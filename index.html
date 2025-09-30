@@ -1,11 +1,104 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Camp Scheduler</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    h1 { margin-bottom: 10px; }
+    input { margin: 5px; padding: 5px; }
+    button { margin: 5px; padding: 5px; cursor: pointer; }
+    table { border-collapse: collapse; margin-top: 20px; }
+    th, td { border: 1px solid black; padding: 8px; text-align: center; }
+  </style>
 </head>
 <body>
-  <h1>Welcome to Camp Scheduler</h1>
-  <p>This will be our starting point!</p>
+  <h1>Camp Scheduler</h1>
+
+  <div>
+    <h3>Add Bunk</h3>
+    <input id="bunkInput" placeholder="Enter bunk name">
+    <button onclick="addBunk()">Add Bunk</button>
+    <button onclick="removeBunk()">Remove Last Bunk</button>
+  </div>
+
+  <div>
+    <h3>Add Time</h3>
+    <input id="timeInput" placeholder="Enter time slot">
+    <button onclick="addTime()">Add Time</button>
+    <button onclick="removeTime()">Remove Last Time</button>
+  </div>
+
+  <table id="scheduleTable">
+    <thead>
+      <tr>
+        <th>Time / Bunk</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    let bunks = [];
+    let times = [];
+
+    function updateTable() {
+      const table = document.getElementById("scheduleTable");
+      const theadRow = table.querySelector("thead tr");
+      theadRow.innerHTML = "<th>Time / Bunk</th>";
+
+      bunks.forEach(bunk => {
+        const th = document.createElement("th");
+        th.textContent = bunk;
+        theadRow.appendChild(th);
+      });
+
+      const tbody = table.querySelector("tbody");
+      tbody.innerHTML = "";
+
+      times.forEach(time => {
+        const row = document.createElement("tr");
+        const timeCell = document.createElement("td");
+        timeCell.textContent = time;
+        row.appendChild(timeCell);
+
+        bunks.forEach(() => {
+          const cell = document.createElement("td");
+          cell.textContent = "";
+          row.appendChild(cell);
+        });
+
+        tbody.appendChild(row);
+      });
+    }
+
+    function addBunk() {
+      const bunkInput = document.getElementById("bunkInput");
+      if (bunkInput.value.trim() !== "") {
+        bunks.push(bunkInput.value.trim());
+        bunkInput.value = "";
+        updateTable();
+      }
+    }
+
+    function removeBunk() {
+      bunks.pop();
+      updateTable();
+    }
+
+    function addTime() {
+      const timeInput = document.getElementById("timeInput");
+      if (timeInput.value.trim() !== "") {
+        times.push(timeInput.value.trim());
+        timeInput.value = "";
+        updateTable();
+      }
+    }
+
+    function removeTime() {
+      times.pop();
+      updateTable();
+    }
+  </script>
 </body>
 </html>
