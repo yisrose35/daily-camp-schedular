@@ -5,27 +5,11 @@
 </head>
 <body>
   <h1>Test Camp Scheduler</h1>
-
-  <!-- Bunks (unchanged) -->
   <input id="bunkInput" placeholder="Enter bunk">
   <button onclick="addBunk()">Add Bunk</button>
   <ul id="bunkList"></ul>
 
-  <!-- Times (added separately) -->
-  <h3>Generate Times</h3>
-  Start: <input type="time" id="startTime">
-  End: <input type="time" id="endTime">
-  Increment: 
-  <select id="increment">
-    <option value="15">15 min</option>
-    <option value="30">30 min</option>
-    <option value="60">60 min</option>
-  </select>
-  <button onclick="generateTimes()">Generate</button>
-  <ul id="timeList"></ul>
-
   <script>
-    // Bunks (original working code)
     let bunks = [];
     function addBunk() {
       const input = document.getElementById('bunkInput');
@@ -38,51 +22,6 @@
         input.value = "";
         console.log("Added bunk:", bunks);
       }
-    }
-
-    // Times (fixed)
-    function generateTimes() {
-      const startInput = document.getElementById("startTime").value;
-      const endInput = document.getElementById("endTime").value;
-      const increment = parseInt(document.getElementById("increment").value);
-
-      if (!startInput || !endInput) {
-        alert("Please select valid start and end times.");
-        return;
-      }
-
-      let [startH, startM] = startInput.split(":").map(Number);
-      let [endH, endM] = endInput.split(":").map(Number);
-
-      const startDate = new Date(0,0,0,startH,startM);
-      const endDate = new Date(0,0,0,endH,endM);
-
-      if (startDate >= endDate) {
-        alert("Start time must be before end time.");
-        return;
-      }
-
-      const times = [];
-      let current = new Date(startDate.getTime());
-
-      while (current < endDate) {
-        const next = new Date(current.getTime() + increment*60000);
-        if (next > endDate) break;
-        const format = d => d.getHours().toString().padStart(2,'0') + ":" + d.getMinutes().toString().padStart(2,'0');
-        times.push(`${format(current)} - ${format(next)}`);
-        current = next;
-      }
-
-      // Display times only in the separate <ul> for times
-      const ul = document.getElementById('timeList');
-      ul.innerHTML = "";
-      times.forEach(t => {
-        const li = document.createElement('li');
-        li.textContent = t;
-        ul.appendChild(li);
-      });
-
-      console.log("Generated times:", times);
     }
   </script>
 </body>
