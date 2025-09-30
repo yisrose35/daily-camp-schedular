@@ -46,11 +46,86 @@
     <tbody></tbody>
   </table>
 
-  <script defer>
+  <!-- JavaScript at the bottom -->
+  <script>
     let bunks = [];
     let times = [];
 
     function updateTable() {
+      console.log("Updating table...", bunks, times); // debug
       const table = document.getElementById("scheduleTable");
       const theadRow = table.querySelector("thead tr");
       theadRow.innerHTML = "<th>Time / Bunk</th>";
+
+      bunks.forEach(bunk => {
+        const th = document.createElement("th");
+        th.textContent = bunk;
+        theadRow.appendChild(th);
+      });
+
+      const tbody = table.querySelector("tbody");
+      tbody.innerHTML = "";
+
+      times.forEach(time => {
+        const row = document.createElement("tr");
+        const timeCell = document.createElement("td");
+        timeCell.textContent = time;
+        row.appendChild(timeCell);
+
+        bunks.forEach(() => {
+          const cell = document.createElement("td");
+          row.appendChild(cell);
+        });
+
+        tbody.appendChild(row);
+      });
+    }
+
+    function addBunk() {
+      const input = document.getElementById("bunkInput");
+      if (input.value.trim() !== "") {
+        bunks.push(input.value.trim());
+        input.value = "";
+        console.log("Added bunk:", bunks); // debug
+        updateTable();
+      }
+    }
+
+    function removeBunk() {
+      bunks.pop();
+      updateTable();
+    }
+
+    function generateTimes() {
+      const startInput = document.getElementById("startTime").value;
+      const endInput = document.getElementById("endTime").value;
+      const increment = parseInt(document.getElementById("increment").value);
+
+      if (!startInput || !endInput) {
+        alert("Please select start and end times.");
+        return;
+      }
+
+      let [startH, startM] = startInput.split(":").map(Number);
+      let [endH, endM] = endInput.split(":").map(Number);
+
+      const startDate = new Date(0,0,0,startH,startM);
+      const endDate = new Date(0,0,0,endH,endM);
+
+      times = [];
+      let current = new Date(startDate.getTime());
+
+      while (current < endDate) {
+        const next = new Date(current.getTime() + increment*60000);
+        if (next > endDate) break;
+        const format = d => d.toTimeString().slice(0,5);
+        times.push(`${format(current)} - ${format(next)}`);
+        current = next;
+      }
+
+      console.log("Generated times:", times); // debug
+      updateTable();
+    }
+  </script>
+</body>
+</html>
