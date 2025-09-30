@@ -6,9 +6,9 @@
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     h1 { margin-bottom: 10px; }
-    input { margin: 5px; padding: 5px; }
+    input, select { margin: 5px; padding: 5px; }
     button { margin: 5px; padding: 5px; cursor: pointer; }
-    table { border-collapse: collapse; margin-top: 20px; }
+    table { border-collapse: collapse; margin-top: 20px; width: 100%; }
     th, td { border: 1px solid black; padding: 8px; text-align: center; }
   </style>
 </head>
@@ -23,10 +23,16 @@
   </div>
 
   <div>
-    <h3>Add Time</h3>
-    <input id="timeInput" placeholder="Enter time slot">
-    <button onclick="addTime()">Add Time</button>
-    <button onclick="removeTime()">Remove Last Time</button>
+    <h3>Generate Times</h3>
+    Start: <input type="time" id="startTime">
+    End: <input type="time" id="endTime">
+    Increment: 
+    <select id="increment">
+      <option value="15">15 min</option>
+      <option value="30">30 min</option>
+      <option value="60">60 min</option>
+    </select>
+    <button onclick="generateTimes()">Generate</button>
   </div>
 
   <table id="scheduleTable">
@@ -86,19 +92,26 @@
       updateTable();
     }
 
-    function addTime() {
-      const timeInput = document.getElementById("timeInput");
-      if (timeInput.value.trim() !== "") {
-        times.push(timeInput.value.trim());
-        timeInput.value = "";
-        updateTable();
-      }
-    }
+    function generateTimes() {
+      const startInput = document.getElementById("startTime").value;
+      const endInput = document.getElementById("endTime").value;
+      const increment = parseInt(document.getElementById("increment").value);
 
-    function removeTime() {
-      times.pop();
-      updateTable();
-    }
-  </script>
-</body>
-</html>
+      if (!startInput || !endInput) {
+        alert("Please select start and end times.");
+        return;
+      }
+
+      let [startHour, startMinute] = startInput.split(":").map(Number);
+      let [endHour, endMinute] = endInput.split(":").map(Number);
+
+      const startDate = new Date(0, 0, 0, startHour, startMinute);
+      const endDate = new Date(0, 0, 0, endHour, endMinute);
+
+      times = [];
+
+      while (startDate < endDate) {
+        const endSlot = new Date(startDate.getTime() + increment * 60000);
+        if (endSlot > endDate) break;
+
+        const for
