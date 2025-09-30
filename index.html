@@ -22,10 +22,6 @@
   <input id="bunkInput" placeholder="Enter bunk">
   <button onclick="addBunk()">Add Bunk</button>
 
-  <!-- Unassigned Bunks -->
-  <h4>Unassigned Bunks</h4>
-  <div id="unassignedBunks"></div>
-
   <!-- Division Input -->
   <h3>Add Divisions</h3>
   <input id="divisionInput" placeholder="Enter division name">
@@ -45,6 +41,10 @@
   </select>
   <button onclick="generateTimes()">Generate</button>
 
+  <!-- Unassigned Bunks -->
+  <h4>Unassigned Bunks</h4>
+  <div id="unassignedBunks"></div>
+
   <!-- Schedule Table -->
   <table id="scheduleTable" style="display:none;">
     <thead>
@@ -54,178 +54,178 @@
     <tbody></tbody>
   </table>
 
-<script>
-let bunks = [];
-let times = [];
-let divisions = {}; // {divisionName: {color: "#...", bunks: []}}
-let selectedDivision = null;
+  <script>
+    let bunks = [];
+    let times = [];
+    let divisions = {}; // { divisionName: [bunk1,bunk2,...], color: "#xxxxxx" }
+    let selectedDivision = null;
+    let availableDivisions = [];
 
-// Add bunk function
-function addBunk(){
-  const input = document.getElementById("bunkInput");
-  if(input.value.trim()==="") return;
-  const bunk = input.value.trim();
-  bunks.push(bunk);
-  input.value="";
-  updateUnassigned();
-}
-
-// Update unassigned bunks display
-function updateUnassigned(){
-  const container = document.getElementById("unassignedBunks");
-  container.innerHTML="";
-  const unassigned = bunks.filter(b => !Object.values(divisions).flatMap(d=>d.bunks).includes(b));
-  unassigned.forEach(bunk=>{
-    const btn = document.createElement("div");
-    btn.textContent=bunk;
-    btn.className="bunk-button";
-    btn.onclick=()=>{
-      if(selectedDivision){
-        divisions[selectedDivision].bunks.push(bunk);
+    // Add bunk
+    function addBunk(){
+      const input = document.getElementById('bunkInput');
+      if(input.value.trim()!==""){
+        bunks.push(input.value.trim());
+        input.value="";
         updateUnassigned();
-        updateTable();
-      } else {
-        alert("Select a division first!");
       }
-    };
-    container.appendChild(btn);
-  });
-}
+    }
 
-// Add division
-function addDivision(){
-  const nameInput = document.getElementById("divisionInput");
-  const colorInput = document.getElementById("divisionColor");
-  const name = nameInput.value.trim();
-  if(name==="") return;
-  if(divisions[name]) { alert("Division exists!"); return; }
-  divisions[name] = {color: colorInput.value, bunks: []};
-  nameInput.value="";
-  setupDivisionButtons();
-}
+    // Add division
+    function addDivision(){
+      const input = document.getElementById('divisionInput');
+      const colorInput = document.getElementById('divisionColor');
+      if(input.value.trim()==="") return;
+      const divName = input.value.trim();
+      const divColor = colorInput.value;
+      if(!availableDivisions.includes(divName)){
+        availableDivisions.push(divName);
+        divisions[divName] = { bunks: [], color: divColor };
+        input.value="";
+        setupDivisionButtons();
+        updateTable();
+      }
+    }
 
-// Setup division selection buttons
-function setupDivisionButtons(){
-  const container = document.getElementById("divisionButtons");
-  container.innerHTML="";
-  Object.keys(divisions).forEach(name=>{
-    const btn = document.createElement("button");
-    btn.textContent=name;
-    btn.className="bunk-button";
-    btn.style.backgroundColor=divisions[name].color;
-    btn.onclick=()=>{
-      selectedDivision=name;
-      Array.from(container.children).forEach(c=>c.classList.remove("selected"));
-      btn.classList.add("selected");
-    };
-    container.appendChild(btn);
-  });
-  updateUnassigned();
-}
-
-// Generate times
-function generateTimes(){
-  const startInput = document.getElementById("startTime").value;
-  const endInput = document.getElementById("endTime").value;
-  const increment = parseInt(document.getElementById("increment").value);
-  if(!startInput || !endInput) return;
-  let [h1,m1]=startInput.split(":").map(Number);
-  let [h2,m2]=endInput.split(":").map(Number);
-  const start = new Date(0,0,0,h1,m1);
-  const end = new Date(0,0,0,h2,m2);
-  times=[];
-  let current = new Date(start.getTime());
-  while(current<end){
-    let next = new Date(current.getTime()+increment*60000);
-    if(next>end) break;
-    const format = d=>{ let h=d.getHours()%12||12; let m=d.getMinutes().toString().padStart(2,'0'); return `${h}:${m}`; };
-    times.push(`${format(current)} - ${format(next)}`);
-    current=next;
-  }
-  updateTable();
-}
-
-// Update table
-function updateTable(){
-  const table = document.getElementById("scheduleTable");
-  table.style.display="table";
-
-  const divRow = document.getElementById("divisionRow");
-  const bunkRow = document.getElementById("bunkRow");
-  divRow.innerHTML="<th>Time / Division</th>";
-  bunkRow.innerHTML="<th>Time / Bunk</th>";
-
-  // Build division headers above bunks
-  Object.keys(divisions).forEach(name=>{
-    const div = divisions[name];
-    const colSpan = Math.max(div.bunks.length,1);
-    const thDiv = document.createElement("th");
-    thDiv.textContent=name;
-    thDiv.style.backgroundColor=div.color;
-    thDiv.colSpan=colSpan;
-    divRow.appendChild(thDiv);
-
-    if(div.bunks.length===0){
-      const thEmpty=document.createElement("th");
-      thEmpty.textContent="";
-      bunkRow.appendChild(thEmpty);
-    } else {
-      div.bunks.forEach(bunk=>{
-        const thBunk = document.createElement("th");
-        thBunk.textContent=bunk;
-        thBunk.classList.add("editable");
-        thBunk.contentEditable="true";
-        thBunk.addEventListener("input", e=>{
-          const idx = div.bunks.indexOf(bunk);
-          if(idx>=0) div.bunks[idx] = e.target.textContent;
-        });
-        bunkRow.appendChild(thBunk);
+    function setupDivisionButtons(){
+      const container = document.getElementById("divisionButtons");
+      container.innerHTML="";
+      availableDivisions.forEach(divName=>{
+        const btn = document.createElement("button");
+        btn.textContent=divName;
+        btn.className="bunk-button";
+        btn.style.backgroundColor=divisions[divName].color;
+        btn.onclick=()=>{
+          selectedDivision=divName;
+          Array.from(container.children).forEach(c=>c.classList.remove("selected"));
+          btn.classList.add("selected");
+        };
+        container.appendChild(btn);
       });
     }
-  });
 
-  // Body rows
-  const tbody = table.querySelector("tbody");
-  tbody.innerHTML="";
-  times.forEach(time=>{
-    const row = document.createElement("tr");
-    const tdTime = document.createElement("td");
-    tdTime.textContent=time;
-    tdTime.classList.add("editable");
-    tdTime.contentEditable="true";
-    row.appendChild(tdTime);
+    // Unassigned bunks
+    function updateUnassigned(){
+      const container = document.getElementById("unassignedBunks");
+      container.innerHTML="";
+      const unassigned = bunks.filter(b => !Object.values(divisions).flatMap(d=>d.bunks).includes(b));
+      unassigned.forEach(bunk=>{
+        const btn = document.createElement("div");
+        btn.textContent=bunk;
+        btn.className="bunk-button";
+        btn.onclick = ()=>{
+          if(selectedDivision){
+            divisions[selectedDivision].bunks.push(bunk);
+            updateUnassigned();
+            updateTable();
+          } else {
+            alert("Select a division first!");
+          }
+        };
+        container.appendChild(btn);
+      });
+    }
 
-    Object.keys(divisions).forEach(name=>{
-      const bunks = divisions[name].bunks;
-      if(bunks.length===0){
-        const td = document.createElement("td");
-        td.classList.add("editable");
-        td.contentEditable="true";
-        row.appendChild(td);
-      } else {
-        bunks.forEach(()=>{ 
-          const td = document.createElement("td");
-          td.classList.add("editable");
-          td.contentEditable="true";
-          row.appendChild(td);
-        });
+    // Generate times
+    function generateTimes(){
+      const startInput = document.getElementById("startTime").value;
+      const endInput = document.getElementById("endTime").value;
+      const increment = parseInt(document.getElementById("increment").value);
+      if(!startInput || !endInput){alert("Select valid start and end times"); return;}
+      let [startH,startM]=startInput.split(":").map(Number);
+      let [endH,endM]=endInput.split(":").map(Number);
+      const startDate = new Date(0,0,0,startH,startM);
+      const endDate = new Date(0,0,0,endH,endM);
+      if(startDate>=endDate){alert("Start must be before end"); return;}
+      times=[];
+      let current = new Date(startDate.getTime());
+      while(current<endDate){
+        let next = new Date(current.getTime()+increment*60000);
+        if(next>endDate) break;
+        const format = d=>{
+          let h=d.getHours(), m=d.getMinutes().toString().padStart(2,'0');
+          h=h%12||12;
+          return `${h}:${m}`;
+        };
+        times.push(`${format(current)} - ${format(next)}`);
+        current=next;
       }
+      updateTable();
+    }
+
+    // Update table
+    function updateTable(){
+      const table = document.getElementById("scheduleTable");
+      if(times.length===0) return;
+      table.style.display="table";
+
+      const divRow=document.getElementById("divisionRow");
+      const bunkRow=document.getElementById("bunkRow");
+      divRow.innerHTML="<th>Division</th>";
+      bunkRow.innerHTML="<th>Bunk</th>";
+
+      availableDivisions.forEach(divName=>{
+        const divObj = divisions[divName];
+        const bunksInDiv = divObj.bunks;
+        const thDiv = document.createElement("th");
+        thDiv.textContent=divName;
+        thDiv.colSpan=Math.max(bunksInDiv.length,1);
+        thDiv.style.backgroundColor=divObj.color;
+        divRow.appendChild(thDiv);
+
+        if(bunksInDiv.length===0){
+          const thEmpty = document.createElement("th");
+          thEmpty.textContent="";
+          bunkRow.appendChild(thEmpty);
+        } else {
+          bunksInDiv.forEach(bunk=>{
+            const thBunk = document.createElement("th");
+            thBunk.textContent=bunk;
+            bunkRow.appendChild(thBunk);
+          });
+        }
+      });
+
+      const tbody = document.querySelector("#scheduleTable tbody");
+      tbody.innerHTML="";
+      times.forEach(time=>{
+        const row = document.createElement("tr");
+        const tdTime = document.createElement("td");
+        tdTime.textContent = time;
+        tdTime.classList.add("editable");
+        tdTime.contentEditable=true;
+        row.appendChild(tdTime);
+
+        availableDivisions.forEach(divName=>{
+          const bunksInDiv = divisions[divName].bunks;
+          if(bunksInDiv.length===0){
+            const td = document.createElement("td");
+            td.classList.add("editable");
+            td.contentEditable=true;
+            row.appendChild(td);
+          } else {
+            bunksInDiv.forEach(()=>{
+              const td = document.createElement("td");
+              td.classList.add("editable");
+              td.contentEditable=true;
+              row.appendChild(td);
+            });
+          }
+        });
+        tbody.appendChild(row);
+      });
+    }
+
+    // ENTER key support
+    document.getElementById("bunkInput").addEventListener("keyup", function(e){
+      if(e.key==="Enter") addBunk();
     });
-
-    tbody.appendChild(row);
-  });
-}
-
-// Enter key events
-document.getElementById("bunkInput").addEventListener("keyup", e=>{
-  if(e.key==="Enter") addBunk();
-});
-document.getElementById("divisionInput").addEventListener("keyup", e=>{
-  if(e.key==="Enter") addDivision();
-});
-document.getElementById("endTime").addEventListener("keyup", e=>{
-  if(e.key==="Enter") generateTimes();
-});
-</script>
+    document.getElementById("divisionInput").addEventListener("keyup", function(e){
+      if(e.key==="Enter") addDivision();
+    });
+    document.getElementById("endTime").addEventListener("keyup", function(e){
+      if(e.key==="Enter") generateTimes();
+    });
+  </script>
 </body>
 </html>
