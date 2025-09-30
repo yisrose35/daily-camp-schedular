@@ -6,8 +6,7 @@
     body { font-family: Arial, sans-serif; padding: 20px; }
     table { border-collapse: collapse; margin-top: 20px; width: 100%; }
     th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
-    th { color: white; }
-    td.editable:hover, th.editable:hover { background-color: #f0f0f0; cursor: text; }
+    th.editable:hover, td.editable:hover { background-color: #f0f0f0; cursor: text; }
 
     .bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; display: inline-block; }
     .selected { outline: 3px solid #90CAF9; }
@@ -25,7 +24,6 @@
   <!-- Division Input -->
   <h3>Add Divisions</h3>
   <input id="divisionInput" placeholder="Enter division name">
-  <input type="color" id="divisionColor" value="#FFCDD2">
   <button onclick="addDivision()">Add Division</button>
   <div id="divisionButtons"></div>
 
@@ -57,46 +55,50 @@
   <script>
     let bunks = [];
     let times = [];
-    let divisions = {}; // { divisionName: [bunk1,bunk2,...], color: "#xxxxxx" }
-    let selectedDivision = null;
+    let divisions = {}; // { name: { bunks: [], color: "#xxxxxx" } }
     let availableDivisions = [];
+    let selectedDivision = null;
+
+    const defaultColors = ['#FFCDD2','#C8E6C9','#BBDEFB','#FFF9C4','#D1C4E9','#FFECB3','#B2DFDB','#F8BBD0'];
+    let colorIndex = 0;
 
     // Add bunk
-    function addBunk(){
+    function addBunk() {
       const input = document.getElementById('bunkInput');
       if(input.value.trim()!==""){
         bunks.push(input.value.trim());
         input.value="";
         updateUnassigned();
+        updateTable();
       }
     }
 
     // Add division
-    function addDivision(){
+    function addDivision() {
       const input = document.getElementById('divisionInput');
-      const colorInput = document.getElementById('divisionColor');
       if(input.value.trim()==="") return;
       const divName = input.value.trim();
-      const divColor = colorInput.value;
       if(!availableDivisions.includes(divName)){
+        const color = defaultColors[colorIndex % defaultColors.length];
+        colorIndex++;
         availableDivisions.push(divName);
-        divisions[divName] = { bunks: [], color: divColor };
+        divisions[divName] = { bunks: [], color: color };
         input.value="";
         setupDivisionButtons();
         updateTable();
       }
     }
 
-    function setupDivisionButtons(){
+    function setupDivisionButtons() {
       const container = document.getElementById("divisionButtons");
       container.innerHTML="";
-      availableDivisions.forEach(divName=>{
+      availableDivisions.forEach((divName)=>{
         const btn = document.createElement("button");
-        btn.textContent=divName;
-        btn.className="bunk-button";
-        btn.style.backgroundColor=divisions[divName].color;
+        btn.textContent = divName;
+        btn.className = "bunk-button";
+        btn.style.backgroundColor = divisions[divName].color;
         btn.onclick=()=>{
-          selectedDivision=divName;
+          selectedDivision = divName;
           Array.from(container.children).forEach(c=>c.classList.remove("selected"));
           btn.classList.add("selected");
         };
@@ -104,15 +106,15 @@
       });
     }
 
-    // Unassigned bunks
-    function updateUnassigned(){
+    function updateUnassigned() {
       const container = document.getElementById("unassignedBunks");
       container.innerHTML="";
-      const unassigned = bunks.filter(b => !Object.values(divisions).flatMap(d=>d.bunks).includes(b));
+      const assignedBunks = Object.values(divisions).flatMap(d=>d.bunks);
+      const unassigned = bunks.filter(b => !assignedBunks.includes(b));
       unassigned.forEach(bunk=>{
         const btn = document.createElement("div");
-        btn.textContent=bunk;
-        btn.className="bunk-button";
+        btn.textContent = bunk;
+        btn.className = "bunk-button";
         btn.onclick = ()=>{
           if(selectedDivision){
             divisions[selectedDivision].bunks.push(bunk);
@@ -126,14 +128,13 @@
       });
     }
 
-    // Generate times
-    function generateTimes(){
+    function generateTimes() {
       const startInput = document.getElementById("startTime").value;
       const endInput = document.getElementById("endTime").value;
       const increment = parseInt(document.getElementById("increment").value);
       if(!startInput || !endInput){alert("Select valid start and end times"); return;}
-      let [startH,startM]=startInput.split(":").map(Number);
-      let [endH,endM]=endInput.split(":").map(Number);
+      let [startH,startM] = startInput.split(":").map(Number);
+      let [endH,endM] = endInput.split(":").map(Number);
       const startDate = new Date(0,0,0,startH,startM);
       const endDate = new Date(0,0,0,endH,endM);
       if(startDate>=endDate){alert("Start must be before end"); return;}
@@ -153,26 +154,44 @@
       updateTable();
     }
 
-    // Update table
-    function updateTable(){
+    function updateTable() {
       const table = document.getElementById("scheduleTable");
       if(times.length===0) return;
       table.style.display="table";
 
-      const divRow=document.getElementById("divisionRow");
-      const bunkRow=document.getElementById("bunkRow");
+      const divRow = document.getElementById("divisionRow");
+      const bunkRow = document.getElementById("bunkRow");
       divRow.innerHTML="<th>Division</th>";
       bunkRow.innerHTML="<th>Bunk</th>";
 
-      availableDivisions.forEach(divName=>{
+      availableDivisions.forEach((divName,i)=>{
         const divObj = divisions[divName];
         const bunksInDiv = divObj.bunks;
+
+        // Division header
         const thDiv = document.createElement("th");
-        thDiv.textContent=divName;
-        thDiv.colSpan=Math.max(bunksInDiv.length,1);
-        thDiv.style.backgroundColor=divObj.color;
+        thDiv.textContent = divName;
+        thDiv.colSpan = Math.max(bunksInDiv.length,1);
+        thDiv.style.backgroundColor = divObj.color;
+        thDiv.classList.add("editable");
+        thDiv.contentEditable = true;
+        thDiv.addEventListener("input", e=>{
+          // update division name key
+          const oldName = divName;
+          const newName = e.target.textContent;
+          if(newName && newName!==oldName){
+            divisions[newName] = divisions[oldName];
+            delete divisions[oldName];
+            const idx = availableDivisions.indexOf(oldName);
+            availableDivisions[idx]=newName;
+            if(selectedDivision===oldName) selectedDivision=newName;
+            setupDivisionButtons();
+            updateTable();
+          }
+        });
         divRow.appendChild(thDiv);
 
+        // Bunks under division
         if(bunksInDiv.length===0){
           const thEmpty = document.createElement("th");
           thEmpty.textContent="";
@@ -181,11 +200,18 @@
           bunksInDiv.forEach(bunk=>{
             const thBunk = document.createElement("th");
             thBunk.textContent=bunk;
+            thBunk.classList.add("editable");
+            thBunk.contentEditable = true;
+            thBunk.addEventListener("input", e=>{
+              const idx = divObj.bunks.indexOf(bunk);
+              if(idx>=0) divObj.bunks[idx] = e.target.textContent;
+            });
             bunkRow.appendChild(thBunk);
           });
         }
       });
 
+      // Build body
       const tbody = document.querySelector("#scheduleTable tbody");
       tbody.innerHTML="";
       times.forEach(time=>{
@@ -222,6 +248,9 @@
     });
     document.getElementById("divisionInput").addEventListener("keyup", function(e){
       if(e.key==="Enter") addDivision();
+    });
+    document.getElementById("startTime").addEventListener("input", ()=>{
+      document.getElementById("endTime").focus();
     });
     document.getElementById("endTime").addEventListener("keyup", function(e){
       if(e.key==="Enter") generateTimes();
