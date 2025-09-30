@@ -150,7 +150,7 @@
       });
     }
 
-    // ✅ Fixed Time Generator with AM/PM
+    // ✅ Time generator with AM/PM formatting restored
     function generateTimes() {
       const startInput = document.getElementById("startTime").value.trim();
       const endInput = document.getElementById("endTime").value.trim();
@@ -260,12 +260,26 @@
       alert("Setup saved! Go to Daily Schedule tab.");
     }
 
+    function loadSetup() {
+      const saved = localStorage.getItem("campSetup");
+      if (!saved) return;
+      const data = JSON.parse(saved);
+      bunks = data.bunks || [];
+      divisions = data.divisions || {};
+      availableDivisions = data.availableDivisions || [];
+      times = data.times || [];
+      fields = data.fields || [];
+      updateUnassigned();
+      setupDivisionButtons();
+      renderFields();
+    }
+
     // Enter key support
     document.getElementById("bunkInput").addEventListener("keyup", e=>{if(e.key==="Enter") addBunk();});
     document.getElementById("divisionInput").addEventListener("keyup", e=>{if(e.key==="Enter") addDivision();});
     document.getElementById("fieldInput").addEventListener("keyup", e=>{if(e.key==="Enter") addField();});
 
-    // ✅ Smooth flow between time inputs
+    // Smooth flow for times
     document.getElementById("startTime").addEventListener("keyup", function() {
       if (this.value.match(/(AM|PM)$/i)) {
         document.getElementById("endTime").focus();
@@ -277,25 +291,9 @@
         generateTimes();
       }
     });
-    function loadSetup() {
-  const saved = localStorage.getItem("campSetup");
-  if (!saved) return; // nothing saved yet
-  const data = JSON.parse(saved);
 
-  bunks = data.bunks || [];
-  divisions = data.divisions || {};
-  availableDivisions = data.availableDivisions || [];
-  times = data.times || [];
-  fields = data.fields || [];
-
-  updateUnassigned();
-  setupDivisionButtons();
-  renderFields();
-}
-
-// Load saved setup when page opens
-window.onload = loadSetup;
-
+    // Load previous setup
+    window.onload = loadSetup;
   </script>
 </body>
 </html>
