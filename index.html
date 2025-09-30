@@ -62,11 +62,9 @@
     let availableDivisions = [];
     let selectedDivision = null;
 
-    // Drastic contrasting colors for auto-assignment
     const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336'];
     let colorIndex = 0;
 
-    // Add bunk
     function addBunk() {
       const input = document.getElementById('bunkInput');
       if(input.value.trim()!==""){
@@ -77,7 +75,6 @@
       }
     }
 
-    // Add division
     function addDivision() {
       const input = document.getElementById('divisionInput');
       if(input.value.trim()==="") return;
@@ -96,6 +93,8 @@
     function setupDivisionButtons() {
       const container = document.getElementById("divisionButtons");
       container.innerHTML="";
+      const colorEnabled = document.getElementById("enableColor").checked;
+
       availableDivisions.forEach((divName)=>{
         const divObj = divisions[divName];
 
@@ -105,7 +104,7 @@
         const btn = document.createElement("button");
         btn.textContent = divName;
         btn.className = "bunk-button";
-        btn.style.backgroundColor = divObj.color;
+        btn.style.backgroundColor = colorEnabled ? divObj.color : "transparent";
         btn.onclick = ()=>{
           selectedDivision = divName;
           Array.from(container.getElementsByTagName('button')).forEach(c=>c.classList.remove("selected"));
@@ -113,14 +112,13 @@
         };
         wrapper.appendChild(btn);
 
-        // Color picker for manual customization
         const colorInput = document.createElement("input");
         colorInput.type = "color";
         colorInput.value = divObj.color;
         colorInput.className = "colorPicker";
         colorInput.addEventListener("input", e=>{
           divObj.color = e.target.value;
-          btn.style.backgroundColor = e.target.value;
+          if(colorEnabled) btn.style.backgroundColor = e.target.value;
           updateTable();
         });
         wrapper.appendChild(colorInput);
@@ -225,7 +223,7 @@
           bunksInDiv.forEach(bunk=>{
             const thBunk = document.createElement("th");
             thBunk.textContent = bunk;
-            thBunk.style.color = "#000"; // always visible
+            thBunk.style.color = "#000";
             thBunk.classList.add("editable");
             thBunk.contentEditable = true;
             thBunk.addEventListener("input", e=>{
@@ -283,7 +281,6 @@
     document.getElementById("endTime").addEventListener("keyup", function(e){
       if(e.key==="Enter") generateTimes();
     });
-
   </script>
 </body>
 </html>
