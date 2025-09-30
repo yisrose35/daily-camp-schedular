@@ -5,10 +5,8 @@
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     .tabs { margin-bottom: 20px; }
-    .tab-button { padding: 10px 20px; cursor: pointer; border: 1px solid #ccc; background: #f0f0f0; margin-right: 5px; }
+    .tab-button { padding: 10px 20px; cursor: pointer; border: 1px solid #ccc; background: #f0f0f0; margin-right: 5px; text-decoration: none; color: black; }
     .tab-button.active { background: #007BFF; color: white; font-weight: bold; }
-    .tab-content { display: none; }
-    .tab-content.active { display: block; }
     table { border-collapse: collapse; margin-top: 20px; width: 100%; }
     th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
     .bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; display: inline-block; }
@@ -33,20 +31,26 @@
 <body>
   <h1>Camp Scheduler - Setup</h1>
 
-  <!-- Bunks -->
+  <!-- Navigation -->
+  <div class="tabs">
+    <a href="index.html" class="tab-button active">Setup & Configuration</a>
+    <a href="schedule.html" class="tab-button">Daily Schedule</a>
+  </div>
+
+  <!-- Bunk Input -->
   <h3>Add Bunks</h3>
   <input id="bunkInput" placeholder="Enter bunk">
   <button onclick="addBunk()">Add Bunk</button>
   <div id="unassignedBunks"></div>
 
-  <!-- Divisions -->
+  <!-- Division Input -->
   <h3>Add Divisions</h3>
   <input id="divisionInput" placeholder="Enter division name">
   <button onclick="addDivision()">Add Division</button>
   <label><input type="checkbox" id="enableColor" checked> Enable colors</label>
   <div id="divisionButtons"></div>
 
-  <!-- Times -->
+  <!-- Time Inputs -->
   <h3>Generate Times</h3>
   Start: <input type="time" id="startTime">
   End: <input type="time" id="endTime">
@@ -59,15 +63,13 @@
   </select>
   <button onclick="generateTimes()">Generate</button>
 
-  <!-- Fields -->
+  <!-- Field Input -->
   <h3>Add Fields/Courts</h3>
   <input id="fieldInput" placeholder="Enter field/court name (e.g., Court #1)">
   <button onclick="addField()">Add Field/Court</button>
   <div id="fieldList"></div>
 
-  <!-- Save Button -->
   <button onclick="saveSetup()">💾 Save Setup</button>
-  <p>After saving, open <b>schedule.html</b> to build the daily schedule.</p>
 
   <script>
     let bunks = [];
@@ -107,12 +109,10 @@
       const container = document.getElementById("divisionButtons");
       container.innerHTML="";
       const colorEnabled = document.getElementById("enableColor").checked;
-
       availableDivisions.forEach((divName)=>{
         const divObj = divisions[divName];
         const wrapper = document.createElement("div");
         wrapper.className = "divisionWrapper";
-
         const span = document.createElement("span");
         span.textContent = divName;
         span.className = "bunk-button";
@@ -123,7 +123,6 @@
           span.classList.add("selected");
         };
         wrapper.appendChild(span);
-
         const colorInput = document.createElement("input");
         colorInput.type = "color";
         colorInput.value = divObj.color;
@@ -132,7 +131,6 @@
           divObj.color = e.target.value;
         });
         wrapper.appendChild(colorInput);
-
         container.appendChild(wrapper);
       });
     }
@@ -195,11 +193,9 @@
         const wrapper=document.createElement("div");
         wrapper.className="fieldWrapper";
         if(!field.available) wrapper.classList.add("unavailable");
-
         const title=document.createElement("h4");
         title.textContent=field.name;
         wrapper.appendChild(title);
-
         const toggle=document.createElement("label");
         toggle.className="switch";
         const cb=document.createElement("input");
@@ -208,7 +204,6 @@
         const slider=document.createElement("span"); slider.className="slider";
         toggle.appendChild(cb); toggle.appendChild(slider);
         wrapper.appendChild(toggle);
-
         commonActivities.forEach(act=>{
           const btn=document.createElement("button");
           btn.textContent=act;
@@ -221,18 +216,15 @@
           };
           wrapper.appendChild(btn);
         });
-
         const other=document.createElement("input");
         other.placeholder="Other activity";
         other.onkeyup=(e)=>{ if(e.key==="Enter" && other.value.trim()){ field.activities.push(other.value.trim()); other.value=""; renderFields();}};
         wrapper.appendChild(other);
-
         if(field.activities.length>0){
           const chosen=document.createElement("p");
           chosen.textContent="Activities: "+field.activities.join(", ");
           wrapper.appendChild(chosen);
         }
-
         container.appendChild(wrapper);
       });
     }
@@ -240,7 +232,7 @@
     function saveSetup() {
       const data = { bunks, divisions, availableDivisions, times, fields };
       localStorage.setItem("campSetup", JSON.stringify(data));
-      alert("Setup saved! Open schedule.html to build the schedule.");
+      alert("Setup saved! Now go to Daily Schedule tab.");
     }
 
     document.getElementById("bunkInput").addEventListener("keyup", e=>{if(e.key==="Enter") addBunk();});
