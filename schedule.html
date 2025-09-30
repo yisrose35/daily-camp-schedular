@@ -40,7 +40,7 @@
     let fields = [];
 
     function loadSetup() {
-      const saved = localStorage.getItem("campSetup");
+      const saved = sessionStorage.getItem("campSetup");
       if (!saved) {
         alert("No setup found! Go back to Setup tab and save first.");
         return false;
