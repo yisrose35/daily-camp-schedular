@@ -5,7 +5,7 @@
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     .tabs { margin-bottom: 20px; }
-    .tab-button { padding: 10px 20px; cursor: pointer; border: 1px solid #ccc; background: #f0f0f0; margin-right: 5px; text-decoration: none; color: black; }
+    .tab-button { padding: 10px 20px; border: 1px solid #ccc; background: #f0f0f0; margin-right: 5px; text-decoration: none; color: black; }
     .tab-button.active { background: #007BFF; color: white; font-weight: bold; }
     table { border-collapse: collapse; width: 100%; margin-top: 20px; }
     th, td { border: 1px solid #333; padding: 8px; text-align: center; min-width: 100px; }
@@ -16,15 +16,16 @@
   </style>
 </head>
 <body>
-  <h1>Daily Schedule</h1>
+  <h1>Camp Scheduler</h1>
 
-  <!-- Navigation -->
+  <!-- Navigation Tabs -->
   <div class="tabs">
     <a href="index.html" class="tab-button">Setup & Configuration</a>
     <a href="schedule.html" class="tab-button active">Daily Schedule</a>
   </div>
 
-  <p>This page loads your saved setup from <b>Setup & Config</b>. If nothing shows, go back and save first.</p>
+  <p>This page loads your saved setup from <b>Setup & Config</b>.  
+  If nothing shows, go back and save first.</p>
 
   <table id="scheduleTable" style="display:none;">
     <thead>
@@ -44,8 +45,8 @@
     function loadSetup() {
       const saved = localStorage.getItem("campSetup");
       if (!saved) {
-        alert("No setup found! Go to Setup page and save first.");
-        return;
+        alert("No setup found! Go back to Setup tab and save first.");
+        return false;
       }
       const data = JSON.parse(saved);
       bunks = data.bunks || [];
@@ -53,11 +54,17 @@
       availableDivisions = data.availableDivisions || [];
       times = data.times || [];
       fields = data.fields || [];
+      return true;
     }
 
     function renderSchedule() {
-      if(times.length===0){ return; }
-      document.getElementById("scheduleTable").style.display="table";
+      if (times.length === 0 || availableDivisions.length === 0) {
+        alert("No times or divisions available. Please set them up first.");
+        return;
+      }
+
+      const table = document.getElementById("scheduleTable");
+      table.style.display = "table";
 
       const divRow = document.getElementById("divisionRow");
       const bunkRow = document.getElementById("bunkRow");
@@ -70,7 +77,7 @@
 
         const thDiv = document.createElement("th");
         thDiv.colSpan = bunksInDiv.length || 1;
-        thDiv.style.backgroundColor = divObj.color;
+        thDiv.style.backgroundColor = divObj.color || "#ccc";
         thDiv.style.color = "white";
         thDiv.textContent = divName;
         divRow.appendChild(thDiv);
@@ -91,7 +98,7 @@
         row.appendChild(tdTime);
 
         availableDivisions.forEach(divName => {
-          divisions[divName].bunks.forEach(bunk => {
+          divisions[divName].bunks.forEach(() => {
             const td = document.createElement("td");
             td.className = "schedule-cell";
             td.onclick = () => assignActivity(td);
@@ -143,8 +150,10 @@
       cell.appendChild(select);
     }
 
-    loadSetup();
-    renderSchedule();
+    // Init
+    if (loadSetup()) {
+      renderSchedule();
+    }
   </script>
 </body>
 </html>
