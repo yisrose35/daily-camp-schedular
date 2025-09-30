@@ -17,16 +17,16 @@
 <body>
   <h1>Camp Scheduler</h1>
 
+  <!-- Bunk Input -->
+  <h3>Add Bunks</h3>
+  <input id="bunkInput" placeholder="Enter bunk">
+  <button onclick="addBunk()">Add Bunk</button>
+
   <!-- Custom Divisions -->
   <h3>Add Divisions</h3>
   <input id="divisionInput" placeholder="Enter division name">
   <button onclick="addDivision()">Add Division</button>
   <div id="divisionButtons"></div>
-
-  <!-- Bunk Input -->
-  <h3>Add Bunks</h3>
-  <input id="bunkInput" placeholder="Enter bunk">
-  <button onclick="addBunk()">Add Bunk</button>
 
   <!-- Time Inputs -->
   <h3>Generate Times</h3>
@@ -45,7 +45,7 @@
   <div id="unassignedBunks"></div>
 
   <!-- Schedule Table -->
-  <table id="scheduleTable">
+  <table id="scheduleTable" style="display:none;">
     <thead>
       <tr id="divisionRow"></tr>
       <tr id="bunkRow"></tr>
@@ -61,37 +61,6 @@
     let selectedDivision = null;
     let availableDivisions = [];
 
-    // Add a new division
-    function addDivision(){
-      const input = document.getElementById('divisionInput');
-      if(input.value.trim()==="") return;
-      const divName = input.value.trim();
-      if(!availableDivisions.includes(divName)){
-        availableDivisions.push(divName);
-        divisions[divName]=[];
-        input.value="";
-        setupDivisionButtons();
-        updateTable();
-      }
-    }
-
-    function setupDivisionButtons(){
-      const container = document.getElementById("divisionButtons");
-      container.innerHTML="";
-      availableDivisions.forEach((divName,i)=>{
-        const btn = document.createElement("button");
-        btn.textContent=divName;
-        btn.className="bunk-button";
-        btn.style.backgroundColor=divisionColors[i%divisionColors.length];
-        btn.onclick=()=>{
-          selectedDivision=divName;
-          Array.from(container.children).forEach(c=>c.classList.remove("selected"));
-          btn.classList.add("selected");
-        };
-        container.appendChild(btn);
-      });
-    }
-
     // Add bunk
     function addBunk(){
       const input = document.getElementById('bunkInput');
@@ -99,7 +68,6 @@
         bunks.push(input.value.trim());
         input.value="";
         updateUnassigned();
-        updateTable();
       }
     }
 
@@ -119,6 +87,36 @@
           } else {
             alert("Select a division first!");
           }
+        };
+        container.appendChild(btn);
+      });
+    }
+
+    // Add a new division
+    function addDivision(){
+      const input = document.getElementById('divisionInput');
+      if(input.value.trim()==="") return;
+      const divName = input.value.trim();
+      if(!availableDivisions.includes(divName)){
+        availableDivisions.push(divName);
+        divisions[divName]=[];
+        input.value="";
+        setupDivisionButtons();
+      }
+    }
+
+    function setupDivisionButtons(){
+      const container = document.getElementById("divisionButtons");
+      container.innerHTML="";
+      availableDivisions.forEach((divName,i)=>{
+        const btn = document.createElement("button");
+        btn.textContent=divName;
+        btn.className="bunk-button";
+        btn.style.backgroundColor=divisionColors[i%divisionColors.length];
+        btn.onclick=()=>{
+          selectedDivision=divName;
+          Array.from(container.children).forEach(c=>c.classList.remove("selected"));
+          btn.classList.add("selected");
         };
         container.appendChild(btn);
       });
@@ -152,6 +150,9 @@
     }
 
     function updateTable(){
+      const table = document.getElementById("scheduleTable");
+      table.style.display="table";
+
       const divRow=document.getElementById("divisionRow");
       const bunkRow=document.getElementById("bunkRow");
       divRow.innerHTML="<th>Time / Division</th>";
@@ -162,7 +163,7 @@
         const bunksInDiv = divisions[divName] || [];
         const thDiv=document.createElement("th");
         thDiv.textContent=divName;
-        thDiv.colSpan=Math.max(bunksInDiv.length,1); // At least 1
+        thDiv.colSpan=Math.max(bunksInDiv.length,1);
         thDiv.style.backgroundColor=divisionColors[i%divisionColors.length];
         divRow.appendChild(thDiv);
 
@@ -212,27 +213,24 @@
             });
           }
         });
-
         tbody.appendChild(row);
       });
     }
 
-    // Seamless time input
+    // Seamless time input: enter moves to end
     document.getElementById("startTime").addEventListener("input", ()=>{
       if(document.getElementById("startTime").value.length===5){
         document.getElementById("endTime").focus();
       }
     });
 
-    // Initialize empty table headers on load
-    function initTable(){
-      const divRow=document.getElementById("divisionRow");
-      const bunkRow=document.getElementById("bunkRow");
-      divRow.innerHTML="<th>Time / Division</th>";
-      bunkRow.innerHTML="<th>Time / Bunk</th>";
-    }
+    // Press Enter on endTime input to generate
+    document.getElementById("endTime").addEventListener("keyup", function(e){
+      if(e.key === "Enter"){
+        generateTimes();
+      }
+    });
 
-    initTable();
   </script>
 </body>
 </html>
