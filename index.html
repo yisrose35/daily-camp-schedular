@@ -5,13 +5,11 @@
 </head>
 <body>
   <h1>Test Camp Scheduler</h1>
-
-  <!-- Bunks -->
   <input id="bunkInput" placeholder="Enter bunk">
   <button onclick="addBunk()">Add Bunk</button>
   <ul id="bunkList"></ul>
 
-  <!-- Times -->
+  <!-- Fixed Time Input -->
   <h3>Generate Times</h3>
   Start: <input type="time" id="startTime">
   End: <input type="time" id="endTime">
@@ -31,15 +29,16 @@
       const input = document.getElementById('bunkInput');
       if(input.value.trim() !== "") {
         bunks.push(input.value.trim());
-        const bunkUl = document.getElementById('bunkList');
+        const ul = document.getElementById('bunkList');
         const li = document.createElement('li');
         li.textContent = input.value.trim();
-        bunkUl.appendChild(li);
+        ul.appendChild(li);
         input.value = "";
         console.log("Added bunk:", bunks);
       }
     }
 
+    // Only time input fix applied below
     function generateTimes() {
       const startInput = document.getElementById("startTime").value;
       const endInput = document.getElementById("endTime").value;
@@ -62,4 +61,22 @@
       }
 
       const times = [];
-      let current = new Date(startDate.getTime
+      let current = new Date(startDate.getTime());
+
+      while (current < endDate) {
+        const next = new Date(current.getTime() + increment*60000);
+        if (next > endDate) break;
+        const format = d => d.getHours().toString().padStart(2,'0') + ":" + d.getMinutes().toString().padStart(2,'0');
+        times.push(`${format(current)} - ${format(next)}`);
+        current = next;
+      }
+
+      const ul = document.getElementById('timeList');
+      ul.innerHTML = "";
+      times.forEach(t => {
+        const li = document.createElement('li');
+        li.textContent = t;
+        ul.appendChild(li);
+      });
+
+      console.log("Genera
