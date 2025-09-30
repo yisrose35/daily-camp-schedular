@@ -10,18 +10,18 @@
     td.editable:hover, th.editable:hover { background-color: #f0f0f0; cursor: text; }
 
     .bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; display: inline-block; }
-    .selected { background-color: #90CAF9; }
+    .selected { outline: 3px solid #90CAF9; }
     #unassignedBunks { margin-top: 10px; }
   </style>
 </head>
 <body>
   <h1>Camp Scheduler</h1>
 
-  <!-- Custom Grades -->
-  <h3>Custom Grades</h3>
-  <input id="gradeInput" placeholder="Enter grade name">
-  <button onclick="addGrade()">Add Grade</button>
-  <div id="gradeButtons"></div>
+  <!-- Custom Divisions -->
+  <h3>Add Divisions</h3>
+  <input id="divisionInput" placeholder="Enter division name">
+  <button onclick="addDivision()">Add Division</button>
+  <div id="divisionButtons"></div>
 
   <!-- Bunk Input -->
   <h3>Add Bunks</h3>
@@ -47,7 +47,7 @@
   <!-- Schedule Table -->
   <table id="scheduleTable">
     <thead>
-      <tr id="gradeRow"></tr>
+      <tr id="divisionRow"></tr>
       <tr id="bunkRow"></tr>
     </thead>
     <tbody></tbody>
@@ -56,35 +56,35 @@
   <script>
     let bunks = [];
     let times = [];
-    let grades = {}; // { gradeName: [bunk1,bunk2,...] }
-    let gradeColors = ['#FFCDD2','#C8E6C9','#BBDEFB','#FFF9C4','#D1C4E9','#FFECB3','#B2DFDB','#F8BBD0'];
-    let selectedGrade = null;
-    let availableGrades = [];
+    let divisions = {}; // { divisionName: [bunk1,bunk2,...] }
+    let divisionColors = ['#FFCDD2','#C8E6C9','#BBDEFB','#FFF9C4','#D1C4E9','#FFECB3','#B2DFDB','#F8BBD0'];
+    let selectedDivision = null;
+    let availableDivisions = [];
 
-    // Add a grade
-    function addGrade(){
-      const input = document.getElementById('gradeInput');
+    // Add a new division
+    function addDivision(){
+      const input = document.getElementById('divisionInput');
       if(input.value.trim()==="") return;
-      const grade = input.value.trim();
-      if(!availableGrades.includes(grade)){
-        availableGrades.push(grade);
-        grades[grade]=[];
+      const divName = input.value.trim();
+      if(!availableDivisions.includes(divName)){
+        availableDivisions.push(divName);
+        divisions[divName]=[];
         input.value="";
-        setupGradeButtons();
+        setupDivisionButtons();
         updateTable();
       }
     }
 
-    function setupGradeButtons(){
-      const container = document.getElementById("gradeButtons");
+    function setupDivisionButtons(){
+      const container = document.getElementById("divisionButtons");
       container.innerHTML="";
-      availableGrades.forEach((grade,i)=>{
+      availableDivisions.forEach((divName,i)=>{
         const btn = document.createElement("button");
-        btn.textContent=grade;
+        btn.textContent=divName;
         btn.className="bunk-button";
-        btn.style.backgroundColor=gradeColors[i%gradeColors.length];
+        btn.style.backgroundColor=divisionColors[i%divisionColors.length];
         btn.onclick=()=>{
-          selectedGrade=grade;
+          selectedDivision=divName;
           Array.from(container.children).forEach(c=>c.classList.remove("selected"));
           btn.classList.add("selected");
         };
@@ -92,6 +92,7 @@
       });
     }
 
+    // Add bunk
     function addBunk(){
       const input = document.getElementById('bunkInput');
       if(input.value.trim()!==""){
@@ -105,18 +106,18 @@
     function updateUnassigned(){
       const container = document.getElementById("unassignedBunks");
       container.innerHTML="";
-      const unassigned = bunks.filter(b => !Object.values(grades).flat().includes(b));
+      const unassigned = bunks.filter(b => !Object.values(divisions).flat().includes(b));
       unassigned.forEach(bunk=>{
         const btn = document.createElement("div");
         btn.textContent=bunk;
         btn.className="bunk-button";
         btn.onclick = ()=>{
-          if(selectedGrade){
-            grades[selectedGrade].push(bunk);
+          if(selectedDivision){
+            divisions[selectedDivision].push(bunk);
             updateUnassigned();
             updateTable();
           } else {
-            alert("Select a grade first!");
+            alert("Select a division first!");
           }
         };
         container.appendChild(btn);
@@ -151,32 +152,38 @@
     }
 
     function updateTable(){
-      const gradeRow=document.getElementById("gradeRow");
+      const divRow=document.getElementById("divisionRow");
       const bunkRow=document.getElementById("bunkRow");
-      gradeRow.innerHTML="<th>Time / Grade</th>";
+      divRow.innerHTML="<th>Time / Division</th>";
       bunkRow.innerHTML="<th>Time / Bunk</th>";
 
-      // Build merged grade headers
-      availableGrades.forEach((grade,i)=>{
-        const bunksInGrade = grades[grade] || [];
-        if(bunksInGrade.length===0) return;
-        const thGrade=document.createElement("th");
-        thGrade.textContent=grade;
-        thGrade.colSpan=bunksInGrade.length;
-        thGrade.style.backgroundColor=gradeColors[i%gradeColors.length];
-        gradeRow.appendChild(thGrade);
+      // Build merged division headers
+      availableDivisions.forEach((divName,i)=>{
+        const bunksInDiv = divisions[divName] || [];
+        const thDiv=document.createElement("th");
+        thDiv.textContent=divName;
+        thDiv.colSpan=Math.max(bunksInDiv.length,1); // At least 1
+        thDiv.style.backgroundColor=divisionColors[i%divisionColors.length];
+        divRow.appendChild(thDiv);
 
-        bunksInGrade.forEach(bunk=>{
-          const thBunk=document.createElement("th");
-          thBunk.textContent=bunk;
-          thBunk.classList.add("editable");
-          thBunk.contentEditable="true";
-          thBunk.addEventListener("input", e=>{
-            const idx = grades[grade].indexOf(bunk);
-            if(idx>=0) grades[grade][idx]=e.target.textContent;
+        if(bunksInDiv.length===0){
+          const thEmpty=document.createElement("th");
+          thEmpty.textContent="";
+          thEmpty.classList.add("editable");
+          bunkRow.appendChild(thEmpty);
+        } else {
+          bunksInDiv.forEach(bunk=>{
+            const thBunk=document.createElement("th");
+            thBunk.textContent=bunk;
+            thBunk.classList.add("editable");
+            thBunk.contentEditable="true";
+            thBunk.addEventListener("input", e=>{
+              const idx = divisions[divName].indexOf(bunk);
+              if(idx>=0) divisions[divName][idx]=e.target.textContent;
+            });
+            bunkRow.appendChild(thBunk);
           });
-          bunkRow.appendChild(thBunk);
-        });
+        }
       });
 
       const tbody = document.querySelector("#scheduleTable tbody");
@@ -189,31 +196,39 @@
         timeCell.contentEditable="true";
         row.appendChild(timeCell);
 
-        availableGrades.forEach((grade,i)=>{
-          const bunksInGrade = grades[grade] || [];
-          bunksInGrade.forEach(()=>{
-            const cell=document.createElement("td");
-            cell.classList.add("editable");
-            cell.contentEditable="true";
-            row.appendChild(cell);
-          });
+        availableDivisions.forEach((divName,i)=>{
+          const bunksInDiv = divisions[divName] || [];
+          if(bunksInDiv.length===0){
+            const td=document.createElement("td");
+            td.classList.add("editable");
+            td.contentEditable="true";
+            row.appendChild(td);
+          } else {
+            bunksInDiv.forEach(()=>{
+              const td=document.createElement("td");
+              td.classList.add("editable");
+              td.contentEditable="true";
+              row.appendChild(td);
+            });
+          }
         });
+
         tbody.appendChild(row);
       });
     }
 
-    // Move focus from start to end time automatically
+    // Seamless time input
     document.getElementById("startTime").addEventListener("input", ()=>{
-      if(document.getElementById("startTime").value.length===5){ // hh:mm
+      if(document.getElementById("startTime").value.length===5){
         document.getElementById("endTime").focus();
       }
     });
 
-    // Initialize table headers even before bunks
+    // Initialize empty table headers on load
     function initTable(){
-      const gradeRow=document.getElementById("gradeRow");
+      const divRow=document.getElementById("divisionRow");
       const bunkRow=document.getElementById("bunkRow");
-      gradeRow.innerHTML="<th>Time / Grade</th>";
+      divRow.innerHTML="<th>Time / Division</th>";
       bunkRow.innerHTML="<th>Time / Bunk</th>";
     }
 
