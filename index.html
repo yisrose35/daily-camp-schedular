@@ -29,7 +29,8 @@
     }
     .division-header { font-weight: bold; color: white; }
     .button-container button { margin: 3px; padding: 6px 10px; cursor: pointer; }
-    .time-input { width: 70px; }
+    .time-input { width: 80px; }
+    .selected { outline: 3px solid #FFD700; }
   </style>
 </head>
 <body>
@@ -56,9 +57,14 @@
   <button id="colorToggleBtn" onclick="toggleColor()">Disable Colors</button>
 
   <h3>Times</h3>
-  Start: <input id="startTime" class="time-input" placeholder="9:00">
-  End: <input id="endTime" class="time-input" placeholder="17:00">
-  Interval: <input id="increment" class="time-input" placeholder="15">
+  Start: <input id="startTime" class="time-input" placeholder="9:00 AM">
+  End: <input id="endTime" class="time-input" placeholder="5:00 PM">
+  Intervals: 
+  <select id="intervalSelect" class="time-input">
+    <option value="15">15 min</option>
+    <option value="30">30 min</option>
+    <option value="60">60 min</option>
+  </select>
   <button onclick="generateTimes()">Generate Times</button>
 </div>
 
@@ -68,161 +74,180 @@
 </div>
 
 <script>
-  let bunks = [];
-  let divisions = [];
-  let times = [];
-  let autoColors = ["#4CAF50","#2196F3","#E91E63","#FF9800","#9C27B0"];
-  let autoIndex = 0;
-  let colorEnabled = true;
-  let selectedDivision = null;
+let bunks = [];
+let divisions = [];
+let times = [];
+let autoColors = ["#4CAF50","#2196F3","#E91E63","#FF9800","#9C27B0"];
+let autoIndex = 0;
+let colorEnabled = true;
+let selectedDivision = null;
+let selectedBunk = null;
 
-  // TAB FUNCTIONALITY
-  function showTab(id){
-    document.querySelectorAll('.tab-button').forEach(b=>b.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
-    document.getElementById(id).classList.add('active');
-    document.querySelector(`button[onclick="showTab('${id}')"]`).classList.add('active');
-    if(id==='schedule') updateScheduleTable();
+// TAB FUNCTIONALITY
+function showTab(id){
+  document.querySelectorAll('.tab-button').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  document.querySelector(`button[onclick="showTab('${id}')"]`).classList.add('active');
+  if(id==='schedule') updateScheduleTable();
+}
+
+// ADD & RENDER BUNKS
+function addBunk(){
+  const val=document.getElementById('bunkInput').value.trim();
+  if(val){ bunks.push({name:val, division:null}); document.getElementById('bunkInput').value=""; renderBunks(); }
+}
+
+function renderBunks(){
+  const container = document.getElementById('bunkButtons');
+  container.innerHTML = "";
+  bunks.forEach((b,i)=>{
+    const btn = document.createElement('button');
+    btn.textContent = b.name + (b.division? " ("+b.division+")":"");
+    btn.style.backgroundColor = b.division? getDivisionColor(b.division) : "#eee";
+    btn.className = (selectedBunk===b)? "selected" : "";
+    btn.onclick = ()=>{
+      if(selectedDivision){ 
+        b.division = selectedDivision; 
+        selectedDivision = null; selectedBunk = null;
+      } else { 
+        selectedBunk = b; 
+      }
+      renderBunks();
+      renderDivisions();
+      updateScheduleTable();
+    };
+    container.appendChild(btn);
+  });
+}
+
+// ADD & RENDER DIVISIONS
+function addDivision(){
+  const val=document.getElementById('divisionInput').value.trim();
+  if(!val) return;
+  const color = autoColors[autoIndex % autoColors.length]; autoIndex++;
+  divisions.push({name:val, color:color});
+  selectedDivision = val; selectedBunk = null;
+  renderDivisions();
+  document.getElementById('divisionInput').value="";
+}
+
+function renderDivisions(){
+  const container = document.getElementById('divisionButtons');
+  container.innerHTML="";
+  divisions.forEach(d=>{
+    const btn = document.createElement('button');
+    btn.textContent = d.name;
+    btn.style.backgroundColor = getDivisionColor(d.name);
+    btn.className = (selectedDivision===d.name)? "selected" : "";
+    btn.onclick = ()=>{
+      if(selectedBunk){ 
+        selectedBunk.division = d.name;
+        selectedBunk = null; selectedDivision = null;
+      } else { 
+        selectedDivision = d.name; selectedBunk = null;
+      }
+      renderBunks();
+      renderDivisions();
+      updateScheduleTable();
+    };
+    container.appendChild(btn);
+    const colorInput = document.createElement('input');
+    colorInput.type="color"; colorInput.value=d.color;
+    colorInput.oninput = e=>{ d.color=e.target.value; updateScheduleTable(); renderDivisions(); };
+    container.appendChild(colorInput);
+  });
+  document.getElementById('colorToggleBtn').textContent = colorEnabled?"Disable Colors":"Enable Colors";
+}
+
+function getDivisionColor(name){
+  const div = divisions.find(d=>d.name===name);
+  return div ? (colorEnabled?div.color:"#ccc") : "#ccc";
+}
+
+function toggleColor(){ colorEnabled = !colorEnabled; updateScheduleTable(); renderDivisions(); }
+
+// TIME GENERATION
+function parse12Hour(timeStr){
+  const match = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if(!match) return null;
+  let h=parseInt(match[1]), m=parseInt(match[2]), suffix=match[3].toUpperCase();
+  if(suffix==="PM" && h<12) h+=12;
+  if(suffix==="AM" && h===12) h=0;
+  return {h,m};
+}
+
+function format12Hour(date){
+  let h=date.getHours(), m=date.getMinutes();
+  let suffix = h>=12?"PM":"AM";
+  h=h%12||12;
+  return h+":"+m.toString().padStart(2,"0")+" "+suffix;
+}
+
+function generateTimes(){
+  const startStr=document.getElementById("startTime").value;
+  const endStr=document.getElementById("endTime").value;
+  const inc = parseInt(document.getElementById("intervalSelect").value);
+  const start=parse12Hour(startStr), end=parse12Hour(endStr);
+  if(!start||!end||!inc) return;
+
+  let startDate=new Date(0,0,0,start.h,start.m);
+  let endDate=new Date(0,0,0,end.h,end.m);
+  times=[];
+  while(startDate<endDate){
+    let next = new Date(startDate.getTime()+inc*60000);
+    times.push(format12Hour(startDate)+" - "+format12Hour(next));
+    startDate=next;
   }
+  updateScheduleTable();
+}
 
-  // ADD & RENDER BUNKS
-  function addBunk(){
-    const val=document.getElementById('bunkInput').value.trim();
-    if(val){ bunks.push({name:val, division:null}); document.getElementById('bunkInput').value=""; renderBunks(); }
-  }
+// UPDATE SCHEDULE TABLE
+function updateScheduleTable(){
+  const table = document.getElementById("scheduleTable");
+  table.innerHTML="";
+  const thead = document.createElement("thead");
+  const topRow = document.createElement("tr");
+  const secondRow = document.createElement("tr");
 
-  function renderBunks(){
-    const container = document.getElementById('bunkButtons');
-    container.innerHTML = "";
-    bunks.forEach((b,i)=>{
-      const btn = document.createElement('button');
-      btn.textContent = b.name + (b.division? " ("+b.division+")":"");
-      btn.style.backgroundColor = b.division? getDivisionColor(b.division) : "#eee";
-      btn.onclick = ()=>{
-        if(selectedDivision){
-          b.division = selectedDivision;
-          renderBunks();
-          updateScheduleTable();
-        } else {
-          alert("Select a division first.");
-        }
-      };
-      container.appendChild(btn);
+  const emptyTh = document.createElement("th"); emptyTh.rowSpan=2; emptyTh.textContent="Time"; topRow.appendChild(emptyTh);
+
+  divisions.forEach(div=>{
+    const bunksInDiv = bunks.filter(b=>b.division===div.name);
+    const th = document.createElement("th");
+    th.textContent = div.name; th.colSpan = bunksInDiv.length; th.className="division-header";
+    th.style.backgroundColor = getDivisionColor(div.name); topRow.appendChild(th);
+
+    bunksInDiv.forEach(b=>{
+      const bunkTh = document.createElement("th"); bunkTh.textContent = b.name; secondRow.appendChild(bunkTh);
     });
-  }
+  });
+  thead.appendChild(topRow); thead.appendChild(secondRow);
+  table.appendChild(thead);
 
-  // ADD & RENDER DIVISIONS
-  function addDivision(){
-    const val=document.getElementById('divisionInput').value.trim();
-    if(!val) return;
-    const color = autoColors[autoIndex % autoColors.length]; autoIndex++;
-    divisions.push({name:val, color:color});
-    selectedDivision = val; renderDivisions();
-    document.getElementById('divisionInput').value="";
-  }
-
-  function renderDivisions(){
-    const container = document.getElementById('divisionButtons');
-    container.innerHTML="";
-    divisions.forEach(d=>{
-      const btn = document.createElement('button');
-      btn.textContent = d.name;
-      btn.style.backgroundColor = getDivisionColor(d.name);
-      btn.onclick = ()=>{ selectedDivision = d.name; };
-      container.appendChild(btn);
-      const colorInput = document.createElement('input');
-      colorInput.type="color"; colorInput.value=d.color;
-      colorInput.oninput = e=>{ d.color=e.target.value; updateScheduleTable(); renderDivisions(); };
-      container.appendChild(colorInput);
-    });
-    document.getElementById('colorToggleBtn').textContent = colorEnabled?"Disable Colors":"Enable Colors";
-  }
-
-  function getDivisionColor(name){
-    const div = divisions.find(d=>d.name===name);
-    return div ? (colorEnabled?div.color:"#ccc") : "#ccc";
-  }
-
-  function toggleColor(){ colorEnabled = !colorEnabled; updateScheduleTable(); renderDivisions(); }
-
-  // TIME GENERATION
-  function generateTimes(){
-    const start = document.getElementById("startTime").value;
-    const end = document.getElementById("endTime").value;
-    const inc = parseInt(document.getElementById("increment").value);
-    if(!start||!end||!inc) return;
-
-    let [sh,sm] = start.split(":").map(Number);
-    let [eh,em] = end.split(":").map(Number);
-    let startDate = new Date(0,0,0,sh,sm);
-    let endDate = new Date(0,0,0,eh,em);
-
-    times = [];
-    while(startDate<endDate){
-      let next = new Date(startDate.getTime()+inc*60000);
-      times.push(formatTime(startDate)+" - "+formatTime(next));
-      startDate=next;
-    }
-    updateScheduleTable();
-  }
-
-  function formatTime(date){
-    let h = date.getHours(), m = date.getMinutes().toString().padStart(2,"0");
-    let suffix = h>=12?"PM":"AM";
-    h = h%12||12;
-    return h+":"+m+" "+suffix;
-  }
-
-  // UPDATE SCHEDULE TABLE
-  function updateScheduleTable(){
-    const table = document.getElementById("scheduleTable");
-    table.innerHTML="";
-    const thead = document.createElement("thead");
-    const topRow = document.createElement("tr");
-    const secondRow = document.createElement("tr");
-
-    const emptyTh = document.createElement("th"); emptyTh.rowSpan=2; emptyTh.textContent="Time"; topRow.appendChild(emptyTh);
-
+  const tbody = document.createElement("tbody");
+  times.forEach(t=>{
+    const tr = document.createElement("tr");
+    const tdTime = document.createElement("td"); tdTime.textContent = t; tr.appendChild(tdTime);
     divisions.forEach(div=>{
       const bunksInDiv = bunks.filter(b=>b.division===div.name);
-      const th = document.createElement("th");
-      th.textContent = div.name; th.colSpan = bunksInDiv.length; th.className="division-header";
-      th.style.backgroundColor = getDivisionColor(div.name); topRow.appendChild(th);
-
       bunksInDiv.forEach(b=>{
-        const bunkTh = document.createElement("th"); bunkTh.textContent = b.name; secondRow.appendChild(bunkTh);
+        const td = document.createElement("td"); td.textContent=""; tr.appendChild(td);
       });
     });
-    thead.appendChild(topRow); thead.appendChild(secondRow);
-    table.appendChild(thead);
-
-    const tbody = document.createElement("tbody");
-    times.forEach(t=>{
-      const tr = document.createElement("tr");
-      const tdTime = document.createElement("td"); tdTime.textContent=t; tr.appendChild(tdTime);
-      divisions.forEach(div=>{
-        const bunksInDiv = bunks.filter(b=>b.division===div.name);
-        bunksInDiv.forEach(b=>{
-          const td = document.createElement("td"); td.textContent=""; tr.appendChild(td);
-        });
-      });
-      tbody.appendChild(tr);
-    });
-    table.appendChild(tbody);
-  }
-
-  // SMOOTH TIME INPUT FLOW + ENTER
-  document.getElementById("startTime").addEventListener("input", ()=>{if(document.getElementById("startTime").value.length===4||document.getElementById("startTime").value.length===5) document.getElementById("endTime").focus();});
-  document.getElementById("endTime").addEventListener("input", ()=>{if(document.getElementById("endTime").value.length===4||document.getElementById("endTime").value.length===5) document.getElementById("increment").focus();});
-  document.getElementById("increment").addEventListener("keyup",(e)=>{if(e.key==="Enter") generateTimes();});
-
-  // ENTER KEY FOR ADDING BUNKS & DIVISIONS
-  document.addEventListener("keydown", e=>{
-    if(e.key==="Enter"){
-      const active = document.activeElement.id;
-      if(active==="bunkInput") addBunk();
-      else if(active==="divisionInput") addDivision();
-    }
+    tbody.appendChild(tr);
   });
+  table.appendChild(tbody);
+}
+
+// ENTER KEY FOR ADDING BUNKS & DIVISIONS
+document.addEventListener("keydown", e=>{
+  if(e.key==="Enter"){
+    const active = document.activeElement.id;
+    if(active==="bunkInput") addBunk();
+    else if(active==="divisionInput") addDivision();
+  }
+});
 </script>
 </body>
+</html>
