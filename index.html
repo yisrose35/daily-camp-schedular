@@ -38,7 +38,8 @@
   <!-- Grade Assignment -->
   <h3>Assign Bunks to Grades</h3>
   Grade: <input id="gradeInput" placeholder="5th Grade">
-  Bunks (comma-separated): <input id="gradeBunksInput" placeholder="Bunk 1,Bunk 2,Bunk 3">
+  Bunks:
+  <select id="gradeBunksSelect" multiple size="5"></select>
   <button onclick="assignBunksToGrade()">Assign</button>
 
   <!-- Schedule Table -->
@@ -61,21 +62,35 @@
       if(input.value.trim() !== "") {
         bunks.push(input.value.trim());
         input.value = "";
+        updateBunkSelect();
         updateTable();
       }
     }
 
-    // Assign bunks to a grade
+    // Populate the multi-select for grades
+    function updateBunkSelect() {
+      const select = document.getElementById("gradeBunksSelect");
+      select.innerHTML = "";
+      bunks.forEach(b => {
+        const option = document.createElement("option");
+        option.value = b;
+        option.textContent = b;
+        select.appendChild(option);
+      });
+    }
+
+    // Assign selected bunks to a grade
     function assignBunksToGrade() {
       const gradeName = document.getElementById("gradeInput").value.trim();
-      const bunkNames = document.getElementById("gradeBunksInput").value.split(",").map(b => b.trim()).filter(b => b);
+      const select = document.getElementById("gradeBunksSelect");
+      const selectedBunks = Array.from(select.selectedOptions).map(o => o.value);
 
-      if(!gradeName || bunkNames.length === 0) {
-        alert("Enter a grade and at least one bunk.");
+      if(!gradeName || selectedBunks.length === 0) {
+        alert("Enter a grade and select at least one bunk.");
         return;
       }
 
-      grades[gradeName] = bunkNames;
+      grades[gradeName] = selectedBunks;
       updateTable();
     }
 
@@ -145,11 +160,14 @@
         const th = document.createElement("th");
         // Find grade of bunk
         let gradeIndex = 0;
-        for (const [gradeName, bunkList] of Object.entries(grades)) {
-          if(bunkList.includes(bunk)) break;
-          gradeIndex++;
+        const gradeNames = Object.keys(grades);
+        for (let i = 0; i < gradeNames.length; i++) {
+          if(grades[gradeNames[i]].includes(bunk)) {
+            gradeIndex = i;
+            break;
+          }
         }
-        th.textContent = Object.keys(grades)[gradeIndex] || ""; 
+        th.textContent = gradeNames[gradeIndex] || "";
         th.classList.add(`grade-${gradeIndex % 4}`);
         gradeHeaderRow.appendChild(th);
       });
