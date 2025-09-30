@@ -31,4 +31,55 @@
     End: <input type="time" id="endTime">
     Increment: 
     <select id="increment">
-      <option value="15
+      <option value="15">15 min</option>
+      <option value="30">30 min</option>
+      <option value="60">60 min</option>
+    </select>
+    <button onclick="generateTimes()">Generate</button>
+  </div>
+
+  <!-- Schedule Table -->
+  <table id="scheduleTable">
+    <thead>
+      <tr><th>Time / Bunk</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    let bunks = [];
+    let times = [];
+
+    function updateTable() {
+      const table = document.getElementById("scheduleTable");
+      const theadRow = table.querySelector("thead tr");
+      theadRow.innerHTML = "<th>Time / Bunk</th>";
+
+      bunks.forEach(bunk => {
+        const th = document.createElement("th");
+        th.textContent = bunk;
+        theadRow.appendChild(th);
+      });
+
+      const tbody = table.querySelector("tbody");
+      tbody.innerHTML = "";
+
+      times.forEach(time => {
+        const row = document.createElement("tr");
+        const timeCell = document.createElement("td");
+        timeCell.textContent = time;
+        row.appendChild(timeCell);
+
+        bunks.forEach(() => {
+          const cell = document.createElement("td");
+          row.appendChild(cell);
+        });
+
+        tbody.appendChild(row);
+      });
+    }
+
+    function addBunk() {
+      const input = document.getElementById("bunkInput");
+      if (input.value.trim() !== "") {
+        bunks.push(input.value.tr
