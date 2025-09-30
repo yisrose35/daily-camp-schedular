@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Camp Scheduler</title>
+  <title>Camp Scheduler - Setup</title>
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     .tabs { margin-bottom: 20px; }
@@ -9,24 +9,17 @@
     .tab-button.active { background: #007BFF; color: white; font-weight: bold; }
     .tab-content { display: none; }
     .tab-content.active { display: block; }
-
     table { border-collapse: collapse; margin-top: 20px; width: 100%; }
     th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
-    th.editable:hover, td.editable:hover { background-color: #f0f0f0; cursor: text; }
-
     .bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; display: inline-block; }
     .selected { outline: 3px solid #90CAF9; }
-    #unassignedBunks { margin-top: 10px; }
     .divisionWrapper { display: inline-block; margin-right: 10px; }
     .colorPicker { width: 30px; height: 30px; border: none; cursor: pointer; vertical-align: middle; }
-
     .fieldWrapper { border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 6px; }
     .fieldWrapper h4 { margin: 0 0 5px 0; display: inline-block; margin-right: 10px; }
     .fieldWrapper.unavailable { opacity: 0.5; }
     .activity-button { margin: 2px; padding: 4px 8px; border: 1px solid #333; border-radius: 3px; cursor: pointer; }
     .activity-button.active { background: #007BFF; color: white; }
-
-    /* Toggle switch */
     .switch { position: relative; display: inline-block; width: 40px; height: 20px; }
     .switch input { opacity: 0; width: 0; height: 0; }
     .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
@@ -38,125 +31,64 @@
   </style>
 </head>
 <body>
-  <h1>Camp Scheduler</h1>
+  <h1>Camp Scheduler - Setup</h1>
 
-  <div class="tabs">
-    <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button>
-    <button class="tab-button" onclick="showTab('schedule')">Daily Schedule</button>
-  </div>
+  <!-- Bunks -->
+  <h3>Add Bunks</h3>
+  <input id="bunkInput" placeholder="Enter bunk">
+  <button onclick="addBunk()">Add Bunk</button>
+  <div id="unassignedBunks"></div>
 
-  <!-- Setup Tab -->
-  <div id="setup" class="tab-content active">
-    <!-- Bunk Input -->
-    <h3>Add Bunks</h3>
-    <input id="bunkInput" placeholder="Enter bunk">
-    <button onclick="addBunk()">Add Bunk</button>
+  <!-- Divisions -->
+  <h3>Add Divisions</h3>
+  <input id="divisionInput" placeholder="Enter division name">
+  <button onclick="addDivision()">Add Division</button>
+  <label><input type="checkbox" id="enableColor" checked> Enable colors</label>
+  <div id="divisionButtons"></div>
 
-    <!-- Division Input -->
-    <h3>Add Divisions</h3>
-    <input id="divisionInput" placeholder="Enter division name">
-    <button onclick="addDivision()">Add Division</button>
-    <label><input type="checkbox" id="enableColor" checked> Enable colors</label>
-    <div id="divisionButtons"></div>
+  <!-- Times -->
+  <h3>Generate Times</h3>
+  Start: <input type="time" id="startTime">
+  End: <input type="time" id="endTime">
+  Increment:
+  <select id="increment">
+    <option value="15">15 min</option>
+    <option value="30">30 min</option>
+    <option value="45">45 min</option>
+    <option value="60">60 min</option>
+  </select>
+  <button onclick="generateTimes()">Generate</button>
 
-    <!-- Time Inputs -->
-    <h3>Generate Times</h3>
-    Start: <input type="time" id="startTime">
-    End: <input type="time" id="endTime">
-    Increment:
-    <select id="increment">
-      <option value="15">15 min</option>
-      <option value="30">30 min</option>
-      <option value="45">45 min</option>
-      <option value="60">60 min</option>
-    </select>
-    <button onclick="generateTimes()">Generate</button>
+  <!-- Fields -->
+  <h3>Add Fields/Courts</h3>
+  <input id="fieldInput" placeholder="Enter field/court name (e.g., Court #1)">
+  <button onclick="addField()">Add Field/Court</button>
+  <div id="fieldList"></div>
 
-    <!-- Unassigned Bunks -->
-    <h4>Unassigned Bunks</h4>
-    <div id="unassignedBunks"></div>
-
-    <!-- Field Input -->
-    <h3>Add Fields/Courts</h3>
-    <input id="fieldInput" placeholder="Enter field/court name (e.g., Court #1)">
-    <button onclick="addField()">Add Field/Court</button>
-    <div id="fieldList"></div>
-  </div>
-
-  <!-- Schedule Tab -->
-  <div id="schedule" class="tab-content">
-    <table id="scheduleTable" style="display:none;">
-      <thead>
-        <tr id="divisionRow"></tr>
-        <tr id="bunkRow"></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
+  <!-- Save Button -->
+  <button onclick="saveSetup()">💾 Save Setup</button>
+  <p>After saving, open <b>schedule.html</b> to build the daily schedule.</p>
 
   <script>
-    // ==============================
-    // TAB FUNCTIONALITY
-    function showTab(id){
-      document.querySelectorAll('.tab-button').forEach(b=>b.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
-      document.getElementById(id).classList.add('active');
-      document.querySelector(`.tab-button[onclick="showTab('${id}')"]`).classList.add('active');
-      if(id==='schedule') updateTable();
-    }
-
-    // ==============================
-    // DATA STRUCTURES
     let bunks = [];
     let times = [];
-    let divisions = {}; 
+    let divisions = {};
     let availableDivisions = [];
     let selectedDivision = null;
-
+    let fields = [];
+    const commonActivities = ["Basketball","Football","Baseball","Hockey","Volleyball","Soccer","Lacrosse"];
     const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336'];
     let colorIndex = 0;
 
-    let fields = []; // {name: "Court #1", activities: [], available: true}
-    const commonActivities = ["Basketball","Football","Baseball","Hockey","Volleyball","Soccer","Lacrosse"];
-
-    // ==============================
-    // EDIT FUNCTIONS
-    function editBunk(oldName, newName) {
-      const idx = bunks.indexOf(oldName);
-      if (idx !== -1) bunks[idx] = newName;
-      for (let div in divisions) {
-        const bunkIdx = divisions[div].bunks.indexOf(oldName);
-        if (bunkIdx !== -1) divisions[div].bunks[bunkIdx] = newName;
-      }
-      updateUnassigned();
-      updateTable();
-    }
-
-    function editDivision(oldName, newName) {
-      if (!newName || availableDivisions.includes(newName)) return;
-      const idx = availableDivisions.indexOf(oldName);
-      if (idx !== -1) availableDivisions[idx] = newName;
-      divisions[newName] = divisions[oldName];
-      delete divisions[oldName];
-      if (selectedDivision === oldName) selectedDivision = newName;
-      setupDivisionButtons();
-      updateTable();
-    }
-
-    // ==============================
-    // BUNKS
     function addBunk() {
       const input = document.getElementById('bunkInput');
       if(input.value.trim()!==""){
         bunks.push(input.value.trim());
         input.value="";
         updateUnassigned();
-        updateTable();
       }
     }
 
-    // ==============================
-    // DIVISIONS
     function addDivision() {
       const input = document.getElementById('divisionInput');
       if(input.value.trim()==="") return;
@@ -168,7 +100,6 @@
         divisions[divName] = { bunks: [], color: color };
         input.value="";
         setupDivisionButtons();
-        updateTable();
       }
     }
 
@@ -186,19 +117,6 @@
         span.textContent = divName;
         span.className = "bunk-button";
         span.style.backgroundColor = colorEnabled ? divObj.color : "transparent";
-        span.ondblclick = () => {
-          const input = document.createElement("input");
-          input.type = "text";
-          input.value = divName;
-          input.onblur = () => {
-            if (input.value.trim() && input.value.trim() !== divName) {
-              editDivision(divName, input.value.trim());
-            }
-          };
-          input.onkeyup = (e) => { if (e.key === "Enter") input.blur(); };
-          span.replaceWith(input);
-          input.focus();
-        };
         span.onclick = ()=> {
           selectedDivision = divName;
           Array.from(container.getElementsByTagName('span')).forEach(c=>c.classList.remove("selected"));
@@ -212,8 +130,6 @@
         colorInput.className = "colorPicker";
         colorInput.addEventListener("input", e=>{
           divObj.color = e.target.value;
-          if(colorEnabled) span.style.backgroundColor = e.target.value;
-          updateTable();
         });
         wrapper.appendChild(colorInput);
 
@@ -234,59 +150,34 @@
           if(selectedDivision){
             divisions[selectedDivision].bunks.push(bunk);
             updateUnassigned();
-            updateTable();
           } else {
             alert("Select a division first!");
           }
-        };
-        span.ondblclick = (e)=>{
-          e.stopPropagation();
-          const input = document.createElement("input");
-          input.type = "text";
-          input.value = bunk;
-          input.onblur = ()=>{
-            if (input.value.trim() && input.value.trim() !== bunk) {
-              editBunk(bunk, input.value.trim());
-            }
-          };
-          input.onkeyup = (e)=>{ if(e.key==="Enter") input.blur(); };
-          span.replaceWith(input);
-          input.focus();
         };
         container.appendChild(span);
       });
     }
 
-    // ==============================
-    // TIMES
     function generateTimes() {
       const startInput = document.getElementById("startTime").value;
       const endInput = document.getElementById("endTime").value;
       const increment = parseInt(document.getElementById("increment").value);
-      if(!startInput || !endInput){alert("Select valid start and end times"); return;}
-      let [startH,startM] = startInput.split(":").map(Number);
-      let [endH,endM] = endInput.split(":").map(Number);
-      const startDate = new Date(0,0,0,startH,startM);
-      const endDate = new Date(0,0,0,endH,endM);
-      if(startDate>=endDate){alert("Start must be before end"); return;}
+      if(!startInput || !endInput){alert("Select valid times"); return;}
+      let [sh,sm] = startInput.split(":").map(Number);
+      let [eh,em] = endInput.split(":").map(Number);
+      let start=new Date(0,0,0,sh,sm), end=new Date(0,0,0,eh,em);
+      if(start>=end){alert("Start must be before end"); return;}
       times=[];
-      let current = new Date(startDate.getTime());
-      while(current<endDate){
-        let next = new Date(current.getTime()+increment*60000);
-        if(next>endDate) break;
-        const format = d=>{
-          let h=d.getHours(), m=d.getMinutes().toString().padStart(2,'0');
-          h=h%12||12;
-          return `${h}:${m}`;
-        };
-        times.push(`${format(current)} - ${format(next)}`);
-        current=next;
+      let cur=new Date(start);
+      while(cur<end){
+        let next=new Date(cur.getTime()+increment*60000);
+        if(next>end) break;
+        let fmt=d=>{let h=d.getHours(),m=d.getMinutes().toString().padStart(2,'0'); h=h%12||12; return `${h}:${m}`;};
+        times.push(`${fmt(cur)} - ${fmt(next)}`);
+        cur=next;
       }
-      updateTable();
     }
 
-    // ==============================
-    // FIELDS
     function addField() {
       const input = document.getElementById("fieldInput");
       const fieldName = input.value.trim();
@@ -297,80 +188,48 @@
       }
     }
 
-    function renderFields(){
+    function renderFields() {
       const container = document.getElementById("fieldList");
       container.innerHTML="";
-      fields.forEach((field, index)=>{
-        const wrapper = document.createElement("div");
+      fields.forEach((field)=>{
+        const wrapper=document.createElement("div");
         wrapper.className="fieldWrapper";
         if(!field.available) wrapper.classList.add("unavailable");
 
-        const title = document.createElement("h4");
-        title.textContent = field.name;
-        title.ondblclick = ()=>{
-          const input = document.createElement("input");
-          input.type="text";
-          input.value = field.name;
-          input.onblur = ()=>{
-            if(input.value.trim()) field.name = input.value.trim();
-            renderFields();
-          };
-          input.onkeyup = (e)=>{ if(e.key==="Enter") input.blur(); };
-          title.replaceWith(input);
-          input.focus();
-        };
+        const title=document.createElement("h4");
+        title.textContent=field.name;
         wrapper.appendChild(title);
 
-        // Availability toggle
-        const toggleWrapper = document.createElement("label");
-        toggleWrapper.className="switch";
-        const checkbox = document.createElement("input");
-        checkbox.type="checkbox";
-        checkbox.checked = field.available;
-        checkbox.onchange = ()=>{
-          field.available = checkbox.checked;
-          renderFields();
-        };
-        const slider = document.createElement("span");
-        slider.className="slider";
-        toggleWrapper.appendChild(checkbox);
-        toggleWrapper.appendChild(slider);
-        wrapper.appendChild(toggleWrapper);
+        const toggle=document.createElement("label");
+        toggle.className="switch";
+        const cb=document.createElement("input");
+        cb.type="checkbox"; cb.checked=field.available;
+        cb.onchange=()=>{field.available=cb.checked; renderFields();};
+        const slider=document.createElement("span"); slider.className="slider";
+        toggle.appendChild(cb); toggle.appendChild(slider);
+        wrapper.appendChild(toggle);
 
-        // Common activity buttons
         commonActivities.forEach(act=>{
-          const btn = document.createElement("button");
-          btn.textContent = act;
+          const btn=document.createElement("button");
+          btn.textContent=act;
           btn.className="activity-button";
           if(field.activities.includes(act)) btn.classList.add("active");
           btn.onclick=()=>{
-            if(field.activities.includes(act)){
-              field.activities = field.activities.filter(a=>a!==act);
-            } else {
-              field.activities.push(act);
-            }
+            if(field.activities.includes(act)) field.activities=field.activities.filter(a=>a!==act);
+            else field.activities.push(act);
             renderFields();
           };
           wrapper.appendChild(btn);
         });
 
-        // "Other" input
-        const otherInput = document.createElement("input");
-        otherInput.placeholder="Other activity";
-        otherInput.onkeyup=(e)=>{
-          if(e.key==="Enter" && otherInput.value.trim()){
-            const val = otherInput.value.trim();
-            if(!field.activities.includes(val)) field.activities.push(val);
-            otherInput.value="";
-            renderFields();
-          }
-        };
-        wrapper.appendChild(otherInput);
+        const other=document.createElement("input");
+        other.placeholder="Other activity";
+        other.onkeyup=(e)=>{ if(e.key==="Enter" && other.value.trim()){ field.activities.push(other.value.trim()); other.value=""; renderFields();}};
+        wrapper.appendChild(other);
 
-        // Display chosen activities
         if(field.activities.length>0){
-          const chosen = document.createElement("p");
-          chosen.textContent = "Activities: " + field.activities.join(", ");
+          const chosen=document.createElement("p");
+          chosen.textContent="Activities: "+field.activities.join(", ");
           wrapper.appendChild(chosen);
         }
 
@@ -378,117 +237,15 @@
       });
     }
 
-    // ==============================
-    // SCHEDULE TABLE
-    function updateTable() {
-      const table = document.getElementById("scheduleTable");
-      if(times.length===0) return;
-      table.style.display="table";
-
-      const divRow = document.getElementById("divisionRow");
-      const bunkRow = document.getElementById("bunkRow");
-      divRow.innerHTML="<th>Division</th>";
-      bunkRow.innerHTML="<th>Bunk</th>";
-
-      const colorEnabled = document.getElementById("enableColor").checked;
-
-      availableDivisions.forEach((divName)=>{
-        const divObj = divisions[divName];
-        const bunksInDiv = divObj.bunks;
-
-        const thDiv = document.createElement("th");
-        thDiv.colSpan = Math.max(bunksInDiv.length,1);
-        thDiv.style.backgroundColor = colorEnabled ? divObj.color : "transparent";
-        thDiv.style.color = colorEnabled ? "#fff" : "#000";
-
-        const span = document.createElement("span");
-        span.textContent = divName;
-        span.ondblclick = ()=>{
-          const input = document.createElement("input");
-          input.type="text";
-          input.value = divName;
-          input.onblur = ()=>{
-            if(input.value.trim() && input.value.trim()!==divName){
-              editDivision(divName, input.value.trim());
-            }
-          };
-          input.onkeyup = (e)=>{ if(e.key==="Enter") input.blur(); };
-          span.replaceWith(input);
-          input.focus();
-        };
-        thDiv.appendChild(span);
-        divRow.appendChild(thDiv);
-
-        if(bunksInDiv.length===0){
-          const thEmpty = document.createElement("th");
-          thEmpty.textContent="";
-          bunkRow.appendChild(thEmpty);
-        } else {
-          bunksInDiv.forEach(bunk=>{
-            const thBunk = document.createElement("th");
-            const spanBunk = document.createElement("span");
-            spanBunk.textContent = bunk;
-            spanBunk.ondblclick = ()=>{
-              const input = document.createElement("input");
-              input.type="text";
-              input.value = bunk;
-              input.onblur = ()=>{
-                if(input.value.trim() && input.value.trim()!==bunk){
-                  editBunk(bunk, input.value.trim());
-                }
-              };
-              input.onkeyup = (e)=>{ if(e.key==="Enter") input.blur(); };
-              spanBunk.replaceWith(input);
-              input.focus();
-            };
-            thBunk.appendChild(spanBunk);
-            bunkRow.appendChild(thBunk);
-          });
-        }
-      });
-
-      const tbody = document.querySelector("#scheduleTable tbody");
-      tbody.innerHTML="";
-      times.forEach(time=>{
-        const row = document.createElement("tr");
-        const tdTime = document.createElement("td");
-        tdTime.textContent = time;
-        row.appendChild(tdTime);
-
-        availableDivisions.forEach(divName=>{
-          const bunksInDiv = divisions[divName].bunks;
-          if(bunksInDiv.length===0){
-            const td = document.createElement("td");
-            row.appendChild(td);
-          } else {
-            bunksInDiv.forEach(()=>{ 
-              const td = document.createElement("td");
-              row.appendChild(td);
-            });
-          }
-        });
-        tbody.appendChild(row);
-      });
+    function saveSetup() {
+      const data = { bunks, divisions, availableDivisions, times, fields };
+      localStorage.setItem("campSetup", JSON.stringify(data));
+      alert("Setup saved! Open schedule.html to build the schedule.");
     }
 
-    // ==============================
-    // ENTER key support
-    document.getElementById("bunkInput").addEventListener("keyup", function(e){
-      if(e.key==="Enter") addBunk();
-    });
-    document.getElementById("divisionInput").addEventListener("keyup", function(e){
-      if(e.key==="Enter") addDivision();
-    });
-    document.getElementById("fieldInput").addEventListener("keyup", function(e){
-      if(e.key==="Enter") addField();
-    });
-
-    document.getElementById("startTime").addEventListener("input", function(){
-      if(this.value.length === 5) document.getElementById("endTime").focus();
-    });
-    document.getElementById("endTime").addEventListener("keyup", function(e){
-      if(e.key==="Enter") generateTimes();
-    });
+    document.getElementById("bunkInput").addEventListener("keyup", e=>{if(e.key==="Enter") addBunk();});
+    document.getElementById("divisionInput").addEventListener("keyup", e=>{if(e.key==="Enter") addDivision();});
+    document.getElementById("fieldInput").addEventListener("keyup", e=>{if(e.key==="Enter") addField();});
   </script>
 </body>
 </html>
