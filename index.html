@@ -41,7 +41,7 @@
     let bunks = [];
     let times = [];
 
-    // Add bunk (keeps your logic intact)
+    // Add bunk (works exactly like original)
     function addBunk() {
       const input = document.getElementById('bunkInput');
       if(input.value.trim() !== "") {
@@ -52,5 +52,73 @@
       }
     }
 
-    // Generate times
-    function generateTi
+    // Generate times (HH:MM only)
+    function generateTimes() {
+      const startInput = document.getElementById("startTime").value;
+      const endInput = document.getElementById("endTime").value;
+      const increment = parseInt(document.getElementById("increment").value);
+
+      if(!startInput || !endInput) {
+        alert("Please select valid start and end times.");
+        return;
+      }
+
+      let [startH, startM] = startInput.split(":").map(Number);
+      let [endH, endM] = endInput.split(":").map(Number);
+
+      const startDate = new Date(0,0,0,startH,startM);
+      const endDate = new Date(0,0,0,endH,endM);
+
+      if(startDate >= endDate) {
+        alert("Start time must be before end time.");
+        return;
+      }
+
+      times = [];
+      let current = new Date(startDate.getTime());
+
+      while(current < endDate) {
+        const next = new Date(current.getTime() + increment*60000);
+        if(next > endDate) break;
+        const format = d => d.getHours().toString().padStart(2,'0') + ":" + d.getMinutes().toString().padStart(2,'0');
+        times.push(`${format(current)} - ${format(next)}`);
+        current = next;
+      }
+
+      console.log("Generated times:", times);
+      updateTable();
+    }
+
+    // Update table to show bunks horizontally and times vertically
+    function updateTable() {
+      const table = document.getElementById("scheduleTable");
+
+      // Header row with bunks
+      const thead = table.querySelector("thead");
+      thead.innerHTML = "<tr><th>Time / Bunk</th></tr>";
+      bunks.forEach(bunk => {
+        const th = document.createElement("th");
+        th.textContent = bunk;
+        thead.querySelector("tr").appendChild(th);
+      });
+
+      // Body rows with times
+      const tbody = table.querySelector("tbody");
+      tbody.innerHTML = "";
+      times.forEach(time => {
+        const row = document.createElement("tr");
+        const timeCell = document.createElement("td");
+        timeCell.textContent = time;
+        row.appendChild(timeCell);
+
+        bunks.forEach(() => {
+          const cell = document.createElement("td");
+          row.appendChild(cell);
+        });
+
+        tbody.appendChild(row);
+      });
+    }
+  </script>
+</body>
+</html>
