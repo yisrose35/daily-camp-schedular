@@ -5,11 +5,13 @@
 </head>
 <body>
   <h1>Test Camp Scheduler</h1>
+
+  <!-- Bunks (unchanged) -->
   <input id="bunkInput" placeholder="Enter bunk">
   <button onclick="addBunk()">Add Bunk</button>
   <ul id="bunkList"></ul>
 
-  <!-- Fixed Time Input -->
+  <!-- Times (added separately) -->
   <h3>Generate Times</h3>
   Start: <input type="time" id="startTime">
   End: <input type="time" id="endTime">
@@ -23,8 +25,8 @@
   <ul id="timeList"></ul>
 
   <script>
+    // Bunks (original working code)
     let bunks = [];
-
     function addBunk() {
       const input = document.getElementById('bunkInput');
       if(input.value.trim() !== "") {
@@ -38,7 +40,7 @@
       }
     }
 
-    // Only time input fix applied below
+    // Times (fixed)
     function generateTimes() {
       const startInput = document.getElementById("startTime").value;
       const endInput = document.getElementById("endTime").value;
@@ -71,6 +73,7 @@
         current = next;
       }
 
+      // Display times only in the separate <ul> for times
       const ul = document.getElementById('timeList');
       ul.innerHTML = "";
       times.forEach(t => {
@@ -79,4 +82,8 @@
         ul.appendChild(li);
       });
 
-      console.log("Genera
+      console.log("Generated times:", times);
+    }
+  </script>
+</body>
+</html>
