@@ -23,245 +23,187 @@
     table { border-collapse: collapse; margin-top: 20px; width: 100%; }
     th, td {
       border: 1px solid #000;
-      padding: 8px;
+      padding: 6px;
       text-align: center;
-      min-width: 80px;
+      min-width: 70px;
     }
-    .division-header {
-      font-weight: bold;
-      color: white;
-    }
-    .unassigned-buttons button {
-      margin: 2px;
-      padding: 4px 8px;
-      cursor: pointer;
-    }
+    .division-header { font-weight: bold; color: white; }
+    .button-container button { margin: 3px; padding: 6px 10px; cursor: pointer; }
+    .time-input { width: 70px; }
   </style>
 </head>
 <body>
 
 <h1>Camp Scheduler</h1>
 
-<!-- Tabs -->
 <div class="tabs">
   <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button>
   <button class="tab-button" onclick="showTab('schedule')">Daily Schedule</button>
 </div>
 
-<!-- Setup & Configuration -->
 <div id="setup" class="tab-content active">
   <h2>Setup & Configuration</h2>
 
   <h3>Bunks</h3>
   <input id="bunkInput" placeholder="Enter bunk name">
   <button onclick="addBunk()">Add Bunk</button>
-  <ul id="bunkList"></ul>
+  <div id="bunkButtons" class="button-container"></div>
 
   <h3>Divisions</h3>
   <input id="divisionInput" placeholder="Enter division name">
   <button onclick="addDivision()">Add Division</button>
-  <ul id="divisionList"></ul>
+  <div id="divisionButtons" class="button-container"></div>
+  <button id="colorToggleBtn" onclick="toggleColor()">Disable Colors</button>
 
   <h3>Times</h3>
-  <input id="startTime" placeholder="Start time (e.g., 9:00)">
-  <input id="endTime" placeholder="End time (e.g., 17:00)">
-  <input id="increment" placeholder="Interval in minutes (e.g., 15)">
+  Start: <input id="startTime" class="time-input" placeholder="9:00">
+  End: <input id="endTime" class="time-input" placeholder="17:00">
+  Interval: <input id="increment" class="time-input" placeholder="15">
   <button onclick="generateTimes()">Generate Times</button>
-  <ul id="timeList"></ul>
 </div>
 
-<!-- Daily Schedule -->
 <div id="schedule" class="tab-content">
   <h2>Daily Schedule</h2>
-  <table id="scheduleTable">
-    <!-- Filled dynamically -->
-  </table>
+  <table id="scheduleTable"></table>
 </div>
 
 <script>
   let bunks = [];
   let divisions = [];
-  let availableDivisions = [];
   let times = [];
-  const autoColors = ["#4CAF50","#2196F3","#E91E63","#FF9800","#9C27B0"];
-  let autoColorIndex = 0;
+  let autoColors = ["#4CAF50","#2196F3","#E91E63","#FF9800","#9C27B0"];
+  let autoIndex = 0;
   let colorEnabled = true;
+  let selectedDivision = null;
 
-  // Tab handling
-  function showTab(tabId){
-    document.querySelectorAll('.tab-button').forEach(btn=>btn.classList.remove('active'));
+  // TAB FUNCTIONALITY
+  function showTab(id){
+    document.querySelectorAll('.tab-button').forEach(b=>b.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
-    document.getElementById(tabId).classList.add('active');
-    document.querySelector(`button[onclick="showTab('${tabId}')"]`).classList.add('active');
-    if(tabId==='schedule') updateScheduleTable();
+    document.getElementById(id).classList.add('active');
+    document.querySelector(`button[onclick="showTab('${id}')"]`).classList.add('active');
+    if(id==='schedule') updateScheduleTable();
   }
 
-  // Add bunk
-  function addBunk() {
-    const val = document.getElementById('bunkInput').value.trim();
-    if(val!=="") {
-      bunks.push({name: val, division:null});
-      renderBunkList();
-      document.getElementById('bunkInput').value="";
-    }
+  // ADD & RENDER BUNKS
+  function addBunk(){
+    const val=document.getElementById('bunkInput').value.trim();
+    if(val){ bunks.push({name:val, division:null}); document.getElementById('bunkInput').value=""; renderBunks(); }
   }
 
-  function renderBunkList() {
-    const ul = document.getElementById('bunkList');
-    ul.innerHTML = "";
-    bunks.forEach((bunk,index)=>{
-      const li = document.createElement('li');
-      li.textContent = bunk.name + (bunk.division ? " ("+bunk.division+")" : " (unassigned)");
-      li.onclick = ()=>editBunk(index);
-      ul.appendChild(li);
-    });
-
-    // Unassigned bunk buttons
-    const container = document.createElement("div");
-    container.className="unassigned-buttons";
-    container.innerHTML="<h4>Assign Unassigned Bunks:</h4>";
-    bunks.filter(b=>!b.division).forEach(bunk=>{
-      const btn = document.createElement("button");
-      btn.textContent = bunk.name;
+  function renderBunks(){
+    const container = document.getElementById('bunkButtons');
+    container.innerHTML = "";
+    bunks.forEach((b,i)=>{
+      const btn = document.createElement('button');
+      btn.textContent = b.name + (b.division? " ("+b.division+")":"");
+      btn.style.backgroundColor = b.division? getDivisionColor(b.division) : "#eee";
       btn.onclick = ()=>{
-        if(availableDivisions.length===0){ alert("Add a division first!"); return; }
-        const chosenDiv = prompt("Assign " + bunk.name + " to which division?", availableDivisions[0]);
-        if(chosenDiv && availableDivisions.includes(chosenDiv)){
-          bunk.division = chosenDiv;
-          renderBunkList();
+        if(selectedDivision){
+          b.division = selectedDivision;
+          renderBunks();
+          updateScheduleTable();
+        } else {
+          alert("Select a division first.");
         }
       };
       container.appendChild(btn);
     });
-    ul.appendChild(container);
   }
 
-  function editBunk(index){
-    const newName = prompt("Edit bunk name:", bunks[index].name);
-    if(newName) { bunks[index].name = newName.trim(); renderBunkList(); }
+  // ADD & RENDER DIVISIONS
+  function addDivision(){
+    const val=document.getElementById('divisionInput').value.trim();
+    if(!val) return;
+    const color = autoColors[autoIndex % autoColors.length]; autoIndex++;
+    divisions.push({name:val, color:color});
+    selectedDivision = val; renderDivisions();
+    document.getElementById('divisionInput').value="";
   }
 
-  // Add division
-  function addDivision() {
-    const val = document.getElementById('divisionInput').value.trim();
-    if(val!=="") {
-      const color = autoColors[autoColorIndex % autoColors.length];
-      autoColorIndex++;
-      divisions.push({name: val, color: color});
-      availableDivisions.push(val);
-      renderDivisionList();
-      document.getElementById('divisionInput').value="";
-    }
-  }
-
-  function renderDivisionList(){
-    const ul = document.getElementById('divisionList');
-    ul.innerHTML="";
-    divisions.forEach((div,index)=>{
-      const li = document.createElement('li');
-      li.textContent = div.name + " ";
-      // Color input
-      const colorInput = document.createElement("input");
-      colorInput.type="color";
-      colorInput.value = div.color;
-      colorInput.oninput = e=>{ div.color=e.target.value; updateScheduleTable(); };
-      li.appendChild(colorInput);
-      ul.appendChild(li);
+  function renderDivisions(){
+    const container = document.getElementById('divisionButtons');
+    container.innerHTML="";
+    divisions.forEach(d=>{
+      const btn = document.createElement('button');
+      btn.textContent = d.name;
+      btn.style.backgroundColor = getDivisionColor(d.name);
+      btn.onclick = ()=>{ selectedDivision = d.name; };
+      container.appendChild(btn);
+      const colorInput = document.createElement('input');
+      colorInput.type="color"; colorInput.value=d.color;
+      colorInput.oninput = e=>{ d.color=e.target.value; updateScheduleTable(); renderDivisions(); };
+      container.appendChild(colorInput);
     });
-    // Toggle color enable/disable
-    const toggle = document.createElement("button");
-    toggle.textContent = colorEnabled ? "Disable Colors" : "Enable Colors";
-    toggle.onclick = ()=>{
-      colorEnabled=!colorEnabled; renderDivisionList(); updateScheduleTable();
-    };
-    ul.appendChild(toggle);
+    document.getElementById('colorToggleBtn').textContent = colorEnabled?"Disable Colors":"Enable Colors";
   }
 
   function getDivisionColor(name){
     const div = divisions.find(d=>d.name===name);
-    if(!div) return "#ccc";
-    return colorEnabled ? div.color : "#ccc";
+    return div ? (colorEnabled?div.color:"#ccc") : "#ccc";
   }
 
-  // Time generation
+  function toggleColor(){ colorEnabled = !colorEnabled; updateScheduleTable(); renderDivisions(); }
+
+  // TIME GENERATION
   function generateTimes(){
     const start = document.getElementById("startTime").value;
     const end = document.getElementById("endTime").value;
     const inc = parseInt(document.getElementById("increment").value);
     if(!start||!end||!inc) return;
 
-    let [sh,sm]=start.split(":").map(Number);
-    let [eh,em]=end.split(":").map(Number);
-    let startDate=new Date(0,0,0,sh,sm);
-    let endDate=new Date(0,0,0,eh,em);
+    let [sh,sm] = start.split(":").map(Number);
+    let [eh,em] = end.split(":").map(Number);
+    let startDate = new Date(0,0,0,sh,sm);
+    let endDate = new Date(0,0,0,eh,em);
 
-    times=[];
+    times = [];
     while(startDate<endDate){
-      let next=new Date(startDate.getTime()+inc*60000);
+      let next = new Date(startDate.getTime()+inc*60000);
       times.push(formatTime(startDate)+" - "+formatTime(next));
       startDate=next;
     }
-    renderTimeList();
     updateScheduleTable();
   }
 
   function formatTime(date){
-    let h = date.getHours();
-    let m = date.getMinutes().toString().padStart(2,"0");
-    let suffix = h>=12 ? "PM":"AM";
-    h = h%12 || 12;
+    let h = date.getHours(), m = date.getMinutes().toString().padStart(2,"0");
+    let suffix = h>=12?"PM":"AM";
+    h = h%12||12;
     return h+":"+m+" "+suffix;
   }
 
-  function renderTimeList(){
-    const ul = document.getElementById("timeList");
-    ul.innerHTML="";
-    times.forEach(t=>{
-      const li = document.createElement("li"); li.textContent=t; ul.appendChild(li);
-    });
-  }
-
-  // Update schedule table
+  // UPDATE SCHEDULE TABLE
   function updateScheduleTable(){
     const table = document.getElementById("scheduleTable");
     table.innerHTML="";
+    const thead = document.createElement("thead");
+    const topRow = document.createElement("tr");
+    const secondRow = document.createElement("tr");
 
-    const thead=document.createElement("thead");
-    const topRow=document.createElement("tr");
-    const secondRow=document.createElement("tr");
+    const emptyTh = document.createElement("th"); emptyTh.rowSpan=2; emptyTh.textContent="Time"; topRow.appendChild(emptyTh);
 
-    const emptyTh=document.createElement("th");
-    emptyTh.rowSpan=2; emptyTh.textContent="Time";
-    topRow.appendChild(emptyTh);
+    divisions.forEach(div=>{
+      const bunksInDiv = bunks.filter(b=>b.division===div.name);
+      const th = document.createElement("th");
+      th.textContent = div.name; th.colSpan = bunksInDiv.length; th.className="division-header";
+      th.style.backgroundColor = getDivisionColor(div.name); topRow.appendChild(th);
 
-    // Divisions
-    availableDivisions.forEach(div=>{
-      const bunksInDiv = bunks.filter(b=>b.division===div);
-      const th=document.createElement("th");
-      th.textContent=div; th.colSpan=bunksInDiv.length;
-      th.style.backgroundColor=getDivisionColor(div); th.style.color="white"; th.className="division-header";
-      topRow.appendChild(th);
-
-      bunksInDiv.forEach(bunk=>{
-        const bunkTh = document.createElement("th");
-        bunkTh.textContent=bunk.name; secondRow.appendChild(bunkTh);
+      bunksInDiv.forEach(b=>{
+        const bunkTh = document.createElement("th"); bunkTh.textContent = b.name; secondRow.appendChild(bunkTh);
       });
     });
-
-    thead.appendChild(topRow);
-    thead.appendChild(secondRow);
+    thead.appendChild(topRow); thead.appendChild(secondRow);
     table.appendChild(thead);
 
-    const tbody=document.createElement("tbody");
-    times.forEach(time=>{
-      const tr=document.createElement("tr");
-      const tdTime=document.createElement("td"); tdTime.textContent=time; tr.appendChild(tdTime);
-
-      availableDivisions.forEach(div=>{
-        const bunksInDiv = bunks.filter(b=>b.division===div);
-        bunksInDiv.forEach(bunk=>{
-          const td=document.createElement("td");
-          td.textContent=""; tr.appendChild(td);
+    const tbody = document.createElement("tbody");
+    times.forEach(t=>{
+      const tr = document.createElement("tr");
+      const tdTime = document.createElement("td"); tdTime.textContent=t; tr.appendChild(tdTime);
+      divisions.forEach(div=>{
+        const bunksInDiv = bunks.filter(b=>b.division===div.name);
+        bunksInDiv.forEach(b=>{
+          const td = document.createElement("td"); td.textContent=""; tr.appendChild(td);
         });
       });
       tbody.appendChild(tr);
@@ -269,26 +211,18 @@
     table.appendChild(tbody);
   }
 
-  // Smooth time flow and Enter key
-  document.addEventListener("keydown",e=>{
-    if(e.key==="Enter"){
-      if(document.activeElement.id==="bunkInput") addBunk();
-      else if(document.activeElement.id==="divisionInput") addDivision();
-      else if(document.activeElement.id==="startTime") document.getElementById("endTime").focus();
-      else if(document.activeElement.id==="endTime") document.getElementById("increment").focus();
-      else if(document.activeElement.id==="increment") generateTimes();
-    }
-  });
+  // SMOOTH TIME INPUT FLOW + ENTER
+  document.getElementById("startTime").addEventListener("input", ()=>{if(document.getElementById("startTime").value.length===4||document.getElementById("startTime").value.length===5) document.getElementById("endTime").focus();});
+  document.getElementById("endTime").addEventListener("input", ()=>{if(document.getElementById("endTime").value.length===4||document.getElementById("endTime").value.length===5) document.getElementById("increment").focus();});
+  document.getElementById("increment").addEventListener("keyup",(e)=>{if(e.key==="Enter") generateTimes();});
 
-  document.getElementById("startTime").addEventListener("input", ()=>{
-    if(document.getElementById("startTime").value.length===5) document.getElementById("endTime").focus();
-  });
-  document.getElementById("endTime").addEventListener("input", ()=>{
-    if(document.getElementById("endTime").value.length===5) document.getElementById("increment").focus();
-  });
-  document.getElementById("increment").addEventListener("keyup",(e)=>{
-    if(e.key==="Enter") generateTimes();
+  // ENTER KEY FOR ADDING BUNKS & DIVISIONS
+  document.addEventListener("keydown", e=>{
+    if(e.key==="Enter"){
+      const active = document.activeElement.id;
+      if(active==="bunkInput") addBunk();
+      else if(active==="divisionInput") addDivision();
+    }
   });
 </script>
 </body>
-</html>
