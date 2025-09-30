@@ -3,203 +3,269 @@
 <head>
   <title>Camp Scheduler</title>
   <style>
-    body { font-family: Arial, sans-serif; }
-    .tabs { display: flex; margin-bottom: 10px; }
-    .tab { padding: 10px 20px; cursor: pointer; border: 1px solid #ccc; border-bottom: none; }
-    .tab.active { background: #f0f0f0; font-weight: bold; }
-    .tab-content { border: 1px solid #ccc; padding: 10px; display: none; }
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .tabs { margin-bottom: 20px; }
+    .tab-button {
+      padding: 10px 20px;
+      cursor: pointer;
+      border: 1px solid #ccc;
+      background: #f0f0f0;
+      margin-right: 5px;
+    }
+    .tab-button.active {
+      background: #007BFF;
+      color: white;
+      font-weight: bold;
+    }
+    .tab-content { display: none; }
     .tab-content.active { display: block; }
-    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
-    th, td { border: 1px solid #ccc; padding: 5px; text-align: center; }
-    .color-box { width: 20px; height: 20px; display: inline-block; border: 1px solid #000; vertical-align: middle; }
+
+    table { border-collapse: collapse; margin-top: 20px; width: 100%; }
+    th, td {
+      border: 1px solid #000;
+      padding: 8px;
+      text-align: center;
+      min-width: 80px;
+    }
+    .division-header {
+      font-weight: bold;
+      color: white;
+    }
   </style>
 </head>
 <body>
+
   <h1>Camp Scheduler</h1>
 
   <!-- Tabs -->
   <div class="tabs">
-    <div class="tab active" onclick="showTab('setup')">Setup & Configuration</div>
-    <div class="tab" onclick="showTab('schedule')">Daily Schedule</div>
+    <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button>
+    <button class="tab-button" onclick="showTab('schedule')">Daily Schedule</button>
   </div>
 
-  <!-- Setup Tab -->
+  <!-- Setup & Configuration Tab -->
   <div id="setup" class="tab-content active">
     <h2>Setup & Configuration</h2>
 
-    <!-- Bunks -->
     <h3>Bunks</h3>
-    <input id="bunkInput" placeholder="Enter bunk">
+    <input id="bunkInput" placeholder="Enter bunk name">
     <button onclick="addBunk()">Add Bunk</button>
     <ul id="bunkList"></ul>
 
-    <!-- Divisions -->
     <h3>Divisions</h3>
-    <input id="divisionInput" placeholder="Enter division">
-    <input type="color" id="divisionColor">
+    <input id="divisionInput" placeholder="Enter division name">
     <button onclick="addDivision()">Add Division</button>
-    <ul id="divisionList"></ul>
+    <div id="divisionButtons"></div>
 
-    <!-- Times -->
     <h3>Times</h3>
-    <input type="time" id="startTime"> to 
-    <input type="time" id="endTime">
+    <input id="startTime" placeholder="Start time (e.g., 9:00)">
+    <input id="endTime" placeholder="End time (e.g., 17:00)">
+    <input id="increment" placeholder="Increment (e.g., 30)">
     <button onclick="generateTimes()">Generate Times</button>
-
-    <!-- Activities -->
-    <h3>Fields & Activities</h3>
-    <input id="activityInput" placeholder="Enter activity">
-    <button onclick="addActivity()">Add Activity</button>
-    <ul id="activityList"></ul>
+    <ul id="timeList"></ul>
   </div>
 
-  <!-- Schedule Tab -->
+  <!-- Daily Schedule Tab -->
   <div id="schedule" class="tab-content">
     <h2>Daily Schedule</h2>
     <table id="scheduleTable">
       <thead>
         <tr>
           <th>Time</th>
-          <th>Division</th>
-          <th>Bunk</th>
-          <th>Activity</th>
+          <th id="bunkHeaders">Bunks / Divisions</th>
         </tr>
       </thead>
-      <tbody></tbody>
+      <tbody id="scheduleBody"></tbody>
     </table>
   </div>
 
   <script>
     let bunks = [];
-    let divisions = [];
     let times = [];
-    let activities = [];
-    let autoColors = ["#4CAF50", "#2196F3", "#E91E63", "#FF9800", "#9C27B0"];
-    let colorIndex = 0;
+    let divisions = {};
+    let availableDivisions = [];
+    let colors = ["#4CAF50","#2196F3","#FF5722","#9C27B0","#E91E63","#FF9800","#795548"];
+    let divisionColorIndex = 0;
 
-    function showTab(tab) {
-      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
-      document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
-      document.querySelector(`.tab[onclick="showTab('${tab}')"]`).classList.add("active");
-      document.getElementById(tab).classList.add("active");
+    // Handle tabs
+    function showTab(tabId) {
+      document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+      document.querySelector(`button[onclick="showTab('${tabId}')"]`).classList.add('active');
+      document.getElementById(tabId).classList.add('active');
+      if(tabId === "schedule") updateScheduleTable();
     }
 
-    // Bunks
+    // Add bunk
     function addBunk() {
-      const input = document.getElementById("bunkInput");
-      if (input.value.trim() !== "") {
-        bunks.push(input.value.trim());
-        updateBunkList();
+      const input = document.getElementById('bunkInput');
+      if(input.value.trim() !== "") {
+        bunks.push({ name: input.value.trim(), division: null });
+        renderBunkList();
         input.value = "";
       }
     }
-    function updateBunkList() {
-      const ul = document.getElementById("bunkList");
+
+    function renderBunkList() {
+      const ul = document.getElementById('bunkList');
       ul.innerHTML = "";
-      bunks.forEach((bunk, i) => {
-        const li = document.createElement("li");
-        li.textContent = bunk;
-        li.contentEditable = true;
-        li.onblur = () => bunks[i] = li.textContent.trim();
+      bunks.forEach((bunk, index) => {
+        const li = document.createElement('li');
+        li.textContent = bunk.name + (bunk.division ? " ("+bunk.division+")" : "");
+        li.onclick = () => editBunk(index);
         ul.appendChild(li);
       });
     }
 
-    // Divisions
+    function editBunk(index) {
+      const newName = prompt("Edit bunk name:", bunks[index].name);
+      if(newName) {
+        bunks[index].name = newName.trim();
+        renderBunkList();
+      }
+    }
+
+    // Add division
     function addDivision() {
-      const input = document.getElementById("divisionInput");
-      const colorInput = document.getElementById("divisionColor");
-      if (input.value.trim() !== "") {
-        const color = colorInput.value || autoColors[colorIndex % autoColors.length];
-        divisions.push({ name: input.value.trim(), color });
-        colorIndex++;
-        updateDivisionList();
+      const input = document.getElementById('divisionInput');
+      if(input.value.trim() !== "") {
+        const name = input.value.trim();
+        const color = colors[divisionColorIndex % colors.length];
+        divisionColorIndex++;
+        divisions[name] = { color: color };
+        availableDivisions.push(name);
+        renderDivisionButtons();
         input.value = "";
       }
     }
-    function updateDivisionList() {
-      const ul = document.getElementById("divisionList");
-      ul.innerHTML = "";
-      divisions.forEach((div, i) => {
-        const li = document.createElement("li");
-        const box = document.createElement("span");
-        box.className = "color-box";
-        box.style.backgroundColor = div.color;
-        const text = document.createElement("span");
-        text.textContent = " " + div.name;
-        text.contentEditable = true;
-        text.onblur = () => divisions[i].name = text.textContent.trim();
-        const picker = document.createElement("input");
-        picker.type = "color";
-        picker.value = div.color;
-        picker.oninput = () => { div.color = picker.value; updateDivisionList(); };
-        li.appendChild(box);
-        li.appendChild(text);
-        li.appendChild(picker);
-        ul.appendChild(li);
+
+    function renderDivisionButtons() {
+      const container = document.getElementById("divisionButtons");
+      container.innerHTML="";
+      availableDivisions.forEach((divName)=>{
+        const divObj = divisions[divName];
+        const btn = document.createElement("button");
+        btn.textContent = divName;
+        btn.style.backgroundColor = divObj.color;
+        btn.style.color = "white";
+        btn.onclick = ()=>assignDivision(divName);
+
+        const colorInput = document.createElement("input");
+        colorInput.type = "color";
+        colorInput.value = divObj.color;
+        colorInput.oninput = (e)=> {
+          divisions[divName].color = e.target.value;
+          renderDivisionButtons();
+        };
+
+        const disableColor = document.createElement("input");
+        disableColor.type = "checkbox";
+        disableColor.title = "Disable color";
+        disableColor.onchange = (e)=>{
+          if(e.target.checked) {
+            divisions[divName].color = "transparent";
+          } else {
+            divisions[divName].color = colorInput.value;
+          }
+          renderDivisionButtons();
+        };
+
+        container.appendChild(btn);
+        container.appendChild(colorInput);
+        container.appendChild(disableColor);
+        container.appendChild(document.createElement("br"));
       });
     }
 
-    // Activities
-    function addActivity() {
-      const input = document.getElementById("activityInput");
-      if (input.value.trim() !== "") {
-        activities.push(input.value.trim());
-        updateActivityList();
-        input.value = "";
+    function assignDivision(divName) {
+      const bunkName = prompt("Enter bunk name to assign to " + divName + ":");
+      const bunk = bunks.find(b => b.name === bunkName);
+      if(bunk) {
+        bunk.division = divName;
+        renderBunkList();
+      } else {
+        alert("Bunk not found");
       }
     }
-    function updateActivityList() {
-      const ul = document.getElementById("activityList");
-      ul.innerHTML = "";
-      activities.forEach((act, i) => {
-        const li = document.createElement("li");
-        li.textContent = act;
-        li.contentEditable = true;
-        li.onblur = () => activities[i] = li.textContent.trim();
-        ul.appendChild(li);
-      });
-    }
 
-    // Times
+    // Generate times
     function generateTimes() {
       const start = document.getElementById("startTime").value;
       const end = document.getElementById("endTime").value;
-      if (!start || !end) return;
+      const inc = parseInt(document.getElementById("increment").value);
+      if(!start || !end || !inc) return;
 
       let [sh, sm] = start.split(":").map(Number);
       let [eh, em] = end.split(":").map(Number);
-
+      let startDate = new Date(0,0,0,sh,sm);
+      let endDate = new Date(0,0,0,eh,em);
       times = [];
-      while (sh < eh || (sh === eh && sm < em)) {
-        let hour = sh % 12 || 12;
-        let ampm = sh < 12 ? "AM" : "PM";
-        times.push(`${hour}:${sm.toString().padStart(2,"0")} ${ampm}`);
-        sm += 30;
-        if (sm >= 60) { sm = 0; sh++; }
+
+      while(startDate < endDate) {
+        let next = new Date(startDate.getTime() + inc*60000);
+        let display = formatTime(startDate) + " - " + formatTime(next);
+        times.push(display);
+        startDate = next;
       }
-      updateScheduleTable();
+      renderTimeList();
     }
 
-    // Schedule display
-    function updateScheduleTable() {
-      const tbody = document.getElementById("scheduleTable").querySelector("tbody");
-      tbody.innerHTML = "";
-      times.forEach(time => {
-        divisions.forEach(div => {
-          bunks.forEach(bunk => {
-            const tr = document.createElement("tr");
-            tr.innerHTML = `
-              <td>${time}</td>
-              <td style="background:${div.color}">${div.name}</td>
-              <td>${bunk}</td>
-              <td>${activities[Math.floor(Math.random()*activities.length)] || ""}</td>
-            `;
-            tbody.appendChild(tr);
-          });
-        });
+    function renderTimeList() {
+      const ul = document.getElementById("timeList");
+      ul.innerHTML = "";
+      times.forEach(t=>{
+        const li = document.createElement("li");
+        li.textContent = t;
+        ul.appendChild(li);
       });
     }
+
+    function formatTime(date) {
+      let h = date.getHours();
+      let m = date.getMinutes().toString().padStart(2,"0");
+      let suffix = h >= 12 ? "PM" : "AM";
+      h = h % 12 || 12;
+      return h + ":" + m + " " + suffix;
+    }
+
+    // Update schedule table
+    function updateScheduleTable() {
+      const headerRow = document.querySelector("#scheduleTable thead tr");
+      headerRow.innerHTML = "<th>Time</th>";
+      availableDivisions.forEach(div=>{
+        const th = document.createElement("th");
+        th.textContent = div;
+        th.className = "division-header";
+        th.style.backgroundColor = divisions[div].color;
+        headerRow.appendChild(th);
+      });
+
+      const body = document.getElementById("scheduleBody");
+      body.innerHTML="";
+      times.forEach(t=>{
+        const tr = document.createElement("tr");
+        const timeCell = document.createElement("td");
+        timeCell.textContent = t;
+        tr.appendChild(timeCell);
+        availableDivisions.forEach(div=>{
+          const td = document.createElement("td");
+          td.textContent = bunks.filter(b=>b.division===div).map(b=>b.name).join(", ");
+          tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+    }
+
+    // Handle Enter key events
+    document.addEventListener("keydown", (e)=>{
+      if(e.key === "Enter") {
+        if(document.activeElement.id==="bunkInput") addBunk();
+        if(document.activeElement.id==="divisionInput") addDivision();
+        if(document.activeElement.id==="startTime") document.getElementById("endTime").focus();
+        if(document.activeElement.id==="endTime") document.getElementById("increment").focus();
+        if(document.activeElement.id==="increment") generateTimes();
+      }
+    });
   </script>
 </body>
 </html>
