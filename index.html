@@ -54,18 +54,19 @@
     <label><input type="checkbox" id="enableColor" checked> Enable colors</label>
     <div id="divisionButtons"></div>
 
-    <!-- Time Inputs -->
-    <h3>Generate Times</h3>
-    Start: <input type="text" id="startTime" class="time-input" value="__:__">
-    End: <input type="text" id="endTime" class="time-input" value="__:__">
-    Increment:
-    <select id="increment">
-      <option value="15">15 min</option>
-      <option value="30">30 min</option>
-      <option value="45">45 min</option>
-      <option value="60">60 min</option>
-    </select>
-    <button onclick="generateTimes()">Generate</button>
+   <!-- Time Inputs -->
+<h3>Generate Times</h3>
+Start: <input type="text" id="startTime" class="time-input" value="__:__">
+End: <input type="text" id="endTime" class="time-input" value="__:__">
+Increment:
+<select id="increment">
+  <option value="15">15 min</option>
+  <option value="30">30 min</option>
+  <option value="45">45 min</option>
+  <option value="60">60 min</option>
+</select>
+<button onclick="generateTimes()">Generate</button>
+
 
     <!-- Unassigned Bunks -->
     <h4>Unassigned Bunks</h4>
@@ -110,28 +111,62 @@
     let fields = [];
     const commonActivities = ["Basketball","Football","Baseball","Hockey","Volleyball","Soccer","Lacrosse"];
 
-    // ============================== CUSTOM TIME INPUT ==============================
-    function setupTimeInput(input){
-      input.addEventListener("input", function(){
-        let val=this.value.replace(/[^0-9APMapm:]/g,"");
-        if(val.length<=2){
-          val=val.replace(":","");
-          if(val.length===2) val=val+":";
-        } else {
-          if(val[2]!==":") val=val.slice(0,2)+":"+val.slice(2);
-        }
-        this.value=val.toUpperCase();
-      });
-    }
-    setupTimeInput(document.getElementById("startTime"));
-    setupTimeInput(document.getElementById("endTime"));
+   // ==============================
+// TIMES
+function generateTimes() {
+  const startInput = document.getElementById("startTime").value.trim();
+  const endInput = document.getElementById("endTime").value.trim();
+  const increment = parseInt(document.getElementById("increment").value);
 
-    document.getElementById("startTime").addEventListener("keyup", function(){
-      if(this.value.match(/(AM|PM)$/i)){ document.getElementById("endTime").focus(); }
-    });
-    document.getElementById("endTime").addEventListener("keyup", function(e){
-      if(e.key==="Enter" && this.value.match(/(AM|PM)$/i)){ generateTimes(); }
-    });
+  // Helper to parse "hh:mm AM/PM" into a Date
+  function parseTime(str) {
+    const match = str.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (!match) return null;
+
+    let h = parseInt(match[1], 10);
+    const m = parseInt(match[2], 10);
+    const ampm = match[3].toUpperCase();
+
+    if (ampm === "PM" && h !== 12) h += 12;
+    if (ampm === "AM" && h === 12) h = 0;
+
+    return new Date(0, 0, 0, h, m);
+  }
+
+  const startDate = parseTime(startInput);
+  const endDate = parseTime(endInput);
+
+  if (!startDate || !endDate) {
+    alert("Please enter valid times in the format hh:mm AM/PM");
+    return;
+  }
+  if (startDate >= endDate) {
+    alert("Start must be before end");
+    return;
+  }
+
+  times = [];
+  let current = new Date(startDate.getTime());
+
+  // Formatter to "h:mm AM/PM"
+  function format(d) {
+    let h = d.getHours();
+    let m = d.getMinutes().toString().padStart(2, "0");
+    let ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12 || 12;
+    return `${h}:${m} ${ampm}`;
+  }
+
+  while (current < endDate) {
+    let next = new Date(current.getTime() + increment * 60000);
+    if (next > endDate) next = endDate;
+    times.push(`${format(current)} - ${format(next)}`);
+    current = next;
+  }
+
+  updateTable();
+}
+
 
     // ============================== REST OF YOUR FUNCTIONS ==============================
     function addBunk(){ const input=document.getElementById("bunkInput"); if(input.value.trim()!==""){ bunks.push(input.value.trim()); input.value=""; updateUnassigned(); updateTable(); } }
