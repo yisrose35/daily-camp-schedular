@@ -1,36 +1,56 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Test Camp Scheduler</title>
+  <title>Camp Scheduler Grid</title>
   <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
     table { border-collapse: collapse; margin-top: 20px; width: 100%; }
     th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
     th { background-color: #4CAF50; color: white; }
+    td:hover { background-color: #f0f0f0; cursor: pointer; }
   </style>
 </head>
 <body>
-  <h1>Test Camp Scheduler</h1>
+  <h1>Camp Scheduler</h1>
 
   <!-- Bunk Input -->
   <input id="bunkInput" placeholder="Enter bunk">
   <button onclick="addBunk()">Add Bunk</button>
 
+  <!-- Time Inputs -->
+  <h3>Generate Times</h3>
+  Start: <input type="time" id="startTime">
+  End: <input type="time" id="endTime">
+  Increment:
+  <select id="increment">
+    <option value="15">15 min</option>
+    <option value="30">30 min</option>
+    <option value="60">60 min</option>
+  </select>
+  <button onclick="generateTimes()">Generate</button>
+
   <!-- Schedule Table -->
   <table id="scheduleTable">
     <thead>
-      <tr>
-        <th>Time / Bunk</th> <!-- top-left corner -->
-      </tr>
+      <tr><th>Time / Bunk</th></tr>
     </thead>
-    <tbody>
-      <!-- Times will go here later -->
-    </tbody>
+    <tbody></tbody>
   </table>
 
   <script>
     let bunks = [];
+    let times = [];
 
+    // Add bunk (keeps your logic intact)
     function addBunk() {
       const input = document.getElementById('bunkInput');
       if(input.value.trim() !== "") {
-        bunks.push(
+        bunks.push(input.value.trim());
+        input.value = "";
+        console.log("Added bunk:", bunks);
+        updateTable();
+      }
+    }
+
+    // Generate times
+    function generateTi
