@@ -19,17 +19,21 @@
     #unassignedBunks { margin-top: 10px; }
     .divisionWrapper { display: inline-block; margin-right: 10px; }
     .colorPicker { width: 30px; height: 30px; border: none; cursor: pointer; vertical-align: middle; }
+
+    .fieldWrapper { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
+    .fieldWrapper h4 { margin: 0 0 5px 0; }
+    .activity-button { margin: 2px; padding: 4px 8px; border: 1px solid #333; border-radius: 3px; cursor: pointer; }
   </style>
 </head>
 <body>
   <h1>Camp Scheduler</h1>
 
   <div class="tabs">
-    <button class="tab-button active" onclick="showTab('setup')">Set Up & Configuration</button>
+    <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button>
     <button class="tab-button" onclick="showTab('schedule')">Daily Schedule</button>
   </div>
 
-  <!-- Tab: Setup & Configuration -->
+  <!-- Setup Tab -->
   <div id="setup" class="tab-content active">
     <!-- Bunk Input -->
     <h3>Add Bunks</h3>
@@ -58,9 +62,15 @@
     <!-- Unassigned Bunks -->
     <h4>Unassigned Bunks</h4>
     <div id="unassignedBunks"></div>
+
+    <!-- Field Input -->
+    <h3>Add Fields</h3>
+    <input id="fieldInput" placeholder="Enter field name (e.g., Court #1)">
+    <button onclick="addField()">Add Field</button>
+    <div id="fieldList"></div>
   </div>
 
-  <!-- Tab: Daily Schedule -->
+  <!-- Schedule Tab -->
   <div id="schedule" class="tab-content">
     <table id="scheduleTable" style="display:none;">
       <thead>
@@ -72,17 +82,18 @@
   </div>
 
   <script>
+    // ==============================
     // TAB FUNCTIONALITY
     function showTab(id){
       document.querySelectorAll('.tab-button').forEach(b=>b.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
       document.getElementById(id).classList.add('active');
       document.querySelector(`.tab-button[onclick="showTab('${id}')"]`).classList.add('active');
-      if(id==='schedule') updateTable(); // refresh table when viewing schedule
+      if(id==='schedule') updateTable();
     }
 
-    // ========================
-    // All previous code remains exactly the same
+    // ==============================
+    // DATA STRUCTURES
     let bunks = [];
     let times = [];
     let divisions = {}; // { name: { bunks: [], color: "#xxxxxx" } }
@@ -92,6 +103,11 @@
     const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336'];
     let colorIndex = 0;
 
+    let fields = []; // {name: "Court #1", activities: []}
+    const commonActivities = ["Basketball","Football","Baseball","Hockey","Volleyball","Soccer","Lacrosse"];
+
+    // ==============================
+    // BUNKS
     function addBunk() {
       const input = document.getElementById('bunkInput');
       if(input.value.trim()!==""){
@@ -102,6 +118,8 @@
       }
     }
 
+    // ==============================
+    // DIVISIONS
     function addDivision() {
       const input = document.getElementById('divisionInput');
       if(input.value.trim()==="") return;
@@ -124,7 +142,6 @@
 
       availableDivisions.forEach((divName)=>{
         const divObj = divisions[divName];
-
         const wrapper = document.createElement("div");
         wrapper.className = "divisionWrapper";
 
@@ -176,6 +193,8 @@
       });
     }
 
+    // ==============================
+    // TIMES
     function generateTimes() {
       const startInput = document.getElementById("startTime").value;
       const endInput = document.getElementById("endTime").value;
@@ -202,6 +221,68 @@
       updateTable();
     }
 
+    // ==============================
+    // FIELDS
+    function addField() {
+      const input = document.getElementById("fieldInput");
+      const fieldName = input.value.trim();
+      if(fieldName){
+        fields.push({name: fieldName, activities: []});
+        input.value="";
+        renderFields();
+      }
+    }
+
+    function renderFields(){
+      const container = document.getElementById("fieldList");
+      container.innerHTML="";
+      fields.forEach((field)=>{
+        const wrapper = document.createElement("div");
+        wrapper.className="fieldWrapper";
+
+        const title = document.createElement("h4");
+        title.textContent = field.name;
+        wrapper.appendChild(title);
+
+        // Common activity buttons
+        commonActivities.forEach(act=>{
+          const btn = document.createElement("button");
+          btn.textContent = act;
+          btn.className="activity-button";
+          btn.onclick=()=>{
+            if(!field.activities.includes(act)){
+              field.activities.push(act);
+              renderFields();
+            }
+          };
+          wrapper.appendChild(btn);
+        });
+
+        // "Other" input
+        const otherInput = document.createElement("input");
+        otherInput.placeholder="Other activity";
+        otherInput.onkeyup=(e)=>{
+          if(e.key==="Enter" && otherInput.value.trim()){
+            field.activities.push(otherInput.value.trim());
+            otherInput.value="";
+            renderFields();
+          }
+        };
+        wrapper.appendChild(otherInput);
+
+        // Display chosen activities
+        if(field.activities.length>0){
+          const chosen = document.createElement("p");
+          chosen.textContent = "Activities: " + field.activities.join(", ");
+          wrapper.appendChild(chosen);
+        }
+
+        container.appendChild(wrapper);
+      });
+    }
+
+    // ==============================
+    // SCHEDULE TABLE
     function updateTable() {
       const table = document.getElementById("scheduleTable");
       if(times.length===0) return;
@@ -290,6 +371,7 @@
       });
     }
 
+    // ==============================
     // ENTER key support
     document.getElementById("bunkInput").addEventListener("keyup", function(e){
       if(e.key==="Enter") addBunk();
