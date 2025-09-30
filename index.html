@@ -8,6 +8,12 @@
     th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
     th { background-color: #4CAF50; color: white; }
     td.editable:hover, th.editable:hover { background-color: #f0f0f0; cursor: text; }
+
+    /* Colors for different grades */
+    .grade-0 { background-color: #FFCDD2; }
+    .grade-1 { background-color: #C8E6C9; }
+    .grade-2 { background-color: #BBDEFB; }
+    .grade-3 { background-color: #FFF9C4; }
   </style>
 </head>
 <body>
@@ -29,10 +35,17 @@
   </select>
   <button onclick="generateTimes()">Generate</button>
 
+  <!-- Grade Assignment -->
+  <h3>Assign Bunks to Grades</h3>
+  Grade: <input id="gradeInput" placeholder="5th Grade">
+  Bunks (comma-separated): <input id="gradeBunksInput" placeholder="Bunk 1,Bunk 2,Bunk 3">
+  <button onclick="assignBunksToGrade()">Assign</button>
+
   <!-- Schedule Table -->
   <table id="scheduleTable">
     <thead>
       <tr><th>Time / Bunk</th></tr>
+      <tr id="gradeHeaderRow"></tr>
     </thead>
     <tbody></tbody>
   </table>
@@ -40,6 +53,7 @@
   <script>
     let bunks = [];
     let times = [];
+    let grades = {}; // { gradeName: [bunk1, bunk2...] }
 
     // Add bunk
     function addBunk() {
@@ -49,6 +63,20 @@
         input.value = "";
         updateTable();
       }
+    }
+
+    // Assign bunks to a grade
+    function assignBunksToGrade() {
+      const gradeName = document.getElementById("gradeInput").value.trim();
+      const bunkNames = document.getElementById("gradeBunksInput").value.split(",").map(b => b.trim()).filter(b => b);
+
+      if(!gradeName || bunkNames.length === 0) {
+        alert("Enter a grade and at least one bunk.");
+        return;
+      }
+
+      grades[gradeName] = bunkNames;
+      updateTable();
     }
 
     // Generate times in 12-hour format
@@ -94,24 +122,39 @@
       updateTable();
     }
 
-    // Update full table with editable bunks, times, and cells
+    // Update full table with grades, bunks, times, and editable cells
     function updateTable() {
       const table = document.getElementById("scheduleTable");
-
-      // Header row
       const thead = table.querySelector("thead");
-      thead.innerHTML = "<tr><th>Time / Bunk</th></tr>";
+      const gradeHeaderRow = document.getElementById("gradeHeaderRow");
+
+      // Header row with bunks
+      thead.querySelector("tr").innerHTML = "<th>Time / Bunk</th>";
       bunks.forEach((bunk, idx) => {
         const th = document.createElement("th");
         th.textContent = bunk;
         th.classList.add("editable");
         th.contentEditable = "true";
-        // Update the bunks array if header is edited
         th.addEventListener("input", e => bunks[idx] = e.target.textContent);
         thead.querySelector("tr").appendChild(th);
       });
 
-      // Body rows
+      // Grade row
+      gradeHeaderRow.innerHTML = "<th></th>"; // first cell empty
+      bunks.forEach((bunk, idx) => {
+        const th = document.createElement("th");
+        // Find grade of bunk
+        let gradeIndex = 0;
+        for (const [gradeName, bunkList] of Object.entries(grades)) {
+          if(bunkList.includes(bunk)) break;
+          gradeIndex++;
+        }
+        th.textContent = Object.keys(grades)[gradeIndex] || ""; 
+        th.classList.add(`grade-${gradeIndex % 4}`);
+        gradeHeaderRow.appendChild(th);
+      });
+
+      // Body rows with times and editable cells
       const tbody = table.querySelector("tbody");
       tbody.innerHTML = "";
       times.forEach((time, timeIdx) => {
