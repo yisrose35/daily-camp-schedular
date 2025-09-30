@@ -1,15 +1,24 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Camp Scheduler Grid</title>
+  <title>Camp Scheduler</title>
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     table { border-collapse: collapse; margin-top: 20px; width: 100%; }
     th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
-    th { background-color: #4CAF50; color: white; }
+    th { color: white; }
     td.editable:hover, th.editable:hover { background-color: #f0f0f0; cursor: text; }
-    .bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; }
-    .assigned { background-color: #BBDEFB; }
+
+    /* Grade colors */
+    .grade-0 { background-color: #FFCDD2; } /* red */
+    .grade-1 { background-color: #C8E6C9; } /* green */
+    .grade-2 { background-color: #BBDEFB; } /* blue */
+    .grade-3 { background-color: #FFF9C4; } /* yellow */
+
+    /* Bunk buttons */
+    #unassignedBunks { margin-top: 10px; }
+    .bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; display: inline-block; }
+    .selected { background-color: #90CAF9; }
   </style>
 </head>
 <body>
@@ -31,15 +40,13 @@
   </select>
   <button onclick="generateTimes()">Generate</button>
 
-  <!-- Grade Assignment -->
-  <h3>Assign Bunks to Grades</h3>
-  Grade:
-  <select id="gradeSelect">
-    <option value="5th Grade">5th Grade</option>
-    <option value="6th Grade">6th Grade</option>
-    <option value="7th Grade">7th Grade</option>
-  </select>
-  <div id="bunkButtons"></div>
+  <!-- Grade Buttons -->
+  <h3>Assign Grades</h3>
+  <div id="gradeButtons"></div>
+
+  <!-- Unassigned Bunks -->
+  <h4>Unassigned Bunks</h4>
+  <div id="unassignedBunks"></div>
 
   <!-- Schedule Table -->
   <table id="scheduleTable">
@@ -53,147 +60,140 @@
   <script>
     let bunks = [];
     let times = [];
-    let grades = {}; // { gradeName: [bunk1, bunk2...] }
+    let grades = {}; // { gradeName: [bunk1,bunk2,...] }
+    let gradeColors = ['grade-0','grade-1','grade-2','grade-3'];
+    let selectedGrade = null;
 
-    // Add bunk
-    function addBunk() {
+    const availableGrades = ["5th Grade","6th Grade","7th Grade","8th Grade"];
+    availableGrades.forEach(g => grades[g]=[]);
+
+    function addBunk(){
       const input = document.getElementById('bunkInput');
-      if(input.value.trim() !== "") {
-        const bunk = input.value.trim();
-        bunks.push(bunk);
-        input.value = "";
-        updateBunkButtons();
+      if(input.value.trim() !== ""){
+        bunks.push(input.value.trim());
+        input.value="";
+        updateUnassigned();
         updateTable();
       }
     }
 
-    // Update bunk buttons for grade assignment
-    function updateBunkButtons() {
-      const container = document.getElementById("bunkButtons");
-      container.innerHTML = "";
-      bunks.forEach(bunk => {
-        const btn = document.createElement("button");
-        btn.textContent = bunk;
-        btn.className = "bunk-button";
-        // Highlight if already assigned
-        btn.classList.toggle("assigned", Object.values(grades).some(arr => arr.includes(bunk)));
-        btn.onclick = () => {
-          const selectedGrade = document.getElementById("gradeSelect").value;
-          // Remove from any other grade
-          for(const g in grades) {
-            grades[g] = grades[g].filter(b => b !== bunk);
+    function updateUnassigned(){
+      const container = document.getElementById("unassignedBunks");
+      container.innerHTML="";
+      const unassigned = bunks.filter(b => !Object.values(grades).flat().includes(b));
+      unassigned.forEach(bunk=>{
+        const btn = document.createElement("div");
+        btn.textContent=bunk;
+        btn.className="bunk-button";
+        btn.onclick = ()=>{
+          if(selectedGrade){
+            grades[selectedGrade].push(bunk);
+            updateUnassigned();
+            updateTable();
+          } else {
+            alert("Select a grade first!");
           }
-          // Assign to selected grade
-          if(!grades[selectedGrade]) grades[selectedGrade] = [];
-          grades[selectedGrade].push(bunk);
-          updateBunkButtons();
-          updateTable();
         };
         container.appendChild(btn);
       });
     }
 
-    // Generate times in 12-hour format
-    function generateTimes() {
+    function setupGradeButtons(){
+      const container = document.getElementById("gradeButtons");
+      container.innerHTML="";
+      availableGrades.forEach((grade,i)=>{
+        const btn = document.createElement("button");
+        btn.textContent=grade;
+        btn.className="bunk-button";
+        btn.onclick=()=>{
+          selectedGrade=grade;
+          Array.from(container.children).forEach(c=>c.classList.remove("selected"));
+          btn.classList.add("selected");
+        };
+        container.appendChild(btn);
+      });
+    }
+
+    function generateTimes(){
       const startInput = document.getElementById("startTime").value;
       const endInput = document.getElementById("endTime").value;
       const increment = parseInt(document.getElementById("increment").value);
-
-      if(!startInput || !endInput) {
-        alert("Please select valid start and end times.");
-        return;
-      }
-
-      let [startH, startM] = startInput.split(":").map(Number);
-      let [endH, endM] = endInput.split(":").map(Number);
-
+      if(!startInput || !endInput){alert("Select valid start and end times"); return;}
+      let [startH,startM]=startInput.split(":").map(Number);
+      let [endH,endM]=endInput.split(":").map(Number);
       const startDate = new Date(0,0,0,startH,startM);
       const endDate = new Date(0,0,0,endH,endM);
-
-      if(startDate >= endDate) {
-        alert("Start time must be before end time.");
-        return;
-      }
-
-      times = [];
+      if(startDate>=endDate){alert("Start must be before end"); return;}
+      times=[];
       let current = new Date(startDate.getTime());
-
-      while(current < endDate) {
-        const next = new Date(current.getTime() + increment*60000);
-        if(next > endDate) break;
-
-        const format = d => {
-          let hours = d.getHours();
-          const minutes = d.getMinutes().toString().padStart(2,'0');
-          hours = hours % 12 || 12; // 12-hour conversion
-          return `${hours}:${minutes}`;
+      while(current<endDate){
+        let next = new Date(current.getTime()+increment*60000);
+        if(next>endDate) break;
+        const format = d=>{
+          let h=d.getHours(), m=d.getMinutes().toString().padStart(2,'0');
+          h=h%12||12;
+          return `${h}:${m}`;
         };
-
         times.push(`${format(current)} - ${format(next)}`);
-        current = next;
+        current=next;
       }
-
       updateTable();
     }
 
-    // Update table
-    function updateTable() {
-      const table = document.getElementById("scheduleTable");
-      const gradeRow = document.getElementById("gradeRow");
-      const bunkRow = document.getElementById("bunkRow");
+    function updateTable(){
+      const gradeRow=document.getElementById("gradeRow");
+      const bunkRow=document.getElementById("bunkRow");
+      gradeRow.innerHTML="<th>Time / Grade</th>";
+      bunkRow.innerHTML="<th>Time / Bunk</th>";
 
-      gradeRow.innerHTML = "<th>Time / Grade</th>";
-      bunkRow.innerHTML = "<th>Time / Bunk</th>";
-
-      // Merge grades
-      const gradeNames = Object.keys(grades);
-      gradeNames.forEach(grade => {
+      availableGrades.forEach((grade,i)=>{
         const bunksInGrade = grades[grade] || [];
-        if(bunksInGrade.length === 0) return;
-
-        const thGrade = document.createElement("th");
-        thGrade.textContent = grade;
-        thGrade.colSpan = bunksInGrade.length;
+        if(bunksInGrade.length===0) return;
+        const thGrade=document.createElement("th");
+        thGrade.textContent=grade;
+        thGrade.colSpan=bunksInGrade.length;
+        thGrade.className=gradeColors[i%gradeColors.length];
         gradeRow.appendChild(thGrade);
 
-        bunksInGrade.forEach(bunk => {
-          const thBunk = document.createElement("th");
-          thBunk.textContent = bunk;
+        bunksInGrade.forEach(bunk=>{
+          const thBunk=document.createElement("th");
+          thBunk.textContent=bunk;
           thBunk.classList.add("editable");
-          thBunk.contentEditable = "true";
-          thBunk.addEventListener("input", e => {
+          thBunk.contentEditable="true";
+          thBunk.addEventListener("input", e=>{
             const idx = grades[grade].indexOf(bunk);
-            if(idx >= 0) grades[grade][idx] = e.target.textContent;
+            if(idx>=0) grades[grade][idx]=e.target.textContent;
           });
           bunkRow.appendChild(thBunk);
         });
       });
 
-      // Body rows
-      const tbody = table.querySelector("tbody");
-      tbody.innerHTML = "";
-      times.forEach(time => {
-        const row = document.createElement("tr");
-
-        const timeCell = document.createElement("td");
-        timeCell.textContent = time;
+      const tbody = document.querySelector("#scheduleTable tbody");
+      tbody.innerHTML="";
+      times.forEach(time=>{
+        const row=document.createElement("tr");
+        const timeCell=document.createElement("td");
+        timeCell.textContent=time;
         timeCell.classList.add("editable");
-        timeCell.contentEditable = "true";
+        timeCell.contentEditable="true";
         row.appendChild(timeCell);
 
-        gradeNames.forEach(grade => {
+        availableGrades.forEach((grade,i)=>{
           const bunksInGrade = grades[grade] || [];
-          bunksInGrade.forEach(() => {
-            const cell = document.createElement("td");
+          bunksInGrade.forEach(()=>{
+            const cell=document.createElement("td");
             cell.classList.add("editable");
-            cell.contentEditable = "true";
+            cell.contentEditable="true";
             row.appendChild(cell);
           });
         });
-
         tbody.appendChild(row);
       });
     }
+
+    // Initialize
+    setupGradeButtons();
+    updateUnassigned();
   </script>
 </body>
 </html>
