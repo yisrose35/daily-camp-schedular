@@ -327,4 +327,77 @@
     }
   </script>
 </body>
+</html>   wrapper.className="fieldWrapper";
+        if(!field.available) wrapper.classList.add("unavailable");
+        const title=document.createElement("h4");
+        title.textContent=field.name;
+        wrapper.appendChild(title);
+        const toggle=document.createElement("label");
+        toggle.className="switch";
+        const cb=document.createElement("input");
+        cb.type="checkbox"; cb.checked=field.available;
+        cb.onchange=()=>{field.available=cb.checked; renderFields();};
+        const slider=document.createElement("span"); slider.className="slider";
+        toggle.appendChild(cb); toggle.appendChild(slider);
+        wrapper.appendChild(toggle);
+        commonActivities.forEach(act=>{
+          const btn=document.createElement("button");
+          btn.textContent=act; btn.className="activity-button";
+          if(field.activities.includes(act)) btn.classList.add("active");
+          btn.onclick=()=>{
+            if(field.activities.includes(act)) field.activities=field.activities.filter(a=>a!==act);
+            else field.activities.push(act);
+            renderFields();
+          };
+          wrapper.appendChild(btn);
+        });
+        const other=document.createElement("input");
+        other.placeholder="Other activity";
+        other.onkeyup=(e)=>{ if(e.key==="Enter" && other.value.trim()){ field.activities.push(other.value.trim()); other.value=""; renderFields(); }};
+        wrapper.appendChild(other);
+        if(field.activities.length>0){
+          const chosen=document.createElement("p");
+          chosen.textContent="Activities: "+field.activities.join(", ");
+          wrapper.appendChild(chosen);
+        }
+        container.appendChild(wrapper);
+      });
+    }
+
+    // ================== SCHEDULE ==================
+    function updateTable(){
+      const table=document.getElementById("scheduleTable");
+      if(times.length===0) return;
+      table.style.display="table";
+      const divRow=document.getElementById("divisionRow");
+      const bunkRow=document.getElementById("bunkRow");
+      divRow.innerHTML="<th>Division</th>"; bunkRow.innerHTML="<th>Bunk</th>";
+      availableDivisions.forEach(divName=>{
+        const divObj=divisions[divName];
+        const bunksInDiv=divObj.bunks;
+        const thDiv=document.createElement("th");
+        thDiv.colSpan=Math.max(bunksInDiv.length,1);
+        thDiv.style.backgroundColor=divObj.color;
+        thDiv.style.color="white"; thDiv.textContent=divName;
+        divRow.appendChild(thDiv);
+        bunksInDiv.forEach(bunk=>{
+          const thBunk=document.createElement("th");
+          thBunk.textContent=bunk;
+          bunkRow.appendChild(thBunk);
+        });
+      });
+      const tbody=document.querySelector("#scheduleTable tbody");
+      tbody.innerHTML="";
+      times.forEach(time=>{
+        const row=document.createElement("tr");
+        const tdTime=document.createElement("td");
+        tdTime.textContent=time; row.appendChild(tdTime);
+        availableDivisions.forEach(divName=>{
+          divisions[divName].bunks.forEach(()=>{ row.appendChild(document.createElement("td")); });
+        });
+        tbody.appendChild(row);
+      });
+    }
+  </script>
+</body>
 </html>
