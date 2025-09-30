@@ -5,16 +5,13 @@
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     .tabs { margin-bottom: 20px; }
-    .tab-button { padding: 10px 20px; cursor: pointer; border: 1px solid #ccc; background: #f0f0f0; margin-right: 5px; text-decoration: none; color: black; }
+    .tab-button { padding: 10px 20px; border: 1px solid #ccc; background: #f0f0f0; margin-right: 5px; text-decoration: none; color: black; }
     .tab-button.active { background: #007BFF; color: white; font-weight: bold; }
-    table { border-collapse: collapse; margin-top: 20px; width: 100%; }
-    th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
     .bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; display: inline-block; }
     .selected { outline: 3px solid #90CAF9; }
     .divisionWrapper { display: inline-block; margin-right: 10px; }
     .colorPicker { width: 30px; height: 30px; border: none; cursor: pointer; vertical-align: middle; }
     .fieldWrapper { border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 6px; }
-    .fieldWrapper h4 { margin: 0 0 5px 0; display: inline-block; margin-right: 10px; }
     .fieldWrapper.unavailable { opacity: 0.5; }
     .activity-button { margin: 2px; padding: 4px 8px; border: 1px solid #333; border-radius: 3px; cursor: pointer; }
     .activity-button.active { background: #007BFF; color: white; }
@@ -29,28 +26,26 @@
   </style>
 </head>
 <body>
-  <h1>Camp Scheduler - Setup</h1>
+  <h1>Camp Scheduler</h1>
 
-  <!-- Navigation -->
+  <!-- Navigation Tabs -->
   <div class="tabs">
     <a href="index.html" class="tab-button active">Setup & Configuration</a>
     <a href="schedule.html" class="tab-button">Daily Schedule</a>
   </div>
 
-  <!-- Bunk Input -->
+  <!-- Setup Content -->
   <h3>Add Bunks</h3>
   <input id="bunkInput" placeholder="Enter bunk">
   <button onclick="addBunk()">Add Bunk</button>
   <div id="unassignedBunks"></div>
 
-  <!-- Division Input -->
   <h3>Add Divisions</h3>
   <input id="divisionInput" placeholder="Enter division name">
   <button onclick="addDivision()">Add Division</button>
   <label><input type="checkbox" id="enableColor" checked> Enable colors</label>
   <div id="divisionButtons"></div>
 
-  <!-- Time Inputs -->
   <h3>Generate Times</h3>
   Start: <input type="time" id="startTime">
   End: <input type="time" id="endTime">
@@ -63,7 +58,6 @@
   </select>
   <button onclick="generateTimes()">Generate</button>
 
-  <!-- Field Input -->
   <h3>Add Fields/Courts</h3>
   <input id="fieldInput" placeholder="Enter field/court name (e.g., Court #1)">
   <button onclick="addField()">Add Field/Court</button>
@@ -156,24 +150,48 @@
       });
     }
 
+    // ✅ Fixed Time Generator
     function generateTimes() {
       const startInput = document.getElementById("startTime").value;
       const endInput = document.getElementById("endTime").value;
       const increment = parseInt(document.getElementById("increment").value);
-      if(!startInput || !endInput){alert("Select valid times"); return;}
-      let [sh,sm] = startInput.split(":").map(Number);
-      let [eh,em] = endInput.split(":").map(Number);
-      let start=new Date(0,0,0,sh,sm), end=new Date(0,0,0,eh,em);
-      if(start>=end){alert("Start must be before end"); return;}
-      times=[];
-      let cur=new Date(start);
-      while(cur<end){
-        let next=new Date(cur.getTime()+increment*60000);
-        if(next>end) break;
-        let fmt=d=>{let h=d.getHours(),m=d.getMinutes().toString().padStart(2,'0'); h=h%12||12; return `${h}:${m}`;};
-        times.push(`${fmt(cur)} - ${fmt(next)}`);
-        cur=next;
+
+      if (!startInput || !endInput) {
+        alert("Select valid start and end times");
+        return;
       }
+
+      let [sh, sm] = startInput.split(":").map(Number);
+      let [eh, em] = endInput.split(":").map(Number);
+
+      const start = new Date(0, 0, 0, sh, sm);
+      const end = new Date(0, 0, 0, eh, em);
+
+      if (start >= end) {
+        alert("Start must be before end");
+        return;
+      }
+
+      times = [];
+      let current = new Date(start);
+
+      while (current < end) {
+        let next = new Date(current.getTime() + increment * 60000);
+        if (next > end) next = end;
+
+        const format = d => {
+          let h = d.getHours();
+          let m = d.getMinutes().toString().padStart(2, "0");
+          let ampm = h >= 12 ? "PM" : "AM";
+          h = h % 12 || 12;
+          return `${h}:${m} ${ampm}`;
+        };
+
+        times.push(`${format(current)} - ${format(next)}`);
+        current = next;
+      }
+
+      alert("Times generated successfully!");
     }
 
     function addField() {
@@ -232,9 +250,10 @@
     function saveSetup() {
       const data = { bunks, divisions, availableDivisions, times, fields };
       localStorage.setItem("campSetup", JSON.stringify(data));
-      alert("Setup saved! Now go to Daily Schedule tab.");
+      alert("Setup saved! Go to Daily Schedule tab.");
     }
 
+    // Enter key support
     document.getElementById("bunkInput").addEventListener("keyup", e=>{if(e.key==="Enter") addBunk();});
     document.getElementById("divisionInput").addEventListener("keyup", e=>{if(e.key==="Enter") addDivision();});
     document.getElementById("fieldInput").addEventListener("keyup", e=>{if(e.key==="Enter") addField();});
