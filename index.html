@@ -23,6 +23,7 @@
     .fieldWrapper { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
     .fieldWrapper h4 { margin: 0 0 5px 0; }
     .activity-button { margin: 2px; padding: 4px 8px; border: 1px solid #333; border-radius: 3px; cursor: pointer; }
+    .activity-button.active { background: #007BFF; color: white; }
   </style>
 </head>
 <body>
@@ -55,6 +56,7 @@
     <select id="increment">
       <option value="15">15 min</option>
       <option value="30">30 min</option>
+      <option value="45">45 min</option>
       <option value="60">60 min</option>
     </select>
     <button onclick="generateTimes()">Generate</button>
@@ -96,7 +98,7 @@
     // DATA STRUCTURES
     let bunks = [];
     let times = [];
-    let divisions = {}; // { name: { bunks: [], color: "#xxxxxx" } }
+    let divisions = {}; 
     let availableDivisions = [];
     let selectedDivision = null;
 
@@ -249,11 +251,14 @@
           const btn = document.createElement("button");
           btn.textContent = act;
           btn.className="activity-button";
+          if(field.activities.includes(act)) btn.classList.add("active");
           btn.onclick=()=>{
-            if(!field.activities.includes(act)){
+            if(field.activities.includes(act)){
+              field.activities = field.activities.filter(a=>a!==act);
+            } else {
               field.activities.push(act);
-              renderFields();
             }
+            renderFields();
           };
           wrapper.appendChild(btn);
         });
@@ -263,7 +268,8 @@
         otherInput.placeholder="Other activity";
         otherInput.onkeyup=(e)=>{
           if(e.key==="Enter" && otherInput.value.trim()){
-            field.activities.push(otherInput.value.trim());
+            const val = otherInput.value.trim();
+            if(!field.activities.includes(val)) field.activities.push(val);
             otherInput.value="";
             renderFields();
           }
@@ -304,21 +310,6 @@
         thDiv.colSpan = Math.max(bunksInDiv.length,1);
         thDiv.style.backgroundColor = colorEnabled ? divObj.color : "transparent";
         thDiv.style.color = colorEnabled ? "#fff" : "#000";
-        thDiv.classList.add("editable");
-        thDiv.contentEditable = true;
-        thDiv.addEventListener("input", e=>{
-          const oldName = divName;
-          const newName = e.target.textContent;
-          if(newName && newName!==oldName){
-            divisions[newName] = divisions[oldName];
-            delete divisions[oldName];
-            const idx = availableDivisions.indexOf(oldName);
-            availableDivisions[idx]=newName;
-            if(selectedDivision===oldName) selectedDivision=newName;
-            setupDivisionButtons();
-            updateTable();
-          }
-        });
         divRow.appendChild(thDiv);
 
         if(bunksInDiv.length===0){
@@ -330,12 +321,6 @@
             const thBunk = document.createElement("th");
             thBunk.textContent = bunk;
             thBunk.style.color = "#000";
-            thBunk.classList.add("editable");
-            thBunk.contentEditable = true;
-            thBunk.addEventListener("input", e=>{
-              const idx = divObj.bunks.indexOf(bunk);
-              if(idx>=0) divObj.bunks[idx] = e.target.textContent;
-            });
             bunkRow.appendChild(thBunk);
           });
         }
@@ -347,22 +332,16 @@
         const row = document.createElement("tr");
         const tdTime = document.createElement("td");
         tdTime.textContent = time;
-        tdTime.classList.add("editable");
-        tdTime.contentEditable=true;
         row.appendChild(tdTime);
 
         availableDivisions.forEach(divName=>{
           const bunksInDiv = divisions[divName].bunks;
           if(bunksInDiv.length===0){
             const td = document.createElement("td");
-            td.classList.add("editable");
-            td.contentEditable=true;
             row.appendChild(td);
           } else {
             bunksInDiv.forEach(()=>{ 
               const td = document.createElement("td");
-              td.classList.add("editable");
-              td.contentEditable=true;
               row.appendChild(td);
             });
           }
@@ -378,6 +357,9 @@
     });
     document.getElementById("divisionInput").addEventListener("keyup", function(e){
       if(e.key==="Enter") addDivision();
+    });
+    document.getElementById("fieldInput").addEventListener("keyup", function(e){
+      if(e.key==="Enter") addField();
     });
 
     document.getElementById("startTime").addEventListener("input", function(){
