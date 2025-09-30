@@ -24,9 +24,6 @@
     <a href="schedule.html" class="tab-button active">Daily Schedule</a>
   </div>
 
-  <p>This page loads your saved setup from <b>Setup & Config</b>.  
-  If nothing shows, go back and save first.</p>
-
   <table id="scheduleTable" style="display:none;">
     <thead>
       <tr id="divisionRow"></tr>
@@ -150,7 +147,6 @@
       cell.appendChild(select);
     }
 
-    // Init
     if (loadSetup()) {
       renderSchedule();
     }
