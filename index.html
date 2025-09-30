@@ -7,6 +7,7 @@
     table { border-collapse: collapse; margin-top: 20px; width: 100%; }
     th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
     th { background-color: #4CAF50; color: white; }
+    td.editable:hover { background-color: #f0f0f0; cursor: text; }
   </style>
 </head>
 <body>
@@ -46,8 +47,8 @@
       if(input.value.trim() !== "") {
         bunks.push(input.value.trim());
         input.value = "";
-        console.log("Added bunk:", bunks);
-        updateHeaderOnly(); // only update header so bunks appear immediately
+        updateHeaderOnly();
+        updateTable(); // regenerate table so new bunk gets editable cells
       }
     }
 
@@ -84,11 +85,10 @@
         current = next;
       }
 
-      console.log("Generated times:", times);
       updateTable();
     }
 
-    // Update only table header (bunks)
+    // Update only header
     function updateHeaderOnly() {
       const table = document.getElementById("scheduleTable");
       const thead = table.querySelector("thead");
@@ -100,7 +100,7 @@
       });
     }
 
-    // Update full table with times
+    // Update full table with editable cells
     function updateTable() {
       updateHeaderOnly();
       const table = document.getElementById("scheduleTable");
@@ -115,6 +115,8 @@
 
         bunks.forEach(() => {
           const cell = document.createElement("td");
+          cell.classList.add("editable");
+          cell.contentEditable = "true"; // <-- makes cell directly editable
           row.appendChild(cell);
         });
 
