@@ -1,130 +1,27 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>Camp Scheduler</title>
-  <style>
-    body { font-family: Arial, sans-serif; padding: 20px; }
-    h1 { margin-bottom: 10px; }
-    input, select, button { margin: 5px; padding: 5px; }
-    table { border-collapse: collapse; margin-top: 20px; width: 100%; }
-    th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
-    th { background-color: #4CAF50; color: white; }
-    td:hover { background-color: #f0f0f0; cursor: pointer; }
-  </style>
+  <title>Test Page</title>
 </head>
 <body>
-  <h1>Camp Scheduler</h1>
+  <h1>Test Camp Scheduler</h1>
+  <input id="bunkInput" placeholder="Enter bunk">
+  <button onclick="addBunk()">Add Bunk</button>
+  <ul id="bunkList"></ul>
 
-  <!-- Bunks -->
-  <div>
-    <h3>Add Bunk</h3>
-    <input id="bunkInput" placeholder="Enter bunk name">
-    <button onclick="addBunk()">Add Bunk</button>
-    <button onclick="removeBunk()">Remove Last Bunk</button>
-  </div>
-
-  <!-- Times -->
-  <div>
-    <h3>Generate Times</h3>
-    Start: <input type="time" id="startTime">
-    End: <input type="time" id="endTime">
-    Increment: 
-    <select id="increment">
-      <option value="15">15 min</option>
-      <option value="30">30 min</option>
-      <option value="60">60 min</option>
-    </select>
-    <button onclick="generateTimes()">Generate</button>
-  </div>
-
-  <!-- Schedule Table -->
-  <table id="scheduleTable">
-    <thead>
-      <tr><th>Time / Bunk</th></tr>
-    </thead>
-    <tbody></tbody>
-  </table>
-
-  <!-- JavaScript at the bottom -->
   <script>
     let bunks = [];
-    let times = [];
-
-    function updateTable() {
-      console.log("Updating table...", bunks, times); // debug
-      const table = document.getElementById("scheduleTable");
-      const theadRow = table.querySelector("thead tr");
-      theadRow.innerHTML = "<th>Time / Bunk</th>";
-
-      bunks.forEach(bunk => {
-        const th = document.createElement("th");
-        th.textContent = bunk;
-        theadRow.appendChild(th);
-      });
-
-      const tbody = table.querySelector("tbody");
-      tbody.innerHTML = "";
-
-      times.forEach(time => {
-        const row = document.createElement("tr");
-        const timeCell = document.createElement("td");
-        timeCell.textContent = time;
-        row.appendChild(timeCell);
-
-        bunks.forEach(() => {
-          const cell = document.createElement("td");
-          row.appendChild(cell);
-        });
-
-        tbody.appendChild(row);
-      });
-    }
-
     function addBunk() {
-      const input = document.getElementById("bunkInput");
-      if (input.value.trim() !== "") {
+      const input = document.getElementById('bunkInput');
+      if(input.value.trim() !== "") {
         bunks.push(input.value.trim());
+        const ul = document.getElementById('bunkList');
+        const li = document.createElement('li');
+        li.textContent = input.value.trim();
+        ul.appendChild(li);
         input.value = "";
-        console.log("Added bunk:", bunks); // debug
-        updateTable();
+        console.log("Added bunk:", bunks);
       }
-    }
-
-    function removeBunk() {
-      bunks.pop();
-      updateTable();
-    }
-
-    function generateTimes() {
-      const startInput = document.getElementById("startTime").value;
-      const endInput = document.getElementById("endTime").value;
-      const increment = parseInt(document.getElementById("increment").value);
-
-      if (!startInput || !endInput) {
-        alert("Please select start and end times.");
-        return;
-      }
-
-      let [startH, startM] = startInput.split(":").map(Number);
-      let [endH, endM] = endInput.split(":").map(Number);
-
-      const startDate = new Date(0,0,0,startH,startM);
-      const endDate = new Date(0,0,0,endH,endM);
-
-      times = [];
-      let current = new Date(startDate.getTime());
-
-      while (current < endDate) {
-        const next = new Date(current.getTime() + increment*60000);
-        if (next > endDate) break;
-        const format = d => d.toTimeString().slice(0,5);
-        times.push(`${format(current)} - ${format(next)}`);
-        current = next;
-      }
-
-      console.log("Generated times:", times); // debug
-      updateTable();
     }
   </script>
 </body>
