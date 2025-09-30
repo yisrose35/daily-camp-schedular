@@ -83,7 +83,6 @@ let autoColors = ["#4CAF50","#2196F3","#E91E63","#FF9800","#9C27B0"];
 let autoIndex = 0;
 let colorEnabled = true;
 let selectedDivision = null;
-let selectedBunk = null;
 
 // TAB FUNCTIONALITY
 function showTab(id){
@@ -97,27 +96,26 @@ function showTab(id){
 // ADD & RENDER BUNKS
 function addBunk(){
   const val=document.getElementById('bunkInput').value.trim();
-  if(val){ bunks.push({name:val, division:null}); document.getElementById('bunkInput').value=""; renderBunks(); }
+  if(val){ 
+    bunks.push({name:val, division:null}); 
+    document.getElementById('bunkInput').value=""; 
+    renderBunks(); 
+  }
 }
 
 function renderBunks(){
   const container = document.getElementById('bunkButtons');
   container.innerHTML = "";
-  bunks.forEach((b,i)=>{
+  bunks.forEach(b=>{
     const btn = document.createElement('button');
     btn.textContent = b.name + (b.division? " ("+b.division+")":"");
     btn.style.backgroundColor = b.division? getDivisionColor(b.division) : "#eee";
-    btn.className = (selectedBunk===b)? "selected" : "";
     btn.onclick = ()=>{
       if(selectedDivision){ 
         b.division = selectedDivision; 
-        selectedDivision = null; selectedBunk = null;
-      } else { 
-        selectedBunk = b; 
+        renderBunks();
+        updateScheduleTable();
       }
-      renderBunks();
-      renderDivisions();
-      updateScheduleTable();
     };
     container.appendChild(btn);
   });
@@ -129,7 +127,7 @@ function addDivision(){
   if(!val) return;
   const color = autoColors[autoIndex % autoColors.length]; autoIndex++;
   divisions.push({name:val, color:color});
-  selectedDivision = val; selectedBunk = null;
+  selectedDivision = val;
   renderDivisions();
   document.getElementById('divisionInput').value="";
 }
@@ -141,18 +139,7 @@ function renderDivisions(){
     const btn = document.createElement('button');
     btn.textContent = d.name;
     btn.style.backgroundColor = getDivisionColor(d.name);
-    btn.className = (selectedDivision===d.name)? "selected" : "";
-    btn.onclick = ()=>{
-      if(selectedBunk){ 
-        selectedBunk.division = d.name;
-        selectedBunk = null; selectedDivision = null;
-      } else { 
-        selectedDivision = d.name; selectedBunk = null;
-      }
-      renderBunks();
-      renderDivisions();
-      updateScheduleTable();
-    };
+    btn.onclick = ()=>{ selectedDivision = d.name; };
     container.appendChild(btn);
     const colorInput = document.createElement('input');
     colorInput.type="color"; colorInput.value=d.color;
@@ -242,12 +229,14 @@ function updateScheduleTable(){
   table.appendChild(tbody);
 }
 
-// ENTER KEY FOR ADDING BUNKS & DIVISIONS
+// ENTER KEY AND TIME FLOW
 document.addEventListener("keydown", e=>{
   if(e.key==="Enter"){
     const active = document.activeElement.id;
     if(active==="bunkInput") addBunk();
     else if(active==="divisionInput") addDivision();
+    else if(active==="startTime") document.getElementById("endTime").focus();
+    else if(active==="endTime") document.getElementById("intervalSelect").focus();
   }
 });
 </script>
