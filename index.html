@@ -1,28 +1,36 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Test Page</title>
+  <title>Test Camp Scheduler</title>
+  <style>
+    table { border-collapse: collapse; margin-top: 20px; width: 100%; }
+    th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
+    th { background-color: #4CAF50; color: white; }
+  </style>
 </head>
 <body>
   <h1>Test Camp Scheduler</h1>
+
+  <!-- Bunk Input -->
   <input id="bunkInput" placeholder="Enter bunk">
   <button onclick="addBunk()">Add Bunk</button>
-  <ul id="bunkList"></ul>
+
+  <!-- Schedule Table -->
+  <table id="scheduleTable">
+    <thead>
+      <tr>
+        <th>Time / Bunk</th> <!-- top-left corner -->
+      </tr>
+    </thead>
+    <tbody>
+      <!-- Times will go here later -->
+    </tbody>
+  </table>
 
   <script>
     let bunks = [];
+
     function addBunk() {
       const input = document.getElementById('bunkInput');
       if(input.value.trim() !== "") {
-        bunks.push(input.value.trim());
-        const ul = document.getElementById('bunkList');
-        const li = document.createElement('li');
-        li.textContent = input.value.trim();
-        ul.appendChild(li);
-        input.value = "";
-        console.log("Added bunk:", bunks);
-      }
-    }
-  </script>
-</body>
-</html>
+        bunks.push(
