@@ -6,15 +6,17 @@
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     h1 { margin-bottom: 10px; }
-    input, select { margin: 5px; padding: 5px; }
-    button { margin: 5px; padding: 5px; cursor: pointer; }
+    input, select, button { margin: 5px; padding: 5px; }
     table { border-collapse: collapse; margin-top: 20px; width: 100%; }
-    th, td { border: 1px solid black; padding: 8px; text-align: center; }
+    th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
+    th { background-color: #4CAF50; color: white; }
+    td:hover { background-color: #f0f0f0; cursor: pointer; }
   </style>
 </head>
 <body>
   <h1>Camp Scheduler</h1>
 
+  <!-- Bunks -->
   <div>
     <h3>Add Bunk</h3>
     <input id="bunkInput" placeholder="Enter bunk name">
@@ -22,6 +24,7 @@
     <button onclick="removeBunk()">Remove Last Bunk</button>
   </div>
 
+  <!-- Times -->
   <div>
     <h3>Generate Times</h3>
     Start: <input type="time" id="startTime">
@@ -35,6 +38,7 @@
     <button onclick="generateTimes()">Generate</button>
   </div>
 
+  <!-- Schedule Table -->
   <table id="scheduleTable">
     <thead>
       <tr>
@@ -48,6 +52,7 @@
     let bunks = [];
     let times = [];
 
+    // Update the table
     function updateTable() {
       const table = document.getElementById("scheduleTable");
       const theadRow = table.querySelector("thead tr");
@@ -63,55 +68,4 @@
       tbody.innerHTML = "";
 
       times.forEach(time => {
-        const row = document.createElement("tr");
-        const timeCell = document.createElement("td");
-        timeCell.textContent = time;
-        row.appendChild(timeCell);
-
-        bunks.forEach(() => {
-          const cell = document.createElement("td");
-          cell.textContent = "";
-          row.appendChild(cell);
-        });
-
-        tbody.appendChild(row);
-      });
-    }
-
-    function addBunk() {
-      const bunkInput = document.getElementById("bunkInput");
-      if (bunkInput.value.trim() !== "") {
-        bunks.push(bunkInput.value.trim());
-        bunkInput.value = "";
-        updateTable();
-      }
-    }
-
-    function removeBunk() {
-      bunks.pop();
-      updateTable();
-    }
-
-    function generateTimes() {
-      const startInput = document.getElementById("startTime").value;
-      const endInput = document.getElementById("endTime").value;
-      const increment = parseInt(document.getElementById("increment").value);
-
-      if (!startInput || !endInput) {
-        alert("Please select start and end times.");
-        return;
-      }
-
-      let [startHour, startMinute] = startInput.split(":").map(Number);
-      let [endHour, endMinute] = endInput.split(":").map(Number);
-
-      const startDate = new Date(0, 0, 0, startHour, startMinute);
-      const endDate = new Date(0, 0, 0, endHour, endMinute);
-
-      times = [];
-
-      while (startDate < endDate) {
-        const endSlot = new Date(startDate.getTime() + increment * 60000);
-        if (endSlot > endDate) break;
-
-        const for
+        const row = document.createEle
