@@ -277,6 +277,25 @@
         generateTimes();
       }
     });
+    function loadSetup() {
+  const saved = localStorage.getItem("campSetup");
+  if (!saved) return; // nothing saved yet
+  const data = JSON.parse(saved);
+
+  bunks = data.bunks || [];
+  divisions = data.divisions || {};
+  availableDivisions = data.availableDivisions || [];
+  times = data.times || [];
+  fields = data.fields || [];
+
+  updateUnassigned();
+  setupDivisionButtons();
+  renderFields();
+}
+
+// Load saved setup when page opens
+window.onload = loadSetup;
+
   </script>
 </body>
 </html>
