@@ -8,12 +8,6 @@
     th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
     th { background-color: #4CAF50; color: white; }
     td.editable:hover, th.editable:hover { background-color: #f0f0f0; cursor: text; }
-
-    /* Colors for different grades */
-    .grade-0 { background-color: #FFCDD2; }
-    .grade-1 { background-color: #C8E6C9; }
-    .grade-2 { background-color: #BBDEFB; }
-    .grade-3 { background-color: #FFF9C4; }
   </style>
 </head>
 <body>
@@ -45,8 +39,8 @@
   <!-- Schedule Table -->
   <table id="scheduleTable">
     <thead>
-      <tr><th>Time / Bunk</th></tr>
-      <tr id="gradeHeaderRow"></tr>
+      <tr id="gradeRow"></tr>
+      <tr id="bunkRow"></tr>
     </thead>
     <tbody></tbody>
   </table>
@@ -67,7 +61,7 @@
       }
     }
 
-    // Populate the multi-select for grades
+    // Populate multi-select for grades
     function updateBunkSelect() {
       const select = document.getElementById("gradeBunksSelect");
       select.innerHTML = "";
@@ -137,61 +131,60 @@
       updateTable();
     }
 
-    // Update full table with grades, bunks, times, and editable cells
+    // Update table with merged grade headers
     function updateTable() {
       const table = document.getElementById("scheduleTable");
-      const thead = table.querySelector("thead");
-      const gradeHeaderRow = document.getElementById("gradeHeaderRow");
+      const gradeRow = document.getElementById("gradeRow");
+      const bunkRow = document.getElementById("bunkRow");
 
-      // Header row with bunks
-      thead.querySelector("tr").innerHTML = "<th>Time / Bunk</th>";
-      bunks.forEach((bunk, idx) => {
-        const th = document.createElement("th");
-        th.textContent = bunk;
-        th.classList.add("editable");
-        th.contentEditable = "true";
-        th.addEventListener("input", e => bunks[idx] = e.target.textContent);
-        thead.querySelector("tr").appendChild(th);
+      // Clear rows
+      gradeRow.innerHTML = "<th>Time / Grade</th>";
+      bunkRow.innerHTML = "<th>Time / Bunk</th>";
+
+      // Sort grades by insertion order
+      const gradeNames = Object.keys(grades);
+
+      gradeNames.forEach(grade => {
+        const bunkList = grades[grade];
+        if(bunkList.length === 0) return;
+        const thGrade = document.createElement("th");
+        thGrade.textContent = grade;
+        thGrade.colSpan = bunkList.length;
+        gradeRow.appendChild(thGrade);
+
+        bunkList.forEach(bunk => {
+          const thBunk = document.createElement("th");
+          thBunk.textContent = bunk;
+          thBunk.classList.add("editable");
+          thBunk.contentEditable = "true";
+          thBunk.addEventListener("input", e => {
+            // Update bunk name in the grades object
+            const idx = grades[grade].indexOf(bunk);
+            if(idx >= 0) grades[grade][idx] = e.target.textContent;
+          });
+          bunkRow.appendChild(thBunk);
+        });
       });
 
-      // Grade row
-      gradeHeaderRow.innerHTML = "<th></th>"; // first cell empty
-      bunks.forEach((bunk, idx) => {
-        const th = document.createElement("th");
-        // Find grade of bunk
-        let gradeIndex = 0;
-        const gradeNames = Object.keys(grades);
-        for (let i = 0; i < gradeNames.length; i++) {
-          if(grades[gradeNames[i]].includes(bunk)) {
-            gradeIndex = i;
-            break;
-          }
-        }
-        th.textContent = gradeNames[gradeIndex] || "";
-        th.classList.add(`grade-${gradeIndex % 4}`);
-        gradeHeaderRow.appendChild(th);
-      });
-
-      // Body rows with times and editable cells
+      // Body rows
       const tbody = table.querySelector("tbody");
       tbody.innerHTML = "";
-      times.forEach((time, timeIdx) => {
+      times.forEach(time => {
         const row = document.createElement("tr");
 
-        // Time cell editable
         const timeCell = document.createElement("td");
         timeCell.textContent = time;
         timeCell.classList.add("editable");
         timeCell.contentEditable = "true";
-        timeCell.addEventListener("input", e => times[timeIdx] = e.target.textContent);
         row.appendChild(timeCell);
 
-        // Activity cells editable
-        bunks.forEach(() => {
-          const cell = document.createElement("td");
-          cell.classList.add("editable");
-          cell.contentEditable = "true";
-          row.appendChild(cell);
+        gradeNames.forEach(grade => {
+          grades[grade].forEach(() => {
+            const cell = document.createElement("td");
+            cell.classList.add("editable");
+            cell.contentEditable = "true";
+            row.appendChild(cell);
+          });
         });
 
         tbody.appendChild(row);
