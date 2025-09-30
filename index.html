@@ -31,6 +31,7 @@
     .button-container button { margin: 3px; padding: 6px 10px; cursor: pointer; }
     .time-input { width: 80px; }
     .selected { outline: 3px solid #FFD700; }
+    .clock-symbol { margin-right: 5px; }
   </style>
 </head>
 <body>
@@ -57,12 +58,13 @@
   <button id="colorToggleBtn" onclick="toggleColor()">Disable Colors</button>
 
   <h3>Times</h3>
-  Start: <input id="startTime" class="time-input" placeholder="9:00 AM">
-  End: <input id="endTime" class="time-input" placeholder="5:00 PM">
-  Intervals: 
+  <span class="clock-symbol">🕒</span>Start: <input id="startTime" class="time-input" placeholder="9:00 AM">
+  <span class="clock-symbol">🕒</span>End: <input id="endTime" class="time-input" placeholder="5:00 PM">
+  Interval: 
   <select id="intervalSelect" class="time-input">
     <option value="15">15 min</option>
     <option value="30">30 min</option>
+    <option value="45">45 min</option>
     <option value="60">60 min</option>
   </select>
   <button onclick="generateTimes()">Generate Times</button>
