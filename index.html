@@ -20,10 +20,21 @@
     .divisionWrapper { display: inline-block; margin-right: 10px; }
     .colorPicker { width: 30px; height: 30px; border: none; cursor: pointer; vertical-align: middle; }
 
-    .fieldWrapper { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
-    .fieldWrapper h4 { margin: 0 0 5px 0; }
+    .fieldWrapper { border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 6px; }
+    .fieldWrapper h4 { margin: 0 0 5px 0; display: inline-block; margin-right: 10px; }
+    .fieldWrapper.unavailable { opacity: 0.5; }
     .activity-button { margin: 2px; padding: 4px 8px; border: 1px solid #333; border-radius: 3px; cursor: pointer; }
     .activity-button.active { background: #007BFF; color: white; }
+
+    /* Toggle switch */
+    .switch { position: relative; display: inline-block; width: 40px; height: 20px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #ccc; transition: .4s; border-radius: 20px; }
+    .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px;
+      background-color: white; transition: .4s; border-radius: 50%; }
+    input:checked + .slider { background-color: #4CAF50; }
+    input:checked + .slider:before { transform: translateX(20px); }
   </style>
 </head>
 <body>
@@ -66,9 +77,9 @@
     <div id="unassignedBunks"></div>
 
     <!-- Field Input -->
-    <h3>Add Fields</h3>
-    <input id="fieldInput" placeholder="Enter field name (e.g., Court #1)">
-    <button onclick="addField()">Add Field</button>
+    <h3>Add Fields/Courts</h3>
+    <input id="fieldInput" placeholder="Enter field/court name (e.g., Court #1)">
+    <button onclick="addField()">Add Field/Court</button>
     <div id="fieldList"></div>
   </div>
 
@@ -105,8 +116,32 @@
     const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336'];
     let colorIndex = 0;
 
-    let fields = []; // {name: "Court #1", activities: []}
+    let fields = []; // {name: "Court #1", activities: [], available: true}
     const commonActivities = ["Basketball","Football","Baseball","Hockey","Volleyball","Soccer","Lacrosse"];
+
+    // ==============================
+    // EDIT FUNCTIONS
+    function editBunk(oldName, newName) {
+      const idx = bunks.indexOf(oldName);
+      if (idx !== -1) bunks[idx] = newName;
+      for (let div in divisions) {
+        const bunkIdx = divisions[div].bunks.indexOf(oldName);
+        if (bunkIdx !== -1) divisions[div].bunks[bunkIdx] = newName;
+      }
+      updateUnassigned();
+      updateTable();
+    }
+
+    function editDivision(oldName, newName) {
+      if (!newName || availableDivisions.includes(newName)) return;
+      const idx = availableDivisions.indexOf(oldName);
+      if (idx !== -1) availableDivisions[idx] = newName;
+      divisions[newName] = divisions[oldName];
+      delete divisions[oldName];
+      if (selectedDivision === oldName) selectedDivision = newName;
+      setupDivisionButtons();
+      updateTable();
+    }
 
     // ==============================
     // BUNKS
@@ -147,16 +182,29 @@
         const wrapper = document.createElement("div");
         wrapper.className = "divisionWrapper";
 
-        const btn = document.createElement("button");
-        btn.textContent = divName;
-        btn.className = "bunk-button";
-        btn.style.backgroundColor = colorEnabled ? divObj.color : "transparent";
-        btn.onclick = ()=>{
-          selectedDivision = divName;
-          Array.from(container.getElementsByTagName('button')).forEach(c=>c.classList.remove("selected"));
-          btn.classList.add("selected");
+        const span = document.createElement("span");
+        span.textContent = divName;
+        span.className = "bunk-button";
+        span.style.backgroundColor = colorEnabled ? divObj.color : "transparent";
+        span.ondblclick = () => {
+          const input = document.createElement("input");
+          input.type = "text";
+          input.value = divName;
+          input.onblur = () => {
+            if (input.value.trim() && input.value.trim() !== divName) {
+              editDivision(divName, input.value.trim());
+            }
+          };
+          input.onkeyup = (e) => { if (e.key === "Enter") input.blur(); };
+          span.replaceWith(input);
+          input.focus();
         };
-        wrapper.appendChild(btn);
+        span.onclick = ()=> {
+          selectedDivision = divName;
+          Array.from(container.getElementsByTagName('span')).forEach(c=>c.classList.remove("selected"));
+          span.classList.add("selected");
+        };
+        wrapper.appendChild(span);
 
         const colorInput = document.createElement("input");
         colorInput.type = "color";
@@ -164,7 +212,7 @@
         colorInput.className = "colorPicker";
         colorInput.addEventListener("input", e=>{
           divObj.color = e.target.value;
-          if(colorEnabled) btn.style.backgroundColor = e.target.value;
+          if(colorEnabled) span.style.backgroundColor = e.target.value;
           updateTable();
         });
         wrapper.appendChild(colorInput);
@@ -179,10 +227,10 @@
       const assignedBunks = Object.values(divisions).flatMap(d=>d.bunks);
       const unassigned = bunks.filter(b => !assignedBunks.includes(b));
       unassigned.forEach(bunk=>{
-        const btn = document.createElement("div");
-        btn.textContent = bunk;
-        btn.className = "bunk-button";
-        btn.onclick = ()=>{
+        const span = document.createElement("span");
+        span.textContent = bunk;
+        span.className = "bunk-button";
+        span.onclick = ()=>{
           if(selectedDivision){
             divisions[selectedDivision].bunks.push(bunk);
             updateUnassigned();
@@ -191,7 +239,21 @@
             alert("Select a division first!");
           }
         };
-        container.appendChild(btn);
+        span.ondblclick = (e)=>{
+          e.stopPropagation();
+          const input = document.createElement("input");
+          input.type = "text";
+          input.value = bunk;
+          input.onblur = ()=>{
+            if (input.value.trim() && input.value.trim() !== bunk) {
+              editBunk(bunk, input.value.trim());
+            }
+          };
+          input.onkeyup = (e)=>{ if(e.key==="Enter") input.blur(); };
+          span.replaceWith(input);
+          input.focus();
+        };
+        container.appendChild(span);
       });
     }
 
@@ -229,7 +291,7 @@
       const input = document.getElementById("fieldInput");
       const fieldName = input.value.trim();
       if(fieldName){
-        fields.push({name: fieldName, activities: []});
+        fields.push({name: fieldName, activities: [], available: true});
         input.value="";
         renderFields();
       }
@@ -238,13 +300,42 @@
     function renderFields(){
       const container = document.getElementById("fieldList");
       container.innerHTML="";
-      fields.forEach((field)=>{
+      fields.forEach((field, index)=>{
         const wrapper = document.createElement("div");
         wrapper.className="fieldWrapper";
+        if(!field.available) wrapper.classList.add("unavailable");
 
         const title = document.createElement("h4");
         title.textContent = field.name;
+        title.ondblclick = ()=>{
+          const input = document.createElement("input");
+          input.type="text";
+          input.value = field.name;
+          input.onblur = ()=>{
+            if(input.value.trim()) field.name = input.value.trim();
+            renderFields();
+          };
+          input.onkeyup = (e)=>{ if(e.key==="Enter") input.blur(); };
+          title.replaceWith(input);
+          input.focus();
+        };
         wrapper.appendChild(title);
+
+        // Availability toggle
+        const toggleWrapper = document.createElement("label");
+        toggleWrapper.className="switch";
+        const checkbox = document.createElement("input");
+        checkbox.type="checkbox";
+        checkbox.checked = field.available;
+        checkbox.onchange = ()=>{
+          field.available = checkbox.checked;
+          renderFields();
+        };
+        const slider = document.createElement("span");
+        slider.className="slider";
+        toggleWrapper.appendChild(checkbox);
+        toggleWrapper.appendChild(slider);
+        wrapper.appendChild(toggleWrapper);
 
         // Common activity buttons
         commonActivities.forEach(act=>{
@@ -306,10 +397,26 @@
         const bunksInDiv = divObj.bunks;
 
         const thDiv = document.createElement("th");
-        thDiv.textContent = divName;
         thDiv.colSpan = Math.max(bunksInDiv.length,1);
         thDiv.style.backgroundColor = colorEnabled ? divObj.color : "transparent";
         thDiv.style.color = colorEnabled ? "#fff" : "#000";
+
+        const span = document.createElement("span");
+        span.textContent = divName;
+        span.ondblclick = ()=>{
+          const input = document.createElement("input");
+          input.type="text";
+          input.value = divName;
+          input.onblur = ()=>{
+            if(input.value.trim() && input.value.trim()!==divName){
+              editDivision(divName, input.value.trim());
+            }
+          };
+          input.onkeyup = (e)=>{ if(e.key==="Enter") input.blur(); };
+          span.replaceWith(input);
+          input.focus();
+        };
+        thDiv.appendChild(span);
         divRow.appendChild(thDiv);
 
         if(bunksInDiv.length===0){
@@ -319,8 +426,22 @@
         } else {
           bunksInDiv.forEach(bunk=>{
             const thBunk = document.createElement("th");
-            thBunk.textContent = bunk;
-            thBunk.style.color = "#000";
+            const spanBunk = document.createElement("span");
+            spanBunk.textContent = bunk;
+            spanBunk.ondblclick = ()=>{
+              const input = document.createElement("input");
+              input.type="text";
+              input.value = bunk;
+              input.onblur = ()=>{
+                if(input.value.trim() && input.value.trim()!==bunk){
+                  editBunk(bunk, input.value.trim());
+                }
+              };
+              input.onkeyup = (e)=>{ if(e.key==="Enter") input.blur(); };
+              spanBunk.replaceWith(input);
+              input.focus();
+            };
+            thBunk.appendChild(spanBunk);
             bunkRow.appendChild(thBunk);
           });
         }
