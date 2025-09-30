@@ -20,8 +20,8 @@
   <div>
     <h3>Add Bunk</h3>
     <input id="bunkInput" placeholder="Enter bunk name">
-    <button id="addBunkBtn">Add Bunk</button>
-    <button id="removeBunkBtn">Remove Last Bunk</button>
+    <button onclick="addBunk()">Add Bunk</button>
+    <button onclick="removeBunk()">Remove Last Bunk</button>
   </div>
 
   <!-- Times -->
@@ -35,7 +35,7 @@
       <option value="30">30 min</option>
       <option value="60">60 min</option>
     </select>
-    <button id="generateTimesBtn">Generate</button>
+    <button onclick="generateTimes()">Generate</button>
   </div>
 
   <!-- Schedule Table -->
@@ -46,56 +46,11 @@
     <tbody></tbody>
   </table>
 
-  <script>
+  <script defer>
     let bunks = [];
     let times = [];
 
-    // Function to update the table
     function updateTable() {
       const table = document.getElementById("scheduleTable");
       const theadRow = table.querySelector("thead tr");
       theadRow.innerHTML = "<th>Time / Bunk</th>";
-      bunks.forEach(bunk => {
-        const th = document.createElement("th");
-        th.textContent = bunk;
-        theadRow.appendChild(th);
-      });
-
-      const tbody = table.querySelector("tbody");
-      tbody.innerHTML = "";
-
-      times.forEach(time => {
-        const row = document.createElement("tr");
-        const timeCell = document.createElement("td");
-        timeCell.textContent = time;
-        row.appendChild(timeCell);
-
-        bunks.forEach(() => {
-          const cell = document.createElement("td");
-          row.appendChild(cell);
-        });
-
-        tbody.appendChild(row);
-      });
-    }
-
-    // Event listeners to make sure functions work
-    window.addEventListener('DOMContentLoaded', () => {
-      document.getElementById('addBunkBtn').addEventListener('click', () => {
-        const input = document.getElementById('bunkInput');
-        if (input.value.trim() !== "") {
-          bunks.push(input.value.trim());
-          input.value = "";
-          updateTable();
-        }
-      });
-
-      document.getElementById('removeBunkBtn').addEventListener('click', () => {
-        bunks.pop();
-        updateTable();
-      });
-
-      document.getElementById('generateTimesBtn').addEventListener('click', () => {
-        const startInput = document.getElementById("startTime").value;
-        const endInput = document.getElementById("endTime").value;
-        const increment = parseInt(document.g
