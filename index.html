@@ -21,8 +21,8 @@
     <option value="30">30 min</option>
     <option value="60">60 min</option>
   </select>
-  <ul id="timeList"></ul>
   <button onclick="generateTimes()">Generate</button>
+  <ul id="timeList"></ul>
 
   <script>
     let bunks = [];
@@ -31,10 +31,10 @@
       const input = document.getElementById('bunkInput');
       if(input.value.trim() !== "") {
         bunks.push(input.value.trim());
-        const ul = document.getElementById('bunkList');
+        const bunkUl = document.getElementById('bunkList');
         const li = document.createElement('li');
         li.textContent = input.value.trim();
-        ul.appendChild(li);
+        bunkUl.appendChild(li);
         input.value = "";
         console.log("Added bunk:", bunks);
       }
@@ -51,4 +51,15 @@
       }
 
       let [startH, startM] = startInput.split(":").map(Number);
-      let [endH, endM] = endInput.split(":").map(Nu
+      let [endH, endM] = endInput.split(":").map(Number);
+
+      const startDate = new Date(0,0,0,startH,startM);
+      const endDate = new Date(0,0,0,endH,endM);
+
+      if (startDate >= endDate) {
+        alert("Start time must be before end time.");
+        return;
+      }
+
+      const times = [];
+      let current = new Date(startDate.getTime
