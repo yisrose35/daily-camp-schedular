@@ -3,284 +3,203 @@
 <head>
   <title>Camp Scheduler</title>
   <style>
-    body { font-family: Arial, sans-serif; padding: 20px; }
-    table { border-collapse: collapse; margin-top: 20px; width: 100%; }
-    th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
-    th.editable:hover, td.editable:hover { background-color: #f0f0f0; cursor: text; }
-
-    .bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; display: inline-block; }
-    .selected { outline: 3px solid #90CAF9; }
-    #unassignedBunks { margin-top: 10px; }
-    .divisionWrapper { display: inline-block; margin-right: 10px; }
-    .colorPicker { width: 30px; height: 30px; border: none; cursor: pointer; vertical-align: middle; }
+    body { font-family: Arial, sans-serif; }
+    .tabs { display: flex; margin-bottom: 10px; }
+    .tab { padding: 10px 20px; cursor: pointer; border: 1px solid #ccc; border-bottom: none; }
+    .tab.active { background: #f0f0f0; font-weight: bold; }
+    .tab-content { border: 1px solid #ccc; padding: 10px; display: none; }
+    .tab-content.active { display: block; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+    th, td { border: 1px solid #ccc; padding: 5px; text-align: center; }
+    .color-box { width: 20px; height: 20px; display: inline-block; border: 1px solid #000; vertical-align: middle; }
   </style>
 </head>
 <body>
   <h1>Camp Scheduler</h1>
 
-  <!-- Bunk Input -->
-  <h3>Add Bunks</h3>
-  <input id="bunkInput" placeholder="Enter bunk">
-  <button onclick="addBunk()">Add Bunk</button>
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('setup')">Setup & Configuration</div>
+    <div class="tab" onclick="showTab('schedule')">Daily Schedule</div>
+  </div>
 
-  <!-- Division Input -->
-  <h3>Add Divisions</h3>
-  <input id="divisionInput" placeholder="Enter division name">
-  <button onclick="addDivision()">Add Division</button>
-  <label><input type="checkbox" id="enableColor" checked> Enable colors</label>
-  <div id="divisionButtons"></div>
+  <!-- Setup Tab -->
+  <div id="setup" class="tab-content active">
+    <h2>Setup & Configuration</h2>
 
-  <!-- Time Inputs -->
-  <h3>Generate Times</h3>
-  Start: <input type="time" id="startTime">
-  End: <input type="time" id="endTime">
-  Increment:
-  <select id="increment">
-    <option value="15">15 min</option>
-    <option value="30">30 min</option>
-    <option value="60">60 min</option>
-  </select>
-  <button onclick="generateTimes()">Generate</button>
+    <!-- Bunks -->
+    <h3>Bunks</h3>
+    <input id="bunkInput" placeholder="Enter bunk">
+    <button onclick="addBunk()">Add Bunk</button>
+    <ul id="bunkList"></ul>
 
-  <!-- Unassigned Bunks -->
-  <h4>Unassigned Bunks</h4>
-  <div id="unassignedBunks"></div>
+    <!-- Divisions -->
+    <h3>Divisions</h3>
+    <input id="divisionInput" placeholder="Enter division">
+    <input type="color" id="divisionColor">
+    <button onclick="addDivision()">Add Division</button>
+    <ul id="divisionList"></ul>
 
-  <!-- Schedule Table -->
-  <table id="scheduleTable" style="display:none;">
-    <thead>
-      <tr id="divisionRow"></tr>
-      <tr id="bunkRow"></tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+    <!-- Times -->
+    <h3>Times</h3>
+    <input type="time" id="startTime"> to 
+    <input type="time" id="endTime">
+    <button onclick="generateTimes()">Generate Times</button>
+
+    <!-- Activities -->
+    <h3>Fields & Activities</h3>
+    <input id="activityInput" placeholder="Enter activity">
+    <button onclick="addActivity()">Add Activity</button>
+    <ul id="activityList"></ul>
+  </div>
+
+  <!-- Schedule Tab -->
+  <div id="schedule" class="tab-content">
+    <h2>Daily Schedule</h2>
+    <table id="scheduleTable">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Division</th>
+          <th>Bunk</th>
+          <th>Activity</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
 
   <script>
     let bunks = [];
+    let divisions = [];
     let times = [];
-    let divisions = {}; // { name: { bunks: [], color: "#xxxxxx" } }
-    let availableDivisions = [];
-    let selectedDivision = null;
-
-    const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336'];
+    let activities = [];
+    let autoColors = ["#4CAF50", "#2196F3", "#E91E63", "#FF9800", "#9C27B0"];
     let colorIndex = 0;
 
+    function showTab(tab) {
+      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+      document.querySelector(`.tab[onclick="showTab('${tab}')"]`).classList.add("active");
+      document.getElementById(tab).classList.add("active");
+    }
+
+    // Bunks
     function addBunk() {
-      const input = document.getElementById('bunkInput');
-      if(input.value.trim()!==""){
+      const input = document.getElementById("bunkInput");
+      if (input.value.trim() !== "") {
         bunks.push(input.value.trim());
-        input.value="";
-        updateUnassigned();
-        updateTable();
+        updateBunkList();
+        input.value = "";
       }
     }
+    function updateBunkList() {
+      const ul = document.getElementById("bunkList");
+      ul.innerHTML = "";
+      bunks.forEach((bunk, i) => {
+        const li = document.createElement("li");
+        li.textContent = bunk;
+        li.contentEditable = true;
+        li.onblur = () => bunks[i] = li.textContent.trim();
+        ul.appendChild(li);
+      });
+    }
 
+    // Divisions
     function addDivision() {
-      const input = document.getElementById('divisionInput');
-      if(input.value.trim()==="") return;
-      const divName = input.value.trim();
-      if(!availableDivisions.includes(divName)){
-        const color = defaultColors[colorIndex % defaultColors.length];
+      const input = document.getElementById("divisionInput");
+      const colorInput = document.getElementById("divisionColor");
+      if (input.value.trim() !== "") {
+        const color = colorInput.value || autoColors[colorIndex % autoColors.length];
+        divisions.push({ name: input.value.trim(), color });
         colorIndex++;
-        availableDivisions.push(divName);
-        divisions[divName] = { bunks: [], color: color };
-        input.value="";
-        setupDivisionButtons();
-        updateTable();
+        updateDivisionList();
+        input.value = "";
       }
     }
-
-    function setupDivisionButtons() {
-      const container = document.getElementById("divisionButtons");
-      container.innerHTML="";
-      const colorEnabled = document.getElementById("enableColor").checked;
-
-      availableDivisions.forEach((divName)=>{
-        const divObj = divisions[divName];
-
-        const wrapper = document.createElement("div");
-        wrapper.className = "divisionWrapper";
-
-        const btn = document.createElement("button");
-        btn.textContent = divName;
-        btn.className = "bunk-button";
-        btn.style.backgroundColor = colorEnabled ? divObj.color : "transparent";
-        btn.onclick = ()=>{
-          selectedDivision = divName;
-          Array.from(container.getElementsByTagName('button')).forEach(c=>c.classList.remove("selected"));
-          btn.classList.add("selected");
-        };
-        wrapper.appendChild(btn);
-
-        const colorInput = document.createElement("input");
-        colorInput.type = "color";
-        colorInput.value = divObj.color;
-        colorInput.className = "colorPicker";
-        colorInput.addEventListener("input", e=>{
-          divObj.color = e.target.value;
-          if(colorEnabled) btn.style.backgroundColor = e.target.value;
-          updateTable();
-        });
-        wrapper.appendChild(colorInput);
-
-        container.appendChild(wrapper);
+    function updateDivisionList() {
+      const ul = document.getElementById("divisionList");
+      ul.innerHTML = "";
+      divisions.forEach((div, i) => {
+        const li = document.createElement("li");
+        const box = document.createElement("span");
+        box.className = "color-box";
+        box.style.backgroundColor = div.color;
+        const text = document.createElement("span");
+        text.textContent = " " + div.name;
+        text.contentEditable = true;
+        text.onblur = () => divisions[i].name = text.textContent.trim();
+        const picker = document.createElement("input");
+        picker.type = "color";
+        picker.value = div.color;
+        picker.oninput = () => { div.color = picker.value; updateDivisionList(); };
+        li.appendChild(box);
+        li.appendChild(text);
+        li.appendChild(picker);
+        ul.appendChild(li);
       });
     }
 
-    function updateUnassigned() {
-      const container = document.getElementById("unassignedBunks");
-      container.innerHTML="";
-      const assignedBunks = Object.values(divisions).flatMap(d=>d.bunks);
-      const unassigned = bunks.filter(b => !assignedBunks.includes(b));
-      unassigned.forEach(bunk=>{
-        const btn = document.createElement("div");
-        btn.textContent = bunk;
-        btn.className = "bunk-button";
-        btn.onclick = ()=>{
-          if(selectedDivision){
-            divisions[selectedDivision].bunks.push(bunk);
-            updateUnassigned();
-            updateTable();
-          } else {
-            alert("Select a division first!");
-          }
-        };
-        container.appendChild(btn);
+    // Activities
+    function addActivity() {
+      const input = document.getElementById("activityInput");
+      if (input.value.trim() !== "") {
+        activities.push(input.value.trim());
+        updateActivityList();
+        input.value = "";
+      }
+    }
+    function updateActivityList() {
+      const ul = document.getElementById("activityList");
+      ul.innerHTML = "";
+      activities.forEach((act, i) => {
+        const li = document.createElement("li");
+        li.textContent = act;
+        li.contentEditable = true;
+        li.onblur = () => activities[i] = li.textContent.trim();
+        ul.appendChild(li);
       });
     }
 
+    // Times
     function generateTimes() {
-      const startInput = document.getElementById("startTime").value;
-      const endInput = document.getElementById("endTime").value;
-      const increment = parseInt(document.getElementById("increment").value);
-      if(!startInput || !endInput){alert("Select valid start and end times"); return;}
-      let [startH,startM] = startInput.split(":").map(Number);
-      let [endH,endM] = endInput.split(":").map(Number);
-      const startDate = new Date(0,0,0,startH,startM);
-      const endDate = new Date(0,0,0,endH,endM);
-      if(startDate>=endDate){alert("Start must be before end"); return;}
-      times=[];
-      let current = new Date(startDate.getTime());
-      while(current<endDate){
-        let next = new Date(current.getTime()+increment*60000);
-        if(next>endDate) break;
-        const format = d=>{
-          let h=d.getHours(), m=d.getMinutes().toString().padStart(2,'0');
-          h=h%12||12;
-          return `${h}:${m}`;
-        };
-        times.push(`${format(current)} - ${format(next)}`);
-        current=next;
+      const start = document.getElementById("startTime").value;
+      const end = document.getElementById("endTime").value;
+      if (!start || !end) return;
+
+      let [sh, sm] = start.split(":").map(Number);
+      let [eh, em] = end.split(":").map(Number);
+
+      times = [];
+      while (sh < eh || (sh === eh && sm < em)) {
+        let hour = sh % 12 || 12;
+        let ampm = sh < 12 ? "AM" : "PM";
+        times.push(`${hour}:${sm.toString().padStart(2,"0")} ${ampm}`);
+        sm += 30;
+        if (sm >= 60) { sm = 0; sh++; }
       }
-      updateTable();
+      updateScheduleTable();
     }
 
-    function updateTable() {
-      const table = document.getElementById("scheduleTable");
-      if(times.length===0) return;
-      table.style.display="table";
-
-      const divRow = document.getElementById("divisionRow");
-      const bunkRow = document.getElementById("bunkRow");
-      divRow.innerHTML="<th>Division</th>";
-      bunkRow.innerHTML="<th>Bunk</th>";
-
-      const colorEnabled = document.getElementById("enableColor").checked;
-
-      availableDivisions.forEach((divName)=>{
-        const divObj = divisions[divName];
-        const bunksInDiv = divObj.bunks;
-
-        // Division header
-        const thDiv = document.createElement("th");
-        thDiv.textContent = divName;
-        thDiv.colSpan = Math.max(bunksInDiv.length,1);
-        thDiv.style.backgroundColor = colorEnabled ? divObj.color : "transparent";
-        thDiv.style.color = colorEnabled ? "#fff" : "#000";
-        thDiv.classList.add("editable");
-        thDiv.contentEditable = true;
-        thDiv.addEventListener("input", e=>{
-          const oldName = divName;
-          const newName = e.target.textContent;
-          if(newName && newName!==oldName){
-            divisions[newName] = divisions[oldName];
-            delete divisions[oldName];
-            const idx = availableDivisions.indexOf(oldName);
-            availableDivisions[idx]=newName;
-            if(selectedDivision===oldName) selectedDivision=newName;
-            setupDivisionButtons();
-            updateTable();
-          }
-        });
-        divRow.appendChild(thDiv);
-
-        // Bunks under division
-        if(bunksInDiv.length===0){
-          const thEmpty = document.createElement("th");
-          thEmpty.textContent="";
-          bunkRow.appendChild(thEmpty);
-        } else {
-          bunksInDiv.forEach(bunk=>{
-            const thBunk = document.createElement("th");
-            thBunk.textContent = bunk;
-            thBunk.style.color = "#000";
-            thBunk.classList.add("editable");
-            thBunk.contentEditable = true;
-            thBunk.addEventListener("input", e=>{
-              const idx = divObj.bunks.indexOf(bunk);
-              if(idx>=0) divObj.bunks[idx] = e.target.textContent;
-            });
-            bunkRow.appendChild(thBunk);
+    // Schedule display
+    function updateScheduleTable() {
+      const tbody = document.getElementById("scheduleTable").querySelector("tbody");
+      tbody.innerHTML = "";
+      times.forEach(time => {
+        divisions.forEach(div => {
+          bunks.forEach(bunk => {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td>${time}</td>
+              <td style="background:${div.color}">${div.name}</td>
+              <td>${bunk}</td>
+              <td>${activities[Math.floor(Math.random()*activities.length)] || ""}</td>
+            `;
+            tbody.appendChild(tr);
           });
-        }
-      });
-
-      // Build body
-      const tbody = document.querySelector("#scheduleTable tbody");
-      tbody.innerHTML="";
-      times.forEach(time=>{
-        const row = document.createElement("tr");
-        const tdTime = document.createElement("td");
-        tdTime.textContent = time;
-        tdTime.classList.add("editable");
-        tdTime.contentEditable=true;
-        row.appendChild(tdTime);
-
-        availableDivisions.forEach(divName=>{
-          const bunksInDiv = divisions[divName].bunks;
-          if(bunksInDiv.length===0){
-            const td = document.createElement("td");
-            td.classList.add("editable");
-            td.contentEditable=true;
-            row.appendChild(td);
-          } else {
-            bunksInDiv.forEach(()=>{
-              const td = document.createElement("td");
-              td.classList.add("editable");
-              td.contentEditable=true;
-              row.appendChild(td);
-            });
-          }
         });
-        tbody.appendChild(row);
       });
     }
-
-    // ENTER key support
-    document.getElementById("bunkInput").addEventListener("keyup", function(e){
-      if(e.key==="Enter") addBunk();
-    });
-    document.getElementById("divisionInput").addEventListener("keyup", function(e){
-      if(e.key==="Enter") addDivision();
-    });
-
-    // Time input flow
-    document.getElementById("startTime").addEventListener("input", function(){
-      if(this.value.length === 5) document.getElementById("endTime").focus();
-    });
-    document.getElementById("endTime").addEventListener("keyup", function(e){
-      if(e.key==="Enter") generateTimes();
-    });
   </script>
 </body>
 </html>
