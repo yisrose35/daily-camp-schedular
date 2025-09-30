@@ -7,7 +7,7 @@
     table { border-collapse: collapse; margin-top: 20px; width: 100%; }
     th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
     th { background-color: #4CAF50; color: white; }
-    td.editable:hover { background-color: #f0f0f0; cursor: text; }
+    td.editable:hover, th.editable:hover { background-color: #f0f0f0; cursor: text; }
   </style>
 </head>
 <body>
@@ -47,7 +47,6 @@
       if(input.value.trim() !== "") {
         bunks.push(input.value.trim());
         input.value = "";
-        updateHeaderOnly();
         updateTable();
       }
     }
@@ -95,31 +94,38 @@
       updateTable();
     }
 
-    // Update only header
-    function updateHeaderOnly() {
+    // Update full table with editable bunks, times, and cells
+    function updateTable() {
       const table = document.getElementById("scheduleTable");
+
+      // Header row
       const thead = table.querySelector("thead");
       thead.innerHTML = "<tr><th>Time / Bunk</th></tr>";
-      bunks.forEach(bunk => {
+      bunks.forEach((bunk, idx) => {
         const th = document.createElement("th");
         th.textContent = bunk;
+        th.classList.add("editable");
+        th.contentEditable = "true";
+        // Update the bunks array if header is edited
+        th.addEventListener("input", e => bunks[idx] = e.target.textContent);
         thead.querySelector("tr").appendChild(th);
       });
-    }
 
-    // Update full table with times and editable cells
-    function updateTable() {
-      updateHeaderOnly();
-      const table = document.getElementById("scheduleTable");
+      // Body rows
       const tbody = table.querySelector("tbody");
       tbody.innerHTML = "";
-
-      times.forEach(time => {
+      times.forEach((time, timeIdx) => {
         const row = document.createElement("tr");
+
+        // Time cell editable
         const timeCell = document.createElement("td");
         timeCell.textContent = time;
+        timeCell.classList.add("editable");
+        timeCell.contentEditable = "true";
+        timeCell.addEventListener("input", e => times[timeIdx] = e.target.textContent);
         row.appendChild(timeCell);
 
+        // Activity cells editable
         bunks.forEach(() => {
           const cell = document.createElement("td");
           cell.classList.add("editable");
