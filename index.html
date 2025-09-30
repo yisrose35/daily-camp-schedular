@@ -9,22 +9,22 @@
     th { color: white; }
     td.editable:hover, th.editable:hover { background-color: #f0f0f0; cursor: text; }
 
-    /* Grade colors */
-    .grade-0 { background-color: #FFCDD2; } /* red */
-    .grade-1 { background-color: #C8E6C9; } /* green */
-    .grade-2 { background-color: #BBDEFB; } /* blue */
-    .grade-3 { background-color: #FFF9C4; } /* yellow */
-
-    /* Bunk buttons */
-    #unassignedBunks { margin-top: 10px; }
     .bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; display: inline-block; }
     .selected { background-color: #90CAF9; }
+    #unassignedBunks { margin-top: 10px; }
   </style>
 </head>
 <body>
   <h1>Camp Scheduler</h1>
 
+  <!-- Custom Grades -->
+  <h3>Custom Grades</h3>
+  <input id="gradeInput" placeholder="Enter grade name">
+  <button onclick="addGrade()">Add Grade</button>
+  <div id="gradeButtons"></div>
+
   <!-- Bunk Input -->
+  <h3>Add Bunks</h3>
   <input id="bunkInput" placeholder="Enter bunk">
   <button onclick="addBunk()">Add Bunk</button>
 
@@ -39,10 +39,6 @@
     <option value="60">60 min</option>
   </select>
   <button onclick="generateTimes()">Generate</button>
-
-  <!-- Grade Buttons -->
-  <h3>Assign Grades</h3>
-  <div id="gradeButtons"></div>
 
   <!-- Unassigned Bunks -->
   <h4>Unassigned Bunks</h4>
@@ -61,15 +57,44 @@
     let bunks = [];
     let times = [];
     let grades = {}; // { gradeName: [bunk1,bunk2,...] }
-    let gradeColors = ['grade-0','grade-1','grade-2','grade-3'];
+    let gradeColors = ['#FFCDD2','#C8E6C9','#BBDEFB','#FFF9C4','#D1C4E9','#FFECB3','#B2DFDB','#F8BBD0'];
     let selectedGrade = null;
+    let availableGrades = [];
 
-    const availableGrades = ["5th Grade","6th Grade","7th Grade","8th Grade"];
-    availableGrades.forEach(g => grades[g]=[]);
+    // Add a grade
+    function addGrade(){
+      const input = document.getElementById('gradeInput');
+      if(input.value.trim()==="") return;
+      const grade = input.value.trim();
+      if(!availableGrades.includes(grade)){
+        availableGrades.push(grade);
+        grades[grade]=[];
+        input.value="";
+        setupGradeButtons();
+        updateTable();
+      }
+    }
+
+    function setupGradeButtons(){
+      const container = document.getElementById("gradeButtons");
+      container.innerHTML="";
+      availableGrades.forEach((grade,i)=>{
+        const btn = document.createElement("button");
+        btn.textContent=grade;
+        btn.className="bunk-button";
+        btn.style.backgroundColor=gradeColors[i%gradeColors.length];
+        btn.onclick=()=>{
+          selectedGrade=grade;
+          Array.from(container.children).forEach(c=>c.classList.remove("selected"));
+          btn.classList.add("selected");
+        };
+        container.appendChild(btn);
+      });
+    }
 
     function addBunk(){
       const input = document.getElementById('bunkInput');
-      if(input.value.trim() !== ""){
+      if(input.value.trim()!==""){
         bunks.push(input.value.trim());
         input.value="";
         updateUnassigned();
@@ -98,22 +123,7 @@
       });
     }
 
-    function setupGradeButtons(){
-      const container = document.getElementById("gradeButtons");
-      container.innerHTML="";
-      availableGrades.forEach((grade,i)=>{
-        const btn = document.createElement("button");
-        btn.textContent=grade;
-        btn.className="bunk-button";
-        btn.onclick=()=>{
-          selectedGrade=grade;
-          Array.from(container.children).forEach(c=>c.classList.remove("selected"));
-          btn.classList.add("selected");
-        };
-        container.appendChild(btn);
-      });
-    }
-
+    // Generate times in 12-hour format
     function generateTimes(){
       const startInput = document.getElementById("startTime").value;
       const endInput = document.getElementById("endTime").value;
@@ -146,13 +156,14 @@
       gradeRow.innerHTML="<th>Time / Grade</th>";
       bunkRow.innerHTML="<th>Time / Bunk</th>";
 
+      // Build merged grade headers
       availableGrades.forEach((grade,i)=>{
         const bunksInGrade = grades[grade] || [];
         if(bunksInGrade.length===0) return;
         const thGrade=document.createElement("th");
         thGrade.textContent=grade;
         thGrade.colSpan=bunksInGrade.length;
-        thGrade.className=gradeColors[i%gradeColors.length];
+        thGrade.style.backgroundColor=gradeColors[i%gradeColors.length];
         gradeRow.appendChild(thGrade);
 
         bunksInGrade.forEach(bunk=>{
@@ -191,9 +202,22 @@
       });
     }
 
-    // Initialize
-    setupGradeButtons();
-    updateUnassigned();
+    // Move focus from start to end time automatically
+    document.getElementById("startTime").addEventListener("input", ()=>{
+      if(document.getElementById("startTime").value.length===5){ // hh:mm
+        document.getElementById("endTime").focus();
+      }
+    });
+
+    // Initialize table headers even before bunks
+    function initTable(){
+      const gradeRow=document.getElementById("gradeRow");
+      const bunkRow=document.getElementById("bunkRow");
+      gradeRow.innerHTML="<th>Time / Grade</th>";
+      bunkRow.innerHTML="<th>Time / Bunk</th>";
+    }
+
+    initTable();
   </script>
 </body>
 </html>
