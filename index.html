@@ -47,8 +47,8 @@
   <div id="divisionButtons"></div>
 
   <h3>Generate Times</h3>
-  Start: <input type="time" id="startTime">
-  End: <input type="time" id="endTime">
+  Start: <input type="text" id="startTime" placeholder="hh:mm AM/PM">
+  End: <input type="text" id="endTime" placeholder="hh:mm AM/PM">
   Increment:
   <select id="increment">
     <option value="15">15 min</option>
@@ -150,43 +150,50 @@
       });
     }
 
-    // ✅ Fixed Time Generator
+    // ✅ Fixed Time Generator with AM/PM
     function generateTimes() {
-      const startInput = document.getElementById("startTime").value;
-      const endInput = document.getElementById("endTime").value;
+      const startInput = document.getElementById("startTime").value.trim();
+      const endInput = document.getElementById("endTime").value.trim();
       const increment = parseInt(document.getElementById("increment").value);
 
       if (!startInput || !endInput) {
-        alert("Select valid start and end times");
+        alert("Enter both start and end times (e.g., 8:30 AM)");
         return;
       }
 
-      let [sh, sm] = startInput.split(":").map(Number);
-      let [eh, em] = endInput.split(":").map(Number);
+      function parseTime(str) {
+        const match = str.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+        if (!match) return null;
+        let h = parseInt(match[1], 10);
+        const m = parseInt(match[2], 10);
+        const ampm = match[3].toUpperCase();
+        if (ampm === "PM" && h !== 12) h += 12;
+        if (ampm === "AM" && h === 12) h = 0;
+        return new Date(0, 0, 0, h, m);
+      }
 
-      const start = new Date(0, 0, 0, sh, sm);
-      const end = new Date(0, 0, 0, eh, em);
+      const start = parseTime(startInput);
+      const end = parseTime(endInput);
 
-      if (start >= end) {
-        alert("Start must be before end");
+      if (!start || !end || start >= end) {
+        alert("Invalid time format or start must be before end.");
         return;
       }
 
       times = [];
       let current = new Date(start);
 
+      function format(d) {
+        let h = d.getHours();
+        let m = d.getMinutes().toString().padStart(2, "0");
+        let ampm = h >= 12 ? "PM" : "AM";
+        h = h % 12 || 12;
+        return `${h}:${m} ${ampm}`;
+      }
+
       while (current < end) {
         let next = new Date(current.getTime() + increment * 60000);
         if (next > end) next = end;
-
-        const format = d => {
-          let h = d.getHours();
-          let m = d.getMinutes().toString().padStart(2, "0");
-          let ampm = h >= 12 ? "PM" : "AM";
-          h = h % 12 || 12;
-          return `${h}:${m} ${ampm}`;
-        };
-
         times.push(`${format(current)} - ${format(next)}`);
         current = next;
       }
@@ -257,6 +264,19 @@
     document.getElementById("bunkInput").addEventListener("keyup", e=>{if(e.key==="Enter") addBunk();});
     document.getElementById("divisionInput").addEventListener("keyup", e=>{if(e.key==="Enter") addDivision();});
     document.getElementById("fieldInput").addEventListener("keyup", e=>{if(e.key==="Enter") addField();});
+
+    // ✅ Smooth flow between time inputs
+    document.getElementById("startTime").addEventListener("keyup", function() {
+      if (this.value.match(/(AM|PM)$/i)) {
+        document.getElementById("endTime").focus();
+      }
+    });
+
+    document.getElementById("endTime").addEventListener("keyup", function(e) {
+      if (e.key === "Enter" && this.value.match(/(AM|PM)$/i)) {
+        generateTimes();
+      }
+    });
   </script>
 </body>
 </html>
