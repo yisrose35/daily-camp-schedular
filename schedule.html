@@ -4,6 +4,9 @@
   <title>Camp Scheduler - Daily Schedule</title>
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
+    .tabs { margin-bottom: 20px; }
+    .tab-button { padding: 10px 20px; cursor: pointer; border: 1px solid #ccc; background: #f0f0f0; margin-right: 5px; text-decoration: none; color: black; }
+    .tab-button.active { background: #007BFF; color: white; font-weight: bold; }
     table { border-collapse: collapse; width: 100%; margin-top: 20px; }
     th, td { border: 1px solid #333; padding: 8px; text-align: center; min-width: 100px; }
     th { background: #f0f0f0; }
@@ -14,9 +17,16 @@
 </head>
 <body>
   <h1>Daily Schedule</h1>
-  <p>This page loads your saved setup from <b>index.html</b>. If nothing shows, go back and click "Save Setup".</p>
 
-  <table id="scheduleTable">
+  <!-- Navigation -->
+  <div class="tabs">
+    <a href="index.html" class="tab-button">Setup & Configuration</a>
+    <a href="schedule.html" class="tab-button active">Daily Schedule</a>
+  </div>
+
+  <p>This page loads your saved setup from <b>Setup & Config</b>. If nothing shows, go back and save first.</p>
+
+  <table id="scheduleTable" style="display:none;">
     <thead>
       <tr id="divisionRow"></tr>
       <tr id="bunkRow"></tr>
@@ -34,7 +44,7 @@
     function loadSetup() {
       const saved = localStorage.getItem("campSetup");
       if (!saved) {
-        alert("No setup found! Go to index.html and save first.");
+        alert("No setup found! Go to Setup page and save first.");
         return;
       }
       const data = JSON.parse(saved);
@@ -46,6 +56,9 @@
     }
 
     function renderSchedule() {
+      if(times.length===0){ return; }
+      document.getElementById("scheduleTable").style.display="table";
+
       const divRow = document.getElementById("divisionRow");
       const bunkRow = document.getElementById("bunkRow");
       divRow.innerHTML = "<th>Time</th>";
