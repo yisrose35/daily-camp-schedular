@@ -26,7 +26,6 @@
     .activity-button { margin: 2px; padding: 4px 8px; border: 1px solid #333; border-radius: 3px; cursor: pointer; }
     .activity-button.active { background: #007BFF; color: white; }
 
-    /* Toggle switch */
     .switch { position: relative; display: inline-block; width: 40px; height: 20px; vertical-align: middle; margin-left: 8px; }
     .switch input { opacity: 0; width: 0; height: 0; }
     .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
@@ -95,7 +94,7 @@
     let selectedDivision = null;
     let times = [];
     let fields = [];
-    let scheduleAssignments = {}; // { bunkName: [ {field, sport}, ... ] }
+    let scheduleAssignments = {};
 
     const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
     let colorIndex = 0;
@@ -272,87 +271,14 @@
       updateTable();
     }
 
-    function addField(){
-      const input = document.getElementById("fieldInput");
-      const fieldName = input.value.trim();
-      if(fieldName){
-        fields.push({name: fieldName, activities: [], available: true});
-        input.value="";
-        renderFields();
+    // ✅ Fix 1: Enter in start time focuses end time
+    document.getElementById("startTime").addEventListener("keyup", (e)=>{
+      if(e.key==="Enter"){
+        document.getElementById("endTime").focus();
       }
-    }
-    document.getElementById("addFieldBtn").onclick = addField;
-    document.getElementById("fieldInput").addEventListener("keyup", e => { if (e.key === "Enter") addField(); });
+    });
 
-    function renderFields(){
-      const container = document.getElementById("fieldList");
-      container.innerHTML="";
-      fields.forEach((field, index)=>{
-        const wrapper = document.createElement("div");
-        wrapper.className="fieldWrapper";
-        if(!field.available) wrapper.classList.add("unavailable");
-
-        const title = document.createElement("span");
-        title.className = "fieldTitle";
-        title.textContent = field.name;
-        makeEditable(title, (newName)=>{
-          field.name = newName;
-          renderFields();
-        });
-        wrapper.appendChild(title);
-
-        const toggleWrapper = document.createElement("label");
-        toggleWrapper.className="switch";
-        const checkbox = document.createElement("input");
-        checkbox.type="checkbox";
-        checkbox.checked = field.available;
-        checkbox.onchange = ()=>{ field.available = checkbox.checked; renderFields(); };
-        const slider = document.createElement("span");
-        slider.className="slider";
-        toggleWrapper.appendChild(checkbox);
-        toggleWrapper.appendChild(slider);
-        wrapper.appendChild(toggleWrapper);
-
-        const btnWrap = document.createElement("div");
-        btnWrap.style.marginTop = "8px";
-        commonActivities.forEach(act=>{
-          const btn = document.createElement("button");
-          btn.textContent = act;
-          btn.className = "activity-button";
-          if(field.activities.includes(act)) btn.classList.add("active");
-          btn.onclick=()=>{ 
-            if(field.activities.includes(act)){ field.activities = field.activities.filter(a=>a!==act); } 
-            else { field.activities.push(act); } 
-            renderFields(); 
-          };
-          btnWrap.appendChild(btn);
-        });
-        wrapper.appendChild(btnWrap);
-
-        const otherInput = document.createElement("input");
-        otherInput.placeholder="Other activity";
-        otherInput.onkeyup=(e)=>{ 
-          if(e.key==="Enter" && otherInput.value.trim()){ 
-            const val = otherInput.value.trim(); 
-            if(!field.activities.includes(val)) field.activities.push(val); 
-            otherInput.value=""; 
-            renderFields(); 
-          } 
-        };
-        wrapper.appendChild(otherInput);
-
-        if(field.activities.length>0){
-          const chosen = document.createElement("p");
-          chosen.style.marginTop = "6px";
-          chosen.textContent = "Activities: " + field.activities.join(", ");
-          wrapper.appendChild(chosen);
-        }
-
-        container.appendChild(wrapper);
-      });
-    }
-
-    // --- Assign fields & sports ---
+    // ✅ Fix 2: Assign fields & sports, no sport back-to-back
     function assignFieldsToBunks() {
       const scheduledBunks = availableDivisions.flatMap(divName => divisions[divName].bunks);
       const availableFields = fields.filter(f => f.available);
@@ -375,19 +301,39 @@
         let usedFields = new Set();
 
         for (let bunk of scheduledBunks) {
-          // assign a field not already used
-          let chosenFieldObj = availableFields.find(f => !usedFields.has(f.name)) || availableFields[0];
-          usedFields.add(chosenFieldObj.name);
-
-          // pick a sport (different from last slot if possible)
           let lastSport = s > 0 ? scheduleAssignments[bunk][s-1].sport : null;
+          let chosenFieldObj = null;
           let chosenSport = "";
-          if (chosenFieldObj.activities.length > 0) {
-            let candidates = chosenFieldObj.activities.filter(act => act !== lastSport);
-            if (candidates.length === 0) candidates = chosenFieldObj.activities;
-            chosenSport = candidates[Math.floor(Math.random() * candidates.length)];
+
+          // Priority: avoid repeating lastSport
+          for (let field of availableFields) {
+            if (usedFields.has(field.name)) continue;
+            if (field.activities.length === 0) continue;
+            let candidates = field.activities.filter(act => act !== lastSport);
+            if (candidates.length > 0) {
+              chosenFieldObj = field;
+              chosenSport = candidates[Math.floor(Math.random() * candidates.length)];
+              break;
+            }
           }
 
+          // Relax constraint if no alternative
+          if (!chosenFieldObj) {
+            for (let field of availableFields) {
+              if (usedFields.has(field.name)) continue;
+              let sport = field.activities.length > 0 ? field.activities[0] : "";
+              chosenFieldObj = field;
+              chosenSport = sport;
+              break;
+            }
+          }
+
+          if (!chosenFieldObj) {
+            chosenFieldObj = availableFields[0];
+            chosenSport = availableFields[0].activities.length > 0 ? availableFields[0].activities[0] : "";
+          }
+
+          usedFields.add(chosenFieldObj.name);
           scheduleAssignments[bunk].push({ field: chosenFieldObj.name, sport: chosenSport });
         }
       }
