@@ -52,11 +52,10 @@
     <h4>Unassigned Bunks</h4>
     <div id="unassignedBunks"></div>
 
-    <h3>Add Divisions</h3>
-    <input id="divisionInput" placeholder="Enter division name">
-    <button id="addDivisionBtn">Add Division</button>
-    <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable colors</label>
-    <div id="divisionButtons" style="margin-top:8px;"></div>
+    <h3>Add Fields/Courts</h3>
+    <input id="fieldInput" placeholder="Enter field/court name (e.g., Court #1)">
+    <button id="addFieldBtn">Add Field/Court</button>
+    <div id="fieldList"></div>
 
     <h3>Generate Times</h3>
     Start: <input type="text" id="startTime" placeholder="e.g., 11:30 AM">
@@ -69,19 +68,13 @@
       <option value="60">60 min</option>
     </select>
     <button onclick="generateTimes()">Generate</button>
-
-    <h3>Add Fields/Courts</h3>
-    <input id="fieldInput" placeholder="Enter field/court name (e.g., Court #1)">
-    <button id="addFieldBtn">Add Field/Court</button>
-    <div id="fieldList"></div>
   </div>
 
   <!-- Schedule Tab -->
   <div id="schedule" class="tab-content">
     <table id="scheduleTable" style="display:none;">
       <thead>
-        <tr id="divisionRow"></tr>
-        <tr id="bunkRow"></tr>
+        <tr id="timeRow"></tr>
       </thead>
       <tbody></tbody>
     </table>
@@ -89,52 +82,18 @@
 
   <script>
     let bunks = [];
-    let divisions = {};
-    let availableDivisions = [];
-    let selectedDivision = null;
-    let times = [];
     let fields = [];
+    let times = [];
 
-    const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
-    let colorIndex = 0;
-    const commonActivities = ["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
-
-    // 🔹 Save and load state from localStorage
     function saveState(){
       localStorage.setItem("bunks", JSON.stringify(bunks));
       localStorage.setItem("fields", JSON.stringify(fields));
-      localStorage.setItem("divisions", JSON.stringify(divisions));
-      localStorage.setItem("availableDivisions", JSON.stringify(availableDivisions));
       localStorage.setItem("times", JSON.stringify(times));
     }
     function loadState(){
       bunks = JSON.parse(localStorage.getItem("bunks") || "[]");
       fields = JSON.parse(localStorage.getItem("fields") || "[]");
-      divisions = JSON.parse(localStorage.getItem("divisions") || "{}");
-      availableDivisions = JSON.parse(localStorage.getItem("availableDivisions") || "[]");
       times = JSON.parse(localStorage.getItem("times") || "[]");
-    }
-
-    function makeEditable(element, saveCallback) {
-      element.ondblclick = (e) => {
-        e.stopPropagation();
-        const oldText = element.textContent;
-        const input = document.createElement("input");
-        input.type = "text";
-        input.value = oldText;
-        input.style.width = (oldText.length + 2) + "ch";
-        element.replaceWith(input);
-        input.focus();
-        function save() {
-          const newText = input.value.trim();
-          if (newText && newText !== oldText) saveCallback(newText);
-          element.textContent = newText || oldText;
-          input.replaceWith(element);
-          saveState();
-        }
-        input.addEventListener("blur", save);
-        input.addEventListener("keyup", e => { if (e.key === "Enter") save(); });
-      };
     }
 
     function showTab(id){
@@ -145,18 +104,12 @@
       if(id==='schedule') updateTable();
     }
 
-    document.getElementById('enableColor').addEventListener('change', () => {
-      setupDivisionButtons();
-      updateTable();
-    });
-
     function addBunk(){
       const input = document.getElementById("bunkInput");
       if(input.value.trim()!==""){
         bunks.push(input.value.trim());
         input.value="";
         updateUnassigned();
-        updateTable();
         saveState();
       }
     }
@@ -166,102 +119,34 @@
     function updateUnassigned(){
       const container = document.getElementById("unassignedBunks");
       container.innerHTML="";
-      const assignedBunks = Object.values(divisions).flatMap(d=>d.bunks);
-      const unassigned = bunks.filter(b => !assignedBunks.includes(b));
-      unassigned.forEach(bunk=>{
+      bunks.forEach(bunk=>{
         const span = document.createElement("span");
         span.textContent = bunk;
         span.className = "bunk-button";
-        span.onclick = ()=> {
-          if(selectedDivision){
-            divisions[selectedDivision].bunks.push(bunk);
-            updateUnassigned();
-            updateTable();
-            saveState();
-          } else {
-            alert("Select a division first!");
-          }
-        };
-        makeEditable(span, (newName) => {
-          const idx = bunks.indexOf(bunk);
-          if (idx !== -1) bunks[idx] = newName;
-          for (const div of Object.values(divisions)) {
-            const i = div.bunks.indexOf(bunk);
-            if (i !== -1) div.bunks[i] = newName;
-          }
-          updateUnassigned();
-          updateTable();
-          saveState();
-        });
         container.appendChild(span);
       });
     }
 
-    function addDivision(){
-      const input = document.getElementById("divisionInput");
-      if(input.value.trim()==="") return;
-      const divName = input.value.trim();
-      if(!availableDivisions.includes(divName)){
-        const color = defaultColors[colorIndex % defaultColors.length];
-        colorIndex++;
-        availableDivisions.push(divName);
-        divisions[divName] = { bunks: [], color: color };
+    function addField(){
+      const input = document.getElementById("fieldInput");
+      const fieldName = input.value.trim();
+      if(fieldName){
+        fields.push({name: fieldName, activities: [], available: true});
         input.value="";
-        setupDivisionButtons();
-        updateTable();
+        renderFields();
         saveState();
       }
     }
-    document.getElementById("addDivisionBtn").onclick = addDivision;
-    document.getElementById("divisionInput").addEventListener("keyup", e => { if (e.key === "Enter") addDivision(); });
+    document.getElementById("addFieldBtn").onclick = addField;
+    document.getElementById("fieldInput").addEventListener("keyup", e => { if (e.key === "Enter") addField(); });
 
-    function setupDivisionButtons(){
-      const container = document.getElementById("divisionButtons");
+    function renderFields(){
+      const container = document.getElementById("fieldList");
       container.innerHTML="";
-      const colorEnabled = document.getElementById("enableColor").checked;
-
-      availableDivisions.forEach((divName)=>{
-        const divObj = divisions[divName];
-        const wrapper = document.createElement("div");
-        wrapper.className = "divisionWrapper";
-
-        const span = document.createElement("span");
-        span.textContent = divName;
-        span.className = "bunk-button";
-        span.style.backgroundColor = colorEnabled ? divObj.color : "transparent";
-        span.style.color = colorEnabled ? "#fff" : "inherit";
-        span.onclick = ()=> {
-          selectedDivision = divName;
-          container.querySelectorAll('span.bunk-button').forEach(el=>el.classList.remove("selected"));
-          span.classList.add("selected");
-        };
-        makeEditable(span, (newName) => {
-          divisions[newName] = divisions[divName];
-          delete divisions[divName];
-          availableDivisions[availableDivisions.indexOf(divName)] = newName;
-          if (selectedDivision === divName) selectedDivision = newName;
-          setupDivisionButtons();
-          updateTable();
-          saveState();
-        });
-        wrapper.appendChild(span);
-
-        const colorInput = document.createElement("input");
-        colorInput.type = "color";
-        colorInput.value = divObj.color;
-        colorInput.className = "colorPicker";
-        colorInput.addEventListener("input", e=>{
-          divObj.color = e.target.value;
-          if (colorEnabled) {
-            span.style.backgroundColor = e.target.value;
-            span.style.color = "#fff";
-          }
-          updateTable();
-          saveState();
-        });
-        wrapper.appendChild(colorInput);
-
-        container.appendChild(wrapper);
+      fields.forEach(field=>{
+        const div = document.createElement("div");
+        div.textContent = field.name;
+        container.appendChild(div);
       });
     }
 
@@ -302,151 +187,24 @@
         times.push(`${format(current)} - ${format(next)}`);
         current=next;
       }
-      updateTable();
       saveState();
-    }
 
-    document.getElementById("startTime").addEventListener("keyup", (e)=>{
-      if(e.key==="Enter" && /(AM|PM)$/i.test(e.target.value.trim())){
-        document.getElementById("endTime").focus();
-      }
-    });
-
-    function addField(){
-      const input = document.getElementById("fieldInput");
-      const fieldName = input.value.trim();
-      if(fieldName){
-        fields.push({name: fieldName, activities: [], available: true});
-        input.value="";
-        renderFields();
-        saveState();
-      }
-    }
-    document.getElementById("addFieldBtn").onclick = addField;
-    document.getElementById("fieldInput").addEventListener("keyup", e => { if (e.key === "Enter") addField(); });
-
-    function renderFields(){
-      const container = document.getElementById("fieldList");
-      container.innerHTML="";
-      fields.forEach((field, index)=>{
-        const wrapper = document.createElement("div");
-        wrapper.className="fieldWrapper";
-        if(!field.available) wrapper.classList.add("unavailable");
-
-        const title = document.createElement("span");
-        title.className = "fieldTitle";
-        title.textContent = field.name;
-        makeEditable(title, (newName)=>{
-          field.name = newName;
-          renderFields();
-          saveState();
-        });
-        wrapper.appendChild(title);
-
-        const toggleWrapper = document.createElement("label");
-        toggleWrapper.className="switch";
-        const checkbox = document.createElement("input");
-        checkbox.type="checkbox";
-        checkbox.checked = field.available;
-        checkbox.onchange = ()=>{ field.available = checkbox.checked; renderFields(); saveState(); };
-        const slider = document.createElement("span");
-        slider.className="slider";
-        toggleWrapper.appendChild(checkbox);
-        toggleWrapper.appendChild(slider);
-        wrapper.appendChild(toggleWrapper);
-
-        const btnWrap = document.createElement("div");
-        btnWrap.style.marginTop = "8px";
-        commonActivities.forEach(act=>{
-          const btn = document.createElement("button");
-          btn.textContent = act;
-          btn.className = "activity-button";
-          if(field.activities.includes(act)) btn.classList.add("active");
-          btn.onclick=()=>{ 
-            if(field.activities.includes(act)){ field.activities = field.activities.filter(a=>a!==act); } 
-            else { field.activities.push(act); } 
-            renderFields(); 
-            saveState();
-          };
-          btnWrap.appendChild(btn);
-        });
-        wrapper.appendChild(btnWrap);
-
-        const otherInput = document.createElement("input");
-        otherInput.placeholder="Other activity";
-        otherInput.onkeyup=(e)=>{ 
-          if(e.key==="Enter" && otherInput.value.trim()){ 
-            const val = otherInput.value.trim(); 
-            if(!field.activities.includes(val)) field.activities.push(val); 
-            otherInput.value=""; 
-            renderFields(); 
-            saveState();
-          } 
-        };
-        wrapper.appendChild(otherInput);
-
-        if(field.activities.length>0){
-          const chosen = document.createElement("p");
-          chosen.style.marginTop = "6px";
-          chosen.textContent = "Activities: " + field.activities.join(", ");
-          wrapper.appendChild(chosen);
-        }
-
-        container.appendChild(wrapper);
-      });
+      // Bounce to assign.html
+      window.location.href = "assign.html";
     }
 
     function updateTable(){
       const table = document.getElementById("scheduleTable");
-      if(times.length===0) { table.style.display="none"; return; }
+      const assignments = JSON.parse(localStorage.getItem("assignments") || "{}");
+      if(times.length===0 || bunks.length===0) { table.style.display="none"; return; }
       table.style.display="table";
 
-      const divRow = document.getElementById("divisionRow");
-      const bunkRow = document.getElementById("bunkRow");
-      divRow.innerHTML="<th>Division</th>";
-      bunkRow.innerHTML="<th>Bunk</th>";
-
-      const colorEnabled = document.getElementById("enableColor").checked;
-
-      availableDivisions.forEach((divName)=>{
-        const divObj = divisions[divName];
-        const bunksInDiv = divObj.bunks;
-
-        const thDiv = document.createElement("th");
-        thDiv.colSpan = Math.max(bunksInDiv.length,1);
-        if(colorEnabled){ thDiv.style.backgroundColor = divObj.color; thDiv.style.color = "#fff"; } 
-        else { thDiv.style.backgroundColor = "transparent"; thDiv.style.color = "#000"; }
-        thDiv.textContent = divName;
-        makeEditable(thDiv, (newName) => {
-          divisions[newName] = divisions[divName];
-          delete divisions[divName];
-          availableDivisions[availableDivisions.indexOf(divName)] = newName;
-          updateTable();
-          setupDivisionButtons();
-          saveState();
-        });
-        divRow.appendChild(thDiv);
-
-        if(bunksInDiv.length===0){
-          bunkRow.appendChild(document.createElement("th"));
-        } else {
-          bunksInDiv.forEach(bunk=>{
-            const thBunk = document.createElement("th");
-            thBunk.textContent = bunk;
-            makeEditable(thBunk, (newName) => {
-              const idx = bunks.indexOf(bunk);
-              if (idx !== -1) bunks[idx] = newName;
-              for (const div of Object.values(divisions)) {
-                const i = div.bunks.indexOf(bunk);
-                if (i !== -1) div.bunks[i] = newName;
-              }
-              updateTable();
-              updateUnassigned();
-              saveState();
-            });
-            bunkRow.appendChild(thBunk);
-          });
-        }
+      const theadRow = document.getElementById("timeRow");
+      theadRow.innerHTML = "<th>Time</th>";
+      bunks.forEach(bunk=>{
+        const th = document.createElement("th");
+        th.textContent = bunk;
+        theadRow.appendChild(th);
       });
 
       const tbody = document.querySelector("#scheduleTable tbody");
@@ -457,22 +215,19 @@
         tdTime.textContent = time;
         row.appendChild(tdTime);
 
-        availableDivisions.forEach(divName=>{
-          const bunksInDiv = divisions[divName].bunks;
-          if(bunksInDiv.length===0){
-            row.appendChild(document.createElement("td"));
-          } else {
-            bunksInDiv.forEach(()=>{ row.appendChild(document.createElement("td")); });
-          }
+        bunks.forEach(bunk=>{
+          const td = document.createElement("td");
+          td.textContent = assignments[time]?.[bunk] || "";
+          row.appendChild(td);
         });
+
         tbody.appendChild(row);
       });
     }
 
-    // 🔹 Initialize on load
+    // Load state on startup
     loadState();
     updateUnassigned();
-    setupDivisionButtons();
     renderFields();
     updateTable();
   </script>
