@@ -186,11 +186,17 @@
       const startStr=document.getElementById("startTime").value.trim();
       const endStr=document.getElementById("endTime").value.trim();
       const inc=parseInt(document.getElementById("increment").value);
+
       function parseTime(str){
-        const m=str.match(/^(\\d{1,2}):(\\d{2})\\s*(AM|PM)$/i); if(!m)return null;
-        let h=parseInt(m[1],10),min=parseInt(m[2],10),ampm=m[3].toUpperCase();
-        if(ampm==="PM"&&h!==12)h+=12; if(ampm==="AM"&&h===12)h=0; return new Date(0,0,0,h,min);
+        str = str.trim();
+        const m=str.match(/^(\d{1,2}):(\d{2})(\s*)?(AM|PM)$/i);
+        if(!m) return null;
+        let h=parseInt(m[1],10), min=parseInt(m[2],10), ampm=m[4].toUpperCase();
+        if(ampm==="PM"&&h!==12)h+=12;
+        if(ampm==="AM"&&h===12)h=0;
+        return new Date(0,0,0,h,min);
       }
+
       const start=parseTime(startStr), end=parseTime(endStr);
       if(!start||!end||start>=end){alert("Enter valid times like 11:30 AM and 5:30 PM."); return;}
       times=[]; let cur=new Date(start);
