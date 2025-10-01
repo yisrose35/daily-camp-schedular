@@ -11,7 +11,7 @@
     .tab-content.active { display: block; }
 
     table { border-collapse: collapse; margin-top: 20px; width: 100%; }
-    th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 80px; }
+    th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 120px; }
 
     .bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; display: inline-block; }
     .selected { outline: 3px solid #90CAF9; }
@@ -95,7 +95,7 @@
     let selectedDivision = null;
     let times = [];
     let fields = [];
-    let scheduleAssignments = {}; // { bunkName: [fieldForSlot0, fieldForSlot1, ...] }
+    let scheduleAssignments = {}; // { bunkName: [ {field, sport}, ... ] }
 
     const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
     let colorIndex = 0;
@@ -285,7 +285,7 @@
         current=next;
       }
 
-      assignFieldsToBunks(); // build schedule (or alert if impossible)
+      assignFieldsToBunks();
       updateTable();
     }
 
@@ -375,16 +375,8 @@
       });
     }
 
-    /**
-     * Build a schedule that satisfies:
-     *  - No two bunks share the same field in the same slot
-     *  - No bunk repeats the same field in consecutive slots
-     * Requirements (feasibility):
-     *  - #AvailableFields >= #ScheduledBunks for every slot
-     *  - If times.length > 1, #AvailableFields must be > 1 to avoid back-to-back repeats
-     */
+    // New: assign fields and sports with constraints
     function assignFieldsToBunks() {
-      // Only schedule bunks that are actually placed under divisions (columns in the schedule)
       const scheduledBunks = availableDivisions.flatMap(divName => divisions[divName].bunks);
       const availableFields = fields.filter(f => f.available).map(f => f.name);
 
@@ -394,49 +386,39 @@
       }
 
       if (availableFields.length < scheduledBunks.length) {
-        alert(`Not enough available fields.\nBunks to schedule: ${scheduledBunks.length}\nAvailable fields: ${availableFields.length}\nPlease add more fields or mark more as available.`);
-        scheduleAssignments = {};
-        return;
-      }
-      if (times.length > 1 && availableFields.length < 2) {
-        alert(`Only one available field for multiple periods.\nThis makes "no back-to-back same field" impossible.\nPlease add or enable at least 2 fields.`);
+        alert("Not enough fields for the number of bunks.");
         scheduleAssignments = {};
         return;
       }
 
-      // Deterministic rotation approach:
-      // For slot s, assign bunk i -> field[(i + s) % F]
-      // This guarantees:
-      //  - Unique field per bunk per slot (since F >= N_bunks and we take first N_bunks distinct fields)
-      //  - No consecutive repeat for a bunk (offset changes by +1 each slot)
-      const F = availableFields.length;
       scheduleAssignments = {};
       scheduledBunks.forEach(b => scheduleAssignments[b] = []);
 
       for (let s = 0; s < times.length; s++) {
-        // Rotate fields by s to avoid back-to-back repeats for each bunk across periods
-        const rotated = availableFields.slice(s % F).concat(availableFields.slice(0, s % F));
+        let usedFields = new Set();
 
-        // Assign the first scheduledBunks.length fields to bunks in order
-        for (let i = 0; i < scheduledBunks.length; i++) {
-          const bunk = scheduledBunks[i];
-          const field = rotated[i % F]; // safe since F >= scheduledBunks.length
-          // Check previous slot repeat (shouldn't happen with rotation + F>1, but we keep guard)
-          if (s > 0 && scheduleAssignments[bunk][s - 1] === field) {
-            // Swap with next field to avoid repeat
-            const swapIdx = (i + 1) % F;
-            const alt = rotated[swapIdx];
-            // Only swap if alt isn't the same as last slot
-            if (alt !== scheduleAssignments[bunk][s - 1]) {
-              scheduleAssignments[bunk].push(alt);
-            } else {
-              // Find any alt not equal to last
-              const anyAlt = rotated.find(f => f !== scheduleAssignments[bunk][s - 1]) || field;
-              scheduleAssignments[bunk].push(anyAlt);
+        for (let bunk of scheduledBunks) {
+          // pick a field not used this slot
+          let chosenField = null;
+          for (let f of availableFields) {
+            if (!usedFields.has(f)) {
+              chosenField = f;
+              break;
             }
-          } else {
-            scheduleAssignments[bunk].push(field);
           }
+          if (!chosenField) chosenField = availableFields[0]; // fallback
+          usedFields.add(chosenField);
+
+          // pick a sport valid for this field
+          let chosenSport = "";
+          const fieldObj = fields.find(f => f.name === chosenField);
+          if (fieldObj && fieldObj.activities.length > 0) {
+            let lastSport = s > 0 ? scheduleAssignments[bunk][s-1].sport : null;
+            let candidates = fieldObj.activities.filter(act => act !== lastSport);
+            chosenSport = candidates.length > 0 ? candidates[0] : fieldObj.activities[0];
+          }
+
+          scheduleAssignments[bunk].push({ field: chosenField, sport: chosenSport });
         }
       }
     }
@@ -477,16 +459,6 @@
           bunksInDiv.forEach(bunk=>{
             const thBunk = document.createElement("th");
             thBunk.textContent = bunk;
-            makeEditable(thBunk, (newName) => {
-              const idx = bunks.indexOf(bunk);
-              if (idx !== -1) bunks[idx] = newName;
-              for (const div of Object.values(divisions)) {
-                const i = div.bunks.indexOf(bunk);
-                if (i !== -1) div.bunks[i] = newName;
-              }
-              updateTable();
-              updateUnassigned();
-            });
             bunkRow.appendChild(thBunk);
           });
         }
@@ -507,9 +479,10 @@
           } else {
             bunksInDiv.forEach(bunk=>{
               const td = document.createElement("td");
-              td.textContent = scheduleAssignments[bunk] && scheduleAssignments[bunk][rowIndex] 
-                               ? scheduleAssignments[bunk][rowIndex] 
-                               : "";
+              if (scheduleAssignments[bunk] && scheduleAssignments[bunk][rowIndex]) {
+                const entry = scheduleAssignments[bunk][rowIndex];
+                td.textContent = entry.field + (entry.sport ? " – " + entry.sport : "");
+              }
               row.appendChild(td);
             });
           }
