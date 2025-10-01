@@ -95,7 +95,7 @@
     let selectedDivision = null;
     let times = [];
     let fields = [];
-    let scheduleAssignments = {}; // store assignments
+    let scheduleAssignments = {}; // { bunkName: [fieldForSlot0, fieldForSlot1, ...] }
 
     const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
     let colorIndex = 0;
@@ -285,7 +285,7 @@
         current=next;
       }
 
-      assignFieldsToBunks();
+      assignFieldsToBunks(); // build schedule (or alert if impossible)
       updateTable();
     }
 
@@ -375,50 +375,70 @@
       });
     }
 
-    // FIXED: Automatic assignment with no overlaps or repeats
+    /**
+     * Build a schedule that satisfies:
+     *  - No two bunks share the same field in the same slot
+     *  - No bunk repeats the same field in consecutive slots
+     * Requirements (feasibility):
+     *  - #AvailableFields >= #ScheduledBunks for every slot
+     *  - If times.length > 1, #AvailableFields must be > 1 to avoid back-to-back repeats
+     */
     function assignFieldsToBunks() {
+      // Only schedule bunks that are actually placed under divisions (columns in the schedule)
+      const scheduledBunks = availableDivisions.flatMap(divName => divisions[divName].bunks);
       const availableFields = fields.filter(f => f.available).map(f => f.name);
-      if (availableFields.length === 0) {
-        alert("No available fields to assign.");
+
+      if (scheduledBunks.length === 0 || times.length === 0) {
+        scheduleAssignments = {};
         return;
       }
 
+      if (availableFields.length < scheduledBunks.length) {
+        alert(`Not enough available fields.\nBunks to schedule: ${scheduledBunks.length}\nAvailable fields: ${availableFields.length}\nPlease add more fields or mark more as available.`);
+        scheduleAssignments = {};
+        return;
+      }
+      if (times.length > 1 && availableFields.length < 2) {
+        alert(`Only one available field for multiple periods.\nThis makes "no back-to-back same field" impossible.\nPlease add or enable at least 2 fields.`);
+        scheduleAssignments = {};
+        return;
+      }
+
+      // Deterministic rotation approach:
+      // For slot s, assign bunk i -> field[(i + s) % F]
+      // This guarantees:
+      //  - Unique field per bunk per slot (since F >= N_bunks and we take first N_bunks distinct fields)
+      //  - No consecutive repeat for a bunk (offset changes by +1 each slot)
+      const F = availableFields.length;
       scheduleAssignments = {};
-      const allBunks = bunks.slice();
-      allBunks.forEach(b => { scheduleAssignments[b] = []; });
+      scheduledBunks.forEach(b => scheduleAssignments[b] = []);
 
-      times.forEach((slot, slotIndex) => {
-        let usedThisSlot = new Set();
+      for (let s = 0; s < times.length; s++) {
+        // Rotate fields by s to avoid back-to-back repeats for each bunk across periods
+        const rotated = availableFields.slice(s % F).concat(availableFields.slice(0, s % F));
 
-        allBunks.forEach(bunk => {
-          let lastField = slotIndex > 0 ? scheduleAssignments[bunk][slotIndex - 1] : null;
-          let chosen = null;
-
-          // Try to find a valid field
-          for (let f of availableFields) {
-            if (!usedThisSlot.has(f) && f !== lastField) {
-              chosen = f;
-              break;
+        // Assign the first scheduledBunks.length fields to bunks in order
+        for (let i = 0; i < scheduledBunks.length; i++) {
+          const bunk = scheduledBunks[i];
+          const field = rotated[i % F]; // safe since F >= scheduledBunks.length
+          // Check previous slot repeat (shouldn't happen with rotation + F>1, but we keep guard)
+          if (s > 0 && scheduleAssignments[bunk][s - 1] === field) {
+            // Swap with next field to avoid repeat
+            const swapIdx = (i + 1) % F;
+            const alt = rotated[swapIdx];
+            // Only swap if alt isn't the same as last slot
+            if (alt !== scheduleAssignments[bunk][s - 1]) {
+              scheduleAssignments[bunk].push(alt);
+            } else {
+              // Find any alt not equal to last
+              const anyAlt = rotated.find(f => f !== scheduleAssignments[bunk][s - 1]) || field;
+              scheduleAssignments[bunk].push(anyAlt);
             }
+          } else {
+            scheduleAssignments[bunk].push(field);
           }
-
-          // If none fits, allow any unused field
-          if (!chosen) {
-            for (let f of availableFields) {
-              if (!usedThisSlot.has(f)) {
-                chosen = f;
-                break;
-              }
-            }
-          }
-
-          // Final fallback
-          if (!chosen) chosen = availableFields[0];
-
-          scheduleAssignments[bunk].push(chosen);
-          usedThisSlot.add(chosen);
-        });
-      });
+        }
+      }
     }
 
     function updateTable(){
@@ -440,6 +460,63 @@
         const thDiv = document.createElement("th");
         thDiv.colSpan = Math.max(bunksInDiv.length,1);
         if(colorEnabled){ thDiv.style.backgroundColor = divObj.color; thDiv.style.color = "#fff"; } 
-        else {
+        else { thDiv.style.backgroundColor = "transparent"; thDiv.style.color = "#000"; }
+        thDiv.textContent = divName;
+        makeEditable(thDiv, (newName) => {
+          divisions[newName] = divisions[divName];
+          delete divisions[divName];
+          availableDivisions[availableDivisions.indexOf(divName)] = newName;
+          updateTable();
+          setupDivisionButtons();
+        });
+        divRow.appendChild(thDiv);
 
-        
+        if(bunksInDiv.length===0){
+          bunkRow.appendChild(document.createElement("th"));
+        } else {
+          bunksInDiv.forEach(bunk=>{
+            const thBunk = document.createElement("th");
+            thBunk.textContent = bunk;
+            makeEditable(thBunk, (newName) => {
+              const idx = bunks.indexOf(bunk);
+              if (idx !== -1) bunks[idx] = newName;
+              for (const div of Object.values(divisions)) {
+                const i = div.bunks.indexOf(bunk);
+                if (i !== -1) div.bunks[i] = newName;
+              }
+              updateTable();
+              updateUnassigned();
+            });
+            bunkRow.appendChild(thBunk);
+          });
+        }
+      });
+
+      const tbody = document.querySelector("#scheduleTable tbody");
+      tbody.innerHTML="";
+      times.forEach((time, rowIndex)=>{
+        const row = document.createElement("tr");
+        const tdTime = document.createElement("td");
+        tdTime.textContent = time;
+        row.appendChild(tdTime);
+
+        availableDivisions.forEach(divName=>{
+          const bunksInDiv = divisions[divName].bunks;
+          if(bunksInDiv.length===0){
+            row.appendChild(document.createElement("td"));
+          } else {
+            bunksInDiv.forEach(bunk=>{
+              const td = document.createElement("td");
+              td.textContent = scheduleAssignments[bunk] && scheduleAssignments[bunk][rowIndex] 
+                               ? scheduleAssignments[bunk][rowIndex] 
+                               : "";
+              row.appendChild(td);
+            });
+          }
+        });
+        tbody.appendChild(row);
+      });
+    }
+  </script>
+</body>
+</html>
