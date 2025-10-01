@@ -49,7 +49,6 @@
     <h3>Add Bunks</h3>
     <input id="bunkInput" placeholder="Enter bunk">
     <button id="addBunkBtn">Add Bunk</button>
-    <h4>Unassigned Bunks</h4>
     <div id="unassignedBunks"></div>
 
     <h3>Add Divisions</h3>
@@ -74,6 +73,11 @@
     <input id="fieldInput" placeholder="Enter field/court name (e.g., Court #1)">
     <button id="addFieldBtn">Add Field/Court</button>
     <div id="fieldList"></div>
+
+    <h3>Add Special Activities</h3>
+    <input id="specialInput" placeholder="Enter special activity (e.g., Canteen)">
+    <button id="addSpecialBtn">Add Special Activity</button>
+    <div id="specialList"></div>
   </div>
 
   <!-- Schedule Tab -->
@@ -89,7 +93,7 @@
 
   <script>
     let bunks = [], divisions = {}, availableDivisions = [], selectedDivision = null;
-    let times = [], fields = [], scheduleAssignments = {};
+    let times = [], fields = [], specialActivities = [], scheduleAssignments = {};
     const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
     let colorIndex = 0;
     const commonActivities = ["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
@@ -129,19 +133,48 @@
     document.getElementById("bunkInput").addEventListener("keyup",e=>{if(e.key==="Enter")addBunk();});
 
     function updateUnassigned(){
-      const cont=document.getElementById("unassignedBunks"); cont.innerHTML="";
-      const assigned=Object.values(divisions).flatMap(d=>d.bunks);
-      bunks.filter(b=>!assigned.includes(b)).forEach(bunk=>{
+      const container=document.getElementById("unassignedBunks");
+      container.innerHTML="";
+      bunks.forEach(bunk=>{
         const span=document.createElement("span");
-        span.textContent=bunk; span.className="bunk-button";
-        span.onclick=()=>{if(selectedDivision){divisions[selectedDivision].bunks.push(bunk); updateUnassigned(); updateTable();}else alert("Select a division first!");};
+        span.textContent=bunk;
+        span.className="bunk-button";
+
+        let assignedDiv=null;
+        for(const divName in divisions){
+          if(divisions[divName].bunks.includes(bunk)){assignedDiv=divName; break;}
+        }
+
+        if(assignedDiv){
+          const divColor=divisions[assignedDiv].color;
+          span.style.backgroundColor=divColor;
+          span.style.color="#fff";
+        }
+
+        span.onclick=()=>{
+          if(selectedDivision && (!assignedDiv || assignedDiv!==selectedDivision)){
+            for(const divName in divisions){
+              const i=divisions[divName].bunks.indexOf(bunk);
+              if(i!==-1) divisions[divName].bunks.splice(i,1);
+            }
+            divisions[selectedDivision].bunks.push(bunk);
+            updateUnassigned(); updateTable();
+          } else if(!selectedDivision){
+            alert("Select a division first!");
+          }
+        };
+
         makeEditable(span,newName=>{
-          const idx=bunks.indexOf(bunk); if(idx!==-1)bunks[idx]=newName;
+          const idx=bunks.indexOf(bunk);
+          if(idx!==-1) bunks[idx]=newName;
           for(const div of Object.values(divisions)){
-            const i=div.bunks.indexOf(bunk); if(i!==-1)div.bunks[i]=newName;
-          } updateUnassigned(); updateTable();
+            const i=div.bunks.indexOf(bunk);
+            if(i!==-1) div.bunks[i]=newName;
+          }
+          updateUnassigned(); updateTable();
         });
-        cont.appendChild(span);
+
+        container.appendChild(span);
       });
     }
 
@@ -240,6 +273,31 @@
       });
     }
 
+    // --- Special Activities ---
+    function addSpecial(){
+      const input=document.getElementById("specialInput");
+      const name=input.value.trim();
+      if(name){specialActivities.push({name:name,available:true}); input.value=""; renderSpecials();}
+    }
+    document.getElementById("addSpecialBtn").onclick=addSpecial;
+    document.getElementById("specialInput").addEventListener("keyup",e=>{if(e.key==="Enter")addSpecial();});
+
+    function renderSpecials(){
+      const cont=document.getElementById("specialList"); cont.innerHTML="";
+      specialActivities.forEach(act=>{
+        const wrap=document.createElement("div"); wrap.className="fieldWrapper"; if(!act.available)wrap.classList.add("unavailable");
+        const title=document.createElement("span"); title.className="fieldTitle"; title.textContent=act.name;
+        makeEditable(title,newName=>{act.name=newName; renderSpecials();}); wrap.appendChild(title);
+        const toggle=document.createElement("label"); toggle.className="switch";
+        const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=act.available;
+        cb.onchange=()=>{act.available=cb.checked; renderSpecials();};
+        const slider=document.createElement("span"); slider.className="slider";
+        toggle.appendChild(cb); toggle.appendChild(slider); wrap.appendChild(toggle);
+        cont.appendChild(wrap);
+      });
+    }
+
+    // --- Assignment Logic ---
     function assignFieldsToBunks() {
       const scheduled = availableDivisions.flatMap(div => divisions[div].bunks);
       const availFields = fields.filter(f => f.available);
@@ -258,7 +316,6 @@
           let lastSport = s > 0 ? scheduleAssignments[bunk][s-1].sport : null;
           let candidates = [];
 
-          // Build candidate (field, sport) pairs
           for (let f of availFields) {
             if (usedFields.has(f.name)) continue;
             for (let act of f.activities) {
@@ -266,17 +323,13 @@
             }
           }
 
-          // Filter out last sport if possible
           let validChoices = candidates.filter(c => c.sport !== lastSport);
-
           let chosen;
           if (validChoices.length > 0) {
-            // Among valid choices, prefer least played sports
             let minCount = Math.min(...validChoices.map(c => bunkSportCounts[bunk][c.sport] || 0));
             let bestChoices = validChoices.filter(c => (bunkSportCounts[bunk][c.sport] || 0) === minCount);
             chosen = bestChoices[Math.floor(Math.random() * bestChoices.length)];
           } else if (candidates.length > 0) {
-            // All repeats — still prefer least played sport
             let minCount = Math.min(...candidates.map(c => bunkSportCounts[bunk][c.sport] || 0));
             let bestChoices = candidates.filter(c => (bunkSportCounts[bunk][c.sport] || 0) === minCount);
             chosen = bestChoices[Math.floor(Math.random() * bestChoices.length)];
