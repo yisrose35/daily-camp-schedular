@@ -241,51 +241,55 @@
     }
 
     function assignFieldsToBunks() {
-  const scheduled = availableDivisions.flatMap(div => divisions[div].bunks);
-  const availFields = fields.filter(f => f.available);
+      const scheduled = availableDivisions.flatMap(div => divisions[div].bunks);
+      const availFields = fields.filter(f => f.available);
 
-  if (scheduled.length === 0 || times.length === 0) { scheduleAssignments = {}; return; }
-  if (availFields.length < scheduled.length) { alert("Not enough fields for bunks."); scheduleAssignments = {}; return; }
+      if (scheduled.length === 0 || times.length === 0) { scheduleAssignments = {}; return; }
+      if (availFields.length < scheduled.length) { alert("Not enough fields for bunks."); scheduleAssignments = {}; return; }
 
-  scheduleAssignments = {};
-  scheduled.forEach(b => scheduleAssignments[b] = []);
+      scheduleAssignments = {};
+      let bunkSportCounts = {};
+      scheduled.forEach(b => { scheduleAssignments[b] = []; bunkSportCounts[b] = {}; });
 
-  for (let s = 0; s < times.length; s++) {
-    let usedFields = new Set();
+      for (let s = 0; s < times.length; s++) {
+        let usedFields = new Set();
 
-    for (let bunk of scheduled) {
-      let lastSport = s > 0 ? scheduleAssignments[bunk][s-1].sport : null;
-      let candidates = [];
+        for (let bunk of scheduled) {
+          let lastSport = s > 0 ? scheduleAssignments[bunk][s-1].sport : null;
+          let candidates = [];
 
-      // Build candidate list (field, sport) pairs
-      for (let f of availFields) {
-        if (usedFields.has(f.name)) continue;
-        for (let act of f.activities) {
-          candidates.push({ field: f, sport: act });
+          // Build candidate (field, sport) pairs
+          for (let f of availFields) {
+            if (usedFields.has(f.name)) continue;
+            for (let act of f.activities) {
+              candidates.push({ field: f, sport: act });
+            }
+          }
+
+          // Filter out last sport if possible
+          let validChoices = candidates.filter(c => c.sport !== lastSport);
+
+          let chosen;
+          if (validChoices.length > 0) {
+            // Among valid choices, prefer least played sports
+            let minCount = Math.min(...validChoices.map(c => bunkSportCounts[bunk][c.sport] || 0));
+            let bestChoices = validChoices.filter(c => (bunkSportCounts[bunk][c.sport] || 0) === minCount);
+            chosen = bestChoices[Math.floor(Math.random() * bestChoices.length)];
+          } else if (candidates.length > 0) {
+            // All repeats — still prefer least played sport
+            let minCount = Math.min(...candidates.map(c => bunkSportCounts[bunk][c.sport] || 0));
+            let bestChoices = candidates.filter(c => (bunkSportCounts[bunk][c.sport] || 0) === minCount);
+            chosen = bestChoices[Math.floor(Math.random() * bestChoices.length)];
+          } else {
+            chosen = { field: availFields[0], sport: availFields[0]?.activities[0] || "" };
+          }
+
+          usedFields.add(chosen.field.name);
+          scheduleAssignments[bunk].push({ field: chosen.field.name, sport: chosen.sport });
+          bunkSportCounts[bunk][chosen.sport] = (bunkSportCounts[bunk][chosen.sport] || 0) + 1;
         }
       }
-
-      // 1. Prefer candidates with sport ≠ lastSport
-      let validChoices = candidates.filter(c => c.sport !== lastSport);
-
-      let chosen;
-      if (validChoices.length > 0) {
-        chosen = validChoices[Math.floor(Math.random() * validChoices.length)];
-      } else if (candidates.length > 0) {
-        // 2. If no valid choices, fallback to any available candidate
-        chosen = candidates[Math.floor(Math.random() * candidates.length)];
-      } else {
-        // 3. Absolute fallback (no fields or sports defined)
-        chosen = { field: availFields[0], sport: availFields[0]?.activities[0] || "" };
-      }
-
-      usedFields.add(chosen.field.name);
-      scheduleAssignments[bunk].push({ field: chosen.field.name, sport: chosen.sport });
     }
-  }
-}
-
-
 
     function updateTable(){
       const table=document.getElementById("scheduleTable");
