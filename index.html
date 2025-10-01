@@ -88,35 +88,25 @@
   </div>
 
   <script>
-    let bunks = [];
-    let divisions = {};
-    let availableDivisions = [];
-    let selectedDivision = null;
-    let times = [];
-    let fields = [];
-    let scheduleAssignments = {};
-
+    let bunks = [], divisions = {}, availableDivisions = [], selectedDivision = null;
+    let times = [], fields = [], scheduleAssignments = {};
     const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
     let colorIndex = 0;
     const commonActivities = ["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
 
-    function makeEditable(element, saveCallback) {
-      element.ondblclick = (e) => {
+    function makeEditable(el, save){
+      el.ondblclick = e => {
         e.stopPropagation();
-        const oldText = element.textContent;
+        const old = el.textContent;
         const input = document.createElement("input");
-        input.type = "text";
-        input.value = oldText;
-        element.replaceWith(input);
-        input.focus();
-        function save() {
-          const newText = input.value.trim();
-          if (newText && newText !== oldText) saveCallback(newText);
-          element.textContent = newText || oldText;
-          input.replaceWith(element);
+        input.type="text"; input.value=old;
+        el.replaceWith(input); input.focus();
+        function done(){
+          const val=input.value.trim();
+          if(val&&val!==old) save(val);
+          el.textContent=val||old; input.replaceWith(el);
         }
-        input.addEventListener("blur", save);
-        input.addEventListener("keyup", e => { if (e.key === "Enter") save(); });
+        input.onblur=done; input.onkeyup=e=>{if(e.key==="Enter")done();};
       };
     }
 
@@ -129,257 +119,165 @@
     }
 
     function addBunk(){
-      const input = document.getElementById("bunkInput");
+      const input=document.getElementById("bunkInput");
       if(input.value.trim()!==""){
         bunks.push(input.value.trim());
-        input.value="";
-        updateUnassigned();
-        updateTable();
+        input.value=""; updateUnassigned(); updateTable();
       }
     }
-    document.getElementById("addBunkBtn").onclick = addBunk;
-    document.getElementById("bunkInput").addEventListener("keyup", e => { if (e.key === "Enter") addBunk(); });
+    document.getElementById("addBunkBtn").onclick=addBunk;
+    document.getElementById("bunkInput").addEventListener("keyup",e=>{if(e.key==="Enter")addBunk();});
 
     function updateUnassigned(){
-      const container = document.getElementById("unassignedBunks");
-      container.innerHTML="";
-      const assignedBunks = Object.values(divisions).flatMap(d=>d.bunks);
-      const unassigned = bunks.filter(b => !assignedBunks.includes(b));
-      unassigned.forEach(bunk=>{
-        const span = document.createElement("span");
-        span.textContent = bunk;
-        span.className = "bunk-button";
-        span.onclick = ()=> {
-          if(selectedDivision){
-            divisions[selectedDivision].bunks.push(bunk);
-            updateUnassigned();
-            updateTable();
-          } else {
-            alert("Select a division first!");
-          }
-        };
-        makeEditable(span, (newName) => {
-          const idx = bunks.indexOf(bunk);
-          if (idx !== -1) bunks[idx] = newName;
-          for (const div of Object.values(divisions)) {
-            const i = div.bunks.indexOf(bunk);
-            if (i !== -1) div.bunks[i] = newName;
-          }
-          updateUnassigned();
-          updateTable();
+      const cont=document.getElementById("unassignedBunks"); cont.innerHTML="";
+      const assigned=Object.values(divisions).flatMap(d=>d.bunks);
+      bunks.filter(b=>!assigned.includes(b)).forEach(bunk=>{
+        const span=document.createElement("span");
+        span.textContent=bunk; span.className="bunk-button";
+        span.onclick=()=>{if(selectedDivision){divisions[selectedDivision].bunks.push(bunk); updateUnassigned(); updateTable();}else alert("Select a division first!");};
+        makeEditable(span,newName=>{
+          const idx=bunks.indexOf(bunk); if(idx!==-1)bunks[idx]=newName;
+          for(const div of Object.values(divisions)){
+            const i=div.bunks.indexOf(bunk); if(i!==-1)div.bunks[i]=newName;
+          } updateUnassigned(); updateTable();
         });
-        container.appendChild(span);
+        cont.appendChild(span);
       });
     }
 
     function addDivision(){
-      const input = document.getElementById("divisionInput");
-      if(input.value.trim()==="") return;
-      const divName = input.value.trim();
-      if(!availableDivisions.includes(divName)){
-        const color = defaultColors[colorIndex % defaultColors.length];
-        colorIndex++;
-        availableDivisions.push(divName);
-        divisions[divName] = { bunks: [], color: color };
-        input.value="";
-        setupDivisionButtons();
-        updateTable();
+      const input=document.getElementById("divisionInput");
+      if(input.value.trim()==="")return;
+      const name=input.value.trim();
+      if(!availableDivisions.includes(name)){
+        const color=defaultColors[colorIndex%defaultColors.length]; colorIndex++;
+        availableDivisions.push(name);
+        divisions[name]={bunks:[],color:color};
+        input.value=""; setupDivisionButtons(); updateTable();
       }
     }
-    document.getElementById("addDivisionBtn").onclick = addDivision;
-    document.getElementById("divisionInput").addEventListener("keyup", e => { if (e.key === "Enter") addDivision(); });
+    document.getElementById("addDivisionBtn").onclick=addDivision;
+    document.getElementById("divisionInput").addEventListener("keyup",e=>{if(e.key==="Enter")addDivision();});
 
     function setupDivisionButtons(){
-      const container = document.getElementById("divisionButtons");
-      container.innerHTML="";
-      const colorEnabled = document.getElementById("enableColor").checked;
-
-      availableDivisions.forEach((divName)=>{
-        const divObj = divisions[divName];
-        const wrapper = document.createElement("div");
-        wrapper.className = "divisionWrapper";
-
-        const span = document.createElement("span");
-        span.textContent = divName;
-        span.className = "bunk-button";
-        span.style.backgroundColor = colorEnabled ? divObj.color : "transparent";
-        span.style.color = colorEnabled ? "#fff" : "inherit";
-        span.onclick = ()=> {
-          selectedDivision = divName;
-          container.querySelectorAll('span.bunk-button').forEach(el=>el.classList.remove("selected"));
-          span.classList.add("selected");
-        };
-        wrapper.appendChild(span);
-
-        const colorInput = document.createElement("input");
-        colorInput.type = "color";
-        colorInput.value = divObj.color;
-        colorInput.className = "colorPicker";
-        colorInput.addEventListener("input", e=>{
-          divObj.color = e.target.value;
-          if (colorEnabled) {
-            span.style.backgroundColor = e.target.value;
-            span.style.color = "#fff";
-          }
-          updateTable();
+      const cont=document.getElementById("divisionButtons"); cont.innerHTML="";
+      const colorEnabled=document.getElementById("enableColor").checked;
+      availableDivisions.forEach(name=>{
+        const obj=divisions[name];
+        const wrap=document.createElement("div"); wrap.className="divisionWrapper";
+        const span=document.createElement("span"); span.textContent=name; span.className="bunk-button";
+        span.style.backgroundColor=colorEnabled?obj.color:"transparent";
+        span.style.color=colorEnabled?"#fff":"inherit";
+        span.onclick=()=>{selectedDivision=name; cont.querySelectorAll('span.bunk-button').forEach(el=>el.classList.remove("selected")); span.classList.add("selected");};
+        makeEditable(span,newName=>{
+          divisions[newName]=divisions[name]; delete divisions[name];
+          availableDivisions[availableDivisions.indexOf(name)]=newName;
+          if(selectedDivision===name)selectedDivision=newName;
+          setupDivisionButtons(); updateTable();
         });
-        wrapper.appendChild(colorInput);
-
-        container.appendChild(wrapper);
+        wrap.appendChild(span);
+        const col=document.createElement("input"); col.type="color"; col.value=obj.color; col.className="colorPicker";
+        col.oninput=e=>{obj.color=e.target.value; if(colorEnabled){span.style.backgroundColor=e.target.value; span.style.color="#fff";} updateTable();};
+        wrap.appendChild(col); cont.appendChild(wrap);
       });
     }
 
     function generateTimes(){
-      const startInput = document.getElementById("startTime").value.trim();
-      const endInput = document.getElementById("endTime").value.trim();
-      const increment = parseInt(document.getElementById("increment").value);
-
+      const startStr=document.getElementById("startTime").value.trim();
+      const endStr=document.getElementById("endTime").value.trim();
+      const inc=parseInt(document.getElementById("increment").value);
       function parseTime(str){
-        const match = str.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-        if(!match) return null;
-        let h = parseInt(match[1],10);
-        const m = parseInt(match[2],10);
-        const ampm = match[3].toUpperCase();
-        if(ampm==="PM" && h!==12) h+=12;
-        if(ampm==="AM" && h===12) h=0;
-        return new Date(0,0,0,h,m);
+        const m=str.match(/^(\\d{1,2}):(\\d{2})\\s*(AM|PM)$/i); if(!m)return null;
+        let h=parseInt(m[1],10),min=parseInt(m[2],10),ampm=m[3].toUpperCase();
+        if(ampm==="PM"&&h!==12)h+=12; if(ampm==="AM"&&h===12)h=0; return new Date(0,0,0,h,min);
       }
+      const start=parseTime(startStr), end=parseTime(endStr);
+      if(!start||!end||start>=end){alert("Enter valid times like 11:30 AM and 5:30 PM."); return;}
+      times=[]; let cur=new Date(start);
+      function fmt(d){let h=d.getHours(),m=d.getMinutes().toString().padStart(2,"0"),ap=h>=12?"PM":"AM"; h=h%12||12; return `${h}:${m} ${ap}`;}
+      while(cur<end){let nxt=new Date(cur.getTime()+inc*60000); if(nxt>end)nxt=end; times.push(`${fmt(cur)} - ${fmt(nxt)}`); cur=nxt;}
+      assignFieldsToBunks(); updateTable();
+    }
+    document.getElementById("startTime").addEventListener("keyup",e=>{if(e.key==="Enter")document.getElementById("endTime").focus();});
 
-      const start = parseTime(startInput);
-      const end = parseTime(endInput);
-      if(!start || !end || start>=end){ alert("Enter valid times like 11:30 AM and 5:30 PM."); return; }
+    function addField(){
+      const input=document.getElementById("fieldInput");
+      const name=input.value.trim();
+      if(name){fields.push({name:name,activities:[],available:true}); input.value=""; renderFields();}
+    }
+    document.getElementById("addFieldBtn").onclick=addField;
+    document.getElementById("fieldInput").addEventListener("keyup",e=>{if(e.key==="Enter")addField();});
 
-      times=[];
-      let current = new Date(start);
-
-      function format(d){
-        let h=d.getHours();
-        let m=d.getMinutes().toString().padStart(2,"0");
-        let ampm=h>=12?"PM":"AM";
-        h=h%12||12;
-        return `${h}:${m} ${ampm}`;
-      }
-
-      while(current<end){
-        let next=new Date(current.getTime()+increment*60000);
-        if(next>end) next=end;
-        times.push(`${format(current)} - ${format(next)}`);
-        current=next;
-      }
-
-      assignFieldsToBunks();
-      updateTable();
+    function renderFields(){
+      const cont=document.getElementById("fieldList"); cont.innerHTML="";
+      fields.forEach(field=>{
+        const wrap=document.createElement("div"); wrap.className="fieldWrapper"; if(!field.available)wrap.classList.add("unavailable");
+        const title=document.createElement("span"); title.className="fieldTitle"; title.textContent=field.name;
+        makeEditable(title,newName=>{field.name=newName; renderFields();}); wrap.appendChild(title);
+        const toggle=document.createElement("label"); toggle.className="switch";
+        const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=field.available;
+        cb.onchange=()=>{field.available=cb.checked; renderFields();};
+        const slider=document.createElement("span"); slider.className="slider";
+        toggle.appendChild(cb); toggle.appendChild(slider); wrap.appendChild(toggle);
+        const btnWrap=document.createElement("div"); btnWrap.style.marginTop="8px";
+        commonActivities.forEach(act=>{
+          const btn=document.createElement("button"); btn.textContent=act; btn.className="activity-button";
+          if(field.activities.includes(act))btn.classList.add("active");
+          btn.onclick=()=>{if(field.activities.includes(act))field.activities=field.activities.filter(a=>a!==act); else field.activities.push(act); renderFields();};
+          btnWrap.appendChild(btn);
+        }); wrap.appendChild(btnWrap);
+        const other=document.createElement("input"); other.placeholder="Other activity";
+        other.onkeyup=e=>{if(e.key==="Enter"&&other.value.trim()){const v=other.value.trim(); if(!field.activities.includes(v))field.activities.push(v); other.value=""; renderFields();}};
+        wrap.appendChild(other);
+        if(field.activities.length>0){const p=document.createElement("p"); p.style.marginTop="6px"; p.textContent="Activities: "+field.activities.join(", "); wrap.appendChild(p);}
+        cont.appendChild(wrap);
+      });
     }
 
-    // ✅ Fix 1: Enter in start time focuses end time
-    document.getElementById("startTime").addEventListener("keyup", (e)=>{
-      if(e.key==="Enter"){
-        document.getElementById("endTime").focus();
-      }
-    });
-
-    // ✅ Fix 2: Assign fields & sports, no sport back-to-back
-    function assignFieldsToBunks() {
-      const scheduledBunks = availableDivisions.flatMap(divName => divisions[divName].bunks);
-      const availableFields = fields.filter(f => f.available);
-
-      if (scheduledBunks.length === 0 || times.length === 0) {
-        scheduleAssignments = {};
-        return;
-      }
-
-      if (availableFields.length < scheduledBunks.length) {
-        alert("Not enough fields for bunks.");
-        scheduleAssignments = {};
-        return;
-      }
-
-      scheduleAssignments = {};
-      scheduledBunks.forEach(b => scheduleAssignments[b] = []);
-
-      for (let s = 0; s < times.length; s++) {
-        let usedFields = new Set();
-
-        for (let bunk of scheduledBunks) {
-          let lastSport = s > 0 ? scheduleAssignments[bunk][s-1].sport : null;
-          let chosenFieldObj = null;
-          let chosenSport = "";
-
-          // Priority: avoid repeating lastSport
-          for (let field of availableFields) {
-            if (usedFields.has(field.name)) continue;
-            if (field.activities.length === 0) continue;
-            let candidates = field.activities.filter(act => act !== lastSport);
-            if (candidates.length > 0) {
-              chosenFieldObj = field;
-              chosenSport = candidates[Math.floor(Math.random() * candidates.length)];
-              break;
-            }
+    function assignFieldsToBunks(){
+      const scheduled=availableDivisions.flatMap(div=>divisions[div].bunks);
+      const availFields=fields.filter(f=>f.available);
+      if(scheduled.length===0||times.length===0){scheduleAssignments={}; return;}
+      if(availFields.length<scheduled.length){alert("Not enough fields for bunks."); scheduleAssignments={}; return;}
+      scheduleAssignments={}; scheduled.forEach(b=>scheduleAssignments[b]=[]);
+      for(let s=0;s<times.length;s++){
+        let used=new Set();
+        for(let bunk of scheduled){
+          let lastSport=s>0?scheduleAssignments[bunk][s-1].sport:null;
+          let chosenField=null, chosenSport="";
+          for(let f of availFields){
+            if(used.has(f.name))continue; if(f.activities.length===0)continue;
+            let candidates=f.activities.filter(act=>act!==lastSport);
+            if(candidates.length>0){chosenField=f; chosenSport=candidates[Math.floor(Math.random()*candidates.length)]; break;}
           }
-
-          // Relax constraint if no alternative
-          if (!chosenFieldObj) {
-            for (let field of availableFields) {
-              if (usedFields.has(field.name)) continue;
-              let sport = field.activities.length > 0 ? field.activities[0] : "";
-              chosenFieldObj = field;
-              chosenSport = sport;
-              break;
-            }
+          if(!chosenField){
+            for(let f of availFields){if(used.has(f.name))continue; let sport=f.activities.length>0?f.activities[0]:""; chosenField=f; chosenSport=sport; break;}
           }
-
-          if (!chosenFieldObj) {
-            chosenFieldObj = availableFields[0];
-            chosenSport = availableFields[0].activities.length > 0 ? availableFields[0].activities[0] : "";
-          }
-
-          usedFields.add(chosenFieldObj.name);
-          scheduleAssignments[bunk].push({ field: chosenFieldObj.name, sport: chosenSport });
+          if(!chosenField){chosenField=availFields[0]; chosenSport=availFields[0].activities.length>0?availFields[0].activities[0]:"";}
+          used.add(chosenField.name); scheduleAssignments[bunk].push({field:chosenField.name,sport:chosenSport});
         }
       }
     }
 
     function updateTable(){
-      const table = document.getElementById("scheduleTable");
-      if(times.length===0) { table.style.display="none"; return; }
-      table.style.display="table";
-
-      const divRow = document.getElementById("divisionRow");
-      const bunkRow = document.getElementById("bunkRow");
-      divRow.innerHTML="<th>Division</th>";
-      bunkRow.innerHTML="<th>Bunk</th>";
-
-      availableDivisions.forEach(divName=>{
-        const divObj = divisions[divName];
-        const bunksInDiv = divObj.bunks;
-
-        const thDiv = document.createElement("th");
-        thDiv.colSpan = Math.max(bunksInDiv.length,1);
-        thDiv.textContent = divName;
-        divRow.appendChild(thDiv);
-
-        bunksInDiv.forEach(bunk=>{
-          const thBunk = document.createElement("th");
-          thBunk.textContent = bunk;
-          bunkRow.appendChild(thBunk);
-        });
+      const table=document.getElementById("scheduleTable");
+      if(times.length===0){table.style.display="none"; return;} table.style.display="table";
+      const divRow=document.getElementById("divisionRow"), bunkRow=document.getElementById("bunkRow");
+      divRow.innerHTML="<th>Division</th>"; bunkRow.innerHTML="<th>Bunk</th>";
+      availableDivisions.forEach(div=>{
+        const obj=divisions[div]; const bunksInDiv=obj.bunks;
+        const th=document.createElement("th"); th.colSpan=Math.max(bunksInDiv.length,1); th.textContent=div; divRow.appendChild(th);
+        bunksInDiv.forEach(bunk=>{const thB=document.createElement("th"); thB.textContent=bunk; bunkRow.appendChild(thB);});
       });
-
-      const tbody = document.querySelector("#scheduleTable tbody");
-      tbody.innerHTML="";
-      times.forEach((time, rowIndex)=>{
-        const row = document.createElement("tr");
-        const tdTime = document.createElement("td");
-        tdTime.textContent = time;
-        row.appendChild(tdTime);
-
-        availableDivisions.forEach(divName=>{
-          const bunksInDiv = divisions[divName].bunks;
-          bunksInDiv.forEach(bunk=>{
-            const td = document.createElement("td");
-            if (scheduleAssignments[bunk] && scheduleAssignments[bunk][rowIndex]) {
-              const entry = scheduleAssignments[bunk][rowIndex];
-              td.textContent = entry.field + (entry.sport ? " – " + entry.sport : "");
+      const tbody=document.querySelector("#scheduleTable tbody"); tbody.innerHTML="";
+      times.forEach((time,rowIdx)=>{
+        const row=document.createElement("tr"); const tdTime=document.createElement("td"); tdTime.textContent=time; row.appendChild(tdTime);
+        availableDivisions.forEach(div=>{
+          divisions[div].bunks.forEach(bunk=>{
+            const td=document.createElement("td");
+            if(scheduleAssignments[bunk]&&scheduleAssignments[bunk][rowIdx]){
+              const entry=scheduleAssignments[bunk][rowIdx];
+              td.textContent=entry.field+(entry.sport?" – "+entry.sport:"");
             }
             row.appendChild(td);
           });
