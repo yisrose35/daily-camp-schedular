@@ -61,8 +61,8 @@
 
     <!-- Time Inputs -->
     <h3>Generate Times</h3>
-    Start: <input type="text" id="startTime" placeholder="hh:mm AM/PM">
-    End: <input type="text" id="endTime" placeholder="hh:mm AM/PM">
+    Start: <input type="text" id="startTime" placeholder="e.g., 11:30 AM">
+    End: <input type="text" id="endTime" placeholder="e.g., 5:30 PM">
     Increment:
     <select id="increment">
       <option value="15">15 min</option>
@@ -108,6 +108,32 @@
 
     const commonActivities = ["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
 
+    // ================== INLINE EDIT HELPER ==================
+    function makeEditable(element, saveCallback) {
+      element.onclick = () => {
+        const oldText = element.textContent;
+        const input = document.createElement("input");
+        input.type = "text";
+        input.value = oldText;
+        input.style.width = (oldText.length + 2) + "ch";
+
+        element.replaceWith(input);
+        input.focus();
+
+        function save() {
+          const newText = input.value.trim();
+          if (newText && newText !== oldText) {
+            saveCallback(newText);
+          }
+          element.textContent = newText || oldText;
+          input.replaceWith(element);
+        }
+
+        input.addEventListener("blur", save);
+        input.addEventListener("keyup", e => { if (e.key === "Enter") save(); });
+      };
+    }
+
     // ================== TABS ==================
     function showTab(id){
       document.querySelectorAll('.tab-button').forEach(b=>b.classList.remove('active'));
@@ -144,15 +170,17 @@
         const span = document.createElement("span");
         span.textContent = bunk;
         span.className = "bunk-button";
-        span.onclick = ()=>{
-          if(selectedDivision){
-            divisions[selectedDivision].bunks.push(bunk);
-            updateUnassigned();
-            updateTable();
-          } else {
-            alert("Select a division first!");
+        span.onclick = ()=>{ if(selectedDivision){ divisions[selectedDivision].bunks.push(bunk); updateUnassigned(); updateTable(); } else { alert("Select a division first!"); } };
+        makeEditable(span, (newName) => {
+          const idx = bunks.indexOf(bunk);
+          if (idx !== -1) bunks[idx] = newName;
+          for (const div of Object.values(divisions)) {
+            const i = div.bunks.indexOf(bunk);
+            if (i !== -1) div.bunks[i] = newName;
           }
-        };
+          updateUnassigned();
+          updateTable();
+        });
         container.appendChild(span);
       });
     }
@@ -195,6 +223,14 @@
           container.querySelectorAll('span.bunk-button').forEach(el=>el.classList.remove("selected"));
           span.classList.add("selected");
         };
+        makeEditable(span, (newName) => {
+          divisions[newName] = divisions[divName];
+          delete divisions[divName];
+          availableDivisions[availableDivisions.indexOf(divName)] = newName;
+          if (selectedDivision === divName) selectedDivision = newName;
+          setupDivisionButtons();
+          updateTable();
+        });
         wrapper.appendChild(span);
 
         const colorInput = document.createElement("input");
@@ -234,7 +270,7 @@
 
       const start = parseTime(startInput);
       const end = parseTime(endInput);
-      if(!start || !end || start>=end){ alert("Enter valid times like 8:30 AM and 9:15 AM (start must be before end)."); return; }
+      if(!start || !end || start>=end){ alert("Enter valid times like 11:30 AM and 5:30 PM (start must be before end)."); return; }
 
       times=[];
       let current = new Date(start);
@@ -294,10 +330,7 @@
         const checkbox = document.createElement("input");
         checkbox.type="checkbox";
         checkbox.checked = field.available;
-        checkbox.onchange = ()=>{
-          field.available = checkbox.checked;
-          renderFields();
-        };
+        checkbox.onchange = ()=>{ field.available = checkbox.checked; renderFields(); };
         const slider = document.createElement("span");
         slider.className="slider";
         toggleWrapper.appendChild(checkbox);
@@ -312,14 +345,7 @@
           btn.textContent = act;
           btn.className = "activity-button";
           if(field.activities.includes(act)) btn.classList.add("active");
-          btn.onclick=()=>{
-            if(field.activities.includes(act)){
-              field.activities = field.activities.filter(a=>a!==act);
-            } else {
-              field.activities.push(act);
-            }
-            renderFields();
-          };
+          btn.onclick=()=>{ if(field.activities.includes(act)){ field.activities = field.activities.filter(a=>a!==act); } else { field.activities.push(act); } renderFields(); };
           btnWrap.appendChild(btn);
         });
         wrapper.appendChild(btnWrap);
@@ -327,14 +353,7 @@
         // Other input
         const otherInput = document.createElement("input");
         otherInput.placeholder="Other activity";
-        otherInput.onkeyup=(e)=>{
-          if(e.key==="Enter" && otherInput.value.trim()){
-            const val = otherInput.value.trim();
-            if(!field.activities.includes(val)) field.activities.push(val);
-            otherInput.value="";
-            renderFields();
-          }
-        };
+        otherInput.onkeyup=(e)=>{ if(e.key==="Enter" && otherInput.value.trim()){ const val = otherInput.value.trim(); if(!field.activities.includes(val)) field.activities.push(val); otherInput.value=""; renderFields(); } };
         wrapper.appendChild(otherInput);
 
         // Chosen activities list
@@ -368,14 +387,16 @@
 
         const thDiv = document.createElement("th");
         thDiv.colSpan = Math.max(bunksInDiv.length,1);
-        if(colorEnabled){
-          thDiv.style.backgroundColor = divObj.color;
-          thDiv.style.color = "#fff";
-        } else {
-          thDiv.style.backgroundColor = "transparent";
-          thDiv.style.color = "#000";
-        }
+        if(colorEnabled){ thDiv.style.backgroundColor = divObj.color; thDiv.style.color = "#fff"; } 
+        else { thDiv.style.backgroundColor = "transparent"; thDiv.style.color = "#000"; }
         thDiv.textContent = divName;
+        makeEditable(thDiv, (newName) => {
+          divisions[newName] = divisions[divName];
+          delete divisions[divName];
+          availableDivisions[availableDivisions.indexOf(divName)] = newName;
+          updateTable();
+          setupDivisionButtons();
+        });
         divRow.appendChild(thDiv);
 
         if(bunksInDiv.length===0){
@@ -384,6 +405,16 @@
           bunksInDiv.forEach(bunk=>{
             const thBunk = document.createElement("th");
             thBunk.textContent = bunk;
+            makeEditable(thBunk, (newName) => {
+              const idx = bunks.indexOf(bunk);
+              if (idx !== -1) bunks[idx] = newName;
+              for (const div of Object.values(divisions)) {
+                const i = div.bunks.indexOf(bunk);
+                if (i !== -1) div.bunks[i] = newName;
+              }
+              updateTable();
+              updateUnassigned();
+            });
             bunkRow.appendChild(thBunk);
           });
         }
