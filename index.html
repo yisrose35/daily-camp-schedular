@@ -15,10 +15,9 @@
     .selected { outline: 3px solid #90CAF9; }
     #unassignedBunks { margin-top: 10px; }
     .divisionWrapper { display: inline-block; margin-right: 10px; }
-    .colorPicker { width: 30px; height: 30px; border: none; cursor: pointer; vertical-align: middle; }
+    .colorPicker { width: 30px; height: 30px; border: none; cursor: pointer; vertical-align: middle; margin-left: 5px; }
     .fieldWrapper { border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 6px; }
     .fieldWrapper h4 { margin: 0 0 5px 0; display: inline-block; margin-right: 10px; }
-    .fieldWrapper.unavailable { opacity: 0.5; }
     .activity-button { margin: 2px; padding: 4px 8px; border: 1px solid #333; border-radius: 3px; cursor: pointer; }
     .activity-button.active { background: #007BFF; color: white; }
   </style>
@@ -81,6 +80,9 @@
     let selectedDivision = null;
     let times = [];
     let fields = [];
+    const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336'];
+    let colorIndex = 0;
+    const commonActivities = ["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
 
     // Switch tabs
     function showTab(id) {
@@ -110,8 +112,10 @@
       if (input.value.trim() === "") return;
       const divName = input.value.trim();
       if (!availableDivisions.includes(divName)) {
+        const color = defaultColors[colorIndex % defaultColors.length];
+        colorIndex++;
         availableDivisions.push(divName);
-        divisions[divName] = { bunks: [] };
+        divisions[divName] = { bunks: [], color: color };
         input.value = "";
         setupDivisionButtons();
         updateTable();
@@ -158,16 +162,35 @@
     function setupDivisionButtons() {
       const container = document.getElementById("divisionButtons");
       container.innerHTML = "";
+      const colorEnabled = document.getElementById("enableColor").checked;
       availableDivisions.forEach(divName => {
+        const divObj = divisions[divName];
+        const wrapper = document.createElement("div");
+        wrapper.className = "divisionWrapper";
+
         const span = document.createElement("span");
         span.textContent = divName;
         span.className = "bunk-button";
+        span.style.backgroundColor = colorEnabled ? divObj.color : "transparent";
         span.onclick = () => {
           selectedDivision = divName;
           container.querySelectorAll("span").forEach(s => s.classList.remove("selected"));
           span.classList.add("selected");
         };
-        container.appendChild(span);
+        wrapper.appendChild(span);
+
+        const colorInput = document.createElement("input");
+        colorInput.type = "color";
+        colorInput.value = divObj.color;
+        colorInput.className = "colorPicker";
+        colorInput.addEventListener("input", e => {
+          divObj.color = e.target.value;
+          if (colorEnabled) span.style.backgroundColor = e.target.value;
+          updateTable();
+        });
+        wrapper.appendChild(colorInput);
+
+        container.appendChild(wrapper);
       });
     }
 
@@ -207,21 +230,52 @@
       return `${h}:${m} ${ampm}`;
     }
 
-    // Focus endTime when AM/PM typed in startTime
-    document.getElementById("startTime").addEventListener("input", function() {
-      if (this.value.toUpperCase().endsWith("AM") || this.value.toUpperCase().endsWith("PM")) {
-        document.getElementById("endTime").focus();
-      }
-    });
-
     // === Render Fields ===
     function renderFields() {
       const container = document.getElementById("fieldList");
       container.innerHTML = "";
-      fields.forEach(f => {
+      fields.forEach((f, index) => {
         const wrap = document.createElement("div");
         wrap.className = "fieldWrapper";
-        wrap.textContent = f.name;
+
+        const title = document.createElement("h4");
+        title.textContent = f.name;
+        wrap.appendChild(title);
+
+        commonActivities.forEach(act => {
+          const btn = document.createElement("button");
+          btn.textContent = act;
+          btn.className = "activity-button";
+          if (f.activities.includes(act)) btn.classList.add("active");
+          btn.onclick = () => {
+            if (f.activities.includes(act)) {
+              f.activities = f.activities.filter(a => a !== act);
+            } else {
+              f.activities.push(act);
+            }
+            renderFields();
+          };
+          wrap.appendChild(btn);
+        });
+
+        const otherInput = document.createElement("input");
+        otherInput.placeholder = "Other activity";
+        otherInput.onkeyup = e => {
+          if (e.key === "Enter" && otherInput.value.trim()) {
+            const val = otherInput.value.trim();
+            if (!f.activities.includes(val)) f.activities.push(val);
+            otherInput.value = "";
+            renderFields();
+          }
+        };
+        wrap.appendChild(otherInput);
+
+        if (f.activities.length > 0) {
+          const chosen = document.createElement("p");
+          chosen.textContent = "Activities: " + f.activities.join(", ");
+          wrap.appendChild(chosen);
+        }
+
         container.appendChild(wrap);
       });
     }
@@ -241,6 +295,8 @@
         const th = document.createElement("th");
         th.colSpan = Math.max(divObj.bunks.length, 1);
         th.textContent = divName;
+        th.style.backgroundColor = divObj.color;
+        th.style.color = "#fff";
         divRow.appendChild(th);
         if (divObj.bunks.length === 0) {
           bunkRow.appendChild(document.createElement("th"));
@@ -268,7 +324,13 @@
         tbody.appendChild(tr);
       });
     }
+
+    // === StartTime Enter → Move to EndTime ===
+    document.getElementById("startTime").addEventListener("keyup", e => {
+      if (e.key === "Enter" && document.getElementById("startTime").value.match(/(AM|PM)$/i)) {
+        document.getElementById("endTime").focus();
+      }
+    });
   </script>
 </body>
 </html>
-
