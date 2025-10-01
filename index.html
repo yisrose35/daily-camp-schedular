@@ -241,29 +241,59 @@
     }
 
     function assignFieldsToBunks(){
-      const scheduled=availableDivisions.flatMap(div=>divisions[div].bunks);
-      const availFields=fields.filter(f=>f.available);
-      if(scheduled.length===0||times.length===0){scheduleAssignments={}; return;}
-      if(availFields.length<scheduled.length){alert("Not enough fields for bunks."); scheduleAssignments={}; return;}
-      scheduleAssignments={}; scheduled.forEach(b=>scheduleAssignments[b]=[]);
-      for(let s=0;s<times.length;s++){
-        let used=new Set();
-        for(let bunk of scheduled){
-          let lastSport=s>0?scheduleAssignments[bunk][s-1].sport:null;
-          let chosenField=null, chosenSport="";
-          for(let f of availFields){
-            if(used.has(f.name))continue; if(f.activities.length===0)continue;
-            let candidates=f.activities.filter(act=>act!==lastSport);
-            if(candidates.length>0){chosenField=f; chosenSport=candidates[Math.floor(Math.random()*candidates.length)]; break;}
-          }
-          if(!chosenField){
-            for(let f of availFields){if(used.has(f.name))continue; let sport=f.activities.length>0?f.activities[0]:""; chosenField=f; chosenSport=sport; break;}
-          }
-          if(!chosenField){chosenField=availFields[0]; chosenSport=availFields[0].activities.length>0?availFields[0].activities[0]:"";}
-          used.add(chosenField.name); scheduleAssignments[bunk].push({field:chosenField.name,sport:chosenSport});
+  const scheduled = availableDivisions.flatMap(div => divisions[div].bunks);
+  const availFields = fields.filter(f => f.available);
+
+  if (scheduled.length === 0 || times.length === 0) { scheduleAssignments = {}; return; }
+  if (availFields.length < scheduled.length) { alert("Not enough fields for bunks."); scheduleAssignments = {}; return; }
+
+  scheduleAssignments = {};
+  scheduled.forEach(b => scheduleAssignments[b] = []);
+
+  for (let s = 0; s < times.length; s++) {
+    let usedFields = new Set();
+
+    for (let bunk of scheduled) {
+      let lastSport = s > 0 ? scheduleAssignments[bunk][s-1].sport : null;
+      let bestChoice = null;
+
+      // 1. Try to find a field+sport with a different sport than last time
+      for (let f of availFields) {
+        if (usedFields.has(f.name)) continue;
+        if (f.activities.length === 0) continue;
+
+        let candidates = f.activities.filter(act => act !== lastSport);
+        if (candidates.length > 0) {
+          bestChoice = {
+            field: f,
+            sport: candidates[Math.floor(Math.random() * candidates.length)]
+          };
+          break;
         }
       }
+
+      // 2. If no non-repeating sport found, pick any available option
+      if (!bestChoice) {
+        for (let f of availFields) {
+          if (usedFields.has(f.name)) continue;
+          if (f.activities.length > 0) {
+            bestChoice = { field: f, sport: f.activities[0] };
+            break;
+          }
+        }
+      }
+
+      // 3. Fallback absolute guarantee
+      if (!bestChoice) {
+        bestChoice = { field: availFields[0], sport: availFields[0].activities[0] || "" };
+      }
+
+      usedFields.add(bestChoice.field.name);
+      scheduleAssignments[bunk].push({ field: bestChoice.field.name, sport: bestChoice.sport });
     }
+  }
+}
+
 
     function updateTable(){
       const table=document.getElementById("scheduleTable");
