@@ -26,7 +26,6 @@
     .activity-button { margin: 2px; padding: 4px 8px; border: 1px solid #333; border-radius: 3px; cursor: pointer; }
     .activity-button.active { background: #007BFF; color: white; }
 
-    /* Toggle switch */
     .switch { position: relative; display: inline-block; width: 40px; height: 20px; vertical-align: middle; margin-left: 8px; }
     .switch input { opacity: 0; width: 0; height: 0; }
     .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
@@ -100,6 +99,22 @@
     let colorIndex = 0;
     const commonActivities = ["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
 
+    // 🔹 Save and load state from localStorage
+    function saveState(){
+      localStorage.setItem("bunks", JSON.stringify(bunks));
+      localStorage.setItem("fields", JSON.stringify(fields));
+      localStorage.setItem("divisions", JSON.stringify(divisions));
+      localStorage.setItem("availableDivisions", JSON.stringify(availableDivisions));
+      localStorage.setItem("times", JSON.stringify(times));
+    }
+    function loadState(){
+      bunks = JSON.parse(localStorage.getItem("bunks") || "[]");
+      fields = JSON.parse(localStorage.getItem("fields") || "[]");
+      divisions = JSON.parse(localStorage.getItem("divisions") || "{}");
+      availableDivisions = JSON.parse(localStorage.getItem("availableDivisions") || "[]");
+      times = JSON.parse(localStorage.getItem("times") || "[]");
+    }
+
     function makeEditable(element, saveCallback) {
       element.ondblclick = (e) => {
         e.stopPropagation();
@@ -108,17 +123,15 @@
         input.type = "text";
         input.value = oldText;
         input.style.width = (oldText.length + 2) + "ch";
-
         element.replaceWith(input);
         input.focus();
-
         function save() {
           const newText = input.value.trim();
           if (newText && newText !== oldText) saveCallback(newText);
           element.textContent = newText || oldText;
           input.replaceWith(element);
+          saveState();
         }
-
         input.addEventListener("blur", save);
         input.addEventListener("keyup", e => { if (e.key === "Enter") save(); });
       };
@@ -144,6 +157,7 @@
         input.value="";
         updateUnassigned();
         updateTable();
+        saveState();
       }
     }
     document.getElementById("addBunkBtn").onclick = addBunk;
@@ -163,6 +177,7 @@
             divisions[selectedDivision].bunks.push(bunk);
             updateUnassigned();
             updateTable();
+            saveState();
           } else {
             alert("Select a division first!");
           }
@@ -176,6 +191,7 @@
           }
           updateUnassigned();
           updateTable();
+          saveState();
         });
         container.appendChild(span);
       });
@@ -193,6 +209,7 @@
         input.value="";
         setupDivisionButtons();
         updateTable();
+        saveState();
       }
     }
     document.getElementById("addDivisionBtn").onclick = addDivision;
@@ -225,6 +242,7 @@
           if (selectedDivision === divName) selectedDivision = newName;
           setupDivisionButtons();
           updateTable();
+          saveState();
         });
         wrapper.appendChild(span);
 
@@ -239,6 +257,7 @@
             span.style.color = "#fff";
           }
           updateTable();
+          saveState();
         });
         wrapper.appendChild(colorInput);
 
@@ -284,6 +303,7 @@
         current=next;
       }
       updateTable();
+      saveState();
     }
 
     document.getElementById("startTime").addEventListener("keyup", (e)=>{
@@ -299,6 +319,7 @@
         fields.push({name: fieldName, activities: [], available: true});
         input.value="";
         renderFields();
+        saveState();
       }
     }
     document.getElementById("addFieldBtn").onclick = addField;
@@ -318,6 +339,7 @@
         makeEditable(title, (newName)=>{
           field.name = newName;
           renderFields();
+          saveState();
         });
         wrapper.appendChild(title);
 
@@ -326,7 +348,7 @@
         const checkbox = document.createElement("input");
         checkbox.type="checkbox";
         checkbox.checked = field.available;
-        checkbox.onchange = ()=>{ field.available = checkbox.checked; renderFields(); };
+        checkbox.onchange = ()=>{ field.available = checkbox.checked; renderFields(); saveState(); };
         const slider = document.createElement("span");
         slider.className="slider";
         toggleWrapper.appendChild(checkbox);
@@ -344,6 +366,7 @@
             if(field.activities.includes(act)){ field.activities = field.activities.filter(a=>a!==act); } 
             else { field.activities.push(act); } 
             renderFields(); 
+            saveState();
           };
           btnWrap.appendChild(btn);
         });
@@ -357,6 +380,7 @@
             if(!field.activities.includes(val)) field.activities.push(val); 
             otherInput.value=""; 
             renderFields(); 
+            saveState();
           } 
         };
         wrapper.appendChild(otherInput);
@@ -399,6 +423,7 @@
           availableDivisions[availableDivisions.indexOf(divName)] = newName;
           updateTable();
           setupDivisionButtons();
+          saveState();
         });
         divRow.appendChild(thDiv);
 
@@ -417,6 +442,7 @@
               }
               updateTable();
               updateUnassigned();
+              saveState();
             });
             bunkRow.appendChild(thBunk);
           });
@@ -442,6 +468,13 @@
         tbody.appendChild(row);
       });
     }
+
+    // 🔹 Initialize on load
+    loadState();
+    updateUnassigned();
+    setupDivisionButtons();
+    renderFields();
+    updateTable();
   </script>
 </body>
 </html>
