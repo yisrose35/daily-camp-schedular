@@ -301,45 +301,58 @@
     function assignFieldsToBunks() {
       const scheduled = availableDivisions.flatMap(div => divisions[div].bunks);
       const availFields = fields.filter(f => f.available);
+      const availSpecials = specialActivities.filter(s => s.available);
 
       if (scheduled.length === 0 || times.length === 0) { scheduleAssignments = {}; return; }
-      if (availFields.length < scheduled.length) { alert("Not enough fields for bunks."); scheduleAssignments = {}; return; }
+      if (availFields.length + availSpecials.length < scheduled.length) { alert("Not enough activities for bunks."); scheduleAssignments = {}; return; }
 
       scheduleAssignments = {};
       let bunkSportCounts = {};
       scheduled.forEach(b => { scheduleAssignments[b] = []; bunkSportCounts[b] = {}; });
 
       for (let s = 0; s < times.length; s++) {
-        let usedFields = new Set();
+        let usedNames = new Set();
 
         for (let bunk of scheduled) {
-          let lastSport = s > 0 ? scheduleAssignments[bunk][s-1].sport : null;
+          let lastEntry = s > 0 ? scheduleAssignments[bunk][s-1] : null;
           let candidates = [];
 
           for (let f of availFields) {
-            if (usedFields.has(f.name)) continue;
+            if (usedNames.has(f.name)) continue;
             for (let act of f.activities) {
-              candidates.push({ field: f, sport: act });
+              candidates.push({ type:"field", field: f, sport: act });
             }
           }
+          for (let sa of availSpecials) {
+            if (usedNames.has(sa.name)) continue;
+            candidates.push({ type:"special", field:{name:sa.name}, sport:null });
+          }
 
-          let validChoices = candidates.filter(c => c.sport !== lastSport);
+          let validChoices = candidates.filter(c => {
+            if (!lastEntry) return true;
+            if (c.type==="special" && lastEntry.field===c.field.name) return false;
+            if (c.type==="field" && lastEntry.sport && c.sport===lastEntry.sport) return false;
+            return true;
+          });
+
           let chosen;
           if (validChoices.length > 0) {
             let minCount = Math.min(...validChoices.map(c => bunkSportCounts[bunk][c.sport] || 0));
             let bestChoices = validChoices.filter(c => (bunkSportCounts[bunk][c.sport] || 0) === minCount);
-            chosen = bestChoices[Math.floor(Math.random() * bestChoices.length)];
+            chosen = bestChoices[Math.floor(Math.random()*bestChoices.length)];
           } else if (candidates.length > 0) {
-            let minCount = Math.min(...candidates.map(c => bunkSportCounts[bunk][c.sport] || 0));
-            let bestChoices = candidates.filter(c => (bunkSportCounts[bunk][c.sport] || 0) === minCount);
-            chosen = bestChoices[Math.floor(Math.random() * bestChoices.length)];
+            chosen = candidates[Math.floor(Math.random()*candidates.length)];
           } else {
-            chosen = { field: availFields[0], sport: availFields[0]?.activities[0] || "" };
+            chosen = { type:"special", field:{name:"Free"}, sport:null };
           }
 
-          usedFields.add(chosen.field.name);
-          scheduleAssignments[bunk].push({ field: chosen.field.name, sport: chosen.sport });
-          bunkSportCounts[bunk][chosen.sport] = (bunkSportCounts[bunk][chosen.sport] || 0) + 1;
+          usedNames.add(chosen.field.name);
+          if (chosen.type==="special") {
+            scheduleAssignments[bunk].push({ field: chosen.field.name, sport: null });
+          } else {
+            scheduleAssignments[bunk].push({ field: chosen.field.name, sport: chosen.sport });
+            bunkSportCounts[bunk][chosen.sport] = (bunkSportCounts[bunk][chosen.sport]||0)+1;
+          }
         }
       }
     }
@@ -362,7 +375,7 @@
             const td=document.createElement("td");
             if(scheduleAssignments[bunk]&&scheduleAssignments[bunk][rowIdx]){
               const entry=scheduleAssignments[bunk][rowIdx];
-              td.textContent=entry.field+(entry.sport?" – "+entry.sport:"");
+              td.textContent=entry.sport ? entry.field + " – " + entry.sport : entry.field;
             }
             row.appendChild(td);
           });
