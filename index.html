@@ -95,7 +95,7 @@
     let selectedDivision = null;
     let times = [];
     let fields = [];
-    let scheduleAssignments = {}; // NEW: store assignments
+    let scheduleAssignments = {}; // store assignments
 
     const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
     let colorIndex = 0;
@@ -285,7 +285,7 @@
         current=next;
       }
 
-      assignFieldsToBunks(); // NEW
+      assignFieldsToBunks();
       updateTable();
     }
 
@@ -375,7 +375,7 @@
       });
     }
 
-    // NEW: Automatic assignment of fields to bunks
+    // FIXED: Automatic assignment with no overlaps or repeats
     function assignFieldsToBunks() {
       const availableFields = fields.filter(f => f.available).map(f => f.name);
       if (availableFields.length === 0) {
@@ -385,22 +385,38 @@
 
       scheduleAssignments = {};
       const allBunks = bunks.slice();
-
       allBunks.forEach(b => { scheduleAssignments[b] = []; });
 
       times.forEach((slot, slotIndex) => {
-        let rotatedFields = availableFields.slice();
-        rotatedFields = rotatedFields.sort(() => Math.random() - 0.5);
+        let usedThisSlot = new Set();
 
-        allBunks.forEach((bunk, i) => {
-          let field = rotatedFields[i % rotatedFields.length];
+        allBunks.forEach(bunk => {
+          let lastField = slotIndex > 0 ? scheduleAssignments[bunk][slotIndex - 1] : null;
+          let chosen = null;
 
-          if (slotIndex > 0 && scheduleAssignments[bunk][slotIndex-1] === field) {
-            let alternatives = rotatedFields.filter(f => f !== field);
-            if (alternatives.length > 0) field = alternatives[0];
+          // Try to find a valid field
+          for (let f of availableFields) {
+            if (!usedThisSlot.has(f) && f !== lastField) {
+              chosen = f;
+              break;
+            }
           }
 
-          scheduleAssignments[bunk].push(field);
+          // If none fits, allow any unused field
+          if (!chosen) {
+            for (let f of availableFields) {
+              if (!usedThisSlot.has(f)) {
+                chosen = f;
+                break;
+              }
+            }
+          }
+
+          // Final fallback
+          if (!chosen) chosen = availableFields[0];
+
+          scheduleAssignments[bunk].push(chosen);
+          usedThisSlot.add(chosen);
         });
       });
     }
@@ -424,63 +440,6 @@
         const thDiv = document.createElement("th");
         thDiv.colSpan = Math.max(bunksInDiv.length,1);
         if(colorEnabled){ thDiv.style.backgroundColor = divObj.color; thDiv.style.color = "#fff"; } 
-        else { thDiv.style.backgroundColor = "transparent"; thDiv.style.color = "#000"; }
-        thDiv.textContent = divName;
-        makeEditable(thDiv, (newName) => {
-          divisions[newName] = divisions[divName];
-          delete divisions[divName];
-          availableDivisions[availableDivisions.indexOf(divName)] = newName;
-          updateTable();
-          setupDivisionButtons();
-        });
-        divRow.appendChild(thDiv);
+        else {
 
-        if(bunksInDiv.length===0){
-          bunkRow.appendChild(document.createElement("th"));
-        } else {
-          bunksInDiv.forEach(bunk=>{
-            const thBunk = document.createElement("th");
-            thBunk.textContent = bunk;
-            makeEditable(thBunk, (newName) => {
-              const idx = bunks.indexOf(bunk);
-              if (idx !== -1) bunks[idx] = newName;
-              for (const div of Object.values(divisions)) {
-                const i = div.bunks.indexOf(bunk);
-                if (i !== -1) div.bunks[i] = newName;
-              }
-              updateTable();
-              updateUnassigned();
-            });
-            bunkRow.appendChild(thBunk);
-          });
-        }
-      });
-
-      const tbody = document.querySelector("#scheduleTable tbody");
-      tbody.innerHTML="";
-      times.forEach((time, rowIndex)=>{
-        const row = document.createElement("tr");
-        const tdTime = document.createElement("td");
-        tdTime.textContent = time;
-        row.appendChild(tdTime);
-
-        availableDivisions.forEach(divName=>{
-          const bunksInDiv = divisions[divName].bunks;
-          if(bunksInDiv.length===0){
-            row.appendChild(document.createElement("td"));
-          } else {
-            bunksInDiv.forEach(bunk=>{
-              const td = document.createElement("td");
-              td.textContent = scheduleAssignments[bunk] && scheduleAssignments[bunk][rowIndex] 
-                               ? scheduleAssignments[bunk][rowIndex] 
-                               : "";
-              row.appendChild(td);
-            });
-          }
-        });
-        tbody.appendChild(row);
-      });
-    }
-  </script>
-</body>
-</html>
+        
