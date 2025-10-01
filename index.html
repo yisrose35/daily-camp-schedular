@@ -51,6 +51,9 @@
     <h3>Add Bunks</h3>
     <input id="bunkInput" placeholder="Enter bunk">
     <button id="addBunkBtn">Add Bunk</button>
+    <!-- Unassigned Bunks -->
+    <h4>Unassigned Bunks</h4>
+    <div id="unassignedBunks"></div>
 
     <!-- Division Input -->
     <h3>Add Divisions</h3>
@@ -71,10 +74,6 @@
       <option value="60">60 min</option>
     </select>
     <button onclick="generateTimes()">Generate</button>
-
-    <!-- Unassigned Bunks -->
-    <h4>Unassigned Bunks</h4>
-    <div id="unassignedBunks"></div>
 
     <!-- Field Input -->
     <h3>Add Fields/Courts</h3>
@@ -97,11 +96,11 @@
   <script>
     // ================== DATA ==================
     let bunks = [];
-    let divisions = {};              // { [divName]: { bunks: [], color: '#hex' } }
+    let divisions = {};
     let availableDivisions = [];
     let selectedDivision = null;
     let times = [];
-    let fields = [];                 // { name, activities: [], available: true }
+    let fields = [];
 
     const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
     let colorIndex = 0;
@@ -110,7 +109,8 @@
 
     // ================== INLINE EDIT HELPER ==================
     function makeEditable(element, saveCallback) {
-      element.onclick = () => {
+      element.ondblclick = (e) => {
+        e.stopPropagation();
         const oldText = element.textContent;
         const input = document.createElement("input");
         input.type = "text";
@@ -122,9 +122,7 @@
 
         function save() {
           const newText = input.value.trim();
-          if (newText && newText !== oldText) {
-            saveCallback(newText);
-          }
+          if (newText && newText !== oldText) saveCallback(newText);
           element.textContent = newText || oldText;
           input.replaceWith(element);
         }
@@ -170,7 +168,15 @@
         const span = document.createElement("span");
         span.textContent = bunk;
         span.className = "bunk-button";
-        span.onclick = ()=>{ if(selectedDivision){ divisions[selectedDivision].bunks.push(bunk); updateUnassigned(); updateTable(); } else { alert("Select a division first!"); } };
+        span.onclick = ()=> {
+          if(selectedDivision){
+            divisions[selectedDivision].bunks.push(bunk);
+            updateUnassigned();
+            updateTable();
+          } else {
+            alert("Select a division first!");
+          }
+        };
         makeEditable(span, (newName) => {
           const idx = bunks.indexOf(bunk);
           if (idx !== -1) bunks[idx] = newName;
@@ -314,7 +320,7 @@
     function renderFields(){
       const container = document.getElementById("fieldList");
       container.innerHTML="";
-      fields.forEach((field, index)=>{
+      fields.forEach((field)=>{
         const wrapper = document.createElement("div");
         wrapper.className="fieldWrapper";
         if(!field.available) wrapper.classList.add("unavailable");
@@ -324,7 +330,6 @@
         title.textContent = field.name;
         wrapper.appendChild(title);
 
-        // Availability toggle
         const toggleWrapper = document.createElement("label");
         toggleWrapper.className="switch";
         const checkbox = document.createElement("input");
@@ -337,7 +342,6 @@
         toggleWrapper.appendChild(slider);
         wrapper.appendChild(toggleWrapper);
 
-        // Activity buttons
         const btnWrap = document.createElement("div");
         btnWrap.style.marginTop = "8px";
         commonActivities.forEach(act=>{
@@ -350,13 +354,11 @@
         });
         wrapper.appendChild(btnWrap);
 
-        // Other input
         const otherInput = document.createElement("input");
         otherInput.placeholder="Other activity";
         otherInput.onkeyup=(e)=>{ if(e.key==="Enter" && otherInput.value.trim()){ const val = otherInput.value.trim(); if(!field.activities.includes(val)) field.activities.push(val); otherInput.value=""; renderFields(); } };
         wrapper.appendChild(otherInput);
 
-        // Chosen activities list
         if(field.activities.length>0){
           const chosen = document.createElement("p");
           chosen.style.marginTop = "6px";
@@ -442,4 +444,3 @@
   </script>
 </body>
 </html>
-
