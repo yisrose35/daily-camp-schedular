@@ -240,7 +240,7 @@
       });
     }
 
-    function assignFieldsToBunks(){
+    function assignFieldsToBunks() {
   const scheduled = availableDivisions.flatMap(div => divisions[div].bunks);
   const availFields = fields.filter(f => f.available);
 
@@ -255,44 +255,36 @@
 
     for (let bunk of scheduled) {
       let lastSport = s > 0 ? scheduleAssignments[bunk][s-1].sport : null;
-      let bestChoice = null;
+      let candidates = [];
 
-      // 1. Try to find a field+sport with a different sport than last time
+      // Build candidate list (field, sport) pairs
       for (let f of availFields) {
         if (usedFields.has(f.name)) continue;
-        if (f.activities.length === 0) continue;
-
-        let candidates = f.activities.filter(act => act !== lastSport);
-        if (candidates.length > 0) {
-          bestChoice = {
-            field: f,
-            sport: candidates[Math.floor(Math.random() * candidates.length)]
-          };
-          break;
+        for (let act of f.activities) {
+          candidates.push({ field: f, sport: act });
         }
       }
 
-      // 2. If no non-repeating sport found, pick any available option
-      if (!bestChoice) {
-        for (let f of availFields) {
-          if (usedFields.has(f.name)) continue;
-          if (f.activities.length > 0) {
-            bestChoice = { field: f, sport: f.activities[0] };
-            break;
-          }
-        }
+      // 1. Prefer candidates with sport ≠ lastSport
+      let validChoices = candidates.filter(c => c.sport !== lastSport);
+
+      let chosen;
+      if (validChoices.length > 0) {
+        chosen = validChoices[Math.floor(Math.random() * validChoices.length)];
+      } else if (candidates.length > 0) {
+        // 2. If no valid choices, fallback to any available candidate
+        chosen = candidates[Math.floor(Math.random() * candidates.length)];
+      } else {
+        // 3. Absolute fallback (no fields or sports defined)
+        chosen = { field: availFields[0], sport: availFields[0]?.activities[0] || "" };
       }
 
-      // 3. Fallback absolute guarantee
-      if (!bestChoice) {
-        bestChoice = { field: availFields[0], sport: availFields[0].activities[0] || "" };
-      }
-
-      usedFields.add(bestChoice.field.name);
-      scheduleAssignments[bunk].push({ field: bestChoice.field.name, sport: bestChoice.sport });
+      usedFields.add(chosen.field.name);
+      scheduleAssignments[bunk].push({ field: chosen.field.name, sport: chosen.sport });
     }
   }
 }
+
 
 
     function updateTable(){
