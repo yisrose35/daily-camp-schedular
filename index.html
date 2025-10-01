@@ -11,7 +11,7 @@
     .tab-content.active { display: block; }
 
     table { border-collapse: collapse; margin-top: 20px; width: 100%; }
-    th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 120px; }
+    th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 140px; }
 
     .bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; display: inline-block; }
     .selected { outline: 3px solid #90CAF9; }
@@ -108,18 +108,14 @@
         const input = document.createElement("input");
         input.type = "text";
         input.value = oldText;
-        input.style.width = (oldText.length + 2) + "ch";
-
         element.replaceWith(input);
         input.focus();
-
         function save() {
           const newText = input.value.trim();
           if (newText && newText !== oldText) saveCallback(newText);
           element.textContent = newText || oldText;
           input.replaceWith(element);
         }
-
         input.addEventListener("blur", save);
         input.addEventListener("keyup", e => { if (e.key === "Enter") save(); });
       };
@@ -132,11 +128,6 @@
       document.querySelector(`.tab-button[onclick="showTab('${id}')"]`).classList.add('active');
       if(id==='schedule') updateTable();
     }
-
-    document.getElementById('enableColor').addEventListener('change', () => {
-      setupDivisionButtons();
-      updateTable();
-    });
 
     function addBunk(){
       const input = document.getElementById("bunkInput");
@@ -219,14 +210,6 @@
           container.querySelectorAll('span.bunk-button').forEach(el=>el.classList.remove("selected"));
           span.classList.add("selected");
         };
-        makeEditable(span, (newName) => {
-          divisions[newName] = divisions[divName];
-          delete divisions[divName];
-          availableDivisions[availableDivisions.indexOf(divName)] = newName;
-          if (selectedDivision === divName) selectedDivision = newName;
-          setupDivisionButtons();
-          updateTable();
-        });
         wrapper.appendChild(span);
 
         const colorInput = document.createElement("input");
@@ -288,12 +271,6 @@
       assignFieldsToBunks();
       updateTable();
     }
-
-    document.getElementById("startTime").addEventListener("keyup", (e)=>{
-      if(e.key==="Enter" && /(AM|PM)$/i.test(e.target.value.trim())){
-        document.getElementById("endTime").focus();
-      }
-    });
 
     function addField(){
       const input = document.getElementById("fieldInput");
@@ -375,10 +352,10 @@
       });
     }
 
-    // New: assign fields and sports with constraints
+    // --- Assign fields & sports ---
     function assignFieldsToBunks() {
       const scheduledBunks = availableDivisions.flatMap(divName => divisions[divName].bunks);
-      const availableFields = fields.filter(f => f.available).map(f => f.name);
+      const availableFields = fields.filter(f => f.available);
 
       if (scheduledBunks.length === 0 || times.length === 0) {
         scheduleAssignments = {};
@@ -386,7 +363,7 @@
       }
 
       if (availableFields.length < scheduledBunks.length) {
-        alert("Not enough fields for the number of bunks.");
+        alert("Not enough fields for bunks.");
         scheduleAssignments = {};
         return;
       }
@@ -398,27 +375,20 @@
         let usedFields = new Set();
 
         for (let bunk of scheduledBunks) {
-          // pick a field not used this slot
-          let chosenField = null;
-          for (let f of availableFields) {
-            if (!usedFields.has(f)) {
-              chosenField = f;
-              break;
-            }
-          }
-          if (!chosenField) chosenField = availableFields[0]; // fallback
-          usedFields.add(chosenField);
+          // assign a field not already used
+          let chosenFieldObj = availableFields.find(f => !usedFields.has(f.name)) || availableFields[0];
+          usedFields.add(chosenFieldObj.name);
 
-          // pick a sport valid for this field
+          // pick a sport (different from last slot if possible)
+          let lastSport = s > 0 ? scheduleAssignments[bunk][s-1].sport : null;
           let chosenSport = "";
-          const fieldObj = fields.find(f => f.name === chosenField);
-          if (fieldObj && fieldObj.activities.length > 0) {
-            let lastSport = s > 0 ? scheduleAssignments[bunk][s-1].sport : null;
-            let candidates = fieldObj.activities.filter(act => act !== lastSport);
-            chosenSport = candidates.length > 0 ? candidates[0] : fieldObj.activities[0];
+          if (chosenFieldObj.activities.length > 0) {
+            let candidates = chosenFieldObj.activities.filter(act => act !== lastSport);
+            if (candidates.length === 0) candidates = chosenFieldObj.activities;
+            chosenSport = candidates[Math.floor(Math.random() * candidates.length)];
           }
 
-          scheduleAssignments[bunk].push({ field: chosenField, sport: chosenSport });
+          scheduleAssignments[bunk].push({ field: chosenFieldObj.name, sport: chosenSport });
         }
       }
     }
@@ -433,35 +403,20 @@
       divRow.innerHTML="<th>Division</th>";
       bunkRow.innerHTML="<th>Bunk</th>";
 
-      const colorEnabled = document.getElementById("enableColor").checked;
-
-      availableDivisions.forEach((divName)=>{
+      availableDivisions.forEach(divName=>{
         const divObj = divisions[divName];
         const bunksInDiv = divObj.bunks;
 
         const thDiv = document.createElement("th");
         thDiv.colSpan = Math.max(bunksInDiv.length,1);
-        if(colorEnabled){ thDiv.style.backgroundColor = divObj.color; thDiv.style.color = "#fff"; } 
-        else { thDiv.style.backgroundColor = "transparent"; thDiv.style.color = "#000"; }
         thDiv.textContent = divName;
-        makeEditable(thDiv, (newName) => {
-          divisions[newName] = divisions[divName];
-          delete divisions[divName];
-          availableDivisions[availableDivisions.indexOf(divName)] = newName;
-          updateTable();
-          setupDivisionButtons();
-        });
         divRow.appendChild(thDiv);
 
-        if(bunksInDiv.length===0){
-          bunkRow.appendChild(document.createElement("th"));
-        } else {
-          bunksInDiv.forEach(bunk=>{
-            const thBunk = document.createElement("th");
-            thBunk.textContent = bunk;
-            bunkRow.appendChild(thBunk);
-          });
-        }
+        bunksInDiv.forEach(bunk=>{
+          const thBunk = document.createElement("th");
+          thBunk.textContent = bunk;
+          bunkRow.appendChild(thBunk);
+        });
       });
 
       const tbody = document.querySelector("#scheduleTable tbody");
@@ -474,18 +429,14 @@
 
         availableDivisions.forEach(divName=>{
           const bunksInDiv = divisions[divName].bunks;
-          if(bunksInDiv.length===0){
-            row.appendChild(document.createElement("td"));
-          } else {
-            bunksInDiv.forEach(bunk=>{
-              const td = document.createElement("td");
-              if (scheduleAssignments[bunk] && scheduleAssignments[bunk][rowIndex]) {
-                const entry = scheduleAssignments[bunk][rowIndex];
-                td.textContent = entry.field + (entry.sport ? " – " + entry.sport : "");
-              }
-              row.appendChild(td);
-            });
-          }
+          bunksInDiv.forEach(bunk=>{
+            const td = document.createElement("td");
+            if (scheduleAssignments[bunk] && scheduleAssignments[bunk][rowIndex]) {
+              const entry = scheduleAssignments[bunk][rowIndex];
+              td.textContent = entry.field + (entry.sport ? " – " + entry.sport : "");
+            }
+            row.appendChild(td);
+          });
         });
         tbody.appendChild(row);
       });
