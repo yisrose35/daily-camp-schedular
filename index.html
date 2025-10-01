@@ -297,62 +297,58 @@
       });
     }
 
-    // --- Assignment Logic ---
+    // --- Assignment Logic (Round Robin) ---
     function assignFieldsToBunks() {
       const scheduled = availableDivisions.flatMap(div => divisions[div].bunks);
       const availFields = fields.filter(f => f.available);
       const availSpecials = specialActivities.filter(s => s.available);
 
       if (scheduled.length === 0 || times.length === 0) { scheduleAssignments = {}; return; }
-      if (availFields.length + availSpecials.length < scheduled.length) { alert("Not enough activities for bunks."); scheduleAssignments = {}; return; }
+      if (availFields.length + availSpecials.length === 0) { alert("No activities available."); scheduleAssignments = {}; return; }
+
+      // Build master activity pool
+      let allActivities = [
+        ...availFields.flatMap(f => f.activities.map(act => ({type:"field", field:f, sport:act}))),
+        ...availSpecials.map(sa => ({type:"special", field:{name:sa.name}, sport:null}))
+      ];
 
       scheduleAssignments = {};
-      let bunkSportCounts = {};
-      scheduled.forEach(b => { scheduleAssignments[b] = []; bunkSportCounts[b] = {}; });
+      let doneSets = {};
+      scheduled.forEach(b => { scheduleAssignments[b] = []; doneSets[b] = new Set(); });
 
       for (let s = 0; s < times.length; s++) {
         let usedNames = new Set();
 
         for (let bunk of scheduled) {
           let lastEntry = s > 0 ? scheduleAssignments[bunk][s-1] : null;
-          let candidates = [];
 
-          for (let f of availFields) {
-            if (usedNames.has(f.name)) continue;
-            for (let act of f.activities) {
-              candidates.push({ type:"field", field: f, sport: act });
-            }
-          }
-          for (let sa of availSpecials) {
-            if (usedNames.has(sa.name)) continue;
-            candidates.push({ type:"special", field:{name:sa.name}, sport:null });
+          // Reset cycle if bunk has done all
+          if (doneSets[bunk].size === allActivities.length) {
+            doneSets[bunk].clear();
           }
 
-          let validChoices = candidates.filter(c => {
+          // Build candidates
+          let candidates = allActivities.filter(c => !usedNames.has(c.field.name));
+
+          // Exclude last activity
+          candidates = candidates.filter(c => {
             if (!lastEntry) return true;
             if (c.type==="special" && lastEntry.field===c.field.name) return false;
             if (c.type==="field" && lastEntry.sport && c.sport===lastEntry.sport) return false;
             return true;
           });
 
-          let chosen;
-          if (validChoices.length > 0) {
-            let minCount = Math.min(...validChoices.map(c => bunkSportCounts[bunk][c.sport] || 0));
-            let bestChoices = validChoices.filter(c => (bunkSportCounts[bunk][c.sport] || 0) === minCount);
-            chosen = bestChoices[Math.floor(Math.random()*bestChoices.length)];
-          } else if (candidates.length > 0) {
-            chosen = candidates[Math.floor(Math.random()*candidates.length)];
-          } else {
-            chosen = { type:"special", field:{name:"Free"}, sport:null };
-          }
+          // Prefer not-yet-done
+          let preferred = candidates.filter(c => !doneSets[bunk].has(c.type==="field" ? c.sport : c.field.name));
+          let chosen = preferred.length ? preferred[Math.floor(Math.random()*preferred.length)]
+                                        : candidates[Math.floor(Math.random()*candidates.length)];
 
+          // Save assignment
           usedNames.add(chosen.field.name);
-          if (chosen.type==="special") {
-            scheduleAssignments[bunk].push({ field: chosen.field.name, sport: null });
-          } else {
-            scheduleAssignments[bunk].push({ field: chosen.field.name, sport: chosen.sport });
-            bunkSportCounts[bunk][chosen.sport] = (bunkSportCounts[bunk][chosen.sport]||0)+1;
-          }
+          scheduleAssignments[bunk].push({ field: chosen.field.name, sport: chosen.sport });
+
+          // Track progress
+          doneSets[bunk].add(chosen.type==="field" ? chosen.sport : chosen.field.name);
         }
       }
     }
