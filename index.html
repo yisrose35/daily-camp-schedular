@@ -318,4 +318,126 @@
         leagueSports.forEach(sport=>{
           const btn=document.createElement("button"); btn.textContent=sport; btn.className="activity-button";
           if(leagues[divName].sports.includes(sport)) btn.classList.add("active");
-          btn.onclick=()=>{if(leagues[divName].sports.includes(sport)){leagues[divName].sports=leagues[divName].sports.filter(s=>s!==sport);} else {leagues[divName].sports
+          btn.onclick=()=>{if(leagues[divName].sports.includes(sport)){leagues[divName].sports=leagues[divName].sports.filter(s=>s!==sport);} else {leagues[divName].sports.push(sport);} renderLeagues();};
+          btnWrap.appendChild(btn);
+        }); wrap.appendChild(btnWrap);
+        const other=document.createElement("input"); other.placeholder="Other sport";
+        other.onkeyup=e=>{if(e.key==="Enter"&&other.value.trim()){const val=other.value.trim(); if(!leagues[divName].sports.includes(val)){leagues[divName].sports.push(val);} other.value=""; renderLeagues();}};
+        wrap.appendChild(other);
+        if(leagues[divName].sports.length>0){const chosen=document.createElement("p"); chosen.style.marginTop="6px"; chosen.textContent="Sports: "+leagues[divName].sports.join(", "); wrap.appendChild(chosen);}
+        container.appendChild(wrap);
+      });
+    }
+
+    function assignFieldsToBunks() {
+      const scheduled = availableDivisions.flatMap(div => divisions[div].bunks);
+      const availFields = fields.filter(f => f.available);
+      const availSpecials = specialActivities.filter(s => s.available);
+
+      if (scheduled.length === 0 || times.length === 0) { scheduleAssignments = {}; return; }
+      if (availFields.length + availSpecials.length === 0) { alert("No activities available."); scheduleAssignments = {}; return; }
+
+      let allActivities = [
+        ...availFields.flatMap(f => f.activities.map(act => ({type:"field", field:f, sport:act}))),
+        ...availSpecials.map(sa => ({type:"special", field:{name:sa.name}, sport:null}))
+      ];
+
+      scheduleAssignments = {};
+      let doneSets = {};
+      scheduled.forEach(b => { scheduleAssignments[b] = []; doneSets[b] = new Set(); });
+
+      // Pick league slots for divisions with leagues enabled
+      let leagueSlots = {};
+      availableDivisions.forEach(divName => {
+        if (leagues[divName] && leagues[divName].enabled) {
+          leagueSlots[divName] = Math.floor(Math.random() * times.length);
+        }
+      });
+
+      for (let s = 0; s < times.length; s++) {
+        let usedNames = new Set();
+
+        for (let divName of availableDivisions) {
+          for (let bunk of divisions[divName].bunks) {
+            let lastEntry = s > 0 ? scheduleAssignments[bunk][s-1] : null;
+
+            // ---- League handling ----
+            if (leagueSlots[divName] === s) {
+              if (lastEntry && lastEntry.field === "Leagues") {
+                leagueSlots[divName] = Math.min(s + 1, times.length - 1);
+              }
+              if (leagueSlots[divName] === s) {
+                scheduleAssignments[bunk].push({ field: "Leagues", sport: null });
+                usedNames.add("Leagues");
+                continue;
+              }
+            }
+
+            // ---- Regular activities ----
+            if (doneSets[bunk].size === allActivities.length) doneSets[bunk].clear();
+
+            let candidates = allActivities.filter(c => !usedNames.has(c.field.name));
+
+            candidates = candidates.filter(c => {
+              if (!lastEntry) return true;
+              if (c.type === "special" && lastEntry.field === c.field.name) return false;
+              if (c.type === "field" && lastEntry.sport && c.sport === lastEntry.sport) return false;
+              if (c.type === "field" && lastEntry.field === c.field.name) return false;
+              return true;
+            });
+
+            let preferred = candidates.filter(c => !doneSets[bunk].has(c.type==="field" ? c.sport : c.field.name));
+
+            let chosen;
+            if (preferred.length > 0) {
+              chosen = preferred[Math.floor(Math.random() * preferred.length)];
+            } else if (candidates.length > 0) {
+              chosen = candidates[Math.floor(Math.random() * candidates.length)];
+            } else {
+              // fallback: avoid exact repeat if possible
+              let tries = [...allActivities];
+              do {
+                chosen = tries.splice(Math.floor(Math.random() * tries.length), 1)[0];
+              } while (chosen && lastEntry && 
+                       (chosen.field.name === lastEntry.field || chosen.sport === lastEntry.sport) && tries.length > 0);
+            }
+
+            if (!chosen) continue;
+
+            usedNames.add(chosen.field.name);
+            scheduleAssignments[bunk].push({ field: chosen.field.name, sport: chosen.sport });
+            doneSets[bunk].add(chosen.type==="field" ? chosen.sport : chosen.field.name);
+          }
+        }
+      }
+    }
+
+    function updateTable(){
+      const table=document.getElementById("scheduleTable");
+      if(times.length===0){table.style.display="none"; return;} table.style.display="table";
+      const divRow=document.getElementById("divisionRow"), bunkRow=document.getElementById("bunkRow");
+      divRow.innerHTML="<th>Division</th>"; bunkRow.innerHTML="<th>Bunk</th>";
+      availableDivisions.forEach(div=>{
+        const obj=divisions[div]; const bunksInDiv=obj.bunks;
+        const th=document.createElement("th"); th.colSpan=Math.max(bunksInDiv.length,1); th.textContent=div; divRow.appendChild(th);
+        bunksInDiv.forEach(bunk=>{const thB=document.createElement("th"); thB.textContent=bunk; bunkRow.appendChild(thB);});
+      });
+      const tbody=document.querySelector("#scheduleTable tbody"); tbody.innerHTML="";
+      times.forEach((time,rowIdx)=>{
+        const row=document.createElement("tr"); const tdTime=document.createElement("td"); tdTime.textContent=time; row.appendChild(tdTime);
+        availableDivisions.forEach(div=>{
+          divisions[div].bunks.forEach(bunk=>{
+            const td=document.createElement("td");
+            if(scheduleAssignments[bunk]&&scheduleAssignments[bunk][rowIdx]){
+              const entry=scheduleAssignments[bunk][rowIdx];
+              td.textContent=entry.sport ? entry.field + " – " + entry.sport : entry.field;
+            }
+            row.appendChild(td);
+          });
+        });
+        tbody.appendChild(row);
+      });
+    }
+  </script>
+</body>
+</html>
