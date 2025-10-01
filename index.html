@@ -53,7 +53,6 @@
 
   <!-- Schedule Tab -->
   <div id="schedule" class="tab-content">
-    <button onclick="reassignFields()">Reassign Fields</button>
     <table id="scheduleTable" style="display:none;">
       <thead>
         <tr id="timeRow"></tr>
@@ -113,7 +112,7 @@
       const input = document.getElementById("fieldInput");
       const fieldName = input.value.trim();
       if(fieldName){
-        fields.push({name: fieldName});
+        fields.push({name: fieldName, activities: [], available: true});
         input.value="";
         renderFields();
         saveState();
@@ -207,18 +206,13 @@
       });
     }
 
-    function reassignFields(){
-      // Go back to assign.html for a fresh shuffle
-      window.location.href = "assign.html";
-    }
-
-    // 🔹 Run on startup
+    // Load state on startup
     loadState();
     updateUnassigned();
     renderFields();
     updateTable();
 
-    // If assignments exist, auto-switch to Daily Schedule
+    // If assignments exist, auto-open Daily Schedule tab
     if(localStorage.getItem("assignments")){
       showTab("schedule");
     }
