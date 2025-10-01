@@ -1,88 +1,40 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Field Assignment</title>
-  <style>
-    body { font-family: Arial, sans-serif; padding: 20px; }
-    input, button { margin: 5px; padding: 6px 12px; }
-    table { border-collapse: collapse; margin-top: 20px; width: 100%; }
-    th, td { border: 1px solid black; padding: 8px; text-align: center; }
-  </style>
-</head>
-<body>
-  <h1>Field Assignment Scheduler</h1>
-
-  <div id="info"></div>
-
-  <h3>Generate Schedule</h3>
-  <label>Number of Periods: <input id="numPeriods" type="number" value="3" min="1"></label>
-  <button onclick="generateSchedule()">Generate</button>
-
-  <table id="scheduleTable" style="display:none;">
-    <thead>
-      <tr>
-        <th>Period</th>
-        <th>Bunk</th>
-        <th>Assigned Field</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
-
+  <title>Assign Fields</title>
   <script>
-    // Load state from localStorage
-    let bunks = JSON.parse(localStorage.getItem("bunks") || "[]");
-    let fields = JSON.parse(localStorage.getItem("fields") || "[]");
+    window.onload = function(){
+      let bunks = JSON.parse(localStorage.getItem("bunks") || "[]");
+      let fields = JSON.parse(localStorage.getItem("fields") || "[]");
+      let times = JSON.parse(localStorage.getItem("times") || "[]");
 
-    // Some fields may be objects with {name: ...}
-    fields = fields.map(f => typeof f === "string" ? f : f.name);
+      // Normalize field names
+      fields = fields.map(f => typeof f === "string" ? f : f.name);
 
-    // Show what was loaded
-    document.getElementById("info").textContent =
-      `Loaded ${bunks.length} bunks and ${fields.length} fields from setup.`;
-
-    function generateSchedule(){
-      if(bunks.length === 0 || fields.length === 0){
-        alert("No bunks or fields found. Go back to setup first.");
-        return;
-      }
-      if(fields.length < bunks.length){
-        alert("You need at least as many fields as bunks for unique assignment.");
+      if(bunks.length === 0 || fields.length === 0 || times.length === 0){
+        alert("Missing bunks, fields, or times. Go back to setup.");
+        window.location.href = "index.html";
         return;
       }
 
-      const numPeriods = parseInt(document.getElementById("numPeriods").value,10);
-      const tbody = document.querySelector("#scheduleTable tbody");
-      tbody.innerHTML = "";
-
-      for(let p=1; p<=numPeriods; p++){
-        // Shuffle fields each period for random assignment
-        const shuffled = [...fields].sort(()=>Math.random()-0.5);
-
-        bunks.forEach((bunk, i)=>{
-          const row = document.createElement("tr");
-
-          if(i===0){
-            const tdPeriod = document.createElement("td");
-            tdPeriod.textContent = "Period " + p;
-            tdPeriod.rowSpan = bunks.length;
-            row.appendChild(tdPeriod);
-          }
-
-          const tdBunk = document.createElement("td");
-          tdBunk.textContent = bunk;
-
-          const tdField = document.createElement("td");
-          tdField.textContent = shuffled[i];
-
-          row.appendChild(tdBunk);
-          row.appendChild(tdField);
-          tbody.appendChild(row);
+      let assignments = {}; // {time: {bunk: field}}
+      times.forEach(time => {
+        const shuffled = [...fields].sort(() => Math.random() - 0.5);
+        assignments[time] = {};
+        bunks.forEach((bunk, i) => {
+          assignments[time][bunk] = shuffled[i];
         });
-      }
+      });
 
-      document.getElementById("scheduleTable").style.display="table";
+      // Save assignments
+      localStorage.setItem("assignments", JSON.stringify(assignments));
+
+      // Redirect back
+      window.location.href = "index.html";
     }
   </script>
+</head>
+<body>
+  <h3>Assigning fields to bunks...</h3>
 </body>
 </html>
