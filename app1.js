@@ -68,8 +68,6 @@ function addBunk(){
     updateUnassigned(); updateTable();
   }
 }
-document.getElementById("addBunkBtn").onclick=addBunk;
-document.getElementById("bunkInput").addEventListener("keyup",e=>{if(e.key==="Enter")addBunk();});
 
 function updateUnassigned(){
   const c=document.getElementById("unassignedBunks");c.innerHTML="";
@@ -122,8 +120,6 @@ function addDivision(){
     renderTimeTemplates();
   }
 }
-document.getElementById("addDivisionBtn").onclick=addDivision;
-document.getElementById("divisionInput").addEventListener("keyup",e=>{if(e.key==="Enter")addDivision();});
 
 function setupDivisionButtons(){
   const cont=document.getElementById("divisionButtons"); cont.innerHTML="";
@@ -167,10 +163,19 @@ function setupDivisionButtons(){
     cont.appendChild(wrap);
   });
 }
-document.getElementById("enableColor").addEventListener("change", setupDivisionButtons);
 
 // -------------------- Init --------------------
 window.addEventListener("DOMContentLoaded", () => {
+  // attach event listeners only after DOM exists
+  document.getElementById("addBunkBtn").onclick = addBunk;
+  document.getElementById("bunkInput").addEventListener("keyup", e => { if(e.key==="Enter") addBunk(); });
+
+  document.getElementById("addDivisionBtn").onclick = addDivision;
+  document.getElementById("divisionInput").addEventListener("keyup", e => { if(e.key==="Enter") addDivision(); });
+
+  document.getElementById("enableColor").addEventListener("change", setupDivisionButtons);
+
+  // initial UI build
   updateUnassigned();
   setupDivisionButtons();
 });
