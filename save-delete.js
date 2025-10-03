@@ -1,4 +1,4 @@
-// -------------------- Auto Save / Load / Erase --------------------
+// -------------------- Save / Load / Erase --------------------
 
 // Save the current state into localStorage
 function saveData() {
@@ -38,7 +38,7 @@ function loadData() {
     unifiedTimes = state.unifiedTimes || [];
     scheduleAssignments = state.scheduleAssignments || {};
 
-    // After loading, re-render everything
+    // Re-render everything after loading
     renderBunks();
     renderDivisions();
     renderFields();
@@ -83,8 +83,8 @@ function eraseData() {
 }
 
 // -------------------- Auto Save on Changes --------------------
-// Wrap key render/input functions so every change gets saved
 
+// Utility to wrap a function so it always triggers save after execution
 function autoSaveWrapper(originalFn) {
   return function (...args) {
     const result = originalFn.apply(this, args);
@@ -93,16 +93,27 @@ function autoSaveWrapper(originalFn) {
   };
 }
 
-// Wrap your render and mutating functions so any update triggers save
+// Hook auto-save into key actions
 window.addEventListener("DOMContentLoaded", () => {
   loadData();
 
-  // Wrap functions that change state
-  if (typeof renderBunks === "function") renderBunks = autoSaveWrapper(renderBunks);
-  if (typeof renderDivisions === "function") renderDivisions = autoSaveWrapper(renderDivisions);
-  if (typeof renderFields === "function") renderFields = autoSaveWrapper(renderFields);
-  if (typeof renderSpecialActivities === "function") renderSpecialActivities = autoSaveWrapper(renderSpecialActivities);
-  if (typeof renderTimeTemplates === "function") renderTimeTemplates = autoSaveWrapper(renderTimeTemplates);
-  if (typeof renderLeagues === "function") renderLeagues = autoSaveWrapper(renderLeagues);
-  if (typeof renderScheduleTable === "function") renderScheduleTable = autoSaveWrapper(renderScheduleTable);
+  // Wrap add/remove functions
+  if (typeof addBunk === "function") addBunk = autoSaveWrapper(addBunk);
+  if (typeof addDivision === "function") addDivision = autoSaveWrapper(addDivision);
+  if (typeof addField === "function") addField = autoSaveWrapper(addField);
+  if (typeof addSpecialActivity === "function") addSpecialActivity = autoSaveWrapper(addSpecialActivity);
+  if (typeof addTimeTemplate === "function") addTimeTemplate = autoSaveWrapper(addTimeTemplate);
+  if (typeof generateTimes === "function") generateTimes = autoSaveWrapper(generateTimes);
+
+  // Save whenever schedule is regenerated
+  if (typeof assignFieldsToBunks === "function") {
+    assignFieldsToBunks = autoSaveWrapper(assignFieldsToBunks);
+  }
+
+  // Mutation observer for name editing (inline edits on bunk/division/etc.)
+  document.body.addEventListener("blur", (e) => {
+    if (e.target && e.target.tagName === "INPUT" && e.target.dataset.editing === "true") {
+      saveData();
+    }
+  }, true);
 });
