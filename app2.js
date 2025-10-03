@@ -1,114 +1,150 @@
-// -------------------- Defaults --------------------
-const commonActivities = ["Basketball","Hockey","Volleyball","Soccer","Kickball","Punchball","Baseball"];
-const leagueSports     = ["Basketball","Hockey","Volleyball","Soccer","Kickball","Punchball","Baseball"];
-
-// -------------------- State --------------------
-let timeTemplates = [];         // [{start,end,divisions:[name,...]}]
-let fields = [];                // [{name,activities:[],available:true}]
-let specialActivities = [];     // [{name,available:true}]
-let leagues = {};               // { [divisionName]: {enabled:boolean, sports:[]}}
-let availableDivisions = [];    // names; synced from app1.js
-
-// -------------------- Division Sync (called by app1.js) --------------------
-function onDivisionsChanged() {
-  // divisions[] comes from app1.js
-  availableDivisions = divisions.map(d => d.name);
-  // Ensure leagues map has keys
-  availableDivisions.forEach(n => { if (!leagues[n]) leagues[n] = {enabled:false, sports:[]}; });
-  renderLeagues();
-  renderTimeTemplates();
+// -------------------- Divisions --------------------
+function addDivision(){
+  const i=document.getElementById("divisionInput");
+  if(i.value.trim()==="")return;
+  const name=i.value.trim();
+  if(!availableDivisions.includes(name)){
+    const color=defaultColors[colorIndex%defaultColors.length]; colorIndex++;
+    availableDivisions.push(name);
+    divisions[name]={bunks:[],color,start:null,end:null};
+    leagues[name]={enabled:false,sports:[]};
+    i.value="";
+    setupDivisionButtons(); renderLeagues(); updateTable();
+    renderTimeTemplates(); // refresh template assignment UI
+  }
 }
+document.getElementById("addDivisionBtn").onclick=addDivision;
+document.getElementById("divisionInput").addEventListener("keyup",e=>{if(e.key==="Enter")addDivision();});
 
-// -------------------- Time Helpers --------------------
-function parseTime(str) {
-  if (!str) return null;
-  const m = String(str).trim().match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
-  if (!m) return null;
-  let h = parseInt(m[1],10), min = parseInt(m[2],10);
-  const ampm = m[3].toLowerCase();
-  if (ampm === "pm" && h !== 12) h += 12;
-  if (ampm === "am" && h === 12) h = 0;
-  const d = new Date(); d.setHours(h, min, 0, 0); return d;
+function setupDivisionButtons(){
+  const cont=document.getElementById("divisionButtons"); cont.innerHTML="";
+  const colorEnabled=document.getElementById("enableColor").checked;
+  availableDivisions.forEach(name=>{
+    const obj=divisions[name];
+    const wrap=document.createElement("div"); wrap.className="divisionWrapper";
+    const span=document.createElement("span"); span.textContent=name; span.className="bunk-button";
+    span.style.backgroundColor=colorEnabled?obj.color:"transparent";
+    span.style.color=colorEnabled?"#fff":"inherit";
+    span.onclick=()=>{selectedDivision=name; cont.querySelectorAll('span.bunk-button').forEach(el=>el.classList.remove("selected")); span.classList.add("selected");};
+    makeEditable(span,newName=>{
+      divisions[newName]=divisions[name]; delete divisions[name];
+      leagues[newName]=leagues[name]||{enabled:false,sports:[]}; delete leagues[name];
+      availableDivisions[availableDivisions.indexOf(name)]=newName;
+      if(selectedDivision===name)selectedDivision=newName;
+      setupDivisionButtons(); renderLeagues(); renderTimeTemplates(); updateTable();
+    });
+    wrap.appendChild(span);
+    const col=document.createElement("input"); col.type="color"; col.value=obj.color; col.className="colorPicker";
+    col.oninput=e=>{obj.color=e.target.value; if(colorEnabled){span.style.backgroundColor=e.target.value; span.style.color="#fff";} updateTable(); renderTimeTemplates();};
+    wrap.appendChild(col);
+    cont.appendChild(wrap);
+  });
 }
-function fmtTime(d) {
-  let h = d.getHours(), m = d.getMinutes();
-  const ampm = h >= 12 ? "pm" : "am";
-  h = h % 12; if (h === 0) h = 12;
-  return `${h}:${String(m).padStart(2,"0")}${ampm}`;
-}
+document.getElementById("enableColor").addEventListener("change", setupDivisionButtons);
 
 // -------------------- Time Templates --------------------
-function addTimeTemplate() {
-  const start = document.getElementById("timeStartInput").value.trim();
-  const end   = document.getElementById("timeEndInput").value.trim();
-  if (!start || !end) return;
-  timeTemplates.push({start, end, divisions:[]});
+function addTimeTemplate(){
+  const start=document.getElementById("timeStartInput").value.trim();
+  const end=document.getElementById("timeEndInput").value.trim();
+  if(!start||!end) return;
+  timeTemplates.push({start,end,divisions:[]});
   document.getElementById("timeStartInput").value="";
   document.getElementById("timeEndInput").value="";
   renderTimeTemplates();
 }
 
-function renderTimeTemplates() {
-  const cont = document.getElementById("timeTemplates");
-  if (!cont) return;
-  cont.innerHTML = "";
-  timeTemplates.forEach((tpl) => {
+function renderTimeTemplates(){
+  const cont=document.getElementById("timeTemplates"); cont.innerHTML="";
+  timeTemplates.forEach((tpl,idx)=>{
     const wrap=document.createElement("div"); wrap.className="fieldWrapper";
     const label=document.createElement("span"); label.textContent=`${tpl.start} - ${tpl.end}`;
     wrap.appendChild(label);
 
-    availableDivisions.forEach(divName=>{
-      const btn=document.createElement("button"); btn.textContent=divName; btn.className="bunk-button";
-      const divObj = divisions.find(d => d.name === divName);
-      const selected = tpl.divisions.includes(divName);
-      btn.style.backgroundColor = selected ? (divObj?.color || "#333") : "#fff";
-      btn.style.color = selected ? "#fff" : "#000";
-      btn.onclick = () => {
-        if (selected) tpl.divisions = tpl.divisions.filter(d => d !== divName);
-        else tpl.divisions.push(divName);
+    availableDivisions.forEach(div=>{
+      const btn=document.createElement("button");
+      btn.textContent=div; btn.className="bunk-button";
+      if(tpl.divisions.includes(div)){ btn.style.backgroundColor=divisions[div].color; btn.style.color="#fff"; }
+      else { btn.style.backgroundColor="#fff"; btn.style.color="#000"; }
+      btn.onclick=()=>{
+        if(tpl.divisions.includes(div)){
+          tpl.divisions = tpl.divisions.filter(d=>d!==div);
+        } else {
+          tpl.divisions.push(div);
+        }
         applyTemplatesToDivisions();
         renderTimeTemplates();
       };
       wrap.appendChild(btn);
     });
+
     cont.appendChild(wrap);
   });
+
   applyTemplatesToDivisions();
 }
 
-function applyTemplatesToDivisions() {
-  availableDivisions.forEach(divName => {
+function applyTemplatesToDivisions(){
+  availableDivisions.forEach(div=>{
     let match = null;
-    for (let i = timeTemplates.length - 1; i >= 0; i--) {
-      if (timeTemplates[i].divisions.includes(divName)) { match = timeTemplates[i]; break; }
+    for(let i=timeTemplates.length-1;i>=0;i--){
+      if(timeTemplates[i].divisions.includes(div)){ match=timeTemplates[i]; break; }
     }
-    if (match) {
-      const d = divisions.find(dd => dd.name === divName);
-      if (d) { d.start = match.start; d.end = match.end; }
-    }
+    if(match){ divisions[div].start=match.start; divisions[div].end=match.end; }
   });
 }
 
-// -------------------- Fields --------------------
-function addFieldAdvanced() {
-  const i = document.getElementById("fieldInput"); if (!i) return;
-  const n = i.value.trim(); if (!n) return;
-  fields.push({name:n, activities:[], available:true});
-  i.value = "";
-  renderFieldsAdvanced();
+// -------------------- Generate Times (Unified Grid) --------------------
+function generateTimes(){
+  const inc = parseInt(document.getElementById("increment").value);
+  applyTemplatesToDivisions();
+
+  const starts = availableDivisions.map(d=>parseTime(divisions[d].start)).filter(Boolean);
+  const ends   = availableDivisions.map(d=>parseTime(divisions[d].end)).filter(Boolean);
+  if(starts.length===0 || ends.length===0){ alert("Please set time templates for divisions first."); return; }
+
+  const earliest = new Date(Math.min(...starts.map(d=>d.getTime())));
+  const latest   = new Date(Math.max(...ends.map(d=>d.getTime())));
+  unifiedTimes = [];
+  let cur = new Date(earliest);
+  while(cur < latest){
+    let nxt = new Date(cur.getTime() + inc*60000);
+    if(nxt > latest) nxt = latest;
+    unifiedTimes.push({ start:new Date(cur), end:new Date(nxt), label:`${fmtTime(cur)} - ${fmtTime(nxt)}` });
+    cur = nxt;
+  }
+
+  divisionActiveRows = {};
+  availableDivisions.forEach(div=>{
+    const s=parseTime(divisions[div].start), e=parseTime(divisions[div].end);
+    const rows = new Set();
+    unifiedTimes.forEach((t,idx)=>{
+      if (s && e && t.start >= s && t.start < e) rows.add(idx);
+    });
+    divisionActiveRows[div] = rows;
+  });
+
+  assignFieldsToBunks();
+  updateTable();
 }
-function renderFieldsAdvanced() {
-  const c = document.getElementById("fieldList"); if (!c) return;
-  c.innerHTML = "";
-  fields.forEach((f, idx) => {
-    const w=document.createElement("div"); w.className="fieldWrapper"; if(!f.available) w.classList.add("unavailable");
+
+// -------------------- Fields / Specials --------------------
+function addField(){
+  const i=document.getElementById("fieldInput"); const n=i.value.trim();
+  if(n){fields.push({name:n,activities:[],available:true});i.value="";renderFields();}
+}
+document.getElementById("addFieldBtn").onclick=addField;
+document.getElementById("fieldInput").addEventListener("keyup",e=>{if(e.key==="Enter")addField();});
+
+function renderFields(){
+  const c=document.getElementById("fieldList"); c.innerHTML="";
+  fields.forEach(f=>{
+    const w=document.createElement("div"); w.className="fieldWrapper"; if(!f.available)w.classList.add("unavailable");
     const t=document.createElement("span"); t.className="fieldTitle"; t.textContent=f.name;
-    if (typeof makeEditable === "function") makeEditable(t, newName => { f.name = newName; renderFieldsAdvanced(); });
-    w.appendChild(t);
+    makeEditable(t,newName=>{f.name=newName;renderFields();}); w.appendChild(t);
 
     const tog=document.createElement("label"); tog.className="switch";
     const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=f.available;
-    cb.onchange=()=>{ f.available = cb.checked; renderFieldsAdvanced(); };
+    cb.onchange=()=>{f.available=cb.checked;renderFields();};
     const sl=document.createElement("span"); sl.className="slider";
     tog.appendChild(cb); tog.appendChild(sl); w.appendChild(tog);
 
@@ -116,11 +152,7 @@ function renderFieldsAdvanced() {
     commonActivities.forEach(act=>{
       const b=document.createElement("button"); b.textContent=act; b.className="activity-button";
       if(f.activities.includes(act)) b.classList.add("active");
-      b.onclick=()=>{ 
-        if(f.activities.includes(act)) f.activities = f.activities.filter(a=>a!==act);
-        else f.activities.push(act);
-        renderFieldsAdvanced();
-      };
+      b.onclick=()=>{ if(f.activities.includes(act)) f.activities=f.activities.filter(a=>a!==act); else f.activities.push(act); renderFields(); };
       bw.appendChild(b);
     });
     w.appendChild(bw);
@@ -129,7 +161,7 @@ function renderFieldsAdvanced() {
     other.onkeyup=e=>{
       if(e.key==="Enter" && other.value.trim()){
         const v=other.value.trim(); if(!f.activities.includes(v)) f.activities.push(v);
-        other.value=""; renderFieldsAdvanced();
+        other.value=""; renderFields();
       }
     };
     w.appendChild(other);
@@ -142,26 +174,23 @@ function renderFieldsAdvanced() {
   });
 }
 
-// -------------------- Specials --------------------
-function addSpecial() {
-  const i = document.getElementById("specialInput"); if (!i) return;
-  const n = i.value.trim(); if (!n) return;
-  specialActivities.push({name:n, available:true});
-  i.value = "";
-  renderSpecials();
+function addSpecial(){
+  const i=document.getElementById("specialInput"); const n=i.value.trim();
+  if(n){specialActivities.push({name:n,available:true}); i.value=""; renderSpecials();}
 }
-function renderSpecials() {
-  const c = document.getElementById("specialList"); if (!c) return;
-  c.innerHTML = "";
-  specialActivities.forEach(s => {
-    const w=document.createElement("div"); w.className="fieldWrapper"; if(!s.available) w.classList.add("unavailable");
+document.getElementById("addSpecialBtn").onclick=addSpecial;
+document.getElementById("specialInput").addEventListener("keyup",e=>{if(e.key==="Enter")addSpecial();});
+
+function renderSpecials(){
+  const c=document.getElementById("specialList"); c.innerHTML="";
+  specialActivities.forEach(s=>{
+    const w=document.createElement("div"); w.className="fieldWrapper"; if(!s.available)w.classList.add("unavailable");
     const t=document.createElement("span"); t.className="fieldTitle"; t.textContent=s.name;
-    if (typeof makeEditable === "function") makeEditable(t, newName => { s.name = newName; renderSpecials(); });
-    w.appendChild(t);
+    makeEditable(t,newName=>{s.name=newName;renderSpecials();}); w.appendChild(t);
 
     const tog=document.createElement("label"); tog.className="switch";
     const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=s.available;
-    cb.onchange=()=>{ s.available = cb.checked; renderSpecials(); };
+    cb.onchange=()=>{s.available=cb.checked;renderSpecials();};
     const sl=document.createElement("span"); sl.className="slider";
     tog.appendChild(cb); tog.appendChild(sl); w.appendChild(tog);
 
@@ -170,11 +199,11 @@ function renderSpecials() {
 }
 
 // -------------------- Leagues --------------------
-function renderLeagues() {
-  const container = document.getElementById("leaguesContainer"); if (!container) return;
-  container.innerHTML = "";
+function renderLeagues(){
+  const container=document.getElementById("leaguesContainer");
+  container.innerHTML="";
   availableDivisions.forEach(divName=>{
-    if(!leagues[divName]) leagues[divName] = {enabled:false, sports:[]};
+    if(!leagues[divName]) leagues[divName]={enabled:false,sports:[]};
     const wrap=document.createElement("div"); wrap.className="fieldWrapper";
 
     const title=document.createElement("span"); title.className="fieldTitle"; title.textContent=divName;
@@ -182,9 +211,10 @@ function renderLeagues() {
 
     const toggle=document.createElement("label"); toggle.className="switch";
     const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=leagues[divName].enabled;
-    cb.onchange=()=>{ leagues[divName].enabled = cb.checked; renderLeagues(); };
+    cb.onchange=()=>{leagues[divName].enabled=cb.checked; renderLeagues();};
     const slider=document.createElement("span"); slider.className="slider";
-    toggle.appendChild(cb); toggle.appendChild(slider); wrap.appendChild(toggle);
+    toggle.appendChild(cb); toggle.appendChild(slider);
+    wrap.appendChild(toggle);
 
     const btnWrap=document.createElement("div"); btnWrap.style.marginTop="8px";
     leagueSports.forEach(sport=>{
@@ -221,56 +251,213 @@ function renderLeagues() {
   });
 }
 
-// -------------------- Generate Times (builds unifiedTimes + divisionActiveRows) --------------------
-function generateTimes(){
-  // uses globals from app3.js via window.*
-  const inc = parseInt(document.getElementById("increment").value) || 30;
+// -------------------- Scheduling Core (Unified Grid) --------------------
+function assignFieldsToBunks() {
+  const availFields = fields.filter(f => f.available && f.activities.length>0);
+  const availSpecials = specialActivities.filter(s => s.available);
 
-  // make sure division start/end are applied from templates first
-  applyTemplatesToDivisions();
+  const allActivities = [
+    ...availFields.flatMap(f => f.activities.map(act => ({type:"field", field:f, sport:act}))),
+    ...availSpecials.map(sa => ({type:"special", field:{name:sa.name}, sport:null}))
+  ];
+  if (allActivities.length === 0) { alert("No activities available."); scheduleAssignments={}; return; }
 
-  const starts = availableDivisions.map(n => parseTime((divisions.find(d=>d.name===n)||{}).start)).filter(Boolean);
-  const ends   = availableDivisions.map(n => parseTime((divisions.find(d=>d.name===n)||{}).end)).filter(Boolean);
-  if (starts.length===0 || ends.length===0) { alert("Please set time templates for divisions first."); return; }
-
-  const earliest = new Date(Math.min(...starts.map(d=>d.getTime())));
-  const latest   = new Date(Math.max(...ends.map(d=>d.getTime())));
-
-  window.unifiedTimes = [];
-  let cur = new Date(earliest);
-  while (cur < latest) {
-    let nxt = new Date(cur.getTime() + inc*60000);
-    if (nxt > latest) nxt = latest;
-    unifiedTimes.push({ start:new Date(cur), end:new Date(nxt), label:`${fmtTime(cur)} - ${fmtTime(nxt)}` });
-    cur = nxt;
-  }
-
-  window.divisionActiveRows = {};
-  availableDivisions.forEach(divName=>{
-    const d = divisions.find(dd=>dd.name===divName);
-    const s = parseTime(d?.start), e = parseTime(d?.end);
-    const rows = new Set();
-    unifiedTimes.forEach((t,idx)=>{
-      if (s && e && t.start >= s && t.start < e) rows.add(idx);
-    });
-    divisionActiveRows[divName] = rows;
+  scheduleAssignments = {};
+  availableDivisions.forEach(div=>{
+    divisions[div].bunks.forEach(b=>{ scheduleAssignments[b]=new Array(unifiedTimes.length); });
   });
 
-  if (typeof assignFieldsToBunks === "function") assignFieldsToBunks();
-  if (typeof updateTable === "function") updateTable();
+  const inc = parseInt(document.getElementById("increment").value);
+  const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
+
+  const leagueSlotByDiv = {};
+  availableDivisions.forEach(div=>{
+    if (leagues[div] && leagues[div].enabled) {
+      const active = Array.from(divisionActiveRows[div] || []);
+      if (active.length>0) {
+        leagueSlotByDiv[div] = active[Math.floor(Math.random()*active.length)];
+      }
+    }
+  });
+
+  for (let s=0; s<unifiedTimes.length; s++){
+    const usedFieldsByDiv = {};
+    availableDivisions.forEach(div=>{
+      usedFieldsByDiv[div] = new Set();
+      divisions[div].bunks.forEach(bunk=>{
+        const entry = scheduleAssignments[bunk][s];
+        if (entry && entry.continuation) usedFieldsByDiv[div].add(entry.field);
+      });
+    });
+
+    for (let div of availableDivisions) {
+      const isActiveRow = divisionActiveRows[div] && divisionActiveRows[div].has(s);
+      if (!isActiveRow) continue;
+
+      for (let bunk of divisions[div].bunks) {
+        if (scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s].continuation) continue;
+
+        let lastIdx = s-1, lastEntry = null;
+        while (lastIdx>=0 && !scheduleAssignments[bunk][lastIdx]) lastIdx--;
+        if (lastIdx>=0) lastEntry = scheduleAssignments[bunk][lastIdx];
+
+        if (leagueSlotByDiv[div] === s && leagues[div] && leagues[div].enabled) {
+          if (lastEntry && lastEntry.isLeague) {
+            let next = s+1;
+            while (next<unifiedTimes.length && (!divisionActiveRows[div].has(next))) next++;
+            leagueSlotByDiv[div] = Math.min(next, unifiedTimes.length-1);
+          }
+          if (leagueSlotByDiv[div] === s) {
+            scheduleAssignments[bunk][s] = { field:"Leagues", sport:null, continuation:false, isLeague:true };
+            let placed = 1, k = 1;
+            while (placed < spanLen && (s+k)<unifiedTimes.length && divisionActiveRows[div].has(s+k)) {
+              scheduleAssignments[bunk][s+k] = { field:"Leagues", sport:null, continuation:true, isLeague:true };
+              placed++; k++;
+            }
+            usedFieldsByDiv[div].add("Leagues");
+            continue;
+          }
+        }
+
+        if (lastEntry && !lastEntry.continuation) {
+          let countDone = 1;
+          let t = lastIdx+1;
+          while (t<s && scheduleAssignments[bunk][t] && scheduleAssignments[bunk][t].continuation) { countDone++; t++; }
+          if (countDone < spanLen) {
+            scheduleAssignments[bunk][s] = { field:lastEntry.field, sport:lastEntry.sport, continuation:true, isLeague:lastEntry.isLeague||false };
+            usedFieldsByDiv[div].add(lastEntry.field);
+            continue;
+          }
+        }
+
+        let candidates = allActivities.filter(c => !usedFieldsByDiv[div].has(c.field.name));
+        candidates = candidates.filter(c => {
+          if (!lastEntry) return true;
+          if (lastEntry.isLeague) {
+            if (c.field.name === "Leagues") return false;
+            if (c.type==="field" && c.field.name === lastEntry.field) return false;
+          }
+          if (c.type==="field" && lastEntry.sport && c.sport === lastEntry.sport) return false;
+          if (c.field.name === lastEntry.field) return false;
+          return true;
+        });
+
+        scheduleAssignments.__done = scheduleAssignments.__done || {};
+        scheduleAssignments.__done[bunk] = scheduleAssignments.__done[bunk] || new Set();
+        const doneSet = scheduleAssignments.__done[bunk];
+        const preferred = candidates.filter(c => !doneSet.has(c.type==="field" ? c.sport : c.field.name));
+        let chosen = (preferred.length>0 ? preferred : candidates)[Math.floor(Math.random()*(preferred.length>0 ? preferred.length : candidates.length) )];
+
+        if (!chosen && allActivities.length>0) {
+          let tries = allActivities.slice();
+          do {
+            chosen = tries.splice(Math.floor(Math.random()*tries.length),1)[0];
+          } while (chosen && lastEntry && (chosen.field.name===lastEntry.field || chosen.sport===lastEntry.sport) && tries.length>0);
+        }
+        if (!chosen) continue;
+
+        scheduleAssignments[bunk][s] = { field:chosen.field.name, sport:chosen.sport, continuation:false, isLeague:false };
+        usedFieldsByDiv[div].add(chosen.field.name);
+        doneSet.add(chosen.type==="field" ? chosen.sport : chosen.field.name);
+
+        let placed = 1, k=1;
+        while (placed < spanLen && (s+k) < unifiedTimes.length && divisionActiveRows[div].has(s+k)) {
+          scheduleAssignments[bunk][s+k] = { field:chosen.field.name, sport:chosen.sport, continuation:true, isLeague:false };
+          placed++; k++;
+        }
+      }
+    }
+  }
+}
+
+// -------------------- Rendering --------------------
+function updateTable(){
+  const scheduleTab = document.getElementById("schedule");
+  scheduleTab.innerHTML = "";
+
+  if (unifiedTimes.length === 0) return;
+
+  Object.keys(scheduleAssignments).forEach(b=>{
+    if (Array.isArray(scheduleAssignments[b])) {
+      scheduleAssignments[b].forEach(e=>{ if(e) delete e._skip; });
+    }
+  });
+
+  const table=document.createElement("table");
+  table.className="division-schedule";
+
+  const thead=document.createElement("thead");
+
+  const row1=document.createElement("tr");
+  const thTime=document.createElement("th"); thTime.textContent="Time"; row1.appendChild(thTime);
+  availableDivisions.forEach(div=>{
+    const th=document.createElement("th");
+    th.colSpan = divisions[div].bunks.length || 1;
+    th.textContent=div;
+    th.style.background=divisions[div].color; th.style.color="#fff";
+    row1.appendChild(th);
+  });
+  thead.appendChild(row1);
+
+  const row2=document.createElement("tr");
+  const thBunkLabel=document.createElement("th"); thBunkLabel.textContent="Bunk"; row2.appendChild(thBunkLabel);
+  availableDivisions.forEach(div=>{
+    divisions[div].bunks.forEach(b=>{
+      const th=document.createElement("th"); th.textContent=b; row2.appendChild(th);
+    });
+  });
+  thead.appendChild(row2);
+  table.appendChild(thead);
+
+  const tbody=document.createElement("tbody");
+
+  for (let s=0; s<unifiedTimes.length; s++){
+    const tr=document.createElement("tr");
+    const tdTime=document.createElement("td"); tdTime.textContent=unifiedTimes[s].label; tr.appendChild(tdTime);
+
+    availableDivisions.forEach(div=>{
+      const activeSet = divisionActiveRows[div] || new Set();
+      divisions[div].bunks.forEach(bunk=>{
+        if (scheduleAssignments[bunk] && scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s]._skip) return;
+
+        const td=document.createElement("td");
+        const isActive = activeSet.has(s);
+
+        if (!isActive) {
+          td.className="grey-cell";
+          tr.appendChild(td);
+          return;
+        }
+
+        const entry = scheduleAssignments[bunk] ? scheduleAssignments[bunk][s] : null;
+        if (entry && !entry.continuation) {
+          let span=1;
+          for (let k=s+1; k<unifiedTimes.length; k++){
+            const e2 = scheduleAssignments[bunk][k];
+            if (!e2 || !e2.continuation || e2.field!==entry.field || e2.sport!==entry.sport || e2.isLeague!==entry.isLeague) break;
+            span++;
+            scheduleAssignments[bunk][k]._skip = true;
+          }
+          td.rowSpan = span;
+          if (entry.isLeague) {
+            td.innerHTML = `<span class="league-pill">Leagues</span>`;
+          } else {
+            td.textContent = entry.sport ? `${entry.field} – ${entry.sport}` : entry.field;
+          }
+        } else if (!entry) {
+          td.textContent = "";
+        }
+
+        tr.appendChild(td);
+      });
+    });
+
+    tbody.appendChild(tr);
+  }
+
+  table.appendChild(tbody);
+  scheduleTab.appendChild(table);
 }
 
 // -------------------- Init --------------------
-window.addEventListener("DOMContentLoaded", () => {
-  document.getElementById("addTimeTemplateBtn")?.addEventListener("click", addTimeTemplate);
-
-  document.getElementById("addFieldBtn")?.addEventListener("click", addFieldAdvanced);
-  document.getElementById("fieldInput")?.addEventListener("keyup", e=>{ if(e.key==="Enter") addFieldAdvanced(); });
-
-  document.getElementById("addSpecialBtn")?.addEventListener("click", addSpecial);
-  document.getElementById("specialInput")?.addEventListener("keyup", e=>{ if(e.key==="Enter") addSpecial(); });
-
-  // First paint so the sections aren't empty
-  renderFieldsAdvanced(); renderSpecials(); renderLeagues(); renderTimeTemplates();
-});
-
+document.getElementById("addFieldBtn").disabled = false;
