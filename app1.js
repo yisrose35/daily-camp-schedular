@@ -96,7 +96,7 @@ function updateUnassigned(){
     span.textContent=b;
     span.className="bunk-button";
 
-    // Check if assigned for color
+    // Assigned division for color only
     let assignedDivision=null;
     for(const d in divisions){ 
       if(divisions[d].bunks.includes(b)) assignedDivision=d; 
@@ -106,50 +106,42 @@ function updateUnassigned(){
       span.style.color="#fff";
     }
 
-    // --- CLICK VS DOUBLE-CLICK HANDLING ---
-    let clickTimer=null;
-
-    span.addEventListener("click", () => {
-      if(clickTimer) return; // already waiting for possible dblclick
-      clickTimer=setTimeout(()=>{
-        // Single click = assign bunk
-        if(selectedDivision && (!assignedDivision || assignedDivision!==selectedDivision)){
-          for(const d in divisions){
-            const i=divisions[d].bunks.indexOf(b);
-            if(i!==-1) divisions[d].bunks.splice(i,1);
-          }
-          divisions[selectedDivision].bunks.push(b);
-          updateUnassigned();
-          updateTable();
-        } else if(!selectedDivision){
-          alert("Select a division first!");
+    // Single click assigns (ignore double clicks)
+    span.addEventListener("click", e => {
+      if (e.detail > 1) return; // ignore double click
+      if(selectedDivision && (!assignedDivision || assignedDivision!==selectedDivision)){
+        for(const d in divisions){
+          const i=divisions[d].bunks.indexOf(b);
+          if(i!==-1) divisions[d].bunks.splice(i,1);
         }
-        clickTimer=null;
-      }, 200); // wait a bit to see if it's a double click
-    });
-
-    span.addEventListener("dblclick", () => {
-      if(clickTimer){ clearTimeout(clickTimer); clickTimer=null; }
-      // Double click = edit name
-      makeEditable(span,newName=>{
-        const idx=bunks.indexOf(b);
-        if(idx!==-1) bunks[idx]=newName;
-
-        for(const d of Object.values(divisions)){
-          const i=d.bunks.indexOf(b);
-          if(i!==-1) d.bunks[i]=newName;
-        }
-
-        if(scheduleAssignments[b]){
-          scheduleAssignments[newName]=scheduleAssignments[b];
-          delete scheduleAssignments[b];
-        }
-
+        divisions[selectedDivision].bunks.push(b);
         updateUnassigned();
         updateTable();
-      });
-      // immediately trigger edit mode
-      span.dispatchEvent(new Event("dblclick-edit"));
+      } else if(!selectedDivision){
+        alert("Select a division first!");
+      }
     });
+
+    // Double click always edits
+    makeEditable(span,newName=>{
+      const idx=bunks.indexOf(b);
+      if(idx!==-1) bunks[idx]=newName;
+
+      for(const d of Object.values(divisions)){
+        const i=d.bunks.indexOf(b);
+        if(i!==-1) d.bunks[i]=newName;
+      }
+
+      if(scheduleAssignments[b]){
+        scheduleAssignments[newName]=scheduleAssignments[b];
+        delete scheduleAssignments[b];
+      }
+
+      updateUnassigned();
+      updateTable();
+    });
+
+    c.appendChild(span);
   });
 }
+
