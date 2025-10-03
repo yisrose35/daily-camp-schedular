@@ -106,3 +106,4 @@ window.addEventListener("DOMContentLoaded", () => {
   if (typeof renderLeagues === "function") renderLeagues = autoSaveWrapper(renderLeagues);
   if (typeof renderScheduleTable === "function") renderScheduleTable = autoSaveWrapper(renderScheduleTable);
 });
+
