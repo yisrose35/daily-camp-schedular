@@ -246,4 +246,88 @@ function updateTable(){
   const scheduleTab = document.getElementById("schedule");
   scheduleTab.innerHTML = "";
 
-  if (
+  if (unifiedTimes.length === 0) return;
+
+  Object.keys(scheduleAssignments).forEach(b=>{
+    if (Array.isArray(scheduleAssignments[b])) {
+      scheduleAssignments[b].forEach(e=>{ if(e) delete e._skip; });
+    }
+  });
+
+  const table=document.createElement("table");
+  table.className="division-schedule";
+
+  const thead=document.createElement("thead");
+
+  const row1=document.createElement("tr");
+  const thTime=document.createElement("th"); thTime.textContent="Time"; row1.appendChild(thTime);
+  availableDivisions.forEach(div=>{
+    const th=document.createElement("th");
+    th.colSpan = divisions[div].bunks.length || 1;
+    th.textContent=div;
+    th.style.background=divisions[div].color; th.style.color="#fff";
+    row1.appendChild(th);
+  });
+  thead.appendChild(row1);
+
+  const row2=document.createElement("tr");
+  const thBunkLabel=document.createElement("th"); thBunkLabel.textContent="Bunk"; row2.appendChild(thBunkLabel);
+  availableDivisions.forEach(div=>{
+    divisions[div].bunks.forEach(b=>{
+      const th=document.createElement("th"); th.textContent=b; row2.appendChild(th);
+    });
+  });
+  thead.appendChild(row2);
+  table.appendChild(thead);
+
+  const tbody=document.createElement("tbody");
+
+  for (let s=0; s<unifiedTimes.length; s++){
+    const tr=document.createElement("tr");
+    const tdTime=document.createElement("td"); tdTime.textContent=unifiedTimes[s].label; tr.appendChild(tdTime);
+
+    availableDivisions.forEach(div=>{
+      const activeSet = divisionActiveRows[div] || new Set();
+      divisions[div].bunks.forEach(bunk=>{
+        if (scheduleAssignments[bunk] && scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s]._skip) return;
+
+        const td=document.createElement("td");
+        const isActive = activeSet.has(s);
+
+        if (!isActive) {
+          td.className="grey-cell";
+          tr.appendChild(td);
+          return;
+        }
+
+        const entry = scheduleAssignments[bunk] ? scheduleAssignments[bunk][s] : null;
+        if (entry && !entry.continuation) {
+          let span=1;
+          for (let k=s+1; k<unifiedTimes.length; k++){
+            const e2 = scheduleAssignments[bunk][k];
+            if (!e2 || !e2.continuation || e2.field!==entry.field || e2.sport!==entry.sport || e2.isLeague!==entry.isLeague) break;
+            span++;
+            scheduleAssignments[bunk][k]._skip = true;
+          }
+          td.rowSpan = span;
+          if (entry.isLeague) {
+            td.innerHTML = `<span class="league-pill">Leagues</span>`;
+          } else {
+            td.textContent = entry.sport ? `${entry.field} – ${entry.sport}` : entry.field;
+          }
+        } else if (!entry) {
+          td.textContent = "";
+        }
+        tr.appendChild(td);
+      });
+    });
+
+    tbody.appendChild(tr);
+  }
+
+  table.appendChild(tbody);
+  scheduleTab.appendChild(table);
+}
+
+// -------------------- Init --------------------
+document.getElementById("addFieldBtn").disabled = false;
