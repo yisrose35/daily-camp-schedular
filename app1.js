@@ -88,26 +88,34 @@ document.getElementById("addBunkBtn").onclick=addBunk;
 document.getElementById("bunkInput").addEventListener("keyup",e=>{if(e.key==="Enter")addBunk();});
 
 function updateUnassigned(){
-  const c=document.getElementById("unassignedBunks");c.innerHTML="";
+  const c=document.getElementById("unassignedBunks");
+  c.innerHTML="";
+
   bunks.forEach(b=>{
     const span=document.createElement("span");
     span.textContent=b;
     span.className="bunk-button";
-    let assigned=null;
-    for(const d in divisions){ if(divisions[d].bunks.includes(b)) assigned=d; }
-    if(assigned){
-      span.style.backgroundColor=divisions[assigned].color;
+
+    // Check if assigned for color only
+    let assignedDivision=null;
+    for(const d in divisions){ 
+      if(divisions[d].bunks.includes(b)) assignedDivision=d; 
+    }
+    if(assignedDivision){
+      span.style.backgroundColor=divisions[assignedDivision].color;
       span.style.color="#fff";
     }
 
-    // Single click → assign
+    // Single click → assign to selected division
     span.addEventListener("click", e => {
-      if (e.detail === 1) {  // ignore double-click
-        if(selectedDivision && (!assigned||assigned!==selectedDivision)){
+      if (e.detail === 1) {  // only on single click
+        if(selectedDivision && (!assignedDivision || assignedDivision!==selectedDivision)){
+          // remove from any previous division
           for(const d in divisions){
             const i=divisions[d].bunks.indexOf(b);
-            if(i!==-1)divisions[d].bunks.splice(i,1);
+            if(i!==-1) divisions[d].bunks.splice(i,1);
           }
+          // add to new division
           divisions[selectedDivision].bunks.push(b);
           updateUnassigned();
           updateTable();
@@ -117,18 +125,23 @@ function updateUnassigned(){
       }
     });
 
-    // Double click → edit
+    // Double click → edit name (always allowed, even unassigned)
     makeEditable(span,newName=>{
       const idx=bunks.indexOf(b);
-      if(idx!==-1)bunks[idx]=newName;
+      if(idx!==-1) bunks[idx]=newName;
+
+      // Update inside divisions
       for(const d of Object.values(divisions)){
         const i=d.bunks.indexOf(b);
-        if(i!==-1)d.bunks[i]=newName;
+        if(i!==-1) d.bunks[i]=newName;
       }
+
+      // Update schedule assignments
       if(scheduleAssignments[b]){
         scheduleAssignments[newName]=scheduleAssignments[b];
         delete scheduleAssignments[b];
       }
+
       updateUnassigned();
       updateTable();
     });
