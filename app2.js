@@ -27,26 +27,35 @@ function setupDivisionButtons(){
     span.style.color=colorEnabled?"#fff":"inherit";
     span.onclick=()=>{selectedDivision=name; cont.querySelectorAll('span.bunk-button').forEach(el=>el.classList.remove("selected")); span.classList.add("selected");};
     
-    // Safe rename logic
+    // ✅ Fixed rename logic
     makeEditable(span,newName=>{
       if (!newName || newName === name) return;
 
+      // copy old division data safely
       if (divisions[name]) {
-        divisions[newName] = divisions[name];
+        const oldData = divisions[name];
+        divisions[newName] = { ...oldData };
         delete divisions[name];
       }
+
+      // copy league data safely
       if (leagues[name]) {
-        leagues[newName] = leagues[name];
+        leagues[newName] = { ...leagues[name] };
         delete leagues[name];
       }
+
+      // update availableDivisions
       const idx = availableDivisions.indexOf(name);
       if (idx !== -1) {
         availableDivisions[idx] = newName;
       }
+
+      // update selected division if needed
       if (selectedDivision === name) {
         selectedDivision = newName;
       }
 
+      // re-render
       setupDivisionButtons();
       renderLeagues();
       renderTimeTemplates();
