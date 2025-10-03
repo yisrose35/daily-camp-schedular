@@ -1,6 +1,5 @@
 // -------------------- Scheduling Core (Unified Grid) --------------------
 function assignFieldsToBunks() {
-  // Build activity universe
   const availFields = fields.filter(f => f.available && f.activities.length > 0);
   const availSpecials = specialActivities.filter(s => s.available);
 
@@ -14,19 +13,16 @@ function assignFieldsToBunks() {
     return; 
   }
 
-  // init schedules
+  // reset schedules
   scheduleAssignments = {};
   availableDivisions.forEach(div => {
-    divisions[div].bunks.forEach(b => { 
-      scheduleAssignments[b] = new Array(unifiedTimes.length); 
-    });
+    divisions[div].bunks.forEach(b => { scheduleAssignments[b] = new Array(unifiedTimes.length); });
   });
 
-  // Activity span in rows
   const inc = parseInt(document.getElementById("increment").value);
   const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
 
-  // -------------------- Global resource tracker --------------------
+  // Global tracker: Set of resources reserved at each row
   const usedResources = Array.from({ length: unifiedTimes.length }, () => new Set());
 
   function canUseResource(resourceKey, startRow, span) {
@@ -46,7 +42,7 @@ function assignFieldsToBunks() {
     }
   }
 
-  // Pick a league slot per division (must be in active rows)
+  // League slot assignment
   const leagueSlotByDiv = {};
   availableDivisions.forEach(div => {
     if (leagues[div] && leagues[div].enabled) {
@@ -57,9 +53,7 @@ function assignFieldsToBunks() {
     }
   });
 
-  // Per unified time row
   for (let s = 0; s < unifiedTimes.length; s++) {
-    // For each division, track used fields this row to avoid conflicts inside division
     const usedFieldsByDiv = {};
     availableDivisions.forEach(div => {
       usedFieldsByDiv[div] = new Set();
@@ -70,8 +64,7 @@ function assignFieldsToBunks() {
     });
 
     for (let div of availableDivisions) {
-      const isActiveRow = divisionActiveRows[div] && divisionActiveRows[div].has(s);
-      if (!isActiveRow) continue;
+      if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s))) continue;
 
       for (let bunk of divisions[div].bunks) {
         if (scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s].continuation) continue;
@@ -82,31 +75,23 @@ function assignFieldsToBunks() {
 
         // ---- Leagues ----
         if (leagueSlotByDiv[div] === s && leagues[div] && leagues[div].enabled) {
-          if (lastEntry && lastEntry.isLeague) {
-            let next = s + 1;
-            while (next < unifiedTimes.length && (!divisionActiveRows[div].has(next))) next++;
-            leagueSlotByDiv[div] = Math.min(next, unifiedTimes.length - 1);
-          }
-          if (leagueSlotByDiv[div] === s) {
-            const resourceKey = "Leagues";
-            if (canUseResource(resourceKey, s, spanLen)) {
-              scheduleAssignments[bunk][s] = { field: "Leagues", sport: null, continuation: false, isLeague: true };
-              let placed = 1, k = 1;
-              while (placed < spanLen && (s + k) < unifiedTimes.length && divisionActiveRows[div].has(s + k)) {
-                scheduleAssignments[bunk][s + k] = { field: "Leagues", sport: null, continuation: true, isLeague: true };
-                placed++; k++;
-              }
-              usedFieldsByDiv[div].add("Leagues");
-              reserveResource(resourceKey, s, spanLen);
+          const resourceKey = "Leagues";
+          if (canUseResource(resourceKey, s, spanLen)) {
+            scheduleAssignments[bunk][s] = { field: "Leagues", sport: null, continuation: false, isLeague: true };
+            let placed = 1;
+            while (placed < spanLen && (s + placed) < unifiedTimes.length && divisionActiveRows[div].has(s + placed)) {
+              scheduleAssignments[bunk][s + placed] = { field: "Leagues", sport: null, continuation: true, isLeague: true };
+              placed++;
             }
-            continue;
+            usedFieldsByDiv[div].add("Leagues");
+            reserveResource(resourceKey, s, spanLen);
           }
+          continue;
         }
 
         // ---- Regular activities ----
         if (lastEntry && !lastEntry.continuation) {
-          let countDone = 1;
-          let t = lastIdx + 1;
+          let countDone = 1, t = lastIdx + 1;
           while (t < s && scheduleAssignments[bunk][t] && scheduleAssignments[bunk][t].continuation) { countDone++; t++; }
           if (countDone < spanLen) {
             scheduleAssignments[bunk][s] = { field: lastEntry.field, sport: lastEntry.sport, continuation: true, isLeague: lastEntry.isLeague || false };
@@ -115,10 +100,10 @@ function assignFieldsToBunks() {
           }
         }
 
-        // Filter candidates (check division + global conflicts)
+        // candidate activities
         let candidates = allActivities.filter(c => {
           if (usedFieldsByDiv[div].has(c.field.name)) return false;
-          let resourceKey = c.field.name; // unique per field/special
+          let resourceKey = c.field.name; // lock per field/special
           return canUseResource(resourceKey, s, spanLen);
         });
 
@@ -133,31 +118,19 @@ function assignFieldsToBunks() {
           return true;
         });
 
-        scheduleAssignments.__done = scheduleAssignments.__done || {};
-        scheduleAssignments.__done[bunk] = scheduleAssignments.__done[bunk] || new Set();
-        const doneSet = scheduleAssignments.__done[bunk];
-        const preferred = candidates.filter(c => !doneSet.has(c.type === "field" ? c.sport : c.field.name));
-        let chosen = (preferred.length > 0 ? preferred : candidates)[Math.floor(Math.random() * (preferred.length > 0 ? preferred.length : candidates.length))];
+        if (candidates.length === 0) continue;
 
-        if (!chosen && allActivities.length > 0) {
-          let tries = allActivities.slice();
-          do {
-            chosen = tries.splice(Math.floor(Math.random() * tries.length), 1)[0];
-          } while (chosen && lastEntry && (chosen.field.name === lastEntry.field || chosen.sport === lastEntry.sport) && tries.length > 0);
-        }
-        if (!chosen) continue;
-
+        let chosen = candidates[Math.floor(Math.random() * candidates.length)];
         scheduleAssignments[bunk][s] = { field: chosen.field.name, sport: chosen.sport, continuation: false, isLeague: false };
         usedFieldsByDiv[div].add(chosen.field.name);
-        doneSet.add(chosen.type === "field" ? chosen.sport : chosen.field.name);
 
-        // Reserve globally for all rows in this span
+        // reserve globally for the span
         reserveResource(chosen.field.name, s, spanLen);
 
-        let placed = 1, k = 1;
-        while (placed < spanLen && (s + k) < unifiedTimes.length && divisionActiveRows[div].has(s + k)) {
-          scheduleAssignments[bunk][s + k] = { field: chosen.field.name, sport: chosen.sport, continuation: true, isLeague: false };
-          placed++; k++;
+        let placed = 1;
+        while (placed < spanLen && (s + placed) < unifiedTimes.length && divisionActiveRows[div].has(s + placed)) {
+          scheduleAssignments[bunk][s + placed] = { field: chosen.field.name, sport: chosen.sport, continuation: true, isLeague: false };
+          placed++;
         }
       }
     }
