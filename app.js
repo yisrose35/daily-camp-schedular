@@ -85,14 +85,30 @@ function updateUnassigned(){
         divisions[selectedDivision].bunks.push(b);updateUnassigned();updateTable();
       }else if(!selectedDivision){ alert("Select a division first!"); }
     };
-    makeEditable(span,newName=>{
-      const idx=bunks.indexOf(b);if(idx!==-1)bunks[idx]=newName;
-      for(const d of Object.values(divisions)){const i=d.bunks.indexOf(b);if(i!==-1)d.bunks[i]=newName;}
-      if(scheduleAssignments[b]){ scheduleAssignments[newName]=scheduleAssignments[b]; delete scheduleAssignments[b]; }
-      updateUnassigned();updateTable();
-    });
-    c.appendChild(span);
-  });
+   makeEditable(span,newName=>{
+  if (!newName || newName === b) return;
+
+  // Update global bunks list
+  const idx=bunks.indexOf(b);
+  if(idx!==-1) bunks[idx]=newName;
+
+  // Update divisions that contain this bunk
+  for(const d of Object.values(divisions)){
+    const i=d.bunks.indexOf(b);
+    if(i!==-1) d.bunks[i]=newName;
+  }
+
+  // Update schedule assignments
+  if(scheduleAssignments[b]){
+    scheduleAssignments[newName]=scheduleAssignments[b];
+    delete scheduleAssignments[b];
+  }
+
+  updateUnassigned();
+  setupDivisionButtons(); // refresh division buttons after rename
+  updateTable();
+});
+
 }
 
 // -------------------- Divisions --------------------
