@@ -1,5 +1,5 @@
 // -------------------- Defaults --------------------
-const commonActivities = ["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
+const commonActivities = ["Basketball","Hockey","Volleyball","Soccer","Kickball","Punchball","Baseball"];
 const leagueSports     = ["Basketball","Hockey","Volleyball","Soccer","Kickball","Punchball","Baseball"];
 
 // -------------------- State --------------------
