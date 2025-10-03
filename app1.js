@@ -1,131 +1,96 @@
 // -------------------- State --------------------
-let bunks = [];       // { name, color, division: null|string }
-let divisions = [];   // { name, color, bunks: [], start, end }
+let bunks = [];
+let divisions = {};  // { divName:{ bunks:[], color, start, end } }
+let availableDivisions = [];
+let selectedDivision = null;
+
+let fields = [], specialActivities = [];
+let leagues = {};    // { divName:{enabled:boolean, sports:string[]} }
+
+let timeTemplates = []; // [{start,end,divisions:[]}]
+let activityDuration = 30;
+let scheduleAssignments = {}; // { bunkName: [ per unified row index: {...} ] }
+let unifiedTimes = []; // [{start:Date,end:Date,label:string}]
+let divisionActiveRows = {}; // { divName: Set(rowIndices) }
+
+const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
+let colorIndex=0;
+const commonActivities=["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
+const leagueSports=["Basketball","Hockey","Volleyball","Soccer","Kickball","Punchball","Baseball"];
+
+document.getElementById("activityDuration").onchange=function(){activityDuration=parseInt(this.value);};
 
 // -------------------- Helpers --------------------
-function makeEditable(element, saveFn) {
-  element.ondblclick = () => {
-    const input = document.createElement("input");
-    input.type = "text";
-    input.value = element.textContent;
-    element.replaceWith(input);
-    input.focus();
-
-    const save = () => {
-      const newName = input.value.trim();
-      if (newName) saveFn(newName);
-      renderBunks();
-      renderDivisions();
-      if (typeof onDivisionsChanged === "function") onDivisionsChanged();
-    };
-    input.addEventListener("blur", save);
-    input.addEventListener("keypress", e => { if (e.key === "Enter") save(); });
+function makeEditable(el, save){
+  el.ondblclick=e=>{
+    e.stopPropagation();
+    const old=el.textContent;
+    const input=document.createElement("input");
+    input.type="text"; input.value=old;
+    el.replaceWith(input); input.focus();
+    function done(){
+      const val=input.value.trim();
+      if(val&&val!==old) save(val);
+      el.textContent=val||old; input.replaceWith(el);
+    }
+    input.onblur=done; input.onkeyup=e=>{if(e.key==="Enter")done();};
   };
 }
+function parseTime(str){
+  if(!str) return null;
+  const m=str.match(/^(\d{1,2}):(\d{2})(\s*)?(AM|PM)$/i);
+  if(!m) return null;
+  let h=parseInt(m[1],10), min=parseInt(m[2],10), ap=m[4].toUpperCase();
+  if(ap==="PM"&&h!==12)h+=12; if(ap==="AM"&&h===12)h=0;
+  return new Date(0,0,0,h,min);
+}
+function fmtTime(d){
+  let h=d.getHours(),m=d.getMinutes().toString().padStart(2,"0"),ap=h>=12?"PM":"AM";h=h%12||12;
+  return `${h}:${m} ${ap}`;
+}
 
-// -------------------- Render Functions --------------------
-function renderBunks() {
-  const container = document.getElementById("bunk-list");
-  container.innerHTML = "";
-  bunks.filter(b => !b.division).forEach((bunk, i) => {
-    const wrap = document.createElement("div");
-    wrap.className = "fieldWrapper";
+// -------------------- Tabs --------------------
+function showTab(id){
+  document.querySelectorAll('.tab-button').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  document.querySelector(`.tab-button[onclick="showTab('${id}')"]`).classList.add('active');
+  if(id==='schedule') updateTable();
+  if(id==='leagues') renderLeagues();
+}
 
-    const label = document.createElement("span");
-    label.textContent = bunk.name;
-    makeEditable(label, newName => { bunks[i].name = newName; });
-    wrap.appendChild(label);
+// -------------------- Bunks --------------------
+function addBunk(){
+  const i=document.getElementById("bunkInput");
+  if(i.value.trim()!==""){
+    bunks.push(i.value.trim());
+    i.value="";
+    updateUnassigned(); updateTable();
+  }
+}
+document.getElementById("addBunkBtn").onclick=addBunk;
+document.getElementById("bunkInput").addEventListener("keyup",e=>{if(e.key==="Enter")addBunk();});
 
-    const select = document.createElement("select");
-    const optDefault = document.createElement("option");
-    optDefault.textContent = "Assign to division";
-    optDefault.disabled = true; optDefault.selected = true;
-    select.appendChild(optDefault);
-
-    divisions.forEach(div => {
-      const opt = document.createElement("option");
-      opt.value = div.name; opt.textContent = div.name;
-      select.appendChild(opt);
-    });
-
-    select.onchange = () => {
-      const divisionName = select.value;
-      bunks[i].division = divisionName;
-      const divObj = divisions.find(d => d.name === divisionName);
-      if (divObj && !divObj.bunks.includes(bunks[i].name)) divObj.bunks.push(bunks[i].name);
-      renderBunks(); renderDivisions();
-      if (typeof onDivisionsChanged === "function") onDivisionsChanged();
+function updateUnassigned(){
+  const c=document.getElementById("unassignedBunks");c.innerHTML="";
+  bunks.forEach(b=>{
+    const span=document.createElement("span");
+    span.textContent=b;span.className="bunk-button";
+    let assigned=null;
+    for(const d in divisions){ if(divisions[d].bunks.includes(b)) assigned=d; }
+    if(assigned){span.style.backgroundColor=divisions[assigned].color;span.style.color="#fff";}
+    span.onclick=()=>{
+      if(selectedDivision && (!assigned||assigned!==selectedDivision)){
+        for(const d in divisions){const i=divisions[d].bunks.indexOf(b);if(i!==-1)divisions[d].bunks.splice(i,1);}
+        divisions[selectedDivision].bunks.push(b);updateUnassigned();updateTable();
+      }else if(!selectedDivision){ alert("Select a division first!"); }
     };
-
-    wrap.appendChild(select);
-    container.appendChild(wrap);
+    makeEditable(span,newName=>{
+      const idx=bunks.indexOf(b);if(idx!==-1)bunks[idx]=newName;
+      for(const d of Object.values(divisions)){const i=d.bunks.indexOf(b);if(i!==-1)d.bunks[i]=newName;}
+      if(scheduleAssignments[b]){ scheduleAssignments[newName]=scheduleAssignments[b]; delete scheduleAssignments[b]; }
+      updateUnassigned();updateTable();
+    });
+    c.appendChild(span);
   });
 }
-
-function renderDivisions() {
-  const container = document.getElementById("division-list");
-  container.innerHTML = "";
-  divisions.forEach((division, i) => {
-    const wrap = document.createElement("div");
-    wrap.className = "fieldWrapper";
-
-    const label = document.createElement("span");
-    label.textContent = division.name;
-    label.style.backgroundColor = division.color; label.style.color = "#fff";
-    makeEditable(label, newName => { divisions[i].name = newName; });
-    wrap.appendChild(label);
-
-    if (division.bunks.length > 0) {
-      const bunkList = document.createElement("ul");
-      division.bunks.forEach(bName => {
-        const li = document.createElement("li");
-        li.textContent = bName;
-        bunkList.appendChild(li);
-      });
-      wrap.appendChild(bunkList);
-    }
-    container.appendChild(wrap);
-  });
-}
-
-// -------------------- Add Functions --------------------
-function addBunk() {
-  const input = document.getElementById("bunk-input");
-  if (!input.value.trim()) return;
-  bunks.push({ name: input.value.trim(), color: "", division: null });
-  input.value = "";
-  renderBunks();
-}
-
-function addDivision() {
-  const input = document.getElementById("division-input");
-  if (!input.value.trim()) return;
-  divisions.push({ name: input.value.trim(), color: getRandomColor(), bunks: [] });
-  input.value = "";
-  renderDivisions();
-  renderBunks();
-  if (typeof onDivisionsChanged === "function") onDivisionsChanged();
-}
-
-// -------------------- Utilities --------------------
-function getRandomColor() {
-  const colors = ["#FF7F7F", "#7FBFFF", "#7FFF7F", "#FFBF7F", "#BF7FFF"];
-  return colors[Math.floor(Math.random() * colors.length)];
-}
-function enableEnterKey(id, fn) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.addEventListener("keypress", e => { if (e.key === "Enter") fn(); });
-}
-
-// -------------------- Init --------------------
-window.addEventListener("DOMContentLoaded", () => {
-  enableEnterKey("bunk-input", addBunk);
-  enableEnterKey("division-input", addDivision);
-  document.getElementById("addBunkBtn").onclick = addBunk;
-  document.getElementById("addDivisionBtn").onclick = addDivision;
-  // First render
-  renderBunks(); renderDivisions();
-  if (typeof onDivisionsChanged === "function") onDivisionsChanged();
-});
-
