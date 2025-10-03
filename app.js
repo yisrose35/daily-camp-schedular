@@ -85,30 +85,31 @@ function updateUnassigned(){
         divisions[selectedDivision].bunks.push(b);updateUnassigned();updateTable();
       }else if(!selectedDivision){ alert("Select a division first!"); }
     };
-   makeEditable(span,newName=>{
-  if (!newName || newName === b) return;
+    makeEditable(span,newName=>{
+      if (!newName || newName === b) return;
 
-  // Update global bunks list
-  const idx=bunks.indexOf(b);
-  if(idx!==-1) bunks[idx]=newName;
+      // Update global bunks list
+      const idx=bunks.indexOf(b);
+      if(idx!==-1) bunks[idx]=newName;
 
-  // Update divisions that contain this bunk
-  for(const d of Object.values(divisions)){
-    const i=d.bunks.indexOf(b);
-    if(i!==-1) d.bunks[i]=newName;
-  }
+      // Update divisions that contain this bunk
+      for(const d of Object.values(divisions)){
+        const i=d.bunks.indexOf(b);
+        if(i!==-1) d.bunks[i]=newName;
+      }
 
-  // Update schedule assignments
-  if(scheduleAssignments[b]){
-    scheduleAssignments[newName]=scheduleAssignments[b];
-    delete scheduleAssignments[b];
-  }
+      // Update schedule assignments
+      if(scheduleAssignments[b]){
+        scheduleAssignments[newName]=scheduleAssignments[b];
+        delete scheduleAssignments[b];
+      }
 
-  updateUnassigned();
-  setupDivisionButtons(); // refresh division buttons after rename
-  updateTable();
-});
-
+      updateUnassigned();
+      setupDivisionButtons(); // refresh division buttons after rename
+      updateTable();
+    });
+    c.appendChild(span);
+  });
 }
 
 // -------------------- Divisions --------------------
@@ -123,7 +124,7 @@ function addDivision(){
     leagues[name]={enabled:false,sports:[]};
     i.value="";
     setupDivisionButtons(); renderLeagues(); updateTable();
-    renderTimeTemplates();
+    renderTimeTemplates(); // refresh template assignment UI
   }
 }
 document.getElementById("addDivisionBtn").onclick=addDivision;
@@ -140,30 +141,29 @@ function setupDivisionButtons(){
     span.style.color=colorEnabled?"#fff":"inherit";
     span.onclick=()=>{selectedDivision=name; cont.querySelectorAll('span.bunk-button').forEach(el=>el.classList.remove("selected")); span.classList.add("selected");};
     makeEditable(span,newName=>{
-  if (!newName || newName === name) return;
+      if (!newName || newName === name) return;
 
-  // Move division object
-  divisions[newName] = {...divisions[name]};
-  delete divisions[name];
+      // Move division object
+      divisions[newName] = {...divisions[name]};
+      delete divisions[name];
 
-  // Move league settings
-  leagues[newName] = leagues[name] || {enabled:false,sports:[]};
-  delete leagues[name];
+      // Move league settings
+      leagues[newName] = leagues[name] || {enabled:false,sports:[]};
+      delete leagues[name];
 
-  // Update availableDivisions array
-  const idx = availableDivisions.indexOf(name);
-  if (idx !== -1) availableDivisions[idx] = newName;
+      // Update availableDivisions array
+      const idx = availableDivisions.indexOf(name);
+      if (idx !== -1) availableDivisions[idx] = newName;
 
-  // Update selectedDivision if needed
-  if (selectedDivision === name) selectedDivision = newName;
+      // Update selectedDivision if needed
+      if (selectedDivision === name) selectedDivision = newName;
 
-  setupDivisionButtons();
-  renderLeagues();
-  renderTimeTemplates();
-  updateUnassigned(); // refresh bunk assignments to display properly
-  updateTable();
-});
-
+      setupDivisionButtons();
+      renderLeagues();
+      renderTimeTemplates();
+      updateUnassigned(); // refresh bunk assignments to display properly
+      updateTable();
+    });
     wrap.appendChild(span);
     const col=document.createElement("input"); col.type="color"; col.value=obj.color; col.className="colorPicker";
     col.oninput=e=>{obj.color=e.target.value; if(colorEnabled){span.style.backgroundColor=e.target.value; span.style.color="#fff";} updateTable(); renderTimeTemplates();};
@@ -202,6 +202,7 @@ function renderTimeTemplates(){
         } else {
           tpl.divisions.push(div);
         }
+        // Apply latest picks immediately
         applyTemplatesToDivisions();
         renderTimeTemplates();
       };
@@ -210,10 +211,13 @@ function renderTimeTemplates(){
 
     cont.appendChild(wrap);
   });
+
+  // Apply when first rendered (covers color toggles etc.)
   applyTemplatesToDivisions();
 }
 
 function applyTemplatesToDivisions(){
+  // A division can be in at most one template; last template containing it wins
   availableDivisions.forEach(div=>{
     let match = null;
     for(let i=timeTemplates.length-1;i>=0;i--){
@@ -223,13 +227,18 @@ function applyTemplatesToDivisions(){
   });
 }
 
-// -------------------- Generate Times --------------------
+// -------------------- Generate Times (Unified Grid) --------------------
 function generateTimes(){
+  // Build unifiedTimes from overall earliest start to latest end across all divisions with times
   const inc = parseInt(document.getElementById("increment").value);
+
+  // ensure templates are applied
   applyTemplatesToDivisions();
+
   const starts = availableDivisions.map(d=>parseTime(divisions[d].start)).filter(Boolean);
   const ends   = availableDivisions.map(d=>parseTime(divisions[d].end)).filter(Boolean);
   if(starts.length===0 || ends.length===0){ alert("Please set time templates for divisions first."); return; }
+
   const earliest = new Date(Math.min(...starts.map(d=>d.getTime())));
   const latest   = new Date(Math.max(...ends.map(d=>d.getTime())));
   unifiedTimes = [];
@@ -240,13 +249,18 @@ function generateTimes(){
     unifiedTimes.push({ start:new Date(cur), end:new Date(nxt), label:`${fmtTime(cur)} - ${fmtTime(nxt)}` });
     cur = nxt;
   }
+
+  // Compute active rows per division
   divisionActiveRows = {};
   availableDivisions.forEach(div=>{
     const s=parseTime(divisions[div].start), e=parseTime(divisions[div].end);
     const rows = new Set();
-    unifiedTimes.forEach((t,idx)=>{ if (s && e && t.start >= s && t.start < e) rows.add(idx); });
+    unifiedTimes.forEach((t,idx)=>{
+      if (s && e && t.start >= s && t.start < e) rows.add(idx);
+    });
     divisionActiveRows[div] = rows;
   });
+
   assignFieldsToBunks();
   updateTable();
 }
@@ -375,8 +389,9 @@ function renderLeagues(){
   });
 }
 
-// -------------------- Scheduling Core --------------------
+// -------------------- Scheduling Core (Unified Grid + No Overlaps) --------------------
 function assignFieldsToBunks() {
+  // Build activity universe
   const availFields = fields.filter(f => f.available && f.activities.length>0);
   const availSpecials = specialActivities.filter(s => s.available);
 
@@ -386,14 +401,17 @@ function assignFieldsToBunks() {
   ];
   if (allActivities.length === 0) { alert("No activities available."); scheduleAssignments={}; return; }
 
+  // init schedules
   scheduleAssignments = {};
   availableDivisions.forEach(div=>{
     divisions[div].bunks.forEach(b=>{ scheduleAssignments[b]=new Array(unifiedTimes.length); });
   });
 
+  // Activity span in rows
   const inc = parseInt(document.getElementById("increment").value);
   const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
 
+  // Pick a league slot per division (must be in active rows)
   const leagueSlotByDiv = {};
   availableDivisions.forEach(div=>{
     if (leagues[div] && leagues[div].enabled) {
@@ -404,13 +422,14 @@ function assignFieldsToBunks() {
     }
   });
 
+  // Per unified time row
   for (let s=0; s<unifiedTimes.length; s++){
-    const usedFieldsByDiv = {};
-    availableDivisions.forEach(div=>{
-      usedFieldsByDiv[div] = new Set();
-      divisions[div].bunks.forEach(bunk=>{
-        const entry = scheduleAssignments[bunk][s];
-        if (entry && entry.continuation) usedFieldsByDiv[div].add(entry.field);
+    // Global used fields (across all divisions) for this row due to continuations
+    const usedFieldsAtRow = new Set();
+    availableDivisions.forEach(dv=>{
+      divisions[dv].bunks.forEach(bk=>{
+        const e = scheduleAssignments[bk][s];
+        if (e && e.continuation && e.field !== "Leagues") usedFieldsAtRow.add(e.field);
       });
     });
 
@@ -419,69 +438,98 @@ function assignFieldsToBunks() {
       if (!isActiveRow) continue;
 
       for (let bunk of divisions[div].bunks) {
+        // If this row is part of a previous span, continue it (already marked)
         if (scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s].continuation) continue;
 
+        // Compute last non-null entry before s
         let lastIdx = s-1, lastEntry = null;
         while (lastIdx>=0 && !scheduleAssignments[bunk][lastIdx]) lastIdx--;
         if (lastIdx>=0) lastEntry = scheduleAssignments[bunk][lastIdx];
 
+        // ---- Leagues handling (one slot per division) ----
         if (leagueSlotByDiv[div] === s && leagues[div] && leagues[div].enabled) {
+          // avoid back-to-back leagues by shifting forward for this bunk
           if (lastEntry && lastEntry.isLeague) {
+            // push division league slot forward to next active row not right after another league
             let next = s+1;
             while (next<unifiedTimes.length && (!divisionActiveRows[div].has(next))) next++;
             leagueSlotByDiv[div] = Math.min(next, unifiedTimes.length-1);
           }
           if (leagueSlotByDiv[div] === s) {
             scheduleAssignments[bunk][s] = { field:"Leagues", sport:null, continuation:false, isLeague:true };
+            // span forward within active rows
             let placed = 1, k = 1;
             while (placed < spanLen && (s+k)<unifiedTimes.length && divisionActiveRows[div].has(s+k)) {
               scheduleAssignments[bunk][s+k] = { field:"Leagues", sport:null, continuation:true, isLeague:true };
               placed++; k++;
             }
-            usedFieldsByDiv[div].add("Leagues");
+            // NOTE: We do NOT add "Leagues" to usedFieldsAtRow (it can run division-wide)
             continue;
           }
         }
 
+        // ---- Continue previous span if not finished ----
         if (lastEntry && !lastEntry.continuation) {
+          // Count how many continuation rows already set after last start
           let countDone = 1;
           let t = lastIdx+1;
           while (t<s && scheduleAssignments[bunk][t] && scheduleAssignments[bunk][t].continuation) { countDone++; t++; }
           if (countDone < spanLen) {
+            // continue it
             scheduleAssignments[bunk][s] = { field:lastEntry.field, sport:lastEntry.sport, continuation:true, isLeague:lastEntry.isLeague||false };
-            usedFieldsByDiv[div].add(lastEntry.field);
+            if (lastEntry.field !== "Leagues") usedFieldsAtRow.add(lastEntry.field);
             continue;
           }
         }
 
+        // ---- Regular activities (no overlaps across any division) ----
+        // Build candidates excluding any field already used in this row (global) and excluding any overlaps across future span rows.
         let candidates = allActivities.filter(c => {
-  // Exclude if already in use this row
-  if (usedFieldsByDiv[div].has(c.field.name)) return false;
+          // "Leagues" is not part of allActivities; kept for safety
+          if (c.field.name !== "Leagues" && usedFieldsAtRow.has(c.field.name)) return false;
 
-  // Exclude if this activity would overlap with an existing assignment in later rows
-  for (let k = 0; k < spanLen; k++) {
-    const futureRow = s + k;
-    if (futureRow >= unifiedTimes.length) break;
+          // Ensure no overlap with any other bunk across ANY division over the whole span
+          for (let k = 0; k < spanLen; k++) {
+            const futureRow = s + k;
+            if (futureRow >= unifiedTimes.length) break;
+            // Only check span within this division's active window
+            if (!divisionActiveRows[div].has(futureRow)) break;
 
-    // Check every bunk in this division
-    for (let otherBunk of divisions[div].bunks) {
-      if (otherBunk === bunk) continue;
-      const e = scheduleAssignments[otherBunk][futureRow];
-      if (e && e.field === c.field.name) {
-        return false; // overlap conflict
-      }
-    }
-  }
-  return true;
-});
+            // Scan all divisions/bunks for conflicts at this futureRow
+            for (const d2 of availableDivisions) {
+              if (!divisionActiveRows[d2] || !divisionActiveRows[d2].has(futureRow)) continue;
+              for (const otherBunk of divisions[d2].bunks) {
+                if (otherBunk === bunk) continue;
+                const e = scheduleAssignments[otherBunk][futureRow];
+                if (e && e.field === c.field.name && e.field !== "Leagues") {
+                  return false; // overlap conflict across divisions
+                }
+              }
+            }
+          }
+          return true;
+        });
 
+        // Exclude back-to-back same sport/field/special
+        candidates = candidates.filter(c => {
+          if (!lastEntry) return true;
+          if (lastEntry.isLeague) {
+            if (c.field.name === "Leagues") return false; // avoid back-to-back leagues anyway
+            if (c.type==="field" && c.field.name === lastEntry.field) return false;
+          }
+          if (c.type==="field" && lastEntry.sport && c.sport === lastEntry.sport) return false;
+          if (c.field.name === lastEntry.field) return false;
+          return true;
+        });
 
+        // Simple fairness tracker (avoid overusing same items per bunk)
         scheduleAssignments.__done = scheduleAssignments.__done || {};
         scheduleAssignments.__done[bunk] = scheduleAssignments.__done[bunk] || new Set();
         const doneSet = scheduleAssignments.__done[bunk];
         const preferred = candidates.filter(c => !doneSet.has(c.type==="field" ? c.sport : c.field.name));
         let chosen = (preferred.length>0 ? preferred : candidates)[Math.floor(Math.random()*(preferred.length>0 ? preferred.length : candidates.length) )];
 
+        // fallback if no candidate
         if (!chosen && allActivities.length>0) {
           let tries = allActivities.slice();
           do {
@@ -490,8 +538,9 @@ function assignFieldsToBunks() {
         }
         if (!chosen) continue;
 
+        // place chosen and span forward inside active rows
         scheduleAssignments[bunk][s] = { field:chosen.field.name, sport:chosen.sport, continuation:false, isLeague:false };
-        usedFieldsByDiv[div].add(chosen.field.name);
+        if (chosen.field.name !== "Leagues") usedFieldsAtRow.add(chosen.field.name);
         doneSet.add(chosen.type==="field" ? chosen.sport : chosen.field.name);
 
         let placed = 1, k=1;
@@ -504,13 +553,14 @@ function assignFieldsToBunks() {
   }
 }
 
-// -------------------- Rendering --------------------
+// -------------------- Rendering (Unified Grid + Merged Cells) --------------------
 function updateTable(){
   const scheduleTab = document.getElementById("schedule");
-  scheduleTab.innerHTML = "";
+  scheduleTab.innerHTML = ""; // clear
 
   if (unifiedTimes.length === 0) return;
 
+  // Clear any previous _skip flags
   Object.keys(scheduleAssignments).forEach(b=>{
     if (Array.isArray(scheduleAssignments[b])) {
       scheduleAssignments[b].forEach(e=>{ if(e) delete e._skip; });
@@ -520,7 +570,9 @@ function updateTable(){
   const table=document.createElement("table");
   table.className="division-schedule";
 
+  // Header rows
   const thead=document.createElement("thead");
+
   const row1=document.createElement("tr");
   const thTime=document.createElement("th"); thTime.textContent="Time"; row1.appendChild(thTime);
   availableDivisions.forEach(div=>{
@@ -543,6 +595,7 @@ function updateTable(){
   table.appendChild(thead);
 
   const tbody=document.createElement("tbody");
+
   for (let s=0; s<unifiedTimes.length; s++){
     const tr=document.createElement("tr");
     const tdTime=document.createElement("td"); tdTime.textContent=unifiedTimes[s].label; tr.appendChild(tdTime);
@@ -550,21 +603,27 @@ function updateTable(){
     availableDivisions.forEach(div=>{
       const activeSet = divisionActiveRows[div] || new Set();
       divisions[div].bunks.forEach(bunk=>{
+        // Skip if part of a merged cell from a previous row
         if (scheduleAssignments[bunk] && scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s]._skip) return;
+
         const td=document.createElement("td");
         const isActive = activeSet.has(s);
+
         if (!isActive) {
           td.className="grey-cell";
           tr.appendChild(td);
           return;
         }
+
         const entry = scheduleAssignments[bunk] ? scheduleAssignments[bunk][s] : null;
         if (entry && !entry.continuation) {
+          // determine rowspan by scanning forward over continuation rows
           let span=1;
           for (let k=s+1; k<unifiedTimes.length; k++){
             const e2 = scheduleAssignments[bunk][k];
             if (!e2 || !e2.continuation || e2.field!==entry.field || e2.sport!==entry.sport || e2.isLeague!==entry.isLeague) break;
             span++;
+            // mark skip so we don't render duplicate cells
             scheduleAssignments[bunk][k]._skip = true;
           }
           td.rowSpan = span;
@@ -574,13 +633,18 @@ function updateTable(){
             td.textContent = entry.sport ? `${entry.field} – ${entry.sport}` : entry.field;
           }
         } else if (!entry) {
-          td.textContent = "";
+          td.textContent = ""; // empty (should be rare if activities exist)
+        } else {
+          // continuation handled by skip/rowspan
         }
+
         tr.appendChild(td);
       });
     });
+
     tbody.appendChild(tr);
   }
+
   table.appendChild(tbody);
   scheduleTab.appendChild(table);
 }
