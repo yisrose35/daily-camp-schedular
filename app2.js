@@ -1,3 +1,16 @@
+// -------------------- Defaults --------------------
+// Common activities for fields
+const commonActivities = [
+  "Basketball", "Baseball", "Hockey", "Football",
+  "Soccer", "Volleyball", "Lacrosse"
+];
+
+// Default sports for leagues
+const leagueSports = [
+  "Basketball", "Hockey", "Volleyball", "Soccer",
+  "Kickball", "Punchball", "Baseball"
+];
+
 // -------------------- State --------------------
 let timeTemplates = [];
 let fields = [];
