@@ -168,3 +168,9 @@ function setupDivisionButtons(){
   });
 }
 document.getElementById("enableColor").addEventListener("change", setupDivisionButtons);
+
+// -------------------- Init --------------------
+window.addEventListener("DOMContentLoaded", () => {
+  updateUnassigned();
+  setupDivisionButtons();
+});
