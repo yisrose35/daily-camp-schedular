@@ -35,22 +35,49 @@
     <button class="tab-button" data-tab="leagues">Leagues</button>
   </div>
 
-  <!-- TAB CONTENTS (setup, schedule, leagues) -->
+  <!-- TAB: Setup -->
   <div id="setup" class="tab-content active">
-    <!-- your setup inputs for bunks, divisions, fields, specials etc. -->
-    <div>
-      <input id="fieldInput" placeholder="Add field/court">
-      <button id="addFieldBtn">Add Field</button>
-      <div id="fieldList"></div>
-    </div>
-    <div>
-      <input id="specialInput" placeholder="Add special activity">
-      <button id="addSpecialBtn">Add Special</button>
-      <div id="specialList"></div>
-    </div>
+    <h2>Bunks</h2>
+    <input id="bunkInput" placeholder="Add bunk">
+    <button id="addBunkBtn">Add Bunk</button>
+    <div id="bunkList"></div>
+
+    <h2>Divisions</h2>
+    <input id="divisionInput" placeholder="Add division">
+    <button id="addDivisionBtn">Add Division</button>
+    <label><input type="checkbox" id="enableColor"> Enable colors</label>
+    <div id="divisionButtons"></div>
+
+    <h2>Time Templates</h2>
+    <input id="timeStartInput" placeholder="Start time (e.g. 11:30am)">
+    <input id="timeEndInput" placeholder="End time (e.g. 5:30pm)">
+    <button onclick="addTimeTemplate()">Add Time</button>
+    <div id="timeTemplates"></div>
+
+    <h2>Increment</h2>
+    <select id="increment">
+      <option value="15">15</option>
+      <option value="30" selected>30</option>
+      <option value="45">45</option>
+      <option value="60">60</option>
+    </select>
+    <button onclick="generateTimes()">Generate Times</button>
+
+    <h2>Fields / Courts</h2>
+    <input id="fieldInput" placeholder="Add field/court">
+    <button id="addFieldBtn">Add Field</button>
+    <div id="fieldList"></div>
+
+    <h2>Special Activities</h2>
+    <input id="specialInput" placeholder="Add special activity">
+    <button id="addSpecialBtn">Add Special</button>
+    <div id="specialList"></div>
   </div>
 
+  <!-- TAB: Schedule -->
   <div id="schedule" class="tab-content"></div>
+
+  <!-- TAB: Leagues -->
   <div id="leagues" class="tab-content">
     <div id="leaguesContainer"></div>
   </div>
