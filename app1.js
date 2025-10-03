@@ -128,3 +128,4 @@ window.addEventListener("DOMContentLoaded", () => {
   renderBunks(); renderDivisions();
   if (typeof onDivisionsChanged === "function") onDivisionsChanged();
 });
+
