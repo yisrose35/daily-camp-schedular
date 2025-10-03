@@ -2,6 +2,7 @@
 <html>
 <head>
   <title>Camp Scheduler</title>
+  <meta charset="utf-8" />
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     .tabs { margin-bottom: 20px; }
@@ -11,7 +12,7 @@
     .tab-content.active { display: block; }
 
     table { border-collapse: collapse; margin-top: 20px; width: 100%; }
-    th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 140px; }
+    th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 120px; }
     caption { font-weight: bold; margin: 10px 0; }
 
     .bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; display: inline-block; }
@@ -38,6 +39,7 @@
 
     .continuation { opacity: 0.7; font-style: italic; }
     .league-pill { background:#4CAF50; color:#fff; padding:2px 6px; border-radius:12px; }
+    .grey-cell { background:#eee; }
   </style>
 </head>
 <body>
@@ -79,7 +81,13 @@
       <option value="90">90 minutes</option>
     </select>
 
-    <button onclick="generateTimes()">Generate</button>
+    <h3>Division Time Templates</h3>
+    <input id="timeStartInput" placeholder="Start (e.g. 11:00 AM)">
+    <input id="timeEndInput" placeholder="End (e.g. 4:30 PM)">
+    <button onclick="addTimeTemplate()">Add Time</button>
+    <div id="timeTemplates"></div>
+
+    <button style="margin-top:10px;" onclick="generateTimes()">Generate Schedule Times</button>
 
     <h3>Add Fields/Courts</h3>
     <input id="fieldInput" placeholder="Enter field/court name (e.g., Court #1)">
@@ -104,41 +112,38 @@
   <script>
     // -------------------- State --------------------
     let bunks = [];
-    let divisions = {};                 // { [divName]: { bunks:[], color, start, end } }
+    let divisions = {};  // { divName:{ bunks:[], color, start, end } }
     let availableDivisions = [];
     let selectedDivision = null;
 
-    let divisionTimes = {};             // { [divName]: [ "11:00 AM - 11:15 AM", ... ] }
-    let fields = [];                    // [{ name, activities:[], available:true }]
-    let specialActivities = [];         // [{ name, available:true }]
+    let fields = [], specialActivities = [];
+    let leagues = {};    // { divName:{enabled:boolean, sports:string[]} }
 
-    let scheduleAssignments = {};       // { [bunkName]: [ {field,sport,continuation,isLeague}, ... ] } (per its division's length)
+    let timeTemplates = []; // [{start,end,divisions:[]}]
     let activityDuration = 30;
+    let scheduleAssignments = {}; // { bunkName: [ per unified row index: {field,sport,continuation,isLeague,_skip} ] }
+    let unifiedTimes = []; // [{start:Date,end:Date,label:string}]
+    let divisionActiveRows = {}; // { divName: Set(rowIndices) }
 
     const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
-    let colorIndex = 0;
+    let colorIndex=0;
+    const commonActivities=["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
+    const leagueSports=["Basketball","Hockey","Volleyball","Soccer","Kickball","Punchball","Baseball"];
 
-    const commonActivities = ["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
-    const leagueSports = ["Basketball","Hockey","Volleyball","Soccer","Kickball","Punchball","Baseball"];
-    let leagues = {};                   // { [divName]: { enabled:boolean, sports:string[] } }
-
-    document.getElementById("activityDuration").onchange = function(){
-      activityDuration = parseInt(this.value);
-    };
+    document.getElementById("activityDuration").onchange=function(){activityDuration=parseInt(this.value);};
 
     // -------------------- Helpers --------------------
     function makeEditable(el, save){
-      el.ondblclick = e => {
+      el.ondblclick=e=>{
         e.stopPropagation();
-        const old = el.textContent;
-        const input = document.createElement("input");
+        const old=el.textContent;
+        const input=document.createElement("input");
         input.type="text"; input.value=old;
         el.replaceWith(input); input.focus();
         function done(){
           const val=input.value.trim();
-          if(val && val!==old) save(val);
-          el.textContent = val || old;
-          input.replaceWith(el);
+          if(val&&val!==old) save(val);
+          el.textContent=val||old; input.replaceWith(el);
         }
         input.onblur=done; input.onkeyup=e=>{if(e.key==="Enter")done();};
       };
@@ -152,8 +157,8 @@
       return new Date(0,0,0,h,min);
     }
     function fmtTime(d){
-      let h=d.getHours(), m=d.getMinutes().toString().padStart(2,"0"), ap=h>=12?"PM":"AM";
-      h=h%12||12; return `${h}:${m} ${ap}`;
+      let h=d.getHours(),m=d.getMinutes().toString().padStart(2,"0"),ap=h>=12?"PM":"AM";h=h%12||12;
+      return `${h}:${m} ${ap}`;
     }
 
     // -------------------- Tabs --------------------
@@ -168,64 +173,54 @@
 
     // -------------------- Bunks --------------------
     function addBunk(){
-      const input=document.getElementById("bunkInput");
-      if(input.value.trim()!==""){
-        bunks.push(input.value.trim());
-        input.value=""; updateUnassigned(); updateTable();
+      const i=document.getElementById("bunkInput");
+      if(i.value.trim()!==""){
+        bunks.push(i.value.trim());
+        i.value="";
+        updateUnassigned(); updateTable();
       }
     }
     document.getElementById("addBunkBtn").onclick=addBunk;
     document.getElementById("bunkInput").addEventListener("keyup",e=>{if(e.key==="Enter")addBunk();});
 
     function updateUnassigned(){
-      const container=document.getElementById("unassignedBunks");
-      container.innerHTML="";
-      bunks.forEach(bunk=>{
+      const c=document.getElementById("unassignedBunks");c.innerHTML="";
+      bunks.forEach(b=>{
         const span=document.createElement("span");
-        span.textContent=bunk;
-        span.className="bunk-button";
-        let assignedDiv=null;
-        for(const divName in divisions){
-          if(divisions[divName].bunks.includes(bunk)){assignedDiv=divName; break;}
-        }
-        if(assignedDiv){
-          const divColor=divisions[assignedDiv].color;
-          span.style.backgroundColor=divColor; span.style.color="#fff";
-        }
+        span.textContent=b;span.className="bunk-button";
+        let assigned=null;
+        for(const d in divisions){ if(divisions[d].bunks.includes(b)) assigned=d; }
+        if(assigned){span.style.backgroundColor=divisions[assigned].color;span.style.color="#fff";}
         span.onclick=()=>{
-          if(selectedDivision && (!assignedDiv || assignedDiv!==selectedDivision)){
-            for(const divName in divisions){
-              const i=divisions[divName].bunks.indexOf(bunk);
-              if(i!==-1) divisions[divName].bunks.splice(i,1);
-            }
-            divisions[selectedDivision].bunks.push(bunk);
-            updateUnassigned(); updateTable();
-          } else if(!selectedDivision){ alert("Select a division first!"); }
+          if(selectedDivision && (!assigned||assigned!==selectedDivision)){
+            for(const d in divisions){const i=divisions[d].bunks.indexOf(b);if(i!==-1)divisions[d].bunks.splice(i,1);}
+            divisions[selectedDivision].bunks.push(b);updateUnassigned();updateTable();
+          }else if(!selectedDivision){ alert("Select a division first!"); }
         };
         makeEditable(span,newName=>{
-          const idx=bunks.indexOf(bunk); if(idx!==-1) bunks[idx]=newName;
-          for(const div of Object.values(divisions)){
-            const i=div.bunks.indexOf(bunk); if(i!==-1) div.bunks[i]=newName;
-          }
-          scheduleAssignments[newName]=scheduleAssignments[bunk]||[];
-          delete scheduleAssignments[bunk];
-          updateUnassigned(); updateTable();
+          const idx=bunks.indexOf(b);if(idx!==-1)bunks[idx]=newName;
+          for(const d of Object.values(divisions)){const i=d.bunks.indexOf(b);if(i!==-1)d.bunks[i]=newName;}
+          // Move schedule assignments to new key if any
+          if(scheduleAssignments[b]){ scheduleAssignments[newName]=scheduleAssignments[b]; delete scheduleAssignments[b]; }
+          updateUnassigned();updateTable();
         });
-        container.appendChild(span);
+        c.appendChild(span);
       });
     }
 
     // -------------------- Divisions --------------------
     function addDivision(){
-      const input=document.getElementById("divisionInput");
-      if(input.value.trim()==="")return;
-      const name=input.value.trim();
+      const i=document.getElementById("divisionInput");
+      if(i.value.trim()==="")return;
+      const name=i.value.trim();
       if(!availableDivisions.includes(name)){
         const color=defaultColors[colorIndex%defaultColors.length]; colorIndex++;
         availableDivisions.push(name);
-        divisions[name]={bunks:[],color:color,start:null,end:null};
-        input.value="";
-        setupDivisionButtons(); updateTable(); renderLeagues();
+        divisions[name]={bunks:[],color,start:null,end:null};
+        leagues[name]={enabled:false,sports:[]};
+        i.value="";
+        setupDivisionButtons(); renderLeagues(); updateTable();
+        renderTimeTemplates(); // refresh template assignment UI
       }
     }
     document.getElementById("addDivisionBtn").onclick=addDivision;
@@ -243,118 +238,180 @@
         span.onclick=()=>{selectedDivision=name; cont.querySelectorAll('span.bunk-button').forEach(el=>el.classList.remove("selected")); span.classList.add("selected");};
         makeEditable(span,newName=>{
           divisions[newName]=divisions[name]; delete divisions[name];
+          leagues[newName]=leagues[name]||{enabled:false,sports:[]}; delete leagues[name];
           availableDivisions[availableDivisions.indexOf(name)]=newName;
           if(selectedDivision===name)selectedDivision=newName;
-          // move leagues config
-          leagues[newName]=leagues[name]||{enabled:false,sports:[]}; delete leagues[name];
-          // move times
-          divisionTimes[newName]=divisionTimes[name]||[]; delete divisionTimes[name];
-          setupDivisionButtons(); updateTable(); renderLeagues();
+          setupDivisionButtons(); renderLeagues(); renderTimeTemplates(); updateTable();
         });
         wrap.appendChild(span);
-
         const col=document.createElement("input"); col.type="color"; col.value=obj.color; col.className="colorPicker";
-        col.oninput=e=>{obj.color=e.target.value; if(colorEnabled){span.style.backgroundColor=e.target.value; span.style.color="#fff";} updateTable();};
+        col.oninput=e=>{obj.color=e.target.value; if(colorEnabled){span.style.backgroundColor=e.target.value; span.style.color="#fff";} updateTable(); renderTimeTemplates();};
         wrap.appendChild(col);
-
-        // Per-division start/end inputs
-        const start=document.createElement("input"); start.placeholder="Start (e.g. 11:00 AM)"; start.style.marginLeft="8px";
-        start.value=obj.start||""; start.onchange=()=>{obj.start=start.value;};
-        const end=document.createElement("input"); end.placeholder="End (e.g. 4:30 PM)"; end.style.marginLeft="6px";
-        end.value=obj.end||""; end.onchange=()=>{obj.end=end.value;};
-        wrap.appendChild(start); wrap.appendChild(end);
-
         cont.appendChild(wrap);
       });
     }
+    document.getElementById("enableColor").addEventListener("change", setupDivisionButtons);
 
-    // -------------------- Time Generation --------------------
-    function generateTimes(){
-      divisionTimes={};
-      availableDivisions.forEach(div=>{
-        divisionTimes[div]=generateDivisionTimes(div);
+    // -------------------- Time Templates --------------------
+    function addTimeTemplate(){
+      const start=document.getElementById("timeStartInput").value.trim();
+      const end=document.getElementById("timeEndInput").value.trim();
+      if(!start||!end) return;
+      timeTemplates.push({start,end,divisions:[]});
+      document.getElementById("timeStartInput").value="";
+      document.getElementById("timeEndInput").value="";
+      renderTimeTemplates();
+    }
+
+    function renderTimeTemplates(){
+      const cont=document.getElementById("timeTemplates"); cont.innerHTML="";
+      timeTemplates.forEach((tpl,idx)=>{
+        const wrap=document.createElement("div"); wrap.className="fieldWrapper";
+        const label=document.createElement("span"); label.textContent=`${tpl.start} - ${tpl.end}`;
+        wrap.appendChild(label);
+
+        availableDivisions.forEach(div=>{
+          const btn=document.createElement("button");
+          btn.textContent=div; btn.className="bunk-button";
+          if(tpl.divisions.includes(div)){ btn.style.backgroundColor=divisions[div].color; btn.style.color="#fff"; }
+          else { btn.style.backgroundColor="#fff"; btn.style.color="#000"; }
+          btn.onclick=()=>{
+            if(tpl.divisions.includes(div)){
+              tpl.divisions = tpl.divisions.filter(d=>d!==div);
+            } else {
+              tpl.divisions.push(div);
+            }
+            // Apply latest picks immediately
+            applyTemplatesToDivisions();
+            renderTimeTemplates();
+          };
+          wrap.appendChild(btn);
+        });
+
+        cont.appendChild(wrap);
       });
-      assignFieldsToBunks(); updateTable();
+
+      // Apply when first rendered (covers color toggles etc.)
+      applyTemplatesToDivisions();
     }
 
-    function generateDivisionTimes(divName){
-      const inc=parseInt(document.getElementById("increment").value);
-      const startStr=divisions[divName].start, endStr=divisions[divName].end;
-      const start=parseTime(startStr), end=parseTime(endStr);
-      if(!start||!end||start>=end) return [];
-      let arr=[]; let cur=new Date(start);
-      while(cur<end){
-        let nxt=new Date(cur.getTime()+inc*60000);
-        if(nxt>end) nxt=end;
-        arr.push(`${fmtTime(cur)} - ${fmtTime(nxt)}`);
-        cur=nxt;
+    function applyTemplatesToDivisions(){
+      // A division can be in at most one template; last template containing it wins
+      availableDivisions.forEach(div=>{
+        let match = null;
+        for(let i=timeTemplates.length-1;i>=0;i--){
+          if(timeTemplates[i].divisions.includes(div)){ match=timeTemplates[i]; break; }
+        }
+        if(match){ divisions[div].start=match.start; divisions[div].end=match.end; }
+      });
+    }
+
+    // -------------------- Generate Times (Unified Grid) --------------------
+    function generateTimes(){
+      // Build unifiedTimes from overall earliest start to latest end across all divisions with times
+      const inc = parseInt(document.getElementById("increment").value);
+
+      // ensure templates are applied
+      applyTemplatesToDivisions();
+
+      const starts = availableDivisions.map(d=>parseTime(divisions[d].start)).filter(Boolean);
+      const ends   = availableDivisions.map(d=>parseTime(divisions[d].end)).filter(Boolean);
+      if(starts.length===0 || ends.length===0){ alert("Please set time templates for divisions first."); return; }
+
+      const earliest = new Date(Math.min(...starts.map(d=>d.getTime())));
+      const latest   = new Date(Math.max(...ends.map(d=>d.getTime())));
+      unifiedTimes = [];
+      let cur = new Date(earliest);
+      while(cur < latest){
+        let nxt = new Date(cur.getTime() + inc*60000);
+        if(nxt > latest) nxt = latest;
+        unifiedTimes.push({ start:new Date(cur), end:new Date(nxt), label:`${fmtTime(cur)} - ${fmtTime(nxt)}` });
+        cur = nxt;
       }
-      return arr;
+
+      // Compute active rows per division
+      divisionActiveRows = {};
+      availableDivisions.forEach(div=>{
+        const s=parseTime(divisions[div].start), e=parseTime(divisions[div].end);
+        const rows = new Set();
+        unifiedTimes.forEach((t,idx)=>{
+          if (s && e && t.start >= s && t.start < e) rows.add(idx);
+        });
+        divisionActiveRows[div] = rows;
+      });
+
+      assignFieldsToBunks();
+      updateTable();
     }
 
-    // -------------------- Fields & Specials --------------------
+    // -------------------- Fields / Specials --------------------
     function addField(){
-      const input=document.getElementById("fieldInput"); const name=input.value.trim();
-      if(name){fields.push({name:name,activities:[],available:true}); input.value=""; renderFields();}
+      const i=document.getElementById("fieldInput"); const n=i.value.trim();
+      if(n){fields.push({name:n,activities:[],available:true});i.value="";renderFields();}
     }
     document.getElementById("addFieldBtn").onclick=addField;
     document.getElementById("fieldInput").addEventListener("keyup",e=>{if(e.key==="Enter")addField();});
 
     function renderFields(){
-      const cont=document.getElementById("fieldList"); cont.innerHTML="";
-      fields.forEach(field=>{
-        const wrap=document.createElement("div"); wrap.className="fieldWrapper"; if(!field.available)wrap.classList.add("unavailable");
-        const title=document.createElement("span"); title.className="fieldTitle"; title.textContent=field.name;
-        makeEditable(title,newName=>{field.name=newName; renderFields();}); wrap.appendChild(title);
+      const c=document.getElementById("fieldList"); c.innerHTML="";
+      fields.forEach(f=>{
+        const w=document.createElement("div"); w.className="fieldWrapper"; if(!f.available)w.classList.add("unavailable");
+        const t=document.createElement("span"); t.className="fieldTitle"; t.textContent=f.name;
+        makeEditable(t,newName=>{f.name=newName;renderFields();}); w.appendChild(t);
 
-        const toggle=document.createElement("label"); toggle.className="switch";
-        const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=field.available;
-        cb.onchange=()=>{field.available=cb.checked; renderFields();};
-        const slider=document.createElement("span"); slider.className="slider";
-        toggle.appendChild(cb); toggle.appendChild(slider); wrap.appendChild(toggle);
+        const tog=document.createElement("label"); tog.className="switch";
+        const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=f.available;
+        cb.onchange=()=>{f.available=cb.checked;renderFields();};
+        const sl=document.createElement("span"); sl.className="slider";
+        tog.appendChild(cb); tog.appendChild(sl); w.appendChild(tog);
 
-        const btnWrap=document.createElement("div"); btnWrap.style.marginTop="8px";
+        const bw=document.createElement("div"); bw.style.marginTop="8px";
         commonActivities.forEach(act=>{
-          const btn=document.createElement("button"); btn.textContent=act; btn.className="activity-button";
-          if(field.activities.includes(act))btn.classList.add("active");
-          btn.onclick=()=>{if(field.activities.includes(act))field.activities=field.activities.filter(a=>a!==act); else field.activities.push(act); renderFields();};
-          btnWrap.appendChild(btn);
+          const b=document.createElement("button"); b.textContent=act; b.className="activity-button";
+          if(f.activities.includes(act)) b.classList.add("active");
+          b.onclick=()=>{ if(f.activities.includes(act)) f.activities=f.activities.filter(a=>a!==act); else f.activities.push(act); renderFields(); };
+          bw.appendChild(b);
         });
-        wrap.appendChild(btnWrap);
+        w.appendChild(bw);
 
         const other=document.createElement("input"); other.placeholder="Other activity";
-        other.onkeyup=e=>{if(e.key==="Enter"&&other.value.trim()){const v=other.value.trim(); if(!field.activities.includes(v))field.activities.push(v); other.value=""; renderFields();}};
-        wrap.appendChild(other);
+        other.onkeyup=e=>{
+          if(e.key==="Enter" && other.value.trim()){
+            const v=other.value.trim(); if(!f.activities.includes(v)) f.activities.push(v);
+            other.value=""; renderFields();
+          }
+        };
+        w.appendChild(other);
 
-        if(field.activities.length>0){
-          const p=document.createElement("p"); p.style.marginTop="6px"; p.textContent="Activities: "+field.activities.join(", ");
-          wrap.appendChild(p);
+        if(f.activities.length>0){
+          const p=document.createElement("p"); p.style.marginTop="6px"; p.textContent="Activities: "+f.activities.join(", ");
+          w.appendChild(p);
         }
-        cont.appendChild(wrap);
+        c.appendChild(w);
       });
     }
 
     function addSpecial(){
-      const input=document.getElementById("specialInput");
-      const name=input.value.trim();
-      if(name){specialActivities.push({name:name,available:true}); input.value=""; renderSpecials();}
+      const i=document.getElementById("specialInput"); const n=i.value.trim();
+      if(n){specialActivities.push({name:n,available:true}); i.value=""; renderSpecials();}
     }
     document.getElementById("addSpecialBtn").onclick=addSpecial;
     document.getElementById("specialInput").addEventListener("keyup",e=>{if(e.key==="Enter")addSpecial();});
 
     function renderSpecials(){
-      const cont=document.getElementById("specialList"); cont.innerHTML="";
-      specialActivities.forEach(act=>{
-        const wrap=document.createElement("div"); wrap.className="fieldWrapper"; if(!act.available)wrap.classList.add("unavailable");
-        const title=document.createElement("span"); title.className="fieldTitle"; title.textContent=act.name;
-        makeEditable(title,newName=>{act.name=newName; renderSpecials();}); wrap.appendChild(title);
+      const c=document.getElementById("specialList"); c.innerHTML="";
+      specialActivities.forEach(s=>{
+        const w=document.createElement("div"); w.className="fieldWrapper"; if(!s.available)w.classList.add("unavailable");
+        const t=document.createElement("span"); t.className="fieldTitle"; t.textContent=s.name;
+        makeEditable(t,newName=>{s.name=newName;renderSpecials();}); w.appendChild(t);
 
-        const toggle=document.createElement("label"); toggle.className="switch";
-        const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=act.available;
-        cb.onchange=()=>{act.available=cb.checked; renderSpecials();};
-        const slider=document.createElement("span"); slider.className="slider";
-        toggle.appendChild(cb); toggle.appendChild(slider); wrap.appendChild(toggle);
-        cont.appendChild(wrap);
+        const tog=document.createElement("label"); tog.className="switch";
+        const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=s.available;
+        cb.onchange=()=>{s.available=cb.checked;renderSpecials();};
+        const sl=document.createElement("span"); sl.className="slider";
+        tog.appendChild(cb); tog.appendChild(sl); w.appendChild(tog);
+
+        c.appendChild(w);
       });
     }
 
@@ -365,6 +422,7 @@
       availableDivisions.forEach(divName=>{
         if(!leagues[divName]) leagues[divName]={enabled:false,sports:[]};
         const wrap=document.createElement("div"); wrap.className="fieldWrapper";
+
         const title=document.createElement("span"); title.className="fieldTitle"; title.textContent=divName;
         wrap.appendChild(title);
 
@@ -393,7 +451,7 @@
 
         const other=document.createElement("input"); other.placeholder="Other sport";
         other.onkeyup=e=>{
-          if(e.key==="Enter"&&other.value.trim()){
+          if(e.key==="Enter" && other.value.trim()){
             const val=other.value.trim();
             if(!leagues[divName].sports.includes(val)) leagues[divName].sports.push(val);
             other.value=""; renderLeagues();
@@ -410,218 +468,247 @@
       });
     }
 
-    // -------------------- Scheduling Core --------------------
+    // -------------------- Scheduling Core (Unified Grid) --------------------
     function assignFieldsToBunks() {
-      // Setup: available activities
+      // Build activity universe
       const availFields = fields.filter(f => f.available && f.activities.length>0);
       const availSpecials = specialActivities.filter(s => s.available);
 
-      if (availableDivisions.length === 0) { scheduleAssignments = {}; return; }
-
-      // Prebuild activity universe
-      const allActivitiesFlat = [
+      const allActivities = [
         ...availFields.flatMap(f => f.activities.map(act => ({type:"field", field:f, sport:act}))),
         ...availSpecials.map(sa => ({type:"special", field:{name:sa.name}, sport:null}))
       ];
-      if (allActivitiesFlat.length === 0) { alert("No activities available."); scheduleAssignments = {}; return; }
+      if (allActivities.length === 0) { alert("No activities available."); scheduleAssignments={}; return; }
 
-      // Clear & init schedules for each bunk
+      // init schedules
       scheduleAssignments = {};
       availableDivisions.forEach(div=>{
-        divisions[div].bunks.forEach(b=>{ scheduleAssignments[b]=[]; });
+        divisions[div].bunks.forEach(b=>{ scheduleAssignments[b]=new Array(unifiedTimes.length); });
       });
 
+      // Activity span in rows
       const inc = parseInt(document.getElementById("increment").value);
-      const spanLen = Math.max(1, Math.ceil(activityDuration / inc)); // how many increments an activity spans
+      const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
 
-      // Choose league slot per division (initial guess)
+      // Pick a league slot per division (must be in active rows)
       const leagueSlotByDiv = {};
       availableDivisions.forEach(div=>{
-        if (leagues[div] && leagues[div].enabled && (divisionTimes[div]||[]).length>0) {
-          leagueSlotByDiv[div] = Math.floor(Math.random() * divisionTimes[div].length);
+        if (leagues[div] && leagues[div].enabled) {
+          const active = Array.from(divisionActiveRows[div] || []);
+          if (active.length>0) {
+            leagueSlotByDiv[div] = active[Math.floor(Math.random()*active.length)];
+          }
         }
       });
 
-      // Per-division scheduling (independent time grids)
-      availableDivisions.forEach(div=>{
-        const times = divisionTimes[div] || [];
-        if (times.length === 0) return;
+      // Per unified time row
+      for (let s=0; s<unifiedTimes.length; s++){
+        // For each division, we track used fields this row to avoid conflicts
+        const usedFieldsByDiv = {};
+        availableDivisions.forEach(div=>{
+          usedFieldsByDiv[div] = new Set();
 
-        const bunksInDiv = divisions[div].bunks.slice();
-        const doneSets = {}; // track per bunk "recently used" to avoid repeats until cycling
-        bunksInDiv.forEach(b=> doneSets[b] = new Set());
-
-        for (let s = 0; s < times.length; s++) {
-          const usedFieldsThisSlot = new Set(); // prevent two bunks same field/time
-
-          // First, mark any continuations already running from previous span
-          bunksInDiv.forEach(bunk=>{
-            const entryPrev = scheduleAssignments[bunk][s];
-            if (entryPrev && entryPrev.continuation) {
-              usedFieldsThisSlot.add(entryPrev.field);
-            }
+          // mark fields in continuations already running at this row
+          divisions[div].bunks.forEach(bunk=>{
+            const entry = scheduleAssignments[bunk][s];
+            if (entry && entry.continuation) usedFieldsByDiv[div].add(entry.field);
           });
+        });
 
-          // For each bunk in the division, place activity or continuation
-          for (let bunk of bunksInDiv) {
-            // If a continuation already exists at this slot, just keep it and continue
+        for (let div of availableDivisions) {
+          const isActiveRow = divisionActiveRows[div] && divisionActiveRows[div].has(s);
+          if (!isActiveRow) continue;
+
+          for (let bunk of divisions[div].bunks) {
+            // If this row is part of a previous span, continue it (already marked)
             if (scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s].continuation) continue;
 
-            // Check if previous slots started a span that should continue
-            let continued = false;
-            // Find the nearest non-empty entry before s
-            let lastIdx = s-1;
+            // Compute last non-null entry before s
+            let lastIdx = s-1, lastEntry = null;
             while (lastIdx>=0 && !scheduleAssignments[bunk][lastIdx]) lastIdx--;
-            if (lastIdx>=0) {
-              const lastEntry = scheduleAssignments[bunk][lastIdx];
-              // If lastEntry is not a continuation and spans into this slot, continue it
-              if (lastEntry && !lastEntry.continuation) {
-                const startOfSpan = lastIdx;
-                // count how many slots already filled for that span
-                let countSpan = 1;
-                for (let k = startOfSpan+1; k < s; k++) {
-                  if (scheduleAssignments[bunk][k] && scheduleAssignments[bunk][k].continuation) countSpan++;
-                }
-                if (countSpan < spanLen) {
-                  // continue the same activity
-                  scheduleAssignments[bunk][s] = { field: lastEntry.field, sport: lastEntry.sport, continuation: true, isLeague:lastEntry.isLeague||false };
-                  usedFieldsThisSlot.add(lastEntry.field);
-                  continued = true;
-                }
-              }
-            }
-            if (continued) continue;
+            if (lastIdx>=0) lastEntry = scheduleAssignments[bunk][lastIdx];
 
-            const lastEntry = (s>0) ? scheduleAssignments[bunk][s-1] : null;
-
-            // ---- Leagues handling ----
+            // ---- Leagues handling (one slot per division) ----
             if (leagueSlotByDiv[div] === s && leagues[div] && leagues[div].enabled) {
-              // avoid back-to-back leagues; auto-shift forward
+              // avoid back-to-back leagues by shifting forward for this bunk
               if (lastEntry && lastEntry.isLeague) {
-                // shift to next index that is not immediately after another league for this bunk
-                let t = s+1;
-                while (t < times.length) {
-                  const prev = scheduleAssignments[bunk][t-1];
-                  if (!(prev && prev.isLeague)) break;
-                  t++;
-                }
-                leagueSlotByDiv[div] = Math.min(t, times.length-1);
+                // push division league slot forward to next active row not right after another league
+                let next = s+1;
+                while (next<unifiedTimes.length && (!divisionActiveRows[div].has(next))) next++;
+                leagueSlotByDiv[div] = Math.min(next, unifiedTimes.length-1);
               }
               if (leagueSlotByDiv[div] === s) {
-                // schedule a league game spanning spanLen
-                scheduleAssignments[bunk][s] = { field: "Leagues", sport: null, continuation: false, isLeague: true };
-                for (let k=1; k<spanLen && s+k<times.length; k++) {
-                  scheduleAssignments[bunk][s+k] = { field: "Leagues", sport: null, continuation: true, isLeague: true };
+                scheduleAssignments[bunk][s] = { field:"Leagues", sport:null, continuation:false, isLeague:true };
+                // span forward within active rows
+                let placed = 1, k = 1;
+                while (placed < spanLen && (s+k)<unifiedTimes.length && divisionActiveRows[div].has(s+k)) {
+                  scheduleAssignments[bunk][s+k] = { field:"Leagues", sport:null, continuation:true, isLeague:true };
+                  placed++; k++;
                 }
-                usedFieldsThisSlot.add("Leagues");
+                usedFieldsByDiv[div].add("Leagues");
                 continue;
               }
             }
 
             // ---- Regular activities ----
-            // Build candidates excluding fields already used in this division/time
-            let candidates = allActivitiesFlat.filter(c => !usedFieldsThisSlot.has(c.field.name));
+            // If a previous span should continue (within active rows)
+            if (lastEntry && !lastEntry.continuation) {
+              // Count how many continuation rows already set after last start
+              let countDone = 1;
+              let t = lastIdx+1;
+              while (t<s && scheduleAssignments[bunk][t] && scheduleAssignments[bunk][t].continuation) { countDone++; t++; }
+              if (countDone < spanLen) {
+                // continue it
+                scheduleAssignments[bunk][s] = { field:lastEntry.field, sport:lastEntry.sport, continuation:true, isLeague:lastEntry.isLeague||false };
+                usedFieldsByDiv[div].add(lastEntry.field);
+                continue;
+              }
+            }
+
+            // Build candidates excluding used fields at this row for this division
+            let candidates = allActivities.filter(c => !usedFieldsByDiv[div].has(c.field.name));
 
             // Exclude back-to-back same sport/field/special
             candidates = candidates.filter(c => {
               if (!lastEntry) return true;
-              if (lastEntry.isLeague && c.type==="field") {
-                // ok, just don't repeat same field immediately after a league (very rare)
-                if (c.field.name === lastEntry.field) return false;
+              if (lastEntry.isLeague) {
+                if (c.field.name === "Leagues") return false; // avoid back-to-back leagues anyway
+                if (c.type==="field" && c.field.name === lastEntry.field) return false;
               }
-              // prevent repeating sport back-to-back
               if (c.type==="field" && lastEntry.sport && c.sport === lastEntry.sport) return false;
-              // prevent repeating same field/special back-to-back
               if (c.field.name === lastEntry.field) return false;
               return true;
             });
 
-            // Prefer things this bunk hasn't done recently (simple fairness)
-            let preferred = candidates.filter(c => !doneSets[bunk].has(c.type==="field" ? c.sport : c.field.name));
-            let chosen = (preferred.length>0 ? preferred : candidates)[Math.floor(Math.random()*(preferred.length>0 ? preferred.length : candidates.length))];
+            // Simple fairness tracker (avoid overusing same items)
+            scheduleAssignments.__done = scheduleAssignments.__done || {};
+            scheduleAssignments.__done[bunk] = scheduleAssignments.__done[bunk] || new Set();
+            const doneSet = scheduleAssignments.__done[bunk];
+            const preferred = candidates.filter(c => !doneSet.has(c.type==="field" ? c.sport : c.field.name));
+            let chosen = (preferred.length>0 ? preferred : candidates)[Math.floor(Math.random()*(preferred.length>0 ? preferred.length : candidates.length) )];
 
-            // fallback: if no candidate (e.g., all blocked), pick anything that isn't exact repeat
-            if (!chosen && allActivitiesFlat.length>0) {
-              let tries = allActivitiesFlat.slice();
+            // fallback if no candidate
+            if (!chosen && allActivities.length>0) {
+              let tries = allActivities.slice();
               do {
                 chosen = tries.splice(Math.floor(Math.random()*tries.length),1)[0];
               } while (chosen && lastEntry && (chosen.field.name===lastEntry.field || chosen.sport===lastEntry.sport) && tries.length>0);
             }
-
             if (!chosen) continue;
 
-            // place chosen spanning spanLen
-            scheduleAssignments[bunk][s] = { field: chosen.field.name, sport: chosen.sport, continuation: false, isLeague:false };
-            usedFieldsThisSlot.add(chosen.field.name);
-            doneSets[bunk].add(chosen.type==="field" ? chosen.sport : chosen.field.name);
+            // place chosen and span forward inside active rows
+            scheduleAssignments[bunk][s] = { field:chosen.field.name, sport:chosen.sport, continuation:false, isLeague:false };
+            usedFieldsByDiv[div].add(chosen.field.name);
+            doneSet.add(chosen.type==="field" ? chosen.sport : chosen.field.name);
 
-            for (let k=1; k<spanLen && (s+k)<times.length; k++) {
-              scheduleAssignments[bunk][s+k] = { field: chosen.field.name, sport: chosen.sport, continuation: true, isLeague:false };
+            let placed = 1, k=1;
+            while (placed < spanLen && (s+k) < unifiedTimes.length && divisionActiveRows[div].has(s+k)) {
+              scheduleAssignments[bunk][s+k] = { field:chosen.field.name, sport:chosen.sport, continuation:true, isLeague:false };
+              placed++; k++;
             }
           }
         }
-      });
+      }
     }
 
-    // -------------------- Rendering --------------------
+    // -------------------- Rendering (Unified Grid + Merged Cells) --------------------
     function updateTable(){
       const scheduleTab = document.getElementById("schedule");
       scheduleTab.innerHTML = ""; // clear
 
+      if (unifiedTimes.length === 0) return;
+
+      // Clear any previous _skip flags
+      Object.keys(scheduleAssignments).forEach(b=>{
+        if (Array.isArray(scheduleAssignments[b])) {
+          scheduleAssignments[b].forEach(e=>{ if(e) delete e._skip; });
+        }
+      });
+
+      const table=document.createElement("table");
+      table.className="division-schedule";
+
+      // Header rows
+      const thead=document.createElement("thead");
+
+      const row1=document.createElement("tr");
+      const thTime=document.createElement("th"); thTime.textContent="Time"; row1.appendChild(thTime);
       availableDivisions.forEach(div=>{
-        const times = divisionTimes[div];
-        if (!times || times.length === 0) return;
+        const th=document.createElement("th");
+        th.colSpan = divisions[div].bunks.length || 1;
+        th.textContent=div;
+        th.style.background=divisions[div].color; th.style.color="#fff";
+        row1.appendChild(th);
+      });
+      thead.appendChild(row1);
 
-        const table = document.createElement("table");
-        table.className = "division-schedule";
-        const caption = document.createElement("caption");
-        caption.textContent = div + " Schedule";
-        table.appendChild(caption);
-
-        // header row
-        const thead = document.createElement("thead");
-        const headRow = document.createElement("tr");
-        const thTime = document.createElement("th"); thTime.textContent="Time"; headRow.appendChild(thTime);
-        divisions[div].bunks.forEach(b => {
-          const thB = document.createElement("th"); thB.textContent = b; thB.style.background=divisions[div].color; thB.style.color="#fff";
-          headRow.appendChild(thB);
+      const row2=document.createElement("tr");
+      const thBunkLabel=document.createElement("th"); thBunkLabel.textContent="Bunk"; row2.appendChild(thBunkLabel);
+      availableDivisions.forEach(div=>{
+        divisions[div].bunks.forEach(b=>{
+          const th=document.createElement("th"); th.textContent=b; row2.appendChild(th);
         });
-        thead.appendChild(headRow); table.appendChild(thead);
+      });
+      thead.appendChild(row2);
+      table.appendChild(thead);
 
-        const tbody = document.createElement("tbody");
+      const tbody=document.createElement("tbody");
 
-        for (let rowIdx=0; rowIdx<times.length; rowIdx++){
-          const tr = document.createElement("tr");
-          const tdTime = document.createElement("td"); tdTime.textContent = times[rowIdx]; tr.appendChild(tdTime);
+      for (let s=0; s<unifiedTimes.length; s++){
+        const tr=document.createElement("tr");
+        const tdTime=document.createElement("td"); tdTime.textContent=unifiedTimes[s].label; tr.appendChild(tdTime);
 
+        availableDivisions.forEach(div=>{
+          const activeSet = divisionActiveRows[div] || new Set();
           divisions[div].bunks.forEach(bunk=>{
-            const td = document.createElement("td");
-            const entry = scheduleAssignments[bunk] ? scheduleAssignments[bunk][rowIdx] : null;
-            if (entry) {
+            // Skip if part of a merged cell from a previous row
+            if (scheduleAssignments[bunk] && scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s]._skip) return;
+
+            const td=document.createElement("td");
+            const isActive = activeSet.has(s);
+
+            if (!isActive) {
+              td.className="grey-cell";
+              tr.appendChild(td);
+              return;
+            }
+
+            const entry = scheduleAssignments[bunk] ? scheduleAssignments[bunk][s] : null;
+            if (entry && !entry.continuation) {
+              // determine rowspan by scanning forward over continuation rows
+              let span=1;
+              for (let k=s+1; k<unifiedTimes.length; k++){
+                const e2 = scheduleAssignments[bunk][k];
+                if (!e2 || !e2.continuation || e2.field!==entry.field || e2.sport!==entry.sport || e2.isLeague!==entry.isLeague) break;
+                span++;
+                // mark skip so we don't render duplicate cells
+                scheduleAssignments[bunk][k]._skip = true;
+              }
+              td.rowSpan = span;
               if (entry.isLeague) {
-                td.innerHTML = `<span class="league-pill">Leagues</span>` + (entry.continuation ? ' <span class="continuation">→</span>' : '');
-              } else if (entry.continuation) {
-                td.innerHTML = `<span class="continuation">→</span>`;
+                td.innerHTML = `<span class="league-pill">Leagues</span>`;
               } else {
                 td.textContent = entry.sport ? `${entry.field} – ${entry.sport}` : entry.field;
               }
+            } else if (!entry) {
+              td.textContent = ""; // empty (should be rare if activities exist)
             } else {
-              td.textContent = ""; // should be rare; filled by design
+              // continuation handled by skip/rowspan
             }
+
             tr.appendChild(td);
           });
+        });
 
-          tbody.appendChild(tr);
-        }
+        tbody.appendChild(tr);
+      }
 
-        table.appendChild(tbody);
-        scheduleTab.appendChild(table);
-      });
+      table.appendChild(tbody);
+      scheduleTab.appendChild(table);
     }
 
     // -------------------- Init --------------------
-    // Basic hooks
-    document.getElementById("enableColor").addEventListener("change", setupDivisionButtons);
+    document.getElementById("addFieldBtn").disabled = false;
   </script>
 </body>
 </html>
