@@ -155,3 +155,4 @@ function generateTimes(){
   assignFieldsToBunks();
   updateTable();
 }
+
