@@ -221,4 +221,6 @@ function updateTable(){
 }
 
 // -------------------- Init --------------------
-document.getElementById("addFieldBtn").disabled = false;
+window.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("addFieldBtn").disabled = false;
+});
