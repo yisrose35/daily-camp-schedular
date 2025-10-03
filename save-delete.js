@@ -1,4 +1,4 @@
-// -------------------- Save / Load / Erase --------------------
+// -------------------- Auto Save / Load / Erase --------------------
 
 // Save the current state into localStorage
 function saveData() {
@@ -12,10 +12,10 @@ function saveData() {
     leagues,
     timeTemplates,
     activityDuration,
-    unifiedTimes
+    unifiedTimes,
+    scheduleAssignments
   };
   localStorage.setItem("campSchedulerData", JSON.stringify(state));
-  alert("✅ Data saved successfully!");
 }
 
 // Load state from localStorage
@@ -36,6 +36,7 @@ function loadData() {
     timeTemplates = state.timeTemplates || [];
     activityDuration = state.activityDuration || 30;
     unifiedTimes = state.unifiedTimes || [];
+    scheduleAssignments = state.scheduleAssignments || {};
 
     // After loading, re-render everything
     renderBunks();
@@ -44,11 +45,9 @@ function loadData() {
     renderSpecialActivities();
     renderTimeTemplates();
     renderLeagues();
-
-    alert("📂 Data loaded successfully!");
+    renderScheduleTable();
   } catch (e) {
     console.error("Error loading saved data:", e);
-    alert("⚠️ Failed to load saved data.");
   }
 }
 
@@ -83,7 +82,27 @@ function eraseData() {
   }
 }
 
-// -------------------- Auto Load on Page Start --------------------
+// -------------------- Auto Save on Changes --------------------
+// Wrap key render/input functions so every change gets saved
+
+function autoSaveWrapper(originalFn) {
+  return function (...args) {
+    const result = originalFn.apply(this, args);
+    saveData();
+    return result;
+  };
+}
+
+// Wrap your render and mutating functions so any update triggers save
 window.addEventListener("DOMContentLoaded", () => {
   loadData();
+
+  // Wrap functions that change state
+  if (typeof renderBunks === "function") renderBunks = autoSaveWrapper(renderBunks);
+  if (typeof renderDivisions === "function") renderDivisions = autoSaveWrapper(renderDivisions);
+  if (typeof renderFields === "function") renderFields = autoSaveWrapper(renderFields);
+  if (typeof renderSpecialActivities === "function") renderSpecialActivities = autoSaveWrapper(renderSpecialActivities);
+  if (typeof renderTimeTemplates === "function") renderTimeTemplates = autoSaveWrapper(renderTimeTemplates);
+  if (typeof renderLeagues === "function") renderLeagues = autoSaveWrapper(renderLeagues);
+  if (typeof renderScheduleTable === "function") renderScheduleTable = autoSaveWrapper(renderScheduleTable);
 });
