@@ -10,11 +10,10 @@ function assignFieldsToBunks() {
   if (allActivities.length === 0) {
     alert("No activities available.");
     scheduleAssignments = {};
-    try { saveState(); } catch(_) {}
     return;
   }
 
-  // Reset schedules for current bunks
+  // Reset schedules
   scheduleAssignments = {};
   availableDivisions.forEach(div => {
     divisions[div].bunks.forEach(b => { scheduleAssignments[b] = new Array(unifiedTimes.length); });
@@ -103,7 +102,7 @@ function assignFieldsToBunks() {
           return canUseResource(resourceKey, startTime, endTime);
         });
 
-        // Avoid back-to-back same resource/sport/league
+        // Avoid back-to-back same resource
         candidates = candidates.filter(c => {
           if (!lastEntry) return true;
           if (lastEntry.isLeague) {
@@ -122,7 +121,7 @@ function assignFieldsToBunks() {
         scheduleAssignments[bunk][s] = { field: chosen.field.name, sport: chosen.sport, continuation: false, isLeague: false };
         usedFieldsByDiv[div].add(chosen.field.name);
 
-        // Reserve globally so no other bunk can collide on this resource/time
+        // Reserve globally
         reserveResource(chosen.field.name, startTime, endTime);
 
         // Mark continuations
@@ -134,18 +133,15 @@ function assignFieldsToBunks() {
       }
     }
   }
-
-  try { saveState(); } catch(_) {}
 }
 
 // -------------------- Rendering (Unified Grid + Merged Cells) --------------------
 function updateTable() {
   const scheduleTab = document.getElementById("schedule");
   scheduleTab.innerHTML = "";
-  if (!unifiedTimes || unifiedTimes.length === 0) return;
+  if (unifiedTimes.length === 0) return;
 
-  // Clean previous _skip flags
-  Object.keys(scheduleAssignments || {}).forEach(b => {
+  Object.keys(scheduleAssignments).forEach(b => {
     if (Array.isArray(scheduleAssignments[b])) {
       scheduleAssignments[b].forEach(e => { if (e) delete e._skip; });
     }
@@ -154,7 +150,6 @@ function updateTable() {
   const table = document.createElement("table");
   table.className = "division-schedule";
 
-  // Header rows
   const thead = document.createElement("thead");
   const row1 = document.createElement("tr");
   const thTime = document.createElement("th"); thTime.textContent = "Time"; row1.appendChild(thTime);
@@ -177,7 +172,6 @@ function updateTable() {
   thead.appendChild(row2);
   table.appendChild(thead);
 
-  // Body
   const tbody = document.createElement("tbody");
 
   for (let s = 0; s < unifiedTimes.length; s++) {
@@ -187,7 +181,6 @@ function updateTable() {
     availableDivisions.forEach(div => {
       const activeSet = divisionActiveRows[div] || new Set();
       divisions[div].bunks.forEach(bunk => {
-        // If merged into a previous cell
         if (scheduleAssignments[bunk] && scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s]._skip) return;
 
         const td = document.createElement("td");
@@ -229,7 +222,4 @@ function updateTable() {
 }
 
 // -------------------- Init --------------------
-function initSchedule() {
-  updateTable();
-}
-document.addEventListener("DOMContentLoaded", initSchedule);
+document.getElementById("addFieldBtn").disabled = false;
