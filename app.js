@@ -420,17 +420,27 @@ function assignFieldsToBunks() {
           }
         }
 
-        let candidates = allActivities.filter(c => !usedFieldsByDiv[div].has(c.field.name));
-        candidates = candidates.filter(c => {
-          if (!lastEntry) return true;
-          if (lastEntry.isLeague) {
-            if (c.field.name === "Leagues") return false;
-            if (c.type==="field" && c.field.name === lastEntry.field) return false;
-          }
-          if (c.type==="field" && lastEntry.sport && c.sport === lastEntry.sport) return false;
-          if (c.field.name === lastEntry.field) return false;
-          return true;
-        });
+        let candidates = allActivities.filter(c => {
+  // Exclude if already in use this row
+  if (usedFieldsByDiv[div].has(c.field.name)) return false;
+
+  // Exclude if this activity would overlap with an existing assignment in later rows
+  for (let k = 0; k < spanLen; k++) {
+    const futureRow = s + k;
+    if (futureRow >= unifiedTimes.length) break;
+
+    // Check every bunk in this division
+    for (let otherBunk of divisions[div].bunks) {
+      if (otherBunk === bunk) continue;
+      const e = scheduleAssignments[otherBunk][futureRow];
+      if (e && e.field === c.field.name) {
+        return false; // overlap conflict
+      }
+    }
+  }
+  return true;
+});
+
 
         scheduleAssignments.__done = scheduleAssignments.__done || {};
         scheduleAssignments.__done[bunk] = scheduleAssignments.__done[bunk] || new Set();
