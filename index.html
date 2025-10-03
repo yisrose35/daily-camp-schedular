@@ -12,11 +12,12 @@
 
     table { border-collapse: collapse; margin-top: 20px; width: 100%; }
     th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 140px; }
+    caption { font-weight: bold; margin: 10px 0; }
 
     .bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; display: inline-block; }
     .selected { outline: 3px solid #90CAF9; }
     #unassignedBunks { margin-top: 10px; }
-    .divisionWrapper { display: inline-block; margin-right: 10px; }
+    .divisionWrapper { display: inline-block; margin: 6px; padding: 6px; border: 1px dashed #ccc; border-radius: 6px; }
     .colorPicker { width: 30px; height: 30px; border: none; cursor: pointer; vertical-align: middle; margin-left: 6px; }
 
     .fieldWrapper { border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 6px; }
@@ -34,6 +35,9 @@
       background-color: white; transition: .4s; border-radius: 50%; }
     input:checked + .slider { background-color: #4CAF50; }
     input:checked + .slider:before { transform: translateX(20px); }
+
+    .continuation { opacity: 0.7; font-style: italic; }
+    .league-pill { background:#4CAF50; color:#fff; padding:2px 6px; border-radius:12px; }
   </style>
 </head>
 <body>
@@ -58,16 +62,23 @@
     <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable colors</label>
     <div id="divisionButtons" style="margin-top:8px;"></div>
 
-    <h3>Generate Times</h3>
-    Start: <input type="text" id="startTime" placeholder="e.g., 11:30 AM">
-    End: <input type="text" id="endTime" placeholder="e.g., 5:30 PM">
-    Increment:
+    <h3>Schedule Increments</h3>
     <select id="increment">
-      <option value="15">15 min</option>
-      <option value="30">30 min</option>
-      <option value="45">45 min</option>
-      <option value="60">60 min</option>
+      <option value="15">15 minutes</option>
+      <option value="30" selected>30 minutes</option>
+      <option value="45">45 minutes</option>
+      <option value="60">60 minutes</option>
     </select>
+
+    <h3>Activity Duration</h3>
+    <select id="activityDuration">
+      <option value="15">15 minutes</option>
+      <option value="30" selected>30 minutes</option>
+      <option value="45">45 minutes</option>
+      <option value="60">60 minutes</option>
+      <option value="90">90 minutes</option>
+    </select>
+
     <button onclick="generateTimes()">Generate</button>
 
     <h3>Add Fields/Courts</h3>
@@ -82,15 +93,7 @@
   </div>
 
   <!-- Schedule Tab -->
-  <div id="schedule" class="tab-content">
-    <table id="scheduleTable" style="display:none;">
-      <thead>
-        <tr id="divisionRow"></tr>
-        <tr id="bunkRow"></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
+  <div id="schedule" class="tab-content"></div>
 
   <!-- Leagues Tab -->
   <div id="leagues" class="tab-content">
@@ -99,14 +102,31 @@
   </div>
 
   <script>
-    let bunks = [], divisions = {}, availableDivisions = [], selectedDivision = null;
-    let times = [], fields = [], specialActivities = [], scheduleAssignments = {};
+    // -------------------- State --------------------
+    let bunks = [];
+    let divisions = {};                 // { [divName]: { bunks:[], color, start, end } }
+    let availableDivisions = [];
+    let selectedDivision = null;
+
+    let divisionTimes = {};             // { [divName]: [ "11:00 AM - 11:15 AM", ... ] }
+    let fields = [];                    // [{ name, activities:[], available:true }]
+    let specialActivities = [];         // [{ name, available:true }]
+
+    let scheduleAssignments = {};       // { [bunkName]: [ {field,sport,continuation,isLeague}, ... ] } (per its division's length)
+    let activityDuration = 30;
+
     const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
     let colorIndex = 0;
+
     const commonActivities = ["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
     const leagueSports = ["Basketball","Hockey","Volleyball","Soccer","Kickball","Punchball","Baseball"];
-    let leagues = {};
+    let leagues = {};                   // { [divName]: { enabled:boolean, sports:string[] } }
 
+    document.getElementById("activityDuration").onchange = function(){
+      activityDuration = parseInt(this.value);
+    };
+
+    // -------------------- Helpers --------------------
     function makeEditable(el, save){
       el.ondblclick = e => {
         e.stopPropagation();
@@ -116,13 +136,27 @@
         el.replaceWith(input); input.focus();
         function done(){
           const val=input.value.trim();
-          if(val&&val!==old) save(val);
-          el.textContent=val||old; input.replaceWith(el);
+          if(val && val!==old) save(val);
+          el.textContent = val || old;
+          input.replaceWith(el);
         }
         input.onblur=done; input.onkeyup=e=>{if(e.key==="Enter")done();};
       };
     }
+    function parseTime(str){
+      if(!str) return null;
+      const m=str.match(/^(\d{1,2}):(\d{2})(\s*)?(AM|PM)$/i);
+      if(!m) return null;
+      let h=parseInt(m[1],10), min=parseInt(m[2],10), ap=m[4].toUpperCase();
+      if(ap==="PM"&&h!==12)h+=12; if(ap==="AM"&&h===12)h=0;
+      return new Date(0,0,0,h,min);
+    }
+    function fmtTime(d){
+      let h=d.getHours(), m=d.getMinutes().toString().padStart(2,"0"), ap=h>=12?"PM":"AM";
+      h=h%12||12; return `${h}:${m} ${ap}`;
+    }
 
+    // -------------------- Tabs --------------------
     function showTab(id){
       document.querySelectorAll('.tab-button').forEach(b=>b.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
@@ -132,6 +166,7 @@
       if(id==='leagues') renderLeagues();
     }
 
+    // -------------------- Bunks --------------------
     function addBunk(){
       const input=document.getElementById("bunkInput");
       if(input.value.trim()!==""){
@@ -155,8 +190,7 @@
         }
         if(assignedDiv){
           const divColor=divisions[assignedDiv].color;
-          span.style.backgroundColor=divColor;
-          span.style.color="#fff";
+          span.style.backgroundColor=divColor; span.style.color="#fff";
         }
         span.onclick=()=>{
           if(selectedDivision && (!assignedDiv || assignedDiv!==selectedDivision)){
@@ -166,23 +200,22 @@
             }
             divisions[selectedDivision].bunks.push(bunk);
             updateUnassigned(); updateTable();
-          } else if(!selectedDivision){
-            alert("Select a division first!");
-          }
+          } else if(!selectedDivision){ alert("Select a division first!"); }
         };
         makeEditable(span,newName=>{
-          const idx=bunks.indexOf(bunk);
-          if(idx!==-1) bunks[idx]=newName;
+          const idx=bunks.indexOf(bunk); if(idx!==-1) bunks[idx]=newName;
           for(const div of Object.values(divisions)){
-            const i=div.bunks.indexOf(bunk);
-            if(i!==-1) div.bunks[i]=newName;
+            const i=div.bunks.indexOf(bunk); if(i!==-1) div.bunks[i]=newName;
           }
+          scheduleAssignments[newName]=scheduleAssignments[bunk]||[];
+          delete scheduleAssignments[bunk];
           updateUnassigned(); updateTable();
         });
         container.appendChild(span);
       });
     }
 
+    // -------------------- Divisions --------------------
     function addDivision(){
       const input=document.getElementById("divisionInput");
       if(input.value.trim()==="")return;
@@ -190,8 +223,9 @@
       if(!availableDivisions.includes(name)){
         const color=defaultColors[colorIndex%defaultColors.length]; colorIndex++;
         availableDivisions.push(name);
-        divisions[name]={bunks:[],color:color};
-        input.value=""; setupDivisionButtons(); updateTable(); renderLeagues();
+        divisions[name]={bunks:[],color:color,start:null,end:null};
+        input.value="";
+        setupDivisionButtons(); updateTable(); renderLeagues();
       }
     }
     document.getElementById("addDivisionBtn").onclick=addDivision;
@@ -211,42 +245,56 @@
           divisions[newName]=divisions[name]; delete divisions[name];
           availableDivisions[availableDivisions.indexOf(name)]=newName;
           if(selectedDivision===name)selectedDivision=newName;
+          // move leagues config
+          leagues[newName]=leagues[name]||{enabled:false,sports:[]}; delete leagues[name];
+          // move times
+          divisionTimes[newName]=divisionTimes[name]||[]; delete divisionTimes[name];
           setupDivisionButtons(); updateTable(); renderLeagues();
         });
         wrap.appendChild(span);
+
         const col=document.createElement("input"); col.type="color"; col.value=obj.color; col.className="colorPicker";
         col.oninput=e=>{obj.color=e.target.value; if(colorEnabled){span.style.backgroundColor=e.target.value; span.style.color="#fff";} updateTable();};
-        wrap.appendChild(col); cont.appendChild(wrap);
+        wrap.appendChild(col);
+
+        // Per-division start/end inputs
+        const start=document.createElement("input"); start.placeholder="Start (e.g. 11:00 AM)"; start.style.marginLeft="8px";
+        start.value=obj.start||""; start.onchange=()=>{obj.start=start.value;};
+        const end=document.createElement("input"); end.placeholder="End (e.g. 4:30 PM)"; end.style.marginLeft="6px";
+        end.value=obj.end||""; end.onchange=()=>{obj.end=end.value;};
+        wrap.appendChild(start); wrap.appendChild(end);
+
+        cont.appendChild(wrap);
       });
     }
 
+    // -------------------- Time Generation --------------------
     function generateTimes(){
-      const startStr=document.getElementById("startTime").value.trim();
-      const endStr=document.getElementById("endTime").value.trim();
-      const inc=parseInt(document.getElementById("increment").value);
-
-      function parseTime(str){
-        str = str.trim();
-        const m=str.match(/^(\d{1,2}):(\d{2})(\s*)?(AM|PM)$/i);
-        if(!m) return null;
-        let h=parseInt(m[1],10), min=parseInt(m[2],10), ampm=m[4].toUpperCase();
-        if(ampm==="PM"&&h!==12)h+=12;
-        if(ampm==="AM"&&h===12)h=0;
-        return new Date(0,0,0,h,min);
-      }
-
-      const start=parseTime(startStr), end=parseTime(endStr);
-      if(!start||!end||start>=end){alert("Enter valid times like 11:30 AM and 5:30 PM."); return;}
-      times=[]; let cur=new Date(start);
-      function fmt(d){let h=d.getHours(),m=d.getMinutes().toString().padStart(2,"0"),ap=h>=12?"PM":"AM"; h=h%12||12; return `${h}:${m} ${ap}`;}
-      while(cur<end){let nxt=new Date(cur.getTime()+inc*60000); if(nxt>end)nxt=end; times.push(`${fmt(cur)} - ${fmt(nxt)}`); cur=nxt;}
+      divisionTimes={};
+      availableDivisions.forEach(div=>{
+        divisionTimes[div]=generateDivisionTimes(div);
+      });
       assignFieldsToBunks(); updateTable();
     }
-    document.getElementById("startTime").addEventListener("keyup",e=>{if(e.key==="Enter")document.getElementById("endTime").focus();});
 
+    function generateDivisionTimes(divName){
+      const inc=parseInt(document.getElementById("increment").value);
+      const startStr=divisions[divName].start, endStr=divisions[divName].end;
+      const start=parseTime(startStr), end=parseTime(endStr);
+      if(!start||!end||start>=end) return [];
+      let arr=[]; let cur=new Date(start);
+      while(cur<end){
+        let nxt=new Date(cur.getTime()+inc*60000);
+        if(nxt>end) nxt=end;
+        arr.push(`${fmtTime(cur)} - ${fmtTime(nxt)}`);
+        cur=nxt;
+      }
+      return arr;
+    }
+
+    // -------------------- Fields & Specials --------------------
     function addField(){
-      const input=document.getElementById("fieldInput");
-      const name=input.value.trim();
+      const input=document.getElementById("fieldInput"); const name=input.value.trim();
       if(name){fields.push({name:name,activities:[],available:true}); input.value=""; renderFields();}
     }
     document.getElementById("addFieldBtn").onclick=addField;
@@ -258,22 +306,30 @@
         const wrap=document.createElement("div"); wrap.className="fieldWrapper"; if(!field.available)wrap.classList.add("unavailable");
         const title=document.createElement("span"); title.className="fieldTitle"; title.textContent=field.name;
         makeEditable(title,newName=>{field.name=newName; renderFields();}); wrap.appendChild(title);
+
         const toggle=document.createElement("label"); toggle.className="switch";
         const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=field.available;
         cb.onchange=()=>{field.available=cb.checked; renderFields();};
         const slider=document.createElement("span"); slider.className="slider";
         toggle.appendChild(cb); toggle.appendChild(slider); wrap.appendChild(toggle);
+
         const btnWrap=document.createElement("div"); btnWrap.style.marginTop="8px";
         commonActivities.forEach(act=>{
           const btn=document.createElement("button"); btn.textContent=act; btn.className="activity-button";
           if(field.activities.includes(act))btn.classList.add("active");
           btn.onclick=()=>{if(field.activities.includes(act))field.activities=field.activities.filter(a=>a!==act); else field.activities.push(act); renderFields();};
           btnWrap.appendChild(btn);
-        }); wrap.appendChild(btnWrap);
+        });
+        wrap.appendChild(btnWrap);
+
         const other=document.createElement("input"); other.placeholder="Other activity";
         other.onkeyup=e=>{if(e.key==="Enter"&&other.value.trim()){const v=other.value.trim(); if(!field.activities.includes(v))field.activities.push(v); other.value=""; renderFields();}};
         wrap.appendChild(other);
-        if(field.activities.length>0){const p=document.createElement("p"); p.style.marginTop="6px"; p.textContent="Activities: "+field.activities.join(", "); wrap.appendChild(p);}
+
+        if(field.activities.length>0){
+          const p=document.createElement("p"); p.style.marginTop="6px"; p.textContent="Activities: "+field.activities.join(", ");
+          wrap.appendChild(p);
+        }
         cont.appendChild(wrap);
       });
     }
@@ -292,6 +348,7 @@
         const wrap=document.createElement("div"); wrap.className="fieldWrapper"; if(!act.available)wrap.classList.add("unavailable");
         const title=document.createElement("span"); title.className="fieldTitle"; title.textContent=act.name;
         makeEditable(title,newName=>{act.name=newName; renderSpecials();}); wrap.appendChild(title);
+
         const toggle=document.createElement("label"); toggle.className="switch";
         const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=act.available;
         cb.onchange=()=>{act.available=cb.checked; renderSpecials();};
@@ -301,6 +358,7 @@
       });
     }
 
+    // -------------------- Leagues --------------------
     function renderLeagues(){
       const container=document.getElementById("leaguesContainer");
       container.innerHTML="";
@@ -309,135 +367,261 @@
         const wrap=document.createElement("div"); wrap.className="fieldWrapper";
         const title=document.createElement("span"); title.className="fieldTitle"; title.textContent=divName;
         wrap.appendChild(title);
+
         const toggle=document.createElement("label"); toggle.className="switch";
         const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=leagues[divName].enabled;
         cb.onchange=()=>{leagues[divName].enabled=cb.checked; renderLeagues();};
-        const slider=document.createElement("span"); slider.className="slider"; toggle.appendChild(cb); toggle.appendChild(slider);
+        const slider=document.createElement("span"); slider.className="slider";
+        toggle.appendChild(cb); toggle.appendChild(slider);
         wrap.appendChild(toggle);
+
         const btnWrap=document.createElement("div"); btnWrap.style.marginTop="8px";
         leagueSports.forEach(sport=>{
           const btn=document.createElement("button"); btn.textContent=sport; btn.className="activity-button";
           if(leagues[divName].sports.includes(sport)) btn.classList.add("active");
-          btn.onclick=()=>{if(leagues[divName].sports.includes(sport)){leagues[divName].sports=leagues[divName].sports.filter(s=>s!==sport);} else {leagues[divName].sports.push(sport);} renderLeagues();};
+          btn.onclick=()=>{
+            if(leagues[divName].sports.includes(sport)){
+              leagues[divName].sports = leagues[divName].sports.filter(s=>s!==sport);
+            } else {
+              leagues[divName].sports.push(sport);
+            }
+            renderLeagues();
+          };
           btnWrap.appendChild(btn);
-        }); wrap.appendChild(btnWrap);
+        });
+        wrap.appendChild(btnWrap);
+
         const other=document.createElement("input"); other.placeholder="Other sport";
-        other.onkeyup=e=>{if(e.key==="Enter"&&other.value.trim()){const val=other.value.trim(); if(!leagues[divName].sports.includes(val)){leagues[divName].sports.push(val);} other.value=""; renderLeagues();}};
+        other.onkeyup=e=>{
+          if(e.key==="Enter"&&other.value.trim()){
+            const val=other.value.trim();
+            if(!leagues[divName].sports.includes(val)) leagues[divName].sports.push(val);
+            other.value=""; renderLeagues();
+          }
+        };
         wrap.appendChild(other);
-        if(leagues[divName].sports.length>0){const chosen=document.createElement("p"); chosen.style.marginTop="6px"; chosen.textContent="Sports: "+leagues[divName].sports.join(", "); wrap.appendChild(chosen);}
+
+        if(leagues[divName].sports.length>0){
+          const chosen=document.createElement("p"); chosen.style.marginTop="6px";
+          chosen.textContent="Sports: "+leagues[divName].sports.join(", ");
+          wrap.appendChild(chosen);
+        }
         container.appendChild(wrap);
       });
     }
 
+    // -------------------- Scheduling Core --------------------
     function assignFieldsToBunks() {
-      const scheduled = availableDivisions.flatMap(div => divisions[div].bunks);
-      const availFields = fields.filter(f => f.available);
+      // Setup: available activities
+      const availFields = fields.filter(f => f.available && f.activities.length>0);
       const availSpecials = specialActivities.filter(s => s.available);
 
-      if (scheduled.length === 0 || times.length === 0) { scheduleAssignments = {}; return; }
-      if (availFields.length + availSpecials.length === 0) { alert("No activities available."); scheduleAssignments = {}; return; }
+      if (availableDivisions.length === 0) { scheduleAssignments = {}; return; }
 
-      let allActivities = [
+      // Prebuild activity universe
+      const allActivitiesFlat = [
         ...availFields.flatMap(f => f.activities.map(act => ({type:"field", field:f, sport:act}))),
         ...availSpecials.map(sa => ({type:"special", field:{name:sa.name}, sport:null}))
       ];
+      if (allActivitiesFlat.length === 0) { alert("No activities available."); scheduleAssignments = {}; return; }
 
+      // Clear & init schedules for each bunk
       scheduleAssignments = {};
-      let doneSets = {};
-      scheduled.forEach(b => { scheduleAssignments[b] = []; doneSets[b] = new Set(); });
+      availableDivisions.forEach(div=>{
+        divisions[div].bunks.forEach(b=>{ scheduleAssignments[b]=[]; });
+      });
 
-      // Pick league slots for divisions with leagues enabled
-      let leagueSlots = {};
-      availableDivisions.forEach(divName => {
-        if (leagues[divName] && leagues[divName].enabled) {
-          leagueSlots[divName] = Math.floor(Math.random() * times.length);
+      const inc = parseInt(document.getElementById("increment").value);
+      const spanLen = Math.max(1, Math.ceil(activityDuration / inc)); // how many increments an activity spans
+
+      // Choose league slot per division (initial guess)
+      const leagueSlotByDiv = {};
+      availableDivisions.forEach(div=>{
+        if (leagues[div] && leagues[div].enabled && (divisionTimes[div]||[]).length>0) {
+          leagueSlotByDiv[div] = Math.floor(Math.random() * divisionTimes[div].length);
         }
       });
 
-      for (let s = 0; s < times.length; s++) {
-        let usedNames = new Set();
+      // Per-division scheduling (independent time grids)
+      availableDivisions.forEach(div=>{
+        const times = divisionTimes[div] || [];
+        if (times.length === 0) return;
 
-        for (let divName of availableDivisions) {
-          for (let bunk of divisions[divName].bunks) {
-            let lastEntry = s > 0 ? scheduleAssignments[bunk][s-1] : null;
+        const bunksInDiv = divisions[div].bunks.slice();
+        const doneSets = {}; // track per bunk "recently used" to avoid repeats until cycling
+        bunksInDiv.forEach(b=> doneSets[b] = new Set());
 
-            // ---- League handling ----
-            if (leagueSlots[divName] === s) {
-              if (lastEntry && lastEntry.field === "Leagues") {
-                leagueSlots[divName] = Math.min(s + 1, times.length - 1);
+        for (let s = 0; s < times.length; s++) {
+          const usedFieldsThisSlot = new Set(); // prevent two bunks same field/time
+
+          // First, mark any continuations already running from previous span
+          bunksInDiv.forEach(bunk=>{
+            const entryPrev = scheduleAssignments[bunk][s];
+            if (entryPrev && entryPrev.continuation) {
+              usedFieldsThisSlot.add(entryPrev.field);
+            }
+          });
+
+          // For each bunk in the division, place activity or continuation
+          for (let bunk of bunksInDiv) {
+            // If a continuation already exists at this slot, just keep it and continue
+            if (scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s].continuation) continue;
+
+            // Check if previous slots started a span that should continue
+            let continued = false;
+            // Find the nearest non-empty entry before s
+            let lastIdx = s-1;
+            while (lastIdx>=0 && !scheduleAssignments[bunk][lastIdx]) lastIdx--;
+            if (lastIdx>=0) {
+              const lastEntry = scheduleAssignments[bunk][lastIdx];
+              // If lastEntry is not a continuation and spans into this slot, continue it
+              if (lastEntry && !lastEntry.continuation) {
+                const startOfSpan = lastIdx;
+                // count how many slots already filled for that span
+                let countSpan = 1;
+                for (let k = startOfSpan+1; k < s; k++) {
+                  if (scheduleAssignments[bunk][k] && scheduleAssignments[bunk][k].continuation) countSpan++;
+                }
+                if (countSpan < spanLen) {
+                  // continue the same activity
+                  scheduleAssignments[bunk][s] = { field: lastEntry.field, sport: lastEntry.sport, continuation: true, isLeague:lastEntry.isLeague||false };
+                  usedFieldsThisSlot.add(lastEntry.field);
+                  continued = true;
+                }
               }
-              if (leagueSlots[divName] === s) {
-                scheduleAssignments[bunk].push({ field: "Leagues", sport: null });
-                usedNames.add("Leagues");
+            }
+            if (continued) continue;
+
+            const lastEntry = (s>0) ? scheduleAssignments[bunk][s-1] : null;
+
+            // ---- Leagues handling ----
+            if (leagueSlotByDiv[div] === s && leagues[div] && leagues[div].enabled) {
+              // avoid back-to-back leagues; auto-shift forward
+              if (lastEntry && lastEntry.isLeague) {
+                // shift to next index that is not immediately after another league for this bunk
+                let t = s+1;
+                while (t < times.length) {
+                  const prev = scheduleAssignments[bunk][t-1];
+                  if (!(prev && prev.isLeague)) break;
+                  t++;
+                }
+                leagueSlotByDiv[div] = Math.min(t, times.length-1);
+              }
+              if (leagueSlotByDiv[div] === s) {
+                // schedule a league game spanning spanLen
+                scheduleAssignments[bunk][s] = { field: "Leagues", sport: null, continuation: false, isLeague: true };
+                for (let k=1; k<spanLen && s+k<times.length; k++) {
+                  scheduleAssignments[bunk][s+k] = { field: "Leagues", sport: null, continuation: true, isLeague: true };
+                }
+                usedFieldsThisSlot.add("Leagues");
                 continue;
               }
             }
 
             // ---- Regular activities ----
-            if (doneSets[bunk].size === allActivities.length) doneSets[bunk].clear();
+            // Build candidates excluding fields already used in this division/time
+            let candidates = allActivitiesFlat.filter(c => !usedFieldsThisSlot.has(c.field.name));
 
-            let candidates = allActivities.filter(c => !usedNames.has(c.field.name));
-
+            // Exclude back-to-back same sport/field/special
             candidates = candidates.filter(c => {
               if (!lastEntry) return true;
-              if (c.type === "special" && lastEntry.field === c.field.name) return false;
-              if (c.type === "field" && lastEntry.sport && c.sport === lastEntry.sport) return false;
-              if (c.type === "field" && lastEntry.field === c.field.name) return false;
+              if (lastEntry.isLeague && c.type==="field") {
+                // ok, just don't repeat same field immediately after a league (very rare)
+                if (c.field.name === lastEntry.field) return false;
+              }
+              // prevent repeating sport back-to-back
+              if (c.type==="field" && lastEntry.sport && c.sport === lastEntry.sport) return false;
+              // prevent repeating same field/special back-to-back
+              if (c.field.name === lastEntry.field) return false;
               return true;
             });
 
+            // Prefer things this bunk hasn't done recently (simple fairness)
             let preferred = candidates.filter(c => !doneSets[bunk].has(c.type==="field" ? c.sport : c.field.name));
+            let chosen = (preferred.length>0 ? preferred : candidates)[Math.floor(Math.random()*(preferred.length>0 ? preferred.length : candidates.length))];
 
-            let chosen;
-            if (preferred.length > 0) {
-              chosen = preferred[Math.floor(Math.random() * preferred.length)];
-            } else if (candidates.length > 0) {
-              chosen = candidates[Math.floor(Math.random() * candidates.length)];
-            } else {
-              // fallback: avoid exact repeat if possible
-              let tries = [...allActivities];
+            // fallback: if no candidate (e.g., all blocked), pick anything that isn't exact repeat
+            if (!chosen && allActivitiesFlat.length>0) {
+              let tries = allActivitiesFlat.slice();
               do {
-                chosen = tries.splice(Math.floor(Math.random() * tries.length), 1)[0];
-              } while (chosen && lastEntry && 
-                       (chosen.field.name === lastEntry.field || chosen.sport === lastEntry.sport) && tries.length > 0);
+                chosen = tries.splice(Math.floor(Math.random()*tries.length),1)[0];
+              } while (chosen && lastEntry && (chosen.field.name===lastEntry.field || chosen.sport===lastEntry.sport) && tries.length>0);
             }
 
             if (!chosen) continue;
 
-            usedNames.add(chosen.field.name);
-            scheduleAssignments[bunk].push({ field: chosen.field.name, sport: chosen.sport });
+            // place chosen spanning spanLen
+            scheduleAssignments[bunk][s] = { field: chosen.field.name, sport: chosen.sport, continuation: false, isLeague:false };
+            usedFieldsThisSlot.add(chosen.field.name);
             doneSets[bunk].add(chosen.type==="field" ? chosen.sport : chosen.field.name);
+
+            for (let k=1; k<spanLen && (s+k)<times.length; k++) {
+              scheduleAssignments[bunk][s+k] = { field: chosen.field.name, sport: chosen.sport, continuation: true, isLeague:false };
+            }
           }
         }
-      }
+      });
     }
 
+    // -------------------- Rendering --------------------
     function updateTable(){
-      const table=document.getElementById("scheduleTable");
-      if(times.length===0){table.style.display="none"; return;} table.style.display="table";
-      const divRow=document.getElementById("divisionRow"), bunkRow=document.getElementById("bunkRow");
-      divRow.innerHTML="<th>Division</th>"; bunkRow.innerHTML="<th>Bunk</th>";
+      const scheduleTab = document.getElementById("schedule");
+      scheduleTab.innerHTML = ""; // clear
+
       availableDivisions.forEach(div=>{
-        const obj=divisions[div]; const bunksInDiv=obj.bunks;
-        const th=document.createElement("th"); th.colSpan=Math.max(bunksInDiv.length,1); th.textContent=div; divRow.appendChild(th);
-        bunksInDiv.forEach(bunk=>{const thB=document.createElement("th"); thB.textContent=bunk; bunkRow.appendChild(thB);});
-      });
-      const tbody=document.querySelector("#scheduleTable tbody"); tbody.innerHTML="";
-      times.forEach((time,rowIdx)=>{
-        const row=document.createElement("tr"); const tdTime=document.createElement("td"); tdTime.textContent=time; row.appendChild(tdTime);
-        availableDivisions.forEach(div=>{
-          divisions[div].bunks.forEach(bunk=>{
-            const td=document.createElement("td");
-            if(scheduleAssignments[bunk]&&scheduleAssignments[bunk][rowIdx]){
-              const entry=scheduleAssignments[bunk][rowIdx];
-              td.textContent=entry.sport ? entry.field + " – " + entry.sport : entry.field;
-            }
-            row.appendChild(td);
-          });
+        const times = divisionTimes[div];
+        if (!times || times.length === 0) return;
+
+        const table = document.createElement("table");
+        table.className = "division-schedule";
+        const caption = document.createElement("caption");
+        caption.textContent = div + " Schedule";
+        table.appendChild(caption);
+
+        // header row
+        const thead = document.createElement("thead");
+        const headRow = document.createElement("tr");
+        const thTime = document.createElement("th"); thTime.textContent="Time"; headRow.appendChild(thTime);
+        divisions[div].bunks.forEach(b => {
+          const thB = document.createElement("th"); thB.textContent = b; thB.style.background=divisions[div].color; thB.style.color="#fff";
+          headRow.appendChild(thB);
         });
-        tbody.appendChild(row);
+        thead.appendChild(headRow); table.appendChild(thead);
+
+        const tbody = document.createElement("tbody");
+
+        for (let rowIdx=0; rowIdx<times.length; rowIdx++){
+          const tr = document.createElement("tr");
+          const tdTime = document.createElement("td"); tdTime.textContent = times[rowIdx]; tr.appendChild(tdTime);
+
+          divisions[div].bunks.forEach(bunk=>{
+            const td = document.createElement("td");
+            const entry = scheduleAssignments[bunk] ? scheduleAssignments[bunk][rowIdx] : null;
+            if (entry) {
+              if (entry.isLeague) {
+                td.innerHTML = `<span class="league-pill">Leagues</span>` + (entry.continuation ? ' <span class="continuation">→</span>' : '');
+              } else if (entry.continuation) {
+                td.innerHTML = `<span class="continuation">→</span>`;
+              } else {
+                td.textContent = entry.sport ? `${entry.field} – ${entry.sport}` : entry.field;
+              }
+            } else {
+              td.textContent = ""; // should be rare; filled by design
+            }
+            tr.appendChild(td);
+          });
+
+          tbody.appendChild(tr);
+        }
+
+        table.appendChild(tbody);
+        scheduleTab.appendChild(table);
       });
     }
+
+    // -------------------- Init --------------------
+    // Basic hooks
+    document.getElementById("enableColor").addEventListener("change", setupDivisionButtons);
   </script>
 </body>
 </html>
