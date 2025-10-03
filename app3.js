@@ -1,3 +1,9 @@
+// -------------------- State --------------------
+let unifiedTimes = [];
+let divisionActiveRows = {};
+let scheduleAssignments = {};
+let activityDuration = 45; // minutes, can be adjusted
+
 // -------------------- Scheduling Core --------------------
 function assignFieldsToBunks() {
   const availFields = fields.filter(f => f.available && f.activities.length>0);
@@ -7,11 +13,17 @@ function assignFieldsToBunks() {
     ...availFields.flatMap(f => f.activities.map(act => ({type:"field", field:f, sport:act}))),
     ...availSpecials.map(sa => ({type:"special", field:{name:sa.name}, sport:null}))
   ];
-  if (allActivities.length === 0) { alert("No activities available."); scheduleAssignments={}; return; }
+  if (allActivities.length === 0) { 
+    alert("No activities available."); 
+    scheduleAssignments={}; 
+    return; 
+  }
 
   scheduleAssignments = {};
   availableDivisions.forEach(div=>{
-    divisions[div].bunks.forEach(b=>{ scheduleAssignments[b]=new Array(unifiedTimes.length); });
+    let d = divisions.find(dd=>dd.name===div);
+    if (!d) return;
+    d.bunks.forEach(b=>{ scheduleAssignments[b]=new Array(unifiedTimes.length); });
   });
 
   const inc = parseInt(document.getElementById("increment").value);
@@ -30,7 +42,9 @@ function assignFieldsToBunks() {
   for (let s=0; s<unifiedTimes.length; s++){
     const usedFieldsAtRow = new Set();
     availableDivisions.forEach(dv=>{
-      divisions[dv].bunks.forEach(bk=>{
+      let d = divisions.find(dd=>dd.name===dv);
+      if (!d) return;
+      d.bunks.forEach(bk=>{
         const e = scheduleAssignments[bk][s];
         if (e && e.continuation && e.field !== "Leagues") usedFieldsAtRow.add(e.field);
       });
@@ -40,13 +54,17 @@ function assignFieldsToBunks() {
       const isActiveRow = divisionActiveRows[div] && divisionActiveRows[div].has(s);
       if (!isActiveRow) continue;
 
-      for (let bunk of divisions[div].bunks) {
+      let d = divisions.find(dd=>dd.name===div);
+      if (!d) continue;
+
+      for (let bunk of d.bunks) {
         if (scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s].continuation) continue;
 
         let lastIdx = s-1, lastEntry = null;
         while (lastIdx>=0 && !scheduleAssignments[bunk][lastIdx]) lastIdx--;
         if (lastIdx>=0) lastEntry = scheduleAssignments[bunk][lastIdx];
 
+        // Handle leagues
         if (leagueSlotByDiv[div] === s && leagues[div] && leagues[div].enabled) {
           if (lastEntry && lastEntry.isLeague) {
             let next = s+1;
@@ -64,6 +82,7 @@ function assignFieldsToBunks() {
           }
         }
 
+        // Continue previous activity if not finished
         if (lastEntry && !lastEntry.continuation) {
           let countDone = 1;
           let t = lastIdx+1;
@@ -75,6 +94,7 @@ function assignFieldsToBunks() {
           }
         }
 
+        // Pick new activity
         let candidates = allActivities.filter(c => {
           if (c.field.name !== "Leagues" && usedFieldsAtRow.has(c.field.name)) return false;
           for (let k = 0; k < spanLen; k++) {
@@ -82,8 +102,10 @@ function assignFieldsToBunks() {
             if (futureRow >= unifiedTimes.length) break;
             if (!divisionActiveRows[div].has(futureRow)) break;
             for (const d2 of availableDivisions) {
+              let dCheck = divisions.find(dd=>dd.name===d2);
+              if (!dCheck) continue;
               if (!divisionActiveRows[d2] || !divisionActiveRows[d2].has(futureRow)) continue;
-              for (const otherBunk of divisions[d2].bunks) {
+              for (const otherBunk of dCheck.bunks) {
                 if (otherBunk === bunk) continue;
                 const e = scheduleAssignments[otherBunk][futureRow];
                 if (e && e.field === c.field.name && e.field !== "Leagues") {
@@ -95,6 +117,7 @@ function assignFieldsToBunks() {
           return true;
         });
 
+        // Avoid repeats
         candidates = candidates.filter(c => {
           if (!lastEntry) return true;
           if (lastEntry.isLeague) {
@@ -155,10 +178,12 @@ function updateTable(){
   const row1=document.createElement("tr");
   const thTime=document.createElement("th"); thTime.textContent="Time"; row1.appendChild(thTime);
   availableDivisions.forEach(div=>{
+    let d = divisions.find(dd=>dd.name===div);
     const th=document.createElement("th");
-    th.colSpan = divisions[div].bunks.length || 1;
+    th.colSpan = d ? d.bunks.length : 1;
     th.textContent=div;
-    th.style.background=divisions[div].color; th.style.color="#fff";
+    th.style.background=d ? d.color : "#ccc"; 
+    th.style.color="#fff";
     row1.appendChild(th);
   });
   thead.appendChild(row1);
@@ -166,7 +191,9 @@ function updateTable(){
   const row2=document.createElement("tr");
   const thBunkLabel=document.createElement("th"); thBunkLabel.textContent="Bunk"; row2.appendChild(thBunkLabel);
   availableDivisions.forEach(div=>{
-    divisions[div].bunks.forEach(b=>{
+    let d = divisions.find(dd=>dd.name===div);
+    if (!d) return;
+    d.bunks.forEach(b=>{
       const th=document.createElement("th"); th.textContent=b; row2.appendChild(th);
     });
   });
@@ -180,8 +207,10 @@ function updateTable(){
     const tdTime=document.createElement("td"); tdTime.textContent=unifiedTimes[s].label; tr.appendChild(tdTime);
 
     availableDivisions.forEach(div=>{
+      let d = divisions.find(dd=>dd.name===div);
+      if (!d) return;
       const activeSet = divisionActiveRows[div] || new Set();
-      divisions[div].bunks.forEach(bunk=>{
+      d.bunks.forEach(bunk=>{
         if (scheduleAssignments[bunk] && scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s]._skip) return;
 
         const td=document.createElement("td");
