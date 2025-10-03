@@ -38,6 +38,7 @@ function parseTime(str){
   const d = new Date(); d.setHours(h,min,0,0);
   return d;
 }
+
 function fmtTime(d){
   let h=d.getHours(), m=d.getMinutes();
   let ap="AM";
@@ -55,6 +56,7 @@ function makeEditable(el, callback){
     input.style.minWidth = "60px";
     el.replaceWith(input);
     input.focus();
+
     input.onblur = ()=>{
       const val = input.value.trim();
       if(val && val !== old){
@@ -63,6 +65,7 @@ function makeEditable(el, callback){
       input.replaceWith(el);
       el.textContent = val || old;
     };
+
     input.onkeyup = e=>{
       if(e.key==="Enter"){ input.blur(); }
       if(e.key==="Escape"){ input.value=old; input.blur(); }
@@ -95,34 +98,54 @@ document.getElementById("addBunkBtn").onclick=addBunk;
 document.getElementById("bunkInput").addEventListener("keyup",e=>{if(e.key==="Enter")addBunk();});
 
 function renderBunks(){
-  const cont=document.getElementById("bunkList"); cont.innerHTML="";
+  const cont=document.getElementById("bunkList"); 
+  cont.innerHTML="";
+
   bunks.forEach(b=>{
-    const wrap=document.createElement("div"); wrap.className="bunkWrapper";
-    const span=document.createElement("span"); span.textContent=b; span.className="bunk-button";
+    const wrap=document.createElement("div"); 
+    wrap.className="bunkWrapper";
+
+    const span=document.createElement("span"); 
+    span.textContent=b; 
+    span.className="bunk-button";
+
+    // Make editable
     makeEditable(span,newName=>{
       const idx=bunks.indexOf(b);
       if(idx!==-1) bunks[idx]=newName;
+
       for(const div of Object.values(divisions)){
         const j=div.bunks.indexOf(b);
         if(j!==-1) div.bunks[j]=newName;
       }
+
       renderBunks();
       updateTable();
     });
+
     wrap.appendChild(span);
 
     // Assign to division buttons
     availableDivisions.forEach(div=>{
-      const btn=document.createElement("button"); btn.textContent=div; btn.className="bunk-button";
-      if(divisions[div].bunks.includes(b)){ btn.style.backgroundColor=divisions[div].color; btn.style.color="#fff"; }
+      const btn=document.createElement("button"); 
+      btn.textContent=div; 
+      btn.className="bunk-button";
+
+      if(divisions[div].bunks.includes(b)){
+        btn.style.backgroundColor=divisions[div].color; 
+        btn.style.color="#fff";
+      }
+
       btn.onclick=()=>{
         if(!divisions[div].bunks.includes(b)){
           divisions[div].bunks.push(b);
         } else {
           divisions[div].bunks = divisions[div].bunks.filter(x=>x!==b);
         }
-        renderBunks(); updateTable();
+        renderBunks(); 
+        updateTable();
       };
+
       wrap.appendChild(btn);
     });
 
