@@ -1,8 +1,7 @@
-// -------------------- State --------------------
-let unifiedTimes = [];
-let divisionActiveRows = {};
-let scheduleAssignments = {};
-let activityDuration = 45; // minutes, can be adjusted
+// Expose shared state on window so cross-file access is safe
+window.unifiedTimes = window.unifiedTimes || [];
+window.divisionActiveRows = window.divisionActiveRows || {};
+window.scheduleAssignments = window.scheduleAssignments || {};
 
 // -------------------- Scheduling Core --------------------
 function assignFieldsToBunks() {
@@ -13,36 +12,31 @@ function assignFieldsToBunks() {
     ...availFields.flatMap(f => f.activities.map(act => ({type:"field", field:f, sport:act}))),
     ...availSpecials.map(sa => ({type:"special", field:{name:sa.name}, sport:null}))
   ];
-  if (allActivities.length === 0) { 
-    alert("No activities available."); 
-    scheduleAssignments={}; 
-    return; 
-  }
+  if (allActivities.length === 0) { alert("No activities available."); window.scheduleAssignments={}; return; }
 
-  scheduleAssignments = {};
-  availableDivisions.forEach(div=>{
-    let d = divisions.find(dd=>dd.name===div);
+  window.scheduleAssignments = {};
+  availableDivisions.forEach(divName=>{
+    const d = divisions.find(dd=>dd.name===divName);
     if (!d) return;
     d.bunks.forEach(b=>{ scheduleAssignments[b]=new Array(unifiedTimes.length); });
   });
 
-  const inc = parseInt(document.getElementById("increment").value);
-  const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
+  const inc = parseInt(document.getElementById("increment").value) || 30;
+  const duration = parseInt(document.getElementById("activityDurationMins")?.value) || 45;
+  const spanLen = Math.max(1, Math.ceil(duration / inc));
 
   const leagueSlotByDiv = {};
   availableDivisions.forEach(div=>{
     if (leagues[div] && leagues[div].enabled) {
       const active = Array.from(divisionActiveRows[div] || []);
-      if (active.length>0) {
-        leagueSlotByDiv[div] = active[Math.floor(Math.random()*active.length)];
-      }
+      if (active.length>0) leagueSlotByDiv[div] = active[Math.floor(Math.random()*active.length)];
     }
   });
 
   for (let s=0; s<unifiedTimes.length; s++){
     const usedFieldsAtRow = new Set();
     availableDivisions.forEach(dv=>{
-      let d = divisions.find(dd=>dd.name===dv);
+      const d = divisions.find(dd=>dd.name===dv);
       if (!d) return;
       d.bunks.forEach(bk=>{
         const e = scheduleAssignments[bk][s];
@@ -54,7 +48,7 @@ function assignFieldsToBunks() {
       const isActiveRow = divisionActiveRows[div] && divisionActiveRows[div].has(s);
       if (!isActiveRow) continue;
 
-      let d = divisions.find(dd=>dd.name===div);
+      const d = divisions.find(dd=>dd.name===div);
       if (!d) continue;
 
       for (let bunk of d.bunks) {
@@ -64,8 +58,8 @@ function assignFieldsToBunks() {
         while (lastIdx>=0 && !scheduleAssignments[bunk][lastIdx]) lastIdx--;
         if (lastIdx>=0) lastEntry = scheduleAssignments[bunk][lastIdx];
 
-        // Handle leagues
-        if (leagueSlotByDiv[div] === s && leagues[div] && leagues[div].enabled) {
+        // Leagues slot
+        if (leagueSlotByDiv[div] === s && leagues[div]?.enabled) {
           if (lastEntry && lastEntry.isLeague) {
             let next = s+1;
             while (next<unifiedTimes.length && (!divisionActiveRows[div].has(next))) next++;
@@ -82,11 +76,10 @@ function assignFieldsToBunks() {
           }
         }
 
-        // Continue previous activity if not finished
+        // Continue incomplete activity block
         if (lastEntry && !lastEntry.continuation) {
-          let countDone = 1;
-          let t = lastIdx+1;
-          while (t<s && scheduleAssignments[bunk][t] && scheduleAssignments[bunk][t].continuation) { countDone++; t++; }
+          let countDone = 1, t = lastIdx+1;
+          while (t<s && scheduleAssignments[bunk][t]?.continuation) { countDone++; t++; }
           if (countDone < spanLen) {
             scheduleAssignments[bunk][s] = { field:lastEntry.field, sport:lastEntry.sport, continuation:true, isLeague:lastEntry.isLeague||false };
             if (lastEntry.field !== "Leagues") usedFieldsAtRow.add(lastEntry.field);
@@ -94,7 +87,7 @@ function assignFieldsToBunks() {
           }
         }
 
-        // Pick new activity
+        // Pick new activity without overlaps or back-to-back same sport/field
         let candidates = allActivities.filter(c => {
           if (c.field.name !== "Leagues" && usedFieldsAtRow.has(c.field.name)) return false;
           for (let k = 0; k < spanLen; k++) {
@@ -102,22 +95,18 @@ function assignFieldsToBunks() {
             if (futureRow >= unifiedTimes.length) break;
             if (!divisionActiveRows[div].has(futureRow)) break;
             for (const d2 of availableDivisions) {
-              let dCheck = divisions.find(dd=>dd.name===d2);
-              if (!dCheck) continue;
-              if (!divisionActiveRows[d2] || !divisionActiveRows[d2].has(futureRow)) continue;
+              const dCheck = divisions.find(dd=>dd.name===d2); if (!dCheck) continue;
+              if (!divisionActiveRows[d2]?.has(futureRow)) continue;
               for (const otherBunk of dCheck.bunks) {
                 if (otherBunk === bunk) continue;
                 const e = scheduleAssignments[otherBunk][futureRow];
-                if (e && e.field === c.field.name && e.field !== "Leagues") {
-                  return false;
-                }
+                if (e && e.field === c.field.name && e.field !== "Leagues") return false;
               }
             }
           }
           return true;
         });
 
-        // Avoid repeats
         candidates = candidates.filter(c => {
           if (!lastEntry) return true;
           if (lastEntry.isLeague) {
@@ -132,8 +121,10 @@ function assignFieldsToBunks() {
         scheduleAssignments.__done = scheduleAssignments.__done || {};
         scheduleAssignments.__done[bunk] = scheduleAssignments.__done[bunk] || new Set();
         const doneSet = scheduleAssignments.__done[bunk];
+
         const preferred = candidates.filter(c => !doneSet.has(c.type==="field" ? c.sport : c.field.name));
-        let chosen = (preferred.length>0 ? preferred : candidates)[Math.floor(Math.random()*(preferred.length>0 ? preferred.length : candidates.length) )];
+        let pool = preferred.length ? preferred : candidates;
+        let chosen = pool.length ? pool[Math.floor(Math.random()*pool.length)] : null;
 
         if (!chosen && allActivities.length>0) {
           let tries = allActivities.slice();
@@ -161,7 +152,6 @@ function assignFieldsToBunks() {
 function updateTable(){
   const scheduleTab = document.getElementById("schedule");
   scheduleTab.innerHTML = "";
-
   if (unifiedTimes.length === 0) return;
 
   Object.keys(scheduleAssignments).forEach(b=>{
@@ -172,18 +162,16 @@ function updateTable(){
 
   const table=document.createElement("table");
   table.className="division-schedule";
-
   const thead=document.createElement("thead");
 
   const row1=document.createElement("tr");
   const thTime=document.createElement("th"); thTime.textContent="Time"; row1.appendChild(thTime);
   availableDivisions.forEach(div=>{
-    let d = divisions.find(dd=>dd.name===div);
+    const d = divisions.find(dd=>dd.name===div);
     const th=document.createElement("th");
     th.colSpan = d ? d.bunks.length : 1;
     th.textContent=div;
-    th.style.background=d ? d.color : "#ccc"; 
-    th.style.color="#fff";
+    th.style.background=d ? d.color : "#ccc"; th.style.color="#fff";
     row1.appendChild(th);
   });
   thead.appendChild(row1);
@@ -191,8 +179,7 @@ function updateTable(){
   const row2=document.createElement("tr");
   const thBunkLabel=document.createElement("th"); thBunkLabel.textContent="Bunk"; row2.appendChild(thBunkLabel);
   availableDivisions.forEach(div=>{
-    let d = divisions.find(dd=>dd.name===div);
-    if (!d) return;
+    const d = divisions.find(dd=>dd.name===div); if (!d) return;
     d.bunks.forEach(b=>{
       const th=document.createElement("th"); th.textContent=b; row2.appendChild(th);
     });
@@ -201,42 +188,31 @@ function updateTable(){
   table.appendChild(thead);
 
   const tbody=document.createElement("tbody");
-
   for (let s=0; s<unifiedTimes.length; s++){
     const tr=document.createElement("tr");
     const tdTime=document.createElement("td"); tdTime.textContent=unifiedTimes[s].label; tr.appendChild(tdTime);
 
     availableDivisions.forEach(div=>{
-      let d = divisions.find(dd=>dd.name===div);
-      if (!d) return;
+      const d = divisions.find(dd=>dd.name===div); if (!d) return;
       const activeSet = divisionActiveRows[div] || new Set();
       d.bunks.forEach(bunk=>{
-        if (scheduleAssignments[bunk] && scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s]._skip) return;
+        if (scheduleAssignments[bunk]?.[s]?._skip) return;
 
         const td=document.createElement("td");
         const isActive = activeSet.has(s);
+        if (!isActive) { td.className="grey-cell"; tr.appendChild(td); return; }
 
-        if (!isActive) {
-          td.className="grey-cell";
-          tr.appendChild(td);
-          return;
-        }
-
-        const entry = scheduleAssignments[bunk] ? scheduleAssignments[bunk][s] : null;
+        const entry = scheduleAssignments[bunk]?.[s] || null;
         if (entry && !entry.continuation) {
           let span=1;
           for (let k=s+1; k<unifiedTimes.length; k++){
             const e2 = scheduleAssignments[bunk][k];
             if (!e2 || !e2.continuation || e2.field!==entry.field || e2.sport!==entry.sport || e2.isLeague!==entry.isLeague) break;
-            span++;
-            scheduleAssignments[bunk][k]._skip = true;
+            span++; scheduleAssignments[bunk][k]._skip = true;
           }
           td.rowSpan = span;
-          if (entry.isLeague) {
-            td.innerHTML = `<span class="league-pill">Leagues</span>`;
-          } else {
-            td.textContent = entry.sport ? `${entry.field} – ${entry.sport}` : entry.field;
-          }
+          td.innerHTML = entry.isLeague ? `<span class="league-pill">Leagues</span>` :
+            (entry.sport ? `${entry.field} – ${entry.sport}` : entry.field);
         } else if (!entry) {
           td.textContent = "";
         }
@@ -251,5 +227,5 @@ function updateTable(){
 
 // -------------------- Init --------------------
 window.addEventListener("DOMContentLoaded", () => {
-  document.getElementById("addFieldBtn").disabled = false;
+  // nothing needed here; called by app2.js after generateTimes()
 });
