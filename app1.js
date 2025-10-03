@@ -98,8 +98,9 @@ function updateUnassigned(){
         scheduleAssignments[newName]=scheduleAssignments[b];
         delete scheduleAssignments[b];
       }
+
+      // ✅ Only refresh what’s needed (don’t wipe division colors)
       updateUnassigned();
-      setupDivisionButtons();
       updateTable();
     });
     c.appendChild(span);
@@ -136,13 +137,23 @@ function setupDivisionButtons(){
     span.onclick=()=>{selectedDivision=name; cont.querySelectorAll('span.bunk-button').forEach(el=>el.classList.remove("selected")); span.classList.add("selected");};
     makeEditable(span,newName=>{
       if (!newName || newName === name) return;
-      divisions[newName] = {...divisions[name]};
+
+      // ✅ Preserve bunks & color reference
+      divisions[newName] = divisions[name];
       delete divisions[name];
-      leagues[newName] = leagues[name] || {enabled:false,sports:[]};
+
+      // Preserve leagues data
+      leagues[newName] = leagues[name];
       delete leagues[name];
+
+      // Update division name in availableDivisions
       const idx = availableDivisions.indexOf(name);
       if (idx !== -1) availableDivisions[idx] = newName;
+
+      // Update selectedDivision if needed
       if (selectedDivision === name) selectedDivision = newName;
+
+      // ✅ Refresh but keep state
       setupDivisionButtons();
       renderLeagues();
       renderTimeTemplates();
