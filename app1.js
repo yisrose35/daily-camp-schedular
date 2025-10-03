@@ -21,21 +21,37 @@ const leagueSports=["Basketball","Hockey","Volleyball","Soccer","Kickball","Punc
 document.getElementById("activityDuration").onchange=function(){activityDuration=parseInt(this.value);};
 
 // -------------------- Helpers --------------------
-function makeEditable(el, save){
-  el.ondblclick=e=>{
+function makeEditable(el, save) {
+  el.ondblclick = e => {
     e.stopPropagation();
-    const old=el.textContent;
-    const input=document.createElement("input");
-    input.type="text"; input.value=old;
-    el.replaceWith(input); input.focus();
-    function done(){
-      const val=input.value.trim();
-      if(val&&val!==old) save(val);
-      el.textContent=val||old; input.replaceWith(el);
+    const old = el.textContent;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = old;
+    input.style.minWidth = "80px";
+    el.replaceWith(input);
+    input.focus();
+    input.select();
+
+    function done(commit = true) {
+      const val = input.value.trim();
+      if (commit && val && val !== old) {
+        save(val);
+        el.textContent = val;
+      } else {
+        el.textContent = old; // revert if nothing entered
+      }
+      input.replaceWith(el);
     }
-    input.onblur=done; input.onkeyup=e=>{if(e.key==="Enter")done();};
+
+    input.addEventListener("blur", () => done(true));
+    input.addEventListener("keyup", e => {
+      if (e.key === "Enter") done(true);
+      if (e.key === "Escape") done(false);
+    });
   };
 }
+
 function parseTime(str){
   if(!str) return null;
   const m=str.match(/^(\d{1,2}):(\d{2})(\s*)?(AM|PM)$/i);
@@ -75,44 +91,48 @@ function updateUnassigned(){
   const c=document.getElementById("unassignedBunks");c.innerHTML="";
   bunks.forEach(b=>{
     const span=document.createElement("span");
-    span.textContent=b;span.className="bunk-button";
+    span.textContent=b;
+    span.className="bunk-button";
     let assigned=null;
     for(const d in divisions){ if(divisions[d].bunks.includes(b)) assigned=d; }
-    if(assigned){span.style.backgroundColor=divisions[assigned].color;span.style.color="#fff";}
-    span.onclick=()=>{
-      if(selectedDivision && (!assigned||assigned!==selectedDivision)){
-        for(const d in divisions){const i=divisions[d].bunks.indexOf(b);if(i!==-1)divisions[d].bunks.splice(i,1);}
-        divisions[selectedDivision].bunks.push(b);updateUnassigned();updateTable();
-      }else if(!selectedDivision){ alert("Select a division first!"); }
-    };
-    function makeEditable(el, save) {
-  el.ondblclick = e => {
-    e.stopPropagation();
-    const old = el.textContent;
-    const input = document.createElement("input");
-    input.type = "text";
-    input.value = old;
-    input.style.minWidth = "80px"; // so it’s not tiny
-    el.replaceWith(input);
-    input.focus();
-    input.select(); // highlight the text so you can type immediately
-
-    function done(commit = true) {
-      const val = input.value.trim();
-      if (commit && val && val !== old) {
-        save(val);
-        el.textContent = val;
-      } else {
-        el.textContent = old; // revert if nothing entered
-      }
-      input.replaceWith(el);
+    if(assigned){
+      span.style.backgroundColor=divisions[assigned].color;
+      span.style.color="#fff";
     }
 
-    input.addEventListener("blur", () => done(true));
-    input.addEventListener("keyup", e => {
-      if (e.key === "Enter") done(true);
-      if (e.key === "Escape") done(false); // allow cancel with Esc
+    // Single click → assign
+    span.addEventListener("click", e => {
+      if (e.detail === 1) {  // ignore double-click
+        if(selectedDivision && (!assigned||assigned!==selectedDivision)){
+          for(const d in divisions){
+            const i=divisions[d].bunks.indexOf(b);
+            if(i!==-1)divisions[d].bunks.splice(i,1);
+          }
+          divisions[selectedDivision].bunks.push(b);
+          updateUnassigned();
+          updateTable();
+        } else if(!selectedDivision){
+          alert("Select a division first!");
+        }
+      }
     });
-  };
-}
 
+    // Double click → edit
+    makeEditable(span,newName=>{
+      const idx=bunks.indexOf(b);
+      if(idx!==-1)bunks[idx]=newName;
+      for(const d of Object.values(divisions)){
+        const i=d.bunks.indexOf(b);
+        if(i!==-1)d.bunks[i]=newName;
+      }
+      if(scheduleAssignments[b]){
+        scheduleAssignments[newName]=scheduleAssignments[b];
+        delete scheduleAssignments[b];
+      }
+      updateUnassigned();
+      updateTable();
+    });
+
+    c.appendChild(span);
+  });
+}
