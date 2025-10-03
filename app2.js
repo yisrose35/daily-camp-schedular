@@ -273,3 +273,4 @@ window.addEventListener("DOMContentLoaded", () => {
   // First paint so the sections aren't empty
   renderFieldsAdvanced(); renderSpecials(); renderLeagues(); renderTimeTemplates();
 });
+
