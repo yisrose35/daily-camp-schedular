@@ -16,65 +16,70 @@
 
   <!-- Setup Tab -->
   <div id="setup" class="tab-content active">
-    <h3>Add Bunks</h3>
-    <input id="bunkInput" placeholder="Enter bunk">
-    <button id="addBunkBtn">Add Bunk</button>
-    <div id="unassignedBunks"></div>
+    <h2>Setup & Configuration</h2>
 
-    <h3>Add Divisions</h3>
-    <input id="divisionInput" placeholder="Enter division name">
-    <button id="addDivisionBtn">Add Division</button>
-    <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable colors</label>
-    <div id="divisionButtons" style="margin-top:8px;"></div>
+    <div>
+      <h3>Add Bunk</h3>
+      <input type="text" id="bunkInput" placeholder="Enter bunk name">
+      <button onclick="addBunk()">Add</button>
+      <div id="bunkList"></div>
+    </div>
 
-    <h3>Schedule Increments</h3>
-    <select id="increment">
-      <option value="15">15 minutes</option>
-      <option value="30" selected>30 minutes</option>
-      <option value="45">45 minutes</option>
-      <option value="60">60 minutes</option>
-    </select>
+    <div>
+      <h3>Add Division</h3>
+      <input type="text" id="divisionInput" placeholder="Enter division name">
+      <button onclick="addDivision()">Add</button>
+      <div id="divisionList"></div>
+    </div>
 
-    <h3>Activity Duration</h3>
-    <select id="activityDuration">
-      <option value="15">15 minutes</option>
-      <option value="30" selected>30 minutes</option>
-      <option value="45">45 minutes</option>
-      <option value="60">60 minutes</option>
-      <option value="90">90 minutes</option>
-    </select>
+    <div>
+      <h3>Add Field/Court</h3>
+      <input type="text" id="fieldInput" placeholder="Enter field/court name">
+      <button onclick="addField()">Add</button>
+      <div id="fieldList"></div>
+    </div>
 
-    <h3>Division Time Templates</h3>
-    <input id="timeStartInput" placeholder="Start (e.g. 11:00 AM)">
-    <input id="timeEndInput" placeholder="End (e.g. 4:30 PM)">
-    <button onclick="addTimeTemplate()">Add Time</button>
-    <div id="timeTemplates"></div>
+    <div>
+      <h3>Special Activities</h3>
+      <input type="text" id="specialInput" placeholder="Enter special activity">
+      <button onclick="addSpecial()">Add</button>
+      <div id="specialList"></div>
+    </div>
 
-    <button style="margin-top:10px;" onclick="generateTimes()">Generate Schedule Times</button>
+    <div>
+      <h3>Time Setup</h3>
+      <input type="text" id="startTimeInput" placeholder="Start (e.g. 11:30am)">
+      <input type="text" id="endTimeInput" placeholder="End (e.g. 5:30pm)">
+      <select id="intervalSelect">
+        <option value="15">15 minutes</option>
+        <option value="30" selected>30 minutes</option>
+        <option value="45">45 minutes</option>
+        <option value="60">60 minutes</option>
+      </select>
+      <button onclick="setTimes()">Set Times</button>
+      <div id="timeList"></div>
+    </div>
 
-    <h3>Add Fields/Courts</h3>
-    <input id="fieldInput" placeholder="Enter field/court name (e.g., Court #1)">
-    <button id="addFieldBtn">Add Field/Court</button>
-    <div id="fieldList"></div>
-
-    <h3>Add Special Activities</h3>
-    <input id="specialInput" placeholder="Enter special activity (e.g., Canteen)">
-    <button id="addSpecialBtn">Add Special Activity</button>
-    <div id="specialList"></div>
+    <!-- Reset Button -->
+    <div style="margin-top:20px;">
+      <button class="reset-btn" onclick="resetData()">Reset All Data</button>
+    </div>
   </div>
 
-  <!-- Schedule Tab -->
-  <div id="schedule" class="tab-content"></div>
+  <!-- Daily Schedule Tab -->
+  <div id="schedule" class="tab-content">
+    <h2>Daily Schedule</h2>
+    <button onclick="generateSchedule()">Generate Schedule</button>
+    <div id="scheduleTable"></div>
+  </div>
 
   <!-- Leagues Tab -->
   <div id="leagues" class="tab-content">
-    <h3>Leagues Setup</h3>
-    <div id="leaguesContainer"></div>
+    <h2>Leagues</h2>
+    <div id="leaguesList"></div>
   </div>
 
-  <!-- Scripts -->
   <script src="app1.js"></script>
   <script src="app2.js"></script>
 </body>
 </html>
-
