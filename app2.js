@@ -233,3 +233,4 @@ function initSchedule() {
   updateTable();
 }
 document.addEventListener("DOMContentLoaded", initSchedule);
+
