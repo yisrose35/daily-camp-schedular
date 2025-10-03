@@ -85,12 +85,34 @@ function updateUnassigned(){
         divisions[selectedDivision].bunks.push(b);updateUnassigned();updateTable();
       }else if(!selectedDivision){ alert("Select a division first!"); }
     };
-    makeEditable(span,newName=>{
-      const idx=bunks.indexOf(b);if(idx!==-1)bunks[idx]=newName;
-      for(const d of Object.values(divisions)){const i=d.bunks.indexOf(b);if(i!==-1)d.bunks[i]=newName;}
-      if(scheduleAssignments[b]){ scheduleAssignments[newName]=scheduleAssignments[b]; delete scheduleAssignments[b]; }
-      updateUnassigned();updateTable();
+    function makeEditable(el, save) {
+  el.ondblclick = e => {
+    e.stopPropagation();
+    const old = el.textContent;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = old;
+    input.style.minWidth = "80px"; // so it’s not tiny
+    el.replaceWith(input);
+    input.focus();
+    input.select(); // highlight the text so you can type immediately
+
+    function done(commit = true) {
+      const val = input.value.trim();
+      if (commit && val && val !== old) {
+        save(val);
+        el.textContent = val;
+      } else {
+        el.textContent = old; // revert if nothing entered
+      }
+      input.replaceWith(el);
+    }
+
+    input.addEventListener("blur", () => done(true));
+    input.addEventListener("keyup", e => {
+      if (e.key === "Enter") done(true);
+      if (e.key === "Escape") done(false); // allow cancel with Esc
     });
-    c.appendChild(span);
-  });
+  };
 }
+
