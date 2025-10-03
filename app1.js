@@ -1,19 +1,8 @@
 // -------------------- State --------------------
 let bunks = [];
 let divisions = [];
-let fields = [];
-let times = [];
 
 // -------------------- Helpers --------------------
-function createButton(text, color, onClick) {
-  const btn = document.createElement("button");
-  btn.textContent = text;
-  btn.style.backgroundColor = color || "#f0f0f0";
-  btn.className = "item-button";
-  btn.onclick = onClick;
-  return btn;
-}
-
 function createEditableButton(item, index, list, renderFn) {
   const btn = document.createElement("button");
   btn.textContent = item.name;
@@ -36,9 +25,7 @@ function renderBunks() {
   const container = document.getElementById("bunk-list");
   container.innerHTML = "";
   bunks.forEach((bunk, i) => {
-    container.appendChild(
-      createEditableButton(bunk, i, bunks, renderBunks)
-    );
+    container.appendChild(createEditableButton(bunk, i, bunks, renderBunks));
   });
 }
 
@@ -46,29 +33,7 @@ function renderDivisions() {
   const container = document.getElementById("division-list");
   container.innerHTML = "";
   divisions.forEach((division, i) => {
-    container.appendChild(
-      createEditableButton(division, i, divisions, renderDivisions)
-    );
-  });
-}
-
-function renderFields() {
-  const container = document.getElementById("field-list");
-  container.innerHTML = "";
-  fields.forEach((field, i) => {
-    container.appendChild(
-      createEditableButton(field, i, fields, renderFields)
-    );
-  });
-}
-
-function renderTimes() {
-  const container = document.getElementById("time-list");
-  container.innerHTML = "";
-  times.forEach((time, i) => {
-    container.appendChild(
-      createEditableButton(time, i, times, renderTimes)
-    );
+    container.appendChild(createEditableButton(division, i, divisions, renderDivisions));
   });
 }
 
@@ -85,27 +50,9 @@ function addBunk() {
 function addDivision() {
   const input = document.getElementById("division-input");
   if (input.value.trim() !== "") {
-    divisions.push({ name: input.value.trim(), color: getRandomColor() });
+    divisions.push({ name: input.value.trim(), color: getRandomColor(), bunks: [] });
     input.value = "";
     renderDivisions();
-  }
-}
-
-function addField() {
-  const input = document.getElementById("field-input");
-  if (input.value.trim() !== "") {
-    fields.push({ name: input.value.trim(), color: "" });
-    input.value = "";
-    renderFields();
-  }
-}
-
-function addTime() {
-  const input = document.getElementById("time-input");
-  if (input.value.trim() !== "") {
-    times.push({ name: input.value.trim(), color: "" });
-    input.value = "";
-    renderTimes();
   }
 }
 
@@ -125,9 +72,10 @@ function enableEnterKey(inputId, addFn) {
 }
 
 // -------------------- Init --------------------
-window.onload = () => {
+window.addEventListener("DOMContentLoaded", () => {
   enableEnterKey("bunk-input", addBunk);
   enableEnterKey("division-input", addDivision);
-  enableEnterKey("field-input", addField);
-  enableEnterKey("time-input", addTime);
-};
+
+  document.getElementById("addBunkBtn").onclick = addBunk;
+  document.getElementById("addDivisionBtn").onclick = addDivision;
+});
