@@ -223,3 +223,5 @@ function updateTable() {
 
 // -------------------- Init --------------------
 document.getElementById("addFieldBtn").disabled = false;
+// You can also add more init hooks here, for example:
+// document.getElementById("generateBtn").onclick = () => { assignFieldsToBunks(); updateTable(); };
