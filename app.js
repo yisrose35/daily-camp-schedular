@@ -140,12 +140,30 @@ function setupDivisionButtons(){
     span.style.color=colorEnabled?"#fff":"inherit";
     span.onclick=()=>{selectedDivision=name; cont.querySelectorAll('span.bunk-button').forEach(el=>el.classList.remove("selected")); span.classList.add("selected");};
     makeEditable(span,newName=>{
-      divisions[newName]=divisions[name]; delete divisions[name];
-      leagues[newName]=leagues[name]||{enabled:false,sports:[]}; delete leagues[name];
-      availableDivisions[availableDivisions.indexOf(name)]=newName;
-      if(selectedDivision===name)selectedDivision=newName;
-      setupDivisionButtons(); renderLeagues(); renderTimeTemplates(); updateTable();
-    });
+  if (!newName || newName === name) return;
+
+  // Move division object
+  divisions[newName] = {...divisions[name]};
+  delete divisions[name];
+
+  // Move league settings
+  leagues[newName] = leagues[name] || {enabled:false,sports:[]};
+  delete leagues[name];
+
+  // Update availableDivisions array
+  const idx = availableDivisions.indexOf(name);
+  if (idx !== -1) availableDivisions[idx] = newName;
+
+  // Update selectedDivision if needed
+  if (selectedDivision === name) selectedDivision = newName;
+
+  setupDivisionButtons();
+  renderLeagues();
+  renderTimeTemplates();
+  updateUnassigned(); // refresh bunk assignments to display properly
+  updateTable();
+});
+
     wrap.appendChild(span);
     const col=document.createElement("input"); col.type="color"; col.value=obj.color; col.className="colorPicker";
     col.oninput=e=>{obj.color=e.target.value; if(colorEnabled){span.style.backgroundColor=e.target.value; span.style.color="#fff";} updateTable(); renderTimeTemplates();};
