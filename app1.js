@@ -39,7 +39,7 @@ function makeEditable(el, save) {
         save(val);
         el.textContent = val;
       } else {
-        el.textContent = old; // revert if nothing entered
+        el.textContent = old;
       }
       input.replaceWith(el);
     }
@@ -96,7 +96,6 @@ function updateUnassigned(){
     span.textContent=b;
     span.className="bunk-button";
 
-    // Assigned division for color only
     let assignedDivision=null;
     for(const d in divisions){ 
       if(divisions[d].bunks.includes(b)) assignedDivision=d; 
@@ -106,9 +105,9 @@ function updateUnassigned(){
       span.style.color="#fff";
     }
 
-    // Single click assigns (ignore double clicks)
+    // Single click → assign (ignore if part of double click)
     span.addEventListener("click", e => {
-      if (e.detail > 1) return; // ignore double click
+      if (e.detail > 1) return;
       if(selectedDivision && (!assignedDivision || assignedDivision!==selectedDivision)){
         for(const d in divisions){
           const i=divisions[d].bunks.indexOf(b);
@@ -122,7 +121,7 @@ function updateUnassigned(){
       }
     });
 
-    // Double click always edits
+    // Double click → edit
     makeEditable(span,newName=>{
       const idx=bunks.indexOf(b);
       if(idx!==-1) bunks[idx]=newName;
@@ -144,4 +143,3 @@ function updateUnassigned(){
     c.appendChild(span);
   });
 }
-
