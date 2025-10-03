@@ -82,8 +82,6 @@ function addField(){
   const i=document.getElementById("fieldInput"); const n=i.value.trim();
   if(n){fields.push({name:n,activities:[],available:true});i.value="";renderFields();}
 }
-document.getElementById("addFieldBtn").onclick=addField;
-document.getElementById("fieldInput").addEventListener("keyup",e=>{if(e.key==="Enter")addField();});
 
 function renderFields(){
   const c=document.getElementById("fieldList"); c.innerHTML="";
@@ -129,8 +127,6 @@ function addSpecial(){
   const i=document.getElementById("specialInput"); const n=i.value.trim();
   if(n){specialActivities.push({name:n,available:true}); i.value=""; renderSpecials();}
 }
-document.getElementById("addSpecialBtn").onclick=addSpecial;
-document.getElementById("specialInput").addEventListener("keyup",e=>{if(e.key==="Enter")addSpecial();});
 
 function renderSpecials(){
   const c=document.getElementById("specialList"); c.innerHTML="";
@@ -201,3 +197,14 @@ function renderLeagues(){
     container.appendChild(wrap);
   });
 }
+
+// -------------------- Init --------------------
+window.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("addTimeTemplateBtn")?.addEventListener("click", addTimeTemplate);
+
+  document.getElementById("addFieldBtn").onclick = addField;
+  document.getElementById("fieldInput").addEventListener("keyup", e=>{if(e.key==="Enter") addField();});
+
+  document.getElementById("addSpecialBtn").onclick = addSpecial;
+  document.getElementById("specialInput").addEventListener("keyup", e=>{if(e.key==="Enter") addSpecial();});
+});
