@@ -34,3 +34,4 @@ input:checked + .slider:before { transform: translateX(20px); }
 .continuation { opacity: 0.7; font-style: italic; }
 .league-pill { background:#4CAF50; color:#fff; padding:2px 6px; border-radius:12px; }
 .grey-cell { background:#eee; }
+
