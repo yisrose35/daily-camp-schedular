@@ -32,7 +32,7 @@ function assignFieldsToBunks() {
   const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
 
   // -------------------- Resource Locks --------------------
-  const globalResourceUsage = {};
+  const globalResourceUsage = {}; // Tracks which field/activity is used and when
   const divisionResourceUsage = {};
   const occupiedFieldsBySlot = Array.from(
     { length: unifiedTimes.length },
@@ -41,6 +41,12 @@ function assignFieldsToBunks() {
   const leagueOccupiedBySlot = Array.from(
     { length: unifiedTimes.length },
     () => false
+  );
+
+  // Tracks global activity lock (so no two bunks have same sport at same time)
+  const globalActivityLock = Array.from(
+    { length: unifiedTimes.length },
+    () => new Set()
   );
 
   function overlaps(aStart, aEnd, bStart, bEnd) {
@@ -72,7 +78,7 @@ function assignFieldsToBunks() {
     return true;
   }
 
-  function reserveResource(div, resourceKey, startTime, endTime, s) {
+  function reserveResource(div, resourceKey, startTime, endTime, s, sportName = null) {
     if (!globalResourceUsage[resourceKey])
       globalResourceUsage[resourceKey] = [];
     if (!divisionResourceUsage[div]) divisionResourceUsage[div] = {};
@@ -87,6 +93,7 @@ function assignFieldsToBunks() {
       if (idx >= unifiedTimes.length) break;
       if (divisionActiveRows[div] && !divisionActiveRows[div].has(idx)) break;
       occupiedFieldsBySlot[idx].add(resourceKey);
+      if (sportName) globalActivityLock[idx].add(sportName); // lock the sport globally that slot
     }
   }
 
@@ -113,7 +120,7 @@ function assignFieldsToBunks() {
     const usedFieldsByDiv = {};
     availableDivisions.forEach(div => (usedFieldsByDiv[div] = new Set()));
 
-    // 🟩 PRIORITY: younger divisions go first, older go last (older have priority)
+    // Younger to older, so later divisions = higher priority
     const orderedDivs = [...availableDivisions];
 
     for (let i = 0; i < orderedDivs.length; i++) {
@@ -183,17 +190,18 @@ function assignFieldsToBunks() {
           if (usedFieldsByDiv[div].has(a.field.name)) return false;
           if (!canUseResource(div, a.field.name, slotStart, slotEnd, s))
             return false;
+          if (a.sport && globalActivityLock[s].has(a.sport)) return false; // sport already used globally this slot
           return true;
         });
 
-        // Avoid same sport twice in a row OR twice in the same day
+        // Avoid repeating same sport in a day or twice in a row
         if (prev) candidates = candidates.filter(c => c.sport !== prev.sport);
         if (sportsUsedByBunk[bunk])
           candidates = candidates.filter(
             c => !c.sport || !sportsUsedByBunk[bunk].has(c.sport)
           );
 
-        // 🟧 If no candidate available -> mark as "Special Activity Needed"
+        // 🟧 Fallback if no candidates left
         if (candidates.length === 0) {
           scheduleAssignments[bunk][s] = {
             field: "Special Activity Needed",
@@ -221,11 +229,15 @@ function assignFieldsToBunks() {
         };
 
         usedFieldsByDiv[div].add(chosen.field.name);
-        if (chosen.type === "field")
-          reserveResource(div, chosen.field.name, slotStart, slotEnd, s);
-        else occupiedFieldsBySlot[s].add(chosen.field.name);
 
-        // Continuation for activity spanning multiple increments
+        if (chosen.type === "field")
+          reserveResource(div, chosen.field.name, slotStart, slotEnd, s, chosen.sport);
+        else {
+          occupiedFieldsBySlot[s].add(chosen.field.name);
+          if (chosen.sport) globalActivityLock[s].add(chosen.sport);
+        }
+
+        // Continuation
         for (let k = 1; k < spanLen; k++) {
           const idx = s + k;
           if (idx >= unifiedTimes.length) break;
@@ -241,14 +253,15 @@ function assignFieldsToBunks() {
 
           if (chosen.type === "field") {
             const contStart = unifiedTimes[idx].start;
-            const contEnd = new Date(
-              contStart.getTime() + activityDuration * 60000
-            );
-            reserveResource(div, chosen.field.name, contStart, contEnd, idx);
-          } else occupiedFieldsBySlot[idx].add(chosen.field.name);
+            const contEnd = new Date(contStart.getTime() + activityDuration * 60000);
+            reserveResource(div, chosen.field.name, contStart, contEnd, idx, chosen.sport);
+          } else {
+            occupiedFieldsBySlot[idx].add(chosen.field.name);
+            if (chosen.sport) globalActivityLock[idx].add(chosen.sport);
+          }
         }
 
-        // Track sports used today
+        // Track sports used by bunk for the day
         if (!sportsUsedByBunk[bunk]) sportsUsedByBunk[bunk] = new Set();
         if (chosen.sport) sportsUsedByBunk[bunk].add(chosen.sport);
 
