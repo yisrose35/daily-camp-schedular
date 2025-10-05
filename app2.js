@@ -1,304 +1,300 @@
-/******************************
- * app2.js – Camp Scheduler Engine
- ******************************/
+// -------------------- Scheduling Core (Unified Grid) --------------------
+function assignFieldsToBunks() {
+  const availFields = fields.filter(f => f.available && f.activities.length > 0);
+  const availSpecials = specialActivities.filter(s => s.available);
 
-// =================== Utility ===================
-
-function shuffle(arr) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
-
-function getIncrement() {
-  const el = document.getElementById("increment");
-  return el ? parseInt(el.value, 10) : 30;
-}
-
-function spanLength() {
-  const inc = getIncrement();
-  return Math.max(1, Math.ceil(activityDuration / inc));
-}
-
-function activeForDivision(div, r) {
-  const set = divisionActiveRows[div];
-  return !!(set && set.has(r));
-}
-
-function makeUsageMap() {
-  return {
-    map: new Map(),
-    isFree(n, r) {
-      const set = this.map.get(n);
-      return !(set && set.has(r));
-    },
-    reserve(n, r) {
-      if (!this.map.has(n)) this.map.set(n, new Set());
-      this.map.get(n).add(r);
-    },
-    reserveSpan(n, start, span) {
-      for (let i = start; i < start + span && i < unifiedTimes.length; i++) {
-        this.reserve(n, i);
-      }
-    }
-  };
-}
-
-// =================== Main Generator ===================
-
-function generateSchedule() {
-  if (!unifiedTimes || unifiedTimes.length === 0) {
-    alert("Add your times first.");
+  const allActivities = [
+    ...availFields.flatMap(f => f.activities.map(act => ({ type: "field", field: f, sport: act }))),
+    ...availSpecials.map(sa => ({ type: "special", field: { name: sa.name }, sport: null }))
+  ];
+  if (allActivities.length === 0) {
+    alert("No activities available.");
+    scheduleAssignments = {};
     return;
   }
 
+  // Reset schedules
   scheduleAssignments = {};
-  for (const div of Object.values(divisions)) {
-    for (const b of div.bunks) scheduleAssignments[b] = new Array(unifiedTimes.length).fill(null);
-  }
-
-  const span = spanLength();
-  const usage = makeUsageMap();
-
-  const availFields = fields.filter(f => f.available && f.activities?.length);
-  const availSpecials = specialActivities.filter(s => s.available);
-
-  const leagueRow = pickLeagueRow();
-
-  // ============ Pass 1: Assign by row ============
-  for (let r = 0; r < unifiedTimes.length; r++) {
-    let activePairs = [];
-    for (const d of availableDivisions) {
-      if (!activeForDivision(d, r)) continue;
-      for (const b of divisions[d].bunks) {
-        if (!scheduleAssignments[b][r]) activePairs.push({ d, b });
-      }
-    }
-    shuffle(activePairs);
-
-    for (const { d, b } of activePairs) {
-      if (leagueRow[d] === r) {
-        putSpan(b, r, span, { label: "Leagues", type: "league", span });
-        continue;
-      }
-      const ok = tryActivity(b, d, r, span, availFields, availSpecials, usage);
-      if (!ok)
-        putSpan(b, r, span, { label: "Free Play", type: "fallback", span });
-    }
-  }
-
-  // ============ Pass 2: Fill holes ============
-  fillBlanks(span, availFields, availSpecials, usage, leagueRow);
-
-  renderSchedule();
-}
-
-// =================== League Rows ===================
-
-function pickLeagueRow() {
-  const out = {};
-  const span = spanLength();
-  for (const d of availableDivisions) {
-    if (!leagues[d]?.enabled) continue;
-    const act = Array.from(divisionActiveRows[d] || []);
-    const starts = act.filter(r => {
-      for (let i = r; i < r + span; i++) if (!activeForDivision(d, i)) return false;
-      return true;
+  availableDivisions.forEach(div => {
+    divisions[div].bunks.forEach(b => {
+      scheduleAssignments[b] = new Array(unifiedTimes.length);
     });
-    if (!starts.length) continue;
-    out[d] = starts[Math.floor(Math.random() * starts.length)];
-  }
-  return out;
-}
+  });
 
-// =================== Placement ===================
+  const inc = parseInt(document.getElementById("increment").value, 10);
+  const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
 
-function putSpan(b, start, span, data) {
-  for (let r = start; r < start + span && r < unifiedTimes.length; r++) {
-    const cell = { ...data, continuation: r > start, _skip: r > start };
-    scheduleAssignments[b][r] = cell;
-  }
-}
+  // -------------------- Global & Division Resource Tracking --------------------
+  const globalResourceUsage = {};       // { fieldName: [{start,end}] }
+  const divisionResourceUsage = {};     // { divName: { fieldName: [{start,end}] } }
+  const occupiedFieldsBySlot = Array.from({ length: unifiedTimes.length }, () => new Set());
+  const leagueOccupiedBySlot = Array.from({ length: unifiedTimes.length }, () => false);
 
-function spanOK(d, start, span) {
-  for (let i = start; i < start + span && i < unifiedTimes.length; i++)
-    if (!activeForDivision(d, i)) return false;
-  return true;
-}
+  function overlaps(aStart, aEnd, bStart, bEnd) { return aStart < bEnd && bStart < aEnd; }
 
-function spanFree(usage, name, start, span) {
-  for (let i = start; i < start + span && i < unifiedTimes.length; i++)
-    if (!usage.isFree(name, i)) return false;
-  return true;
-}
+  function canUseResource(div, resourceKey, startTime, endTime, s) {
+    if (occupiedFieldsBySlot[s].has(resourceKey)) return false;
 
-function tryActivity(b, d, r, span, fieldsA, specialsA, usage) {
-  const opts = [];
-  for (const f of fieldsA)
-    for (const s of f.activities)
-      opts.push({ type: "field", field: f.name, sport: s });
-  for (const s of specialsA) opts.push({ type: "special", name: s.name });
-  shuffle(opts);
+    if (globalResourceUsage[resourceKey]) {
+      for (const r of globalResourceUsage[resourceKey]) {
+        if (overlaps(startTime, endTime, r.start, r.end)) return false;
+      }
+    }
 
-  for (const o of opts) {
-    if (!spanOK(d, r, span)) continue;
-    const name = o.type === "field" ? `FIELD:${o.field}` : `SPECIAL:${o.name}`;
-    if (!spanFree(usage, name, r, span)) continue;
-    const label = o.type === "field" ? o.sport : o.name;
-    putSpan(b, r, span, { label, type: o.type, field: o.field || null, span });
-    usage.reserveSpan(name, r, span);
+    if (divisionResourceUsage[div] && divisionResourceUsage[div][resourceKey]) {
+      for (const r of divisionResourceUsage[div][resourceKey]) {
+        if (overlaps(startTime, endTime, r.start, r.end)) return false;
+      }
+    }
+
+    for (let k = 0; k < spanLen; k++) {
+      const idx = s + k;
+      if (idx >= unifiedTimes.length) break;
+      if (divisionActiveRows[div] && !divisionActiveRows[div].has(idx)) break;
+      if (occupiedFieldsBySlot[idx].has(resourceKey)) return false;
+    }
+
     return true;
   }
-  return false;
-}
 
-// =================== Fill Blanks ===================
+  function reserveResource(div, resourceKey, startTime, endTime, s) {
+    if (!globalResourceUsage[resourceKey]) globalResourceUsage[resourceKey] = [];
+    if (!divisionResourceUsage[div]) divisionResourceUsage[div] = {};
+    if (!divisionResourceUsage[div][resourceKey]) divisionResourceUsage[div][resourceKey] = [];
 
-function fillBlanks(span, fieldsA, specialsA, usage, leagueRow) {
-  for (const d of availableDivisions) {
-    const div = divisions[d];
-    for (const b of div.bunks) {
-      for (let r = 0; r < unifiedTimes.length; r++) {
-        if (!activeForDivision(d, r)) continue;
-        if (scheduleAssignments[b][r]) continue;
+    globalResourceUsage[resourceKey].push({ start: startTime, end: endTime });
+    divisionResourceUsage[div][resourceKey].push({ start: startTime, end: endTime });
 
-        if (leagueRow[d] === r) {
-          putSpan(b, r, span, { label: "Leagues", type: "league", span });
+    for (let k = 0; k < spanLen; k++) {
+      const idx = s + k;
+      if (idx >= unifiedTimes.length) break;
+      if (divisionActiveRows[div] && !divisionActiveRows[div].has(idx)) break;
+      occupiedFieldsBySlot[idx].add(resourceKey);
+    }
+  }
+
+  // -------------------- One League Slot Per Enabled Division --------------------
+  const leagueSlotByDiv = {};
+  availableDivisions.forEach(div => {
+    if (leagues[div] && leagues[div].enabled) {
+      const active = Array.from(divisionActiveRows[div] || []);
+      if (active.length > 0) {
+        leagueSlotByDiv[div] = active[Math.floor(Math.random() * active.length)];
+      }
+    }
+  });
+
+  const lastActivityByBunk = {};
+
+  // -------------------- Main Schedule Builder --------------------
+  for (let s = 0; s < unifiedTimes.length; s++) {
+    const slotStart = unifiedTimes[s].start;
+    const slotEnd = new Date(slotStart.getTime() + activityDuration * 60000);
+
+    const usedFieldsByDiv = {};
+    availableDivisions.forEach(div => usedFieldsByDiv[div] = new Set());
+
+    // Randomize division order to avoid early bias
+    const shuffledDivs = [...availableDivisions].sort(() => Math.random() - 0.5);
+
+    for (const div of shuffledDivs) {
+      if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s))) continue;
+
+      for (const bunk of divisions[div].bunks) {
+        if (scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s].continuation) continue;
+
+        // League logic
+        if (leagueSlotByDiv[div] === s && !leagueOccupiedBySlot[s]) {
+          scheduleAssignments[bunk][s] = { field: "Leagues", sport: null, continuation: false, isLeague: true };
+          leagueOccupiedBySlot[s] = true;
+          for (let k = 1; k < spanLen; k++) {
+            const idx = s + k;
+            if (idx >= unifiedTimes.length) break;
+            if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
+            scheduleAssignments[bunk][idx] = { field: "Leagues", sport: null, continuation: true, isLeague: true };
+          }
+          lastActivityByBunk[bunk] = { field: "Leagues", sport: null, isLeague: true };
           continue;
         }
 
-        const ok = tryActivity(b, d, r, span, fieldsA, specialsA, usage);
-        if (!ok)
-          putSpan(b, r, span, { label: "Free Play", type: "fallback", span });
-      }
-    }
-  }
-}
-
-// =================== Render Table ===================
-
-function renderSchedule() {
-  const t = document.getElementById("scheduleTable");
-  if (!t) return;
-  t.innerHTML = "";
-
-  const thead = document.createElement("thead");
-  const trDiv = document.createElement("tr");
-  const thTime = document.createElement("th");
-  thTime.textContent = "Time";
-  trDiv.appendChild(thTime);
-
-  for (const d of availableDivisions) {
-    const div = divisions[d];
-    const th = document.createElement("th");
-    th.textContent = d;
-    th.colSpan = div.bunks.length;
-    th.style.background = div.color;
-    th.style.color = "white";
-    trDiv.appendChild(th);
-  }
-  thead.appendChild(trDiv);
-
-  const trB = document.createElement("tr");
-  const blank = document.createElement("th");
-  trB.appendChild(blank);
-  for (const d of availableDivisions) {
-    for (const b of divisions[d].bunks) {
-      const th = document.createElement("th");
-      th.textContent = b;
-      trB.appendChild(th);
-    }
-  }
-  thead.appendChild(trB);
-  t.appendChild(thead);
-
-  const tb = document.createElement("tbody");
-  for (let r = 0; r < unifiedTimes.length; r++) {
-    const tr = document.createElement("tr");
-    const tdT = document.createElement("td");
-    tdT.textContent = unifiedTimes[r].label;
-    tdT.style.fontWeight = "bold";
-    tr.appendChild(tdT);
-
-    for (const d of availableDivisions) {
-      const div = divisions[d];
-      for (const b of div.bunks) {
-        const cell = scheduleAssignments[b][r];
-        if (cell && cell._skip) continue;
-        const td = document.createElement("td");
-
-        if (!activeForDivision(d, r)) {
-          td.style.background = "#eee";
-          td.textContent = "";
-        } else if (!cell) {
-          td.textContent = "—";
-        } else {
-          // merge vertical spans
-          let spanR = 1;
-          for (let k = r + 1; k < r + cell.span && k < unifiedTimes.length; k++) {
-            const next = scheduleAssignments[b][k];
-            if (next && next.continuation) spanR++;
+        // Continuation
+        const prev = lastActivityByBunk[bunk];
+        if (prev && !prev.isLeague) {
+          const prevIdx = s - 1;
+          const prevCell = scheduleAssignments[bunk][prevIdx];
+          if (prevCell && !prevCell.continuation) {
+            let contCount = 1, t = prevIdx + 1;
+            while (t < s && scheduleAssignments[bunk][t] && scheduleAssignments[bunk][t].continuation) { contCount++; t++; }
+            if (contCount < spanLen) {
+              scheduleAssignments[bunk][s] = { ...prevCell, continuation: true };
+              occupiedFieldsBySlot[s].add(prevCell.field);
+              continue;
+            }
           }
-          if (spanR > 1) td.rowSpan = spanR;
-          td.textContent = cell.label;
-          if (cell.type === "league") td.style.fontWeight = "bold";
-          if (cell.type === "field")
-            td.title = `${cell.label} @ ${cell.field}`;
         }
 
-        tr.appendChild(td);
+        // Pick new activity
+        let candidates = allActivities.filter(a => {
+          if (usedFieldsByDiv[div].has(a.field.name)) return false;
+          if (!canUseResource(div, a.field.name, slotStart, slotEnd, s)) return false;
+          return true;
+        });
+
+        // Avoid repeating the exact same field/sport
+        if (prev) {
+          candidates = candidates.filter(c => c.field.name !== prev.field && c.sport !== prev.sport);
+        }
+
+        if (candidates.length === 0) {
+          const specials = allActivities.filter(a => a.type === "special");
+          candidates = specials.length > 0 ? specials : [{ type: "special", field: { name: "Free Play" }, sport: null }];
+        }
+
+        const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+        scheduleAssignments[bunk][s] = { field: chosen.field.name, sport: chosen.sport, continuation: false, isLeague: false };
+
+        usedFieldsByDiv[div].add(chosen.field.name);
+        if (chosen.type === "field") reserveResource(div, chosen.field.name, slotStart, slotEnd, s);
+        else occupiedFieldsBySlot[s].add(chosen.field.name);
+
+        for (let k = 1; k < spanLen; k++) {
+          const idx = s + k;
+          if (idx >= unifiedTimes.length) break;
+          if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
+          scheduleAssignments[bunk][idx] = { field: chosen.field.name, sport: chosen.sport, continuation: true, isLeague: false };
+          if (chosen.type === "field") {
+            const contStart = unifiedTimes[idx].start;
+            const contEnd = new Date(contStart.getTime() + activityDuration * 60000);
+            reserveResource(div, chosen.field.name, contStart, contEnd, idx);
+          } else occupiedFieldsBySlot[idx].add(chosen.field.name);
+        }
+
+        lastActivityByBunk[bunk] = { field: chosen.field.name, sport: chosen.sport, isLeague: false };
       }
     }
-    tb.appendChild(tr);
   }
-  t.appendChild(tb);
+
+  updateTable();
 }
 
-// =================== Expose ===================
-window.generateSchedule = generateSchedule;
+// -------------------- Rendering (Unified Grid + Merged Cells) --------------------
+function updateTable() {
+  const scheduleTab = document.getElementById("schedule");
+  scheduleTab.innerHTML = "";
+  if (unifiedTimes.length === 0) return;
 
-// =================== Initialization ===================
+  Object.keys(scheduleAssignments).forEach(b => {
+    if (Array.isArray(scheduleAssignments[b])) {
+      scheduleAssignments[b].forEach(e => { if (e) delete e._skip; });
+    }
+  });
 
-function initApp2() {
-  // Ensure all base data exists
-  if (!window.divisions) window.divisions = {};
-  if (!window.availableDivisions) window.availableDivisions = [];
-  if (!window.fields) window.fields = [];
-  if (!window.specialActivities) window.specialActivities = [];
-  if (!window.leagues) window.leagues = {};
-  if (!window.unifiedTimes) window.unifiedTimes = [];
-  if (!window.divisionActiveRows) window.divisionActiveRows = {};
-  if (!window.scheduleAssignments) window.scheduleAssignments = {};
+  const table = document.createElement("table");
+  table.className = "division-schedule";
 
-  // Attach generate button if it exists
-  const genBtn = document.getElementById("generateBtn");
-  if (genBtn) genBtn.onclick = generateSchedule;
+  // Header
+  const thead = document.createElement("thead");
+  const row1 = document.createElement("tr");
+  const thTime = document.createElement("th");
+  thTime.textContent = "Time";
+  row1.appendChild(thTime);
 
-  // Auto-load previous schedule if saved
+  availableDivisions.forEach(div => {
+    const th = document.createElement("th");
+    th.colSpan = divisions[div].bunks.length;
+    th.textContent = div;
+    th.style.background = divisions[div].color;
+    th.style.color = "#fff";
+    row1.appendChild(th);
+  });
+  thead.appendChild(row1);
+
+  const row2 = document.createElement("tr");
+  const thB = document.createElement("th");
+  thB.textContent = "Bunk";
+  row2.appendChild(thB);
+  availableDivisions.forEach(div => {
+    divisions[div].bunks.forEach(b => {
+      const th = document.createElement("th");
+      th.textContent = b;
+      row2.appendChild(th);
+    });
+  });
+  thead.appendChild(row2);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (let s = 0; s < unifiedTimes.length; s++) {
+    const tr = document.createElement("tr");
+    const tdTime = document.createElement("td");
+    tdTime.textContent = unifiedTimes[s].label;
+    tr.appendChild(tdTime);
+
+    availableDivisions.forEach(div => {
+      const activeSet = divisionActiveRows[div] || new Set();
+      divisions[div].bunks.forEach(b => {
+        if (scheduleAssignments[b] && scheduleAssignments[b][s] && scheduleAssignments[b][s]._skip) return;
+        const td = document.createElement("td");
+        const active = activeSet.has(s);
+
+        if (!active) {
+          td.className = "grey-cell";
+          tr.appendChild(td);
+          return;
+        }
+
+        const entry = scheduleAssignments[b][s];
+        if (entry && !entry.continuation) {
+          let span = 1;
+          for (let k = s + 1; k < unifiedTimes.length; k++) {
+            const e2 = scheduleAssignments[b][k];
+            if (!e2 || !e2.continuation || e2.field !== entry.field || e2.sport !== entry.sport) break;
+            span++;
+            scheduleAssignments[b][k]._skip = true;
+          }
+          td.rowSpan = span;
+
+          if (entry.isLeague) td.innerHTML = `<span class="league-pill">Leagues</span>`;
+          else td.textContent = entry.sport ? `${entry.field} – ${entry.sport}` : entry.field;
+        } else if (!entry) td.textContent = "";
+
+        tr.appendChild(td);
+      });
+    });
+
+    tbody.appendChild(tr);
+  }
+
+  table.appendChild(tbody);
+  scheduleTab.appendChild(table);
+}
+
+// -------------------- Init --------------------
+function initScheduleSystem() {
+  const btn = document.getElementById("generateBtn");
+  if (btn) btn.onclick = assignFieldsToBunks;
+
   const saved = localStorage.getItem("scheduleAssignments");
   if (saved) {
     try {
       scheduleAssignments = JSON.parse(saved);
-      renderSchedule();
+      updateTable();
     } catch (e) {
       console.error("Failed to load saved schedule:", e);
     }
   }
 }
 
-// Save schedule whenever generated
-function saveScheduleToLocal() {
+function saveSchedule() {
   localStorage.setItem("scheduleAssignments", JSON.stringify(scheduleAssignments));
 }
 
-// Modify generateSchedule to auto-save after generation
-const originalGenerateSchedule = generateSchedule;
-generateSchedule = function() {
-  originalGenerateSchedule();
-  saveScheduleToLocal();
+// Auto-save after generating
+const originalAssign = assignFieldsToBunks;
+assignFieldsToBunks = function() {
+  originalAssign();
+  saveSchedule();
 };
 
-// Run init on page load
-window.addEventListener("DOMContentLoaded", initApp2);
+// Initialize when DOM ready
+window.addEventListener("DOMContentLoaded", initScheduleSystem);
