@@ -1,4 +1,4 @@
-// -------------------- Scheduling Core (Unified Grid) --------------------
+// -------------------- Scheduling Core (Unified Grid with Priority + League Enforcement) --------------------
 function assignFieldsToBunks() {
   const availFields = fields.filter(f => f.available && f.activities.length > 0);
   const availSpecials = specialActivities.filter(s => s.available);
@@ -32,22 +32,11 @@ function assignFieldsToBunks() {
   const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
 
   // -------------------- Resource Locks --------------------
-  const globalResourceUsage = {}; // Tracks which field/activity is used and when
+  const globalResourceUsage = {};
   const divisionResourceUsage = {};
-  const occupiedFieldsBySlot = Array.from(
-    { length: unifiedTimes.length },
-    () => new Set()
-  );
-  const leagueOccupiedBySlot = Array.from(
-    { length: unifiedTimes.length },
-    () => false
-  );
-
-  // Tracks global activity lock (so no two bunks have same sport at same time)
-  const globalActivityLock = Array.from(
-    { length: unifiedTimes.length },
-    () => new Set()
-  );
+  const occupiedFieldsBySlot = Array.from({ length: unifiedTimes.length }, () => new Set());
+  const leagueOccupiedBySlot = Array.from({ length: unifiedTimes.length }, () => false);
+  const globalActivityLock = Array.from({ length: unifiedTimes.length }, () => new Set());
 
   function overlaps(aStart, aEnd, bStart, bEnd) {
     return aStart < bEnd && bStart < aEnd;
@@ -93,59 +82,34 @@ function assignFieldsToBunks() {
       if (idx >= unifiedTimes.length) break;
       if (divisionActiveRows[div] && !divisionActiveRows[div].has(idx)) break;
       occupiedFieldsBySlot[idx].add(resourceKey);
-      if (sportName) globalActivityLock[idx].add(sportName); // lock the sport globally that slot
+      if (sportName) globalActivityLock[idx].add(sportName);
     }
   }
 
-  // -------------------- One League Slot Per Enabled Division --------------------
+  // -------------------- Enforce League Slot For Each Enabled Division --------------------
   const leagueSlotByDiv = {};
-  availableDivisions.forEach(div => {
+  const priorityDivs = [...availableDivisions].reverse(); // oldest to youngest
+
+  // pick a guaranteed slot per division and pre-assign leagues
+  for (const div of priorityDivs) {
     if (leagues[div] && leagues[div].enabled) {
       const active = Array.from(divisionActiveRows[div] || []);
       if (active.length > 0) {
-        leagueSlotByDiv[div] =
-          active[Math.floor(Math.random() * active.length)];
-      }
-    }
-  });
+        const slot = active[Math.floor(Math.random() * active.length)];
+        leagueSlotByDiv[div] = slot;
 
-  const lastActivityByBunk = {};
-  const sportsUsedByBunk = {}; // tracks sports already done for the day
-
-  // -------------------- Main Schedule Builder --------------------
-  for (let s = 0; s < unifiedTimes.length; s++) {
-    const slotStart = unifiedTimes[s].start;
-    const slotEnd = new Date(slotStart.getTime() + activityDuration * 60000);
-
-    const usedFieldsByDiv = {};
-    availableDivisions.forEach(div => (usedFieldsByDiv[div] = new Set()));
-
-    // Younger to older, so later divisions = higher priority
-    const orderedDivs = [...availableDivisions];
-
-    for (let i = 0; i < orderedDivs.length; i++) {
-      const div = orderedDivs[i];
-      if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s))) continue;
-
-      for (const bunk of divisions[div].bunks) {
-        if (scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s].continuation)
-          continue;
-
-        // -------------------- League Logic --------------------
-        if (leagueSlotByDiv[div] === s && !leagueOccupiedBySlot[s]) {
-          scheduleAssignments[bunk][s] = {
+        for (const bunk of divisions[div].bunks) {
+          scheduleAssignments[bunk][slot] = {
             field: "Leagues",
             sport: null,
             continuation: false,
             isLeague: true
           };
-          leagueOccupiedBySlot[s] = true;
-
+          // extend for multi-slot league duration
           for (let k = 1; k < spanLen; k++) {
-            const idx = s + k;
+            const idx = slot + k;
             if (idx >= unifiedTimes.length) break;
-            if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx)))
-              break;
+            if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
             scheduleAssignments[bunk][idx] = {
               field: "Leagues",
               sport: null,
@@ -153,55 +117,49 @@ function assignFieldsToBunks() {
               isLeague: true
             };
           }
-
-          lastActivityByBunk[bunk] = {
-            field: "Leagues",
-            sport: null,
-            isLeague: true
-          };
-          continue;
         }
+        leagueOccupiedBySlot[slot] = true;
+      }
+    }
+  }
 
-        // -------------------- Continuation --------------------
+  const lastActivityByBunk = {};
+  const sportsUsedByBunk = {};
+
+  // -------------------- Main Schedule Builder (Oldest First, Locking Each Use) --------------------
+  for (let s = 0; s < unifiedTimes.length; s++) {
+    const slotStart = unifiedTimes[s].start;
+    const slotEnd = new Date(slotStart.getTime() + activityDuration * 60000);
+
+    const usedFieldsByDiv = {};
+    priorityDivs.forEach(div => (usedFieldsByDiv[div] = new Set()));
+
+    for (const div of priorityDivs) {
+      if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s))) continue;
+
+      // skip this slot if division has league scheduled here
+      if (leagueSlotByDiv[div] === s) continue;
+
+      for (const bunk of divisions[div].bunks) {
+        if (scheduleAssignments[bunk][s]) continue;
+
         const prev = lastActivityByBunk[bunk];
-        if (prev && !prev.isLeague) {
-          const prevIdx = s - 1;
-          const prevCell = scheduleAssignments[bunk][prevIdx];
-          if (prevCell && !prevCell.continuation) {
-            let contCount = 1, t = prevIdx + 1;
-            while (
-              t < s &&
-              scheduleAssignments[bunk][t] &&
-              scheduleAssignments[bunk][t].continuation
-            ) {
-              contCount++;
-              t++;
-            }
-            if (contCount < spanLen) {
-              scheduleAssignments[bunk][s] = { ...prevCell, continuation: true };
-              occupiedFieldsBySlot[s].add(prevCell.field);
-              continue;
-            }
-          }
-        }
 
         // -------------------- Build Candidates --------------------
         let candidates = allActivities.filter(a => {
           if (usedFieldsByDiv[div].has(a.field.name)) return false;
-          if (!canUseResource(div, a.field.name, slotStart, slotEnd, s))
-            return false;
-          if (a.sport && globalActivityLock[s].has(a.sport)) return false; // sport already used globally this slot
+          if (!canUseResource(div, a.field.name, slotStart, slotEnd, s)) return false;
           return true;
         });
 
-        // Avoid repeating same sport in a day or twice in a row
+        // avoid same sport twice in a row or same sport that bunk already had today
         if (prev) candidates = candidates.filter(c => c.sport !== prev.sport);
         if (sportsUsedByBunk[bunk])
           candidates = candidates.filter(
             c => !c.sport || !sportsUsedByBunk[bunk].has(c.sport)
           );
 
-        // 🟧 Fallback if no candidates left
+        // -------------------- Fallback --------------------
         if (candidates.length === 0) {
           scheduleAssignments[bunk][s] = {
             field: "Special Activity Needed",
@@ -218,8 +176,7 @@ function assignFieldsToBunks() {
         }
 
         // -------------------- Choose & Assign --------------------
-        const chosen =
-          candidates[Math.floor(Math.random() * candidates.length)];
+        const chosen = candidates[Math.floor(Math.random() * candidates.length)];
 
         scheduleAssignments[bunk][s] = {
           field: chosen.field.name,
@@ -229,39 +186,24 @@ function assignFieldsToBunks() {
         };
 
         usedFieldsByDiv[div].add(chosen.field.name);
+        reserveResource(div, chosen.field.name, slotStart, slotEnd, s, chosen.sport);
 
-        if (chosen.type === "field")
-          reserveResource(div, chosen.field.name, slotStart, slotEnd, s, chosen.sport);
-        else {
-          occupiedFieldsBySlot[s].add(chosen.field.name);
-          if (chosen.sport) globalActivityLock[s].add(chosen.sport);
-        }
-
-        // Continuation
+        // continuation if activity spans multiple increments
         for (let k = 1; k < spanLen; k++) {
           const idx = s + k;
           if (idx >= unifiedTimes.length) break;
-          if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx)))
-            break;
-
+          if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
           scheduleAssignments[bunk][idx] = {
             field: chosen.field.name,
             sport: chosen.sport,
             continuation: true,
             isLeague: false
           };
-
-          if (chosen.type === "field") {
-            const contStart = unifiedTimes[idx].start;
-            const contEnd = new Date(contStart.getTime() + activityDuration * 60000);
-            reserveResource(div, chosen.field.name, contStart, contEnd, idx, chosen.sport);
-          } else {
-            occupiedFieldsBySlot[idx].add(chosen.field.name);
-            if (chosen.sport) globalActivityLock[idx].add(chosen.sport);
-          }
+          const contStart = unifiedTimes[idx].start;
+          const contEnd = new Date(contStart.getTime() + activityDuration * 60000);
+          reserveResource(div, chosen.field.name, contStart, contEnd, idx, chosen.sport);
         }
 
-        // Track sports used by bunk for the day
         if (!sportsUsedByBunk[bunk]) sportsUsedByBunk[bunk] = new Set();
         if (chosen.sport) sportsUsedByBunk[bunk].add(chosen.sport);
 
@@ -400,12 +342,10 @@ function saveSchedule() {
   localStorage.setItem("scheduleAssignments", JSON.stringify(scheduleAssignments));
 }
 
-// Auto-save after generating
 const originalAssign = assignFieldsToBunks;
 assignFieldsToBunks = function() {
   originalAssign();
   saveSchedule();
 };
 
-// Initialize when DOM ready
 window.addEventListener("DOMContentLoaded", initScheduleSystem);
