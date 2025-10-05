@@ -7,6 +7,7 @@ function assignFieldsToBunks() {
     ...availFields.flatMap(f => f.activities.map(act => ({ type: "field", field: f, sport: act }))),
     ...availSpecials.map(sa => ({ type: "special", field: { name: sa.name }, sport: null }))
   ];
+
   if (allActivities.length === 0) {
     alert("No activities available.");
     scheduleAssignments = {};
@@ -16,7 +17,9 @@ function assignFieldsToBunks() {
   // Reset schedules
   scheduleAssignments = {};
   availableDivisions.forEach(div => {
-    divisions[div].bunks.forEach(b => { scheduleAssignments[b] = new Array(unifiedTimes.length); });
+    divisions[div].bunks.forEach(b => {
+      scheduleAssignments[b] = new Array(unifiedTimes.length);
+    });
   });
 
   const inc = parseInt(document.getElementById("increment").value, 10);
@@ -31,14 +34,17 @@ function assignFieldsToBunks() {
   }
 
   function canUseResource(div, resourceKey, startTime, endTime) {
-    // Prevent conflicts across ALL divisions (global)
-    if (globalResourceUsage[resourceKey] && globalResourceUsage[resourceKey].some(r => overlaps(startTime, endTime, r.start, r.end))) {
-      return false;
+    // Prevent conflicts across ALL divisions
+    if (globalResourceUsage[resourceKey]) {
+      for (const r of globalResourceUsage[resourceKey]) {
+        if (overlaps(startTime, endTime, r.start, r.end)) return false;
+      }
     }
-    // Prevent conflicts WITHIN same division (bunks sharing same field)
-    const divUse = (divisionResourceUsage[div] && divisionResourceUsage[div][resourceKey]) || [];
-    if (divUse.some(r => overlaps(startTime, endTime, r.start, r.end))) {
-      return false;
+    // Prevent conflicts WITHIN the same division
+    if (divisionResourceUsage[div] && divisionResourceUsage[div][resourceKey]) {
+      for (const r of divisionResourceUsage[div][resourceKey]) {
+        if (overlaps(startTime, endTime, r.start, r.end)) return false;
+      }
     }
     return true;
   }
@@ -57,14 +63,12 @@ function assignFieldsToBunks() {
   availableDivisions.forEach(div => {
     if (leagues[div] && leagues[div].enabled) {
       const active = Array.from(divisionActiveRows[div] || []);
-      if (active.length > 0) {
-        leagueSlotByDiv[div] = active[Math.floor(Math.random() * active.length)];
-      }
+      if (active.length > 0) leagueSlotByDiv[div] = active[Math.floor(Math.random() * active.length)];
     }
   });
 
-  // -------------------- Track last activity per bunk --------------------
-  const lastActivityByBunk = {}; // { bunkName: { field, sport } }
+  // Track last activity per bunk
+  const lastActivityByBunk = {};
 
   // -------------------- Build schedule --------------------
   for (let s = 0; s < unifiedTimes.length; s++) {
@@ -72,7 +76,9 @@ function assignFieldsToBunks() {
     const endTime = new Date(startTime.getTime() + activityDuration * 60000);
 
     const usedFieldsByDiv = {};
-    availableDivisions.forEach(div => { usedFieldsByDiv[div] = new Set(); });
+    availableDivisions.forEach(div => {
+      usedFieldsByDiv[div] = new Set();
+    });
 
     for (let div of availableDivisions) {
       if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s))) continue;
@@ -80,28 +86,33 @@ function assignFieldsToBunks() {
       for (let bunk of divisions[div].bunks) {
         if (scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s].continuation) continue;
 
-        // ---- League slot handling ----
+        // ---- Handle League Slot ----
         if (leagueSlotByDiv[div] === s) {
+          const leagueKey = "Leagues_Global";
+          if (!canUseResource(div, leagueKey, startTime, endTime)) continue; // skip if already booked globally
+
           scheduleAssignments[bunk][s] = { field: "Leagues", sport: null, continuation: false, isLeague: true };
+          reserveResource(div, leagueKey, startTime, endTime);
+
+          // Continuations
           let placed = 1;
           while (placed < spanLen && (s + placed) < unifiedTimes.length && divisionActiveRows[div].has(s + placed)) {
             scheduleAssignments[bunk][s + placed] = { field: "Leagues", sport: null, continuation: true, isLeague: true };
             placed++;
           }
+
           lastActivityByBunk[bunk] = { field: "Leagues", sport: null };
           continue;
         }
 
+        // ---- Normal Activities ----
         const prev = lastActivityByBunk[bunk];
-
-        // ---- Build candidate pool ----
         let candidates = allActivities.filter(c => {
           if (usedFieldsByDiv[div].has(c.field.name)) return false;
-          const resourceKey = c.field.name;
-          return canUseResource(div, resourceKey, startTime, endTime);
+          return canUseResource(div, c.field.name, startTime, endTime);
         });
 
-        // ---- Prevent back-to-back same field or sport ----
+        // Prevent back-to-back same field or sport
         candidates = candidates.filter(c => {
           if (!prev) return true;
           if (prev.field === c.field.name) return false;
@@ -109,30 +120,36 @@ function assignFieldsToBunks() {
           return true;
         });
 
-        // ---- Fallback if no candidates ----
+        // Fallbacks
         if (candidates.length === 0) {
           const specials = allActivities.filter(a => a.type === "special");
-          if (specials.length > 0) {
-            candidates = specials;
-          } else {
-            candidates = [{ type: "special", field: { name: "Free Play" }, sport: null }];
-          }
+          candidates = specials.length > 0 ? specials : [{ type: "special", field: { name: "Free Play" }, sport: null }];
         }
 
-        // ---- Choose and assign activity ----
+        // Choose and assign
         const chosen = candidates[Math.floor(Math.random() * candidates.length)];
-        scheduleAssignments[bunk][s] = { field: chosen.field.name, sport: chosen.sport, continuation: false, isLeague: false };
+        scheduleAssignments[bunk][s] = {
+          field: chosen.field.name,
+          sport: chosen.sport,
+          continuation: false,
+          isLeague: false
+        };
         usedFieldsByDiv[div].add(chosen.field.name);
 
-        // ---- Reserve resource ----
+        // Reserve field for entire span before marking continuations
         if (chosen.type === "field") reserveResource(div, chosen.field.name, startTime, endTime);
 
-        // ---- Mark continuation slots ----
+        // Continuations
         let placed = 1;
         while (placed < spanLen && (s + placed) < unifiedTimes.length && divisionActiveRows[div].has(s + placed)) {
-          scheduleAssignments[bunk][s + placed] = { field: chosen.field.name, sport: chosen.sport, continuation: true, isLeague: false };
           const contStart = unifiedTimes[s + placed].start;
           const contEnd = new Date(contStart.getTime() + activityDuration * 60000);
+          scheduleAssignments[bunk][s + placed] = {
+            field: chosen.field.name,
+            sport: chosen.sport,
+            continuation: true,
+            isLeague: false
+          };
           if (chosen.type === "field") reserveResource(div, chosen.field.name, contStart, contEnd);
           placed++;
         }
