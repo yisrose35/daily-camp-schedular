@@ -104,4 +104,3 @@ document.addEventListener("DOMContentLoaded", () => {
   loadLeagues();
   initLeaguesTab();
 });
-
