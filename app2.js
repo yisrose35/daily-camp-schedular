@@ -113,13 +113,12 @@ function assignFieldsToBunks() {
     const usedFieldsByDiv = {};
     availableDivisions.forEach(div => (usedFieldsByDiv[div] = new Set()));
 
-    const shuffledDivs = [...availableDivisions].sort(
-      () => Math.random() - 0.5
-    );
+    // 🟩 PRIORITY: younger divisions go first, older go last (older have priority)
+    const orderedDivs = [...availableDivisions];
 
-    for (const div of shuffledDivs) {
-      if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s)))
-        continue;
+    for (let i = 0; i < orderedDivs.length; i++) {
+      const div = orderedDivs[i];
+      if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s))) continue;
 
       for (const bunk of divisions[div].bunks) {
         if (scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s].continuation)
@@ -162,8 +161,7 @@ function assignFieldsToBunks() {
           const prevIdx = s - 1;
           const prevCell = scheduleAssignments[bunk][prevIdx];
           if (prevCell && !prevCell.continuation) {
-            let contCount = 1,
-              t = prevIdx + 1;
+            let contCount = 1, t = prevIdx + 1;
             while (
               t < s &&
               scheduleAssignments[bunk][t] &&
@@ -189,22 +187,26 @@ function assignFieldsToBunks() {
         });
 
         // Avoid same sport twice in a row OR twice in the same day
-        if (prev) {
-          candidates = candidates.filter(c => c.sport !== prev.sport);
-        }
-        if (sportsUsedByBunk[bunk]) {
+        if (prev) candidates = candidates.filter(c => c.sport !== prev.sport);
+        if (sportsUsedByBunk[bunk])
           candidates = candidates.filter(
             c => !c.sport || !sportsUsedByBunk[bunk].has(c.sport)
           );
-        }
 
-        // Fallback if no candidate
+        // 🟧 If no candidate available -> mark as "Special Activity Needed"
         if (candidates.length === 0) {
-          const specials = allActivities.filter(a => a.type === "special");
-          candidates =
-            specials.length > 0
-              ? specials
-              : [{ type: "special", field: { name: "Free Play" }, sport: null }];
+          scheduleAssignments[bunk][s] = {
+            field: "Special Activity Needed",
+            sport: null,
+            continuation: false,
+            isLeague: false
+          };
+          lastActivityByBunk[bunk] = {
+            field: "Special Activity Needed",
+            sport: null,
+            isLeague: false
+          };
+          continue;
         }
 
         // -------------------- Choose & Assign --------------------
@@ -223,6 +225,7 @@ function assignFieldsToBunks() {
           reserveResource(div, chosen.field.name, slotStart, slotEnd, s);
         else occupiedFieldsBySlot[s].add(chosen.field.name);
 
+        // Continuation for activity spanning multiple increments
         for (let k = 1; k < spanLen; k++) {
           const idx = s + k;
           if (idx >= unifiedTimes.length) break;
@@ -309,6 +312,7 @@ function updateTable() {
   thead.appendChild(row2);
   table.appendChild(thead);
 
+  // Body
   const tbody = document.createElement("tbody");
   for (let s = 0; s < unifiedTimes.length; s++) {
     const tr = document.createElement("tr");
@@ -344,6 +348,8 @@ function updateTable() {
 
           if (entry.isLeague)
             td.innerHTML = `<span class="league-pill">Leagues</span>`;
+          else if (entry.field === "Special Activity Needed")
+            td.innerHTML = `<span class="special-needed">Special Activity Needed</span>`;
           else
             td.textContent = entry.sport
               ? `${entry.field} – ${entry.sport}`
