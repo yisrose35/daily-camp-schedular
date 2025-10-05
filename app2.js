@@ -4,9 +4,16 @@ function assignFieldsToBunks() {
   const availSpecials = specialActivities.filter(s => s.available);
 
   const allActivities = [
-    ...availFields.flatMap(f => f.activities.map(act => ({ type: "field", field: f, sport: act }))),
-    ...availSpecials.map(sa => ({ type: "special", field: { name: sa.name }, sport: null }))
+    ...availFields.flatMap(f =>
+      f.activities.map(act => ({ type: "field", field: f, sport: act }))
+    ),
+    ...availSpecials.map(sa => ({
+      type: "special",
+      field: { name: sa.name },
+      sport: null
+    }))
   ];
+
   if (allActivities.length === 0) {
     alert("No activities available.");
     scheduleAssignments = {};
@@ -24,13 +31,21 @@ function assignFieldsToBunks() {
   const inc = parseInt(document.getElementById("increment").value, 10);
   const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
 
-  // -------------------- Global & Division Resource Tracking --------------------
-  const globalResourceUsage = {};       // { fieldName: [{start,end}] }
-  const divisionResourceUsage = {};     // { divName: { fieldName: [{start,end}] } }
-  const occupiedFieldsBySlot = Array.from({ length: unifiedTimes.length }, () => new Set());
-  const leagueOccupiedBySlot = Array.from({ length: unifiedTimes.length }, () => false);
+  // -------------------- Resource Locks --------------------
+  const globalResourceUsage = {};
+  const divisionResourceUsage = {};
+  const occupiedFieldsBySlot = Array.from(
+    { length: unifiedTimes.length },
+    () => new Set()
+  );
+  const leagueOccupiedBySlot = Array.from(
+    { length: unifiedTimes.length },
+    () => false
+  );
 
-  function overlaps(aStart, aEnd, bStart, bEnd) { return aStart < bEnd && bStart < aEnd; }
+  function overlaps(aStart, aEnd, bStart, bEnd) {
+    return aStart < bEnd && bStart < aEnd;
+  }
 
   function canUseResource(div, resourceKey, startTime, endTime, s) {
     if (occupiedFieldsBySlot[s].has(resourceKey)) return false;
@@ -58,9 +73,11 @@ function assignFieldsToBunks() {
   }
 
   function reserveResource(div, resourceKey, startTime, endTime, s) {
-    if (!globalResourceUsage[resourceKey]) globalResourceUsage[resourceKey] = [];
+    if (!globalResourceUsage[resourceKey])
+      globalResourceUsage[resourceKey] = [];
     if (!divisionResourceUsage[div]) divisionResourceUsage[div] = {};
-    if (!divisionResourceUsage[div][resourceKey]) divisionResourceUsage[div][resourceKey] = [];
+    if (!divisionResourceUsage[div][resourceKey])
+      divisionResourceUsage[div][resourceKey] = [];
 
     globalResourceUsage[resourceKey].push({ start: startTime, end: endTime });
     divisionResourceUsage[div][resourceKey].push({ start: startTime, end: endTime });
@@ -79,12 +96,14 @@ function assignFieldsToBunks() {
     if (leagues[div] && leagues[div].enabled) {
       const active = Array.from(divisionActiveRows[div] || []);
       if (active.length > 0) {
-        leagueSlotByDiv[div] = active[Math.floor(Math.random() * active.length)];
+        leagueSlotByDiv[div] =
+          active[Math.floor(Math.random() * active.length)];
       }
     }
   });
 
   const lastActivityByBunk = {};
+  const sportsUsedByBunk = {}; // tracks sports already done for the day
 
   // -------------------- Main Schedule Builder --------------------
   for (let s = 0; s < unifiedTimes.length; s++) {
@@ -92,39 +111,67 @@ function assignFieldsToBunks() {
     const slotEnd = new Date(slotStart.getTime() + activityDuration * 60000);
 
     const usedFieldsByDiv = {};
-    availableDivisions.forEach(div => usedFieldsByDiv[div] = new Set());
+    availableDivisions.forEach(div => (usedFieldsByDiv[div] = new Set()));
 
-    // Randomize division order to avoid early bias
-    const shuffledDivs = [...availableDivisions].sort(() => Math.random() - 0.5);
+    const shuffledDivs = [...availableDivisions].sort(
+      () => Math.random() - 0.5
+    );
 
     for (const div of shuffledDivs) {
-      if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s))) continue;
+      if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s)))
+        continue;
 
       for (const bunk of divisions[div].bunks) {
-        if (scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s].continuation) continue;
+        if (scheduleAssignments[bunk][s] && scheduleAssignments[bunk][s].continuation)
+          continue;
 
-        // League logic
+        // -------------------- League Logic --------------------
         if (leagueSlotByDiv[div] === s && !leagueOccupiedBySlot[s]) {
-          scheduleAssignments[bunk][s] = { field: "Leagues", sport: null, continuation: false, isLeague: true };
+          scheduleAssignments[bunk][s] = {
+            field: "Leagues",
+            sport: null,
+            continuation: false,
+            isLeague: true
+          };
           leagueOccupiedBySlot[s] = true;
+
           for (let k = 1; k < spanLen; k++) {
             const idx = s + k;
             if (idx >= unifiedTimes.length) break;
-            if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
-            scheduleAssignments[bunk][idx] = { field: "Leagues", sport: null, continuation: true, isLeague: true };
+            if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx)))
+              break;
+            scheduleAssignments[bunk][idx] = {
+              field: "Leagues",
+              sport: null,
+              continuation: true,
+              isLeague: true
+            };
           }
-          lastActivityByBunk[bunk] = { field: "Leagues", sport: null, isLeague: true };
+
+          lastActivityByBunk[bunk] = {
+            field: "Leagues",
+            sport: null,
+            isLeague: true
+          };
           continue;
         }
 
-        // Continuation
+        // -------------------- Continuation --------------------
         const prev = lastActivityByBunk[bunk];
         if (prev && !prev.isLeague) {
           const prevIdx = s - 1;
           const prevCell = scheduleAssignments[bunk][prevIdx];
           if (prevCell && !prevCell.continuation) {
-            let contCount = 1, t = prevIdx + 1;
-            while (t < s && scheduleAssignments[bunk][t] && scheduleAssignments[bunk][t].continuation) { contCount++; t++; }
+            let contCount = 1,
+              t = prevIdx + 1;
+            while (
+              t < s &&
+              scheduleAssignments[bunk][t] &&
+              scheduleAssignments[bunk][t].continuation
+            ) {
+              contCount++;
+              t++;
+            }
             if (contCount < spanLen) {
               scheduleAssignments[bunk][s] = { ...prevCell, continuation: true };
               occupiedFieldsBySlot[s].add(prevCell.field);
@@ -133,43 +180,80 @@ function assignFieldsToBunks() {
           }
         }
 
-        // Pick new activity
+        // -------------------- Build Candidates --------------------
         let candidates = allActivities.filter(a => {
           if (usedFieldsByDiv[div].has(a.field.name)) return false;
-          if (!canUseResource(div, a.field.name, slotStart, slotEnd, s)) return false;
+          if (!canUseResource(div, a.field.name, slotStart, slotEnd, s))
+            return false;
           return true;
         });
 
-        // Avoid repeating the exact same field/sport
+        // Avoid same sport twice in a row OR twice in the same day
         if (prev) {
-          candidates = candidates.filter(c => c.field.name !== prev.field && c.sport !== prev.sport);
+          candidates = candidates.filter(c => c.sport !== prev.sport);
+        }
+        if (sportsUsedByBunk[bunk]) {
+          candidates = candidates.filter(
+            c => !c.sport || !sportsUsedByBunk[bunk].has(c.sport)
+          );
         }
 
+        // Fallback if no candidate
         if (candidates.length === 0) {
           const specials = allActivities.filter(a => a.type === "special");
-          candidates = specials.length > 0 ? specials : [{ type: "special", field: { name: "Free Play" }, sport: null }];
+          candidates =
+            specials.length > 0
+              ? specials
+              : [{ type: "special", field: { name: "Free Play" }, sport: null }];
         }
 
-        const chosen = candidates[Math.floor(Math.random() * candidates.length)];
-        scheduleAssignments[bunk][s] = { field: chosen.field.name, sport: chosen.sport, continuation: false, isLeague: false };
+        // -------------------- Choose & Assign --------------------
+        const chosen =
+          candidates[Math.floor(Math.random() * candidates.length)];
+
+        scheduleAssignments[bunk][s] = {
+          field: chosen.field.name,
+          sport: chosen.sport,
+          continuation: false,
+          isLeague: false
+        };
 
         usedFieldsByDiv[div].add(chosen.field.name);
-        if (chosen.type === "field") reserveResource(div, chosen.field.name, slotStart, slotEnd, s);
+        if (chosen.type === "field")
+          reserveResource(div, chosen.field.name, slotStart, slotEnd, s);
         else occupiedFieldsBySlot[s].add(chosen.field.name);
 
         for (let k = 1; k < spanLen; k++) {
           const idx = s + k;
           if (idx >= unifiedTimes.length) break;
-          if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
-          scheduleAssignments[bunk][idx] = { field: chosen.field.name, sport: chosen.sport, continuation: true, isLeague: false };
+          if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx)))
+            break;
+
+          scheduleAssignments[bunk][idx] = {
+            field: chosen.field.name,
+            sport: chosen.sport,
+            continuation: true,
+            isLeague: false
+          };
+
           if (chosen.type === "field") {
             const contStart = unifiedTimes[idx].start;
-            const contEnd = new Date(contStart.getTime() + activityDuration * 60000);
+            const contEnd = new Date(
+              contStart.getTime() + activityDuration * 60000
+            );
             reserveResource(div, chosen.field.name, contStart, contEnd, idx);
           } else occupiedFieldsBySlot[idx].add(chosen.field.name);
         }
 
-        lastActivityByBunk[bunk] = { field: chosen.field.name, sport: chosen.sport, isLeague: false };
+        // Track sports used today
+        if (!sportsUsedByBunk[bunk]) sportsUsedByBunk[bunk] = new Set();
+        if (chosen.sport) sportsUsedByBunk[bunk].add(chosen.sport);
+
+        lastActivityByBunk[bunk] = {
+          field: chosen.field.name,
+          sport: chosen.sport,
+          isLeague: false
+        };
       }
     }
   }
@@ -185,7 +269,9 @@ function updateTable() {
 
   Object.keys(scheduleAssignments).forEach(b => {
     if (Array.isArray(scheduleAssignments[b])) {
-      scheduleAssignments[b].forEach(e => { if (e) delete e._skip; });
+      scheduleAssignments[b].forEach(e => {
+        if (e) delete e._skip;
+      });
     }
   });
 
@@ -233,7 +319,8 @@ function updateTable() {
     availableDivisions.forEach(div => {
       const activeSet = divisionActiveRows[div] || new Set();
       divisions[div].bunks.forEach(b => {
-        if (scheduleAssignments[b] && scheduleAssignments[b][s] && scheduleAssignments[b][s]._skip) return;
+        if (scheduleAssignments[b] && scheduleAssignments[b][s] && scheduleAssignments[b][s]._skip)
+          return;
         const td = document.createElement("td");
         const active = activeSet.has(s);
 
@@ -248,14 +335,19 @@ function updateTable() {
           let span = 1;
           for (let k = s + 1; k < unifiedTimes.length; k++) {
             const e2 = scheduleAssignments[b][k];
-            if (!e2 || !e2.continuation || e2.field !== entry.field || e2.sport !== entry.sport) break;
+            if (!e2 || !e2.continuation || e2.field !== entry.field || e2.sport !== entry.sport)
+              break;
             span++;
             scheduleAssignments[b][k]._skip = true;
           }
           td.rowSpan = span;
 
-          if (entry.isLeague) td.innerHTML = `<span class="league-pill">Leagues</span>`;
-          else td.textContent = entry.sport ? `${entry.field} – ${entry.sport}` : entry.field;
+          if (entry.isLeague)
+            td.innerHTML = `<span class="league-pill">Leagues</span>`;
+          else
+            td.textContent = entry.sport
+              ? `${entry.field} – ${entry.sport}`
+              : entry.field;
         } else if (!entry) td.textContent = "";
 
         tr.appendChild(td);
