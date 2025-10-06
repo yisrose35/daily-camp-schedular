@@ -1,4 +1,4 @@
-// -------------------- Scheduling Core (Unified Grid: Staggered Leagues + Strict Fallback + No Repeats) --------------------
+// -------------------- Scheduling Core (Unified Grid: Guaranteed Leagues + Strict Fallback + No Repeats) --------------------
 function assignFieldsToBunks() {
   const availFields = fields.filter(f => f.available && f.activities.length > 0);
   const availSpecials = specialActivities.filter(s => s.available);
@@ -35,7 +35,7 @@ function assignFieldsToBunks() {
   const globalResourceUsage = {};
   const occupiedFieldsBySlot = Array.from({ length: unifiedTimes.length }, () => new Set());
   const globalActivityLock = Array.from({ length: unifiedTimes.length }, () => new Set());
-  const leagueTimeLocks = []; // store actual time ranges for leagues
+  const leagueTimeLocks = []; // [{start,end}] - real time ranges for league staggering
 
   function overlaps(aStart, aEnd, bStart, bEnd) {
     return aStart < bEnd && bStart < aEnd;
@@ -62,7 +62,7 @@ function assignFieldsToBunks() {
     }
   }
 
-  // -------------------- 1. Schedule Staggered Leagues First --------------------
+  // -------------------- 1. Schedule Staggered Leagues (Guaranteed) --------------------
   const leagueSlotByDiv = {};
   const priorityDivs = [...availableDivisions].reverse(); // oldest → youngest
 
@@ -75,8 +75,6 @@ function assignFieldsToBunks() {
       for (const slot of activeSlots) {
         const slotStart = unifiedTimes[slot].start;
         const slotEnd = new Date(slotStart.getTime() + activityDuration * 60000);
-
-        // ensure this league does not overlap with existing league times
         const overlapsExisting = leagueTimeLocks.some(l =>
           overlaps(slotStart, slotEnd, l.start, l.end)
         );
@@ -87,7 +85,8 @@ function assignFieldsToBunks() {
         }
       }
 
-      if (chosenSlot === null) continue; // no open league slot found
+      // If no available non-overlapping slot, assign to next available open time anyway (guarantee leagues)
+      if (chosenSlot === null) chosenSlot = activeSlots[0];
 
       leagueSlotByDiv[div] = chosenSlot;
       const slotStart = unifiedTimes[chosenSlot].start;
@@ -146,7 +145,7 @@ function assignFieldsToBunks() {
           return true;
         });
 
-        // Try all possibilities before special fallback
+        // Exhaustive search before special fallback
         if (candidates.length === 0) {
           const allPossible = [];
           availFields.forEach(f => {
@@ -166,7 +165,7 @@ function assignFieldsToBunks() {
           });
         }
 
-        // No valid activity = special needed
+        // No valid activity = truly special fallback
         if (candidates.length === 0) {
           scheduleAssignments[bunk][s] = {
             field: "Special Activity Needed",
