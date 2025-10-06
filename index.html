@@ -75,5 +75,21 @@
   <!-- Scripts -->
   <script src="app1.js"></script>
   <script src="app2.js"></script>
+  <script src="leagues.js"></script>
+
+  <script>
+    // Basic tab switching (keeps your existing style)
+    function showTab(tabId) {
+      document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById(tabId).classList.add('active');
+
+      // Re-initialize leagues tab when opened
+      if (tabId === 'leagues' && typeof initLeaguesTab === 'function') {
+        initLeaguesTab();
+      }
+    }
+  </script>
 </body>
 </html>
