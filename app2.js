@@ -1,4 +1,4 @@
-// -------------------- Scheduling Core (Unified Grid: Guaranteed Leagues + Full Schedule + No Repeats + No Empty Slots) --------------------
+// -------------------- Scheduling Core (Unified Grid: Guaranteed Leagues + Full Schedule + No Repeats Per Division) --------------------
 function assignFieldsToBunks() {
   const availFields = fields.filter(f => f.available && f.activities.length > 0);
   const availSpecials = specialActivities.filter(s => s.available);
@@ -37,6 +37,10 @@ function assignFieldsToBunks() {
   const globalActivityLock = Array.from({ length: unifiedTimes.length }, () => new Set());
   const leagueTimeLocks = [];
 
+  // Track per-division usage to prevent repeats
+  const divisionUsedSports = {}; // { divName: Set(sports) }
+  const divisionUsedFields = {}; // { divName: Set(fields) }
+
   function overlaps(aStart, aEnd, bStart, bEnd) {
     return aStart < bEnd && bStart < aEnd;
   }
@@ -73,7 +77,6 @@ function assignFieldsToBunks() {
     const leagueToggle = leagues[div]?.enabled;
     if (!leagueToggle) continue;
 
-    // Always assign one league slot per division
     let chosenSlot = null;
     for (const slot of activeSlots) {
       const slotStart = unifiedTimes[slot].start;
@@ -88,7 +91,7 @@ function assignFieldsToBunks() {
       }
     }
 
-    if (chosenSlot === null) chosenSlot = activeSlots[0]; // fallback if all overlap
+    if (chosenSlot === null) chosenSlot = activeSlots[0];
     leagueSlotByDiv[div] = chosenSlot;
 
     const slotStart = unifiedTimes[chosenSlot].start;
@@ -101,8 +104,6 @@ function assignFieldsToBunks() {
         continuation: false,
         isLeague: true
       };
-
-      // multi-slot leagues
       for (let k = 1; k < spanLen; k++) {
         const idx = chosenSlot + k;
         if (idx >= unifiedTimes.length) break;
@@ -115,7 +116,6 @@ function assignFieldsToBunks() {
         };
       }
     });
-
     reserveField(`LEAGUE-${div}`, slotStart, slotEnd, chosenSlot, "Leagues");
   }
 
@@ -131,24 +131,27 @@ function assignFieldsToBunks() {
     for (const div of priorityDivs) {
       if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s))) continue;
 
+      if (!divisionUsedSports[div]) divisionUsedSports[div] = new Set();
+      if (!divisionUsedFields[div]) divisionUsedFields[div] = new Set();
+
       for (const bunk of divisions[div].bunks) {
-        if (scheduleAssignments[bunk][s]) continue; // skip leagues or continuations
+        if (scheduleAssignments[bunk][s]) continue;
+
         const prev = lastActivityByBunk[bunk];
 
-        // build valid activities
         let candidates = allActivities.filter(a => {
           if (!canUseField(a.field.name, slotStart, slotEnd, s)) return false;
           if (a.sport && globalActivityLock[s].has(a.sport)) return false;
           if (prev && a.sport === prev.sport) return false;
+          if (divisionUsedSports[div].has(a.sport)) return false;
+          if (divisionUsedFields[div].has(a.field.name)) return false;
           return true;
         });
 
-        // fallback (if nothing valid left)
         if (candidates.length === 0) {
           candidates = allActivities.filter(a => canUseField(a.field.name, slotStart, slotEnd, s));
         }
 
-        // if still empty, pick any available activity
         if (candidates.length === 0) candidates = allActivities;
 
         const chosen = candidates[Math.floor(Math.random() * candidates.length)];
@@ -162,7 +165,6 @@ function assignFieldsToBunks() {
 
         reserveField(chosen.field.name, slotStart, slotEnd, s, chosen.sport);
 
-        // continuation logic
         for (let k = 1; k < spanLen; k++) {
           const idx = s + k;
           if (idx >= unifiedTimes.length) break;
@@ -179,10 +181,15 @@ function assignFieldsToBunks() {
           reserveField(chosen.field.name, contStart, contEnd, idx, chosen.sport);
         }
 
+        // Track usage — both bunk and division level
         if (!sportsUsedByBunk[bunk]) sportsUsedByBunk[bunk] = new Set();
         if (!fieldsUsedByBunk[bunk]) fieldsUsedByBunk[bunk] = new Set();
-        if (chosen.sport) sportsUsedByBunk[bunk].add(chosen.sport);
+        if (chosen.sport) {
+          sportsUsedByBunk[bunk].add(chosen.sport);
+          divisionUsedSports[div].add(chosen.sport);
+        }
         fieldsUsedByBunk[bunk].add(chosen.field.name);
+        divisionUsedFields[div].add(chosen.field.name);
 
         lastActivityByBunk[bunk] = {
           field: chosen.field.name,
