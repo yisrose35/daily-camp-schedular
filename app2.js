@@ -200,6 +200,7 @@ function assignFieldsToBunks() {
   }
 
   updateTable();
+  saveSchedule(); // auto-save each new schedule
 }
 
 // -------------------- Rendering --------------------
@@ -284,28 +285,19 @@ function updateTable() {
   scheduleTab.appendChild(table);
 }
 
-// -------------------- Init --------------------
+// -------------------- Schedule Save / Load --------------------
 function initScheduleSystem() {
-  const btn = document.getElementById("generateBtn");
-  if (btn) btn.onclick = assignFieldsToBunks;
-
   const saved = localStorage.getItem("scheduleAssignments");
   if (saved) {
     try {
       scheduleAssignments = JSON.parse(saved);
       updateTable();
-    } catch (e) { console.error("Failed to load saved schedule:", e); }
+    } catch (e) {
+      console.error("Failed to load saved schedule:", e);
+    }
   }
 }
 
 function saveSchedule() {
   localStorage.setItem("scheduleAssignments", JSON.stringify(scheduleAssignments));
 }
-
-const originalAssign = assignFieldsToBunks;
-assignFieldsToBunks = function () {
-  originalAssign();
-  saveSchedule();
-};
-
-window.addEventListener("DOMContentLoaded", initScheduleSystem);
