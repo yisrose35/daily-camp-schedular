@@ -14,7 +14,7 @@
     <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
   </div>
 
-  <!-- Setup Tab -->
+  <!-- SETUP TAB -->
   <div id="setup" class="tab-content active">
     <h3>Add Bunks</h3>
     <input id="bunkInput" placeholder="Enter bunk">
@@ -52,16 +52,21 @@
     <button id="addSpecialBtn">Add Special</button>
     <div id="specialList"></div>
 
-    <!-- Hidden Time Configuration (required for app2.js to build grid) -->
-    <div id="timeConfig" style="display:none;">
+    <h3>Time & Grid Setup</h3>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
+      <label>Start Time:</label>
       <input id="startTime" type="time" value="09:00">
+      <label>End Time:</label>
       <input id="endTime" type="time" value="17:00">
+      <label>Interval:</label>
       <select id="increment">
-        <option value="30" selected>30</option>
-        <option value="15">15</option>
-        <option value="60">60</option>
+        <option value="15">15 min</option>
+        <option value="30" selected>30 min</option>
+        <option value="45">45 min</option>
+        <option value="60">60 min</option>
       </select>
-      <input id="activityDuration" type="number" value="60">
+      <label>Activity Duration:</label>
+      <input id="activityDuration" type="number" min="15" step="15" value="60" style="width:80px;">
     </div>
 
     <h3>Scheduler Controls</h3>
@@ -73,20 +78,19 @@
     </div>
   </div>
 
-  <!-- Schedule Tab -->
+  <!-- SCHEDULE TAB -->
   <div id="schedule" class="tab-content">
     <h2>Daily Schedule</h2>
     <div id="scheduleTable"></div>
   </div>
 
-  <!-- Leagues Tab -->
+  <!-- LEAGUES TAB -->
   <div id="leagues" class="tab-content">
     <h2>Leagues</h2>
     <div id="leaguesContent"></div>
   </div>
 
   <script>
-    // Tab switching logic
     function showTab(id) {
       document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
@@ -95,7 +99,6 @@
     }
   </script>
 
-  <!-- JS files -->
   <script src="app1.js"></script>
   <script src="app2.js"></script>
   <script src="leagues.js"></script>
