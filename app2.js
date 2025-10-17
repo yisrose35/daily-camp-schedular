@@ -1,4 +1,4 @@
-// -------------------- Scheduling Core (Unified Grid: Full Lock + No Duplicates + No Daily Repeats) --------------------
+// -------------------- Scheduling Core (Unified Grid: Final Lock + No Overlaps + No Daily Repeats) --------------------
 function assignFieldsToBunks() {
   const availFields = fields.filter(f => f.available && f.activities.length > 0);
   const availSpecials = specialActivities.filter(s => s.available);
@@ -10,7 +10,7 @@ function assignFieldsToBunks() {
     ...availSpecials.map(sa => ({
       type: "special",
       field: { name: sa.name },
-      sport: null
+      sport: sa.name // give specials their own sport key for tracking
     }))
   ];
 
@@ -35,11 +35,10 @@ function assignFieldsToBunks() {
   const globalResourceUsage = {};
   const occupiedFieldsBySlot = Array.from({ length: unifiedTimes.length }, () => new Set());
   const globalActivityLock = Array.from({ length: unifiedTimes.length }, () => new Set());
-  const usedActivitiesByTime = Array.from({ length: unifiedTimes.length }, () => new Set()); // prevent same activity same time
+  const usedActivitiesByTime = Array.from({ length: unifiedTimes.length }, () => new Set());
   const leagueTimeLocks = [];
 
-  // Track per bunk
-  const activitiesUsedByBunk = {}; // unified activity name
+  const activitiesUsedByBunk = {}; // tracks unique sports/specials done by each bunk
   const fieldsUsedByBunk = {};
 
   function overlaps(aStart, aEnd, bStart, bEnd) {
@@ -102,7 +101,7 @@ function assignFieldsToBunks() {
     divisions[div].bunks.forEach(b => {
       scheduleAssignments[b][chosenSlot] = {
         field: "Leagues",
-        sport: null,
+        sport: "Leagues",
         continuation: false,
         isLeague: true
       };
@@ -112,7 +111,7 @@ function assignFieldsToBunks() {
         if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
         scheduleAssignments[b][idx] = {
           field: "Leagues",
-          sport: null,
+          sport: "Leagues",
           continuation: true,
           isLeague: true
         };
@@ -136,29 +135,28 @@ function assignFieldsToBunks() {
       if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s))) continue;
 
       for (const bunk of divisions[div].bunks) {
-        if (scheduleAssignments[bunk][s]) continue; // skip leagues or continuations
-        const prev = lastActivityByBunk[bunk];
+        if (scheduleAssignments[bunk][s]) continue;
 
+        const prev = lastActivityByBunk[bunk];
         if (!activitiesUsedByBunk[bunk]) activitiesUsedByBunk[bunk] = new Set();
         if (!fieldsUsedByBunk[bunk]) fieldsUsedByBunk[bunk] = new Set();
         if (!usedActivitiesByTime[s]) usedActivitiesByTime[s] = new Set();
 
-        // Filter out invalid or conflicting activities
         let candidates = allActivities.filter(a => {
-          const activityKey = a.sport ? a.sport : a.field.name;
+          const sportKey = a.sport || a.field.name;
           if (!canUseField(a.field.name, slotStart, slotEnd, s)) return false;
           if (a.sport && globalActivityLock[s].has(a.sport)) return false;
           if (usedActivitiesByTime[s].has(`${a.field.name}|${a.sport || a.field.name}`)) return false;
           if (prev && a.sport === prev.sport) return false;
-          if (activitiesUsedByBunk[bunk].has(activityKey)) return false; // no daily repeat
+          if (activitiesUsedByBunk[bunk].has(sportKey)) return false; // NEW: ban repeat of any sport/special
           return true;
         });
 
         if (candidates.length === 0) {
           candidates = allActivities.filter(a => {
-            const activityKey = a.sport ? a.sport : a.field.name;
+            const sportKey = a.sport || a.field.name;
             return canUseField(a.field.name, slotStart, slotEnd, s) &&
-                   !activitiesUsedByBunk[bunk].has(activityKey) &&
+                   !activitiesUsedByBunk[bunk].has(sportKey) &&
                    !usedActivitiesByTime[s].has(`${a.field.name}|${a.sport || a.field.name}`);
           });
         }
@@ -166,17 +164,14 @@ function assignFieldsToBunks() {
         if (candidates.length === 0) candidates = allActivities;
 
         const chosen = candidates[Math.floor(Math.random() * candidates.length)];
-        const activityKey = chosen.sport ? chosen.sport : chosen.field.name;
+        const sportKey = chosen.sport || chosen.field.name;
 
-        // 🚫 Immediately lock the field and activity for this slot
-        usedActivitiesByTime[s].add(`${chosen.field.name}|${chosen.sport || chosen.field.name}`);
+        // 🔒 Lock immediately
+        usedActivitiesByTime[s].add(`${chosen.field.name}|${sportKey}`);
         occupiedFieldsBySlot[s].add(chosen.field.name);
         if (chosen.sport) globalActivityLock[s].add(chosen.sport);
-
-        // 🚧 Reserve its full duration window
         reserveField(chosen.field.name, slotStart, slotEnd, s, chosen.sport);
 
-        // ✅ Assign to bunk
         scheduleAssignments[bunk][s] = {
           field: chosen.field.name,
           sport: chosen.sport,
@@ -184,7 +179,7 @@ function assignFieldsToBunks() {
           isLeague: false
         };
 
-        // continuation logic
+        // Continuation
         for (let k = 1; k < spanLen; k++) {
           const idx = s + k;
           if (idx >= unifiedTimes.length) break;
@@ -201,21 +196,17 @@ function assignFieldsToBunks() {
           reserveField(chosen.field.name, contStart, contEnd, idx, chosen.sport);
         }
 
-        // Track bunk-level unique daily activities
-        activitiesUsedByBunk[bunk].add(activityKey);
+        // Track unique bunk usage
+        activitiesUsedByBunk[bunk].add(sportKey);
         fieldsUsedByBunk[bunk].add(chosen.field.name);
 
-        lastActivityByBunk[bunk] = {
-          field: chosen.field.name,
-          sport: chosen.sport,
-          isLeague: false
-        };
+        lastActivityByBunk[bunk] = { field: chosen.field.name, sport: chosen.sport };
       }
     }
   }
 
   updateTable();
-  saveSchedule(); // auto-save each new schedule
+  saveSchedule();
 }
 
 // -------------------- Rendering --------------------
