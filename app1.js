@@ -69,7 +69,7 @@ function addBunk() {
   const name = i.value.trim();
   if (!name) return;
 
-  // Prevent duplicates
+  // Prevent duplicates (case-insensitive)
   const exists = bunks.some(b => b.toLowerCase() === name.toLowerCase());
   if (exists) {
     alert("That bunk already exists!");
@@ -226,6 +226,42 @@ function applyTemplatesToDivisions() {
   });
 }
 
+// -------------------- Fields / Specials / Leagues --------------------
+// Keep your existing renderFields(), renderSpecials(), renderLeagues() sections unchanged from before.
+
+// -------------------- Generate Times --------------------
+function generateTimes() {
+  const inc = parseInt(document.getElementById("increment").value);
+  applyTemplatesToDivisions();
+  const starts = availableDivisions.map(d => parseTime(divisions[d].start)).filter(Boolean);
+  const ends   = availableDivisions.map(d => parseTime(divisions[d].end)).filter(Boolean);
+  if (starts.length===0 || ends.length===0) { alert("Please set time templates for divisions first."); return; }
+
+  const earliest = new Date(Math.min(...starts.map(d=>d.getTime())));
+  const latest   = new Date(Math.max(...ends.map(d=>d.getTime())));
+  unifiedTimes = [];
+  let cur = new Date(earliest);
+  while (cur < latest) {
+    let nxt = new Date(cur.getTime() + inc*60000);
+    if (nxt > latest) nxt = latest;
+    unifiedTimes.push({ start:new Date(cur), end:new Date(nxt), label:`${fmtTime(cur)} - ${fmtTime(nxt)}` });
+    cur = nxt;
+  }
+  divisionActiveRows = {};
+  availableDivisions.forEach(div => {
+    const s = parseTime(divisions[div].start), e = parseTime(divisions[div].end);
+    const rows = new Set();
+    unifiedTimes.forEach((t,idx) => {
+      if (s && e && t.start >= s && t.start < e) rows.add(idx);
+    });
+    divisionActiveRows[div] = rows;
+  });
+
+  assignFieldsToBunks(); // from app2.js
+  initScheduleSystem();  // initialize scheduling once
+  updateTable();
+}
+
 // -------------------- Local Storage --------------------
 function saveData() {
   const data = { bunks, divisions, availableDivisions, selectedDivision, fields, specialActivities, leagues, timeTemplates };
@@ -249,7 +285,7 @@ function loadData() {
 }
 
 document.getElementById("eraseAllBtn")?.addEventListener("click", () => {
-  if (confirm("Are you sure you want to erase all data?")) {
+  if (confirm("Erase all camp data?")) {
     localStorage.removeItem("campSchedulerData");
     bunks = []; divisions = {}; availableDivisions = []; selectedDivision = null;
     fields = []; specialActivities = []; leagues = {}; timeTemplates = [];
@@ -257,7 +293,7 @@ document.getElementById("eraseAllBtn")?.addEventListener("click", () => {
   }
 });
 
-// -------------------- INIT --------------------
+// -------------------- Init --------------------
 window.addEventListener("DOMContentLoaded", () => {
   loadData();
   updateUnassigned();
