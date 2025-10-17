@@ -61,6 +61,8 @@
     <input id="specialInput" placeholder="Enter special activity (e.g., Canteen)">
     <button id="addSpecialBtn">Add Special Activity</button>
     <div id="specialList"></div>
+
+    <button id="eraseAllBtn" style="margin-top:10px; background:#f44336; color:white;">Erase All Data</button>
   </div>
 
   <!-- Schedule Tab -->
@@ -72,40 +74,8 @@
     <div id="leaguesContainer"></div>
   </div>
 
-  <!-- Scripts -->
-  <script src="app1.js"></script>
-  <script src="app2.js"></script>
-  <script src="leagues.js"></script>
-
-  <script>
-    // -------------------- Tab Switching --------------------
-    function showTab(tabId) {
-      document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
-      event.target.classList.add('active');
-      document.getElementById(tabId).classList.add('active');
-
-      // Refresh leagues tab when opened
-      if (tabId === 'leagues' && typeof initLeaguesTab === 'function') {
-        // ensure divisions are loaded first
-        if (localStorage.getItem('divisions')) {
-          divisions = JSON.parse(localStorage.getItem('divisions'));
-        }
-        if (localStorage.getItem('leagues')) {
-          leagues = JSON.parse(localStorage.getItem('leagues'));
-        }
-        initLeaguesTab();
-      }
-    }
-
-    // -------------------- Ensure Data Exists on Load --------------------
-    document.addEventListener("DOMContentLoaded", () => {
-      if (localStorage.getItem("bunks")) bunks = JSON.parse(localStorage.getItem("bunks"));
-      if (localStorage.getItem("divisions")) divisions = JSON.parse(localStorage.getItem("divisions"));
-      if (localStorage.getItem("fields")) fields = JSON.parse(localStorage.getItem("fields"));
-      if (localStorage.getItem("specialActivities")) specialActivities = JSON.parse(localStorage.getItem("specialActivities"));
-      if (localStorage.getItem("leagues")) leagues = JSON.parse(localStorage.getItem("leagues"));
-    });
-  </script>
+  <!-- Scripts (deferred to prevent duplication) -->
+  <script src="app1.js" defer></script>
+  <script src="app2.js" defer></script>
 </body>
 </html>
