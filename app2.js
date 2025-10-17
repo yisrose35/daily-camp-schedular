@@ -1,4 +1,4 @@
-// -------------------- Scheduling Core (Unified Grid: Guaranteed Leagues + Full Schedule + No Bunk Repeats) --------------------
+// -------------------- Scheduling Core (Unified Grid: Guaranteed Leagues + Full Schedule + No Bunk Repeats + No Same Activity Duplication) --------------------
 function assignFieldsToBunks() {
   const availFields = fields.filter(f => f.available && f.activities.length > 0);
   const availSpecials = specialActivities.filter(s => s.available);
@@ -35,6 +35,7 @@ function assignFieldsToBunks() {
   const globalResourceUsage = {};
   const occupiedFieldsBySlot = Array.from({ length: unifiedTimes.length }, () => new Set());
   const globalActivityLock = Array.from({ length: unifiedTimes.length }, () => new Set());
+  const usedActivitiesByTime = Array.from({ length: unifiedTimes.length }, () => new Set()); // NEW: prevent same activity across bunks
   const leagueTimeLocks = [];
 
   // Bunk-level tracking to prevent repeats
@@ -116,7 +117,6 @@ function assignFieldsToBunks() {
           isLeague: true
         };
       }
-      // mark league as used so they don't get it again
       if (!sportsUsedByBunk[b]) sportsUsedByBunk[b] = new Set();
       if (!fieldsUsedByBunk[b]) fieldsUsedByBunk[b] = new Set();
       sportsUsedByBunk[b].add("Leagues");
@@ -142,9 +142,13 @@ function assignFieldsToBunks() {
         if (!sportsUsedByBunk[bunk]) sportsUsedByBunk[bunk] = new Set();
         if (!fieldsUsedByBunk[bunk]) fieldsUsedByBunk[bunk] = new Set();
 
+        if (!usedActivitiesByTime[s]) usedActivitiesByTime[s] = new Set();
+
+        // Filter out already-used or conflicting activities
         let candidates = allActivities.filter(a => {
           if (!canUseField(a.field.name, slotStart, slotEnd, s)) return false;
           if (a.sport && globalActivityLock[s].has(a.sport)) return false;
+          if (usedActivitiesByTime[s].has(`${a.field.name}|${a.sport || a.field.name}`)) return false;
           if (prev && a.sport === prev.sport) return false;
           if (sportsUsedByBunk[bunk].has(a.sport)) return false;
           if (fieldsUsedByBunk[bunk].has(a.field.name)) return false;
@@ -153,12 +157,18 @@ function assignFieldsToBunks() {
 
         // fallback if no valid options left
         if (candidates.length === 0) {
-          candidates = allActivities.filter(a => canUseField(a.field.name, slotStart, slotEnd, s));
+          candidates = allActivities.filter(a =>
+            canUseField(a.field.name, slotStart, slotEnd, s) &&
+            !usedActivitiesByTime[s].has(`${a.field.name}|${a.sport || a.field.name}`)
+          );
         }
 
         if (candidates.length === 0) candidates = allActivities;
 
         const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+
+        // lock this field+sport for this time slot
+        usedActivitiesByTime[s].add(`${chosen.field.name}|${chosen.sport || chosen.field.name}`);
 
         scheduleAssignments[bunk][s] = {
           field: chosen.field.name,
