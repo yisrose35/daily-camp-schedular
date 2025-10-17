@@ -14,103 +14,78 @@
     <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
   </div>
 
-  <!-- SETUP TAB -->
+  <!-- Setup Tab -->
   <div id="setup" class="tab-content active">
-    <h2>Setup & Configuration</h2>
-
-    <!-- Bunks -->
     <h3>Add Bunks</h3>
     <input id="bunkInput" placeholder="Enter bunk">
     <button id="addBunkBtn">Add Bunk</button>
     <div id="unassignedBunks"></div>
 
-    <!-- Divisions -->
     <h3>Add Divisions</h3>
     <input id="divisionInput" placeholder="Enter division name">
     <button id="addDivisionBtn">Add Division</button>
-    <label style="margin-left:15px;">
-      <input type="checkbox" id="enableColor" checked> Enable Colors
-    </label>
-    <div id="divisionButtons"></div>
+    <div id="divisionList"></div>
 
-    <!-- Assign Bunks -->
     <h3>Assign Bunks to Divisions</h3>
     <div id="divisionAssignments"></div>
 
-    <!-- Time Templates -->
-    <h3>Division Time Templates</h3>
-    <div style="display:flex;gap:10px;align-items:center;">
-      <input id="timeStartInput" placeholder="Start (e.g. 9:00 AM)" style="width:140px;">
-      <input id="timeEndInput" placeholder="End (e.g. 5:00 PM)" style="width:140px;">
-      <button onclick="addTimeTemplate()">Add Template</button>
-    </div>
-    <div id="timeTemplates" style="margin-top:10px;"></div>
-
-    <!-- Fields -->
     <h3>Add Fields</h3>
     <input id="fieldInput" placeholder="Enter field name">
     <button id="addFieldBtn">Add Field</button>
     <div id="fieldList"></div>
 
-    <!-- Specials -->
+    <h3>Common Sports</h3>
+    <div id="commonSports">
+      <button class="sportBtn">Basketball</button>
+      <button class="sportBtn">Football</button>
+      <button class="sportBtn">Baseball</button>
+      <button class="sportBtn">Hockey</button>
+      <button class="sportBtn">Volleyball</button>
+      <button class="sportBtn">Soccer</button>
+      <button class="sportBtn">Lacrosse</button>
+      <input id="customSportInput" placeholder="Other (custom sport)">
+      <button id="addCustomSportBtn">Add</button>
+    </div>
+
     <h3>Special Activities</h3>
     <input id="specialInput" placeholder="Enter special activity">
     <button id="addSpecialBtn">Add Special</button>
     <div id="specialList"></div>
 
-    <!-- Time & Grid Setup (for app2.js) -->
-    <h3>Time & Grid Setup</h3>
-    <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
-      <label>Interval:</label>
-      <select id="increment">
-        <option value="15">15 min</option>
-        <option value="30" selected>30 min</option>
-        <option value="45">45 min</option>
-        <option value="60">60 min</option>
-      </select>
-      <label>Activity Duration:</label>
-      <select id="activityDuration">
-        <option value="15">15</option>
-        <option value="30" selected>30</option>
-        <option value="45">45</option>
-        <option value="60">60</option>
-      </select>
-    </div>
-
-    <!-- Controls -->
     <h3>Scheduler Controls</h3>
     <div style="margin-top:10px;">
-      <button id="assignBtn" onclick="generateTimes()">Generate Schedule</button>
-      <button id="saveBtn" onclick="saveData()">Save Data</button>
-      <button id="loadBtn" onclick="loadData()">Load Data</button>
-      <button id="eraseAllBtn" style="background:#f66;color:white;">Erase All</button>
+      <button id="assignBtn">Generate Schedule</button>
+      <button id="saveBtn">Save Data</button>
+      <button id="loadBtn">Load Data</button>
+      <button id="resetBtn" style="background:#f66;color:white;">Reset All</button>
     </div>
   </div>
 
-  <!-- SCHEDULE TAB -->
+  <!-- Schedule Tab -->
   <div id="schedule" class="tab-content">
     <h2>Daily Schedule</h2>
     <div id="scheduleTable"></div>
   </div>
 
-  <!-- LEAGUES TAB -->
+  <!-- Leagues Tab -->
   <div id="leagues" class="tab-content">
     <h2>Leagues</h2>
-    <div id="leaguesContainer"></div>
+    <div id="leaguesContent"></div>
   </div>
 
   <script>
+    // Tab switching logic
     function showTab(id) {
       document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
-      document.getElementById(id).classList.add('active');
       document.querySelector(`button[onclick="showTab('${id}')"]`).classList.add('active');
+      document.getElementById(id).classList.add('active');
     }
   </script>
 
-  <!-- JS FILES -->
+  <!-- JS files -->
   <script src="app1.js"></script>
   <script src="app2.js"></script>
-  
+  <script src="leagues.js"></script>
 </body>
 </html>
