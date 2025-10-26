@@ -1,12 +1,14 @@
+Index
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="UTF-8">
   <title>Camp Scheduler</title>
-  <meta charset="utf-8" />
   <link rel="stylesheet" href="styles.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body>
-  <h1>Camp Scheduler</h1>
+  <h1>🏕️ Camp Scheduler</h1>
 
   <div class="tabs">
     <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button>
@@ -14,78 +16,72 @@
     <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
   </div>
 
-  <!-- Setup Tab -->
+  <!-- =================== SETUP TAB =================== -->
   <div id="setup" class="tab-content active">
     <h3>Add Bunks</h3>
-    <input id="bunkInput" placeholder="Enter bunk">
+    <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
     <button id="addBunkBtn">Add Bunk</button>
-    <div id="unassignedBunks"></div>
+    <div id="unassignedBunks" class="bunk-container"></div>
 
     <h3>Add Divisions</h3>
-    <input id="divisionInput" placeholder="Enter division name">
+    <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
     <button id="addDivisionBtn">Add Division</button>
-    <div id="divisionList"></div>
+    <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable Colors</label>
+    <div id="divisionButtons" style="margin-top:8px;"></div>
 
-    <h3>Assign Bunks to Divisions</h3>
-    <div id="divisionAssignments"></div>
+    <h3>Schedule Increments</h3>
+    <select id="increment">
+      <option value="15">15 minutes</option>
+      <option value="30" selected>30 minutes</option>
+      <option value="45">45 minutes</option>
+      <option value="60">60 minutes</option>
+    </select>
 
-    <h3>Add Fields</h3>
-    <input id="fieldInput" placeholder="Enter field name">
-    <button id="addFieldBtn">Add Field</button>
+    <h3>Activity Duration</h3>
+    <select id="activityDuration">
+      <option value="15">15 minutes</option>
+      <option value="30" selected>30 minutes</option>
+      <option value="45">45 minutes</option>
+      <option value="60">60 minutes</option>
+      <option value="90">90 minutes</option>
+    </select>
+
+    <h3>Division Time Templates</h3>
+    <input id="timeStartInput" placeholder="Start (e.g., 9:00 AM)">
+    <input id="timeEndInput" placeholder="End (e.g., 4:00 PM)">
+    <button onclick="addTimeTemplate()">Add Time</button>
+    <div id="timeTemplates"></div>
+
+    <button style="margin-top:12px;" onclick="generateTimes()">Generate Schedule Times</button>
+
+    <h3>Add Fields / Courts</h3>
+    <input id="fieldInput" placeholder="Enter field/court name (e.g., Court 1)">
+    <button id="addFieldBtn">Add Field/Court</button>
     <div id="fieldList"></div>
 
-    <h3>Common Sports</h3>
-    <div id="commonSports">
-      <button class="sportBtn">Basketball</button>
-      <button class="sportBtn">Football</button>
-      <button class="sportBtn">Baseball</button>
-      <button class="sportBtn">Hockey</button>
-      <button class="sportBtn">Volleyball</button>
-      <button class="sportBtn">Soccer</button>
-      <button class="sportBtn">Lacrosse</button>
-      <input id="customSportInput" placeholder="Other (custom sport)">
-      <button id="addCustomSportBtn">Add</button>
-    </div>
-
-    <h3>Special Activities</h3>
-    <input id="specialInput" placeholder="Enter special activity">
+    <h3>Add Special Activities</h3>
+    <input id="specialInput" placeholder="Enter special activity (e.g., Canteen)">
     <button id="addSpecialBtn">Add Special</button>
     <div id="specialList"></div>
 
-    <h3>Scheduler Controls</h3>
-    <div style="margin-top:10px;">
-      <button id="assignBtn">Generate Schedule</button>
-      <button id="saveBtn">Save Data</button>
-      <button id="loadBtn">Load Data</button>
-      <button id="resetBtn" style="background:#f66;color:white;">Reset All</button>
-    </div>
+    <h3>Erase All Data</h3>
+    <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">Erase All</button>
   </div>
 
-  <!-- Schedule Tab -->
+  <!-- =================== SCHEDULE TAB =================== -->
   <div id="schedule" class="tab-content">
-    <h2>Daily Schedule</h2>
+    <h3>Daily Schedule</h3>
     <div id="scheduleTable"></div>
   </div>
 
-  <!-- Leagues Tab -->
+  <!-- =================== LEAGUES TAB =================== -->
   <div id="leagues" class="tab-content">
-    <h2>Leagues</h2>
-    <div id="leaguesContent"></div>
+    <h3>Leagues Setup</h3>
+    <div id="leaguesContainer"></div>
   </div>
 
-  <script>
-    // Tab switching logic
-    function showTab(id) {
-      document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
-      document.querySelector(`button[onclick="showTab('${id}')"]`).classList.add('active');
-      document.getElementById(id).classList.add('active');
-    }
-  </script>
-
-  <!-- JS files -->
-  <script src="app1.js"></script>
-  <script src="app2.js"></script>
-  <script src="leagues.js"></script>
+  <!-- =================== SCRIPTS =================== -->
+  <script src="app1.js" defer></script>
+  <script src="app2.js" defer></script>
 </body>
 </html>
