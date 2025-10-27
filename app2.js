@@ -14,18 +14,18 @@ function reserveLeagueRows() {
   leagueRowByDiv = {};
   leagueRowTaken.clear();
 
-  const leagueDivs = (availableDivisions || []).filter(
-    d => leagues && leagues[d] && leagues[d].enabled
+  const leagueDivs = (window.availableDivisions || []).filter(
+    d => window.leagues && window.leagues[d] && window.leagues[d].enabled
   );
 
   if (leagueDivs.length === 0) return;
 
-  if (!Array.isArray(unifiedTimes) || unifiedTimes.length === 0) {
+  if (!Array.isArray(window.unifiedTimes) || window.unifiedTimes.length === 0) {
     console.warn("No time rows to reserve for leagues.");
     return;
   }
 
-  const N = unifiedTimes.length;
+  const N = window.unifiedTimes.length;
   // Build a spread-out order to reduce clustering
   const step = Math.max(1, Math.floor(N / Math.max(1, leagueDivs.length)));
   const candidateOrder = [];
@@ -77,13 +77,14 @@ function reserveLeagueRows() {
 
 /** Return fields that can host any league sport and are available. */
 function getLeagueCapableFields() {
-  if (!Array.isArray(fields)) return [];
+  const fields = Array.isArray(window.fields) ? window.fields : [];
+  const leagueSports = Array.isArray(window.leagueSports) ? window.leagueSports : [];
   return fields.filter(
     f =>
       f &&
       f.available &&
       Array.isArray(f.activities) &&
-      f.activities.some(a => Array.isArray(leagueSports) && leagueSports.includes(a))
+      f.activities.some(a => leagueSports.includes(a))
   );
 }
 
@@ -93,13 +94,11 @@ function pickLeagueSportForDivision(divName) {
   for (const f of getLeagueCapableFields()) {
     for (const a of f.activities) hostable.add(a);
   }
-  if (Array.isArray(leagueSports)) {
-    for (const s of leagueSports) {
-      if (hostable.has(s)) return s;
-    }
-    return leagueSports[0] || "League";
+  const leagueSports = Array.isArray(window.leagueSports) ? window.leagueSports : [];
+  for (const s of leagueSports) {
+    if (hostable.has(s)) return s;
   }
-  return "League";
+  return leagueSports[0] || "League";
 }
 
 // -------------------- Scheduling Core --------------------
@@ -113,12 +112,33 @@ function pickLeagueSportForDivision(divName) {
  * - Fallback marks "Special Activity Needed" when no valid placement exists.
  */
 function assignFieldsToBunks() {
-  const availFields = (Array.isArray(fields) ? fields : []).filter(
+  const times = Array.isArray(window.unifiedTimes) ? window.unifiedTimes : [];
+  const divisionsList = Array.isArray(window.availableDivisions) ? window.availableDivisions : [];
+  const divisionsMap = window.divisions || {};
+  const leagueSports = Array.isArray(window.leagueSports) ? window.leagueSports : [];
+  const fields = Array.isArray(window.fields) ? window.fields : [];
+  const specials = Array.isArray(window.specialActivities) ? window.specialActivities : [];
+
+  // Hard validation — without a grid or divisions, render a helpful table rather than silently doing nothing.
+  if (times.length === 0) {
+    console.warn("assignFieldsToBunks(): unifiedTimes is empty. Set Start/End/Interval and build the grid first.");
+    window.scheduleAssignments = {};
+    if (typeof window.rebuildScheduleTable === "function") window.rebuildScheduleTable();
+    alert("No time grid. Set Start/End/Interval and try again.");
+    return;
+  }
+  if (divisionsList.length === 0) {
+    console.warn("assignFieldsToBunks(): no availableDivisions.");
+    window.scheduleAssignments = {};
+    if (typeof window.rebuildScheduleTable === "function") window.rebuildScheduleTable();
+    alert("No divisions available. Add/enable divisions.");
+    return;
+  }
+
+  const availFields = fields.filter(
     f => f && f.available && Array.isArray(f.activities) && f.activities.length > 0
   );
-  const availSpecials = (Array.isArray(specialActivities) ? specialActivities : []).filter(
-    s => s && s.available
-  );
+  const availSpecials = specials.filter(s => s && s.available);
 
   // Build catalog of all possible activities
   const allActivities = [
@@ -132,18 +152,13 @@ function assignFieldsToBunks() {
     }))
   ];
 
-  if (allActivities.length === 0) {
-    alert("No activities available.");
-    scheduleAssignments = {};
-    return;
-  }
-
-  // Reset schedule array per bunk x timeslot
-  scheduleAssignments = {};
-  (availableDivisions || []).forEach(div => {
-    const bunksInDiv = (divisions[div]?.bunks) || [];
+  // Reset schedule array per bunk x timeslot (use safe slot count)
+  window.scheduleAssignments = {};
+  const SLOT_COUNT = times.length;
+  divisionsList.forEach(div => {
+    const bunksInDiv = (divisionsMap[div]?.bunks) || [];
     bunksInDiv.forEach(b => {
-      scheduleAssignments[b] = new Array(unifiedTimes.length);
+      window.scheduleAssignments[b] = new Array(SLOT_COUNT);
     });
   });
 
@@ -152,14 +167,14 @@ function assignFieldsToBunks() {
 
   // 2) Pre-place league blocks on the reserved rows
   const leagueFieldsPool = getLeagueCapableFields();
-  const leagueDivs = (availableDivisions || []).filter(d => leagues && leagues[d] && leagues[d].enabled);
+  const leagueDivs = divisionsList.filter(d => window.leagues && window.leagues[d] && window.leagues[d].enabled);
 
   leagueDivs.forEach(div => {
     const row = leagueRowByDiv[div];
     if (row == null) return; // nothing reserved
 
     const sport = pickLeagueSportForDivision(div);
-    const divBunks = (divisions[div]?.bunks) || [];
+    const divBunks = (divisionsMap[div]?.bunks) || [];
     if (divBunks.length === 0) return;
 
     const rowFieldUse = new Set();
@@ -170,7 +185,7 @@ function assignFieldsToBunks() {
       for (let tries = 0; tries < leagueFieldsPool.length; tries++) {
         const f = leagueFieldsPool[fieldIndex % leagueFieldsPool.length];
         fieldIndex++;
-        if (f.activities.includes(sport) && !rowFieldUse.has(f.name)) {
+        if (Array.isArray(f.activities) && f.activities.includes(sport) && !rowFieldUse.has(f.name)) {
           rowFieldUse.add(f.name);
           return f;
         }
@@ -182,7 +197,7 @@ function assignFieldsToBunks() {
       const f = nextLeagueFieldForSport();
       if (!f) {
         // Not enough league-capable fields this row; still mark league, surface need.
-        scheduleAssignments[bunk][row] = {
+        window.scheduleAssignments[bunk][row] = {
           field: { name: "Special Activity Needed" },
           sport: `LEAGUE (${sport})`,
           continuation: false,
@@ -190,7 +205,7 @@ function assignFieldsToBunks() {
           _skip: false
         };
       } else {
-        scheduleAssignments[bunk][row] = {
+        window.scheduleAssignments[bunk][row] = {
           field: { name: f.name },
           sport: `LEAGUE (${sport})`,
           continuation: false,
@@ -201,30 +216,25 @@ function assignFieldsToBunks() {
     }
   });
 
-  // Helper: is a row a league row?
-  function isLeagueRow(rowIdx) {
-    return leagueRowTaken.has(rowIdx);
-  }
-
   // 3) Fill remaining slots (non-league)
   const usedFieldAtRow = new Map(); // rowIdx -> Set(fieldName)
 
   // Seed fields already used by leagues
-  for (const bunk in scheduleAssignments) {
-    const arr = scheduleAssignments[bunk];
+  for (const bunk in window.scheduleAssignments) {
+    const arr = window.scheduleAssignments[bunk];
     if (!Array.isArray(arr)) continue;
     arr.forEach((cell, r) => {
-      if (cell?.field?.name) {
-        if (!usedFieldAtRow.has(r)) usedFieldAtRow.set(r, new Set());
-        usedFieldAtRow.get(r).add(cell.field.name);
-      }
+      const fname = cell?.field?.name;
+      if (!fname) return;
+      if (!usedFieldAtRow.has(r)) usedFieldAtRow.set(r, new Set());
+      usedFieldAtRow.get(r).add(fname);
     });
   }
 
   // Track sports used by each bunk (to prevent duplicates in the same day)
   const bunkUsedSports = {};
-  for (const bunk in scheduleAssignments) {
-    const cells = scheduleAssignments[bunk] || [];
+  for (const bunk in window.scheduleAssignments) {
+    const cells = window.scheduleAssignments[bunk] || [];
     const used = new Set();
     for (const c of cells) {
       if (!c || !c.sport) continue;
@@ -237,21 +247,35 @@ function assignFieldsToBunks() {
 
   // Non-league activity pool
   const nonLeagueActivities = allActivities.filter(
-    a => !(a.sport && Array.isArray(leagueSports) && leagueSports.includes(a.sport))
+    a => !(a.sport && leagueSports.includes(a.sport))
   );
+
+  // If there are truly no activities at all, fill everything with a visible placeholder instead of aborting.
+  const SAFE_FILL_WITH_PLACEHOLDER = nonLeagueActivities.length === 0 && leagueDivs.length === 0;
 
   // fair rotation
   const rotate = (arr) => { if (arr.length) arr.push(arr.shift()); return arr; };
 
-  for (let row = 0; row < unifiedTimes.length; row++) {
+  for (let row = 0; row < SLOT_COUNT; row++) {
     const rowUsed = usedFieldAtRow.get(row) || new Set();
 
-    for (const div of (availableDivisions || [])) {
-      const bunksInDiv = (divisions[div]?.bunks) || [];
+    for (const div of divisionsList) {
+      const bunksInDiv = (divisionsMap[div]?.bunks) || [];
 
       for (const bunk of bunksInDiv) {
         // Skip if already assigned (e.g., league row)
-        if (scheduleAssignments[bunk][row]) continue;
+        if (window.scheduleAssignments[bunk][row]) continue;
+
+        if (SAFE_FILL_WITH_PLACEHOLDER) {
+          window.scheduleAssignments[bunk][row] = {
+            field: { name: "Special Activity Needed" },
+            sport: null,
+            continuation: false,
+            isLeague: false,
+            _skip: false
+          };
+          continue;
+        }
 
         let placed = false;
         let attempts = 0;
@@ -271,7 +295,7 @@ function assignFieldsToBunks() {
             // No two bunks on the same field at the same time
             if (rowUsed.has(fname)) continue;
 
-            scheduleAssignments[bunk][row] = {
+            window.scheduleAssignments[bunk][row] = {
               field: { name: fname },
               sport: sportName,
               continuation: false,
@@ -283,7 +307,7 @@ function assignFieldsToBunks() {
             placed = true;
           } else {
             // Special activity: not a sport, allowed anytime (no sport duplication rules)
-            scheduleAssignments[bunk][row] = {
+            window.scheduleAssignments[bunk][row] = {
               field: { name: act.field.name }, // e.g., "Canteen", "Game Room"
               sport: null,
               continuation: false,
@@ -296,7 +320,7 @@ function assignFieldsToBunks() {
 
         if (!placed) {
           // No valid field/sport left that doesn't violate rules — show need
-          scheduleAssignments[bunk][row] = {
+          window.scheduleAssignments[bunk][row] = {
             field: { name: "Special Activity Needed" },
             sport: null,
             continuation: false,
@@ -310,9 +334,9 @@ function assignFieldsToBunks() {
     if (rowUsed.size > 0) usedFieldAtRow.set(row, rowUsed);
   }
 
-  // Optional: call renderer if present
-  if (typeof rebuildScheduleTable === "function") {
-    try { rebuildScheduleTable(); } catch (e) { console.warn(e); }
+  // Always re-render
+  if (typeof window.rebuildScheduleTable === "function") {
+    try { window.rebuildScheduleTable(); } catch (e) { console.warn(e); }
   }
 }
 
