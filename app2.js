@@ -37,9 +37,12 @@ function assignFieldsToBunks() {
   const globalActivityLock = Array.from({ length: unifiedTimes.length }, () => new Set());
   const leagueTimeLocks = [];
 
-  // Bunk-level tracking to prevent repeats
-  const sportsUsedByBunk = {}; // { bunk: Set(sports) }
-  const fieldsUsedByBunk = {}; // { bunk: Set(fields) }
+  // Normalizer (prevents "basketball", "Basketball ", etc. from bypassing rules)
+  const normSport = (s) => (typeof s === "string" && s.trim() ? s.trim().toLowerCase() : null);
+
+  // Bunk-level tracking (use normalized sport strings)
+  const sportsUsedByBunk = {}; // { bunk: Set<normalizedSport> }
+  const fieldsUsedByBunk = {}; // { bunk: Set<fieldName> }
 
   function overlaps(aStart, aEnd, bStart, bEnd) {
     return aStart < bEnd && bStart < aEnd;
@@ -69,7 +72,6 @@ function assignFieldsToBunks() {
   // Helper: is "Leagues day" globally?
   function isGlobalLeaguesDay() {
     if (!leagues) return false;
-    // If ANY division has leagues enabled, then everyone should get leagues
     return Object.values(leagues).some(cfg => cfg && cfg.enabled === true);
   }
 
@@ -83,12 +85,10 @@ function assignFieldsToBunks() {
     const activeSlots = Array.from(divisionActiveRows[div] || []);
     if (activeSlots.length === 0) continue;
 
-    // If global leagues is on, every division gets leagues.
-    // Otherwise only divisions explicitly toggled on get leagues.
     const wantsLeague = globalLeaguesOn || (leagues && leagues[div]?.enabled);
     if (!wantsLeague) continue;
 
-    // Always assign one league slot per division
+    // Pick a unique (non-overlapping) league row if possible
     let chosenSlot = null;
     for (const slot of activeSlots) {
       const slotStart = unifiedTimes[slot].start;
@@ -116,6 +116,7 @@ function assignFieldsToBunks() {
         continuation: false,
         isLeague: true
       };
+      // Extend to activityDuration
       for (let k = 1; k < spanLen; k++) {
         const idx = chosenSlot + k;
         if (idx >= unifiedTimes.length) break;
@@ -127,10 +128,10 @@ function assignFieldsToBunks() {
           isLeague: true
         };
       }
-      // mark league as used so they don't get it again
+      // count "Leagues" as a unique type so no second league is placed
       if (!sportsUsedByBunk[b]) sportsUsedByBunk[b] = new Set();
       if (!fieldsUsedByBunk[b]) fieldsUsedByBunk[b] = new Set();
-      sportsUsedByBunk[b].add("Leagues");
+      sportsUsedByBunk[b].add(normSport("Leagues")); // normalized
       fieldsUsedByBunk[b].add("Leagues");
     });
     reserveField(`LEAGUE-${div}`, slotStart, slotEnd, chosenSlot, "Leagues");
@@ -140,39 +141,30 @@ function assignFieldsToBunks() {
   const lastActivityByBunk = {};
   const PLACEHOLDER_NAME = "Special Activity Needed";
 
-  function notBackToBack(prev, act) {
-    // Block only when both are real sports and identical (no back-to-back same sport)
-    if (!prev || !prev.sport || !act.sport) return true;
-    return act.sport !== prev.sport;
-  }
-
   function baseFeasible(act, bunk, prev, slotStart, slotEnd, s, allowFieldReuse) {
     if (!canUseField(act.field.name, slotStart, slotEnd, s)) return false;
     if (act.sport && globalActivityLock[s].has(act.sport)) return false;
 
-    // absolute: no back-to-back same sport
-    if (!notBackToBack(prev, act)) return false;
+    // ABSOLUTE: No daily repeat of sport for this bunk (normalized)
+    const ns = normSport(act.sport);
+    if (ns && sportsUsedByBunk[bunk]?.has(ns)) return false;
 
-    // absolute: no daily repeat of sport for this bunk
-    if (act.sport && sportsUsedByBunk[bunk]?.has(act.sport)) return false;
-
-    // soft: avoid reusing the same field for the same bunk (can be relaxed)
+    // Optional: avoid back-to-back *fields* (kept soft); the daily sport rule already blocks “same game” repeats.
     if (!allowFieldReuse && fieldsUsedByBunk[bunk]?.has(act.field.name)) return false;
 
     return true;
   }
 
   function chooseActivity(bunk, prev, slotStart, slotEnd, s) {
-    // TIERED PICKER (never violates back-to-back or daily sport-unique rules)
     // Tier A: all constraints (no field reuse)
     let pool = allActivities.filter(a => baseFeasible(a, bunk, prev, slotStart, slotEnd, s, false));
     if (pool.length > 0) return pool[Math.floor(Math.random() * pool.length)];
 
-    // Tier B: allow field reuse, but still forbid back-to-back and daily sport repeats
+    // Tier B: allow field reuse (still no daily sport repeats)
     pool = allActivities.filter(a => baseFeasible(a, bunk, prev, slotStart, slotEnd, s, true));
     if (pool.length > 0) return pool[Math.floor(Math.random() * pool.length)];
 
-    // Final: no valid non-repeating sport exists → use placeholder block
+    // Final: nothing valid → placeholder instead of breaking rules
     return { type: "special", field: { name: PLACEHOLDER_NAME }, sport: null, _placeholder: true };
   }
 
@@ -184,9 +176,9 @@ function assignFieldsToBunks() {
       if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s))) continue;
 
       for (const bunk of divisions[div].bunks) {
-        if (scheduleAssignments[bunk][s]) continue; // skip leagues or continuations
-        const prev = lastActivityByBunk[bunk];
+        if (scheduleAssignments[bunk][s]) continue; // skip leagues/continuations
 
+        const prev = lastActivityByBunk[bunk];
         if (!sportsUsedByBunk[bunk]) sportsUsedByBunk[bunk] = new Set();
         if (!fieldsUsedByBunk[bunk]) fieldsUsedByBunk[bunk] = new Set();
 
@@ -199,7 +191,7 @@ function assignFieldsToBunks() {
           isLeague: false
         };
 
-        // Only reserve/lock if it's a real resource (not the placeholder)
+        // Reserve resources only for real activities
         if (!chosen._placeholder) {
           reserveField(chosen.field.name, slotStart, slotEnd, s, chosen.sport);
         }
@@ -225,9 +217,10 @@ function assignFieldsToBunks() {
           }
         }
 
-        // Track bunk-level usage (do NOT add placeholder to used sets)
+        // Track bunk-level usage (normalized; skip placeholder)
         if (!chosen._placeholder) {
-          if (chosen.sport) sportsUsedByBunk[bunk].add(chosen.sport);
+          const ns = normSport(chosen.sport);
+          if (ns) sportsUsedByBunk[bunk].add(ns);
           fieldsUsedByBunk[bunk].add(chosen.field.name);
         }
 
@@ -315,11 +308,10 @@ function updateTable() {
           }
           td.rowSpan = span;
 
-          // Style placeholder distinctly
-          if (entry.field === "Special Activity Needed" && !entry.sport) {
-            td.innerHTML = `<span class="need-special-pill">${entry.field}</span>`;
-          } else if (entry.isLeague) {
+          if (entry.isLeague) {
             td.innerHTML = `<span class="league-pill">Leagues</span>`;
+          } else if (entry.field === "Special Activity Needed" && !entry.sport) {
+            td.innerHTML = `<span class="need-special-pill">${entry.field}</span>`;
           } else {
             td.textContent = entry.sport ? `${entry.field} – ${entry.sport}` : entry.field;
           }
