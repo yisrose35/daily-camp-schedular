@@ -159,7 +159,8 @@ function assignFieldsToBunks() {
         let candidates = allActivities.filter(a => {
           if (!canUseField(a.field.name, slotStart, slotEnd, s)) return false;
           if (a.sport && globalActivityLock[s].has(a.sport)) return false;
-          if (prev && a.sport === prev.sport) return false;
+          // Block only when both are real sports and identical (no back-to-back same sport)
+if (prev && prev.sport && a.sport && a.sport === prev.sport) return false;
           if (sportsUsedByBunk[bunk].has(a.sport)) return false;
           if (fieldsUsedByBunk[bunk].has(a.field.name)) return false;
           return true;
