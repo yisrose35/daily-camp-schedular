@@ -103,7 +103,6 @@ function assignFieldsToBunks() {
       }
     }
 
-    // If we couldn't find a non-overlapping time, just take the first active slot
     if (chosenSlot === null) chosenSlot = activeSlots[0];
     leagueSlotByDiv[div] = chosenSlot;
 
@@ -117,7 +116,6 @@ function assignFieldsToBunks() {
         continuation: false,
         isLeague: true
       };
-      // Extend for duration
       for (let k = 1; k < spanLen; k++) {
         const idx = chosenSlot + k;
         if (idx >= unifiedTimes.length) break;
@@ -135,12 +133,48 @@ function assignFieldsToBunks() {
       sportsUsedByBunk[b].add("Leagues");
       fieldsUsedByBunk[b].add("Leagues");
     });
-    // Reserve a synthetic field id for leagues per-division to block conflicts
     reserveField(`LEAGUE-${div}`, slotStart, slotEnd, chosenSlot, "Leagues");
   }
 
   // -------------------- 2. Fill Every Remaining Slot --------------------
   const lastActivityByBunk = {};
+  const PLACEHOLDER_NAME = "Special Activity Needed";
+
+  function notBackToBack(prev, act) {
+    // Block only when both are real sports and identical (no back-to-back same sport)
+    if (!prev || !prev.sport || !act.sport) return true;
+    return act.sport !== prev.sport;
+  }
+
+  function baseFeasible(act, bunk, prev, slotStart, slotEnd, s, allowFieldReuse) {
+    if (!canUseField(act.field.name, slotStart, slotEnd, s)) return false;
+    if (act.sport && globalActivityLock[s].has(act.sport)) return false;
+
+    // absolute: no back-to-back same sport
+    if (!notBackToBack(prev, act)) return false;
+
+    // absolute: no daily repeat of sport for this bunk
+    if (act.sport && sportsUsedByBunk[bunk]?.has(act.sport)) return false;
+
+    // soft: avoid reusing the same field for the same bunk (can be relaxed)
+    if (!allowFieldReuse && fieldsUsedByBunk[bunk]?.has(act.field.name)) return false;
+
+    return true;
+  }
+
+  function chooseActivity(bunk, prev, slotStart, slotEnd, s) {
+    // TIERED PICKER (never violates back-to-back or daily sport-unique rules)
+    // Tier A: all constraints (no field reuse)
+    let pool = allActivities.filter(a => baseFeasible(a, bunk, prev, slotStart, slotEnd, s, false));
+    if (pool.length > 0) return pool[Math.floor(Math.random() * pool.length)];
+
+    // Tier B: allow field reuse, but still forbid back-to-back and daily sport repeats
+    pool = allActivities.filter(a => baseFeasible(a, bunk, prev, slotStart, slotEnd, s, true));
+    if (pool.length > 0) return pool[Math.floor(Math.random() * pool.length)];
+
+    // Final: no valid non-repeating sport exists → use placeholder block
+    return { type: "special", field: { name: PLACEHOLDER_NAME }, sport: null, _placeholder: true };
+  }
 
   for (let s = 0; s < unifiedTimes.length; s++) {
     const slotStart = unifiedTimes[s].start;
@@ -156,24 +190,7 @@ function assignFieldsToBunks() {
         if (!sportsUsedByBunk[bunk]) sportsUsedByBunk[bunk] = new Set();
         if (!fieldsUsedByBunk[bunk]) fieldsUsedByBunk[bunk] = new Set();
 
-        let candidates = allActivities.filter(a => {
-          if (!canUseField(a.field.name, slotStart, slotEnd, s)) return false;
-          if (a.sport && globalActivityLock[s].has(a.sport)) return false;
-          // Block only when both are real sports and identical (no back-to-back same sport)
-if (prev && prev.sport && a.sport && a.sport === prev.sport) return false;
-          if (sportsUsedByBunk[bunk].has(a.sport)) return false;
-          if (fieldsUsedByBunk[bunk].has(a.field.name)) return false;
-          return true;
-        });
-
-        // fallback if no valid options left (allow repeats only as true last resort)
-        if (candidates.length === 0) {
-          candidates = allActivities.filter(a => canUseField(a.field.name, slotStart, slotEnd, s));
-        }
-
-        if (candidates.length === 0) candidates = allActivities;
-
-        const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+        const chosen = chooseActivity(bunk, prev, slotStart, slotEnd, s);
 
         scheduleAssignments[bunk][s] = {
           field: chosen.field.name,
@@ -182,28 +199,37 @@ if (prev && prev.sport && a.sport && a.sport === prev.sport) return false;
           isLeague: false
         };
 
-        reserveField(chosen.field.name, slotStart, slotEnd, s, chosen.sport);
+        // Only reserve/lock if it's a real resource (not the placeholder)
+        if (!chosen._placeholder) {
+          reserveField(chosen.field.name, slotStart, slotEnd, s, chosen.sport);
+        }
 
-        // continuation logic (respect activityDuration exactly; do not shorten)
+        // continuation logic
         for (let k = 1; k < spanLen; k++) {
           const idx = s + k;
           if (idx >= unifiedTimes.length) break;
           if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
           if (scheduleAssignments[bunk][idx]) break;
+
           scheduleAssignments[bunk][idx] = {
             field: chosen.field.name,
             sport: chosen.sport,
             continuation: true,
             isLeague: false
           };
+
           const contStart = unifiedTimes[idx].start;
           const contEnd = new Date(contStart.getTime() + activityDuration * 60000);
-          reserveField(chosen.field.name, contStart, contEnd, idx, chosen.sport);
+          if (!chosen._placeholder) {
+            reserveField(chosen.field.name, contStart, contEnd, idx, chosen.sport);
+          }
         }
 
-        // Track bunk-level activity usage
-        if (chosen.sport) sportsUsedByBunk[bunk].add(chosen.sport);
-        fieldsUsedByBunk[bunk].add(chosen.field.name);
+        // Track bunk-level usage (do NOT add placeholder to used sets)
+        if (!chosen._placeholder) {
+          if (chosen.sport) sportsUsedByBunk[bunk].add(chosen.sport);
+          fieldsUsedByBunk[bunk].add(chosen.field.name);
+        }
 
         lastActivityByBunk[bunk] = {
           field: chosen.field.name,
@@ -288,8 +314,15 @@ function updateTable() {
             scheduleAssignments[b][k]._skip = true;
           }
           td.rowSpan = span;
-          if (entry.isLeague) td.innerHTML = `<span class="league-pill">Leagues</span>`;
-          else td.textContent = entry.sport ? `${entry.field} – ${entry.sport}` : entry.field;
+
+          // Style placeholder distinctly
+          if (entry.field === "Special Activity Needed" && !entry.sport) {
+            td.innerHTML = `<span class="need-special-pill">${entry.field}</span>`;
+          } else if (entry.isLeague) {
+            td.innerHTML = `<span class="league-pill">Leagues</span>`;
+          } else {
+            td.textContent = entry.sport ? `${entry.field} – ${entry.sport}` : entry.field;
+          }
         } else if (!entry) td.textContent = "";
         tr.appendChild(td);
       });
