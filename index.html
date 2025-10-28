@@ -14,6 +14,7 @@ Index
     <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button>
     <button class="tab-button" onclick="showTab('schedule')">Daily Schedule</button>
     <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
+    <button class="tab-button" onclick="showTab('fixed')">Fixed Daily Activities</button>
   </div>
 
   <!-- =================== SETUP TAB =================== -->
@@ -80,8 +81,47 @@ Index
     <div id="leaguesContainer"></div>
   </div>
 
+  <!-- Fixed Daily Activities Tab -->
+<div id="fixed" class="tab-content">
+  <h3>Fixed Daily Activities (e.g., Lunch, Tefillah, Assembly)</h3>
+
+  <div class="fixed-form">
+    <label>
+      Activity name
+      <input id="fixedName" placeholder="e.g., Lunch">
+    </label>
+
+    <div class="time-row">
+      <label>
+        Start
+        <input id="fixedStart" type="time" step="60" value="12:00">
+      </label>
+      <label>
+        End
+        <input id="fixedEnd" type="time" step="60" value="12:30">
+      </label>
+    </div>
+
+    <div>
+      <div><strong>Applies to divisions/grades:</strong></div>
+      <div id="fixedDivisionsBox" class="chip-box"><!-- filled by JS --></div>
+    </div>
+
+    <button id="addFixedBtn">Add Fixed Activity</button>
+  </div>
+
+  <hr>
+
+  <h4>Fixed Activities</h4>
+  <div id="fixedList"><!-- filled by JS --></div>
+</div>
+
+
   <!-- =================== SCRIPTS =================== -->
-  <script src="app1.js" defer></script>
-  <script src="app2.js" defer></script>
+  <script src="app1.js"></script>
+<script src="daily_activities.js"></script>
+<script src="app2.js"></script>
+<script src="leagues.js"></script>
+
 </body>
 </html>
