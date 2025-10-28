@@ -107,16 +107,7 @@
   <!-- =================== SCHEDULE TAB =================== -->
   <div id="schedule" class="tab-content">
     <h3>Daily Schedule</h3>
-
-    <div class="row" style="margin:8px 0;">
-      <button id="generateScheduleBtn">Generate Schedule</button>
-      <button id="clearScheduleBtn" class="secondary">Clear</button>
-      <span class="muted">Fixed activities & leagues are placed first. No bunk repeats; no field collisions.</span>
-    </div>
-
     <div id="scheduleTable"></div>
-    <!-- If your newer code uses a grid container, keep both IDs present: -->
-    <div id="scheduleGrid" style="display:none;"></div>
   </div>
 
   <!-- =================== LEAGUES TAB =================== -->
@@ -132,12 +123,12 @@
   <!-- Tab wiring + ensure fixed-activity chips/list render when opening Daily Activities -->
   <script>
     (function(){
-      const nativeShowTab = window.showTab;
+      const existingShowTab = window.showTab;
       window.showTab = function(id){
-        if (typeof nativeShowTab === 'function') nativeShowTab(id);
+        if (typeof existingShowTab === 'function') existingShowTab(id);
 
-        // Basic toggle if no custom implementation exists:
-        if (typeof nativeShowTab !== 'function') {
+        // Basic toggle if no custom showTab exists:
+        if (typeof existingShowTab !== 'function') {
           document.querySelectorAll('.tab-content').forEach(el => el.classList.toggle('active', el.id === id));
           document.querySelectorAll('.tab-button').forEach(btn => {
             const target = btn.getAttribute('onclick') || '';
@@ -145,7 +136,7 @@
           });
         }
 
-        // Refresh the fixed-activities UI when entering the Daily Activities tab
+        // Refresh fixed-activities UI when opening Daily Activities
         if (id === 'daily' && typeof hookFixedUI === 'function') {
           try { hookFixedUI(); } catch(e) { console.warn('hookFixedUI error', e); }
         }
