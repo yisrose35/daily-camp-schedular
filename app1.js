@@ -13,6 +13,9 @@ let scheduleAssignments = {}; // { bunkName: [ per unified row index: {field,spo
 let unifiedTimes = []; // [{start:Date,end:Date,label:string}]
 let divisionActiveRows = {}; // { divName: Set(rowIndices) }
 
+// NEW: Fixed Daily Activities (persisted)
+let fixedDailyActivities = []; // [{ id, name, start:"HH:MM", end:"HH:MM", divisions:string[] }]
+
 const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
 let colorIndex = 0;
 const commonActivities = ["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
@@ -54,14 +57,24 @@ function fmtTime(d) {
   return `${h}:${m} ${ap}`;
 }
 
+// NEW: "HH:MM" -> minutes helper for Daily Activities
+function timeStrToMinutes(t) {
+  if (!t) return 0;
+  const [h, m] = t.split(":").map(Number);
+  return (h * 60) + (m || 0);
+}
+
 // -------------------- Tabs --------------------
 function showTab(id) {
   document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   document.getElementById(id).classList.add('active');
-  document.querySelector(`.tab-button[onclick="showTab('${id}')"]`).classList.add('active');
+  const tabBtn = document.querySelector(`.tab-button[onclick="showTab('${id}')"]`);
+  if (tabBtn) tabBtn.classList.add('active');
   if (id === 'schedule') updateTable?.();
   if (id === 'leagues') renderLeagues();
+  // NEW: ensure Daily Activities panel is wired when opened
+  if (id === 'daily') hookFixedUI?.();
 }
 
 // -------------------- Bunks --------------------
@@ -145,6 +158,8 @@ function addDivision() {
     saveData();
     setupDivisionButtons(); renderLeagues(); updateTable?.();
     renderTimeTemplates();
+    // NEW: let Daily Activities chips know divisions changed
+    notifyDivisionsChanged();
   }
 }
 document.getElementById("addDivisionBtn").onclick = addDivision;
@@ -167,6 +182,8 @@ function setupDivisionButtons() {
       if (selectedDivision === name) selectedDivision = newName;
       saveData();
       setupDivisionButtons(); renderLeagues(); renderTimeTemplates(); updateTable?.();
+      // NEW: refresh chips after rename
+      notifyDivisionsChanged();
     });
     wrap.appendChild(span);
     const col = document.createElement("input"); col.type = "color"; col.value = obj.color; col.className = "colorPicker";
@@ -338,9 +355,9 @@ function renderLeagues() {
     const other = document.createElement("input"); other.placeholder = "Other sport";
     other.onkeyup = e => {
       if (e.key === "Enter" && other.value.trim()) {
-        const val = other.value.trim();
+        const val = e.target.value.trim();
         if (!leagues[divName].sports.includes(val)) leagues[divName].sports.push(val);
-        other.value = ""; saveData(); renderLeagues();
+        e.target.value = ""; saveData(); renderLeagues();
       }
     };
     wrap.appendChild(other);
@@ -390,9 +407,144 @@ function generateTimes() {
   updateTable?.();
 }
 
+// -------------------- Daily Activities (Fixed) UI --------------------
+// Build list of current divisions (from Setup)
+function _currentDivisionList() {
+  if (Array.isArray(availableDivisions) && availableDivisions.length) return [...availableDivisions];
+  if (divisions && typeof divisions === "object") return Object.keys(divisions);
+  return [];
+}
+
+// Render chips in Daily Activities tab
+function renderFixedDivisionChips() {
+  const wrap = document.getElementById("fixedDivisionChips");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+
+  const divs = _currentDivisionList();
+  if (!divs.length) {
+    wrap.innerHTML = `<span class="muted">No divisions yet — add some in Setup.</span>`;
+    return;
+  }
+
+  divs.forEach(div => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip";
+    chip.dataset.div = div;
+    chip.textContent = div;
+    chip.addEventListener("click", () => chip.classList.toggle("active"));
+    wrap.appendChild(chip);
+  });
+}
+
+// Read selected chips
+function getSelectedFixedDivisions() {
+  const wrap = document.getElementById("fixedDivisionChips");
+  if (!wrap) return [];
+  return Array.from(wrap.querySelectorAll(".chip.active")).map(el => el.dataset.div);
+}
+
+// Render the fixed activities list
+function renderFixedList() {
+  const list = document.getElementById("fixedList");
+  if (!list) return;
+
+  if (!fixedDailyActivities.length) {
+    list.innerHTML = `<div class="muted">No fixed activities yet.</div>`;
+    return;
+  }
+
+  list.innerHTML = "";
+  fixedDailyActivities.forEach(fa => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `
+      <div>
+        <strong>${fa.name}</strong>
+        <div class="muted">${fa.start}–${fa.end} • ${fa.divisions?.length ? fa.divisions.join(", ") : "All divisions"}</div>
+      </div>
+      <div>
+        <button class="btn-link danger" data-id="${fa.id}">Remove</button>
+      </div>
+    `;
+    list.appendChild(row);
+  });
+
+  // Remove handlers
+  list.querySelectorAll(".btn-link.danger").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-id");
+      fixedDailyActivities = fixedDailyActivities.filter(x => x.id !== id);
+      saveData();
+      renderFixedList();
+    });
+  });
+}
+
+// Add handler for the form
+function addFixedActivityFromForm() {
+  const name = (document.getElementById("fixedName")?.value || "").trim();
+  const start = document.getElementById("fixedStart")?.value || "";
+  const end   = document.getElementById("fixedEnd")?.value || "";
+  const selDivs = getSelectedFixedDivisions();
+
+  if (!name) return alert("Please enter a name.");
+  if (!start || !end) return alert("Please choose start and end times.");
+  if (timeStrToMinutes(end) <= timeStrToMinutes(start)) return alert("End must be after start.");
+
+  fixedDailyActivities.push({
+    id: "fa_" + Math.random().toString(36).slice(2),
+    name, start, end,
+    // empty array means "all divisions"
+    divisions: selDivs
+  });
+
+  saveData();
+  renderFixedList();
+
+  // optional: clear inputs (chips remain)
+  const n = document.getElementById("fixedName");
+  const s = document.getElementById("fixedStart");
+  const e = document.getElementById("fixedEnd");
+  if (n) n.value = ""; if (s) s.value = ""; if (e) e.value = "";
+}
+
+// Expose a single hook to wire the panel (chips + list + button)
+function hookFixedUI() {
+  renderFixedDivisionChips();
+  renderFixedList();
+  const addBtn = document.getElementById("addFixedBtn");
+  if (addBtn && !addBtn._wired) {
+    addBtn.addEventListener("click", addFixedActivityFromForm);
+    addBtn._wired = true; // prevent double-binding
+  }
+}
+window.hookFixedUI = hookFixedUI; // ensure index can call it
+
+// Keep Daily Activities chips in sync when Setup changes
+function notifyDivisionsChanged() {
+  // Keep availableDivisions up to date if needed
+  const fresh = _currentDivisionList();
+  if (JSON.stringify(availableDivisions) !== JSON.stringify(fresh)) {
+    availableDivisions = fresh;
+  }
+  // If the Daily tab is visible, refresh chips immediately
+  const dailyTab = document.getElementById("daily");
+  if (dailyTab && dailyTab.classList.contains("active")) {
+    renderFixedDivisionChips();
+  }
+}
+window.notifyDivisionsChanged = notifyDivisionsChanged;
+
 // -------------------- Local Storage --------------------
 function saveData() {
-  const data = { bunks, divisions, availableDivisions, selectedDivision, fields, specialActivities, leagues, timeTemplates };
+  const data = { 
+    bunks, divisions, availableDivisions, selectedDivision, 
+    fields, specialActivities, leagues, timeTemplates,
+    // NEW: persist fixed daily activities too
+    fixedDailyActivities
+  };
   localStorage.setItem("campSchedulerData", JSON.stringify(data));
 }
 
@@ -409,15 +561,21 @@ function loadData() {
     specialActivities = data.specialActivities || [];
     leagues = data.leagues || {};
     timeTemplates = data.timeTemplates || [];
+    // NEW: restore fixed daily activities
+    fixedDailyActivities = Array.isArray(data.fixedDailyActivities) ? data.fixedDailyActivities : [];
   } catch (e) { console.error("Error loading data:", e); }
 }
 
+// -------------------- Erase All --------------------
 document.getElementById("eraseAllBtn")?.addEventListener("click", () => {
   if (confirm("Erase all camp data?")) {
     localStorage.removeItem("campSchedulerData");
     bunks = []; divisions = {}; availableDivisions = []; selectedDivision = null;
     fields = []; specialActivities = []; leagues = {}; timeTemplates = [];
+    unifiedTimes = []; divisionActiveRows = {}; scheduleAssignments = {};
+    fixedDailyActivities = []; // NEW: clear fixed activities too
     updateUnassigned(); setupDivisionButtons(); renderFields(); renderSpecials(); renderLeagues(); renderTimeTemplates(); updateTable?.();
+    renderFixedList(); renderFixedDivisionChips(); // NEW: refresh Daily Activities UI
   }
 });
 
@@ -430,4 +588,9 @@ window.addEventListener("DOMContentLoaded", () => {
   renderSpecials();
   renderLeagues();
   renderTimeTemplates();
+
+  // If the page opens on the Daily tab, ensure the panel is wired
+  if (document.getElementById('daily')?.classList.contains('active')) {
+    hookFixedUI();
+  }
 });
