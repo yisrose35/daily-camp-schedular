@@ -11,6 +11,7 @@
 
   <div class="tabs">
     <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button>
+    <button class="tab-button" onclick="showTab('daily')">Daily Activities</button>
     <button class="tab-button" onclick="showTab('schedule')">Daily Schedule</button>
     <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
   </div>
@@ -67,11 +68,11 @@
     <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">Erase All</button>
   </div>
 
-  <!-- =================== SCHEDULE TAB =================== -->
-  <div id="schedule" class="tab-content">
-    <h3>Daily Schedule</h3>
+  <!-- =================== DAILY ACTIVITIES TAB =================== -->
+  <div id="daily" class="tab-content">
+    <h3>Daily Activities</h3>
 
-    <!-- NEW: Daily Fixed Activities panel -->
+    <!-- Fixed Activities Panel -->
     <div id="fixed-activities-card" class="card">
       <h4>Daily Fixed Activities</h4>
 
@@ -90,6 +91,9 @@
       <div class="row">
         <label style="min-width:120px;">Applies to Grades</label>
         <div id="fixedDivisionChips" class="chip-wrap"></div>
+        <small class="muted" style="display:block;margin-top:.25rem;">
+          Toggle chips to target specific divisions. Leave all unselected to apply to <em>all</em>.
+        </small>
       </div>
 
       <div class="row">
@@ -98,8 +102,12 @@
 
       <div id="fixedList" class="list"></div>
     </div>
+  </div>
 
-    <!-- Optional: schedule actions -->
+  <!-- =================== SCHEDULE TAB =================== -->
+  <div id="schedule" class="tab-content">
+    <h3>Daily Schedule</h3>
+
     <div class="row" style="margin:8px 0;">
       <button id="generateScheduleBtn">Generate Schedule</button>
       <button id="clearScheduleBtn" class="secondary">Clear</button>
@@ -121,29 +129,31 @@
   <script src="app1.js" defer></script>
   <script src="app2.js" defer></script>
 
-  <!-- Tiny fallback to ensure fixed-activity chips/list render when opening the Schedule tab -->
+  <!-- Tab wiring + ensure fixed-activity chips/list render when opening Daily Activities -->
   <script>
-    // If your app already defines showTab, we wrap it to also refresh the fixed panel.
     (function(){
-      const existingShowTab = window.showTab;
+      const nativeShowTab = window.showTab;
       window.showTab = function(id){
-        if (typeof existingShowTab === 'function') existingShowTab(id);
-        // Basic toggle if no existing function:
-        if (typeof existingShowTab !== 'function') {
+        if (typeof nativeShowTab === 'function') nativeShowTab(id);
+
+        // Basic toggle if no custom implementation exists:
+        if (typeof nativeShowTab !== 'function') {
           document.querySelectorAll('.tab-content').forEach(el => el.classList.toggle('active', el.id === id));
           document.querySelectorAll('.tab-button').forEach(btn => {
             const target = btn.getAttribute('onclick') || '';
             btn.classList.toggle('active', target.includes("'" + id + "'"));
           });
         }
-        if (id === 'schedule' && typeof hookFixedUI === 'function') {
+
+        // Refresh the fixed-activities UI when entering the Daily Activities tab
+        if (id === 'daily' && typeof hookFixedUI === 'function') {
           try { hookFixedUI(); } catch(e) { console.warn('hookFixedUI error', e); }
         }
       };
 
-      // Also try to initialize the fixed panel once the DOM is ready (in case the user starts on Schedule)
+      // If the page opens on the Daily tab, initialize chips/list once DOM is ready
       document.addEventListener('DOMContentLoaded', () => {
-        if (document.getElementById('schedule')?.classList.contains('active') && typeof hookFixedUI === 'function') {
+        if (document.getElementById('daily')?.classList.contains('active') && typeof hookFixedUI === 'function') {
           try { hookFixedUI(); } catch(e) { console.warn('hookFixedUI error', e); }
         }
       });
