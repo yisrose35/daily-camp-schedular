@@ -1,3 +1,4 @@
+
 // -------------------- Scheduling Core (Unified Grid: Guaranteed Leagues + Full Schedule + No Repeats for Sports & Specials) --------------------
 function assignFieldsToBunks() {
   // Defensive guards against missing globals
@@ -32,19 +33,6 @@ function assignFieldsToBunks() {
     });
   });
 
-  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-  // NEW: Pre-place Fixed Daily Activities (Lunch, Tefillah, etc.) and lock them
-  // Requires daily_activities.js to be loaded BEFORE this file.
-  if (window.DailyActivities?.prePlace) {
-    DailyActivities.prePlace({
-      scheduleAssignments,
-      unifiedTimes,
-      divisions,
-      availableDivisions
-    });
-  }
-  // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
   const incEl = document.getElementById("increment");
   const inc = incEl ? parseInt(incEl.value, 10) : 15;
   const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
@@ -65,50 +53,25 @@ function assignFieldsToBunks() {
   // Soft preference: avoid reusing same field for same bunk
   const fieldsUsedByBunk = {}; // { bunk: Set<fieldName> }
 
-  // Build empty sets for all bunks; seed with any pre-placed (locked) items
+  // Build empty sets for all bunks
   availableDivisions.forEach(div => {
     (divisions[div]?.bunks || []).forEach(b => {
       usedActivityKeysByBunk[b] = new Set();
       fieldsUsedByBunk[b] = new Set();
-      // If fixed items already placed, mark their keys so we don't count them as repeatable options
-      (scheduleAssignments[b] || []).forEach(slot => {
-        if (!slot) return;
-        const k = activityKeyFromEntry(slot);
-        if (k) usedActivityKeysByBunk[b].add(k);
-      });
     });
   });
 
   function activityKey(act) {
     if (!act) return null;
+    // Count all field-sport plays as a single sport key per day regardless of which field
     if (act.sport && typeof act.sport === 'string') return `sport:${norm(act.sport)}`;
+    // Count specials (and leagues) by their special name
     const fname = norm(act.field && act.field.name);
     return fname ? `special:${fname}` : null;
   }
 
-  function activityKeyFromEntry(entry) {
-    if (!entry) return null;
-    if (entry.sport) return `sport:${norm(entry.sport)}`;
-    if (entry.field) return `special:${norm(entry.field)}`;
-    return null;
-  }
-
   function overlaps(aStart, aEnd, bStart, bEnd) {
     return aStart < bEnd && bStart < aEnd;
-  }
-
-  function slotLocked(bunk, s) {
-    const e = scheduleAssignments?.[bunk]?.[s];
-    return !!(e && e._locked);
-  }
-
-  function anyLockedSpan(bunk, s) {
-    for (let k = 0; k < spanLen; k++) {
-      const idx = s + k;
-      if (idx >= unifiedTimes.length) return true; // cannot complete full span
-      if (slotLocked(bunk, idx)) return true;
-    }
-    return false;
   }
 
   function canUseField(fieldName, start, end, s) {
@@ -132,20 +95,6 @@ function assignFieldsToBunks() {
       occupiedFieldsBySlot[idx].add(fieldName);
       if (sportName) globalActivityLock[idx].add(norm(sportName));
     }
-  }
-
-  // Seed per-slot occupied fields from anything already placed (e.g., fixed/league from a previous run)
-  for (let s = 0; s < unifiedTimes.length; s++) {
-    Object.keys(scheduleAssignments).forEach(b => {
-      const e = scheduleAssignments[b][s];
-      if (!e) return;
-      // If an entry explicitly uses a field (true field/league), reserve the field name
-      if (e.field && e.sport) {
-        const start = unifiedTimes[s].start;
-        const end = new Date(start.getTime() + activityDuration * 60000);
-        reserveField(e.field, start, end, s, e.sport);
-      }
-    });
   }
 
   // Helper: is any division toggled for leagues?
@@ -185,9 +134,6 @@ function assignFieldsToBunks() {
     const slotEnd = new Date(slotStart.getTime() + activityDuration * 60000);
 
     (divisions[div]?.bunks || []).forEach(b => {
-      // NEW: don't overwrite fixed/locked
-      if (slotLocked(b, chosenSlot) || anyLockedSpan(b, chosenSlot)) return;
-
       const leagueAct = { type: 'special', field: { name: 'Leagues' }, sport: null };
       const key = activityKey(leagueAct);
 
@@ -203,7 +149,6 @@ function assignFieldsToBunks() {
         const idx = chosenSlot + k;
         if (idx >= unifiedTimes.length) break;
         if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
-        if (slotLocked(b, idx)) break; // NEW safeguard
         scheduleAssignments[b][idx] = {
           field: 'Leagues',
           sport: null,
@@ -221,17 +166,15 @@ function assignFieldsToBunks() {
   }
 
   // -------------------- 2) Fill Every Remaining Slot --------------------
+  const lastActivityByBunk = {};
   const PLACEHOLDER_NAME = 'Special Activity Needed';
 
   function baseFeasible(act, bunk, slotStart, slotEnd, s, allowFieldReuse) {
     const fieldName = act?.field?.name;
     if (!fieldName) return false;
 
-    // NEW: cannot place if any row in span is locked by fixed (or otherwise)
-    if (anyLockedSpan(bunk, s)) return false;
-
     // Prevent two bunks on the same physical field at the same time
-    if (act.type === "field" && !canUseField(fieldName, slotStart, slotEnd, s)) return false;
+    if (!canUseField(fieldName, slotStart, slotEnd, s)) return false;
 
     // Prevent same sport on multiple fields in the SAME slot (optional lock)
     if (act.sport && globalActivityLock[s].has(norm(act.sport))) return false;
@@ -241,7 +184,7 @@ function assignFieldsToBunks() {
     if (key && usedActivityKeysByBunk[bunk]?.has(key)) return false;
 
     // Soft: avoid reusing the same field for this bunk unless we must
-    if (act.type === "field" && !allowFieldReuse && fieldsUsedByBunk[bunk]?.has(fieldName)) return false;
+    if (!allowFieldReuse && fieldsUsedByBunk[bunk]?.has(fieldName)) return false;
 
     return true;
   }
@@ -267,26 +210,20 @@ function assignFieldsToBunks() {
       if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s))) continue;
 
       for (const bunk of (divisions[div]?.bunks || [])) {
-        // Skip if something already placed (league/fixed/continued)
-        if (scheduleAssignments[bunk][s]) continue;
+        if (scheduleAssignments[bunk][s]) continue; // leagues/continuations already set
 
         const chosen = chooseActivity(bunk, slotStart, slotEnd, s);
 
-        // NEW safeguard: if any locked in span, place placeholder instead
-        const blocked = anyLockedSpan(bunk, s);
-        const toPlace = blocked ? { type: 'special', field: { name: PLACEHOLDER_NAME }, sport: null, _placeholder: true } : chosen;
-
-        // Write head
         scheduleAssignments[bunk][s] = {
-          field: toPlace.field.name,
-          sport: toPlace.sport,
+          field: chosen.field.name,
+          sport: chosen.sport,
           continuation: false,
           isLeague: false
         };
 
-        // Reserve only for real field activities
-        if (!toPlace._placeholder && toPlace.type === "field") {
-          reserveField(toPlace.field.name, slotStart, slotEnd, s, toPlace.sport);
+        // Reserve only for real activities
+        if (!chosen._placeholder) {
+          reserveField(chosen.field.name, slotStart, slotEnd, s, chosen.sport);
         }
 
         // Continuations over spanLen
@@ -294,30 +231,31 @@ function assignFieldsToBunks() {
           const idx = s + k;
           if (idx >= unifiedTimes.length) break;
           if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
-          if (scheduleAssignments[bunk][idx]) break; // already filled by league/fixed etc.
-          if (slotLocked(bunk, idx)) break; // NEW safeguard
+          if (scheduleAssignments[bunk][idx]) break; // already filled by league etc.
 
           const contStart = unifiedTimes[idx].start;
           const contEnd = new Date(contStart.getTime() + activityDuration * 60000);
 
           scheduleAssignments[bunk][idx] = {
-            field: toPlace.field.name,
-            sport: toPlace.sport,
+            field: chosen.field.name,
+            sport: chosen.sport,
             continuation: true,
             isLeague: false
           };
 
-          if (!toPlace._placeholder && toPlace.type === "field") {
-            reserveField(toPlace.field.name, contStart, contEnd, idx, toPlace.sport);
+          if (!chosen._placeholder) {
+            reserveField(chosen.field.name, contStart, contEnd, idx, chosen.sport);
           }
         }
 
         // Track per-bunk usage (skip placeholder)
-        if (!toPlace._placeholder) {
-          const key = activityKey(toPlace);
+        if (!chosen._placeholder) {
+          const key = activityKey(chosen);
           if (key) usedActivityKeysByBunk[bunk].add(key);
-          fieldsUsedByBunk[bunk].add(toPlace.field.name);
+          fieldsUsedByBunk[bunk].add(chosen.field.name);
         }
+
+        lastActivityByBunk[bunk] = { field: chosen.field.name, sport: chosen.sport, isLeague: false };
       }
     }
   }
@@ -398,7 +336,6 @@ function updateTable() {
           }
           td.rowSpan = span;
 
-          // Render pills for leagues & needs-special, simple label for fixed/daily (e.g., Lunch)
           if (entry.isLeague) {
             td.innerHTML = `<span class="league-pill">Leagues</span>`;
           } else if (entry.field === "Special Activity Needed" && !entry.sport) {
