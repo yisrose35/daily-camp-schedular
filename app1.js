@@ -6,8 +6,7 @@ let selectedDivision = null;
  
 let fields = [], specialActivities = [];
 let leagues = {};   // { divName:{enabled:boolean, sports:string[]} }
-
-let dailyActivities = []; // [{name:string, start:string, end:string}] <--- NEW LINE ADDED HERE
+// Removed: let dailyActivities = []; (Now handled by daily_activities.js)
  
 let timeTemplates = []; // [{start,end,divisions:[]}]
 let activityDuration = 30;
@@ -75,8 +74,8 @@ function showTab(id){
 updateTable();
   if(id==='leagues')
 renderLeagues();
-  if(id==='dailyActivity') // ADDED: Render activities when tab is opened
-renderDailyActivities();
+  if(id==='dailyActivity' && window.DailyActivities && window.DailyActivities.onDivisionsChanged)
+window.DailyActivities.onDivisionsChanged(); // Call the new script's renderer
 }
  
 // -------------------- Bunks --------------------
@@ -144,6 +143,8 @@ color=defaultColors[colorIndex%defaultColors.length]; colorIndex++;
    i.value="";
    setupDivisionButtons(); renderLeagues(); updateTable();
    renderTimeTemplates();
+   if(window.DailyActivities && window.DailyActivities.onDivisionsChanged)
+window.DailyActivities.onDivisionsChanged(); // Notify the new script
   }
 }
 document.getElementById("addDivisionBtn").onclick=addDivision;
@@ -177,6 +178,8 @@ leagues[name];
      if(selectedDivision===name)selectedDivision=newName;
      setupDivisionButtons(); renderLeagues(); renderTimeTemplates();
 updateTable();
+     if(window.DailyActivities && window.DailyActivities.onDivisionsChanged)
+window.DailyActivities.onDivisionsChanged(); // Notify the new script
     });
    wrap.appendChild(span);
     const
@@ -481,61 +484,6 @@ chosen.style.marginTop="6px";
    container.appendChild(wrap);
   });
 }
-
-// -------------------- Daily Activities (NEW SECTION) --------------------
-function addDailyActivity(){
-  const name = document.getElementById("dailyActivityInput").value.trim();
-  const start = document.getElementById("dailyActivityTimeStart").value.trim();
-  const end = document.getElementById("dailyActivityTimeEnd").value.trim();
-  
-  if(!name || !start || !end) {
-    alert("Please enter a name, start time, and end time.");
-    return;
-  }
-  
-  // Basic time validation using the existing parseTime helper
-  if(!parseTime(start) || !parseTime(end)) {
-    alert("Please use a valid time format (e.g., 1:30 PM).");
-    return;
-  }
-  
-  dailyActivities.push({ name, start, end });
-  document.getElementById("dailyActivityInput").value = "";
-  document.getElementById("dailyActivityTimeStart").value = "";
-  document.getElementById("dailyActivityTimeEnd").value = "";
-  renderDailyActivities();
-  updateTable(); // Update schedule to show the new fixed activities
-}
-
-document.getElementById("addDailyActivityBtn").onclick = addDailyActivity;
-
-function renderDailyActivities(){
-  const cont = document.getElementById("dailyActivityTemplates");
-  cont.innerHTML = "";
-  
-  dailyActivities.forEach((act, idx) => {
-    const wrap = document.createElement("div");
-    wrap.className = "fieldWrapper";
-    
-    const text = document.createElement("span");
-    text.textContent = `${act.name} (${act.start} - ${act.end})`;
-    wrap.appendChild(text);
-
-    // Add a button to remove the activity
-    const removeBtn = document.createElement("button");
-    removeBtn.textContent = "Remove";
-    removeBtn.style.marginLeft = "10px";
-    removeBtn.onclick = () => {
-      dailyActivities.splice(idx, 1);
-      renderDailyActivities();
-      updateTable();
-    };
-    wrap.appendChild(removeBtn);
-    
-    cont.appendChild(wrap);
-  });
-}
-// -------------------- End Daily Activities --------------------
  
 // -------------------- Init --------------------
 document.getElementById("addFieldBtn").disabled =
