@@ -11,7 +11,7 @@
   <div class="tabs">
     <button class="tab-button active"
 onclick="showTab('setup')">Setup & Configuration</button>
-        <button class="tab-button"
+    <button class="tab-button"
 onclick="showTab('dailyActivity')">Daily Activity</button> 
     <button class="tab-button"
 onclick="showTab('schedule')">Daily Schedule</button>
@@ -68,13 +68,24 @@ onclick="showTab('leagues')">Leagues</button>
   </div>
  
     <div id="dailyActivity" class="tab-content">
-    <h3>Daily Fixed Activity Templates (e.g., Lunch, Swim)</h3>
-    <input id="dailyActivityInput" placeholder="Enter activity name (e.g., Lunch)">
-    <input id="dailyActivityTimeStart" placeholder="Start Time (e.g., 12:00 PM)">
-    <input id="dailyActivityTimeEnd" placeholder="End Time (e.g., 1:00 PM)">
-    <button id="addDailyActivityBtn">Add Fixed Activity</button>
-    
-    <div id="dailyActivityTemplates" style="margin-top: 15px;">
+    <h3>Add Fixed Activity Template (e.g., Lunch, Assembly)</h3>
+    <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:15px; border:1px solid #ddd; padding:12px; border-radius:12px;">
+      <input id="fixedName" placeholder="Activity Name (e.g., Lunch, Assembly)">
+      <div style="display:flex; gap:10px;">
+        <input id="fixedStart" type="time" placeholder="Start Time">
+        <input id="fixedEnd" type="time" placeholder="End Time">
+      </div>
+
+      <h4>Divisions to Include:</h4>
+      <div id="fixedDivisionsBox" style="min-height:30px; border:1px dashed #ccc; padding:6px; border-radius:8px;">
+                <div style="opacity:.6; font-size:.9em;">Add divisions on the Setup tab first.</div>
+      </div>
+
+      <button id="addFixedBtn" style="margin-top:10px;">Add Fixed Activity</button>
+    </div>
+
+    <h3>Active Fixed Activities</h3>
+    <div id="fixedList">
           </div>
   </div>
  
@@ -87,5 +98,6 @@ onclick="showTab('leagues')">Leagues</button>
  
     <script src="app1.js"></script>
   <script src="app2.js"></script>
+  <script src="daily_activities.js"></script>
 </body>
 </html>
