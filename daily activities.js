@@ -1,6 +1,5 @@
 // daily_activities.js
 // Fixed Daily Activities (e.g., Lunch) — per-division, time-bound, toggleable.
-// Integrates with existing globals: availableDivisions, divisions, unifiedTimes, scheduleAssignments.
 // Exposes: window.DailyActivities = { init, onDivisionsChanged, prePlace }
 
 (function(){
@@ -8,24 +7,26 @@
   let fixedActivities = []; 
   // Item: { id, name, start:"HH:MM", end:"HH:MM", divisions:[string], enabled:boolean }
 
-  function save() {
-    localStorage.setItem("fixedActivities", JSON.stringify(fixedActivities));
-  }
-  function load() {
-    try {
-      const raw = localStorage.getItem("fixedActivities");
-      fixedActivities = raw ? JSON.parse(raw) : [];
-    } catch {
-      fixedActivities = [];
-    }
+  function save(){ localStorage.setItem("fixedActivities", JSON.stringify(fixedActivities)); }
+  function load(){
+    try { fixedActivities = JSON.parse(localStorage.getItem("fixedActivities")) || []; }
+    catch { fixedActivities = []; }
+    // Migration: ensure enabled flag exists
+    let migrated = false;
+    fixedActivities.forEach(fx=>{
+      if (typeof fx.enabled === "undefined") { fx.enabled = true; migrated = true; }
+      if (!Array.isArray(fx.divisions)) { fx.divisions = []; migrated = true; }
+    });
+    if (migrated) save();
   }
 
   // -------------------- DOM Helpers --------------------
-  function byId(id){ return document.getElementById(id); }
+  const byId = (id)=>document.getElementById(id);
   const getDivColor = (div) => (window.divisions?.[div]?.color) || "#9e9e9e";
 
-  // Paint a chip like a push button using the division color when selected
-  function paintChip(labelEl, checked, divName) {
+  // Paint a chip using the division color when selected
+  function paintChip(labelEl, checked, divName){
+    if (!labelEl) return;
     const color = getDivColor(divName);
     labelEl.style.cursor = "pointer";
     labelEl.style.userSelect = "none";
@@ -42,13 +43,12 @@
     labelEl.style.boxShadow = checked ? "0 1px 4px rgba(0,0,0,.15)" : "none";
   }
 
-  function renderDivisionChips() {
+  function renderDivisionChips(){
     const box = byId("fixedDivisionsBox");
-    if (!box) return;
+    if (!box) { console.warn("[DailyActivities] #fixedDivisionsBox not found"); return; }
     box.innerHTML = "";
-
     const list = (window.availableDivisions || []);
-    list.forEach(div => {
+    list.forEach(div=>{
       const id = `fxdiv-${div.replace(/\s+/g,'_')}`;
       const color = getDivColor(div);
 
@@ -63,25 +63,21 @@
       box.appendChild(wrap);
 
       const cb = wrap.querySelector("input[type='checkbox']");
-      // initial paint (unchecked)
       paintChip(wrap, cb.checked, div);
 
-      // Toggle via click anywhere on the label (mouse)
-      wrap.addEventListener("click", (e) => {
+      // click anywhere on the chip
+      wrap.addEventListener("click", (e)=>{
         if (e.target.tagName.toLowerCase() === "input") return;
         cb.checked = !cb.checked;
         paintChip(wrap, cb.checked, div);
       });
-
-      // Also react to keyboard/assistive tech changes
-      cb.addEventListener("change", () => {
-        paintChip(wrap, cb.checked, div);
-      });
+      // keyboard/assistive changes
+      cb.addEventListener("change", ()=> paintChip(wrap, cb.checked, div));
     });
   }
 
-  // Small colored pill for list view
-  function makeDivPill(divName) {
+  // pill for list row
+  function makeDivPill(divName){
     const pill = document.createElement("span");
     pill.textContent = divName;
     pill.style.display = "inline-block";
@@ -95,33 +91,80 @@
     return pill;
   }
 
-  // Simple, CSS-free ON/OFF button (persisted)
-  function makeOnOffButton(isOn) {
-    const btn = document.createElement("button");
-    btn.textContent = isOn ? "On" : "Off";
-    btn.setAttribute("aria-pressed", String(!!isOn));
-    btn.style.minWidth = "56px";
-    btn.style.padding = "6px 10px";
-    btn.style.borderRadius = "999px";
-    btn.style.border = "1px solid rgba(0,0,0,.15)";
-    btn.style.cursor = "pointer";
-    btn.style.fontWeight = "600";
-    btn.style.background = isOn ? "#4caf50" : "#e0e0e0";
-    btn.style.color = isOn ? "#fff" : "#222";
-    return btn;
+  // Compact ON/OFF switch (checkbox-based; less likely to be hidden by global CSS)
+  function makeOnOffSwitch(isOn){
+    const label = document.createElement("label");
+    label.style.display = "inline-flex";
+    label.style.alignItems = "center";
+    label.style.gap = "8px";
+    label.style.cursor = "pointer";
+
+    const txt = document.createElement("span");
+    txt.textContent = isOn ? "On" : "Off";
+
+    const box = document.createElement("span");
+    box.style.width = "42px";
+    box.style.height = "24px";
+    box.style.borderRadius = "999px";
+    box.style.border = "1px solid rgba(0,0,0,.15)";
+    box.style.display = "inline-block";
+    box.style.position = "relative";
+    box.style.background = isOn ? "#4caf50" : "#e0e0e0";
+
+    const knob = document.createElement("span");
+    knob.style.position = "absolute";
+    knob.style.top = "2px";
+    knob.style.left = isOn ? "22px" : "2px";
+    knob.style.width = "20px";
+    knob.style.height = "20px";
+    knob.style.borderRadius = "50%";
+    knob.style.background = "#fff";
+    knob.style.boxShadow = "0 1px 3px rgba(0,0,0,.2)";
+    knob.style.transition = "left .15s ease";
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = !!isOn;
+    input.style.display = "none";
+
+    box.appendChild(knob);
+    label.appendChild(box);
+    label.appendChild(txt);
+
+    const api = {
+      el: label,
+      set(on){
+        input.checked = !!on;
+        txt.textContent = on ? "On" : "Off";
+        box.style.background = on ? "#4caf50" : "#e0e0e0";
+        knob.style.left = on ? "22px" : "2px";
+      },
+      onChange(fn){ input.addEventListener("change", ()=> fn(input.checked)); },
+      input
+    };
+
+    // click toggles hidden input
+    label.addEventListener("click", (e)=>{
+      if (e.target === input) return;
+      input.checked = !input.checked;
+      api.set(input.checked);
+      input.dispatchEvent(new Event("change"));
+    });
+
+    return api;
   }
 
-  function renderList() {
+  function renderList(){
     const list = byId("fixedList");
-    if (!list) return;
+    if (!list){ console.warn("[DailyActivities] #fixedList not found"); return; }
 
-    if (!fixedActivities.length) {
+    if (!fixedActivities.length){
       list.innerHTML = `<div style="opacity:.7">No fixed activities yet. Add lunch, tefillah, assemblies, etc.</div>`;
       return;
     }
 
     list.innerHTML = "";
-    fixedActivities.forEach((fx, idx) => {
+    fixedActivities.forEach((fx, idx)=>{
       const row = document.createElement("div");
       row.className = "fixed-row";
       row.style.display = "flex";
@@ -162,26 +205,19 @@
       const right = document.createElement("div");
       right.style.display = "flex";
       right.style.alignItems = "center";
-      right.style.gap = "8px";
+      right.style.gap = "10px";
 
-      // Visible ON/OFF toggle (persisted + re-renders schedule immediately)
-      const toggleBtn = makeOnOffButton(!!fx.enabled);
-      toggleBtn.title = "Enable/disable this fixed activity";
-      toggleBtn.addEventListener("click", () => {
-        const newState = !fixedActivities[idx].enabled;
-        fixedActivities[idx].enabled = newState;
-        // update visuals
-        toggleBtn.textContent = newState ? "On" : "Off";
-        toggleBtn.style.background = newState ? "#4caf50" : "#e0e0e0";
-        toggleBtn.style.color = newState ? "#fff" : "#222";
-        toggleBtn.setAttribute("aria-pressed", String(newState));
+      // On/Off switch (persisted)
+      const sw = makeOnOffSwitch(!!fx.enabled);
+      sw.onChange((isOn)=>{
+        fixedActivities[idx].enabled = isOn;
         save();
         try { window.assignFieldsToBunks?.(); } catch {}
         try { window.renderScheduleTable?.(); } catch {}
       });
-      right.appendChild(toggleBtn);
+      right.appendChild(sw.el);
 
-      // Delete button
+      // Delete
       const delBtn = document.createElement("button");
       delBtn.textContent = "Remove";
       delBtn.title = "Delete";
@@ -205,12 +241,13 @@
     });
   }
 
-  function addFromForm() {
+  // -------------------- Add from form --------------------
+  function addFromForm(){
     const name  = (byId("fixedName")?.value || "").trim();
     const start = byId("fixedStart")?.value || "";
     const end   = byId("fixedEnd")?.value || "";
-    if (!name)  { alert("Please enter an activity name."); return; }
-    if (!start || !end) { alert("Please select start and end times."); return; }
+    if (!name){ alert("Please enter an activity name."); return; }
+    if (!start || !end){ alert("Please select start and end times."); return; }
 
     const selected = [];
     document.querySelectorAll("#fixedDivisionsBox input[type='checkbox']").forEach(cb=>{
@@ -222,7 +259,6 @@
     save();
 
     if (byId("fixedName")) byId("fixedName").value = "";
-    // Clear checks & repaint chips
     document.querySelectorAll("#fixedDivisionsBox input[type='checkbox']").forEach(cb=>{
       cb.checked = false;
       const wrap = cb.closest("label.chip");
@@ -234,40 +270,31 @@
     try { window.renderScheduleTable?.(); } catch {}
   }
 
-  // -------------------- Time & Placement Helpers --------------------
-  function timeStringToTodayDate(hhmm) {
+  // -------------------- Time helpers & prePlacement --------------------
+  function timeStringToTodayDate(hhmm){
     const [hh, mm] = (hhmm || "00:00").split(":").map(Number);
     const base = new Date((window.unifiedTimes?.[0]?.start) || Date.now());
     base.setHours(hh || 0, mm || 0, 0, 0);
     return base;
   }
 
-  function rowsForTimeRange(unifiedTimes, startDate, endDate) {
+  function rowsForTimeRange(unifiedTimes, startDate, endDate){
     if (!Array.isArray(unifiedTimes) || unifiedTimes.length === 0) return [];
     const rows = [];
-    for (let i = 0; i < unifiedTimes.length; i++) {
+    for (let i=0;i<unifiedTimes.length;i++){
       const row = unifiedTimes[i];
-      // overlap if [row.start,row.end) intersects [startDate,endDate)
       if (row.start < endDate && row.end > startDate) rows.push(i);
     }
     return rows;
   }
 
-  // -------------------- Public: prePlace --------------------
-  // Call this AFTER you reset scheduleAssignments arrays in assignFieldsToBunks,
-  // BEFORE assigning leagues/fields/specials.
-  function prePlace(ctx) {
-    const {
-      scheduleAssignments,
-      unifiedTimes,
-      divisions,
-      availableDivisions
-    } = ctx || {};
-
+  // Call BEFORE leagues/fields; AFTER you reset schedule arrays
+  function prePlace(ctx){
+    const { scheduleAssignments, unifiedTimes, divisions, availableDivisions } = ctx || {};
     const enabledFixed = (fixedActivities || []).filter(x => x.enabled);
     if (!enabledFixed.length) return;
 
-    enabledFixed.forEach(fx => {
+    enabledFixed.forEach(fx=>{
       const startD = timeStringToTodayDate(fx.start);
       const endD   = timeStringToTodayDate(fx.end);
       if (!(endD > startD)) return;
@@ -276,12 +303,12 @@
       if (!rows.length) return;
 
       const targetDivs = (fx.divisions?.length ? fx.divisions : (availableDivisions || []));
-      targetDivs.forEach(div => {
+      targetDivs.forEach(div=>{
         const bunksInDiv = (divisions?.[div]?.bunks) || [];
-        bunksInDiv.forEach(bunk => {
+        bunksInDiv.forEach(bunk=>{
           if (!scheduleAssignments[bunk]) return;
           let first = true;
-          rows.forEach(rIdx => {
+          rows.forEach(rIdx=>{
             scheduleAssignments[bunk][rIdx] = {
               type: "fixed",
               field: { name: fx.name },
@@ -297,28 +324,27 @@
   }
 
   // -------------------- Lifecycle --------------------
-  function init() {
+  function init(){
     load();
     renderDivisionChips();
     renderList();
-
     const addBtn = byId("addFixedBtn");
     if (addBtn) addBtn.addEventListener("click", addFromForm);
   }
 
-  function onDivisionsChanged() {
+  function onDivisionsChanged(){
     renderDivisionChips();
     renderList();
   }
 
-  // Expose API
-  window.DailyActivities = {
-    init,
-    onDivisionsChanged,
-    prePlace
-  };
-
-  // Auto-init when DOM is ready
+  window.DailyActivities = { init, onDivisionsChanged, prePlace };
   window.addEventListener("DOMContentLoaded", init);
 
+  // If you use tab buttons, repaint chips when Daily tab is opened
+  window.addEventListener("click", (e)=>{
+    const btn = e.target.closest?.(".tab-button");
+    if (btn && /daily/i.test(btn.textContent || "")) {
+      renderDivisionChips();
+    }
+  });
 })();
