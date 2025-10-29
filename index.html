@@ -3,7 +3,6 @@
 <head>
   <title>Camp Scheduler</title>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -15,7 +14,7 @@
     <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
   </div>
 
-  <!-- =================== SETUP TAB =================== -->
+  <!-- Setup Tab -->
   <div id="setup" class="tab-content active">
     <h3>Add Bunks</h3>
     <input id="bunkInput" placeholder="Enter bunk">
@@ -64,134 +63,16 @@
     <div id="specialList"></div>
   </div>
 
-  <!-- =================== DAILY SCHEDULE TAB =================== -->
-  <div id="schedule" class="tab-content">
-    <h3>Daily Schedule</h3>
+  <!-- Schedule Tab -->
+  <div id="schedule" class="tab-content"></div>
 
-    <!-- Controls row (safe wrappers that call into your app2.js if present) -->
-    <div id="scheduleControls" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
-      <button id="btnGenerateDaily" onclick="window._generateDailySchedule()">Generate Daily Schedule</button>
-      <button id="btnClearSchedule" onclick="window._clearDailySchedule()">Clear Schedule</button>
-      <button id="btnExportCSV" onclick="window._exportScheduleCSV()">Export CSV</button>
-      <span id="scheduleStatus" style="margin-left:auto; opacity:0.8;"></span>
-    </div>
-
-    <!-- Legend / helper -->
-    <div id="scheduleLegend" style="margin:8px 0;">
-      <!-- Your styles.css can style these classes; keeping simple placeholders -->
-      <span class="legend-item" style="margin-right:10px;"><span class="swatch" style="display:inline-block;width:12px;height:12px;background:#ddd;border:1px solid #bbb;margin-right:4px;"></span>Open</span>
-      <span class="legend-item" style="margin-right:10px;"><span class="swatch" style="display:inline-block;width:12px;height:12px;background:#bde5ff;border:1px solid #6cbcff;margin-right:4px;"></span>Assigned</span>
-      <span class="legend-item" style="margin-right:10px;"><span class="swatch" style="display:inline-block;width:12px;height:12px;background:#ffe5bd;border:1px solid #ffc26c;margin-right:4px;"></span>League</span>
-      <span class="legend-item"><span class="swatch" style="display:inline-block;width:12px;height:12px;background:#f8b6b6;border:1px solid #e57373;margin-right:4px;"></span>Blocked / Conflict</span>
-    </div>
-
-    <!-- Grid mount points (your renderers can pick either container) -->
-    <div id="scheduleGrid"></div>
-    <table id="scheduleTable" class="schedule-table"></table>
-  </div>
-
-    <!-- =================== LEAGUES TAB =================== -->
+  <!-- Leagues Tab -->
   <div id="leagues" class="tab-content">
     <h3>Leagues Setup</h3>
     <div id="leaguesContainer"></div>
   </div>
 
-  <!-- =================== SCRIPTS =================== -->
-  <script>
-    // Provide a minimal tab switcher if none is defined by your JS
-    if (typeof window.showTab !== 'function') {
-      window.showTab = function(tabId) {
-        document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
-        const button = Array.from(document.querySelectorAll('.tab-button'))
-          .find(b => (b.getAttribute('onclick') || '').includes("'" + tabId + "'"));
-        if (button) button.classList.add('active');
-        const pane = document.getElementById(tabId);
-        if (pane) pane.classList.add('active');
-      };
-    }
-
-    // Safe wrappers that call into your existing functions if present.
-    // They won't throw if app2.js/app1.js haven't defined certain pieces yet.
-    window._generateDailySchedule = function () {
-      try {
-        // Optional: if your leagues module reserves rows
-        if (typeof window.reserveLeagueRows === 'function') window.reserveLeagueRows();
-        if (typeof window.assignFieldsToBunks === 'function') window.assignFieldsToBunks();
-        if (typeof window.renderSchedule === 'function') {
-          window.renderSchedule(); // some versions expose this
-        } else if (typeof window.renderScheduleGrid === 'function') {
-          window.renderScheduleGrid();
-        }
-        const status = document.getElementById('scheduleStatus');
-        if (status) status.textContent = 'Generated at ' + new Date().toLocaleTimeString();
-      } catch (e) {
-        console.error(e);
-        const status = document.getElementById('scheduleStatus');
-        if (status) status.textContent = 'Error generating schedule';
-        alert('There was an issue generating the schedule. Check the console for details.');
-      }
-    };
-
-    window._clearDailySchedule = function () {
-      try {
-        if (!window.scheduleAssignments) window.scheduleAssignments = {};
-        Object.keys(window.scheduleAssignments).forEach(k => {
-          if (Array.isArray(window.scheduleAssignments[k])) {
-            window.scheduleAssignments[k] = window.scheduleAssignments[k].map(() => undefined);
-          } else {
-            window.scheduleAssignments[k] = [];
-          }
-        });
-        const grid = document.getElementById('scheduleGrid');
-        const table = document.getElementById('scheduleTable');
-        if (grid) grid.innerHTML = '';
-        if (table) table.innerHTML = '';
-        const status = document.getElementById('scheduleStatus');
-        if (status) status.textContent = 'Cleared';
-      } catch (e) {
-        console.error(e);
-        alert('There was an issue clearing the schedule.');
-      }
-    };
-
-    window._exportScheduleCSV = function () {
-      // Minimal CSV export stub; if you already have one in your app, this won’t conflict.
-      try {
-        const rows = [];
-        const times = Array.isArray(window.unifiedTimes) ? window.unifiedTimes : [];
-        const header = ['Bunk', ...times.map(t => t.label || (t.start && t.end ? (t.start + '–' + t.end) : ''))];
-        rows.push(header.join(','));
-
-        if (window.scheduleAssignments) {
-          Object.keys(window.scheduleAssignments).forEach(bunk => {
-            const slots = window.scheduleAssignments[bunk] || [];
-            const line = [bunk].concat(
-              slots.map(cell => {
-                if (!cell) return '';
-                const f = cell.field && cell.field.name ? cell.field.name : '';
-                const s = cell.sport || cell.special || '';
-                const lg = cell.isLeague ? ' (League)' : '';
-                return (s ? s + ' @ ' : '') + f + lg;
-              })
-            );
-            rows.push(line.map(v => `"${String(v).replace(/"/g,'""')}"`).join(','));
-          });
-        }
-
-        const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = 'daily-schedule.csv';
-        document.body.appendChild(a); a.click(); a.remove();
-        URL.revokeObjectURL(url);
-      } catch (e) {
-        console.error(e);
-        alert('There was an issue exporting the CSV.');
-      }
-    };
-  </script>
-
+  <!-- Scripts -->
   <script src="app1.js"></script>
   <script src="app2.js"></script>
 </body>
