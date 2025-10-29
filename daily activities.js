@@ -46,6 +46,7 @@
     const box = byId("fixedDivisionsBox");
     if (!box) return;
     box.innerHTML = "";
+
     const list = (window.availableDivisions || []);
     list.forEach(div => {
       const id = `fxdiv-${div.replace(/\s+/g,'_')}`;
@@ -53,20 +54,27 @@
 
       const wrap = document.createElement("label");
       wrap.className = "chip";
+      wrap.setAttribute("data-div", div);
       wrap.innerHTML = `
-        <input type="checkbox" id="${id}" data-div="${div}" style="display:none">
+        <input type="checkbox" id="${id}" data-div="${div}" style="display:none" aria-label="${div}">
         <span class="chip-dot" aria-hidden="true" style="width:10px;height:10px;border-radius:999px;background:${color};display:inline-block;flex:0 0 auto;"></span>
         <span class="chip-label">${div}</span>
       `;
       box.appendChild(wrap);
 
       const cb = wrap.querySelector("input[type='checkbox']");
+      // initial paint (unchecked)
       paintChip(wrap, cb.checked, div);
 
-      // Toggle via click anywhere on the label
+      // Toggle via click anywhere on the label (mouse)
       wrap.addEventListener("click", (e) => {
         if (e.target.tagName.toLowerCase() === "input") return;
         cb.checked = !cb.checked;
+        paintChip(wrap, cb.checked, div);
+      });
+
+      // Also react to keyboard/assistive tech changes
+      cb.addEventListener("change", () => {
         paintChip(wrap, cb.checked, div);
       });
     });
@@ -87,7 +95,7 @@
     return pill;
   }
 
-  // Simple, CSS-free ON/OFF button
+  // Simple, CSS-free ON/OFF button (persisted)
   function makeOnOffButton(isOn) {
     const btn = document.createElement("button");
     btn.textContent = isOn ? "On" : "Off";
@@ -156,7 +164,7 @@
       right.style.alignItems = "center";
       right.style.gap = "8px";
 
-      // Visible ON/OFF toggle
+      // Visible ON/OFF toggle (persisted + re-renders schedule immediately)
       const toggleBtn = makeOnOffButton(!!fx.enabled);
       toggleBtn.title = "Enable/disable this fixed activity";
       toggleBtn.addEventListener("click", () => {
