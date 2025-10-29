@@ -3,8 +3,42 @@
 <head>
   <meta charset="UTF-8">
   <title>Camp Scheduler</title>
-  <link rel="stylesheet" href="styles.css">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    /* Tabs */
+    .tabs { display: flex; gap: 10px; justify-content: center; margin: 16px 0 20px; }
+    .tab-button { padding: 10px 16px; border-radius: 8px; border: 1px solid #ccc; background: #f2f2f2; cursor: pointer; }
+    .tab-button.active { background: #1976d2; color: #fff; }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Daily Activities UI helpers */
+    #fixedDivisionsBox .chip {
+      display: inline-flex; align-items: center; border-radius: 999px;
+      padding: 6px 10px; margin: 4px 6px 0 0;
+      border: 1px solid rgba(0,0,0,.15); cursor: pointer; user-select: none;
+      transition: all .15s ease;
+    }
+    #fixedList .fixed-row {
+      border: 1px solid rgba(0,0,0,.08); border-radius: 12px;
+      padding: 10px 12px; margin: 8px 0;
+      display: flex; justify-content: space-between; gap: 10px; align-items: center;
+    }
+    .div-pill {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      color: #fff; font-size: 12px; margin-right: 6px; line-height: 18px;
+    }
+    input[type="time"], input[type="text"] {
+      padding: 6px; border-radius: 6px; border: 1px solid #ccc; margin-right: 6px;
+    }
+    #addFixedBtn {
+      padding: 8px 14px; border-radius: 8px; border: 1px solid rgba(0,0,0,.2);
+      cursor: pointer; background: #1976d2; color: #fff; font-weight: 600;
+    }
+    hr { margin: 14px 0; border: none; border-top: 1px solid #ddd; }
+  </style>
 </head>
 <body>
   <h1>🏕️ Camp Scheduler</h1>
@@ -27,7 +61,7 @@
     <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
     <button id="addDivisionBtn">Add Division</button>
     <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable Colors</label>
-    <div id="divisionButtons" style="margin-top:8px;"></div>
+    <div id="divisionList" style="margin-top:8px;"></div>
 
     <h3>Schedule Increments</h3>
     <select id="increment">
@@ -57,12 +91,12 @@
     <h3>Add Fields / Courts</h3>
     <input id="fieldInput" placeholder="Enter field/court name (e.g., Court 1)">
     <button id="addFieldBtn">Add Field/Court</button>
-    <div id="fieldList"></div>
+    <div id="fieldsList"></div>
 
     <h3>Add Special Activities</h3>
     <input id="specialInput" placeholder="Enter special activity (e.g., Canteen)">
     <button id="addSpecialBtn">Add Special</button>
-    <div id="specialList"></div>
+    <div id="specialsList"></div>
 
     <h3>Erase All Data</h3>
     <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">Erase All</button>
@@ -90,7 +124,7 @@
 
       <div class="row">
         <label style="min-width:120px;">Applies to Grades</label>
-        <div id="fixedDivisionChips" class="chip-wrap"></div>
+        <div id="fixedDivisionsBox" class="chip-wrap"></div>
         <small class="muted" style="display:block;margin-top:.25rem;">
           Toggle chips to target specific divisions. Leave all unselected to apply to <em>all</em>.
         </small>
@@ -100,6 +134,7 @@
         <button id="addFixedBtn">Add Fixed Activity</button>
       </div>
 
+      <hr />
       <div id="fixedList" class="list"></div>
     </div>
   </div>
@@ -107,6 +142,7 @@
   <!-- =================== SCHEDULE TAB =================== -->
   <div id="schedule" class="tab-content">
     <h3>Daily Schedule</h3>
+    <button id="generateScheduleBtn">Generate Schedule</button>
     <div id="scheduleTable"></div>
   </div>
 
@@ -116,39 +152,21 @@
     <div id="leaguesContainer"></div>
   </div>
 
-  <!-- =================== SCRIPTS =================== -->
-  <script src="app1.js" defer></script>
-  <script src="app2.js" defer></script>
-
-  <!-- Tab wiring + ensure fixed-activity chips/list render when opening Daily Activities -->
+  <!-- =================== SCRIPTS (order matters) =================== -->
   <script>
-    (function(){
-      const existingShowTab = window.showTab;
-      window.showTab = function(id){
-        if (typeof existingShowTab === 'function') existingShowTab(id);
-
-        // Basic toggle if no custom showTab exists:
-        if (typeof existingShowTab !== 'function') {
-          document.querySelectorAll('.tab-content').forEach(el => el.classList.toggle('active', el.id === id));
-          document.querySelectorAll('.tab-button').forEach(btn => {
-            const target = btn.getAttribute('onclick') || '';
-            btn.classList.toggle('active', target.includes("'" + id + "'"));
-          });
-        }
-
-        // Refresh fixed-activities UI when opening Daily Activities
-        if (id === 'daily' && typeof hookFixedUI === 'function') {
-          try { hookFixedUI(); } catch(e) { console.warn('hookFixedUI error', e); }
-        }
-      };
-
-      // If the page opens on the Daily tab, initialize chips/list once DOM is ready
-      document.addEventListener('DOMContentLoaded', () => {
-        if (document.getElementById('daily')?.classList.contains('active') && typeof hookFixedUI === 'function') {
-          try { hookFixedUI(); } catch(e) { console.warn('hookFixedUI error', e); }
-        }
+    function showTab(id){
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.toggle('active', el.id === id));
+      document.querySelectorAll('.tab-button').forEach(btn => {
+        const target = btn.getAttribute('onclick') || '';
+        btn.classList.toggle('active', target.includes("'" + id + "'"));
       });
-    })();
+    }
   </script>
+
+  <!-- Load AFTER DOM, and in this order so Daily Activities gets division colors -->
+  <script src="app1.js"></script>
+  <script src="daily_activities.js"></script>
+  <script src="app2.js"></script>
+  <script src="leagues.js"></script>
 </body>
 </html>
