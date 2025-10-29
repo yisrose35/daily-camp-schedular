@@ -1,21 +1,127 @@
-<!DOCTYPE html> <html lang="en"> <head> <meta charset="UTF-8"> <title>Camp Scheduler</title> <link rel="stylesheet" href="styles.css"> <meta name="viewport" content="width=device-width, initial-scale=1.0"> </head> <body> <h1>🏕️ Camp Scheduler</h1> <div class="tabs"> <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button> <button class="tab-button" onclick="showTab('daily')">Daily Activities</button> <button class="tab-button" onclick="showTab('schedule')">Daily Schedule</button> <button class="tab-button" onclick="showTab('leagues')">Leagues</button> </div> <!-- =================== SETUP TAB =================== --> <div id="setup" class="tab-content active"> <h3>Add Bunks</h3> <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)"> <button id="addBunkBtn">Add Bunk</button> <div id="unassignedBunks" class="bunk-container"></div> <h3>Add Divisions</h3> <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)"> <button id="addDivisionBtn">Add Division</button> <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable Colors</label> <div id="divisionButtons" style="margin-top:8px;"></div> <h3>Schedule Increments</h3> <select id="increment"> <option value="15">15 minutes</option> <option value="30" selected>30 minutes</option> <option value="45">45 minutes</option> <option value="60">60 minutes</option> </select> <h3>Activity Duration</h3> <select id="activityDuration"> <option value="15">15 minutes</option> <option value="30" selected>30 minutes</option> <option value="45">45 minutes</option> <option value="60">60 minutes</option> <option value="90">90 minutes</option> </select> <h3>Division Time Templates</h3> <input id="timeStartInput" placeholder="Start (e.g., 9:00 AM)"> <input id="timeEndInput" placeholder="End (e.g., 4:00 PM)"> <button onclick="addTimeTemplate()">Add Time</button> <div id="timeTemplates"></div> <button style="margin-top:12px;" onclick="generateTimes()">Generate Schedule Times</button> <h3>Add Fields / Courts</h3> <input id="fieldInput" placeholder="Enter field/court name (e.g., Court 1)"> <button id="addFieldBtn">Add Field/Court</button> <div id="fieldList"></div> <h3>Add Special Activities</h3> <input id="specialInput" placeholder="Enter special activity (e.g., Canteen)"> <button id="addSpecialBtn">Add Special</button> <div id="specialList"></div> <h3>Erase All Data</h3> <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">Erase All</button> </div> <!-- =================== DAILY ACTIVITIES TAB =================== --> <div id="daily" class="tab-content"> <h3>Daily Activities</h3> <!-- Fixed Activities Panel --> <div id="fixed-activities-card" class="card"> <h4>Daily Fixed Activities</h4> <div class="row"> <label for="fixedName" style="min-width:120px;">Name</label> <input id="fixedName" placeholder="Lunch / Mincha / Swim" /> </div> <div class="row"> <label style="min-width:120px;">Time</label> <input id="fixedStart" type="time" step="900" /> <span>to</span> <input id="fixedEnd" type="time" step="900" /> </div> <div class="row"> <label style="min-width:120px;">Applies to Grades</label> <div id="fixedDivisionChips" class="chip-wrap"></div> <small class="muted" style="display:block;margin-top:.25rem;"> Toggle chips to target specific divisions. Leave all unselected to apply to <em>all</em>. </small> </div> <div class="row"> <button id="addFixedBtn">Add Fixed Activity</button> </div> <div id="fixedList" class="list"></div> </div> </div> <!-- =================== SCHEDULE TAB =================== --> <div id="schedule" class="tab-content"> <h3>Daily Schedule</h3> <div id="scheduleTable"></div> </div> <!-- =================== LEAGUES TAB =================== --> <div id="leagues" class="tab-content"> <h3>Leagues Setup</h3> <div id="leaguesContainer"></div> </div> <!-- =================== SCRIPTS =================== --> <script src="app1.js" defer></script> <script src="app2.js" defer></script> <!-- Tab wiring + ensure fixed-activity chips/list render when opening Daily Activities --> <script> (function(){ const existingShowTab = window.showTab; window.showTab = function(id){ if (typeof existingShowTab === 'function') existingShowTab(id); // Basic toggle if no custom showTab exists: if (typeof existingShowTab !== 'function') { document.querySelectorAll('.tab-content').forEach(el => el.classList.toggle('active', el.id === id)); document.querySelectorAll('.tab-button').forEach(btn => { const target = btn.getAttribute('onclick') || ''; btn.classList.toggle('active', target.includes("'" + id + "'")); }); } // Refresh fixed-activities UI when opening Daily Activities if (id === 'daily' && typeof hookFixedUI === 'function') { try { hookFixedUI(); } catch(e) { console.warn('hookFixedUI error', e); } } }; // If the page opens on the Daily tab, initialize chips/list once DOM is ready document.addEventListener('DOMContentLoaded', () => { if (document.getElementById('daily')?.classList.contains('active') && typeof hookFixedUI === 'function') { try { hookFixedUI(); } catch(e) { console.warn('hookFixedUI error', e); } } }); })(); </script> </body> </html>.        if (typeof existingShowTab !== 'function') {
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Camp Scheduler</title>
+  <link rel="stylesheet" href="styles.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+  <h1>🏕️ Camp Scheduler</h1>
+  <div class="tabs">
+    <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button>
+    <button class="tab-button" onclick="showTab('daily')">Daily Activities</button>
+    <button class="tab-button" onclick="showTab('schedule')">Daily Schedule</button>
+    <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
+  </div>
+  <!-- =================== SETUP TAB =================== -->
+  <div id="setup" class="tab-content active">
+    <h3>Add Bunks</h3>
+    <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
+    <button id="addBunkBtn">Add Bunk</button>
+    <div id="unassignedBunks" class="bunk-container"></div>
+    <h3>Add Divisions</h3>
+    <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
+    <button id="addDivisionBtn">Add Division</button>
+    <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable Colors</label>
+    <div id="divisionButtons" style="margin-top:8px;"></div>
+    <h3>Schedule Increments</h3>
+    <select id="increment">
+      <option value="15">15 minutes</option>
+      <option value="30" selected>30 minutes</option>
+      <option value="45">45 minutes</option>
+      <option value="60">60 minutes</option>
+    </select>
+    <h3>Activity Duration</h3>
+    <select id="activityDuration">
+      <option value="15">15 minutes</option>
+      <option value="30" selected>30 minutes</option>
+      <option value="45">45 minutes</option>
+      <option value="60">60 minutes</option>
+      <option value="90">90 minutes</option>
+    </select>
+    <h3>Division Time Templates</h3>
+    <input id="timeStartInput" placeholder="Start (e.g., 9:00 AM)">
+    <input id="timeEndInput" placeholder="End (e.g., 4:00 PM)">
+    <button onclick="addTimeTemplate()">Add Time</button>
+    <div id="timeTemplates"></div>
+    <button style="margin-top:12px;" onclick="generateTimes()">Generate Schedule Times</button>
+    <h3>Add Fields / Courts</h3>
+    <input id="fieldInput" placeholder="Enter field/court name (e.g., Court 1)">
+    <button id="addFieldBtn">Add Field/Court</button>
+    <div id="fieldList"></div>
+    <h3>Add Special Activities</h3>
+    <input id="specialInput" placeholder="Enter special activity (e.g., Canteen)">
+    <button id="addSpecialBtn">Add Special</button>
+    <div id="specialList"></div>
+    <h3>Erase All Data</h3>
+    <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">Erase All</button>
+  </div>
+  <!-- =================== DAILY ACTIVITIES TAB =================== -->
+  <div id="daily" class="tab-content">
+    <h3>Daily Activities</h3>
+    <!-- Fixed Activities Panel -->
+    <div id="fixed-activities-card" class="card">
+      <h4>Daily Fixed Activities</h4>
+      <div class="row">
+        <label for="fixedName" style="min-width:120px;">Name</label>
+        <input id="fixedName" placeholder="Lunch / Mincha / Swim" />
+      </div>
+      <div class="row">
+        <label style="min-width:120px;">Time</label>
+        <input id="fixedStart" type="time" step="900" />
+        <span>to</span>
+        <input id="fixedEnd" type="time" step="900" />
+      </div>
+      <div class="row">
+        <label style="min-width:120px;">Applies to Grades</label>
+        <div id="fixedDivisionChips" class="chip-wrap"></div>
+        <small class="muted" style="display:block;margin-top:.25rem;">
+          Toggle chips to target specific divisions. Leave all unselected to apply to <em>all</em>.
+        </small>
+      </div>
+      <div class="row">
+        <button id="addFixedBtn">Add Fixed Activity</button>
+      </div>
+      <div id="fixedList" class="list"></div>
+    </div>
+  </div>
+  <!-- =================== SCHEDULE TAB =================== -->
+  <div id="schedule" class="tab-content">
+    <h3>Daily Schedule</h3>
+    <div id="scheduleTable"></div>
+  </div>
+  <!-- =================== LEAGUES TAB =================== -->
+  <div id="leagues" class="tab-content">
+    <h3>Leagues Setup</h3>
+    <div id="leaguesContainer"></div>
+  </div>
+  <!-- =================== SCRIPTS =================== -->
+  <script src="app1.js" defer></script>
+  <script src="app2.js" defer></script>
+  <!-- Tab wiring + ensure fixed-activity chips/list render when opening Daily Activities -->
+  <script>
+    (function(){
+      const existingShowTab = window.showTab;
+      window.showTab = function(id){
+        if (typeof existingShowTab === 'function') existingShowTab(id);
+        // Basic toggle if no custom showTab exists:
+        if (typeof existingShowTab !== 'function') {
           document.querySelectorAll('.tab-content').forEach(el => el.classList.toggle('active', el.id === id));
           document.querySelectorAll('.tab-button').forEach(btn => {
             const target = btn.getAttribute('onclick') || '';
             btn.classList.toggle('active', target.includes("'" + id + "'"));
           });
         }
-
-        // Refresh chips/list when opening Daily Activities
-        if (id === 'daily' && window.DailyActivities?.onDivisionsChanged) {
-          try { window.DailyActivities.onDivisionsChanged(); } catch(e) { console.warn('DailyActivities refresh error', e); }
+        // Refresh fixed-activities UI when opening Daily Activities
+        if (id === 'daily' && typeof hookFixedUI === 'function') {
+          try { hookFixedUI(); } catch(e) { console.warn('hookFixedUI error', e); }
         }
       };
-
-      // If page opens on Daily tab, refresh once DOM is ready
+      // If the page opens on the Daily tab, initialize chips/list once DOM is ready
       document.addEventListener('DOMContentLoaded', () => {
-        if (document.getElementById('daily')?.classList.contains('active') && window.DailyActivities?.onDivisionsChanged) {
-          try { window.DailyActivities.onDivisionsChanged(); } catch(e) { console.warn('DailyActivities init refresh error', e); }
+        if (document.getElementById('daily')?.classList.contains('active') && typeof hookFixedUI === 'function') {
+          try { hookFixedUI(); } catch(e) { console.warn('hookFixedUI error', e); }
         }
       });
     })();
