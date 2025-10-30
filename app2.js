@@ -1,4 +1,3 @@
-
 // -------------------- Scheduling Core (Unified Grid: Guaranteed Leagues + Full Schedule + No Repeats for Sports & Specials) --------------------
 function assignFieldsToBunks() {
   // Defensive guards against missing globals
@@ -97,10 +96,9 @@ function assignFieldsToBunks() {
     }
   }
 
-  // Helper: is any division toggled for leagues?
+  // Helper: global master toggle (neutralized unless you set window.leagueGlobalEnabled = true elsewhere)
   function isGlobalLeaguesDay() {
-    if (!leagues) return false;
-    return Object.values(leagues).some(cfg => cfg && cfg.enabled === true);
+    return !!window.leagueGlobalEnabled; // default false/undefined → no global effect
   }
 
   // -------------------- 1) Schedule Guaranteed Leagues --------------------
@@ -113,7 +111,8 @@ function assignFieldsToBunks() {
     const activeSlots = Array.from(divisionActiveRows[div] || []);
     if (activeSlots.length === 0) continue;
 
-    const wantsLeague = globalLeaguesOn || (leagues && leagues[div]?.enabled);
+    // PER-DIVISION decision only (no unintended global)
+    const wantsLeague = !!(leagues && leagues[div] && leagues[div].enabled);
     if (!wantsLeague) continue;
 
     // Choose a spread-out league slot if possible
