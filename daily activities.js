@@ -39,7 +39,7 @@
     labelEl.style.transition = "all .15s ease";
     labelEl.style.border = checked ? "1px solid transparent" : "1px solid rgba(0,0,0,.15)";
     labelEl.style.background = checked ? color : "transparent";
-    // *** VISIBILITY FIX HERE ***: Use a dark color instead of 'inherit' for unselected state
+    // VISIBILITY FIX: Use a dark color for unselected state to prevent invisible text
     labelEl.style.color = checked ? "#fff" : "#333"; 
     labelEl.style.boxShadow = checked ? "0 1px 4px rgba(0,0,0,.15)" : "none";
   }
@@ -215,7 +215,7 @@
         fixedActivities[idx].enabled = isOn;
         save();
         try { window.assignFieldsToBunks?.(); } catch {}
-        try { window.renderScheduleTable?.(); } catch {}
+        try { window.renderScheduleTable?.(); } } catch {}
       });
       right.appendChild(sw.el);
 
@@ -334,13 +334,11 @@
     renderDivisionChips();
     renderList();
     
-    // *** TIME DEFAULT FIX HERE ***: Set the default time values
+    // TIME DEFAULT FIX: Set the default time values
     if (byId("fixedStart")) byId("fixedStart").value = "12:00";
     if (byId("fixedEnd")) byId("fixedEnd").value = "12:30";
 
-    // *** ADD BUTTON FIX HERE ***: Ensure the listener is added reliably *after* the DOM is ready
-    const addBtn = byId("addFixedBtn");
-    if (addBtn) addBtn.addEventListener("click", addFromForm);
+    // REMOVED: The unreliable event listener attachment has been removed.
   }
 
   function onDivisionsChanged(){
@@ -358,4 +356,8 @@
       renderDivisionChips();
     }
   });
+  
+  // *** CRITICAL FIX: Expose the function globally for the HTML onclick handler ***
+  window.addFixedActivity = addFromForm; 
+
 })();
