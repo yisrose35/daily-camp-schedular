@@ -220,3 +220,4 @@ document.addEventListener("DOMContentLoaded", () => {
   if (stored) leagues = JSON.parse(stored);
   if (document.getElementById("leaguesContainer")) initLeaguesTab();
 });
+
