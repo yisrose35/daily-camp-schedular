@@ -132,13 +132,16 @@
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             document.getElementById(id).classList.add('active');
             document.querySelector(`.tab-button[onclick="showTab('${id}')"]`).classList.add('active');
+            
             // Trigger rendering/initialization functions when specific tabs are opened
             if (id === 'schedule') { 
                 window.updateTable?.();
             } else if (id === 'leagues') {
+                // Renders the league UI defined in league.js
                 window.initLeaguesTab?.();
             } else if (id === 'fixed-activities') {
-                window.DailyActivities?.onDivisionsChanged?.(); // Re-render chips if divisions changed
+                // Renders the division chips for selection, defined in daily_activities.js
+                window.DailyActivities?.onDivisionsChanged?.(); 
             }
         }
     </script>
