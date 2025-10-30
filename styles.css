@@ -22,14 +22,44 @@ caption { font-weight: bold; margin: 10px 0; }
 .activity-button { margin: 2px; padding: 4px 8px; border: 1px solid #333; border-radius: 3px; cursor: pointer; }
 .activity-button.active { background: #007BFF; color: white; }
 
+/* --- CORRECTED SLIDER STYLES START HERE --- */
+/* Switch container dimensions: 40px wide, 20px tall */
 .switch { position: relative; display: inline-block; width: 40px; height: 20px; vertical-align: middle; margin-left: 8px; }
 .switch input { opacity: 0; width: 0; height: 0; }
-.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
-  background-color: #ccc; transition: .4s; border-radius: 20px; }
-.slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px;
-  background-color: white; transition: .4s; border-radius: 50%; }
-input:checked + .slider { background-color: #4CAF50; }
-input:checked + .slider:before { transform: translateX(20px); }
+
+.slider { 
+  position: absolute; 
+  cursor: pointer; 
+  top: 0; 
+  left: 0; 
+  right: 0; 
+  bottom: 0;
+  background-color: #ccc; 
+  transition: .4s; 
+  border-radius: 20px; 
+}
+
+/* Knob dimensions: 14px wide/high, with 3px top/bottom/left padding */
+.slider:before { 
+  position: absolute; 
+  content: ""; 
+  height: 14px; 
+  width: 14px; 
+  left: 3px; 
+  bottom: 3px;
+  background-color: white; 
+  transition: .4s; 
+  border-radius: 50%; 
+}
+
+/* 40px container width - (3px left + 3px right padding) - 14px knob width = 20px travel distance */
+input:checked + .slider { 
+  background-color: #4CAF50; 
+}
+input:checked + .slider:before { 
+  transform: translateX(20px); 
+}
+/* --- CORRECTED SLIDER STYLES END HERE --- */
 
 .continuation { opacity: 0.7; font-style: italic; }
 .league-pill { background:#4CAF50; color:#fff; padding:2px 6px; border-radius:12px; }
@@ -37,26 +67,26 @@ input:checked + .slider:before { transform: translateX(20px); }
 /* Push-box chips */
 .chips { display:flex; flex-wrap:wrap; gap:6px; }
 .chip-toggle {
-  appearance:none;
-  border:1px solid #cbd5e1;
-  border-radius:12px;
-  padding:6px 10px;
-  font:inherit;
-  background:#f8fafc;
-  cursor:pointer;
-  user-select:none;
-  transition:transform .02s ease, background .15s ease, border-color .15s ease;
+  appearance:none;
+  border:1px solid #cbd5e1;
+  border-radius:12px;
+  padding:6px 10px;
+  font:inherit;
+  background:#f8fafc;
+  cursor:pointer;
+  user-select:none;
+  transition:transform .02s ease, background .15s ease, border-color .15s ease;
 }
 .chip-toggle:hover { border-color:#94a3b8; }
 .chip-toggle[aria-pressed="true"] {
-  background:#dbeafe;
-  border-color:#60a5fa;
+  background:#dbeafe;
+  border-color:#60a5fa;
 }
 .chip-actions { display:flex; gap:8px; margin-top:6px; }
 .chip-ghost {
-  background:#ffffff;
-  border:1px dashed #cbd5e1;
-  border-radius:10px;
-  padding:4px 8px;
-  cursor:pointer;
+  background:#ffffff;
+  border:1px dashed #cbd5e1;
+  border-radius:10px;
+  padding:4px 8px;
+  cursor:pointer;
 }
