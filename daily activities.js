@@ -329,35 +329,91 @@
   }
 
   // -------------------- Lifecycle --------------------
-  function init(){
-    load();
-    renderDivisionChips();
-    renderList();
-    
-    // TIME DEFAULT FIX: Set the default time values
-    if (byId("fixedStart")) byId("fixedStart").value = "12:00";
-    if (byId("fixedEnd")) byId("fixedEnd").value = "12:30";
+function bindAddButtonOnce() {
+  const addBtn = byId("addFixedBtn");
+  if (!addBtn) return false;
 
-    // REMOVED: The unreliable event listener attachment has been removed.
-  }
+  // Avoid rebinding
+  if (addBtn.dataset.bound === "1") return true;
+  addBtn.dataset.bound = "1";
 
-  function onDivisionsChanged(){
-    renderDivisionChips();
-    renderList();
-  }
+  addBtn.addEventListener("click", (e) => {
+    try {
+      e.preventDefault();
+      e.stopPropagation();
+      addFromForm();
+    } catch (err) {
+      console.error("[DailyActivities] addFromForm error:", err);
+      alert("Could not add activity. Open the console for details.");
+    }
+  });
 
-  window.DailyActivities = { init, onDivisionsChanged, prePlace };
-  window.addEventListener("DOMContentLoaded", init);
+  // Enter in name field = add
+  const nameInput = byId("fixedName");
+  if (nameInput && !nameInput.dataset.bound) {
+    nameInput.dataset.bound = "1";
+    nameInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        addBtn.click();
+      }
+    });
+  }
 
-  // If you use tab buttons, repaint chips when Daily tab is opened
-  window.addEventListener("click", (e)=>{
-    const btn = e.target.closest?.(".tab-button");
-    if (btn && /daily/i.test(btn.textContent || "")) {
-      renderDivisionChips();
-    }
-  });
-  
-  // *** CRITICAL FIX: Expose the function globally for the HTML onclick handler ***
-  window.addFixedActivity = addFromForm; 
+  return true;
+}
 
+function init(){
+  try {
+    load();
+    renderDivisionChips();
+    renderList();
+
+    // Ensure default times present
+    if (byId("fixedStart") && !byId("fixedStart").value) byId("fixedStart").value = "12:00";
+    if (byId("fixedEnd") && !byId("fixedEnd").value) byId("fixedEnd").value = "12:30";
+
+    // Bind add button reliably
+    bindAddButtonOnce();
+  } catch (err) {
+    console.error("[DailyActivities] init error:", err);
+  }
+}
+
+function onDivisionsChanged(){
+  try {
+    renderDivisionChips();
+    renderList();
+    bindAddButtonOnce(); // ensure still bound if DOM re-rendered
+  } catch (err) {
+    console.error("[DailyActivities] onDivisionsChanged error:", err);
+  }
+}
+
+window.DailyActivities = { init, onDivisionsChanged, prePlace };
+
+// Run after DOM is ready (defer-safe) and also fallback if needed
+(function ensureInit(){
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
+      try { init(); } catch(e){ console.error(e); }
+    });
+  } else {
+    // DOM already ready (scripts are deferred)
+    try { init(); } catch(e){ console.error(e); }
+  }
+
+  // Fallback: if something threw before binding, try again shortly
+  setTimeout(() => { try { bindAddButtonOnce(); } catch(e){} }, 0);
 })();
+
+// Repaint chips when Daily Fixed tab is opened
+window.addEventListener("click", (e)=>{
+  const btn = e.target.closest?.(".tab-button");
+  if (btn && /daily fixed/i.test(btn.textContent || "")) {
+    try {
+      renderDivisionChips();
+      bindAddButtonOnce();
+    } catch(e) {}
+  }
+});
