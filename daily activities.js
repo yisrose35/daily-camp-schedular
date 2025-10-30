@@ -1,240 +1,310 @@
-// daily_activities.js
-// Fixed Daily Activities manager: Lunch, Assembly, etc.
-// Exposes: window.DailyActivities = { init, onDivisionsChanged, prePlace }
+// dailyActivities.js — Fixed Daily Activities (Lunch/Mincha/Swim/etc.)
+// Integrates with globals: availableDivisions, divisions, unifiedTimes, scheduleAssignments, divisionActiveRows
+// Exposes: window.DailyActivities = { init, onDivisionsChanged, prePlace, getAll, setAll }
+// - Accepts 12‑hour inputs like "12:00pm" or 24‑hour like "12:00"; stores normalized 24‑hour "HH:MM".
+// - If no divisions are selected for an item, it applies to ALL available divisions.
+// - prePlace() will mark divisionActiveRows and prefill scheduleAssignments with read-only blocks so the scheduler avoids them.
 
-(function () {
-  // -------------------- State --------------------
-  let fixedActivities = []; // [{id,name,start,end,divisions:[],enabled:true}]
-  const LS_KEY = "fixedActivities";
+(function(){
+  const STORAGE_KEY = "fixedActivities_v2";
+  let fixedActivities = []; // { id, name, start:"HH:MM", end:"HH:MM", divisions:[string], enabled:boolean }
 
-  // -------------------- Utilities --------------------
-  const $ = (sel) => document.querySelector(sel);
-  const byId = (id) => document.getElementById(id);
+  // -------------------- Helpers --------------------
+  function uid() { return Math.random().toString(36).slice(2,9); }
 
-  function load() {
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      fixedActivities = raw ? JSON.parse(raw) : [];
-    } catch (e) {
-      console.warn("Failed to load fixed activities:", e);
-      fixedActivities = [];
-    }
-  }
-  function save() {
-    localStorage.setItem(LS_KEY, JSON.stringify(fixedActivities));
-  }
+  function load() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      fixedActivities = Array.isArray(JSON.parse(raw)) ? JSON.parse(raw) : [];
+    } catch { fixedActivities = []; }
+  }
+  function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(fixedActivities)); }
 
-  // Accepts "12:00pm", "12:00 pm", "12:00 PM", "12:00" (24h) and returns minutes since 00:00
-  function parseTimeToMinutes(str) {
-    if (!str) return null;
-    const s = String(str).trim().toLowerCase();
+  function pad(n){ return (n<10?'0':'') + n; }
 
-    // If user typed 24h like "12:30" or the browser provided type="time" value
-    const m24 = s.match(/^(\d{1,2}):(\d{2})$/);
-    if (m24) {
-      let hh = parseInt(m24[1], 10);
-      let mm = parseInt(m24[2], 10);
-      if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59) return hh * 60 + mm;
-    }
+  // Accepts "12:00pm", "12:00 pm", "12:00", "7:05AM", returns normalized "HH:MM" (24h) or null
+  function normalizeTime(str){
+    if(!str) return null;
+    str = String(str).trim().toLowerCase();
+    // Allow placeholders like "e.g., 12:00pm" — ignore if includes letters besides am/pm
+    const tmp = str.replace(/[^0-9apm:]/g, "");
+    if(!tmp) return null;
 
-    // 12h with am/pm: "12:00pm", "9:05 am"
-    const m12 = s.match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
-    if (m12) {
-      let hh = parseInt(m12[1], 10);
-      let mm = parseInt(m12[2], 10);
-      const ap = m12[3];
-      if (hh === 12) hh = 0;          // 12am -> 00
-      if (ap === "pm") hh += 12;      // add 12 for pm (except 12pm handled by previous line -> becomes 12)
-      if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59) return hh * 60 + mm;
-    }
+    const ampmMatch = tmp.match(/(am|pm)$/);
+    const hasAmPm = !!ampmMatch;
+    const ampm = hasAmPm ? ampmMatch[1] : null;
+    const timePart = tmp.replace(/(am|pm)$/,'');
+    const m = timePart.match(/^(\d{1,2}):(\d{2})$/);
+    if(!m) return null;
+    let hh = parseInt(m[1],10);
+    const mm = parseInt(m[2],10);
+    if(mm<0||mm>59) return null;
+    if(hasAmPm){
+      if(hh===12) hh = (ampm==='am') ? 0 : 12; else hh = (ampm==='pm') ? hh+12 : hh;
+    }
+    if(hh<0||hh>23) return null;
+    return `${pad(hh)}:${pad(mm)}`;
+  }
 
-    // "12pm" without minutes
-    const m12simple = s.match(/^(\d{1,2})\s*(am|pm)$/i);
-    if (m12simple) {
-      let hh = parseInt(m12simple[1], 10);
-      const ap = m12simple[2];
-      if (hh === 12) hh = 0;
-      if (ap === "pm") hh += 12;
-      return hh * 60;
-    }
+  function toMinutes(hhmm){
+    if(!hhmm) return null;
+    const [h,m] = hhmm.split(":").map(Number);
+    return h*60+m;
+  }
 
-    return null;
-  }
+  function to12hLabel(hhmm){
+    const mins = toMinutes(hhmm);
+    if(mins==null) return "--:--";
+    let h = Math.floor(mins/60), m = mins%60;
+    const am = h<12; let labelH = h%12; if(labelH===0) labelH=12;
+    return `${labelH}:${pad(m)} ${am? 'AM':'PM'}`;
+  }
 
-  function minutesToLabel(mins) {
-    const hh = Math.floor(mins / 60);
-    const mm = mins % 60;
-    const ap = hh >= 12 ? "PM" : "AM";
-    const h12 = ((hh + 11) % 12) + 1;
-    return `${h12}:${mm.toString().padStart(2, "0")}${ap}`;
-  }
+  // Given a Date, return minutes from midnight
+  function minutesOf(d){ return d.getHours()*60 + d.getMinutes(); }
 
-  // -------------------- UI: Division Chips --------------------
-  function buildDivisionChips() {
-    const box = byId("fixedDivisionsBox");
-    if (!box) return;
-    box.innerHTML = "";
+  // Map a [start,end) block in minutes to unified row indices it covers
+  function rowsForBlock(startMin, endMin){
+    if(!Array.isArray(window.unifiedTimes)) return [];
+    const rows = [];
+    for(let i=0;i<unifiedTimes.length;i++){
+      const row = unifiedTimes[i];
+      if(!(row && row.start && row.end)) continue;
+      const rs = minutesOf(new Date(row.start));
+      const re = minutesOf(new Date(row.end));
+      // Row is fully inside the fixed block window OR overlapping — we require full coverage to avoid shortening
+      if(rs>=startMin && re<=endMin){ rows.push(i); }
+    }
+    return rows;
+  }
 
-    const list = Array.isArray(window.availableDivisions) ? window.availableDivisions : [];
-    list.forEach((divName) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.textContent = divName;
-      btn.className = "chip";
-      btn.style.cssText = `
-        padding:4px 8px;border:1px solid #ccc;border-radius:12px;background:#f7f7f7;cursor:pointer;
-      `;
-      btn.dataset.selected = "false";
-      btn.addEventListener("click", () => {
-        const sel = btn.dataset.selected === "true";
-        btn.dataset.selected = (!sel).toString();
-        btn.style.background = sel ? "#f7f7f7" : "#dbeafe"; // toggle bg
-        btn.style.borderColor = sel ? "#ccc" : "#93c5fd";
-      });
-      box.appendChild(btn);
-    });
-  }
+  function resolveTargetDivisions(divs){
+    const avail = Array.isArray(window.availableDivisions) ? window.availableDivisions : [];
+    if(!divs || !divs.length) return avail.slice();
+    return divs.filter(d => avail.includes(d));
+  }
 
-  function getSelectedDivisions() {
-    const box = byId("fixedDivisionsBox");
-    if (!box) return [];
-    const out = [];
-    box.querySelectorAll("button.chip").forEach((b) => {
-      if (b.dataset.selected === "true") out.push(b.textContent.trim());
-    });
-    return out;
-  }
+  // -------------------- UI --------------------
+  let rootEl, chipsWrap, listEl, nameInput, startInput, endInput, addBtn, infoEl;
 
-  // -------------------- UI: List --------------------
-  function renderList() {
-    const wrap = byId("fixedList");
-    if (!wrap) return;
-    if (!Array.isArray(fixedActivities)) fixedActivities = [];
-    wrap.innerHTML = "";
+  function ensureMount(){
+    // --- FIX: Select the existing elements from index.html ---
+    nameInput = document.getElementById('fixedName');
+    startInput = document.getElementById('fixedStart');
+    endInput = document.getElementById('fixedEnd');
+    addBtn = document.getElementById('addFixedBtn');
+    chipsWrap = document.getElementById('fixedDivisionsBox');
+    listEl = document.getElementById('fixedList');
+    
+    // If the containing element is needed for dynamic content:
+    rootEl = document.getElementById('fixed-activities'); 
+    
+    // Create infoEl for tips/errors if it doesn't exist (assuming it's not in index.html)
+    if (!document.getElementById('da_info')) {
+      infoEl = document.createElement('div');
+      infoEl.id = 'da_info';
+      infoEl.className = 'muted';
+      // Try to insert the info element near the button for feedback
+      if (addBtn && addBtn.parentElement) {
+        addBtn.parentElement.appendChild(infoEl);
+      } else if (rootEl) {
+        rootEl.appendChild(infoEl);
+      }
+    } else {
+      infoEl = document.getElementById('da_info');
+    }
 
-    if (fixedActivities.length === 0) {
-      wrap.innerHTML = `<div style="color:#777;">No fixed activities yet.</div>`;
-      return;
-    }
+    // NOTE: The actual event listener is added in the init function.
+  }
 
-    fixedActivities
-      .slice()
-      .sort((a, b) => a.start - b.start)
-      .forEach((item) => {
-        const row = document.createElement("div");
-        row.style.cssText = "display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #eee;";
+  function injectStyles(){
+    if(document.getElementById('da_styles')) return;
+    const css = document.createElement('style');
+    css.id = 'da_styles';
+    css.textContent = `
+      #dailyActivitiesRoot{padding:12px;border:1px solid #e1e1e1;border-radius:12px}
+      #dailyActivitiesRoot .grid2{display:grid;grid-template-columns:1fr;gap:12px}
+      #dailyActivitiesRoot .time-row{display:flex;gap:8px;align-items:end}
+      #dailyActivitiesRoot .stack{display:flex;flex-direction:column;gap:6px}
+      #dailyActivitiesRoot input{padding:8px 10px;border:1px solid #ccc;border-radius:8px}
+      #dailyActivitiesRoot .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+      #dailyActivitiesRoot .chip{padding:6px 10px;border-radius:999px;border:1px solid #bbb;cursor:pointer;user-select:none}
+      #dailyActivitiesRoot .chip.active{background:#111;color:#fff;border-color:#111}
+      #dailyActivitiesRoot .list .item{display:flex;justify-content:space-between;align-items:center;border:1px solid #eee;border-radius:10px;padding:10px;margin:8px 0}
+      #dailyActivitiesRoot .muted{color:#666}
+      #dailyActivitiesRoot .sep{opacity:.7;padding:0 6px}
+      #dailyActivitiesRoot button.primary{padding:8px 12px;border:none;border-radius:8px;background:#0d6efd;color:#fff;cursor:pointer}
+      #dailyActivitiesRoot .pill{padding:2px 8px;border-radius:999px;background:#f2f2f2;border:1px solid #e6e6e6;margin-left:6px;font-size:12px}
+      @media(min-width:720px){ #dailyActivitiesRoot .grid2{grid-template-columns:1fr 1fr} }
+    `;
+    document.head.appendChild(css);
+  }
 
-        const label = document.createElement("div");
-        const divs = (item.divisions && item.divisions.length) ? item.divisions.join(", ") : "All";
-        label.textContent = `${item.name} • ${minutesToLabel(item.start)}–${minutesToLabel(item.end)} • ${divs}`;
+  function renderChips(){
+    if(!chipsWrap) return; // Ensure element is found before use
+    chipsWrap.innerHTML = '';
+    const divs = Array.isArray(window.availableDivisions) ? window.availableDivisions : [];
+    divs.forEach(d => {
+      const el = document.createElement('span');
+      el.className = 'chip';
+      el.textContent = d;
+      el.dataset.value = d;
+      el.addEventListener('click', ()=> el.classList.toggle('active'));
+      chipsWrap.appendChild(el);
+    });
+  }
 
-        const del = document.createElement("button");
-        del.textContent = "Remove";
-        del.style.cssText = "margin-left:auto;background:#ef4444;color:#fff;border:none;border-radius:6px;padding:6px 10px;cursor:pointer;";
-        del.addEventListener("click", () => {
-          fixedActivities = fixedActivities.filter(f => f.id !== item.id);
-          save();
-          renderList();
-        });
+  function getSelectedDivisions(){
+    if(!chipsWrap) return []; // Ensure element is found before use
+    return Array.from(chipsWrap.querySelectorAll('.chip.active')).map(x=>x.dataset.value);
+  }
 
-        row.appendChild(label);
-        row.appendChild(del);
-        wrap.appendChild(row);
-      });
-  }
+  function renderList(){
+    if(!listEl) return; // Ensure element is found before use
 
-  // -------------------- Add Handler --------------------
-  function handleAdd() {
-    const name = (byId("fixedName")?.value || "").trim();
-    const startStr = (byId("fixedStart")?.value || byId("fixedStart")?.placeholder || "").trim();
-    const endStr = (byId("fixedEnd")?.value || byId("fixedEnd")?.placeholder || "").trim();
+    if(!fixedActivities.length){
+      listEl.innerHTML = '<div class="muted">No fixed activities yet.</div>';
+      return;
+    }
+    listEl.innerHTML = '';
+    fixedActivities.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'item';
+      const targets = resolveTargetDivisions(item.divisions);
+      const label = `${item.name} — ${to12hLabel(item.start)} to ${to12hLabel(item.end)} \u2022 ${targets.join(', ') || 'All'}`;
+      row.innerHTML = `
+        <div>
+          <div><strong>${escapeHtml(item.name)}</strong> <span class="pill">${item.enabled?'ENABLED':'DISABLED'}</span></div>
+          <div class="muted">${escapeHtml(label)}</div>
+        </div>
+        <div>
+          <button class="primary" data-act="toggle">${item.enabled?'Disable':'Enable'}</button>
+          <button style="margin-left:8px" data-act="remove">Remove</button>
+        </div>
+      `;
+      row.querySelector('[data-act="toggle"]').addEventListener('click', ()=>{
+        item.enabled = !item.enabled; save(); renderList();
+        window.updateTable?.();
+      });
+      row.querySelector('[data-act="remove"]').addEventListener('click', ()=>{
+        fixedActivities = fixedActivities.filter(x=>x.id!==item.id); save(); renderList();
+        window.updateTable?.();
+      });
+      listEl.appendChild(row);
+    });
+  }
 
-    if (!name) {
-      console.warn("Missing name for fixed activity");
-      alert("Please enter an activity name.");
-      return;
-    }
+  function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
 
-    const start = parseTimeToMinutes(startStr);
-    const end = parseTimeToMinutes(endStr);
-    if (start == null || end == null) {
-      alert("Please enter valid times (e.g., 12:00pm or 12:00).");
-      return;
-    }
-    if (end <= start) {
-      alert("End time must be after start time.");
-      return;
-    }
+  function onAdd(){
+    // Ensure all inputs are available
+    if(!nameInput || !startInput || !endInput) return tip('UI elements not found. Initialization failed.');
 
-    const selectedDivs = getSelectedDivisions(); // empty => applies to all
+    const name = (nameInput.value||'').trim();
+    const ns = normalizeTime(startInput.value);
+    const ne = normalizeTime(endInput.value);
+    if(!name){ return tip('Please enter a name.'); }
+    if(!ns || !ne){ return tip('Please enter valid start and end times (e.g., 12:00pm).'); }
+    const ms = toMinutes(ns), me = toMinutes(ne);
+    if(me<=ms){ return tip('End must be after start.'); }
+    const divisionsSel = getSelectedDivisions();
+    fixedActivities.push({ id:uid(), name, start:ns, end:ne, divisions:divisionsSel, enabled:true });
+    save();
+    nameInput.value = ''; startInput.value = ''; endInput.value = '';
+    // Clear chip selection on add
+    chipsWrap.querySelectorAll('.chip.active').forEach(c=>c.classList.remove('active'));
+    tip('Added.');
+    renderList();
+    window.updateTable?.();
+  }
 
-    const item = {
-      id: crypto?.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
-      name,
-      start,
-      end,
-      divisions: selectedDivs,
-      enabled: true,
-    };
+  let tipTimer = null;
+  function tip(msg){
+    if (!infoEl) { console.log("DailyActivities Tip: " + msg); return; }
+    infoEl.textContent = msg;
+    clearTimeout(tipTimer);
+    tipTimer = setTimeout(()=> infoEl.textContent = '', 1800);
+  }
 
-    fixedActivities.push(item);
-    save();
-    renderList();
+  // -------------------- Public API --------------------
+  function init(){
+    load();
+    ensureMount(); // This selects the existing elements
 
-    // optional: clear name only
-    byId("fixedName").value = "";
-  }
+    // --- FIX: Attach listener to the correct button ---
+    if (addBtn) {
+      addBtn.addEventListener('click', onAdd);
+      // Also attach listeners to the time inputs for convenience
+      if (nameInput) nameInput.addEventListener('keydown', e=>{ if(e.key==='Enter') onAdd(); });
+      if (startInput) startInput.addEventListener('keydown', e=>{ if(e.key==='Enter') onAdd(); });
+      if (endInput) endInput.addEventListener('keydown', e=>{ if(e.key==='Enter') onAdd(); });
+    } else {
+      console.error("Could not find the 'Add Fixed Activity' button (#addFixedBtn) to attach the event listener.");
+    }
 
-  // -------------------- Public API --------------------
-  function init() {
-    // Ensure DOM is ready
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", init);
-      return;
-    }
+    renderChips();
+    renderList();
+    // The main script should trigger updateTable after init is complete if needed
+  }
 
-    // Wire button
-    const addBtn = byId("addFixedBtn");
-    if (addBtn) {
-      addBtn.addEventListener("click", handleAdd);
-    } else {
-      console.warn("#addFixedBtn not found — cannot attach click handler");
-    }
+  function onDivisionsChanged(){
+    if(!rootEl) return;
+    renderChips();
+    renderList();
+  }
 
-    // Build chips and list
-    buildDivisionChips();
-    load();
-    renderList();
+  /**
+   * Pre-place enabled fixed activities into the schedule grid.
+   * (Function body is unchanged)
+   */
+  function prePlace(){
+    const summary = [];
+    if(!Array.isArray(window.unifiedTimes) || unifiedTimes.length===0) return summary;
 
-    // Optional: if you want to accept Enter in any of the inputs
-    ["fixedName", "fixedStart", "fixedEnd"].forEach(id => {
-      const el = byId(id);
-      if (el) {
-        el.addEventListener("keydown", (e) => {
-          if (e.key === "Enter") handleAdd();
-        });
-      }
-    });
-  }
+    window.divisionActiveRows = window.divisionActiveRows || {};
 
-  // Rebuild chips when divisions change from app1.js
-  function onDivisionsChanged() {
-    buildDivisionChips();
-  }
+    const divBunks = {};
+    (Array.isArray(window.availableDivisions)?availableDivisions:[]).forEach(d=>{
+      const b = (window.divisions && divisions[d] && Array.isArray(divisions[d].bunks)) ? divisions[d].bunks : [];
+      divBunks[d] = b;
+    });
 
-  // For schedule integration: return array of blocks to pre-place
-  // Each block: { name, start, end, divisions (array or "all") }
-  function prePlace() {
-    return fixedActivities
-      .filter(f => f.enabled)
-      .map(f => ({
-        name: f.name,
-        start: f.start,
-        end: f.end,
-        divisions: (f.divisions && f.divisions.length) ? f.divisions.slice() : "all",
-      }));
-  }
+    fixedActivities.filter(x=>x.enabled).forEach(item=>{
+      const startMin = toMinutes(item.start), endMin = toMinutes(item.end);
+      const rows = rowsForBlock(startMin,endMin);
+      if(rows.length===0) return;
 
-  // Attach to window
-  window.DailyActivities = { init, onDivisionsChanged, prePlace };
+      const targets = resolveTargetDivisions(item.divisions);
+      targets.forEach(div=>{
+        if(!window.divisionActiveRows[div]) window.divisionActiveRows[div] = new Set();
+        rows.forEach(r=> window.divisionActiveRows[div].add(r));
+
+        const bunks = divBunks[div] || [];
+        bunks.forEach(b => {
+          if(!window.scheduleAssignments[b]) window.scheduleAssignments[b] = new Array(unifiedTimes.length);
+          rows.forEach((r,idx)=>{
+            window.scheduleAssignments[b][r] = {
+              field: { name: item.name },
+              sport: null,
+              continuation: idx>0,
+              _fixed: true,
+              _skip: false
+            };
+            summary.push({ bunk:b, row:r, name:item.name });
+          });
+        });
+      });
+    });
+
+    return summary;
+  }
+
+  function getAll(){ return JSON.parse(JSON.stringify(fixedActivities)); }
+  function setAll(arr){ if(Array.isArray(arr)){ fixedActivities = arr; save(); renderList(); } }
+
+  // --- FIX: Expose window.DailyActivities immediately. ---
+  window.DailyActivities = { init, onDivisionsChanged, prePlace, getAll, setAll };
+
+  // Auto-init on DOMContentLoaded, ensuring UI elements are available when init() runs.
+  document.addEventListener('DOMContentLoaded', init);
 })();
