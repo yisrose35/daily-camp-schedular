@@ -236,11 +236,19 @@
 
   // -------------------- Add from form --------------------
   function addFromForm(){
+    console.log("[DailyActivities] addFromForm()");
     const name  = (byId("fixedName")?.value || "").trim();
     const start = byId("fixedStart")?.value || "";
     const end   = byId("fixedEnd")?.value || "";
-    if (!name){ alert("Please enter an activity name."); return; }
-    if (!start || !end){ alert("Please select start and end times."); return; }
+
+    if (!name){
+      alert("Please enter an activity name.");
+      return;
+    }
+    if (!start || !end){
+      alert("Please select start and end times.");
+      return;
+    }
 
     const selected = [];
     document.querySelectorAll("#fixedDivisionsBox input[type='checkbox']").forEach(cb=>{
@@ -251,6 +259,7 @@
     fixedActivities.push({ id, name, start, end, divisions: selected, enabled: true });
     save();
 
+    // reset UI
     if (byId("fixedName")) byId("fixedName").value = "";
     document.querySelectorAll("#fixedDivisionsBox input[type='checkbox']").forEach(cb=>{
       cb.checked = false;
@@ -261,6 +270,8 @@
     renderList();
     try { window.assignFieldsToBunks?.(); } catch {}
     try { window.renderScheduleTable?.(); } catch {}
+
+    console.log("[DailyActivities] added:", { id, name, start, end, divisions: selected });
   }
 
   // -------------------- Time helpers & prePlacement --------------------
@@ -317,13 +328,37 @@
 
   // -------------------- Lifecycle --------------------
   function init(){
-    load();
-    renderDivisionChips();
-    renderList();
-    if (byId("fixedStart")) byId("fixedStart").value = "12:00";
-    if (byId("fixedEnd")) byId("fixedEnd").value = "12:30";
-    const addBtn = byId("addFixedBtn");
-    if (addBtn) addBtn.addEventListener("click", addFromForm);
+    try {
+      load();
+      renderDivisionChips();
+      renderList();
+
+      const addBtn = byId("addFixedBtn");
+      if (addBtn && !addBtn.dataset.bound) {
+        addBtn.dataset.bound = "1";
+        addBtn.addEventListener("click", (e)=>{
+          e.preventDefault();
+          e.stopPropagation();
+          addFromForm();
+        });
+      }
+
+      // Enter key on name field triggers Add
+      const nameInput = byId("fixedName");
+      if (nameInput && !nameInput.dataset.bound) {
+        nameInput.dataset.bound = "1";
+        nameInput.addEventListener("keydown", (e)=>{
+          if (e.key === "Enter") {
+            e.preventDefault();
+            byId("addFixedBtn")?.click();
+          }
+        });
+      }
+
+      console.log("[DailyActivities] init complete");
+    } catch (err) {
+      console.error("[DailyActivities] init error:", err);
+    }
   }
 
   function onDivisionsChanged(){
@@ -332,16 +367,25 @@
   }
 
   window.DailyActivities = { init, onDivisionsChanged, prePlace };
-  
-  // ✅ FIX: since scripts are deferred, DOM is already ready — call immediately
+
+  // ✅ Ensure init runs even with defer (DOM likely ready already)
   document.readyState === "loading"
     ? document.addEventListener("DOMContentLoaded", init)
     : init();
 
-  // Repaint chips when Daily tab is opened
+  // ✅ SAFETY NET: Global click delegation (works even if init() failed)
+  document.addEventListener("click", (e)=>{
+    const btn = e.target && (e.target.id === "addFixedBtn" ? e.target : e.target.closest?.("#addFixedBtn"));
+    if (btn) {
+      e.preventDefault();
+      try { addFromForm(); } catch (err) { console.error("[DailyActivities] addFromForm failed:", err); }
+    }
+  });
+
+  // Repaint chips when Daily Fixed tab is opened
   window.addEventListener("click", (e)=>{
-    const btn = e.target.closest?.(".tab-button");
-    if (btn && /daily fixed/i.test(btn.textContent || "")) {
+    const t = e.target.closest?.(".tab-button");
+    if (t && /daily fixed/i.test(t.textContent || "")) {
       renderDivisionChips();
     }
   });
