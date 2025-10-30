@@ -1,6 +1,9 @@
 // dailyActivities.js — Fixed Daily Activities (Lunch/Mincha/Swim/etc.)
 // Integrates with globals: availableDivisions, divisions, unifiedTimes, scheduleAssignments, divisionActiveRows
 // Exposes: window.DailyActivities = { init, onDivisionsChanged, prePlace, getAll, setAll }
+// - Accepts 12‑hour inputs like "12:00pm" or 24‑hour like "12:00"; stores normalized 24‑hour "HH:MM".
+// - If no divisions are selected for an item, it applies to ALL available divisions.
+// - prePlace() will mark divisionActiveRows and prefill scheduleAssignments with read-only blocks so the scheduler avoids them.
 
 (function(){
   const STORAGE_KEY = "fixedActivities_v2";
@@ -82,21 +85,77 @@
   }
 
   // -------------------- UI --------------------
-  // Removed: rootEl (no longer needed)
-  let chipsWrap, listEl, nameInput, startInput, endInput, addBtn, infoEl; // Use existing elements
+  let rootEl, chipsWrap, listEl, nameInput, startInput, endInput, addBtn, infoEl;
 
-  // REMOVED: ensureMount function and injectStyles function (UI is already in index.html)
+  // --- START OF NECESSARY CHANGE BLOCK ---
+  // This function was creating *new* elements and attaching listeners to them,
+  // ignoring the elements already in index.html. We must change it to find the *existing* elements.
+  function ensureMount(){
+    // REMOVE: All code that dynamically creates the input UI, as it already exists in index.html.
+    // INSTEAD: Select the existing elements.
+    nameInput = document.getElementById('fixedName');
+    startInput = document.getElementById('fixedStart');
+    endInput = document.getElementById('fixedEnd');
+    addBtn = document.getElementById('addFixedBtn');
+    chipsWrap = document.getElementById('fixedDivisionsBox');
+    listEl = document.getElementById('fixedList');
+    
+    // We need to re-attach the listener to the *real* button inside init()
+    // since the old ensureMount was responsible for that. We'll move the listener logic to init()
+
+    // To avoid a total error, we'll quickly create minimal containers if the original 'daily'
+    // mount point logic is still expected, but will prioritize setting the right inputs.
+    rootEl = document.getElementById('fixed-activities'); 
+    // Check if the UI for listing is ready, and if not, create a placeholder for the list and info
+    if (!listEl) {
+      listEl = document.createElement('div');
+      listEl.id = 'fixedList';
+      rootEl.appendChild(listEl);
+    }
+    // infoEl for tips is missing from your HTML, so we'll create one near the button for feedback
+    infoEl = document.createElement('div');
+    infoEl.id = 'da_info';
+    infoEl.className = 'muted';
+    if (addBtn && addBtn.parentElement) {
+      addBtn.parentElement.appendChild(infoEl);
+    } else if (rootEl) {
+      rootEl.appendChild(infoEl);
+    }
+    
+    // REMOVED: Styles injection (rely on styles.css)
+
+    // NOTE: The actual event listener is added in the init function now, not here.
+  }
+  // --- END OF NECESSARY CHANGE BLOCK ---
+
+  function injectStyles(){
+    if(document.getElementById('da_styles')) return;
+    const css = document.createElement('style');
+    css.id = 'da_styles';
+    css.textContent = `
+      #dailyActivitiesRoot{padding:12px;border:1px solid #e1e1e1;border-radius:12px}
+      #dailyActivitiesRoot .grid2{display:grid;grid-template-columns:1fr;gap:12px}
+      #dailyActivitiesRoot .time-row{display:flex;gap:8px;align-items:end}
+      #dailyActivitiesRoot .stack{display:flex;flex-direction:column;gap:6px}
+      #dailyActivitiesRoot input{padding:8px 10px;border:1px solid #ccc;border-radius:8px}
+      #dailyActivitiesRoot .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+      #dailyActivitiesRoot .chip{padding:6px 10px;border-radius:999px;border:1px solid #bbb;cursor:pointer;user-select:none}
+      #dailyActivitiesRoot .chip.active{background:#111;color:#fff;border-color:#111}
+      #dailyActivitiesRoot .list .item{display:flex;justify-content:space-between;align-items:center;border:1px solid #eee;border-radius:10px;padding:10px;margin:8px 0}
+      #dailyActivitiesRoot .muted{color:#666}
+      #dailyActivitiesRoot .sep{opacity:.7;padding:0 6px}
+      #dailyActivitiesRoot button.primary{padding:8px 12px;border:none;border-radius:8px;background:#0d6efd;color:#fff;cursor:pointer}
+      #dailyActivitiesRoot .pill{padding:2px 8px;border-radius:999px;background:#f2f2f2;border:1px solid #e6e6e6;margin-left:6px;font-size:12px}
+      @media(min-width:720px){ #dailyActivitiesRoot .grid2{grid-template-columns:1fr 1fr} }
+    `;
+    document.head.appendChild(css);
+  }
 
   function renderChips(){
-    // Ensure chipsWrap is available before using it
-    if (!chipsWrap) return;
-    
     chipsWrap.innerHTML = '';
     const divs = Array.isArray(window.availableDivisions) ? window.availableDivisions : [];
     divs.forEach(d => {
       const el = document.createElement('span');
-      // Replaced 'chip' class with 'bunk-button' which is likely defined in styles.css for consistency
-      // or we can use a simpler class. Let's use 'chip' and rely on existing or future styles.
       el.className = 'chip';
       el.textContent = d;
       el.dataset.value = d;
@@ -106,18 +165,12 @@
   }
 
   function getSelectedDivisions(){
-    // Ensure chipsWrap is available before using it
-    if (!chipsWrap) return [];
-
     return Array.from(chipsWrap.querySelectorAll('.chip.active')).map(x=>x.dataset.value);
   }
 
   function renderList(){
-    // Ensure listEl is available before using it
-    if (!listEl) return;
-    
     if(!fixedActivities.length){
-      listEl.innerHTML = '<div class="muted" style="color:#666;">No fixed activities yet.</div>';
+      listEl.innerHTML = '<div class="muted">No fixed activities yet.</div>';
       return;
     }
     listEl.innerHTML = '';
@@ -125,26 +178,22 @@
       const row = document.createElement('div');
       row.className = 'item';
       const targets = resolveTargetDivisions(item.divisions);
-      const label = `${targets.join(', ') || 'All'}`;
+      const label = `${item.name} — ${to12hLabel(item.start)} to ${to12hLabel(item.end)} \u2022 ${targets.join(', ') || 'All'}`;
       row.innerHTML = `
-        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding: 10px 0;">
-          <div>
-            <div><strong>${escapeHtml(item.name)}</strong> (${to12hLabel(item.start)} - ${to12hLabel(item.end)})</div>
-            <div style="color:#666; font-size: 0.9em;">Applies to: ${escapeHtml(label)}</div>
-          </div>
-          <div>
-            <button data-act="toggle" style="background:#2ecc71; color:white; border:none; padding: 6px 10px; border-radius:4px; cursor:pointer;">${item.enabled?'Disable':'Enable'}</button>
-            <button data-act="remove" style="background:#e74c3c; color:white; border:none; padding: 6px 10px; border-radius:4px; cursor:pointer; margin-left:8px;">Remove</button>
-          </div>
+        <div>
+          <div><strong>${escapeHtml(item.name)}</strong> <span class="pill">${item.enabled?'ENABLED':'DISABLED'}</span></div>
+          <div class="muted">${escapeHtml(label)}</div>
+        </div>
+        <div>
+          <button class="primary" data-act="toggle">${item.enabled?'Disable':'Enable'}</button>
+          <button style="margin-left:8px" data-act="remove">Remove</button>
         </div>
       `;
       row.querySelector('[data-act="toggle"]').addEventListener('click', ()=>{
         item.enabled = !item.enabled; save(); renderList();
-        window.updateTable?.(); // Trigger table update on toggle
       });
       row.querySelector('[data-act="remove"]').addEventListener('click', ()=>{
         fixedActivities = fixedActivities.filter(x=>x.id!==item.id); save(); renderList();
-        window.updateTable?.(); // Trigger table update on remove
       });
       listEl.appendChild(row);
     });
@@ -153,6 +202,7 @@
   function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
 
   function onAdd(){
+    // We must ensure nameInput, startInput, endInput are correctly assigned by init/ensureMount
     const name = (nameInput.value||'').trim();
     const ns = normalizeTime(startInput.value);
     const ne = normalizeTime(endInput.value);
@@ -164,17 +214,13 @@
     fixedActivities.push({ id:uid(), name, start:ns, end:ne, divisions:divisionsSel, enabled:true });
     save();
     nameInput.value = ''; startInput.value = ''; endInput.value = '';
-    // Clear chip selection on add
     chipsWrap.querySelectorAll('.chip.active').forEach(c=>c.classList.remove('active'));
     tip('Added.');
     renderList();
-    window.updateTable?.(); // Trigger table update on add
   }
 
   let tipTimer = null;
   function tip(msg){
-    // If infoEl is not available, just use console for feedback
-    if (!infoEl) { console.log("DailyActivities Tip: " + msg); return; }
     infoEl.textContent = msg;
     clearTimeout(tipTimer);
     tipTimer = setTimeout(()=> infoEl.textContent = '', 1800);
@@ -183,23 +229,22 @@
   // -------------------- Public API --------------------
   function init(){
     load();
-    
-    // --- THE CRITICAL FIX: Find existing elements by ID ---
-    nameInput = document.getElementById('fixedName');
-    startInput = document.getElementById('fixedStart');
-    endInput = document.getElementById('fixedEnd');
-    addBtn = document.getElementById('addFixedBtn');
-    chipsWrap = document.getElementById('fixedDivisionsBox');
-    listEl = document.getElementById('fixedList');
-    // infoEl will likely remain undefined unless a feedback div is added to the HTML
-    // If you want to use the tip function, you should add a hidden div with id="fixedInfo" 
-    // near the "Add Fixed Activity" button in index.html
+    ensureMount(); // This now correctly selects the existing elements
 
-    // --- ATTACH LISTENER TO THE CORRECT BUTTON ---
-    if(addBtn) {
+    // --- THE CRITICAL FIX: Re-attaching the listener to the correct element ---
+    // The old logic implicitly broke by creating a new button. Now ensureMount selects the right one.
+    if (addBtn) {
+      // The listener was previously attached to a temporary button created by ensureMount.
+      // We now attach it to the real button found by the updated ensureMount()
       addBtn.addEventListener('click', onAdd);
+      
+      // Also attach listeners to the time inputs for convenience
+      if (nameInput) nameInput.addEventListener('keydown', e=>{ if(e.key==='Enter') onAdd(); });
+      if (startInput) startInput.addEventListener('keydown', e=>{ if(e.key==='Enter') onAdd(); });
+      if (endInput) endInput.addEventListener('keydown', e=>{ if(e.key==='Enter') onAdd(); });
+
     } else {
-      console.error("Could not find the 'Add Fixed Activity' button (#addFixedBtn).");
+      console.error("Could not find the 'Add Fixed Activity' button (#addFixedBtn) to attach the event listener.");
     }
 
     renderChips();
@@ -208,10 +253,11 @@
 
   function onDivisionsChanged(){
     // Rebuild chips if the available divisions changed at runtime
+    if(!rootEl) return; // not mounted yet
     renderChips();
     renderList();
   }
-  // ... (rest of prePlace, getAll, setAll functions are unchanged) ...
+
   /**
    * Pre-place enabled fixed activities into the schedule grid.
    * - Sets divisionActiveRows[div] to include blocked rows.
