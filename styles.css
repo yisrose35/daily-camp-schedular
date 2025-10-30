@@ -34,4 +34,30 @@ input:checked + .slider:before { transform: translateX(20px); }
 .continuation { opacity: 0.7; font-style: italic; }
 .league-pill { background:#4CAF50; color:#fff; padding:2px 6px; border-radius:12px; }
 .grey-cell { background:#eee; }
+/* Push-box chips */
+.chips { display:flex; flex-wrap:wrap; gap:6px; }
+.chip-toggle {
+  appearance:none;
+  border:1px solid #cbd5e1;
+  border-radius:12px;
+  padding:6px 10px;
+  font:inherit;
+  background:#f8fafc;
+  cursor:pointer;
+  user-select:none;
+  transition:transform .02s ease, background .15s ease, border-color .15s ease;
+}
+.chip-toggle:hover { border-color:#94a3b8; }
+.chip-toggle[aria-pressed="true"] {
+  background:#dbeafe;
+  border-color:#60a5fa;
+}
+.chip-actions { display:flex; gap:8px; margin-top:6px; }
+.chip-ghost {
+  background:#ffffff;
+  border:1px dashed #cbd5e1;
+  border-radius:10px;
+  padding:4px 8px;
+  cursor:pointer;
+}
 
