@@ -13,7 +13,6 @@ function publishDivisionToggleMap() {
       lg.divisions.forEach(d => { if (d) divMap[d] = { enabled: true }; });
     }
   });
-  // Expose ONLY the division map to app2
   window.leagues = divMap;
 }
 
@@ -25,7 +24,6 @@ function saveLeagues() {
 function loadLeagues() {
   const stored = localStorage.getItem("leagues");
   leaguesByName = stored ? (JSON.parse(stored) || {}) : {};
-  // Backfill shapes
   Object.keys(leaguesByName).forEach(name => {
     const l = leaguesByName[name] || {};
     if (typeof l.enabled === "undefined") l.enabled = false;
@@ -81,7 +79,7 @@ function initLeaguesTab() {
     section.style.background = "#fafafa";
     section.style.opacity = leagueData.enabled ? "1" : "0.85";
 
-    // Header with name + toggle + delete
+    // Header
     const header = document.createElement("div");
     header.style.display = "flex";
     header.style.justifyContent = "space-between";
@@ -144,7 +142,7 @@ function initLeaguesTab() {
       knob.style.left = toggle.checked ? "24px" : "2px";
       toggleText.textContent = toggle.checked ? "Enabled" : "Disabled";
       section.style.opacity = leagueData.enabled ? "1" : "0.85";
-      saveLeagues(); // also republishes the division map for app2
+      saveLeagues();
     });
 
     toggleWrap.appendChild(toggle);
@@ -175,18 +173,18 @@ function initLeaguesTab() {
     section.appendChild(divTitle);
 
     const divContainer = document.createElement("div");
+    divContainer.className = "division-push-buttons";
     divContainer.style.display = "flex";
     divContainer.style.flexWrap = "wrap";
     divContainer.style.gap = "6px";
 
-    // Source grades from availableDivisions if present; otherwise from divisions object
     const sourceDivs = Array.isArray(window.availableDivisions) && window.availableDivisions.length > 0
       ? window.availableDivisions
       : Object.keys(window.divisions || {});
 
     if (sourceDivs.length === 0) {
       const note = document.createElement("div");
-      note.textContent = "No divisions found. Add divisions in Setup to select grades for this league.";
+      note.textContent = "No divisions found. Add divisions in Setup.";
       note.style.fontStyle = "italic";
       note.style.opacity = "0.7";
       section.appendChild(note);
@@ -195,21 +193,31 @@ function initLeaguesTab() {
     sourceDivs.forEach(divName => {
       const divBtn = document.createElement("button");
       divBtn.textContent = divName;
-      divBtn.style.padding = "4px 8px";
-      divBtn.style.borderRadius = "999px";
-      divBtn.style.cursor = "pointer";
-      divBtn.style.border = "1px solid #333";
+      divBtn.className = "push-btn";
 
       const active = leagueData.divisions.includes(divName);
-      const divColor = (window.divisions?.[divName]?.color) || "#333";
+      const divColor = window.divisions?.[divName]?.color || "#ccc";
       divBtn.style.backgroundColor = active ? divColor : "white";
       divBtn.style.color = active ? "white" : "black";
+      divBtn.style.border = `2px solid ${divColor}`;
+      divBtn.style.borderRadius = "20px";
+      divBtn.style.padding = "6px 10px";
+      divBtn.style.fontWeight = "500";
+      divBtn.style.cursor = "pointer";
+      divBtn.style.transition = "all 0.15s ease";
+
+      divBtn.onmouseenter = () => {
+        if (!active) divBtn.style.backgroundColor = "#f3f3f3";
+      };
+      divBtn.onmouseleave = () => {
+        if (!active) divBtn.style.backgroundColor = "white";
+      };
 
       divBtn.onclick = () => {
         const idx = leagueData.divisions.indexOf(divName);
         if (idx >= 0) leagueData.divisions.splice(idx, 1);
         else leagueData.divisions.push(divName);
-        saveLeagues();          // republishes division map
+        saveLeagues();
         initLeaguesTab();
       };
 
@@ -228,13 +236,14 @@ function initLeaguesTab() {
     sportsList.forEach(sport => {
       const btn = document.createElement("button");
       btn.textContent = sport;
+      const active = leagueData.sports.includes(sport);
       btn.style.margin = "2px";
-      btn.style.padding = "4px 8px";
-      btn.style.borderRadius = "5px";
+      btn.style.padding = "6px 10px";
+      btn.style.borderRadius = "20px";
       btn.style.cursor = "pointer";
-      btn.style.border = "1px solid #333";
-      btn.style.backgroundColor = leagueData.sports.includes(sport) ? "#007BFF" : "white";
-      btn.style.color = leagueData.sports.includes(sport) ? "white" : "black";
+      btn.style.border = "2px solid #007BFF";
+      btn.style.backgroundColor = active ? "#007BFF" : "white";
+      btn.style.color = active ? "white" : "black";
       btn.onclick = () => {
         const idx = leagueData.sports.indexOf(sport);
         if (idx >= 0) leagueData.sports.splice(idx, 1);
@@ -299,9 +308,9 @@ function initLeaguesTab() {
     (leagueData.teams || []).forEach(team => {
       const teamBtn = document.createElement("button");
       teamBtn.textContent = team;
-      teamBtn.style.padding = "4px 8px";
+      teamBtn.style.padding = "6px 10px";
       teamBtn.style.border = "1px solid #333";
-      teamBtn.style.borderRadius = "5px";
+      teamBtn.style.borderRadius = "20px";
       teamBtn.style.cursor = "pointer";
       teamBtn.style.backgroundColor = "#f9f9f9";
       teamBtn.onclick = () => {
