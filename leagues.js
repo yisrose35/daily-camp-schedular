@@ -1,149 +1,222 @@
-// leagues.js
-// Classic version — fixed sports list and per-division league toggle.
-// Exposes window.initLeaguesTab() for index.html to call when "Leagues" tab is opened.
+// -------------------- Leagues.js --------------------
 
-(function () {
-  // -------------------- Globals & Setup --------------------
-  window.leagues = window.leagues || {};  // { divisionName: { enabled, sports[] } }
-  window.leagueSports = ["Basketball","Football","Baseball","Hockey","Volleyball","Soccer","Lacrosse"];
+// Structure:
+// leagues = {
+//   "League Name": {
+//     divisions: ["5th Grade", "6th Grade"],
+//     sports: ["Basketball"],
+//     teams: ["Lions", "Tigers"]
+//   }
+// }
 
-  const STORAGE_KEY = "leaguesData";
+function initLeaguesTab() {
+  const leaguesContainer = document.getElementById("leaguesContainer");
+  leaguesContainer.innerHTML = "";
 
-  // -------------------- Helpers --------------------
-  function save() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(window.leagues));
-  }
+  // -------------------- Add New League --------------------
+  const addLeagueDiv = document.createElement("div");
+  addLeagueDiv.style.marginBottom = "15px";
 
-  function load() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === "object") window.leagues = parsed;
-      }
-    } catch (e) {
-      console.warn("Failed to load leagues data:", e);
+  const newLeagueInput = document.createElement("input");
+  newLeagueInput.placeholder = "Enter new league name";
+  newLeagueInput.style.marginRight = "8px";
+
+  const addLeagueBtn = document.createElement("button");
+  addLeagueBtn.textContent = "Add League";
+  addLeagueBtn.onclick = () => {
+    const name = newLeagueInput.value.trim();
+    if (name !== "" && !leagues[name]) {
+      leagues[name] = { divisions: [], sports: [], teams: [] };
+      newLeagueInput.value = "";
+      saveLeagues();
+      initLeaguesTab();
     }
-  }
-
-  // -------------------- UI Rendering --------------------
-  function render() {
-    const container = document.getElementById("leaguesContainer");
-    if (!container) return;
-    container.innerHTML = "";
-
-    const divs = Array.isArray(window.availableDivisions)
-      ? window.availableDivisions
-      : [];
-
-    if (divs.length === 0) {
-      container.innerHTML = `<div class="muted">No divisions available. Add divisions in Setup first.</div>`;
-      return;
-    }
-
-    divs.forEach((divName) => {
-      // Ensure data object
-      if (!window.leagues[divName])
-        window.leagues[divName] = { enabled: false, sports: [] };
-      const data = window.leagues[divName];
-
-      // Card container
-      const card = document.createElement("div");
-      card.className = "league-card";
-
-      // Division name
-      const title = document.createElement("h4");
-      title.textContent = divName;
-      title.style.marginTop = "0";
-      card.appendChild(title);
-
-      // League enable toggle
-      const toggleRow = document.createElement("div");
-      toggleRow.style.display = "flex";
-      toggleRow.style.alignItems = "center";
-      toggleRow.style.marginBottom = "6px";
-
-      const label = document.createElement("label");
-      label.className = "switch";
-      const input = document.createElement("input");
-      input.type = "checkbox";
-      input.checked = !!data.enabled;
-      const slider = document.createElement("span");
-      slider.className = "slider";
-      label.appendChild(input);
-      label.appendChild(slider);
-
-      const text = document.createElement("span");
-      text.textContent = "League Enabled";
-      text.style.marginLeft = "10px";
-      text.style.fontSize = "0.9em";
-      text.style.color = "#475569";
-
-      toggleRow.appendChild(label);
-      toggleRow.appendChild(text);
-      card.appendChild(toggleRow);
-
-      // Sports push buttons
-      const sportsWrap = document.createElement("div");
-      sportsWrap.className = "chips";
-      sportsWrap.style.marginTop = "6px";
-
-      window.leagueSports.forEach((sport) => {
-        const btn = document.createElement("button");
-        btn.className = "bunk-button push";
-        btn.textContent = sport;
-        if (data.sports.includes(sport)) btn.classList.add("active");
-
-        btn.addEventListener("click", () => {
-          if (!input.checked) {
-            alert("Enable the league first to select sports.");
-            return;
-          }
-          const arr = window.leagues[divName].sports;
-          if (btn.classList.contains("active")) {
-            btn.classList.remove("active");
-            const idx = arr.indexOf(sport);
-            if (idx > -1) arr.splice(idx, 1);
-          } else {
-            btn.classList.add("active");
-            arr.push(sport);
-          }
-          save();
-        });
-
-        sportsWrap.appendChild(btn);
-      });
-      card.appendChild(sportsWrap);
-
-      // Behavior for main toggle
-      input.addEventListener("change", () => {
-        window.leagues[divName].enabled = input.checked;
-        save();
-        window.updateTable?.();
-        // Slight dimming if disabled
-        sportsWrap.style.opacity = input.checked ? "1" : "0.55";
-      });
-
-      sportsWrap.style.opacity = data.enabled ? "1" : "0.55";
-
-      container.appendChild(card);
-    });
-  }
-
-  // -------------------- Public API --------------------
-  function initLeaguesTab() {
-    load();
-    render();
-  }
-
-  // Re-render on divisions update
-  window.onDivisionsChanged = window.onDivisionsChanged || function () {};
-  const prev = window.onDivisionsChanged;
-  window.onDivisionsChanged = function () {
-    prev();
-    render();
   };
+  newLeagueInput.addEventListener("keypress", e => {
+    if (e.key === "Enter") addLeagueBtn.click();
+  });
 
-  // Export
-  window.initLeaguesTab = initLeaguesTab;
-})();
+  addLeagueDiv.appendChild(newLeagueInput);
+  addLeagueDiv.appendChild(addLeagueBtn);
+  leaguesContainer.appendChild(addLeagueDiv);
+
+  // -------------------- Render Each League --------------------
+  Object.keys(leagues).forEach(leagueName => {
+    const leagueData = leagues[leagueName];
+
+    const section = document.createElement("div");
+    section.className = "league-section";
+    section.style.border = "1px solid #ccc";
+    section.style.padding = "10px";
+    section.style.marginBottom = "12px";
+    section.style.borderRadius = "8px";
+    section.style.background = "#fafafa";
+
+    // Header with name + delete
+    const header = document.createElement("div");
+    header.style.display = "flex";
+    header.style.justifyContent = "space-between";
+    header.style.alignItems = "center";
+
+    const title = document.createElement("h3");
+    title.textContent = leagueName;
+    header.appendChild(title);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.textContent = "🗑️";
+    deleteBtn.title = "Delete League";
+    deleteBtn.onclick = () => {
+      if (confirm(`Delete ${leagueName}?`)) {
+        delete leagues[leagueName];
+        saveLeagues();
+        initLeaguesTab();
+      }
+    };
+    header.appendChild(deleteBtn);
+    section.appendChild(header);
+
+    // -------------------- Division Push Buttons --------------------
+    const divTitle = document.createElement("p");
+    divTitle.textContent = "Divisions in this League:";
+    section.appendChild(divTitle);
+
+    const divContainer = document.createElement("div");
+    divContainer.style.display = "flex";
+    divContainer.style.flexWrap = "wrap";
+    divContainer.style.gap = "6px";
+
+    Object.keys(divisions).forEach(divName => {
+      const divBtn = document.createElement("button");
+      divBtn.textContent = divName;
+      divBtn.style.padding = "4px 8px";
+      divBtn.style.borderRadius = "5px";
+      divBtn.style.cursor = "pointer";
+      divBtn.style.border = "1px solid #333";
+
+      const active = leagueData.divisions.includes(divName);
+      const divColor = divisions[divName]?.color || "#ddd";
+      divBtn.style.backgroundColor = active ? divColor : "white";
+      divBtn.style.color = active ? "white" : "black";
+
+      divBtn.onclick = () => {
+        const idx = leagueData.divisions.indexOf(divName);
+        if (idx >= 0) leagueData.divisions.splice(idx, 1);
+        else leagueData.divisions.push(divName);
+        saveLeagues();
+        initLeaguesTab();
+      };
+
+      divContainer.appendChild(divBtn);
+    });
+    section.appendChild(divContainer);
+
+    // -------------------- Sports Selection --------------------
+    const sportsTitle = document.createElement("p");
+    sportsTitle.textContent = "League Sports:";
+    section.appendChild(sportsTitle);
+
+    const sportsContainer = document.createElement("div");
+    const sportsList = ["Basketball", "Hockey", "Volleyball", "Soccer", "Kickball", "Punchball", "Baseball"];
+    sportsList.forEach(sport => {
+      const btn = document.createElement("button");
+      btn.textContent = sport;
+      btn.style.margin = "2px";
+      btn.style.padding = "4px 8px";
+      btn.style.borderRadius = "5px";
+      btn.style.cursor = "pointer";
+      btn.style.border = "1px solid #333";
+      btn.style.backgroundColor = leagueData.sports.includes(sport) ? "#007BFF" : "white";
+      btn.style.color = leagueData.sports.includes(sport) ? "white" : "black";
+      btn.onclick = () => {
+        const idx = leagueData.sports.indexOf(sport);
+        if (idx >= 0) leagueData.sports.splice(idx, 1);
+        else leagueData.sports.push(sport);
+        saveLeagues();
+        initLeaguesTab();
+      };
+      sportsContainer.appendChild(btn);
+    });
+
+    const customSportInput = document.createElement("input");
+    customSportInput.placeholder = "Other sport";
+    customSportInput.onkeypress = e => {
+      if (e.key === "Enter" && customSportInput.value.trim() !== "") {
+        leagueData.sports.push(customSportInput.value.trim());
+        customSportInput.value = "";
+        saveLeagues();
+        initLeaguesTab();
+      }
+    };
+    sportsContainer.appendChild(customSportInput);
+    section.appendChild(sportsContainer);
+
+    // -------------------- Teams --------------------
+    const teamTitle = document.createElement("p");
+    teamTitle.textContent = "Teams:";
+    section.appendChild(teamTitle);
+
+    const teamInput = document.createElement("input");
+    teamInput.placeholder = "Enter team name";
+    teamInput.style.marginRight = "8px";
+    teamInput.onkeypress = e => {
+      if (e.key === "Enter" && teamInput.value.trim() !== "") {
+        leagueData.teams.push(teamInput.value.trim());
+        teamInput.value = "";
+        saveLeagues();
+        initLeaguesTab();
+      }
+    };
+    section.appendChild(teamInput);
+
+    const addTeamBtn = document.createElement("button");
+    addTeamBtn.textContent = "Add Team";
+    addTeamBtn.onclick = () => {
+      if (teamInput.value.trim() !== "") {
+        leagueData.teams.push(teamInput.value.trim());
+        teamInput.value = "";
+        saveLeagues();
+        initLeaguesTab();
+      }
+    };
+    section.appendChild(addTeamBtn);
+
+    const teamListContainer = document.createElement("div");
+    teamListContainer.style.marginTop = "6px";
+    teamListContainer.style.display = "flex";
+    teamListContainer.style.flexWrap = "wrap";
+    teamListContainer.style.gap = "6px";
+
+    leagueData.teams.forEach(team => {
+      const teamBtn = document.createElement("button");
+      teamBtn.textContent = team;
+      teamBtn.style.padding = "4px 8px";
+      teamBtn.style.border = "1px solid #333";
+      teamBtn.style.borderRadius = "5px";
+      teamBtn.style.cursor = "pointer";
+      teamBtn.style.backgroundColor = "#f9f9f9";
+      teamBtn.onclick = () => {
+        if (confirm(`Remove ${team} from ${leagueName}?`)) {
+          leagueData.teams = leagueData.teams.filter(t => t !== team);
+          saveLeagues();
+          initLeaguesTab();
+        }
+      };
+      teamListContainer.appendChild(teamBtn);
+    });
+    section.appendChild(teamListContainer);
+
+    leaguesContainer.appendChild(section);
+  });
+}
+
+// -------------------- Storage --------------------
+function saveLeagues() {
+  localStorage.setItem("leagues", JSON.stringify(leagues));
+}
+
+// -------------------- Init --------------------
+document.addEventListener("DOMContentLoaded", () => {
+  const stored = localStorage.getItem("leagues");
+  if (stored) leagues = JSON.parse(stored);
+  if (document.getElementById("leaguesContainer")) initLeaguesTab();
+});
