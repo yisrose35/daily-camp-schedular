@@ -1,282 +1,239 @@
-// dailyActivities.js — Fixed Daily Activities (Lunch/Mincha/Swim/etc.)
+// daily_activities.js
+// Fixed Daily Activities manager: Lunch, Assembly, etc.
+// Exposes: window.DailyActivities = { init, onDivisionsChanged, prePlace }
 
-(function(){
-  const STORAGE_KEY = "fixedActivities_v2";
-  let fixedActivities = []; // { id, name, start:"HH:MM", end:"HH:MM", divisions:[string], enabled:boolean }
+(function () {
+  // -------------------- State --------------------
+  let fixedActivities = []; // [{id,name,start,end,divisions:[],enabled:true}]
+  const LS_KEY = "fixedActivities";
 
-  // -------------------- Helpers --------------------
-  function uid() { return Math.random().toString(36).slice(2,9); }
+  // -------------------- Utilities --------------------
+  const $ = (sel) => document.querySelector(sel);
+  const byId = (id) => document.getElementById(id);
 
-  function load() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      fixedActivities = Array.isArray(JSON.parse(raw)) ? JSON.parse(raw) : [];
-    } catch { fixedActivities = []; }
-  }
-  function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(fixedActivities)); }
+  function load() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      fixedActivities = raw ? JSON.parse(raw) : [];
+    } catch {
+      fixedActivities = [];
+    }
+  }
+  function save() {
+    localStorage.setItem(LS_KEY, JSON.stringify(fixedActivities));
+  }
 
-  function pad(n){ return (n<10?'0':'') + n; }
+  // Accepts "12:00pm", "12:00 pm", "12:00" (24h), "12pm"
+  function parseTimeToMinutes(str) {
+    if (!str) return null;
+    const s = String(str).trim().toLowerCase();
 
-  function normalizeTime(str){
-    if(!str) return null;
-    str = String(str).trim().toLowerCase();
-    const tmp = str.replace(/[^0-9apm:]/g, "");
-    if(!tmp) return null;
-    const ampmMatch = tmp.match(/(am|pm)$/);
-    const hasAmPm = !!ampmMatch;
-    const ampm = hasAmPm ? ampmMatch[1] : null;
-    const timePart = tmp.replace(/(am|pm)$/,'');
-    const m = timePart.match(/^(\d{1,2}):(\d{2})$/);
-    if(!m) return null;
-    let hh = parseInt(m[1],10);
-    const mm = parseInt(m[2],10);
-    if(mm<0||mm>59) return null;
-    if(hasAmPm){
-      if(hh===12) hh = (ampm==='am') ? 0 : 12; else hh = (ampm==='pm') ? hh+12 : hh;
-    }
-    if(hh<0||hh>23) return null;
-    return `${pad(hh)}:${pad(mm)}`;
-  }
+    const m24 = s.match(/^(\d{1,2}):(\d{2})$/);
+    if (m24) {
+      let hh = +m24[1], mm = +m24[2];
+      if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59) return hh * 60 + mm;
+    }
 
-  function toMinutes(hhmm){
-    if(!hhmm) return null;
-    const [h,m] = hhmm.split(":").map(Number);
-    return h*60+m;
-  }
+    const m12 = s.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
+    if (m12) {
+      let hh = +m12[1];
+      let mm = m12[2] ? +m12[2] : 0;
+      const ap = m12[3].toLowerCase();
+      if (hh === 12) hh = 0;          // 12am -> 00, 12pm handled by pm add
+      if (ap === "pm") hh += 12;
+      return hh * 60 + mm;
+    }
 
-  function to12hLabel(hhmm){
-    const mins = toMinutes(hhmm);
-    if(mins==null) return "--:--";
-    let h = Math.floor(mins/60), m = mins%60;
-    const am = h<12; let labelH = h%12; if(labelH===0) labelH=12;
-    return `${labelH}:${pad(m)} ${am? 'AM':'PM'}`;
-  }
+    return null;
+  }
+  function minutesToLabel(mins) {
+    const hh = Math.floor(mins / 60);
+    const mm = mins % 60;
+    const ap = hh >= 12 ? "PM" : "AM";
+    const h12 = ((hh + 11) % 12) + 1;
+    return `${h12}:${mm.toString().padStart(2, "0")} ${ap}`;
+  }
 
-  function minutesOf(d){ return d.getHours()*60 + d.getMinutes(); }
+  // -------------------- Division Chips (push-box buttons) --------------------
+  function buildDivisionChips() {
+    const box = byId("fixedDivisionsBox");
+    if (!box) return;
+    box.innerHTML = "";
+    box.classList.add("chips");
 
-  function rowsForBlock(startMin, endMin){
-    if(!Array.isArray(window.unifiedTimes)) return [];
-    const rows = [];
-    for(let i=0;i<unifiedTimes.length;i++){
-      const row = unifiedTimes[i];
-      if(!(row && row.start && row.end)) continue;
-      const rs = minutesOf(new Date(row.start));
-      const re = minutesOf(new Date(row.end));
-      if(rs>=startMin && re<=endMin){ rows.push(i); }
-    }
-    return rows;
-  }
+    const list = Array.isArray(window.availableDivisions) ? window.availableDivisions : [];
+    list.forEach((divName) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = divName;
+      btn.className = "chip-toggle";
+      btn.setAttribute("aria-pressed", "false");
+      btn.addEventListener("click", () => {
+        const pressed = btn.getAttribute("aria-pressed") === "true";
+        btn.setAttribute("aria-pressed", pressed ? "false" : "true");
+      });
+      box.appendChild(btn);
+    });
 
-  function resolveTargetDivisions(divs){
-    const avail = Array.isArray(window.availableDivisions) ? window.availableDivisions : [];
-    if(!divs || !divs.length) return avail.slice();
-    return divs.filter(d => avail.includes(d));
-  }
+    // helper actions
+    const actions = document.createElement("div");
+    actions.className = "chip-actions";
+    const selectAll = document.createElement("button");
+    selectAll.type = "button";
+    selectAll.className = "chip-ghost";
+    selectAll.textContent = "Select all";
+    selectAll.onclick = () => box.querySelectorAll(".chip-toggle").forEach(b => b.setAttribute("aria-pressed","true"));
 
-  // -------------------- UI --------------------
-  let rootEl, chipsWrap, listEl, nameInput, startInput, endInput, addBtn, infoEl;
+    const clearAll = document.createElement("button");
+    clearAll.type = "button";
+    clearAll.className = "chip-ghost";
+    clearAll.textContent = "Clear";
+    clearAll.onclick = () => box.querySelectorAll(".chip-toggle").forEach(b => b.setAttribute("aria-pressed","false"));
 
-  function ensureMount(){
-    // FIX: Select the existing elements from index.html (Button Fix)
-    nameInput = document.getElementById('fixedName');
-    startInput = document.getElementById('fixedStart');
-    endInput = document.getElementById('fixedEnd');
-    addBtn = document.getElementById('addFixedBtn');
-    chipsWrap = document.getElementById('fixedDivisionsBox');
-    listEl = document.getElementById('fixedList');
-    
-    rootEl = document.getElementById('fixed-activities'); 
-    
-    if (!document.getElementById('da_info')) {
-      infoEl = document.createElement('div');
-      infoEl.id = 'da_info';
-      infoEl.className = 'muted';
-      if (addBtn && addBtn.parentElement) {
-        addBtn.parentElement.appendChild(infoEl);
-      } else if (rootEl) {
-        rootEl.appendChild(infoEl);
-      }
-    } else {
-      infoEl = document.getElementById('da_info');
-    }
-  }
+    actions.appendChild(selectAll);
+    actions.appendChild(clearAll);
+    box.parentElement?.appendChild(actions);
+  }
 
-  // Removed: injectStyles (relying on user's styles.css)
+  function getSelectedDivisions() {
+    const box = byId("fixedDivisionsBox");
+    if (!box) return [];
+    const out = [];
+    box.querySelectorAll(".chip-toggle[aria-pressed='true']").forEach(b => {
+      out.push(b.textContent.trim());
+    });
+    return out;
+  }
 
-  function renderChips(){
-    if (!chipsWrap) return;
-    
-    // FIX: Use existing styling class for the chips container
-    chipsWrap.className = 'chips'; 
-    chipsWrap.innerHTML = '';
-    
-    const divs = Array.isArray(window.availableDivisions) ? window.availableDivisions : [];
-    divs.forEach(d => {
-      const el = document.createElement('span');
-      // FIX: Use the existing '.bunk-button' class for chip styling
-      el.className = 'bunk-button'; 
-      el.textContent = d;
-      el.dataset.value = d;
-      
-      // Add 'selected' class on click, matching bunk-button usage
-      el.addEventListener('click', ()=> el.classList.toggle('selected'));
-      
-      chipsWrap.appendChild(el);
-    });
-  }
+  // -------------------- List Rendering --------------------
+  function renderList() {
+    const wrap = byId("fixedList");
+    if (!wrap) return;
+    wrap.innerHTML = "";
 
-  function getSelectedDivisions(){
-    if (!chipsWrap) return []; 
-    // FIX: Look for the 'selected' class used in the updated renderChips
-    return Array.from(chipsWrap.querySelectorAll('.bunk-button.selected')).map(x=>x.dataset.value);
-  }
+    if (!Array.isArray(fixedActivities) || fixedActivities.length === 0) {
+      wrap.innerHTML = `<div style="color:#777;">No fixed activities yet.</div>`;
+      return;
+    }
 
-  function renderList(){
-    if(!listEl) return; 
+    fixedActivities
+      .slice()
+      .sort((a, b) => a.start - b.start)
+      .forEach((item) => {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #eee;";
 
-    if(!fixedActivities.length){
-      listEl.innerHTML = '<div class="muted">No fixed activities yet.</div>';
-      return;
-    }
-    listEl.innerHTML = '';
-    fixedActivities.forEach(item => {
-      const row = document.createElement('div');
-      row.className = 'item';
-      const targets = resolveTargetDivisions(item.divisions);
-      const label = `${targets.join(', ') || 'All'}`;
-      row.innerHTML = `
-        <div style="flex-grow:1;">
-          <div><strong>${escapeHtml(item.name)}</strong></div>
-          <div class="muted" style="font-size: 0.9em;">${to12hLabel(item.start)} - ${to12hLabel(item.end)} &bull; Applies to: ${escapeHtml(label)}</div>
-        </div>
-        <div style="display:flex; align-items:center; gap:15px;">
-          
-                    <label class="switch" data-act="toggle">
-            <input type="checkbox" ${item.enabled ? 'checked' : ''}>
-            <span class="slider"></span>
-          </label>
-                    
-          <button data-act="remove" style="padding: 6px 10px; border-radius:4px; cursor:pointer;">Remove</button>
-        </div>
-      `;
-      // Attach the click handler to the <label> which contains the toggle
-      row.querySelector('[data-act="toggle"]').addEventListener('click', (e)=>{
-        // Prevents click from bubbling up and interfering with other events if needed
-        e.stopPropagation(); 
-        item.enabled = !item.enabled; save(); renderList();
-        window.updateTable?.();
-      });
-      row.querySelector('[data-act="remove"]').addEventListener('click', ()=>{
-        fixedActivities = fixedActivities.filter(x=>x.id!==item.id); save(); renderList();
-        window.updateTable?.();
-      });
-      listEl.appendChild(row);
-    });
-  }
+        const info = document.createElement("div");
+        info.style.flex = "1 1 auto";
+        const divs = (item.divisions && item.divisions.length) ? item.divisions.join(", ") : "All";
+        info.textContent = `${item.name} — ${minutesToLabel(item.start)} to ${minutesToLabel(item.end)} • ${divs}`;
 
-  function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+        const status = document.createElement("span");
+        status.textContent = item.enabled ? "ENABLED" : "DISABLED";
+        status.style.cssText = `font-size:12px;padding:2px 6px;border-radius:8px;
+          ${item.enabled ? "background:#dcfce7;color:#166534;border:1px solid #86efac" : "background:#fee2e2;color:#991b1b;border:1px solid #fecaca"}`;
 
-  function onAdd(){
-    if(!nameInput || !startInput || !endInput) return tip('UI elements not found. Initialization failed.');
+        const toggle = document.createElement("button");
+        toggle.textContent = item.enabled ? "Disable" : "Enable";
+        toggle.style.cssText = "background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:6px 10px;cursor:pointer;";
+        toggle.addEventListener("click", () => {
+          item.enabled = !item.enabled;
+          save();
+          renderList();
+        });
 
-    const name = (nameInput.value||'').trim();
-    const ns = normalizeTime(startInput.value);
-    const ne = normalizeTime(endInput.value);
-    if(!name){ return tip('Please enter a name.'); }
-    if(!ns || !ne){ return tip('Please enter valid start and end times (e.g., 12:00pm).'); }
-    const ms = toMinutes(ns), me = toMinutes(ne);
-    if(me<=ms){ return tip('End must be after start.'); }
-    const divisionsSel = getSelectedDivisions();
-    fixedActivities.push({ id:uid(), name, start:ns, end:ne, divisions:divisionsSel, enabled:true });
-    save();
-    nameInput.value = ''; startInput.value = ''; endInput.value = '';
-    // Clear chip selection on add
-    chipsWrap.querySelectorAll('.bunk-button.selected').forEach(c=>c.classList.remove('selected'));
-    tip('Added.');
-    renderList();
-    window.updateTable?.();
-  }
+        const del = document.createElement("button");
+        del.textContent = "Remove";
+        del.style.cssText = "background:#ef4444;color:#fff;border:none;border-radius:8px;padding:6px 10px;cursor:pointer;";
+        del.addEventListener("click", () => {
+          fixedActivities = fixedActivities.filter(f => f.id !== item.id);
+          save();
+          renderList();
+        });
 
-  let tipTimer = null;
-  function tip(msg){
-    if (!infoEl) { console.log("DailyActivities Tip: " + msg); return; }
-    infoEl.textContent = msg;
-    clearTimeout(tipTimer);
-    tipTimer = setTimeout(()=> infoEl.textContent = '', 1800);
-  }
+        row.appendChild(info);
+        row.appendChild(status);
+        row.appendChild(toggle);
+        row.appendChild(del);
+        wrap.appendChild(row);
+      });
+  }
 
-  // -------------------- Public API --------------------
-  function init(){
-    load();
-    ensureMount();
+  // -------------------- Add Handler --------------------
+  function handleAdd() {
+    const name = (byId("fixedName")?.value || "").trim();
+    // allow placeholder examples if user didn’t type
+    const startStr = (byId("fixedStart")?.value || byId("fixedStart")?.placeholder || "").trim();
+    const endStr = (byId("fixedEnd")?.value || byId("fixedEnd")?.placeholder || "").trim();
 
-    if (addBtn) {
-      addBtn.addEventListener('click', onAdd);
-      if (nameInput) nameInput.addEventListener('keydown', e=>{ if(e.key==='Enter') onAdd(); });
-      if (startInput) startInput.addEventListener('keydown', e=>{ if(e.key==='Enter') onAdd(); });
-      if (endInput) endInput.addEventListener('keydown', e=>{ if(e.key==='Enter') onAdd(); });
-    } else {
-      console.error("Could not find the 'Add Fixed Activity' button (#addFixedBtn) to attach the event listener.");
-    }
+    if (!name) { alert("Please enter an activity name."); return; }
 
-    renderChips();
-    renderList();
-  }
+    const start = parseTimeToMinutes(startStr);
+    const end = parseTimeToMinutes(endStr);
+    if (start == null || end == null) { alert("Enter valid times (e.g., 12:00pm)."); return; }
+    if (end <= start) { alert("End time must be after start time."); return; }
 
-  function onDivisionsChanged(){
-    if(!rootEl) return;
-    renderChips();
-    renderList();
-  }
+    const selectedDivs = getSelectedDivisions(); // empty = all
+    const item = {
+      id: crypto?.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
+      name,
+      start,
+      end,
+      divisions: selectedDivs,
+      enabled: true,
+    };
 
-  function prePlace(){
-    const summary = [];
-    if(!Array.isArray(window.unifiedTimes) || unifiedTimes.length===0) return summary;
+    fixedActivities.push(item);
+    save();
+    renderList();
+    byId("fixedName").value = "";
+  }
 
-    window.divisionActiveRows = window.divisionActiveRows || {};
+  // -------------------- Public API --------------------
+  function init() {
+    if (document.readyState === "loading") { document.addEventListener("DOMContentLoaded", init); return; }
 
-    const divBunks = {};
-    (Array.isArray(window.availableDivisions)?availableDivisions:[]).forEach(d=>{
-      const b = (window.divisions && divisions[d] && Array.isArray(divisions[d].bunks)) ? divisions[d].bunks : [];
-      divBunks[d] = b;
-    });
+    const addBtn = byId("addFixedBtn");
+    if (addBtn) addBtn.addEventListener("click", handleAdd);
 
-    fixedActivities.filter(x=>x.enabled).forEach(item=>{
-      const startMin = toMinutes(item.start), endMin = toMinutes(item.end);
-      const rows = rowsForBlock(startMin,endMin);
-      if(rows.length===0) return;
+    // Ensure placeholders show examples (not HTML time inputs)
+    const fs = byId("fixedStart"); if (fs) { fs.type = "text"; fs.placeholder = fs.placeholder || "e.g., 12:00pm"; }
+    const fe = byId("fixedEnd");   if (fe) { fe.type = "text"; fe.placeholder = fe.placeholder || "e.g., 12:30pm"; }
 
-      const targets = resolveTargetDivisions(item.divisions);
-      targets.forEach(div=>{
-        if(!window.divisionActiveRows[div]) window.divisionActiveRows[div] = new Set();
-        rows.forEach(r=> window.divisionActiveRows[div].add(r));
+    buildDivisionChips();
+    load();
+    renderList();
 
-        const bunks = divBunks[div] || [];
-        bunks.forEach(b => {
-          if(!window.scheduleAssignments[b]) window.scheduleAssignments[b] = new Array(unifiedTimes.length);
-          rows.forEach((r,idx)=>{
-            window.scheduleAssignments[b][r] = {
-              field: { name: item.name },
-              sport: null,
-              continuation: idx>0,
-              _fixed: true,
-              _skip: false
-            };
-            summary.push({ bunk:b, row:r, name:item.name });
-          });
-        });
-      });
-    });
+    ["fixedName", "fixedStart", "fixedEnd"].forEach(id => {
+      const el = byId(id);
+      if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") handleAdd(); });
+    });
+  }
 
-    return summary;
-  }
+  function onDivisionsChanged() {
+    // Rebuild chips, keep selections when possible
+    const prev = new Set(getSelectedDivisions());
+    buildDivisionChips();
+    const box = byId("fixedDivisionsBox");
+    if (box && prev.size) {
+      box.querySelectorAll(".chip-toggle").forEach(b => {
+        if (prev.has(b.textContent.trim())) b.setAttribute("aria-pressed","true");
+      });
+    }
+  }
 
-  function getAll(){ return JSON.parse(JSON.stringify(fixedActivities)); }
-  function setAll(arr){ if(Array.isArray(arr)){ fixedActivities = arr; save(); renderList(); } }
+  // For schedule integration
+  function prePlace() {
+    return fixedActivities
+      .filter(f => f.enabled)
+      .map(f => ({
+        name: f.name,
+        start: f.start,
+        end: f.end,
+        divisions: (f.divisions && f.divisions.length) ? f.divisions.slice() : "all",
+      }));
+  }
 
-  // FIX: Expose window.DailyActivities immediately.
-  window.DailyActivities = { init, onDivisionsChanged, prePlace, getAll, setAll };
-
-  // Auto-init on DOMContentLoaded
-  document.addEventListener('DOMContentLoaded', init);
+  // Attach to window
+  window.DailyActivities = { init, onDivisionsChanged, prePlace };
 })();
