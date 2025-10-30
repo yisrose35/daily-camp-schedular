@@ -6,7 +6,6 @@ let leaguesByName = {};
 
 // -------------------- Helpers --------------------
 function publishDivisionToggleMap() {
-  // Build { "5th Grade": {enabled:true}, ... } for divisions that appear in ANY enabled league
   const divMap = {};
   Object.values(leaguesByName).forEach(lg => {
     if (lg?.enabled && Array.isArray(lg.divisions)) {
@@ -33,6 +32,38 @@ function loadLeagues() {
     leaguesByName[name] = l;
   });
   publishDivisionToggleMap();
+}
+
+// Contrast-aware text color for colored chips (same behavior as Setup)
+function textOn(bgHex) {
+  // parse #rrggbb → relative luminance
+  const hex = (bgHex || "").replace("#", "");
+  if (hex.length !== 6) return "#ffffff";
+  const r = parseInt(hex.slice(0,2),16)/255;
+  const g = parseInt(hex.slice(2,4),16)/255;
+  const b = parseInt(hex.slice(4,6),16)/255;
+  const srgb = [r,g,b].map(v => (v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4)));
+  const L = 0.2126*srgb[0] + 0.7152*srgb[1] + 0.0722*srgb[2];
+  return L > 0.5 ? "#000000" : "#ffffff";
+}
+
+// Apply the SAME push-button style as in Setup/Config
+function styleDivisionChip(btn, active, color) {
+  const outline = color || "#888888";
+  btn.style.borderRadius = "9999px";
+  btn.style.padding = "6px 12px";
+  btn.style.fontWeight = "600";
+  btn.style.cursor = "pointer";
+  btn.style.transition = "all .15s ease";
+  btn.style.border = `2px solid ${outline}`;
+
+  if (active) {
+    btn.style.backgroundColor = outline;
+    btn.style.color = textOn(outline);
+  } else {
+    btn.style.backgroundColor = "transparent";
+    btn.style.color = outline;
+  }
 }
 
 // -------------------- UI --------------------
@@ -79,7 +110,7 @@ function initLeaguesTab() {
     section.style.background = "#fafafa";
     section.style.opacity = leagueData.enabled ? "1" : "0.85";
 
-    // Header
+    // Header with name + toggle + delete
     const header = document.createElement("div");
     header.style.display = "flex";
     header.style.justifyContent = "space-between";
@@ -173,10 +204,9 @@ function initLeaguesTab() {
     section.appendChild(divTitle);
 
     const divContainer = document.createElement("div");
-    divContainer.className = "division-push-buttons";
     divContainer.style.display = "flex";
     divContainer.style.flexWrap = "wrap";
-    divContainer.style.gap = "6px";
+    divContainer.style.gap = "8px";
 
     const sourceDivs = Array.isArray(window.availableDivisions) && window.availableDivisions.length > 0
       ? window.availableDivisions
@@ -191,37 +221,32 @@ function initLeaguesTab() {
     }
 
     sourceDivs.forEach(divName => {
-      const divBtn = document.createElement("button");
-      divBtn.textContent = divName;
-      divBtn.className = "push-btn";
+      const chip = document.createElement("button");
+      chip.textContent = divName;
 
       const active = leagueData.divisions.includes(divName);
-      const divColor = window.divisions?.[divName]?.color || "#ccc";
-      divBtn.style.backgroundColor = active ? divColor : "white";
-      divBtn.style.color = active ? "white" : "black";
-      divBtn.style.border = `2px solid ${divColor}`;
-      divBtn.style.borderRadius = "20px";
-      divBtn.style.padding = "6px 10px";
-      divBtn.style.fontWeight = "500";
-      divBtn.style.cursor = "pointer";
-      divBtn.style.transition = "all 0.15s ease";
+      const divColor = (window.divisions?.[divName]?.color) || "#888888";
+      styleDivisionChip(chip, active, divColor);
 
-      divBtn.onmouseenter = () => {
-        if (!active) divBtn.style.backgroundColor = "#f3f3f3";
+      chip.onmouseenter = () => {
+        if (!leagueData.divisions.includes(divName)) chip.style.backgroundColor = "#f5f5f5";
       };
-      divBtn.onmouseleave = () => {
-        if (!active) divBtn.style.backgroundColor = "white";
+      chip.onmouseleave = () => {
+        const activeNow = leagueData.divisions.includes(divName);
+        styleDivisionChip(chip, activeNow, divColor);
       };
 
-      divBtn.onclick = () => {
+      chip.onclick = () => {
         const idx = leagueData.divisions.indexOf(divName);
         if (idx >= 0) leagueData.divisions.splice(idx, 1);
         else leagueData.divisions.push(divName);
         saveLeagues();
-        initLeaguesTab();
+        // Re-apply style immediately so it mirrors Setup push-buttons
+        const nowActive = leagueData.divisions.includes(divName);
+        styleDivisionChip(chip, nowActive, divColor);
       };
 
-      divContainer.appendChild(divBtn);
+      divContainer.appendChild(chip);
     });
     section.appendChild(divContainer);
 
@@ -238,18 +263,19 @@ function initLeaguesTab() {
       btn.textContent = sport;
       const active = leagueData.sports.includes(sport);
       btn.style.margin = "2px";
-      btn.style.padding = "6px 10px";
-      btn.style.borderRadius = "20px";
+      btn.style.padding = "6px 12px";
+      btn.style.borderRadius = "9999px";
       btn.style.cursor = "pointer";
       btn.style.border = "2px solid #007BFF";
-      btn.style.backgroundColor = active ? "#007BFF" : "white";
-      btn.style.color = active ? "white" : "black";
+      btn.style.backgroundColor = active ? "#007BFF" : "transparent";
+      btn.style.color = active ? "#fff" : "#007BFF";
       btn.onclick = () => {
         const idx = leagueData.sports.indexOf(sport);
         if (idx >= 0) leagueData.sports.splice(idx, 1);
         else leagueData.sports.push(sport);
         saveLeagues();
-        initLeaguesTab();
+        btn.style.backgroundColor = leagueData.sports.includes(sport) ? "#007BFF" : "transparent";
+        btn.style.color = leagueData.sports.includes(sport) ? "#fff" : "#007BFF";
       };
       sportsContainer.appendChild(btn);
     });
@@ -308,9 +334,9 @@ function initLeaguesTab() {
     (leagueData.teams || []).forEach(team => {
       const teamBtn = document.createElement("button");
       teamBtn.textContent = team;
-      teamBtn.style.padding = "6px 10px";
+      teamBtn.style.padding = "6px 12px";
       teamBtn.style.border = "1px solid #333";
-      teamBtn.style.borderRadius = "20px";
+      teamBtn.style.borderRadius = "9999px";
       teamBtn.style.cursor = "pointer";
       teamBtn.style.backgroundColor = "#f9f9f9";
       teamBtn.onclick = () => {
