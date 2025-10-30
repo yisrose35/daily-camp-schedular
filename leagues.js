@@ -1,15 +1,43 @@
 // -------------------- Leagues.js --------------------
 
-// Structure:
-// leagues = {
-//   "League Name": {
-//     enabled: boolean,                    // <— NEW
-//     divisions: ["5th Grade", "6th Grade"],
-//     sports: ["Basketball"],
-//     teams: ["Lions", "Tigers"]
-//   }
-// }
+// Internal store keyed by LEAGUE NAME for UI/storage
+let leaguesByName = {}; 
+// app2 expects window.leagues keyed by DIVISION NAME -> { enabled: boolean }
 
+// -------------------- Helpers --------------------
+function publishDivisionToggleMap() {
+  // Build { "5th Grade": {enabled:true}, ... } for divisions that appear in ANY enabled league
+  const divMap = {};
+  Object.values(leaguesByName).forEach(lg => {
+    if (lg?.enabled && Array.isArray(lg.divisions)) {
+      lg.divisions.forEach(d => { if (d) divMap[d] = { enabled: true }; });
+    }
+  });
+  // Expose ONLY the division map to app2
+  window.leagues = divMap;
+}
+
+function saveLeagues() {
+  localStorage.setItem("leagues", JSON.stringify(leaguesByName));
+  publishDivisionToggleMap();
+}
+
+function loadLeagues() {
+  const stored = localStorage.getItem("leagues");
+  leaguesByName = stored ? (JSON.parse(stored) || {}) : {};
+  // Backfill shapes
+  Object.keys(leaguesByName).forEach(name => {
+    const l = leaguesByName[name] || {};
+    if (typeof l.enabled === "undefined") l.enabled = false;
+    l.divisions = Array.isArray(l.divisions) ? l.divisions : [];
+    l.sports    = Array.isArray(l.sports)    ? l.sports    : [];
+    l.teams     = Array.isArray(l.teams)     ? l.teams     : [];
+    leaguesByName[name] = l;
+  });
+  publishDivisionToggleMap();
+}
+
+// -------------------- UI --------------------
 function initLeaguesTab() {
   const leaguesContainer = document.getElementById("leaguesContainer");
   if (!leaguesContainer) return;
@@ -27,24 +55,22 @@ function initLeaguesTab() {
   addLeagueBtn.textContent = "Add League";
   addLeagueBtn.onclick = () => {
     const name = newLeagueInput.value.trim();
-    if (name !== "" && !leagues[name]) {
-      leagues[name] = { enabled: false, divisions: [], sports: [], teams: [] }; // default disabled
+    if (name !== "" && !leaguesByName[name]) {
+      leaguesByName[name] = { enabled: false, divisions: [], sports: [], teams: [] };
       newLeagueInput.value = "";
       saveLeagues();
       initLeaguesTab();
     }
   };
-  newLeagueInput.addEventListener("keypress", e => {
-    if (e.key === "Enter") addLeagueBtn.click();
-  });
+  newLeagueInput.addEventListener("keypress", e => { if (e.key === "Enter") addLeagueBtn.click(); });
 
   addLeagueDiv.appendChild(newLeagueInput);
   addLeagueDiv.appendChild(addLeagueBtn);
   leaguesContainer.appendChild(addLeagueDiv);
 
   // -------------------- Render Each League --------------------
-  Object.keys(leagues).forEach(leagueName => {
-    const leagueData = leagues[leagueName];
+  Object.keys(leaguesByName).forEach(leagueName => {
+    const leagueData = leaguesByName[leagueName];
 
     const section = document.createElement("div");
     section.className = "league-section";
@@ -71,13 +97,14 @@ function initLeaguesTab() {
     title.textContent = leagueName;
     title.style.margin = "0";
 
-    // ---------- Enabled Toggle (slider style) ----------
+    // Enabled slider toggle
     const toggleWrap = document.createElement("label");
     toggleWrap.style.display = "inline-flex";
     toggleWrap.style.alignItems = "center";
     toggleWrap.style.gap = "8px";
     toggleWrap.style.cursor = "pointer";
     toggleWrap.title = "Enable/Disable this league";
+    toggleWrap.style.position = "relative";
 
     const toggleText = document.createElement("span");
     toggleText.textContent = leagueData.enabled ? "Enabled" : "Disabled";
@@ -85,27 +112,31 @@ function initLeaguesTab() {
     const toggle = document.createElement("input");
     toggle.type = "checkbox";
     toggle.checked = !!leagueData.enabled;
-    toggle.style.appearance = "none";
-    toggle.style.width = "44px";
-    toggle.style.height = "24px";
-    toggle.style.borderRadius = "999px";
-    toggle.style.position = "relative";
-    toggle.style.background = toggle.checked ? "#22c55e" : "#d1d5db";
-    toggle.style.transition = "background 0.15s ease";
-    toggle.style.outline = "none";
-    toggle.style.border = "1px solid #9ca3af";
+    Object.assign(toggle.style, {
+      appearance: "none",
+      width: "44px",
+      height: "24px",
+      borderRadius: "999px",
+      position: "relative",
+      background: toggle.checked ? "#22c55e" : "#d1d5db",
+      transition: "background 0.15s ease",
+      outline: "none",
+      border: "1px solid #9ca3af"
+    });
 
     const knob = document.createElement("span");
-    knob.style.position = "absolute";
-    knob.style.top = "50%";
-    knob.style.transform = "translateY(-50%)";
-    knob.style.left = toggle.checked ? "24px" : "2px";
-    knob.style.width = "20px";
-    knob.style.height = "20px";
-    knob.style.borderRadius = "50%";
-    knob.style.background = "#fff";
-    knob.style.boxShadow = "0 1px 2px rgba(0,0,0,0.3)";
-    knob.style.transition = "left 0.15s ease";
+    Object.assign(knob.style, {
+      position: "absolute",
+      top: "50%",
+      transform: "translateY(-50%)",
+      left: toggle.checked ? "24px" : "2px",
+      width: "20px",
+      height: "20px",
+      borderRadius: "50%",
+      background: "#fff",
+      boxShadow: "0 1px 2px rgba(0,0,0,0.3)",
+      transition: "left 0.15s ease"
+    });
 
     toggle.addEventListener("change", () => {
       leagueData.enabled = toggle.checked;
@@ -113,29 +144,26 @@ function initLeaguesTab() {
       knob.style.left = toggle.checked ? "24px" : "2px";
       toggleText.textContent = toggle.checked ? "Enabled" : "Disabled";
       section.style.opacity = leagueData.enabled ? "1" : "0.85";
-      saveLeagues();
+      saveLeagues(); // also republishes the division map for app2
     });
 
-    // Position the knob inside the custom switch
-    toggleWrap.style.position = "relative";
     toggleWrap.appendChild(toggle);
     toggleWrap.appendChild(knob);
     toggleWrap.appendChild(toggleText);
-
-    leftHeader.appendChild(title);
-    leftHeader.appendChild(toggleWrap);
 
     const deleteBtn = document.createElement("button");
     deleteBtn.textContent = "🗑️";
     deleteBtn.title = "Delete League";
     deleteBtn.onclick = () => {
       if (confirm(`Delete ${leagueName}?`)) {
-        delete leagues[leagueName];
+        delete leaguesByName[leagueName];
         saveLeagues();
         initLeaguesTab();
       }
     };
 
+    leftHeader.appendChild(title);
+    leftHeader.appendChild(toggleWrap);
     header.appendChild(leftHeader);
     header.appendChild(deleteBtn);
     section.appendChild(header);
@@ -151,7 +179,7 @@ function initLeaguesTab() {
     divContainer.style.flexWrap = "wrap";
     divContainer.style.gap = "6px";
 
-    Object.keys(divisions).forEach(divName => {
+    Object.keys(window.divisions || {}).forEach(divName => {
       const divBtn = document.createElement("button");
       divBtn.textContent = divName;
       divBtn.style.padding = "4px 8px";
@@ -160,7 +188,7 @@ function initLeaguesTab() {
       divBtn.style.border = "1px solid #333";
 
       const active = leagueData.divisions.includes(divName);
-      const divColor = divisions[divName]?.color || "#ddd";
+      const divColor = (window.divisions?.[divName]?.color) || "#ddd";
       divBtn.style.backgroundColor = active ? divColor : "white";
       divBtn.style.color = active ? "white" : "black";
 
@@ -168,7 +196,7 @@ function initLeaguesTab() {
         const idx = leagueData.divisions.indexOf(divName);
         if (idx >= 0) leagueData.divisions.splice(idx, 1);
         else leagueData.divisions.push(divName);
-        saveLeagues();
+        saveLeagues();          // republishes division map
         initLeaguesTab();
       };
 
@@ -255,7 +283,7 @@ function initLeaguesTab() {
     teamListContainer.style.flexWrap = "wrap";
     teamListContainer.style.gap = "6px";
 
-    leagueData.teams.forEach(team => {
+    (leagueData.teams || []).forEach(team => {
       const teamBtn = document.createElement("button");
       teamBtn.textContent = team;
       teamBtn.style.padding = "4px 8px";
@@ -278,28 +306,8 @@ function initLeaguesTab() {
   });
 }
 
-// -------------------- Storage --------------------
-function saveLeagues() {
-  localStorage.setItem("leagues", JSON.stringify(leagues));
-}
-
 // -------------------- Init --------------------
 document.addEventListener("DOMContentLoaded", () => {
-  const stored = localStorage.getItem("leagues");
-  if (stored) {
-    leagues = JSON.parse(stored) || {};
-    // Backfill enabled flag if missing
-    Object.keys(leagues).forEach(name => {
-      if (typeof leagues[name].enabled === "undefined") {
-        leagues[name].enabled = false;
-      }
-      leagues[name].divisions = Array.isArray(leagues[name].divisions) ? leagues[name].divisions : [];
-      leagues[name].sports    = Array.isArray(leagues[name].sports) ? leagues[name].sports : [];
-      leagues[name].teams     = Array.isArray(leagues[name].teams) ? leagues[name].teams : [];
-    });
-  } else {
-    leagues = {};
-  }
-
+  loadLeagues();
   if (document.getElementById("leaguesContainer")) initLeaguesTab();
 });
