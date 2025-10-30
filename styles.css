@@ -60,4 +60,3 @@ input:checked + .slider:before { transform: translateX(20px); }
   padding:4px 8px;
   cursor:pointer;
 }
-
