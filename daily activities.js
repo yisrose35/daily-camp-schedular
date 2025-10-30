@@ -1,392 +1,332 @@
-// daily_activities.js
-// Fixed Daily Activities (e.g., Lunch) — per-division, time-bound, toggleable.
-// Exposes: window.DailyActivities = { init, onDivisionsChanged, prePlace }
+// dailyActivities.js — Fixed Daily Activities (Lunch/Mincha/Swim/etc.)
+// Integrates with globals: availableDivisions, divisions, unifiedTimes, scheduleAssignments, divisionActiveRows
+// Exposes: window.DailyActivities = { init, onDivisionsChanged, prePlace, getAll, setAll }
+// - Accepts 12‑hour inputs like "12:00pm" or 24‑hour like "12:00"; stores normalized 24‑hour "HH:MM".
+// - If no divisions are selected for an item, it applies to ALL available divisions.
+// - prePlace() will mark divisionActiveRows and prefill scheduleAssignments with read-only blocks so the scheduler avoids them.
 
 (function(){
-  // -------------------- State & Persistence --------------------
-  let fixedActivities = []; 
-  // Item: { id, name, start:"HH:MM", end:"HH:MM", divisions:[string], enabled:boolean }
+  const STORAGE_KEY = "fixedActivities_v2";
+  let fixedActivities = []; // { id, name, start:"HH:MM", end:"HH:MM", divisions:[string], enabled:boolean }
 
-  function save(){ localStorage.setItem("fixedActivities", JSON.stringify(fixedActivities)); }
-  function load(){
-    try { fixedActivities = JSON.parse(localStorage.getItem("fixedActivities")) || []; }
-    catch { fixedActivities = []; }
-    // Migration: ensure enabled flag exists
-    let migrated = false;
-    fixedActivities.forEach(fx=>{
-      if (typeof fx.enabled === "undefined") { fx.enabled = true; migrated = true; }
-      if (!Array.isArray(fx.divisions)) { fx.divisions = []; migrated = true; }
-    });
-    if (migrated) save();
+  // -------------------- Helpers --------------------
+  function uid() { return Math.random().toString(36).slice(2,9); }
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      fixedActivities = Array.isArray(JSON.parse(raw)) ? JSON.parse(raw) : [];
+    } catch { fixedActivities = []; }
   }
+  function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(fixedActivities)); }
 
-  // -------------------- DOM Helpers --------------------
-  const byId = (id)=>document.getElementById(id);
-  const getDivColor = (div) => (window.divisions?.[div]?.color) || "#9e9e9e";
+  function pad(n){ return (n<10?'0':'') + n; }
 
-  // Paint a chip using the division color when selected
-  function paintChip(labelEl, checked, divName){
-    if (!labelEl) return;
-    const color = getDivColor(divName);
-    labelEl.style.cursor = "pointer";
-    labelEl.style.userSelect = "none";
-    labelEl.style.padding = "6px 10px";
-    labelEl.style.borderRadius = "999px";
-    labelEl.style.display = "inline-flex";
-    labelEl.style.alignItems = "center";
-    labelEl.style.gap = "8px";
-    labelEl.style.margin = "4px 6px 0 0";
-    labelEl.style.transition = "all .15s ease";
-    labelEl.style.border = checked ? "1px solid transparent" : "1px solid rgba(0,0,0,.15)";
-    labelEl.style.background = checked ? color : "transparent";
-    labelEl.style.color = checked ? "#fff" : "inherit";
-    labelEl.style.boxShadow = checked ? "0 1px 4px rgba(0,0,0,.15)" : "none";
-  }
+  // Accepts "12:00pm", "12:00 pm", "12:00", "7:05AM", returns normalized "HH:MM" (24h) or null
+  function normalizeTime(str){
+    if(!str) return null;
+    str = String(str).trim().toLowerCase();
+    // Allow placeholders like "e.g., 12:00pm" — ignore if includes letters besides am/pm
+    const tmp = str.replace(/[^0-9apm:]/g, "");
+    if(!tmp) return null;
 
-  function renderDivisionChips(){
-    const box = byId("fixedDivisionsBox");
-    if (!box) return;
-    box.innerHTML = "";
-    const list = (window.availableDivisions || []); 
-    list.forEach(div=>{
-      const id = `fxdiv-${div.replace(/\s+/g,'_')}`;
-      const color = getDivColor(div);
-
-      const wrap = document.createElement("label");
-      wrap.className = "chip";
-      wrap.setAttribute("data-div", div);
-      wrap.innerHTML = `
-        <input type="checkbox" id="${id}" data-div="${div}" style="display:none" aria-label="${div}">
-        <span class="chip-dot" aria-hidden="true" style="width:10px;height:10px;border-radius:999px;background:${color};display:inline-block;flex:0 0 auto;"></span>
-        <span class="chip-label">${div}</span>
-      `;
-      box.appendChild(wrap);
-
-      const cb = wrap.querySelector("input[type='checkbox']");
-      paintChip(wrap, cb.checked, div);
-
-      wrap.addEventListener("click", (e)=>{
-        if (e.target.tagName.toLowerCase() === "input") return;
-        cb.checked = !cb.checked;
-        paintChip(wrap, cb.checked, div);
-      });
-      cb.addEventListener("change", ()=> paintChip(wrap, cb.checked, div));
-    });
-  }
-
-  function makeDivPill(divName){
-    const pill = document.createElement("span");
-    pill.textContent = divName;
-    pill.style.display = "inline-block";
-    pill.style.padding = "2px 8px";
-    pill.style.borderRadius = "999px";
-    pill.style.background = getDivColor(divName);
-    pill.style.color = "#fff";
-    pill.style.fontSize = "12px";
-    pill.style.marginRight = "6px";
-    pill.style.lineHeight = "18px";
-    return pill;
-  }
-
-  function makeOnOffSwitch(isOn){
-    const label = document.createElement("label");
-    label.style.display = "inline-flex";
-    label.style.alignItems = "center";
-    label.style.gap = "8px";
-    label.style.cursor = "pointer";
-
-    const txt = document.createElement("span");
-    txt.textContent = isOn ? "On" : "Off";
-
-    const box = document.createElement("span");
-    box.style.width = "42px";
-    box.style.height = "24px";
-    box.style.borderRadius = "999px";
-    box.style.border = "1px solid rgba(0,0,0,.15)";
-    box.style.display = "inline-block";
-    box.style.position = "relative";
-    box.style.background = isOn ? "#4caf50" : "#e0e0e0";
-
-    const knob = document.createElement("span");
-    knob.style.position = "absolute";
-    knob.style.top = "2px";
-    knob.style.left = isOn ? "22px" : "2px";
-    knob.style.width = "20px";
-    knob.style.height = "20px";
-    knob.style.borderRadius = "50%";
-    knob.style.background = "#fff";
-    knob.style.boxShadow = "0 1px 3px rgba(0,0,0,.2)";
-    knob.style.transition = "left .15s ease";
-
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = !!isOn;
-    input.style.display = "none";
-
-    box.appendChild(knob);
-    label.appendChild(box);
-    label.appendChild(txt);
-
-    const api = {
-      el: label,
-      set(on){
-        input.checked = !!on;
-        txt.textContent = on ? "On" : "Off";
-        box.style.background = on ? "#4caf50" : "#e0e0e0";
-        knob.style.left = on ? "22px" : "2px";
-      },
-      onChange(fn){ input.addEventListener("change", ()=> fn(input.checked)); },
-      input
-    };
-
-    label.addEventListener("click", (e)=>{
-      if (e.target === input) return;
-      input.checked = !input.checked;
-      api.set(input.checked);
-      input.dispatchEvent(new Event("change"));
-    });
-
-    return api;
-  }
-
-  function renderList(){
-    const list = byId("fixedList");
-    if (!list) return;
-
-    if (!fixedActivities.length){
-      list.innerHTML = `<div style="opacity:.7">No fixed activities yet. Add lunch, tefillah, assemblies, etc.</div>`;
-      return;
+    const ampmMatch = tmp.match(/(am|pm)$/);
+    const hasAmPm = !!ampmMatch;
+    const ampm = hasAmPm ? ampmMatch[1] : null;
+    const timePart = tmp.replace(/(am|pm)$/,'');
+    const m = timePart.match(/^(\d{1,2}):(\d{2})$/);
+    if(!m) return null;
+    let hh = parseInt(m[1],10);
+    const mm = parseInt(m[2],10);
+    if(mm<0||mm>59) return null;
+    if(hasAmPm){
+      if(hh===12) hh = (ampm==='am') ? 0 : 12; else hh = (ampm==='pm') ? hh+12 : hh;
     }
-
-    list.innerHTML = "";
-    fixedActivities.forEach((fx, idx)=>{
-      const row = document.createElement("div");
-      row.className = "fixed-row";
-      row.style.display = "flex";
-      row.style.alignItems = "center";
-      row.style.justifyContent = "space-between";
-      row.style.border = "1px solid rgba(0,0,0,.08)";
-      row.style.borderRadius = "12px";
-      row.style.padding = "10px 12px";
-      row.style.margin = "8px 0";
-      row.style.gap = "10px";
-
-      const left = document.createElement("div");
-      left.style.minWidth = "0";
-
-      const title = document.createElement("div");
-      title.textContent = fx.name;
-      title.style.fontWeight = "600";
-      title.style.marginBottom = "4px";
-
-      const sub = document.createElement("div");
-      sub.style.opacity = ".9";
-      sub.style.display = "flex";
-      sub.style.flexWrap = "wrap";
-      sub.style.alignItems = "center";
-      sub.style.gap = "6px";
-
-      const time = document.createElement("span");
-      time.textContent = `${fx.start}–${fx.end}`;
-      time.style.marginRight = "8px";
-      sub.appendChild(time);
-
-      const targetDivs = fx.divisions?.length ? fx.divisions : (window.availableDivisions || []);
-      targetDivs.forEach(d => sub.appendChild(makeDivPill(d)));
-
-      left.appendChild(title);
-      left.appendChild(sub);
-
-      const right = document.createElement("div");
-      right.style.display = "flex";
-      right.style.alignItems = "center";
-      right.style.gap = "10px";
-
-      const sw = makeOnOffSwitch(!!fx.enabled);
-      sw.onChange((isOn)=>{
-        fixedActivities[idx].enabled = isOn;
-        save();
-        try { window.assignFieldsToBunks?.(); } catch {}
-        try { window.renderScheduleTable?.(); } catch {}
-      });
-      right.appendChild(sw.el);
-
-      const delBtn = document.createElement("button");
-      delBtn.textContent = "Remove";
-      delBtn.title = "Delete";
-      delBtn.style.border = "1px solid rgba(0,0,0,.15)";
-      delBtn.style.background = "#fff";
-      delBtn.style.borderRadius = "8px";
-      delBtn.style.padding = "6px 10px";
-      delBtn.style.cursor = "pointer";
-      delBtn.addEventListener("click", ()=>{
-        fixedActivities.splice(idx,1);
-        save();
-        renderList();
-        try { window.assignFieldsToBunks?.(); } catch {}
-        try { window.renderScheduleTable?.(); } catch {}
-      });
-      right.appendChild(delBtn);
-
-      row.appendChild(left);
-      row.appendChild(right);
-      list.appendChild(row);
-    });
+    if(hh<0||hh>23) return null;
+    return `${pad(hh)}:${pad(mm)}`;
   }
 
-  // -------------------- Add from form --------------------
-  function addFromForm(){
-    console.log("[DailyActivities] addFromForm()");
-    const name  = (byId("fixedName")?.value || "").trim();
-    const start = byId("fixedStart")?.value || "";
-    const end   = byId("fixedEnd")?.value || "";
-
-    if (!name){
-      alert("Please enter an activity name.");
-      return;
-    }
-    if (!start || !end){
-      alert("Please select start and end times.");
-      return;
-    }
-
-    const selected = [];
-    document.querySelectorAll("#fixedDivisionsBox input[type='checkbox']").forEach(cb=>{
-      if (cb.checked) selected.push(cb.dataset.div);
-    });
-
-    const id = "fx_" + Math.random().toString(36).slice(2,9);
-    fixedActivities.push({ id, name, start, end, divisions: selected, enabled: true });
-    save();
-
-    // reset UI
-    if (byId("fixedName")) byId("fixedName").value = "";
-    document.querySelectorAll("#fixedDivisionsBox input[type='checkbox']").forEach(cb=>{
-      cb.checked = false;
-      const wrap = cb.closest("label.chip");
-      if (wrap) paintChip(wrap, false, cb.dataset.div);
-    });
-
-    renderList();
-    try { window.assignFieldsToBunks?.(); } catch {}
-    try { window.renderScheduleTable?.(); } catch {}
-
-    console.log("[DailyActivities] added:", { id, name, start, end, divisions: selected });
+  function toMinutes(hhmm){
+    if(!hhmm) return null;
+    const [h,m] = hhmm.split(":").map(Number);
+    return h*60+m;
   }
 
-  // -------------------- Time helpers & prePlacement --------------------
-  function timeStringToTodayDate(hhmm){
-    const [hh, mm] = (hhmm || "00:00").split(":").map(Number);
-    const base = new Date((window.unifiedTimes?.[0]?.start) || Date.now()); 
-    base.setHours(hh || 0, mm || 0, 0, 0);
-    return base;
+  function to12hLabel(hhmm){
+    const mins = toMinutes(hhmm);
+    if(mins==null) return "--:--";
+    let h = Math.floor(mins/60), m = mins%60;
+    const am = h<12; let labelH = h%12; if(labelH===0) labelH=12;
+    return `${labelH}:${pad(m)} ${am? 'AM':'PM'}`;
   }
 
-  function rowsForTimeRange(unifiedTimes, startDate, endDate){
-    if (!Array.isArray(unifiedTimes) || unifiedTimes.length === 0) return [];
+  // Given a Date, return minutes from midnight
+  function minutesOf(d){ return d.getHours()*60 + d.getMinutes(); }
+
+  // Map a [start,end) block in minutes to unified row indices it covers
+  function rowsForBlock(startMin, endMin){
+    if(!Array.isArray(window.unifiedTimes)) return [];
     const rows = [];
-    for (let i=0;i<unifiedTimes.length;i++){
+    for(let i=0;i<unifiedTimes.length;i++){
       const row = unifiedTimes[i];
-      if (row.start < endDate && row.end > startDate) rows.push(i);
+      if(!(row && row.start && row.end)) continue;
+      const rs = minutesOf(new Date(row.start));
+      const re = minutesOf(new Date(row.end));
+      // Row is fully inside the fixed block window OR overlapping — we require full coverage to avoid shortening
+      if(rs>=startMin && re<=endMin){ rows.push(i); }
     }
     return rows;
   }
 
-  function prePlace(ctx){
-    const { scheduleAssignments, unifiedTimes, divisions, availableDivisions } = ctx || {};
-    const enabledFixed = (fixedActivities || []).filter(x => x.enabled);
-    if (!enabledFixed.length) return;
+  function resolveTargetDivisions(divs){
+    const avail = Array.isArray(window.availableDivisions) ? window.availableDivisions : [];
+    if(!divs || !divs.length) return avail.slice();
+    return divs.filter(d => avail.includes(d));
+  }
 
-    enabledFixed.forEach(fx=>{
-      const startD = timeStringToTodayDate(fx.start);
-      const endD   = timeStringToTodayDate(fx.end);
-      if (!(endD > startD)) return;
+  // -------------------- UI --------------------
+  let rootEl, chipsWrap, listEl, nameInput, startInput, endInput, addBtn, infoEl;
 
-      const rows = rowsForTimeRange(unifiedTimes, startD, endD);
-      if (!rows.length) return;
+  function ensureMount(){
+    // Mount inside the Daily tab (#daily). If not found, create a minimal section at body end.
+    const tab = document.getElementById('daily') || (function(){
+      const sec = document.createElement('section');
+      sec.id = 'daily';
+      document.body.appendChild(sec);
+      return sec;
+    })();
 
-      const targetDivs = (fx.divisions?.length ? fx.divisions : (availableDivisions || []));
-      targetDivs.forEach(div=>{
-        const bunksInDiv = (divisions?.[div]?.bunks) || [];
-        bunksInDiv.forEach(bunk=>{
-          if (!scheduleAssignments[bunk]) return;
-          let first = true;
-          rows.forEach(rIdx=>{
-            scheduleAssignments[bunk][rIdx] = {
-              type: "fixed",
-              field: { name: fx.name },
+    if(document.getElementById('dailyActivitiesRoot')) return;
+
+    tab.innerHTML = tab.innerHTML; // no-op, keep existing, just append below
+
+    rootEl = document.createElement('div');
+    rootEl.id = 'dailyActivitiesRoot';
+    rootEl.className = 'card';
+    rootEl.innerHTML = `
+      <h2>Daily Fixed Activities</h2>
+
+      <div class="grid2">
+        <label class="stack">
+          <span>Name</span>
+          <input id="da_name" placeholder="Lunch / Mincha / Swim" />
+        </label>
+        <div class="time-row">
+          <label class="stack">
+            <span>Start</span>
+            <input id="da_start" placeholder="e.g., 12:00pm" />
+          </label>
+          <span class="sep">to</span>
+          <label class="stack">
+            <span>End</span>
+            <input id="da_end" placeholder="e.g., 12:30pm" />
+          </label>
+        </div>
+      </div>
+
+      <div class="stack">
+        <span>Applies to Divisions</span>
+        <div id="da_chips" class="chips"></div>
+        <small>Toggle chips to target specific divisions. Leave all unselected to apply to <b>all</b>.</small>
+      </div>
+
+      <button id="da_add" class="primary">Add Fixed Activity</button>
+      <div id="da_info" class="muted" style="margin-top:8px;"></div>
+
+      <hr />
+      <div id="da_list" class="list"></div>
+    `;
+
+    tab.appendChild(rootEl);
+
+    // Basic styles (scoped)
+    injectStyles();
+
+    chipsWrap = rootEl.querySelector('#da_chips');
+    listEl   = rootEl.querySelector('#da_list');
+    nameInput= rootEl.querySelector('#da_name');
+    startInput= rootEl.querySelector('#da_start');
+    endInput = rootEl.querySelector('#da_end');
+    addBtn   = rootEl.querySelector('#da_add');
+    infoEl   = rootEl.querySelector('#da_info');
+
+    addBtn.addEventListener('click', onAdd);
+    nameInput.addEventListener('keydown', e=>{ if(e.key==='Enter') onAdd(); });
+    startInput.addEventListener('keydown', e=>{ if(e.key==='Enter') onAdd(); });
+    endInput.addEventListener('keydown', e=>{ if(e.key==='Enter') onAdd(); });
+  }
+
+  function injectStyles(){
+    if(document.getElementById('da_styles')) return;
+    const css = document.createElement('style');
+    css.id = 'da_styles';
+    css.textContent = `
+      #dailyActivitiesRoot{padding:12px;border:1px solid #e1e1e1;border-radius:12px}
+      #dailyActivitiesRoot .grid2{display:grid;grid-template-columns:1fr;gap:12px}
+      #dailyActivitiesRoot .time-row{display:flex;gap:8px;align-items:end}
+      #dailyActivitiesRoot .stack{display:flex;flex-direction:column;gap:6px}
+      #dailyActivitiesRoot input{padding:8px 10px;border:1px solid #ccc;border-radius:8px}
+      #dailyActivitiesRoot .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+      #dailyActivitiesRoot .chip{padding:6px 10px;border-radius:999px;border:1px solid #bbb;cursor:pointer;user-select:none}
+      #dailyActivitiesRoot .chip.active{background:#111;color:#fff;border-color:#111}
+      #dailyActivitiesRoot .list .item{display:flex;justify-content:space-between;align-items:center;border:1px solid #eee;border-radius:10px;padding:10px;margin:8px 0}
+      #dailyActivitiesRoot .muted{color:#666}
+      #dailyActivitiesRoot .sep{opacity:.7;padding:0 6px}
+      #dailyActivitiesRoot button.primary{padding:8px 12px;border:none;border-radius:8px;background:#0d6efd;color:#fff;cursor:pointer}
+      #dailyActivitiesRoot .pill{padding:2px 8px;border-radius:999px;background:#f2f2f2;border:1px solid #e6e6e6;margin-left:6px;font-size:12px}
+      @media(min-width:720px){ #dailyActivitiesRoot .grid2{grid-template-columns:1fr 1fr} }
+    `;
+    document.head.appendChild(css);
+  }
+
+  function renderChips(){
+    chipsWrap.innerHTML = '';
+    const divs = Array.isArray(window.availableDivisions) ? window.availableDivisions : [];
+    divs.forEach(d => {
+      const el = document.createElement('span');
+      el.className = 'chip';
+      el.textContent = d;
+      el.dataset.value = d;
+      el.addEventListener('click', ()=> el.classList.toggle('active'));
+      chipsWrap.appendChild(el);
+    });
+  }
+
+  function getSelectedDivisions(){
+    return Array.from(chipsWrap.querySelectorAll('.chip.active')).map(x=>x.dataset.value);
+  }
+
+  function renderList(){
+    if(!fixedActivities.length){
+      listEl.innerHTML = '<div class="muted">No fixed activities yet.</div>';
+      return;
+    }
+    listEl.innerHTML = '';
+    fixedActivities.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'item';
+      const targets = resolveTargetDivisions(item.divisions);
+      const label = `${item.name} — ${to12hLabel(item.start)} to ${to12hLabel(item.end)} \u2022 ${targets.join(', ') || 'All'}`;
+      row.innerHTML = `
+        <div>
+          <div><strong>${escapeHtml(item.name)}</strong> <span class="pill">${item.enabled?'ENABLED':'DISABLED'}</span></div>
+          <div class="muted">${escapeHtml(label)}</div>
+        </div>
+        <div>
+          <button class="primary" data-act="toggle">${item.enabled?'Disable':'Enable'}</button>
+          <button style="margin-left:8px" data-act="remove">Remove</button>
+        </div>
+      `;
+      row.querySelector('[data-act="toggle"]').addEventListener('click', ()=>{
+        item.enabled = !item.enabled; save(); renderList();
+      });
+      row.querySelector('[data-act="remove"]').addEventListener('click', ()=>{
+        fixedActivities = fixedActivities.filter(x=>x.id!==item.id); save(); renderList();
+      });
+      listEl.appendChild(row);
+    });
+  }
+
+  function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+
+  function onAdd(){
+    const name = (nameInput.value||'').trim();
+    const ns = normalizeTime(startInput.value);
+    const ne = normalizeTime(endInput.value);
+    if(!name){ return tip('Please enter a name.'); }
+    if(!ns || !ne){ return tip('Please enter valid start and end times (e.g., 12:00pm).'); }
+    const ms = toMinutes(ns), me = toMinutes(ne);
+    if(me<=ms){ return tip('End must be after start.'); }
+    const divisionsSel = getSelectedDivisions();
+    fixedActivities.push({ id:uid(), name, start:ns, end:ne, divisions:divisionsSel, enabled:true });
+    save();
+    nameInput.value = ''; startInput.value = ''; endInput.value = '';
+    chipsWrap.querySelectorAll('.chip.active').forEach(c=>c.classList.remove('active'));
+    tip('Added.');
+    renderList();
+  }
+
+  let tipTimer = null;
+  function tip(msg){
+    infoEl.textContent = msg;
+    clearTimeout(tipTimer);
+    tipTimer = setTimeout(()=> infoEl.textContent = '', 1800);
+  }
+
+  // -------------------- Public API --------------------
+  function init(){
+    load();
+    ensureMount();
+    renderChips();
+    renderList();
+  }
+
+  function onDivisionsChanged(){
+    // Rebuild chips if the available divisions changed at runtime
+    if(!rootEl) return; // not mounted yet
+    renderChips();
+    renderList();
+  }
+
+  /**
+   * Pre-place enabled fixed activities into the schedule grid.
+   * - Sets divisionActiveRows[div] to include blocked rows.
+   * - Pre-fills scheduleAssignments for every bunk in targeted divisions with a non-overwritable fixed block.
+   * Return value is a summary useful for debugging.
+   */
+  function prePlace(){
+    const summary = [];
+    if(!Array.isArray(window.unifiedTimes) || unifiedTimes.length===0) return summary;
+
+    // Ensure container exists
+    window.divisionActiveRows = window.divisionActiveRows || {};
+
+    // Build a fast map of division -> bunks
+    const divBunks = {};
+    (Array.isArray(window.availableDivisions)?availableDivisions:[]).forEach(d=>{
+      const b = (window.divisions && divisions[d] && Array.isArray(divisions[d].bunks)) ? divisions[d].bunks : [];
+      divBunks[d] = b;
+    });
+
+    // Loop over items
+    fixedActivities.filter(x=>x.enabled).forEach(item=>{
+      const startMin = toMinutes(item.start), endMin = toMinutes(item.end);
+      const rows = rowsForBlock(startMin,endMin);
+      if(rows.length===0) return; // If no full rows fit, we skip to avoid shortening a period
+
+      const targets = resolveTargetDivisions(item.divisions);
+      targets.forEach(div=>{
+        // Mark division active rows
+        if(!window.divisionActiveRows[div]) window.divisionActiveRows[div] = new Set();
+        rows.forEach(r=> window.divisionActiveRows[div].add(r));
+
+        // Fill scheduleAssignments with fixed blocks for each bunk of the division
+        const bunks = divBunks[div] || [];
+        bunks.forEach(b => {
+          if(!window.scheduleAssignments[b]) window.scheduleAssignments[b] = new Array(unifiedTimes.length);
+          rows.forEach((r,idx)=>{
+            window.scheduleAssignments[b][r] = {
+              field: { name: item.name },
               sport: null,
-              continuation: !first,
-              _locked: true
+              continuation: idx>0,
+              _fixed: true,
+              _skip: false
             };
-            first = false;
+            summary.push({ bunk:b, row:r, name:item.name });
           });
         });
       });
     });
+
+    return summary;
   }
 
-  // -------------------- Lifecycle --------------------
-  function init(){
-    try {
-      load();
-      renderDivisionChips();
-      renderList();
+  function getAll(){ return JSON.parse(JSON.stringify(fixedActivities)); }
+  function setAll(arr){ if(Array.isArray(arr)){ fixedActivities = arr; save(); renderList(); } }
 
-      const addBtn = byId("addFixedBtn");
-      if (addBtn && !addBtn.dataset.bound) {
-        addBtn.dataset.bound = "1";
-        addBtn.addEventListener("click", (e)=>{
-          e.preventDefault();
-          e.stopPropagation();
-          addFromForm();
-        });
-      }
+  // Expose
+  window.DailyActivities = { init, onDivisionsChanged, prePlace, getAll, setAll };
 
-      // Enter key on name field triggers Add
-      const nameInput = byId("fixedName");
-      if (nameInput && !nameInput.dataset.bound) {
-        nameInput.dataset.bound = "1";
-        nameInput.addEventListener("keydown", (e)=>{
-          if (e.key === "Enter") {
-            e.preventDefault();
-            byId("addFixedBtn")?.click();
-          }
-        });
-      }
-
-      console.log("[DailyActivities] init complete");
-    } catch (err) {
-      console.error("[DailyActivities] init error:", err);
-    }
-  }
-
-  function onDivisionsChanged(){
-    renderDivisionChips();
-    renderList();
-  }
-
-  window.DailyActivities = { init, onDivisionsChanged, prePlace };
-
-  // ✅ Ensure init runs even with defer (DOM likely ready already)
-  document.readyState === "loading"
-    ? document.addEventListener("DOMContentLoaded", init)
-    : init();
-
-  // ✅ SAFETY NET: Global click delegation (works even if init() failed)
-  document.addEventListener("click", (e)=>{
-    const btn = e.target && (e.target.id === "addFixedBtn" ? e.target : e.target.closest?.("#addFixedBtn"));
-    if (btn) {
-      e.preventDefault();
-      try { addFromForm(); } catch (err) { console.error("[DailyActivities] addFromForm failed:", err); }
-    }
-  });
-
-  // Repaint chips when Daily Fixed tab is opened
-  window.addEventListener("click", (e)=>{
-    const t = e.target.closest?.(".tab-button");
-    if (t && /daily fixed/i.test(t.textContent || "")) {
-      renderDivisionChips();
-    }
-  });
+  // Auto-init when DOM is ready (safe if included with defer)
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
