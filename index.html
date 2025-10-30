@@ -2,22 +2,21 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>🏕️ Camp Scheduler</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Camp Scheduler</title>
   <link rel="stylesheet" href="styles.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body>
   <h1>🏕️ Camp Scheduler</h1>
 
-  <!-- ===================== TABS ===================== -->
   <div class="tabs">
     <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button>
-    <button class="tab-button" onclick="showTab('daily')">Daily Activities</button>
     <button class="tab-button" onclick="showTab('schedule')">Daily Schedule</button>
     <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
+    <button class="tab-button" onclick="showTab('fixed-activities')">🗓️ Daily Fixed</button>
   </div>
 
-  <!-- ===================== SETUP TAB ===================== -->
+  <!-- =================== SETUP TAB =================== -->
   <div id="setup" class="tab-content active">
     <h3>Add Bunks</h3>
     <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
@@ -25,101 +24,147 @@
     <div id="unassignedBunks" class="bunk-container"></div>
 
     <h3>Add Divisions</h3>
-    <input id="divisionInput" placeholder="Enter division (e.g., 5th Grade)">
+    <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
     <button id="addDivisionBtn">Add Division</button>
-    <div id="divisionList" class="division-container"></div>
+    <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable Colors</label>
+    <div id="divisionButtons" style="margin-top:8px;"></div>
 
-    <h3>Time Settings</h3>
-    <label>Start Time: <input id="startTime" type="time"></label>
-    <label>End Time: <input id="endTime" type="time"></label>
-    <label>Interval:
-      <select id="increment">
-        <option value="15">15 min</option>
-        <option value="30" selected>30 min</option>
-        <option value="60">60 min</option>
-      </select>
-    </label>
-    <button id="generateTimesBtn">Generate Time Slots</button>
+    <h3>Schedule Increments</h3>
+    <select id="increment">
+      <option value="15">15 minutes</option>
+      <option value="30" selected>30 minutes</option>
+      <option value="45">45 minutes</option>
+      <option value="60">60 minutes</option>
+    </select>
 
-    <h3>Fields & Activities</h3>
-    <input id="fieldInput" placeholder="Enter field name (e.g., Gym)">
-    <button id="addFieldBtn">Add Field</button>
-    <div id="fieldsContainer" class="field-container"></div>
+    <h3>Activity Duration</h3>
+    <select id="activityDuration">
+      <option value="15">15 minutes</option>
+      <option value="30" selected>30 minutes</option>
+      <option value="45">45 minutes</option>
+      <option value="60">60 minutes</option>
+      <option value="90">90 minutes</option>
+    </select>
 
-    <h3>Special Activities</h3>
-    <input id="specialInput" placeholder="Enter special activity (e.g., Art)">
+    <h3>Division Time Templates</h3>
+    <input id="timeStartInput" placeholder="Start (e.g., 9:00 AM)">
+    <input id="timeEndInput" placeholder="End (e.g., 4:00 PM)">
+    <button onclick="addTimeTemplate()">Add Time</button>
+    <div id="timeTemplates"></div>
+
+    <button style="margin-top:12px;" onclick="generateTimes()">Generate Schedule Times</button>
+
+    <h3>Add Fields / Courts</h3>
+    <input id="fieldInput" placeholder="Enter field/court name (e.g., Court 1)">
+    <button id="addFieldBtn">Add Field/Court</button>
+    <div id="fieldList"></div>
+
+    <h3>Add Special Activities</h3>
+    <input id="specialInput" placeholder="Enter special activity (e.g., Canteen)">
     <button id="addSpecialBtn">Add Special</button>
-    <div id="specialsContainer" class="special-container"></div>
+    <div id="specialList"></div>
+
+    <h3>Erase All Data</h3>
+    <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">Erase All</button>
   </div>
 
-  <!-- ===================== DAILY ACTIVITIES TAB ===================== -->
-  <div id="daily" class="tab-content">
-    <h2>Daily Fixed Activities</h2>
-    <p class="info">Add things like Lunch, Mincha, or Swim periods that must occur at fixed times.</p>
+  <!-- =================== SCHEDULE TAB =================== -->
+  <div id="schedule" class="tab-content">
+    <h3>Daily Schedule</h3>
+    <p class="info">Fixed activities (e.g., Lunch 12:00–12:30) are pre-placed and take precedence.</p>
+    <button id="generateScheduleBtn" class="primary">Generate Schedule</button>
+    <div id="scheduleTable"></div>
+  </div>
 
-    <label>Name<br><input id="fixedName" placeholder="e.g. Lunch / Mincha / Swim"></label>
+  <!-- =================== LEAGUES TAB =================== -->
+  <div id="leagues" class="tab-content">
+    <h3>Leagues Setup</h3>
+    <div id="leaguesContainer"></div>
+  </div>
 
-    <div class="time-inputs">
-      <label>Start Time<br><input id="fixedStart" placeholder="e.g. 12:00pm"></label>
-      <label>End Time<br><input id="fixedEnd" placeholder="e.g. 12:30pm"></label>
+  <!-- =================== FIXED DAILY ACTIVITIES TAB =================== -->
+  <div id="fixed-activities" class="tab-content">
+    <h2>Fixed Daily Activities (Lunch, Assembly, etc.)</h2>
+
+    <div style="border: 1px solid #ccc; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+      <label for="fixedName" style="display: block; margin-bottom: 5px; font-weight: 600;">Activity Name:</label>
+      <input type="text" id="fixedName" placeholder="e.g., Lunch, Tefillah" style="margin-right: 8px; width: 250px;">
+
+      <label for="fixedStart" style="display: inline-block; margin-top: 10px; font-weight: 600;">Start Time:</label>
+      <input id="fixedStart" placeholder="e.g., 12:00pm" style="margin-right: 8px;">
+
+      <label for="fixedEnd" style="display: inline-block; font-weight: 600;">End Time:</label>
+      <input id="fixedEnd" placeholder="e.g., 12:30pm" style="margin-right: 8px;">
+
+      <button id="addFixedBtn" class="bunk-button" style="background: #007BFF; color: white; margin-top: 15px;">Add Fixed Activity</button>
+
+      <p style="margin-top: 15px; font-weight: 600;">Select Divisions:</p>
+      <div id="fixedDivisionsBox" style="display: flex; flex-wrap: wrap; gap: 4px;"></div>
     </div>
 
-    <h4>Applies to Divisions</h4>
-    <div id="fixedDivisionsContainer" class="chip-container"></div>
-
-    <button id="addFixedBtn">Add Fixed Activity</button>
-
-    <hr>
-    <h3>Existing Fixed Activities</h3>
+    <h3>Active Fixed Activities List</h3>
     <div id="fixedList"></div>
   </div>
 
-  <!-- ===================== DAILY SCHEDULE TAB ===================== -->
-  <div id="schedule" class="tab-content">
-    <h2>Daily Schedule</h2>
-    <p class="info">Automatically generated schedule. Fixed activities (like lunch) take precedence.</p>
-    <button id="generateScheduleBtn">Generate Schedule</button>
-    <div id="scheduleGrid" class="schedule-container"></div>
-  </div>
-
-  <!-- ===================== LEAGUES TAB ===================== -->
-  <div id="leagues" class="tab-content">
-    <h2>Leagues Setup</h2>
-    <input id="leagueInput" placeholder="Enter league name (e.g., Basketball League)">
-    <button id="addLeagueBtn">Add League</button>
-    <div id="leagueList"></div>
-
-    <h3>Division Selection</h3>
-    <p>Select which divisions participate in each league. Button color matches setup colors.</p>
-    <div id="leagueDivisions"></div>
-  </div>
-
-  <!-- ===================== SCRIPT INCLUDES ===================== -->
-  <script src="app1.js" defer></script>
-  <script src="daily_activities.js" defer></script>
-  <script src="leagues.js" defer></script>
-  <script src="app2.js" defer></script>
-
-  <!-- ===================== TAB SCRIPT ===================== -->
+  <!-- ============== TAB SWITCHER + SAFE HOOKS ============== -->
   <script>
-    function showTab(tabId) {
-      document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
-      document.querySelector(`.tab-button[onclick="showTab('${tabId}')"]`).classList.add('active');
-      document.getElementById(tabId).classList.add('active');
+    function showTab(id) {
+      document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      document.getElementById(id).classList.add('active');
+      document.querySelector(`.tab-button[onclick="showTab('${id}')"]`)?.classList.add('active');
+
+      if (id === 'schedule') {
+        // refresh display when opening schedule
+        window.updateTable?.();
+      } else if (id === 'leagues') {
+        window.initLeaguesTab?.();
+      } else if (id === 'fixed-activities') {
+        // refresh division chips and list when opening fixed tab
+        window.DailyActivities?.onDivisionsChanged?.();
+      }
     }
 
-    // Generate schedule on button click
-    document.addEventListener('DOMContentLoaded', () => {
+    // Boot after all deferred scripts parse
+    (document.readyState === "loading"
+      ? document.addEventListener("DOMContentLoaded", boot)
+      : boot());
+
+    function boot() {
+      // Wire the Generate Schedule button
       const genBtn = document.getElementById('generateScheduleBtn');
       if (genBtn) {
         genBtn.addEventListener('click', () => {
           if (typeof assignFieldsToBunks === 'function') assignFieldsToBunks();
-          if (typeof renderSchedule === 'function') renderSchedule();
-          else alert('Schedule generated (core updated).');
+          // render grid
+          if (typeof window.updateTable === 'function') {
+            window.updateTable();
+          } else {
+            console.warn('updateTable() not found; ensure your renderer is loaded.');
+          }
         });
       }
-    });
+
+      // Initialize Fixed Activities module if present
+      if (window.DailyActivities && typeof window.DailyActivities.init === "function") {
+        window.DailyActivities.init();
+      } else {
+        console.warn("DailyActivities not loaded yet. Ensure daily_activities.js sets window.DailyActivities.");
+      }
+
+      // If app1 exposes a divisions change bus, rewire DailyActivities when divisions change
+      if (typeof window.onDivisionsChanged === "function") {
+        window.onDivisionsChanged(() => {
+          window.DailyActivities?.onDivisionsChanged?.();
+        });
+      }
+    }
   </script>
+
+  <!-- ORDER MATTERS -->
+  <script src="app1.js" defer></script>
+  <script src="daily_activities.js" defer></script>
+  <script src="leagues.js" defer></script>
+  <script src="app2.js" defer></script>
 </body>
 </html>
