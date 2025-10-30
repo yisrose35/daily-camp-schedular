@@ -142,3 +142,4 @@
 
   window.initLeaguesTab = initLeaguesTab;
 })();
+
