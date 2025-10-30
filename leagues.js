@@ -1,7 +1,7 @@
 // -------------------- Leagues.js --------------------
 
 // Internal store keyed by LEAGUE NAME for UI/storage
-let leaguesByName = {}; 
+let leaguesByName = {};
 // app2 expects window.leagues keyed by DIVISION NAME -> { enabled: boolean }
 
 // -------------------- Helpers --------------------
@@ -179,16 +179,29 @@ function initLeaguesTab() {
     divContainer.style.flexWrap = "wrap";
     divContainer.style.gap = "6px";
 
-    Object.keys(window.divisions || {}).forEach(divName => {
+    // Source grades from availableDivisions if present; otherwise from divisions object
+    const sourceDivs = Array.isArray(window.availableDivisions) && window.availableDivisions.length > 0
+      ? window.availableDivisions
+      : Object.keys(window.divisions || {});
+
+    if (sourceDivs.length === 0) {
+      const note = document.createElement("div");
+      note.textContent = "No divisions found. Add divisions in Setup to select grades for this league.";
+      note.style.fontStyle = "italic";
+      note.style.opacity = "0.7";
+      section.appendChild(note);
+    }
+
+    sourceDivs.forEach(divName => {
       const divBtn = document.createElement("button");
       divBtn.textContent = divName;
       divBtn.style.padding = "4px 8px";
-      divBtn.style.borderRadius = "5px";
+      divBtn.style.borderRadius = "999px";
       divBtn.style.cursor = "pointer";
       divBtn.style.border = "1px solid #333";
 
       const active = leagueData.divisions.includes(divName);
-      const divColor = (window.divisions?.[divName]?.color) || "#ddd";
+      const divColor = (window.divisions?.[divName]?.color) || "#333";
       divBtn.style.backgroundColor = active ? divColor : "white";
       divBtn.style.color = active ? "white" : "black";
 
