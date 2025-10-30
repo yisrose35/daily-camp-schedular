@@ -39,7 +39,8 @@
     labelEl.style.transition = "all .15s ease";
     labelEl.style.border = checked ? "1px solid transparent" : "1px solid rgba(0,0,0,.15)";
     labelEl.style.background = checked ? color : "transparent";
-    labelEl.style.color = checked ? "#fff" : "inherit";
+    // *** VISIBILITY FIX HERE ***: Use a dark color instead of 'inherit' for unselected state
+    labelEl.style.color = checked ? "#fff" : "#333"; 
     labelEl.style.boxShadow = checked ? "0 1px 4px rgba(0,0,0,.15)" : "none";
   }
 
@@ -47,8 +48,8 @@
     const box = byId("fixedDivisionsBox");
     if (!box) { /* console.warn("[DailyActivities] #fixedDivisionsBox not found"); */ return; }
     box.innerHTML = "";
-    // FIX 2: Use window.availableDivisions, which is exposed by app1.js
-    const list = (window.availableDivisions || []); 
+    // Pulls from the global list managed by app1.js
+    const list = (window.availableDivisions || []); 
     list.forEach(div=>{
       const id = `fxdiv-${div.replace(/\s+/g,'_')}`;
       const color = getDivColor(div);
@@ -197,7 +198,6 @@
       time.style.marginRight = "8px";
       sub.appendChild(time);
 
-      // FIX: Ensure targetDivs gracefully handles undefined availableDivisions
       const targetDivs = fx.divisions?.length ? fx.divisions : (window.availableDivisions || []);
       targetDivs.forEach(d => sub.appendChild(makeDivPill(d)));
 
@@ -276,7 +276,7 @@
   // -------------------- Time helpers & prePlacement --------------------
   function timeStringToTodayDate(hhmm){
     const [hh, mm] = (hhmm || "00:00").split(":").map(Number);
-    // FIX: Ensure there's a fallback date if unifiedTimes hasn't been set yet
+    // Use global unifiedTimes from app1.js if available, otherwise fallback to now
     const base = new Date((window.unifiedTimes?.[0]?.start) || Date.now()); 
     base.setHours(hh || 0, mm || 0, 0, 0);
     return base;
@@ -294,6 +294,7 @@
 
   // Call BEFORE leagues/fields; AFTER you reset schedule arrays
   function prePlace(ctx){
+    // Pulling from ctx or global, depending on how you pass data
     const { scheduleAssignments, unifiedTimes, divisions, availableDivisions } = ctx || {};
     const enabledFixed = (fixedActivities || []).filter(x => x.enabled);
     if (!enabledFixed.length) return;
@@ -333,11 +334,11 @@
     renderDivisionChips();
     renderList();
     
-    // FIX 3: Set default time values for the input fields
+    // *** TIME DEFAULT FIX HERE ***: Set the default time values
     if (byId("fixedStart")) byId("fixedStart").value = "12:00";
     if (byId("fixedEnd")) byId("fixedEnd").value = "12:30";
 
-    // FIX 1: Ensure the listener is added reliably *after* the DOM is ready
+    // *** ADD BUTTON FIX HERE ***: Ensure the listener is added reliably *after* the DOM is ready
     const addBtn = byId("addFixedBtn");
     if (addBtn) addBtn.addEventListener("click", addFromForm);
   }
@@ -348,16 +349,12 @@
   }
 
   window.DailyActivities = { init, onDivisionsChanged, prePlace };
-  
-  // Ensure init runs after the DOM is ready.
-  // Since you use 'defer' in your script tags, DOMContentLoaded is a good time.
   window.addEventListener("DOMContentLoaded", init);
 
   // If you use tab buttons, repaint chips when Daily tab is opened
   window.addEventListener("click", (e)=>{
     const btn = e.target.closest?.(".tab-button");
-    // Check button text for 'fixed-activities' tab text
-    if (btn && /daily fixed/i.test(btn.textContent || "")) {
+    if (btn && /daily/i.test(btn.textContent || "")) {
       renderDivisionChips();
     }
   });
