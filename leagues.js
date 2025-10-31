@@ -1,9 +1,8 @@
-// -------------------- Leagues.js (clean) --------------------
+// -------------------- Leagues.js --------------------
 
 // Internal store keyed by LEAGUE NAME for UI/storage
 let leaguesByName = {};
 // app2 expects window.leagues keyed by DIVISION NAME -> { enabled: boolean }
-// app2 now ALSO expects window.leaguesByName to get team lists
 
 // -------------------- Helpers --------------------
 function publishDivisionToggleMap() {
@@ -17,15 +16,9 @@ function publishDivisionToggleMap() {
   window.leagues = divMap;
 }
 
-function publishLeaguesGlobal() {
-  // Expose leaguesByName for app2.js and anything else
-  window.leaguesByName = leaguesByName;
-  publishDivisionToggleMap();
-}
-
 function saveLeagues() {
   localStorage.setItem("leagues", JSON.stringify(leaguesByName));
-  publishLeaguesGlobal();
+  publishDivisionToggleMap();
 }
 
 function loadLeagues() {
@@ -39,16 +32,7 @@ function loadLeagues() {
     l.teams     = Array.isArray(l.teams)     ? l.teams     : [];
     leaguesByName[name] = l;
   });
-  publishLeaguesGlobal();
-}
-
-function getAllDivisions() {
-  // Prefer divisions keys if available; fallback to availableDivisions
-  if (window.divisions && typeof window.divisions === "object") {
-    return Object.keys(window.divisions);
-  }
-  if (Array.isArray(window.availableDivisions)) return window.availableDivisions.slice();
-  return [];
+  publishDivisionToggleMap();
 }
 
 // -------------------- UI --------------------
@@ -117,6 +101,7 @@ function initLeaguesTab() {
     toggleWrap.style.alignItems = "center";
     toggleWrap.style.gap = "8px";
     toggleWrap.style.cursor = "pointer";
+    toggleWrap.title = "Enable/Disable this league";
     toggleWrap.style.position = "relative";
 
     const toggleText = document.createElement("span");
@@ -272,14 +257,14 @@ function initLeaguesTab() {
     const customSportInput = document.createElement("input");
     customSportInput.placeholder = "Other sport";
     customSportInput.style.marginLeft = "6px";
-    customSportInput.addEventListener("keypress", e => {
+    customSportInput.onkeypress = e => {
       if (e.key === "Enter" && customSportInput.value.trim() !== "") {
         leagueData.sports.push(customSportInput.value.trim());
         customSportInput.value = "";
         saveLeagues();
         initLeaguesTab();
       }
-    });
+    };
     sportsContainer.appendChild(customSportInput);
     section.appendChild(sportsContainer);
 
@@ -292,14 +277,14 @@ function initLeaguesTab() {
     const teamInput = document.createElement("input");
     teamInput.placeholder = "Enter team name";
     teamInput.style.marginRight = "8px";
-    teamInput.addEventListener("keypress", e => {
+    teamInput.onkeypress = e => {
       if (e.key === "Enter" && teamInput.value.trim() !== "") {
         leagueData.teams.push(teamInput.value.trim());
         teamInput.value = "";
         saveLeagues();
         initLeaguesTab();
       }
-    });
+    };
     section.appendChild(teamInput);
 
     const addTeamBtn = document.createElement("button");
@@ -346,25 +331,5 @@ function initLeaguesTab() {
 // -------------------- Init --------------------
 document.addEventListener("DOMContentLoaded", () => {
   loadLeagues();
-  // Expose the init function globally so index.js / tab switcher can call it
-  window.initLeaguesTab = initLeaguesTab;
-
-  // If the Leagues tab is already active on load, render immediately
-  const leaguesTab = document.getElementById("leaguesContainer");
-  if (leaguesTab && leaguesTab.parentElement && leaguesTab.parentElement.classList.contains("active")) {
-    initLeaguesTab();
-  }
-
-  // Optional: refresh leagues UI if your app broadcasts division changes
-  if (typeof window.onDivisionsChanged === "function") {
-    window.onDivisionsChanged(() => {
-      // Drop leagues’ divisions that no longer exist
-      const set = new Set(getAllDivisions());
-      Object.values(leaguesByName).forEach(lg => {
-        lg.divisions = (lg.divisions || []).filter(d => set.has(d));
-      });
-      saveLeagues();
-      initLeaguesTab();
-    });
-  }
+  if (document.getElementById("leaguesContainer")) initLeaguesTab();
 });
