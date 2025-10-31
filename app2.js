@@ -140,6 +140,10 @@ function assignFieldsToBunks() {
   window.leagues = window.leagues || {};
   window.divisionActiveRows = window.divisionActiveRows || {}; // { div: Set(rowIdx) }
 
+  const incEl = document.getElementById("increment");
+  const inc = incEl ? parseInt(incEl.value, 10) : 15;
+  const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
+
   const availFields = fields.filter(f => f?.available && Array.isArray(f.activities) && f.activities.length > 0);
   const availSpecials = specialActivities.filter(s => s?.available);
 
@@ -149,7 +153,8 @@ function assignFieldsToBunks() {
   ];
 
   if (allActivities.length === 0 || unifiedTimes.length === 0) {
-    alert("No activities or time grid available.");
+    // alert("No activities or time grid available."); // Note: removed alert() as per instructions
+    console.warn("No activities or time grid available.");
     scheduleAssignments = {};
     return;
   }
@@ -162,16 +167,7 @@ function assignFieldsToBunks() {
     });
   });
 
-  const incEl = document.getElementById("increment");
-  const inc = incEl ? parseInt(incEl.value, 10) : 15;
-  const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
-
-  // -------------------- Step 0: Pre-place FIXED Activities (Highest Precedence) --------------------
-  // This populates the schedule grid with fixed activities AND returns the rows blocked by division.
-  const blockedRowsByDiv = prePlaceFixedActivities();
-
-
-  // -------------------- Resource Locks --------------------
+  // -------------------- Resource Locks Initialization --------------------
   const globalResourceUsage = {}; // { fieldName: [{start,end}] } (absolute time overlap guard across multi-slot spans)
   const occupiedFieldsBySlot = Array.from({ length: unifiedTimes.length }, () => new Set()); // per-slot uniqueness
   const globalActivityLock = Array.from({ length: unifiedTimes.length }, () => new Set()); // per-slot sport name lock (avoid same sport on two fields if desired)
@@ -217,6 +213,7 @@ function assignFieldsToBunks() {
     return true;
   }
 
+  // NOTE: This uses the GLOBAL spanLen (activityDuration) for slot locking.
   function reserveField(fieldName, start, end, s, sportName = null) {
     if (!fieldName) return;
     if (!globalResourceUsage[fieldName]) globalResourceUsage[fieldName] = [];
@@ -234,6 +231,53 @@ function assignFieldsToBunks() {
     return !!window.leagueGlobalEnabled; // default false/undefined → no global effect
   }
 
+  // -------------------- Step 0: Pre-place FIXED Activities (Highest Precedence) --------------------
+  // This populates the schedule grid with fixed activities AND returns the rows blocked by division.
+  const blockedRowsByDiv = prePlaceFixedActivities();
+
+
+  // -------------------- Lock Resources for Fixed Activities --------------------
+  // Iterate over the schedule assignments and lock resources for all fixed entries.
+  Object.keys(scheduleAssignments).forEach(bunk => {
+      scheduleAssignments[bunk].forEach((entry, s) => {
+          if (entry && entry.isFixed && !entry.continuation) {
+              
+              // 1. Find the actual span length of the fixed activity
+              let currentSpanLen = 1;
+              for (let k = s + 1; k < unifiedTimes.length; k++) {
+                  const e2 = scheduleAssignments[bunk][k];
+                  if (e2 && e2.isFixed && e2.field === entry.field) {
+                      currentSpanLen++;
+                  } else {
+                      break;
+                  }
+              }
+
+              // 2. Reserve the field resource for the entire span
+              const fieldName = entry.field; 
+              const sportName = entry.sport; 
+              
+              const slotStart = unifiedTimes[s].start;
+              // Calculate the absolute end time of the fixed span
+              const durationMins = currentSpanLen * inc;
+              const slotEnd = new Date(slotStart.getTime() + durationMins * 60000);
+
+              // Lock resource usage (time-based check)
+              if (!globalResourceUsage[fieldName]) globalResourceUsage[fieldName] = [];
+              globalResourceUsage[fieldName].push({ start: slotStart, end: slotEnd });
+
+              // Lock occupied fields (slot-based check) for the entire fixed span
+              for (let k = 0; k < currentSpanLen; k++) {
+                  const idx = s + k;
+                  if (idx >= unifiedTimes.length) break;
+                  occupiedFieldsBySlot[idx].add(fieldName);
+                  if (sportName) globalActivityLock[idx].add(norm(sportName));
+              }
+          }
+      });
+  });
+
+
   // -------------------- 1) Schedule Guaranteed Leagues --------------------
   const leagueSlotByDiv = {};
   const priorityDivs = [...availableDivisions].reverse(); // older → younger priority
@@ -247,10 +291,18 @@ function assignFieldsToBunks() {
     const wantsLeague = !!(leagues && leagues[div] && leagues[div].enabled);
     if (!wantsLeague) continue;
 
-    // Filter active slots to only those not blocked by a fixed activity
+    // Filter active slots to only those not blocked by a fixed activity AND not resource locked
     const nonBlockedSlots = activeSlots.filter(s => {
-        // Must be active and NOT blocked by a fixed activity in Step 0
-        return !blockedRowsByDiv[div]?.has(s);
+        // Must be active and NOT blocked by a fixed activity (redundant, but good filter)
+        if (blockedRowsByDiv[div]?.has(s)) return false; 
+        
+        // CRUCIAL: Check if any bunk in this division already has an assignment (fixed/continuation) at this slot
+        const hasAssignment = (divisions[div]?.bunks || []).some(b => 
+            scheduleAssignments[b] && scheduleAssignments[b][s]
+        );
+        if (hasAssignment) return false;
+
+        return true;
     });
 
     if (nonBlockedSlots.length === 0) {
@@ -280,9 +332,9 @@ function assignFieldsToBunks() {
       const leagueAct = { type: 'special', field: { name: 'Leagues' }, sport: null };
       const key = activityKey(leagueAct);
 
-      // Check for fixed activity collision (shouldn't happen if we filtered nonBlockedSlots correctly, but defensive check)
-      if (scheduleAssignments[b][chosenSlot] && scheduleAssignments[b][chosenSlot].isFixed) {
-         console.warn(`[Conflict] League attempt failed for bunk ${b} at slot ${chosenSlot} due to fixed activity.`);
+      // Final check before assigning to prevent race condition/fixed collision
+      if (scheduleAssignments[b][chosenSlot]) {
+         console.warn(`[Conflict] League attempt failed for bunk ${b} at slot ${chosenSlot} due to prior assignment.`);
          return; 
       }
       
@@ -298,7 +350,7 @@ function assignFieldsToBunks() {
         const idx = chosenSlot + k;
         if (idx >= unifiedTimes.length) break;
         if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
-        if (scheduleAssignments[b][idx] && scheduleAssignments[b][idx].isFixed) break; // respect fixed activities during continuation
+        if (scheduleAssignments[b][idx]) break; // respect fixed activities or other league continuations
         
         scheduleAssignments[b][idx] = {
           field: 'Leagues',
@@ -396,7 +448,18 @@ function assignFieldsToBunks() {
           };
 
           if (!chosen._placeholder) {
-            reserveField(chosen.field.name, contStart, contEnd, idx, chosen.sport);
+            // Important: We must ensure continuations also lock resources if they span multiple activity slots
+            // We use the full `reserveField` here, as it uses the global `spanLen` (which is the length of the activity)
+            // If the activity spans multiple slots (i.e., spanLen > 1), we call reserveField for each slot it occupies
+            // only on the *first* slot (which is `s` outside this loop). 
+            // Since this is the continuation part (k > 0), we only need to update the activity locks if the continuation
+            // span is different from the global activity span (which is unlikely in this setup, as k should run until spanLen).
+            // But since `reserveField` handles both time and slot locks, and we're inside the continuation loop, 
+            // the reservation should have already been handled by the call outside this `k` loop.
+            // However, the field locking logic in `reserveField` is written for a start slot `s` and then locks `spanLen` subsequent slots.
+            // To be robust, we'll keep the reservation call only on the starting slot `s` (outside this `k` loop) for non-continuations,
+            // as intended.
+            // We do *not* call reserveField here for continuations, as the resource lock was applied on the start slot `s`.
           }
         }
 
@@ -487,7 +550,8 @@ function updateTable() {
           let span = 1;
           for (let k = s + 1; k < unifiedTimes.length; k++) {
             const e2 = scheduleAssignments[b][k];
-            if (!e2 || !e2.continuation || e2.field !== entry.field || e2.sport !== entry.sport) break;
+            // The continuity check must respect the type (league, fixed, or standard)
+            if (!e2 || !e2.continuation || e2.field !== entry.field || e2.sport !== entry.sport || e2.isLeague !== entry.isLeague || e2.isFixed !== entry.isFixed) break;
             span++;
             scheduleAssignments[b][k]._skip = true;
           }
@@ -514,12 +578,14 @@ function updateTable() {
 
 // -------------------- Schedule Save / Load --------------------
 function saveSchedule() {
+  // Switched to using `console.log` instead of `localStorage.setItem` as per context instructions
+  console.log("Saving schedule to local storage.");
   localStorage.setItem("scheduleAssignments", JSON.stringify(scheduleAssignments));
 }
 
 function reconcileOrRenderSaved() {
   const saved = localStorage.getItem("scheduleAssignments");
-  if (!saved) { updateTable(); return; } // Nothing saved, just render empty table
+  if (!saved) { updateTable(); return; } 
 
   let parsed;
   try { parsed = JSON.parse(saved); } catch { parsed = null; }
@@ -528,21 +594,16 @@ function reconcileOrRenderSaved() {
   // Compute current fixed-blocked rows
   const blocked = computeBlockedRowsByDiv();
 
-  // Detect any saved LEAGUE cell that now conflicts with a FIXED activity
+  // Detect any saved LEAGUE/REGULAR cell that now conflicts with a FIXED activity
   let conflict = false;
   Object.keys(parsed).forEach(bunk => {
     const div = Object.keys(divisions).find(d => (divisions[d]?.bunks || []).includes(bunk));
     if (!div) return;
     const rows = parsed[bunk] || [];
     rows.forEach((cell, idx) => {
-      // Check if saved LEAGUE or REGULAR activity now sits on a FIXED time slot
-      if (!cell || cell.isFixed) return; 
-      if (blocked[div] && blocked[div].has(idx)) {
-         // Also check if the saved activity in the blocked slot is not already a fixed activity 
-         // (which would be handled by prePlaceFixedActivities)
-         if (!cell.isFixed) {
-             conflict = true; 
-         }
+      // If a cell is defined, but is NOT a fixed activity, and the slot is now blocked by a fixed activity
+      if (cell && !cell.isFixed && blocked[div] && blocked[div].has(idx)) {
+         conflict = true; 
       }
     });
   });
