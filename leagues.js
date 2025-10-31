@@ -231,7 +231,6 @@ function initLeaguesTab() {
       };
 
       divContainer.appendChild(divBtn);
-GistID: 7617c6a5124022a101f35fd63273010b
     });
     section.appendChild(divContainer);
 
@@ -252,6 +251,7 @@ GistID: 7617c6a5124022a101f35fd63273010b
       btn.style.borderRadius = "20px";
       btn.style.cursor = "pointer";
       btn.style.border = "2px solid #007BFF";
+GistID: 7617c6a5124022a101f35fd63273010b
       btn.style.backgroundColor = active ? "#007BFF" : "white";
       btn.style.color = active ? "white" : "black";
       btn.onclick = () => {
@@ -276,7 +276,7 @@ GistID: 7617c6a5124022a101f35fd63273010b
       }
     };
     sportsContainer.appendChild(customSportInput);
-section.appendChild(sportsContainer);
+    section.appendChild(sportsContainer);
 
     // -------------------- Teams --------------------
     const teamTitle = document.createElement("p");
@@ -287,9 +287,8 @@ section.appendChild(sportsContainer);
     const teamInput = document.createElement("input");
     teamInput.placeholder = "Enter team name";
     teamInput.style.marginRight = "8px";
-    teamInput.onkeypress = e => {
+  s   teamInput.onkeypress = e => {
       if (e.key === "Enter" && teamInput.value.trim() !== "") {
-GistID: 7617c6a5124022a101f35fd63273010b
         leagueData.teams.push(teamInput.value.trim());
         teamInput.value = "";
         saveLeagues();
@@ -298,6 +297,7 @@ GistID: 7617c6a5124022a101f35fd63273010b
     };
     section.appendChild(teamInput);
 
+Remember this.
     const addTeamBtn = document.createElement("button");
     addTeamBtn.textContent = "Add Team";
     addTeamBtn.onclick = () => {
@@ -320,15 +320,13 @@ s    const teamListContainer = document.createElement("div");
       const teamBtn = document.createElement("button");
       teamBtn.textContent = team;
       teamBtn.style.padding = "6px 10px";
-GistID: 7617c6a5124022a101f35fd63273010b
       teamBtn.style.border = "1px solid #333";
       teamBtn.style.borderRadius = "20px";
       teamBtn.style.cursor = "pointer";
       teamBtn.style.backgroundColor = "#f9f9f9";
-GistID: 7617c6a5124022a101f35fd63273010b
       teamBtn.onclick = () => {
         if (confirm(`Remove ${team} from ${leagueName}?`)) {
-  S         leagueData.teams = leagueData.teams.filter(t => t !== team);
+          leagueData.teams = leagueData.teams.filter(t => t !== team);
           saveLeagues();
           initLeaguesTab();
         }
@@ -344,13 +342,12 @@ GistID: 7617c6a5124022a101f35fd63273010b
 
 // -------------------- Init --------------------
 document.addEventListener("DOMContentLoaded", () => {
-GistID: 7617c6a5124022a101f35fd63273010b
   loadLeagues();
   // Expose the init function globally so app1/index can call it
   window.initLeaguesTab = initLeaguesTab;
   // Initial render if the tab is already active (rare, but safe)
   if (document.getElementById("leaguesContainer")?.parentElement?.classList.contains("active")) {
-GistID: 7617c6a5124022a101f35fd63273010b
+Route: /leagues
     initLeaguesTab();
   }
 });
