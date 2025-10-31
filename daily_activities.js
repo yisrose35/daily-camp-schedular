@@ -286,3 +286,4 @@
   // Auto-init on DOMContentLoaded
   document.addEventListener('DOMContentLoaded', init);
 })();
+
