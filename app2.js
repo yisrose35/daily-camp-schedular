@@ -20,6 +20,13 @@ function parseTimeToMinutes(str) {
   return hh * 60 + mm;
 }
 
+// Normalize any "field" value (string or {name}) into a label string
+function fieldLabel(field) {
+  if (typeof field === "string") return field;
+  if (field && typeof field === "object" && typeof field.name === "string") return field.name;
+  return ""; // safe fallback
+}
+
 function findRowsForRange(startStr, endStr) {
   if (!Array.isArray(window.unifiedTimes) || window.unifiedTimes.length === 0) return [];
   const startMin = parseTimeToMinutes(startStr);
@@ -112,9 +119,10 @@ function prePlaceFixedActivities() {
         window.scheduleAssignments[bunk] = window.scheduleAssignments[bunk] || new Array(window.unifiedTimes.length);
         rows.forEach((r, idx) => {
           if (window.scheduleAssignments[bunk][r]?.isFixed) return; // idempotent
+          // Store fixed activity as a STRING label to avoid object rendering issues
           window.scheduleAssignments[bunk][r] = {
             type: "fixed",
-            field: act.name, // Fixed activity name (STRING)
+            field: fieldLabel(act.name ?? act.field), // tolerate either act.name or act.field
             sport: null,
             continuation: idx > 0,
             isFixed: true
@@ -153,7 +161,6 @@ function assignFieldsToBunks() {
   ];
 
   if (allActivities.length === 0 || unifiedTimes.length === 0) {
-    // alert("No activities or time grid available."); // Note: removed alert() as per instructions
     console.warn("No activities or time grid available.");
     scheduleAssignments = {};
     return;
@@ -178,7 +185,7 @@ function assignFieldsToBunks() {
 
   // Per-bunk once-per-day tracker for both sports & specials (ABSOLUTE RULE)
   const usedActivityKeysByBunk = {}; // { bunk: Set<string> }
-  // Soft preference: avoid reusing same field for same bunk
+  // Soft preference: avoid reusing the same field for same bunk
   const fieldsUsedByBunk = {}; // { bunk: Set<fieldName> }
 
   // Build empty sets for all bunks
@@ -239,42 +246,42 @@ function assignFieldsToBunks() {
   // -------------------- Lock Resources for Fixed Activities --------------------
   // Iterate over the schedule assignments and lock resources for all fixed entries.
   Object.keys(scheduleAssignments).forEach(bunk => {
-      scheduleAssignments[bunk].forEach((entry, s) => {
-          if (entry && entry.isFixed && !entry.continuation) {
-              
-              // 1. Find the actual span length of the fixed activity
-              let currentSpanLen = 1;
-              for (let k = s + 1; k < unifiedTimes.length; k++) {
-                  const e2 = scheduleAssignments[bunk][k];
-                  if (e2 && e2.isFixed && e2.field === entry.field) {
-                      currentSpanLen++;
-                  } else {
-                      break;
-                  }
-              }
-
-              // 2. Reserve the field resource for the entire span
-              const fieldName = entry.field; 
-              const sportName = entry.sport; 
-              
-              const slotStart = unifiedTimes[s].start;
-              // Calculate the absolute end time of the fixed span
-              const durationMins = currentSpanLen * inc;
-              const slotEnd = new Date(slotStart.getTime() + durationMins * 60000);
-
-              // Lock resource usage (time-based check)
-              if (!globalResourceUsage[fieldName]) globalResourceUsage[fieldName] = [];
-              globalResourceUsage[fieldName].push({ start: slotStart, end: slotEnd });
-
-              // Lock occupied fields (slot-based check) for the entire fixed span
-              for (let k = 0; k < currentSpanLen; k++) {
-                  const idx = s + k;
-                  if (idx >= unifiedTimes.length) break;
-                  occupiedFieldsBySlot[idx].add(fieldName);
-                  if (sportName) globalActivityLock[idx].add(norm(sportName));
-              }
+    scheduleAssignments[bunk].forEach((entry, s) => {
+      if (entry && entry.isFixed && !entry.continuation) {
+        // 1. Find the actual span length of the fixed activity
+        let currentSpanLen = 1;
+        for (let k = s + 1; k < unifiedTimes.length; k++) {
+          const e2 = scheduleAssignments[bunk][k];
+          // use label-based compare for robustness
+          if (e2 && e2.isFixed && fieldLabel(e2.field) === fieldLabel(entry.field)) {
+            currentSpanLen++;
+          } else {
+            break;
           }
-      });
+        }
+
+        // 2. Reserve the field resource for the entire span
+        const fieldName = fieldLabel(entry.field); 
+        const sportName = entry.sport; 
+        
+        const slotStart = unifiedTimes[s].start;
+        // Calculate the absolute end time of the fixed span
+        const durationMins = currentSpanLen * (document.getElementById("increment") ? parseInt(document.getElementById("increment").value,10) : 15);
+        const slotEnd = new Date(slotStart.getTime() + durationMins * 60000);
+
+        // Lock resource usage (time-based check)
+        if (!globalResourceUsage[fieldName]) globalResourceUsage[fieldName] = [];
+        globalResourceUsage[fieldName].push({ start: slotStart, end: slotEnd });
+
+        // Lock occupied fields (slot-based check) for the entire fixed span
+        for (let k = 0; k < currentSpanLen; k++) {
+          const idx = s + k;
+          if (idx >= unifiedTimes.length) break;
+          occupiedFieldsBySlot[idx].add(fieldName);
+          if (sportName) globalActivityLock[idx].add(norm(sportName));
+        }
+      }
+    });
   });
 
 
@@ -293,21 +300,21 @@ function assignFieldsToBunks() {
 
     // Filter active slots to only those not blocked by a fixed activity AND not resource locked
     const nonBlockedSlots = activeSlots.filter(s => {
-        // Must be active and NOT blocked by a fixed activity (redundant, but good filter)
-        if (blockedRowsByDiv[div]?.has(s)) return false; 
-        
-        // CRUCIAL: Check if any bunk in this division already has an assignment (fixed/continuation) at this slot
-        const hasAssignment = (divisions[div]?.bunks || []).some(b => 
-            scheduleAssignments[b] && scheduleAssignments[b][s]
-        );
-        if (hasAssignment) return false;
+      // Must be active and NOT blocked by a fixed activity (redundant, but good filter)
+      if (blockedRowsByDiv[div]?.has(s)) return false; 
+      
+      // CRUCIAL: Check if any bunk in this division already has an assignment (fixed/continuation) at this slot
+      const hasAssignment = (divisions[div]?.bunks || []).some(b => 
+        scheduleAssignments[b] && scheduleAssignments[b][s]
+      );
+      if (hasAssignment) return false;
 
-        return true;
+      return true;
     });
 
     if (nonBlockedSlots.length === 0) {
-        console.warn(`[Leagues] No available non-blocked slots found for division ${div}.`);
-        continue; // Skip division if all active slots are fixed
+      console.warn(`[Leagues] No available non-blocked slots found for division ${div}.`);
+      continue; // Skip division if all active slots are fixed
     }
 
     // Choose a spread-out league slot from the available non-blocked slots
@@ -373,11 +380,11 @@ function assignFieldsToBunks() {
   const PLACEHOLDER_NAME = 'Special Activity Needed';
 
   function baseFeasible(act, bunk, slotStart, slotEnd, s, allowFieldReuse) {
-    const fieldName = act?.field?.name;
-    if (!fieldName) return false;
+    const fname = fieldLabel(act?.field);
+    if (!fname) return false;
 
     // Prevent two bunks on the same physical field at the same time
-    if (!canUseField(fieldName, slotStart, slotEnd, s)) return false;
+    if (!canUseField(fname, slotStart, slotEnd, s)) return false;
 
     // Prevent same sport on multiple fields in the SAME slot (optional lock)
     if (act.sport && globalActivityLock[s].has(norm(act.sport))) return false;
@@ -387,7 +394,7 @@ function assignFieldsToBunks() {
     if (key && usedActivityKeysByBunk[bunk]?.has(key)) return false;
 
     // Soft: avoid reusing the same field for this bunk unless we must
-    if (!allowFieldReuse && fieldsUsedByBunk[bunk]?.has(fieldName)) return false;
+    if (!allowFieldReuse && fieldsUsedByBunk[bunk]?.has(fname)) return false;
 
     return true;
   }
@@ -417,9 +424,10 @@ function assignFieldsToBunks() {
         if (scheduleAssignments[bunk][s]) continue; // fixed/leagues/continuations already set
 
         const chosen = chooseActivity(bunk, slotStart, slotEnd, s);
+        const fname = fieldLabel(chosen.field);
 
         scheduleAssignments[bunk][s] = {
-          field: chosen.field.name,
+          field: fname,
           sport: chosen.sport,
           continuation: false,
           isLeague: false
@@ -427,50 +435,32 @@ function assignFieldsToBunks() {
 
         // Reserve only for real activities
         if (!chosen._placeholder) {
-          reserveField(chosen.field.name, slotStart, slotEnd, s, chosen.sport);
+          reserveField(fname, slotStart, slotEnd, s, chosen.sport);
         }
 
         // Continuations over spanLen
-        for (let k = 1; k < spanLen; k++) {
+        for (let k = 1; k < Math.max(1, Math.ceil(activityDuration / (document.getElementById("increment") ? parseInt(document.getElementById("increment").value,10) : 15))); k++) {
           const idx = s + k;
           if (idx >= unifiedTimes.length) break;
           if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
           if (scheduleAssignments[bunk][idx]) break; // already filled by fixed/league/other continuation
 
-          const contStart = unifiedTimes[idx].start;
-          const contEnd = new Date(contStart.getTime() + activityDuration * 60000);
-
           scheduleAssignments[bunk][idx] = {
-            field: chosen.field.name,
+            field: fname,
             sport: chosen.sport,
             continuation: true,
             isLeague: false
           };
-
-          if (!chosen._placeholder) {
-            // Important: We must ensure continuations also lock resources if they span multiple activity slots
-            // We use the full `reserveField` here, as it uses the global `spanLen` (which is the length of the activity)
-            // If the activity spans multiple slots (i.e., spanLen > 1), we call reserveField for each slot it occupies
-            // only on the *first* slot (which is `s` outside this loop). 
-            // Since this is the continuation part (k > 0), we only need to update the activity locks if the continuation
-            // span is different from the global activity span (which is unlikely in this setup, as k should run until spanLen).
-            // But since `reserveField` handles both time and slot locks, and we're inside the continuation loop, 
-            // the reservation should have already been handled by the call outside this `k` loop.
-            // However, the field locking logic in `reserveField` is written for a start slot `s` and then locks `spanLen` subsequent slots.
-            // To be robust, we'll keep the reservation call only on the starting slot `s` (outside this `k` loop) for non-continuations,
-            // as intended.
-            // We do *not* call reserveField here for continuations, as the resource lock was applied on the start slot `s`.
-          }
         }
 
         // Track per-bunk usage (skip placeholder)
         if (!chosen._placeholder) {
           const key = activityKey(chosen);
           if (key) usedActivityKeysByBunk[bunk].add(key);
-          fieldsUsedByBunk[bunk].add(chosen.field.name);
+          fieldsUsedByBunk[bunk].add(fname);
         }
 
-        lastActivityByBunk[bunk] = { field: chosen.field.name, sport: chosen.sport, isLeague: false };
+        lastActivityByBunk[bunk] = { field: fname, sport: chosen.sport, isLeague: false };
       }
     }
   }
@@ -550,8 +540,12 @@ function updateTable() {
           let span = 1;
           for (let k = s + 1; k < unifiedTimes.length; k++) {
             const e2 = scheduleAssignments[b][k];
-            // The continuity check must respect the type (league, fixed, or standard)
-            if (!e2 || !e2.continuation || e2.field !== entry.field || e2.sport !== entry.sport || e2.isLeague !== entry.isLeague || e2.isFixed !== entry.isFixed) break;
+            // Compare using normalized field labels so strings/objects both work
+            const sameField = e2 && fieldLabel(e2.field) === fieldLabel(entry.field);
+            const sameSport = (e2 && e2.sport) === (entry && entry.sport);
+            const sameLeague = !!(e2 && e2.isLeague) === !!(entry && entry.isLeague);
+            const sameFixed = !!(e2 && e2.isFixed) === !!(entry && entry.isFixed);
+            if (!e2 || !e2.continuation || !sameField || !sameSport || !sameLeague || !sameFixed) break;
             span++;
             scheduleAssignments[b][k]._skip = true;
           }
@@ -560,11 +554,12 @@ function updateTable() {
           if (entry.isLeague) {
             td.innerHTML = `<span class="league-pill">Leagues</span>`;
           } else if (entry.isFixed) { // Render fixed activities
-            td.innerHTML = `<span class="fixed-pill">${entry.field}</span>`;
-          } else if (entry.field === "Special Activity Needed" && !entry.sport) {
-            td.innerHTML = `<span class="need-special-pill">${entry.field}</span>`;
+            td.innerHTML = `<span class="fixed-pill">${fieldLabel(entry.field)}</span>`;
+          } else if (fieldLabel(entry.field) === "Special Activity Needed" && !entry.sport) {
+            td.innerHTML = `<span class="need-special-pill">${fieldLabel(entry.field)}</span>`;
           } else {
-            td.textContent = entry.sport ? `${entry.field} – ${entry.sport}` : entry.field;
+            const label = fieldLabel(entry.field);
+            td.textContent = entry.sport ? `${label} – ${entry.sport}` : label;
           }
         } else if (!entry) td.textContent = "";
         tr.appendChild(td);
@@ -578,7 +573,6 @@ function updateTable() {
 
 // -------------------- Schedule Save / Load --------------------
 function saveSchedule() {
-  // Switched to using `console.log` instead of `localStorage.setItem` as per context instructions
   console.log("Saving schedule to local storage.");
   localStorage.setItem("scheduleAssignments", JSON.stringify(scheduleAssignments));
 }
