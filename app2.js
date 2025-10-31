@@ -76,7 +76,7 @@ function loadActiveFixedActivities() {
 function activityKey(act) {
   if (!act) return null;
   if (act.sport && typeof act.sport === "string") return `sport:${norm(act.sport)}`;
-  // Access field name directly if it's an object, or use field string if it's fixed
+  // Check if 'field' is a string (fixed/league/regular assignment) or an object (activity source)
   const fname = norm(typeof act.field === 'string' ? act.field : act.field?.name);
   return fname ? `special:${fname}` : null;
 }
@@ -130,7 +130,7 @@ function prePlaceFixedActivities() {
           if (scheduleAssignments[bunk][r]?.isFixed) return; // idempotent
           scheduleAssignments[bunk][r] = {
             type: "fixed",
-            field: { name: act.name }, // Store as object with name for consistency
+            field: act.name, // <-- FIXED: Store name as STRING for consistency
             sport: null,
             continuation: idx > 0,
             isFixed: true
@@ -160,6 +160,7 @@ function assignFieldsToBunks() {
   const availFields = fields.filter(f => f?.available && Array.isArray(f.activities) && f.activities.length > 0);
   const availSpecials = specialActivities.filter(s => s?.available);
 
+  // All Activity source objects use field.name
   const allActivities = [
     ...availFields.flatMap(f => f.activities.map(act => ({ type: "field", field: f, sport: act }))),
     ...availSpecials.map(sa => ({ type: "special", field: { name: sa.name }, sport: null }))
@@ -186,9 +187,9 @@ function assignFieldsToBunks() {
   const blockedRowsByDiv = prePlaceFixedActivities();
 
   // Resource locks
-  const globalResourceUsage = {}; // { fieldName: [{start,end}] }
+  const globalResourceUsage = {}; 
   const occupiedFieldsBySlot = Array.from({ length: unifiedTimes.length }, () => new Set());
-  const globalActivityLock = Array.from({ length: unifiedTimes.length }, () => new Set()); // per-slot sport lock
+  const globalActivityLock = Array.from({ length: unifiedTimes.length }, () => new Set()); 
 
   function canUseField(fieldName, start, end, s) {
     if (!fieldName) return false;
@@ -218,21 +219,16 @@ function assignFieldsToBunks() {
   const leagueSlotOccupiedByRow = Array.from({ length: unifiedTimes.length }, () => false); 
   const leagueSlotByDiv = {};
 
-  function divHasFixedAt(div, s) {
-    const bunksInDiv = (divisions[div]?.bunks) || [];
-    return bunksInDiv.some(b => scheduleAssignments[b]?.[s]?.isFixed);
-  }
-
   function spanValid(div, s) {
     // Check if the full activity duration is valid for this division
     for (let k = 0; k < spanLen; k++) {
       const idx = s + k;
       if (idx >= unifiedTimes.length) return false;
-      // Check if the slot is active for the division
+      // Active time slot check
       if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) return false;
-      // Check if the slot is blocked by a fixed activity (Division-specific block)
+      // Fixed activity block check (Division-specific block)
       if (blockedRowsByDiv[div] && blockedRowsByDiv[div].has(idx)) return false; 
-      // Check if the slot is already taken by a league from another division (Global block)
+      // Global league non-overlap check
       if (leagueSlotOccupiedByRow[idx]) return false;
     }
     return true;
@@ -242,7 +238,6 @@ function assignFieldsToBunks() {
   const priorityDivs = leagueDivs.map(div => {
     const actives = Array.from(divisionActiveRows[div] || []);
     const slots = actives.filter(s => {
-      // Only check Fixed/Active/Span here to calculate true availability 
       for (let k = 0; k < spanLen; k++) {
         const idx = s + k;
         if (idx >= unifiedTimes.length || 
@@ -283,7 +278,7 @@ function assignFieldsToBunks() {
     (divisions[div]?.bunks || []).forEach(b => {
       if (scheduleAssignments[b][s]) return; // respect fixed
       scheduleAssignments[b][s] = {
-        field: "Leagues",
+        field: "Leagues", // String
         sport: null,
         continuation: false,
         isLeague: true
@@ -294,7 +289,7 @@ function assignFieldsToBunks() {
         if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
         if (scheduleAssignments[b][idx]) break;
         scheduleAssignments[b][idx] = {
-          field: "Leagues",
+          field: "Leagues", // String
           sport: null,
           continuation: true,
           isLeague: true
@@ -321,8 +316,8 @@ function assignFieldsToBunks() {
       fieldsUsedByBunk[b] = new Set();
       (scheduleAssignments[b] || []).forEach(cell => {
         if (!cell) return;
-        // Normalize fixed field name for seeding
-        const fieldName = (typeof cell.field === 'string') ? cell.field : (cell.field?.name || "");
+        // All field names are now expected to be strings
+        const fieldName = cell.field || ""; 
 
         if (cell.isFixed) {
           const key = `special:${norm(fieldName)}`;
@@ -337,7 +332,7 @@ function assignFieldsToBunks() {
   });
 
   function baseFeasible(act, bunk, slotStart, slotEnd, s, allowFieldReuse) {
-    const fieldName = act?.field?.name;
+    const fieldName = act?.field?.name; // NOTE: 'act' is from 'allActivities' list, so field.name is still correct here
     if (!fieldName) return false;
     if (act.type === "field" && !canUseField(fieldName, slotStart, slotEnd, s)) return false;
     if (act.sport && globalActivityLock[s].has(norm(act.sport))) return false;
@@ -382,7 +377,7 @@ function assignFieldsToBunks() {
         const chosen = chooseActivity(bunk, slotStart, slotEnd, s, isLeagueRow, div);
 
         scheduleAssignments[bunk][s] = {
-          field: chosen.field.name,
+          field: chosen.field.name, // STRING
           sport: chosen.sport,
           continuation: false,
           isLeague: false
@@ -405,7 +400,7 @@ function assignFieldsToBunks() {
           const contEnd = new Date(contStart.getTime() + activityDuration * 60000);
 
           scheduleAssignments[bunk][idx] = {
-            field: chosen.field.name,
+            field: chosen.field.name, // STRING
             sport: chosen.sport,
             continuation: true,
             isLeague: false
@@ -494,16 +489,14 @@ function updateTable() {
 
         const entry = scheduleAssignments[b]?.[s];
         if (entry && !entry.continuation) {
-          // Normalize field name to handle fixed objects vs strings
-          const rawField = entry.field;
-          const fieldName = (typeof rawField === "string") ? rawField : (rawField?.name || "");
+          // fieldName is now expected to be a string
+          const fieldName = entry.field || ""; 
 
-          // Determine rowSpan by scanning continuations with normalized compare
+          // Determine rowSpan by scanning continuations with the field name
           let span = 1;
           for (let k = s + 1; k < unifiedTimes.length; k++) {
             const e2 = scheduleAssignments[b]?.[k];
-            const e2FieldName = (typeof e2?.field === "string") ? e2.field : (e2?.field?.name || "");
-            if (!e2 || !e2.continuation || e2FieldName !== fieldName || e2.sport !== entry.sport) break;
+            if (!e2 || !e2.continuation || e2.field !== fieldName || e2.sport !== entry.sport) break;
             span++;
             scheduleAssignments[b][k]._skip = true;
           }
