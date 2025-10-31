@@ -2,6 +2,22 @@
 // Finalized logic: Fixed Activities (highest precedence) -> Leagues (unique, sequential search) -> Remaining Activities.
 
 /////////////////////////////
+// --- ⚠️ START OF DEPENDENCY/INITIALIZATION BLOCK ⚠️ ---
+// These ensure global variables exist so the scheduler doesn't crash on load.
+
+window.activityDuration = window.activityDuration || 30; // Default activity length in minutes
+window.unifiedTimes = window.unifiedTimes || []; // Array of {start: Date, end: Date, label: string} - MUST BE POPULATED SEPARATELY
+window.divisions = window.divisions || {}; // Object of {div: {bunks: [], color: ""}}
+window.availableDivisions = window.availableDivisions || []; // Array of division names (e.g., ["7th", "8th"])
+window.fields = window.fields || []; // Array of field objects
+window.specialActivities = window.specialActivities || []; // Array of special activity objects
+window.leagues = window.leagues || {}; // Object of league settings {div: {enabled: true, sports: []}}
+window.divisionActiveRows = window.divisionActiveRows || {}; // Object of {div: Set(rowIndex)}
+
+// --- ⚠️ END OF DEPENDENCY/INITIALIZATION BLOCK ⚠️ ---
+/////////////////////////////
+
+/////////////////////////////
 // Small helpers
 /////////////////////////////
 const norm = s => (typeof s === "string" ? s.trim().toLowerCase() : null);
@@ -147,32 +163,14 @@ function prePlaceFixedActivities() {
 // Main scheduler
 /////////////////////////////
 function assignFieldsToBunks() {
-  // Defensive guards
-  window.scheduleAssignments = window.scheduleAssignments || {};
-  window.availableDivisions = Array.isArray(window.availableDivisions) ? window.availableDivisions : [];
-  window.divisions = window.divisions || {};
-  window.fields = Array.isArray(window.fields) ? window.fields : [];
-  window.specialActivities = Array.isArray(window.specialActivities) ? window.specialActivities : [];
-  window.unifiedTimes = Array.isArray(window.unifiedTimes) ? window.unifiedTimes : [];
-  window.leagues = window.leagues || {};
-  window.divisionActiveRows = window.divisionActiveRows || {}; // { div: Set(rowIdx) }
-
-  const availFields = fields.filter(f => f?.available && Array.isArray(f.activities) && f.activities.length > 0);
-  const availSpecials = specialActivities.filter(s => s?.available);
-
-  // All Activity source objects use field.name
-  const allActivities = [
-    ...availFields.flatMap(f => f.activities.map(act => ({ type: "field", field: f, sport: act }))),
-    ...availSpecials.map(sa => ({ type: "special", field: { name: sa.name }, sport: null }))
-  ];
-
-  if (unifiedTimes.length === 0) {
-    alert("No time grid available. Generate schedule times first.");
+  // Check for essential data before proceeding
+  if (window.unifiedTimes.length === 0) {
+    alert("No time grid available. Ensure 'window.unifiedTimes' is populated.");
     return;
   }
 
   // Reset grid
-  scheduleAssignments = {};
+  window.scheduleAssignments = {};
   availableDivisions.forEach(div => {
     (divisions[div]?.bunks || []).forEach(b => {
       scheduleAssignments[b] = new Array(unifiedTimes.length);
@@ -432,7 +430,7 @@ function updateTable() {
   host.innerHTML = "";
 
   if (!Array.isArray(unifiedTimes) || unifiedTimes.length === 0) {
-    host.textContent = "No time grid. Generate schedule times in Setup.";
+    host.textContent = "No time grid. Ensure 'window.unifiedTimes' is populated.";
     return;
   }
 
