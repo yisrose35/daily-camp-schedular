@@ -1,6 +1,7 @@
 // app2.js
-// Fixed Activities (hard precedence) + Unique League Slots (no cross-division overlap)
-// + No Repeats per Bunk + No Field Clashes + Save/Load + Safe Rendering
+// Fixed Activities (hard precedence) + Leagues with NO cross-division overlap
+// If a division cannot be uniquely placed, it is skipped (filled by regular/special instead).
+// Also: No field clashes, no per-bunk repeats, proper render, localStorage save/load.
 
 // -------------------- Small helpers --------------------
 const norm = s => (typeof s === "string" ? s.trim().toLowerCase() : null);
@@ -40,7 +41,7 @@ function findRowsForRange(startStr, endStr) {
   }
   if (inside.length) return inside;
 
-  // Misaligned: occupy any overlapping rows
+  // Misaligned: include any overlapping rows (still not shortening fixed)
   const overlap = [];
   for (let i = 0; i < unifiedTimes.length; i++) {
     const r = unifiedTimes[i];
@@ -81,7 +82,7 @@ function overlaps(aStart, aEnd, bStart, bEnd) {
   return aStart < bEnd && bStart < aEnd;
 }
 
-// -------------------- Pre-place Fixed Activities (hard precedence) --------------------
+// -------------------- Fixed Activities: Pre-place with precedence --------------------
 function prePlaceFixedActivities() {
   const fixed = loadActiveFixedActivities();
   const blockedRowsByDiv = {}; // { div: Set(rowIndex) }
@@ -107,7 +108,7 @@ function prePlaceFixedActivities() {
           if (scheduleAssignments[bunk][r]?.isFixed) return; // idempotent
           scheduleAssignments[bunk][r] = {
             type: "fixed",
-            field: { name: act.name },    // keep object; we normalize on render
+            field: { name: act.name }, // keep object; normalize on render
             sport: null,
             continuation: idx > 0,
             isFixed: true
@@ -122,7 +123,7 @@ function prePlaceFixedActivities() {
 
 // -------------------- Main scheduler --------------------
 function assignFieldsToBunks() {
-  // Defensive guards for globals
+  // Defensive guards
   window.scheduleAssignments = window.scheduleAssignments || {};
   window.availableDivisions = Array.isArray(window.availableDivisions) ? window.availableDivisions : [];
   window.divisions = window.divisions || {};
@@ -188,49 +189,91 @@ function assignFieldsToBunks() {
     }
   }
 
-  // -------------------- 1) Reserve a UNIQUE League slot per division --------------------
-  const leagueSlotByDiv = {};
-  const takenLeagueSlots = new Set(); // enforce global uniqueness (no overlaps across grades)
+  // -------------------- 1) Reserve League slots with NO overlap across divisions --------------------
+  const leagueDivs = (availableDivisions || []).filter(d => leagues && leagues[d] && leagues[d].enabled);
 
-  // We’ll iterate in the order they appear in availableDivisions.
-  availableDivisions.forEach(div => {
-    const wantsLeague = !!(leagues && leagues[div] && leagues[div].enabled);
-    if (!wantsLeague) return;
+  // Validate that a full contiguous span fits inside active rows and isn't blocked by fixed
+  function spanValid(div, s) {
+    for (let k = 0; k < spanLen; k++) {
+      const idx = s + k;
+      if (idx >= unifiedTimes.length) return false;
+      if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) return false;
+      if (blockedRowsByDiv[div] && blockedRowsByDiv[div].has(idx)) return false;
+    }
+    return true;
+  }
 
+  // Build candidate slots per division
+  const candList = leagueDivs.map(div => {
     const actives = Array.from(divisionActiveRows[div] || []);
-    if (actives.length === 0) return;
+    const slots = actives.filter(s => spanValid(div, s));
+    return { div, slots };
+  });
 
-    const forbidden = new Set(blockedRowsByDiv[div] || []);
-    let chosen = null;
+  // Sort fewest options first (better search)
+  candList.sort((a, b) => a.slots.length - b.slots.length);
 
-    // Prefer earliest valid slot: active, not fixed, not already taken by another division
-    for (const s of actives) {
-      if (forbidden.has(s)) continue;
-      if (takenLeagueSlots.has(s)) continue; // <-- this enforces the "no overlap between grades" rule
-      chosen = s;
-      break;
+  // Backtracking to find a non-overlapping assignment for as many divisions as possible
+  const bestAssign = { map: {}, count: 0 };
+  const usedRows = new Set();
+
+  function backtrack(i, currentMap) {
+    if (i === candList.length) {
+      const c = Object.keys(currentMap).length;
+      if (c > bestAssign.count) {
+        bestAssign.map = { ...currentMap };
+        bestAssign.count = c;
+      }
+      return;
+    }
+    const { div, slots } = candList[i];
+
+    // Try each slot that doesn't overlap taken rows
+    for (const s of slots) {
+      let ok = true;
+      for (let k = 0; k < spanLen; k++) {
+        const idx = s + k;
+        if (usedRows.has(idx)) { ok = false; break; }
+      }
+      if (!ok) continue;
+
+      // Place
+      for (let k = 0; k < spanLen; k++) usedRows.add(s + k);
+      currentMap[div] = s;
+
+      backtrack(i + 1, currentMap);
+
+      // Backtrack
+      delete currentMap[div];
+      for (let k = 0; k < spanLen; k++) usedRows.delete(s + k);
     }
 
-    if (chosen == null) {
-      console.warn(`No unique league row available for ${div} (blocked by fixed or other leagues).`);
-      return; // skip league for this division if we truly can't place it uniquely
+    // Also consider skipping this division (so others can still be placed)
+    backtrack(i + 1, currentMap);
+  }
+
+  backtrack(0, {});
+
+  const leagueSlotByDiv = bestAssign.map;
+
+  // Place league cells (ONLY for divisions that got a unique slot)
+  for (const div of leagueDivs) {
+    const s = leagueSlotByDiv[div];
+    if (s == null) {
+      console.warn(`[Leagues] No unique league slot found for ${div}; leaving it for normal scheduling.`);
+      continue;
     }
-
-    takenLeagueSlots.add(chosen);
-    leagueSlotByDiv[div] = chosen;
-
-    // Place league cells for each bunk in this division (respect what's already fixed)
     (divisions[div]?.bunks || []).forEach(b => {
-      if (scheduleAssignments[b][chosen]) return; // fixed has precedence
-      scheduleAssignments[b][chosen] = {
+      if (scheduleAssignments[b][s]) return; // respect fixed
+      scheduleAssignments[b][s] = {
         field: "Leagues",
         sport: null,
         continuation: false,
         isLeague: true
       };
-      // Continuations for spanLen (if your grid encodes longer activities)
+      // Continuations across spanLen (within active rows)
       for (let k = 1; k < spanLen; k++) {
-        const idx = chosen + k;
+        const idx = s + k;
         if (idx >= unifiedTimes.length) break;
         if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
         if (scheduleAssignments[b][idx]) break;
@@ -243,11 +286,11 @@ function assignFieldsToBunks() {
       }
     });
 
-    // Optional synthetic resource lock (visual separation only)
-    const slotStart = unifiedTimes[chosen].start;
+    // Optional synthetic lock (visual)
+    const slotStart = unifiedTimes[s].start;
     const slotEnd = new Date(slotStart.getTime() + activityDuration * 60000);
-    reserveField(`LEAGUE-${div}`, slotStart, slotEnd, chosen, "Leagues");
-  });
+    reserveField(`LEAGUE-${div}`, slotStart, slotEnd, s, "Leagues");
+  }
 
   // -------------------- 2) Fill remaining cells --------------------
   const usedActivityKeysByBunk = {};
@@ -294,9 +337,9 @@ function assignFieldsToBunks() {
   }
 
   function chooseActivity(bunk, slotStart, slotEnd, s, isLeagueRow, div) {
-    let candidates;
+    let candidatesList;
     if (isLeagueRow && leagues && leagues[div]?.enabled) {
-      // Restrict to league sports when in the division's league row
+      // If this division got a league slot at this row, prefer league sports
       const sports = Array.isArray(leagues[div].sports) ? leagues[div].sports : [];
       const leagueActs = [];
       availFields.forEach(f => {
@@ -304,17 +347,17 @@ function assignFieldsToBunks() {
           if (sports.includes(spt)) leagueActs.push({ type: "field", field: f, sport: spt });
         });
       });
-      candidates = leagueActs.length ? leagueActs : allActivities;
+      candidatesList = leagueActs.length ? leagueActs : allActivities;
     } else {
-      candidates = allActivities;
+      candidatesList = allActivities;
     }
 
     // Tier A: strict (no field reuse)
-    let pool = candidates.filter(a => baseFeasible(a, bunk, slotStart, slotEnd, s, false));
+    let pool = candidatesList.filter(a => baseFeasible(a, bunk, slotStart, slotEnd, s, false));
     if (pool.length > 0) return pool[Math.floor(Math.random() * pool.length)];
 
     // Tier B: allow field reuse
-    pool = candidates.filter(a => baseFeasible(a, bunk, slotStart, slotEnd, s, true));
+    pool = candidatesList.filter(a => baseFeasible(a, bunk, slotStart, slotEnd, s, true));
     if (pool.length > 0) return pool[Math.floor(Math.random() * pool.length)];
 
     // Nothing valid → placeholder that doesn't affect repeats
@@ -327,7 +370,7 @@ function assignFieldsToBunks() {
 
     availableDivisions.forEach(div => {
       if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s))) return;
-      const isLeagueRow = leagueSlotByDiv[div] === s;
+      const isLeagueRow = (leagues && leagues[div]?.enabled) && (leagueSlotByDiv[div] === s);
 
       (divisions[div]?.bunks || []).forEach(bunk => {
         // Respect pre-placed cells
@@ -349,12 +392,13 @@ function assignFieldsToBunks() {
           fieldsUsedByBunk[bunk].add(chosen.field.name);
         }
 
-        // Continuations
+        // Continuations for multi-row activities
         for (let k = 1; k < spanLen; k++) {
           const idx = s + k;
           if (idx >= unifiedTimes.length) break;
           if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
           if (scheduleAssignments[bunk][idx]) break;
+
           const contStart = unifiedTimes[idx].start;
           const contEnd = new Date(contStart.getTime() + activityDuration * 60000);
 
@@ -364,6 +408,7 @@ function assignFieldsToBunks() {
             continuation: true,
             isLeague: false
           };
+
           if (!chosen._placeholder && chosen.type === "field") {
             reserveField(chosen.field.name, contStart, contEnd, idx, chosen.sport);
           }
