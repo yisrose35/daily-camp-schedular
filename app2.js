@@ -1,6 +1,7 @@
 // app2.js
-// Fixed Activities (hard precedence) + Leagues (unique across grades, prefers first free after fixed)
-// Auto-rebuilds on constraint changes; no per-bunk repeats; no field clashes; safe render; save/load.
+// Fixed Activities precedence + Leagues (no cross-division overlap) with max-placement backtracking
+// Prefers earliest slot AFTER each division’s last fixed block. Never overlaps. If fixed blocks a chosen row,
+// the division is skipped (cleanly) and filled normally. Constraint hashing forces rebuild on changes.
 
 // -------------------- Small helpers --------------------
 const norm = s => (typeof s === "string" ? s.trim().toLowerCase() : null);
@@ -40,7 +41,7 @@ function findRowsForRange(startStr, endStr) {
   }
   if (inside.length) return inside;
 
-  // Misaligned: include any overlappers (we do NOT shorten fixed)
+  // Misaligned: include any overlapping rows (we still never "shorten" fixed)
   const overlap = [];
   for (let i = 0; i < unifiedTimes.length; i++) {
     const r = unifiedTimes[i];
@@ -266,7 +267,7 @@ function assignFieldsToBunks() {
   }
 
   // -------------------- 1) Assign Leagues with NO cross-division overlap
-  // Prefer earliest slot AFTER each division's last fixed block --------------------
+  // Prefer earliest slot AFTER each division's last fixed block. MAX placement. --------------------
   const leagueDivs = (availableDivisions || []).filter(d => leagues && leagues[d] && leagues[d].enabled);
 
   function spanValid(div, s) {
@@ -301,7 +302,7 @@ function assignFieldsToBunks() {
     return last;
   }
 
-  // Candidate slots per division (ordered to prefer earliest AFTER fixed)
+  // Candidate slots per division (ordered: earliest AFTER last fixed first)
   const candList = leagueDivs.map(div => {
     const actives = Array.from(divisionActiveRows[div] || []);
     const filtered = actives.filter(s => spanValid(div, s));
@@ -313,18 +314,20 @@ function assignFieldsToBunks() {
     return { div, slots: scored.map(x => x.s) };
   }).sort((a, b) => a.slots.length - b.slots.length); // fewest options first
 
-  // Backtracking to assign UNIQUE spans to as many divisions as possible
+  // Backtracking to maximize number of divisions placed (no overlap)
   const usedRows = new Set();
-  const leagueSlotByDiv = {};
-  let bestMap = null;
+  let bestMap = {};
+  let bestCount = 0;
 
-  function tryAll(i) {
+  function dfs(i, currentMap) {
     if (i === candList.length) {
-      bestMap = { ...leagueSlotByDiv };
-      return true; // full assignment
+      const cnt = Object.keys(currentMap).length;
+      if (cnt > bestCount) { bestCount = cnt; bestMap = { ...currentMap }; }
+      return;
     }
     const { div, slots } = candList[i];
 
+    // Try placing this division in each legal slot
     for (const s of slots) {
       let ok = true;
       for (let k = 0; k < spanLen; k++) {
@@ -332,34 +335,37 @@ function assignFieldsToBunks() {
       }
       if (!ok) continue;
 
-      leagueSlotByDiv[div] = s;
+      // Place
       for (let k = 0; k < spanLen; k++) usedRows.add(s + k);
+      currentMap[div] = s;
 
-      if (tryAll(i + 1)) return true;
+      dfs(i + 1, currentMap);
 
-      delete leagueSlotByDiv[div];
+      // Backtrack
+      delete currentMap[div];
       for (let k = 0; k < spanLen; k++) usedRows.delete(s + k);
     }
 
-    // If we can't place this division without overlap, skip it (no overlaps, per your rule)
-    // but still let others be placed.
-    const snapshot = { ...leagueSlotByDiv };
-    const usedSnap = new Set([...usedRows]);
-    if (tryAll(i + 1)) return true; // keep the "best" we found
-
-    // Restore (not strictly necessary due to scopes)
-    for (const k in snapshot) leagueSlotByDiv[k] = snapshot[k];
-    usedRows.clear(); usedSnap.forEach(v => usedRows.add(v));
-    return false;
+    // Option to skip this division (keeps search going to maximize others)
+    dfs(i + 1, currentMap);
   }
 
-  tryAll(0);
-  const finalLeagueSlots = bestMap || leagueSlotByDiv;
+  dfs(0, {});
 
-  // Place leagues for divisions that got a unique slot (no overlap ever)
+  const finalLeagueSlots = bestMap; // { div -> rowIndex } for placed divisions only
+
+  // Place leagues for divisions that got a unique slot (and are NOT fixed-blocked at placement time)
   (leagueDivs || []).forEach(div => {
     const s = finalLeagueSlots[div];
-    if (s == null) return; // skipped due to impossibility, will be filled normally
+    if (s == null) return; // skipped due to impossibility
+    // EXTRA HARD GUARD: If any row of the span is blocked by fixed, drop it now.
+    for (let k = 0; k < spanLen; k++) {
+      const idx = s + k;
+      if (blockedRowsByDiv[div] && blockedRowsByDiv[div].has(idx)) {
+        delete finalLeagueSlots[div];
+        return;
+      }
+    }
 
     (divisions[div]?.bunks || []).forEach(b => {
       if (scheduleAssignments[b][s]) return; // respect fixed
@@ -384,7 +390,7 @@ function assignFieldsToBunks() {
       }
     });
 
-    // Optional synthetic lock (visual separation)
+    // Synthetic lock (visual separation)
     const slotStart = unifiedTimes[s].start;
     const slotEnd = new Date(slotStart.getTime() + activityDuration * 60000);
     reserveField(`LEAGUE-${div}`, slotStart, slotEnd, s, "Leagues");
@@ -670,7 +676,7 @@ if (document.readyState === "loading") {
   initScheduleSystem();
 }
 
-// Optional: quick console diag
+// Optional console diag
 window.debugSchedule = function () {
   const incEl = document.getElementById("increment");
   const inc = incEl ? parseInt(incEl.value, 10) : 15;
