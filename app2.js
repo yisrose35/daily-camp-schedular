@@ -1,5 +1,6 @@
 // -------------------- app2.js --------------------
-// Leagues (teams != bunks) get their own assignment layer and merged cell rendering.
+// Leagues (teams != bunks) render as merged cells per division+slot.
+// Ensures no two divisions have leagues at the same time (span-aware).
 
 // ===== Helpers: time / labels =====
 function parseTimeToMinutes(str){
@@ -63,7 +64,7 @@ function leaguesSnapshot(){
   }catch{ return {}; }
 }
 function getEnabledLeaguesByDivision(){
-  const result = {}; // { div: { name, data }[] } but we only expect single league per div in your UI
+  const result = {}; // { [div]: { name, data } }
   const all = leaguesSnapshot();
   Object.keys(all).forEach(name=>{
     const l = all[name];
@@ -75,7 +76,7 @@ function getEnabledLeaguesByDivision(){
   return result;
 }
 
-// Round-robin generator (teams are league teams, not bunks)
+// Round-robin (teams are league teams, not bunks)
 (function(){
   'use strict';
   const KEY="camp_league_round_state";
@@ -112,7 +113,7 @@ function getEnabledLeaguesByDivision(){
 
 // ====== CORE STATE ======
 window.leagueAssignments = window.leagueAssignments || {}; 
-// Shape: { [division]: { [slotIndex]: { sport, matchups: [[A,B],...], leagueName } } }
+// { [division]: { [slotIndex]: { sport, matchups: [[A,B],...], leagueName } } }
 
 function assignFieldsToBunks(){
   // Guard globals
@@ -152,7 +153,7 @@ function assignFieldsToBunks(){
     });
   });
 
-  // Priority order
+  // Priority order (keep your previous behavior)
   const priorityDivs = [...availableDivisions].reverse();
 
   // Locks for general activities (NOT used for league merged rows)
@@ -220,27 +221,54 @@ function assignFieldsToBunks(){
     });
   });
 
-  // ===== 1) PLACE LEAGUES AS MERGED CELLS =====
+  // ===== 1) PLACE LEAGUES AS MERGED CELLS (NO CROSS-DIVISION CONFLICTS) =====
   const enabledByDiv = getEnabledLeaguesByDivision(); // {div:{name,data}}
+
+  // Tracks global timeslots already reserved for any league (span-aware)
+  const takenLeagueSlots = new Set(); // holds row indices occupied by any league across any division
+
+  function slotConflictsWithTaken(slotIndex) {
+    for (let k = 0; k < spanLen; k++) {
+      const idx = slotIndex + k;
+      if (idx >= unifiedTimes.length) break;
+      if (takenLeagueSlots.has(idx)) return true;
+    }
+    return false;
+  }
+  function markTaken(slotIndex) {
+    for (let k = 0; k < spanLen; k++) {
+      const idx = slotIndex + k;
+      if (idx >= unifiedTimes.length) break;
+      takenLeagueSlots.add(idx);
+    }
+  }
+
   for (const div of priorityDivs) {
     const lg = enabledByDiv[div];
     if (!lg) continue;
 
     const activeSet = window.divisionActiveRows?.[div];
-    const actSlots = (activeSet && activeSet.size>0)
+    const actSlots = (activeSet && activeSet.size > 0)
       ? Array.from(activeSet)
-      : window.unifiedTimes.map((_,i)=>i);
+      : window.unifiedTimes.map((_, i) => i);
 
-    const nonBlocked = actSlots.filter(s=>{
+    // Candidate slots: active, not locally blocked, not used by bunk fixed entries, and not globally taken
+    const candidateSlots = actSlots.filter(s => {
       if (blockedRowsByDiv[div]?.has(s)) return false;
-      // also skip if any bunk already has a fixed activity here (rare)
-      const used = (divisions[div]?.bunks || []).some(b => scheduleAssignments[b]?.[s]);
-      return !used;
+      const usedByBunks = (divisions[div]?.bunks || []).some(b => scheduleAssignments[b]?.[s]);
+      if (usedByBunks) return false;
+      if (slotConflictsWithTaken(s)) return false;
+      return true;
     });
-    if (nonBlocked.length===0) continue;
 
-    const chosenSlot = nonBlocked[0];
-    const teams = (lg.data.teams || []).map(t=>String(t||"").trim()).filter(Boolean);
+    if (candidateSlots.length === 0) {
+      console.warn(`[LEAGUES] ${div}: no viable slot that avoids conflicts.`);
+      continue;
+    }
+
+    const chosenSlot = candidateSlots[0];
+
+    const teams = (lg.data.teams || []).map(t => String(t || "").trim()).filter(Boolean);
     if (teams.length < 2) {
       console.warn(`[LEAGUES] "${lg.name}" for ${div}: need at least 2 teams.`);
       continue;
@@ -249,16 +277,19 @@ function assignFieldsToBunks(){
     if (matchups.length === 0) continue;
 
     const sport = (lg.data.sports && lg.data.sports[0]) ? lg.data.sports[0] : "Leagues";
+
     window.leagueAssignments[div] = window.leagueAssignments[div] || {};
     window.leagueAssignments[div][chosenSlot] = { sport, matchups, leagueName: lg.name };
 
-    // IMPORTANT: block this slot for the division so bunks won't be filled here
+    // Block this slot range for this division (so bunks won’t fill here)…
     blockedRowsByDiv[div] = blockedRowsByDiv[div] || new Set();
-    for (let k=0; k<spanLen; k++) {
+    for (let k = 0; k < spanLen; k++) {
       const idx = chosenSlot + k;
       if (idx >= unifiedTimes.length) break;
       blockedRowsByDiv[div].add(idx);
     }
+    // …and mark it taken globally so other divisions can’t pick the same window.
+    markTaken(chosenSlot);
   }
 
   // ===== 2) FILL GENERAL ACTIVITIES (skip league slots for that division) =====
@@ -294,7 +325,7 @@ function assignFieldsToBunks(){
       if (!isActive) continue;
 
       for(const bunk of (divisions[div]?.bunks || [])){
-        if(scheduleAssignments[bunk][s]) continue; // already fixed something here (unlikely)
+        if(scheduleAssignments[bunk][s]) continue; // already fixed something here
 
         const chosen=chooseActivity(bunk,slotStart,absEnd,s);
         const fname=fieldLabel(chosen.field);
@@ -305,7 +336,7 @@ function assignFieldsToBunks(){
           const idx=s+k; if(idx>=unifiedTimes.length) break;
           const nextActive = activeSet ? activeSet.has(idx) : true;
           if(!nextActive) break;
-          if (window.leagueAssignments?.[div]?.[idx]) break; // don't extend into league
+          if (window.leagueAssignments?.[div]?.[idx]) break; // don’t extend into league
           if(scheduleAssignments[bunk][idx]) break;
           scheduleAssignments[bunk][idx]={ field: fname, sport: chosen.sport, continuation:true, isLeague:false };
         }
