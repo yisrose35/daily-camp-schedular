@@ -1,11 +1,11 @@
 // -------------------- app2.js --------------------
-// Scheduling Core: Leagues + Fixed Activities + Robust fallbacks
+// Leagues (teams != bunks) get their own assignment layer and merged cell rendering.
 
-// ---------- Small helpers ----------
-function parseTimeToMinutes(str){ /* (same as before) */ 
+// ===== Helpers: time / labels =====
+function parseTimeToMinutes(str){
   if (!str || typeof str !== "string") return null;
   let s = str.trim().toLowerCase(); let mer = null;
-  if (s.endsWith("am") || s.endsWith("pm")) { mer = s.endsWith("am") ? "am":"pm"; s = s.replace(/am|pm/g,"").trim(); }
+  if (s.endsWith("am") || s.endsWith("pm")) { mer = s.endsWith("am") ? "am" : "pm"; s = s.replace(/am|pm/g,"").trim(); }
   const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/); if(!m) return null;
   let hh = parseInt(m[1],10); const mm = parseInt(m[2],10);
   if (Number.isNaN(hh)||Number.isNaN(mm)||mm<0||mm>59) return null;
@@ -32,7 +32,7 @@ function findRowsForRange(startStr,endStr){
   return inside;
 }
 
-// ---------- Fixed activities ----------
+// ===== Fixed activities =====
 function loadActiveFixedActivities(){
   let raw=localStorage.getItem("fixedActivities_v2"); if(!raw) raw=localStorage.getItem("fixedActivities");
   try{ const arr=JSON.parse(raw||"[]"); return Array.isArray(arr)?arr.filter(a=>a&&a.enabled):[]; }catch{ return []; }
@@ -53,49 +53,69 @@ function prePlaceFixedActivities(){
   return computeBlockedRowsByDiv();
 }
 
-// ---------- Leagues fallbacks ----------
-function readLeaguesFromStorage(){
-  try{
-    const raw = localStorage.getItem("leagues");
-    const obj = raw ? JSON.parse(raw) : {};
-    if(obj && typeof obj==="object") return obj;
-  }catch(e){ console.warn("[LEAGUES] Failed to parse localStorage:", e); }
-  return {};
-}
+// ===== League helpers =====
 function leaguesSnapshot(){
-  // prefer the published window copy; fall back to storage if missing
   if (window.leaguesByName && Object.keys(window.leaguesByName).length>0) return window.leaguesByName;
-  const fromLS = readLeaguesFromStorage();
-  if (Object.keys(fromLS).length>0){
-    console.info("[LEAGUES] Using leagues from localStorage fallback.");
-    return fromLS;
-  }
-  return {};
+  try{
+    const raw = localStorage.getItem("leagues"); 
+    const obj = raw ? JSON.parse(raw) : {};
+    return (obj && typeof obj==="object") ? obj : {};
+  }catch{ return {}; }
 }
-function getLeagueForDivision(div){
-  const allLeagues = leaguesSnapshot();
-  for (const name in allLeagues){
-    const lg = allLeagues[name];
-    if (lg?.enabled && Array.isArray(lg.divisions) && lg.divisions.includes(div)){
-      return { ...lg, name }; // attach name for getLeagueMatchups
-    }
-  }
-  return null;
-}
-function activeSlotsForDivision(div){
-  const set = window.divisionActiveRows?.[div];
-  if (set && set.size>0) return Array.from(set);
-  // Fallback: treat all rows as active so leagues can place
-  if (Array.isArray(window.unifiedTimes)) {
-    console.info(`[LEAGUES] No active rows for "${div}". Using all time rows as fallback.`);
-    return window.unifiedTimes.map((_,i)=>i);
-  }
-  return [];
+function getEnabledLeaguesByDivision(){
+  const result = {}; // { div: { name, data }[] } but we only expect single league per div in your UI
+  const all = leaguesSnapshot();
+  Object.keys(all).forEach(name=>{
+    const l = all[name];
+    if (!l?.enabled) return;
+    (l.divisions||[]).forEach(div=>{
+      result[div] = { name, data: l };
+    });
+  });
+  return result;
 }
 
-// ---------- Main scheduling ----------
+// Round-robin generator (teams are league teams, not bunks)
+(function(){
+  'use strict';
+  const KEY="camp_league_round_state";
+  let state={};
+  function load(){ try{ state=JSON.parse(localStorage.getItem(KEY)||"{}")||{}; }catch{ state={}; } }
+  function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch{} }
+  function genRR(teams){
+    if(!teams||teams.length<2) return [];
+    const t=[...teams]; let bye=false;
+    if(t.length%2!==0){ t.push("BYE"); bye=true; }
+    const fixed=t[0], rot=t.slice(1), rounds=t.length-1, out=[];
+    for(let r=0;r<rounds;r++){
+      const round=[]; round.push([fixed, rot[0]]);
+      for(let i=1;i<t.length/2;i++) round.push([rot[i], rot[rot.length-i]]);
+      out.push(round); rot.unshift(rot.pop());
+    }
+    if(bye) return out.map(r=>r.filter(m=>m[0]!=="BYE"&&m[1]!=="BYE"));
+    return out;
+  }
+  function get(leagueName, teams){
+    if(!leagueName||!teams||teams.length<2) return [];
+    load();
+    const cur = state[leagueName]?.currentRound ?? 0;
+    const full = genRR(teams);
+    if(full.length===0) return [];
+    const today = full[cur];
+    state[leagueName] = { currentRound: (cur+1)%full.length };
+    save();
+    return today;
+  }
+  window.getLeagueMatchups = get;
+  load();
+})();
+
+// ====== CORE STATE ======
+window.leagueAssignments = window.leagueAssignments || {}; 
+// Shape: { [division]: { [slotIndex]: { sport, matchups: [[A,B],...], leagueName } } }
+
 function assignFieldsToBunks(){
-  // globals
+  // Guard globals
   window.scheduleAssignments = window.scheduleAssignments || {};
   window.availableDivisions = Array.isArray(window.availableDivisions)?window.availableDivisions:[];
   window.divisions = window.divisions || {};
@@ -103,6 +123,7 @@ function assignFieldsToBunks(){
   window.specialActivities = Array.isArray(window.specialActivities)?window.specialActivities:[];
   window.unifiedTimes = Array.isArray(window.unifiedTimes)?window.unifiedTimes:[];
   window.divisionActiveRows = window.divisionActiveRows || {};
+  window.leagueAssignments = {}; // reset each generation
 
   const incEl=document.getElementById("increment");
   const inc = incEl ? parseInt(incEl.value,10) : 30;
@@ -118,12 +139,12 @@ function assignFieldsToBunks(){
     ...availSpecials.map(sa=>({type:"special", field:{name:sa.name}, sport:null}))
   ];
   if (allActivities.length===0 || unifiedTimes.length===0){
-    console.warn("[LEAGUES] No activities or no time grid. Aborting.");
+    console.warn("No activities or time grid available. Aborting.");
     scheduleAssignments = {};
     return;
   }
 
-  // Reset scaffold
+  // Reset per-bunk grid
   scheduleAssignments = {};
   availableDivisions.forEach(div=>{
     (divisions[div]?.bunks || []).forEach(b=>{
@@ -131,9 +152,10 @@ function assignFieldsToBunks(){
     });
   });
 
+  // Priority order
   const priorityDivs = [...availableDivisions].reverse();
 
-  // Locks
+  // Locks for general activities (NOT used for league merged rows)
   const globalResourceUsage = {};
   const occupiedFieldsBySlot = Array.from({length: unifiedTimes.length}, ()=>new Set());
   const globalActivityLock = Array.from({length: unifiedTimes.length}, ()=>new Set());
@@ -176,10 +198,10 @@ function assignFieldsToBunks(){
     }
   }
 
-  // Step 0: fixed activities
+  // Pre-place fixed activities & compute blocked rows
   const blockedRowsByDiv = prePlaceFixedActivities();
 
-  // lock fixed resources
+  // Lock fixed resources
   Object.keys(scheduleAssignments).forEach(bunk=>{
     const row = scheduleAssignments[bunk];
     if(!Array.isArray(row)) return;
@@ -192,61 +214,54 @@ function assignFieldsToBunks(){
         }
         const fieldName=fieldLabel(entry.field);
         const slotStart=unifiedTimes[s].start;
-        const absEnd = new Date(slotStart.getTime()+len* (document.getElementById("increment")?parseInt(document.getElementById("increment").value,10):30)*60000);
+        const absEnd = new Date(slotStart.getTime()+len*inc*60000);
         reserveField(fieldName, slotStart, absEnd, s, entry.sport, len);
       }
     });
   });
 
-  // Step 1: Guaranteed leagues
-  console.info("[LEAGUES] Starting league placement.");
-  priorityDivs.forEach(div=>{
-    const lg = getLeagueForDivision(div);
-    if(!lg){ console.info(`[LEAGUES] Division "${div}": no enabled league.`); return; }
+  // ===== 1) PLACE LEAGUES AS MERGED CELLS =====
+  const enabledByDiv = getEnabledLeaguesByDivision(); // {div:{name,data}}
+  for (const div of priorityDivs) {
+    const lg = enabledByDiv[div];
+    if (!lg) continue;
 
-    const actSlots = activeSlotsForDivision(div);
-    if(actSlots.length===0){ console.info(`[LEAGUES] Division "${div}": no slots.`); return; }
+    const activeSet = window.divisionActiveRows?.[div];
+    const actSlots = (activeSet && activeSet.size>0)
+      ? Array.from(activeSet)
+      : window.unifiedTimes.map((_,i)=>i);
 
     const nonBlocked = actSlots.filter(s=>{
-      if(blockedRowsByDiv[div]?.has(s)) return false;
-      const anyAssigned = (divisions[div]?.bunks || []).some(b=> scheduleAssignments[b] && scheduleAssignments[b][s]);
-      return !anyAssigned;
+      if (blockedRowsByDiv[div]?.has(s)) return false;
+      // also skip if any bunk already has a fixed activity here (rare)
+      const used = (divisions[div]?.bunks || []).some(b => scheduleAssignments[b]?.[s]);
+      return !used;
     });
-    if(nonBlocked.length===0){ console.info(`[LEAGUES] Division "${div}": all slots blocked/used.`); return; }
+    if (nonBlocked.length===0) continue;
 
     const chosenSlot = nonBlocked[0];
-    const teams = lg.teams.length>0 ? lg.teams : (divisions[div]?.bunks || []);
-    if(teams.length<2){ console.warn(`[LEAGUES] Division "${div}": not enough teams.`); return; }
-
+    const teams = (lg.data.teams || []).map(t=>String(t||"").trim()).filter(Boolean);
+    if (teams.length < 2) {
+      console.warn(`[LEAGUES] "${lg.name}" for ${div}: need at least 2 teams.`);
+      continue;
+    }
     const matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
-    if(matchups.length===0){ console.warn(`[LEAGUES] Division "${div}": no matchups.`); return; }
+    if (matchups.length === 0) continue;
 
-    const chosenSport = lg.sports.length>0 ? lg.sports[0] : "Leagues";
-    const leagueFieldName = "League Game (TBD)";
+    const sport = (lg.data.sports && lg.data.sports[0]) ? lg.data.sports[0] : "Leagues";
+    window.leagueAssignments[div] = window.leagueAssignments[div] || {};
+    window.leagueAssignments[div][chosenSlot] = { sport, matchups, leagueName: lg.name };
 
-    matchups.forEach(([A,B])=>{
-      if (A==="BYE"||B==="BYE") return;
-      const playingBunks = [A,B].filter(t => (divisions[div]?.bunks || []).includes(t));
-      if (playingBunks.length<2) return;
+    // IMPORTANT: block this slot for the division so bunks won't be filled here
+    blockedRowsByDiv[div] = blockedRowsByDiv[div] || new Set();
+    for (let k=0; k<spanLen; k++) {
+      const idx = chosenSlot + k;
+      if (idx >= unifiedTimes.length) break;
+      blockedRowsByDiv[div].add(idx);
+    }
+  }
 
-      const details = { field: leagueFieldName, sport: chosenSport, matchup: `${playingBunks[0]} vs ${playingBunks[1]}`, isLeague: true, continuation:false };
-      playingBunks.forEach(b=>{
-        if (!scheduleAssignments[b] || scheduleAssignments[b][chosenSlot]) return;
-        scheduleAssignments[b][chosenSlot] = { ...details };
-        for(let k=1;k<spanLen;k++){
-          const idx=chosenSlot+k; if(idx>=unifiedTimes.length) break;
-          if(!(window.divisionActiveRows?.[div]?.has(idx))) break;
-          if(scheduleAssignments[b][idx]) break;
-          scheduleAssignments[b][idx] = { ...details, continuation:true };
-        }
-      });
-    });
-
-    console.info(`[LEAGUES] Placed league for "${div}" at slot ${chosenSlot}.`);
-    // Not reserving a real field; rendering shows a pill.
-  });
-
-  // Step 2: fill rest
+  // ===== 2) FILL GENERAL ACTIVITIES (skip league slots for that division) =====
   const PLACEHOLDER_NAME='Special Activity Needed';
   function baseFeasible(act,bunk,slotStart,slotEnd,s,allowFieldReuse){
     const fname=fieldLabel(act?.field); if(!fname) return false;
@@ -270,19 +285,31 @@ function assignFieldsToBunks(){
     const absEnd=new Date(slotStart.getTime()+activityDuration*60000);
 
     for(const div of priorityDivs){
-      if(!(activeSlotsForDivision(div).includes(s))) continue;
+      // skip if league is occupying this slot for this division
+      if (window.leagueAssignments?.[div]?.[s]) continue;
+      if (blockedRowsByDiv[div]?.has(s)) continue;
+
+      const activeSet = window.divisionActiveRows?.[div];
+      const isActive = activeSet ? activeSet.has(s) : true;
+      if (!isActive) continue;
+
       for(const bunk of (divisions[div]?.bunks || [])){
-        if(scheduleAssignments[bunk][s]) continue;
+        if(scheduleAssignments[bunk][s]) continue; // already fixed something here (unlikely)
+
         const chosen=chooseActivity(bunk,slotStart,absEnd,s);
         const fname=fieldLabel(chosen.field);
         scheduleAssignments[bunk][s]={ field: fname, sport: chosen.sport, continuation:false, isLeague:false };
         if(!chosen._placeholder){ reserveField(fname,slotStart,absEnd,s,chosen.sport); }
+
         for(let k=1;k<spanLen;k++){
           const idx=s+k; if(idx>=unifiedTimes.length) break;
-          if(!(activeSlotsForDivision(div).includes(idx))) break;
+          const nextActive = activeSet ? activeSet.has(idx) : true;
+          if(!nextActive) break;
+          if (window.leagueAssignments?.[div]?.[idx]) break; // don't extend into league
           if(scheduleAssignments[bunk][idx]) break;
           scheduleAssignments[bunk][idx]={ field: fname, sport: chosen.sport, continuation:true, isLeague:false };
         }
+
         if(!chosen._placeholder){
           const key=activityKey(chosen); if(key) usedActivityKeysByBunk[bunk].add(key);
           fieldsUsedByBunk[bunk].add(fname);
@@ -295,7 +322,7 @@ function assignFieldsToBunks(){
   saveSchedule();
 }
 
-// ---------- Rendering ----------
+// ===== Rendering (merged league cells) =====
 function updateTable(){
   const scheduleTab=document.getElementById("schedule");
   if(!scheduleTab) return;
@@ -308,72 +335,90 @@ function updateTable(){
 
   const table=document.createElement("table");
   table.className="division-schedule";
-  const thead=document.createElement("thead");
-  const row1=document.createElement("tr");
-  const thTime=document.createElement("th"); thTime.textContent="Time"; row1.appendChild(thTime);
 
+  // Header row 1: divisions
+  const thead=document.createElement("thead");
+  const r1=document.createElement("tr");
+  const thTime=document.createElement("th"); thTime.textContent="Time"; r1.appendChild(thTime);
   availableDivisions.forEach(div=>{
     const th=document.createElement("th");
     th.colSpan=(divisions[div]?.bunks || []).length;
     th.textContent=div; th.style.background=divisions[div]?.color || '#333'; th.style.color="#fff";
-    row1.appendChild(th);
+    r1.appendChild(th);
   });
-  thead.appendChild(row1);
+  thead.appendChild(r1);
 
-  const row2=document.createElement("tr");
-  const thB=document.createElement("th"); thB.textContent="Bunk"; row2.appendChild(thB);
+  // Header row 2: bunks
+  const r2=document.createElement("tr");
+  const thB=document.createElement("th"); thB.textContent="Bunk"; r2.appendChild(thB);
   availableDivisions.forEach(div=>{
-    (divisions[div]?.bunks || []).forEach(b=>{ const th=document.createElement("th"); th.textContent=b; row2.appendChild(th); });
+    (divisions[div]?.bunks || []).forEach(b=>{ const th=document.createElement("th"); th.textContent=b; r2.appendChild(th); });
   });
-  thead.appendChild(row2);
+  thead.appendChild(r2);
   table.appendChild(thead);
 
+  // Body
   const tbody=document.createElement("tbody");
   for(let s=0;s<unifiedTimes.length;s++){
     const tr=document.createElement("tr");
     const tdTime=document.createElement("td"); tdTime.textContent=unifiedTimes[s].label; tr.appendChild(tdTime);
 
     availableDivisions.forEach(div=>{
-      const activeSet = new Set(activeSlotsForDivision(div));
-      (divisions[div]?.bunks || []).forEach(b=>{
-        if(scheduleAssignments[b] && scheduleAssignments[b][s] && scheduleAssignments[b][s]._skip) return;
+      const bunksInDiv = (divisions[div]?.bunks || []);
+      const leagueHere = window.leagueAssignments?.[div]?.[s];
+
+      if (leagueHere) {
+        // Render one merged cell across the division's bunks
         const td=document.createElement("td");
-        const active=activeSet.has(s);
-        if(!active){ td.className="grey-cell"; tr.appendChild(td); return; }
-
-        const entry=scheduleAssignments[b][s];
-        if(entry && !entry.continuation){
-          let span=1;
-          for(let k=s+1;k<unifiedTimes.length;k++){
-            const e2=scheduleAssignments[b][k];
-            const sameField=e2 && fieldLabel(e2.field)===fieldLabel(entry.field);
-            const sameSport=(e2 && e2.sport)===(entry && entry.sport);
-            const sameLeague=!!(e2 && e2.isLeague)===!!(entry && entry.isLeague);
-            const sameFixed=!!(e2 && e2._fixed)===!!(entry && entry._fixed);
-            if(!e2 || !e2.continuation || !sameField || !sameSport || !sameLeague || !sameFixed) break;
-            span++; scheduleAssignments[b][k]._skip=true;
-          }
-          td.rowSpan=span;
-
-          if(entry.isLeague){
-            const display = entry.matchup 
-              ? `<span style="font-weight:600;">${entry.matchup}</span><br><span style="font-size:0.8em;opacity:0.8;">(${entry.sport})</span>`
-              : 'Leagues';
-            td.innerHTML = `<div class="league-pill">${display}</div>`;
-            const divColor = divisions[div]?.color || '#4CAF50';
-            td.style.backgroundColor = divColor; td.style.color = 'white';
-          } else if(entry._fixed){
-            td.innerHTML = `<span class="fixed-pill">${fieldLabel(entry.field)}</span>`;
-            td.style.backgroundColor = '#f1f1f1';
-          } else if(fieldLabel(entry.field)==="Special Activity Needed" && !entry.sport){
-            td.innerHTML = `<span class="need-special-pill" style="color:#c0392b;">${fieldLabel(entry.field)}</span>`;
-          } else {
-            const label=fieldLabel(entry.field);
-            td.textContent = entry.sport ? `${label} – ${entry.sport}` : label;
-          }
-        } else if(!entry) td.textContent="";
+        td.colSpan = bunksInDiv.length;
+        const divColor = divisions[div]?.color || '#4CAF50';
+        td.style.backgroundColor = divColor;
+        td.style.color = 'white';
+        td.style.textAlign = 'center';
+        td.style.fontWeight = '600';
+        const list = leagueHere.matchups.map(m => `${m[0]} vs ${m[1]}`).join(' • ');
+        td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;opacity:0.9;">(${leagueHere.sport})</span></div>`;
         tr.appendChild(td);
-      });
+      } else {
+        // Normal per-bunk cells
+        bunksInDiv.forEach(b=>{
+          if(scheduleAssignments[b] && scheduleAssignments[b][s] && scheduleAssignments[b][s]._skip) return;
+          const td=document.createElement("td");
+
+          const activeSet = window.divisionActiveRows?.[div];
+          const active = activeSet ? activeSet.has(s) : true;
+          if(!active){ td.className="grey-cell"; tr.appendChild(td); return; }
+
+          const entry=scheduleAssignments[b][s];
+          if (entry && !entry.continuation) {
+            let span=1;
+            for(let k=s+1;k<unifiedTimes.length;k++){
+              const e2=scheduleAssignments[b][k];
+              const sameField=e2 && fieldLabel(e2.field)===fieldLabel(entry.field);
+              const sameSport=(e2 && e2.sport)===(entry && entry.sport);
+              const sameLeague=!!(e2 && e2.isLeague)===!!(entry && entry.isLeague);
+              const sameFixed=!!(e2 && e2._fixed)===!!(entry && entry._fixed);
+              if(!e2 || !e2.continuation || !sameField || !sameSport || !sameLeague || !sameFixed) break;
+              // also stop if a league starts in the next slot for this division
+              if (window.leagueAssignments?.[div]?.[k]) break;
+              span++;
+              scheduleAssignments[b][k]._skip = true;
+            }
+            td.rowSpan = span;
+
+            if (entry._fixed) {
+              td.innerHTML = `<span class="fixed-pill">${fieldLabel(entry.field)}</span>`;
+              td.style.backgroundColor = '#f1f1f1';
+            } else if (fieldLabel(entry.field)==="Special Activity Needed" && !entry.sport) {
+              td.innerHTML = `<span class="need-special-pill" style="color:#c0392b;">${fieldLabel(entry.field)}</span>`;
+            } else {
+              const label=fieldLabel(entry.field);
+              td.textContent = entry.sport ? `${label} – ${entry.sport}` : label;
+            }
+          } else if(!entry) td.textContent="";
+          tr.appendChild(td);
+        });
+      }
     });
 
     tbody.appendChild(tr);
@@ -382,72 +427,32 @@ function updateTable(){
   scheduleTab.appendChild(table);
 }
 
-// ---------- Save/Load ----------
-function saveSchedule(){ try{ localStorage.setItem("scheduleAssignments", JSON.stringify(scheduleAssignments)); }catch(e){ console.error("saveSchedule failed:",e); } }
+// ===== Save / Load =====
+function saveSchedule(){
+  try{
+    localStorage.setItem("scheduleAssignments", JSON.stringify(scheduleAssignments));
+    localStorage.setItem("leagueAssignments", JSON.stringify(window.leagueAssignments || {}));
+  }catch(e){ console.error("Save schedule failed:", e); }
+}
 function reconcileOrRenderSaved(){
-  const saved=localStorage.getItem("scheduleAssignments");
-  if(!saved){ updateTable(); return; }
-  let parsed; try{ parsed=JSON.parse(saved); }catch{ parsed=null; }
-  if(!parsed || typeof parsed!=="object"){ updateTable(); return; }
-
-  const blocked=computeBlockedRowsByDiv();
-  let conflict=false;
-  Object.keys(parsed).forEach(bunk=>{
-    const div=Object.keys(divisions).find(d=>(divisions[d]?.bunks || []).includes(bunk));
-    if(!div) return;
-    (parsed[bunk]||[]).forEach((cell,idx)=>{ if(cell && !cell._fixed && blocked[div] && blocked[div].has(idx)) conflict=true; });
-  });
-  if(conflict){ console.log("Fixed conflict detected. Regenerating."); assignFieldsToBunks(); }
-  else { window.scheduleAssignments=parsed; updateTable(); }
+  let parsedSched=null, parsedLeague=null;
+  try { parsedSched = JSON.parse(localStorage.getItem("scheduleAssignments")||"null"); } catch {}
+  try { parsedLeague = JSON.parse(localStorage.getItem("leagueAssignments")||"null"); } catch {}
+  if (parsedSched && typeof parsedSched==="object") window.scheduleAssignments = parsedSched;
+  if (parsedLeague && typeof parsedLeague==="object") window.leagueAssignments = parsedLeague;
+  updateTable();
 }
 
 function initScheduleSystem(){
   try{
-    // Best effort to have leagues available
     if(typeof window.loadLeagues==="function") window.loadLeagues();
-    else console.info("[LEAGUES] Leagues.js not yet loaded; will use localStorage fallback.");
     reconcileOrRenderSaved();
-  }catch(e){ console.error("initScheduleSystem error:", e); updateTable(); }
+  }catch(e){ console.error("Init error:", e); updateTable(); }
 }
 
-window.assignFieldsToBunks=assignFieldsToBunks;
-window.updateTable=updateTable;
-window.initScheduleSystem=initScheduleSystem;
+window.assignFieldsToBunks = assignFieldsToBunks;
+window.updateTable = updateTable;
+window.initScheduleSystem = initScheduleSystem;
 
 if(document.readyState==="loading") document.addEventListener("DOMContentLoaded", initScheduleSystem);
 else initScheduleSystem();
-
-// ---------- Round-robin helper (same as before) ----------
-(function(){
-  'use strict';
-  const KEY="camp_league_round_state";
-  let state={};
-  function load(){ try{ state=JSON.parse(localStorage.getItem(KEY)||"{}")||{}; }catch{ state={}; } }
-  function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch{} }
-  function genRR(teams){
-    if(!teams||teams.length<2) return [];
-    const t=[...teams]; let bye=false;
-    if(t.length%2!==0){ t.push("BYE"); bye=true; }
-    const fixed=t[0], rot=t.slice(1), rounds=t.length-1, sched=[];
-    for(let r=0;r<rounds;r++){
-      const round=[]; round.push([fixed, rot[0]]);
-      for(let i=1;i<t.length/2;i++){ round.push([rot[i], rot[rot.length-i]]); }
-      sched.push(round); rot.unshift(rot.pop());
-    }
-    if(bye) return sched.map(r=>r.filter(m=>m[0]!=="BYE"&&m[1]!=="BYE"));
-    return sched;
-  }
-  function get(leagueName, teams){
-    if(!leagueName||!teams||teams.length<2) return [];
-    load();
-    const cur = state[leagueName]?.currentRound ?? 0;
-    const full = genRR(teams);
-    if(full.length===0) return [];
-    const today = full[cur];
-    state[leagueName] = { currentRound: (cur+1)%full.length };
-    save();
-    return today;
-  }
-  window.getLeagueMatchups=get;
-  load();
-})();
