@@ -3,30 +3,51 @@
 // Ensures no two divisions have leagues at the same time (span-aware).
 
 // ===== Helpers: time / labels =====
-function parseTimeToMinutes(str){
+function parseTimeToMinutes(str) {
   if (!str || typeof str !== "string") return null;
-  let s = str.trim().toLowerCase(); let mer = null;
-  if (s.endsWith("am") || s.endsWith("pm")) { mer = s.endsWith("am") ? "am" : "pm"; s = s.replace(/am|pm/g,"").trim(); }
-  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/); if(!m) return null;
-  let hh = parseInt(m[1],10); const mm = parseInt(m[2],10);
-  if (Number.isNaN(hh)||Number.isNaN(mm)||mm<0||mm>59) return null;
-  if (mer){ if (hh===12) hh = (mer==="am")?0:12; else if (mer==="pm") hh += 12; }
-  return hh*60+mm;
-}
-function fieldLabel(f){ if(typeof f==="string")return f; if(f&&typeof f==="object"&&typeof f.name==="string")return f.name; return ""; }
-
-function findRowsForRange(startStr,endStr){
-  if(!Array.isArray(window.unifiedTimes)||window.unifiedTimes.length===0) return [];
-  const startMin=parseTimeToMinutes(startStr), endMin=parseTimeToMinutes(endStr);
-  if(startMin==null||endMin==null||endMin<=startMin) return [];
-  const inside=[]; for(let i=0;i<window.unifiedTimes.length;i++){
-    const r=window.unifiedTimes[i], rs=r.start.getHours()*60+r.start.getMinutes(), re=r.end.getHours()*60+r.end.getMinutes();
-    if(rs>=startMin && re<=endMin) inside.push(i);
+  let s = str.trim().toLowerCase();
+  let mer = null;
+  if (s.endsWith("am") || s.endsWith("pm")) {
+    mer = s.endsWith("am") ? "am" : "pm";
+    s = s.replace(/am|pm/g, "").trim();
   }
-  if(inside.length===0){
-    const overlap=[]; for(let i=0;i<window.unifiedTimes.length;i++){
-      const r=window.unifiedTimes[i], rs=r.start.getHours()*60+r.start.getMinutes(), re=r.end.getHours()*60+r.end.getMinutes();
-      if(Math.max(rs,startMin) < Math.min(re,endMin)) overlap.push(i);
+  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+  if (!m) return null;
+  let hh = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
+  if (mer) {
+    if (hh === 12) hh = mer === "am" ? 0 : 12;
+    else if (mer === "pm") hh += 12;
+  }
+  return hh * 60 + mm;
+}
+function fieldLabel(f) {
+  if (typeof f === "string") return f;
+  if (f && typeof f === "object" && typeof f.name === "string") return f.name;
+  return "";
+}
+
+function findRowsForRange(startStr, endStr) {
+  if (!Array.isArray(window.unifiedTimes) || window.unifiedTimes.length === 0)
+    return [];
+  const startMin = parseTimeToMinutes(startStr),
+    endMin = parseTimeToMinutes(endStr);
+  if (startMin == null || endMin == null || endMin <= startMin) return [];
+  const inside = [];
+  for (let i = 0; i < window.unifiedTimes.length; i++) {
+    const r = window.unifiedTimes[i],
+      rs = r.start.getHours() * 60 + r.start.getMinutes(),
+      re = r.end.getHours() * 60 + r.end.getMinutes();
+    if (rs >= startMin && re <= endMin) inside.push(i);
+  }
+  if (inside.length === 0) {
+    const overlap = [];
+    for (let i = 0; i < window.unifiedTimes.length; i++) {
+      const r = window.unifiedTimes[i],
+        rs = r.start.getHours() * 60 + r.start.getMinutes(),
+        re = r.end.getHours() * 60 + r.end.getMinutes();
+      if (Math.max(rs, startMin) < Math.min(re, endMin)) overlap.push(i);
     }
     return overlap;
   }
@@ -34,42 +55,63 @@ function findRowsForRange(startStr,endStr){
 }
 
 // ===== Fixed activities =====
-function loadActiveFixedActivities(){
-  let raw=localStorage.getItem("fixedActivities_v2"); if(!raw) raw=localStorage.getItem("fixedActivities");
-  try{ const arr=JSON.parse(raw||"[]"); return Array.isArray(arr)?arr.filter(a=>a&&a.enabled):[]; }catch{ return []; }
+function loadActiveFixedActivities() {
+  let raw = localStorage.getItem("fixedActivities_v2");
+  if (!raw) raw = localStorage.getItem("fixedActivities");
+  try {
+    const arr = JSON.parse(raw || "[]");
+    return Array.isArray(arr) ? arr.filter((a) => a && a.enabled) : [];
+  } catch {
+    return [];
+  }
 }
-function computeBlockedRowsByDiv(){
-  const fixed=loadActiveFixedActivities(); const blocked={};
-  fixed.forEach(act=>{
-    const rows=findRowsForRange(act.start,act.end); if(rows.length===0) return;
-    const targetDivs=(Array.isArray(act.divisions)&&act.divisions.length>0)?act.divisions:(window.availableDivisions||[]);
-    targetDivs.forEach(div=>{ blocked[div]=blocked[div]||new Set(); rows.forEach(r=>blocked[div].add(r)); });
+function computeBlockedRowsByDiv() {
+  const fixed = loadActiveFixedActivities();
+  const blocked = {};
+  fixed.forEach((act) => {
+    const rows = findRowsForRange(act.start, act.end);
+    if (rows.length === 0) return;
+    const targetDivs =
+      Array.isArray(act.divisions) && act.divisions.length > 0
+        ? act.divisions
+        : window.availableDivisions || [];
+    targetDivs.forEach((div) => {
+      blocked[div] = blocked[div] || new Set();
+      rows.forEach((r) => blocked[div].add(r));
+    });
   });
   return blocked;
 }
-function prePlaceFixedActivities(){
-  if(window.DailyActivities && typeof window.DailyActivities.prePlace==="function"){
-    try{ window.DailyActivities.prePlace(); }catch(e){ console.error("DailyActivities.prePlace error:",e); }
+function prePlaceFixedActivities() {
+  if (window.DailyActivities && typeof window.DailyActivities.prePlace === "function") {
+    try {
+      window.DailyActivities.prePlace();
+    } catch (e) {
+      console.error("DailyActivities.prePlace error:", e);
+    }
   }
   return computeBlockedRowsByDiv();
 }
 
 // ===== League helpers =====
-function leaguesSnapshot(){
-  if (window.leaguesByName && Object.keys(window.leaguesByName).length>0) return window.leaguesByName;
-  try{
-    const raw = localStorage.getItem("leagues"); 
+function leaguesSnapshot() {
+  if (window.leaguesByName && Object.keys(window.leaguesByName).length > 0)
+    return window.leaguesByName;
+  try {
+    const raw = localStorage.getItem("leagues");
     const obj = raw ? JSON.parse(raw) : {};
-    return (obj && typeof obj==="object") ? obj : {};
-  }catch{ return {}; }
+    return obj && typeof obj === "object" ? obj : {};
+  } catch {
+    return {};
+  }
 }
-function getEnabledLeaguesByDivision(){
+function getEnabledLeaguesByDivision() {
   const result = {}; // { [div]: { name, data } }
   const all = leaguesSnapshot();
-  Object.keys(all).forEach(name=>{
+  Object.keys(all).forEach((name) => {
     const l = all[name];
     if (!l?.enabled) return;
-    (l.divisions||[]).forEach(div=>{
+    (l.divisions || []).forEach((div) => {
       result[div] = { name, data: l };
     });
   });
@@ -77,33 +119,54 @@ function getEnabledLeaguesByDivision(){
 }
 
 // Round-robin (teams are league teams, not bunks)
-(function(){
-  'use strict';
-  const KEY="camp_league_round_state";
-  let state={};
-  function load(){ try{ state=JSON.parse(localStorage.getItem(KEY)||"{}")||{}; }catch{ state={}; } }
-  function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch{} }
-  function genRR(teams){
-    if(!teams||teams.length<2) return [];
-    const t=[...teams]; let bye=false;
-    if(t.length%2!==0){ t.push("BYE"); bye=true; }
-    const fixed=t[0], rot=t.slice(1), rounds=t.length-1, out=[];
-    for(let r=0;r<rounds;r++){
-      const round=[]; round.push([fixed, rot[0]]);
-      for(let i=1;i<t.length/2;i++) round.push([rot[i], rot[rot.length-i]]);
-      out.push(round); rot.unshift(rot.pop());
+(function () {
+  "use strict";
+  const KEY = "camp_league_round_state";
+  let state = {};
+  function load() {
+    try {
+      state = JSON.parse(localStorage.getItem(KEY) || "{}") || {};
+    } catch {
+      state = {};
     }
-    if(bye) return out.map(r=>r.filter(m=>m[0]!=="BYE"&&m[1]!=="BYE"));
+  }
+  function save() {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(state));
+    } catch {}
+  }
+  function genRR(teams) {
+    if (!teams || teams.length < 2) return [];
+    const t = [...teams];
+    let bye = false;
+    if (t.length % 2 !== 0) {
+      t.push("BYE");
+      bye = true;
+    }
+    const fixed = t[0],
+      rot = t.slice(1),
+      rounds = t.length - 1,
+      out = [];
+    for (let r = 0; r < rounds; r++) {
+      const round = [];
+      round.push([fixed, rot[0]]);
+      for (let i = 1; i < t.length / 2; i++)
+        round.push([rot[i], rot[rot.length - i]]);
+      out.push(round);
+      rot.unshift(rot.pop());
+    }
+    if (bye)
+      return out.map((r) => r.filter((m) => m[0] !== "BYE" && m[1] !== "BYE"));
     return out;
   }
-  function get(leagueName, teams){
-    if(!leagueName||!teams||teams.length<2) return [];
+  function get(leagueName, teams) {
+    if (!leagueName || !teams || teams.length < 2) return [];
     load();
     const cur = state[leagueName]?.currentRound ?? 0;
     const full = genRR(teams);
-    if(full.length===0) return [];
+    if (full.length === 0) return [];
     const today = full[cur];
-    state[leagueName] = { currentRound: (cur+1)%full.length };
+    state[leagueName] = { currentRound: (cur + 1) % full.length };
     save();
     return today;
   }
@@ -117,62 +180,89 @@ let leagueSportRotation = {};
 
 function loadLeagueSportRotation() {
   try {
-    leagueSportRotation = JSON.parse(localStorage.getItem(SPORT_STATE_KEY) || "{}") || {};
+    leagueSportRotation =
+      JSON.parse(localStorage.getItem(SPORT_STATE_KEY) || "{}") || {};
   } catch {
     leagueSportRotation = {};
   }
 }
-
 function saveLeagueSportRotation() {
   try {
-    localStorage.setItem(SPORT_STATE_KEY, JSON.stringify(leagueSportRotation));
+    localStorage.setItem(
+      SPORT_STATE_KEY,
+      JSON.stringify(leagueSportRotation)
+    );
   } catch {}
 }
 
 /**
- * Returns the next sport for a league, cycling through its available sports.
- * @param {string} leagueName 
- * @param {string[]} sportsList 
+ * Assigns sports to each matchup, aiming for variety within a single round.
+ * Persists per-league rotation state so variety continues between days.
  */
-function getNextLeagueSport(leagueName, sportsList) {
-  if (!Array.isArray(sportsList) || sportsList.length === 0) return "Leagues";
+function assignSportsToMatchups(leagueName, matchups, sportsList) {
+  if (!Array.isArray(matchups) || matchups.length === 0) return [];
+  if (!Array.isArray(sportsList) || sportsList.length === 0)
+    return matchups.map((m) => ({ teams: m, sport: "Leagues" }));
+
   loadLeagueSportRotation();
   const state = leagueSportRotation[leagueName] || { index: 0 };
-  const sport = sportsList[state.index % sportsList.length];
-  leagueSportRotation[leagueName] = { index: (state.index + 1) % sportsList.length };
+  let idx = state.index;
+
+  const assigned = matchups.map((m) => {
+    const sport = sportsList[idx % sportsList.length];
+    idx++;
+    return { teams: m, sport };
+  });
+
+  leagueSportRotation[leagueName] = { index: idx % sportsList.length };
   saveLeagueSportRotation();
-  return sport;
+  return assigned;
 }
 
 // ====== CORE STATE ======
-window.leagueAssignments = window.leagueAssignments || {}; 
-// { [division]: { [slotIndex]: { sport, matchups: [[A,B],...], leagueName } } }
+window.leagueAssignments = window.leagueAssignments || {};
 
-function assignFieldsToBunks(){
-  // Guard globals
+function assignFieldsToBunks() {
+  // ... setup globals & basic structures ...
   window.scheduleAssignments = window.scheduleAssignments || {};
-  window.availableDivisions = Array.isArray(window.availableDivisions)?window.availableDivisions:[];
+  window.availableDivisions = Array.isArray(window.availableDivisions)
+    ? window.availableDivisions
+    : [];
   window.divisions = window.divisions || {};
-  window.fields = Array.isArray(window.fields)?window.fields:[];
-  window.specialActivities = Array.isArray(window.specialActivities)?window.specialActivities:[];
-  window.unifiedTimes = Array.isArray(window.unifiedTimes)?window.unifiedTimes:[];
+  window.fields = Array.isArray(window.fields) ? window.fields : [];
+  window.specialActivities = Array.isArray(window.specialActivities)
+    ? window.specialActivities
+    : [];
+  window.unifiedTimes = Array.isArray(window.unifiedTimes)
+    ? window.unifiedTimes
+    : [];
   window.divisionActiveRows = window.divisionActiveRows || {};
-  window.leagueAssignments = {}; // reset each generation
+  window.leagueAssignments = {};
 
-  const incEl=document.getElementById("increment");
-  const inc = incEl ? parseInt(incEl.value,10) : 30;
-  const durationEl=document.getElementById("activityDuration");
-  const activityDuration = durationEl ? parseInt(durationEl.value,10) : 30;
+  const incEl = document.getElementById("increment");
+  const inc = incEl ? parseInt(incEl.value, 10) : 30;
+  const durationEl = document.getElementById("activityDuration");
+  const activityDuration = durationEl
+    ? parseInt(durationEl.value, 10)
+    : 30;
   const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
 
-  const availFields = fields.filter(f=>f?.available && Array.isArray(f.activities) && f.activities.length>0);
-  const availSpecials = specialActivities.filter(s=>s?.available);
+  const availFields = fields.filter(
+    (f) => f?.available && Array.isArray(f.activities) && f.activities.length > 0
+  );
+  const availSpecials = specialActivities.filter((s) => s?.available);
 
   const allActivities = [
-    ...availFields.flatMap(f=>f.activities.map(act=>({type:"field", field:f, sport:act})) ),
-    ...availSpecials.map(sa=>({type:"special", field:{name:sa.name}, sport:null}))
+    ...availFields.flatMap((f) =>
+      f.activities.map((act) => ({ type: "field", field: f, sport: act }))
+    ),
+    ...availSpecials.map((sa) => ({
+      type: "special",
+      field: { name: sa.name },
+      sport: null,
+    })),
   ];
-  if (allActivities.length===0 || unifiedTimes.length===0){
+  if (allActivities.length === 0 || unifiedTimes.length === 0) {
     console.warn("No activities or time grid available. Aborting.");
     scheduleAssignments = {};
     return;
@@ -180,203 +270,134 @@ function assignFieldsToBunks(){
 
   // Reset per-bunk grid
   scheduleAssignments = {};
-  availableDivisions.forEach(div=>{
-    (divisions[div]?.bunks || []).forEach(b=>{
-      scheduleAssignments[b]=new Array(unifiedTimes.length);
+  availableDivisions.forEach((div) => {
+    (divisions[div]?.bunks || []).forEach((b) => {
+      scheduleAssignments[b] = new Array(unifiedTimes.length);
     });
   });
 
-  // Priority order (keep your previous behavior)
   const priorityDivs = [...availableDivisions].reverse();
-
-  // Locks for general activities (NOT used for league merged rows)
   const globalResourceUsage = {};
-  const occupiedFieldsBySlot = Array.from({length: unifiedTimes.length}, ()=>new Set());
-  const globalActivityLock = Array.from({length: unifiedTimes.length}, ()=>new Set());
+  const occupiedFieldsBySlot = Array.from(
+    { length: unifiedTimes.length },
+    () => new Set()
+  );
+  const globalActivityLock = Array.from(
+    { length: unifiedTimes.length },
+    () => new Set()
+  );
+
   const usedActivityKeysByBunk = {};
   const fieldsUsedByBunk = {};
-  availableDivisions.forEach(div=>{
-    (divisions[div]?.bunks || []).forEach(b=>{
-      usedActivityKeysByBunk[b]=new Set();
-      fieldsUsedByBunk[b]=new Set();
+  availableDivisions.forEach((div) => {
+    (divisions[div]?.bunks || []).forEach((b) => {
+      usedActivityKeysByBunk[b] = new Set();
+      fieldsUsedByBunk[b] = new Set();
     });
   });
-  const norm = s => (typeof s==="string"?s.trim().toLowerCase():null);
-  const activityKey = act => {
-    if (!act) return null;
-    if (act.sport && typeof act.sport==="string") return `sport:${norm(act.sport)}`;
-    const fname = norm(act.field && act.field.name || act.field);
-    return fname ? `special:${fname}` : null;
-  };
-  const overlaps=(aS,aE,bS,bE)=> aS<bE && bS<aE;
 
-  function canUseField(fieldName, start, end, s){
-    if(!fieldName) return false;
-    for(let k=0;k<spanLen;k++){
-      const idx=s+k; if(idx>=unifiedTimes.length) break;
-      if(occupiedFieldsBySlot[idx].has(fieldName)) return false;
+  function canUseField(fieldName, start, end, s) {
+    if (!fieldName) return false;
+    for (let k = 0; k < spanLen; k++) {
+      const idx = s + k;
+      if (idx >= unifiedTimes.length) break;
+      if (occupiedFieldsBySlot[idx].has(fieldName)) return false;
     }
-    if(globalResourceUsage[fieldName]){
-      for(const r of globalResourceUsage[fieldName]) if(overlaps(start,end,r.start,r.end)) return false;
+    if (globalResourceUsage[fieldName]) {
+      for (const r of globalResourceUsage[fieldName])
+        if (start < r.end && end > r.start) return false;
     }
     return true;
   }
-  function reserveField(fieldName,start,end,s,sportName=null,currentSpanLen=spanLen){
-    if(!fieldName) return;
-    if(!globalResourceUsage[fieldName]) globalResourceUsage[fieldName]=[];
-    globalResourceUsage[fieldName].push({start,end});
-    for(let k=0;k<currentSpanLen;k++){
-      const idx=s+k; if(idx>=unifiedTimes.length) break;
+  function reserveField(fieldName, start, end, s, sportName = null, len = spanLen) {
+    if (!fieldName) return;
+    if (!globalResourceUsage[fieldName]) globalResourceUsage[fieldName] = [];
+    globalResourceUsage[fieldName].push({ start, end });
+    for (let k = 0; k < len; k++) {
+      const idx = s + k;
+      if (idx >= unifiedTimes.length) break;
       occupiedFieldsBySlot[idx].add(fieldName);
-      if(sportName) globalActivityLock[idx].add(norm(sportName));
+      if (sportName) globalActivityLock[idx].add(sportName.toLowerCase());
     }
   }
 
-  // Pre-place fixed activities & compute blocked rows
   const blockedRowsByDiv = prePlaceFixedActivities();
 
-  // Lock fixed resources
-  Object.keys(scheduleAssignments).forEach(bunk=>{
-    const row = scheduleAssignments[bunk];
-    if(!Array.isArray(row)) return;
-    row.forEach((entry,s)=>{
-      if(entry && entry._fixed && !entry.continuation){
-        let len=1;
-        for(let k=s+1;k<unifiedTimes.length;k++){
-          const e2=row[k];
-          if(e2 && e2._fixed && fieldLabel(e2.field)===fieldLabel(entry.field)) len++; else break;
-        }
-        const fieldName=fieldLabel(entry.field);
-        const slotStart=unifiedTimes[s].start;
-        const absEnd = new Date(slotStart.getTime()+len*inc*60000);
-        reserveField(fieldName, slotStart, absEnd, s, entry.sport, len);
-      }
-    });
-  });
-
-  // ===== 1) PLACE LEAGUES AS MERGED CELLS (NO CROSS-DIVISION CONFLICTS) =====
-  const enabledByDiv = getEnabledLeaguesByDivision(); // {div:{name,data}}
-
-  // Tracks global timeslots already reserved for any league (span-aware)
-  const takenLeagueSlots = new Set(); // holds row indices occupied by any league across any division
-
-  function slotConflictsWithTaken(slotIndex) {
-    for (let k = 0; k < spanLen; k++) {
-      const idx = slotIndex + k;
-      if (idx >= unifiedTimes.length) break;
-      if (takenLeagueSlots.has(idx)) return true;
-    }
+  // ===== 1) PLACE LEAGUES (per-division) =====
+  const enabledByDiv = getEnabledLeaguesByDivision();
+  const takenLeagueSlots = new Set();
+  const slotConflict = (s) => {
+    for (let k = 0; k < spanLen; k++) if (takenLeagueSlots.has(s + k)) return true;
     return false;
-  }
-  function markTaken(slotIndex) {
-    for (let k = 0; k < spanLen; k++) {
-      const idx = slotIndex + k;
-      if (idx >= unifiedTimes.length) break;
-      takenLeagueSlots.add(idx);
-    }
-  }
+  };
+  const markTaken = (s) => {
+    for (let k = 0; k < spanLen; k++) takenLeagueSlots.add(s + k);
+  };
 
   for (const div of priorityDivs) {
     const lg = enabledByDiv[div];
     if (!lg) continue;
 
-    const activeSet = window.divisionActiveRows?.[div];
-    const actSlots = (activeSet && activeSet.size > 0)
-      ? Array.from(activeSet)
-      : window.unifiedTimes.map((_, i) => i);
+    const actSet = window.divisionActiveRows?.[div];
+    const actSlots =
+      actSet && actSet.size > 0
+        ? Array.from(actSet)
+        : window.unifiedTimes.map((_, i) => i);
 
-    // Candidate slots: active, not locally blocked, not used by bunk fixed entries, and not globally taken
-    const candidateSlots = actSlots.filter(s => {
+    const candidates = actSlots.filter((s) => {
       if (blockedRowsByDiv[div]?.has(s)) return false;
-      const usedByBunks = (divisions[div]?.bunks || []).some(b => scheduleAssignments[b]?.[s]);
-      if (usedByBunks) return false;
-      if (slotConflictsWithTaken(s)) return false;
-      return true;
+      if ((divisions[div]?.bunks || []).some((b) => scheduleAssignments[b]?.[s]))
+        return false;
+      return !slotConflict(s);
     });
+    if (candidates.length === 0) continue;
 
-    if (candidateSlots.length === 0) {
-      console.warn(`[LEAGUES] ${div}: no viable slot that avoids conflicts.`);
-      continue;
-    }
+    const chosenSlot = candidates[0];
+    const teams = (lg.data.teams || []).map((t) => String(t || "").trim()).filter(Boolean);
+    if (teams.length < 2) continue;
 
-    const chosenSlot = candidateSlots[0];
-
-    const teams = (lg.data.teams || []).map(t => String(t || "").trim()).filter(Boolean);
-    if (teams.length < 2) {
-      console.warn(`[LEAGUES] "${lg.name}" for ${div}: need at least 2 teams.`);
-      continue;
-    }
     const matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
     if (matchups.length === 0) continue;
 
-    // NEW: Cycle through sports for this league
-    const sport = getNextLeagueSport(lg.name, lg.data.sports);
-
+    const assignedGames = assignSportsToMatchups(lg.name, matchups, lg.data.sports);
     window.leagueAssignments[div] = window.leagueAssignments[div] || {};
-    window.leagueAssignments[div][chosenSlot] = { sport, matchups, leagueName: lg.name };
+    window.leagueAssignments[div][chosenSlot] = { games: assignedGames, leagueName: lg.name };
 
-    // Block this slot range for this division
     blockedRowsByDiv[div] = blockedRowsByDiv[div] || new Set();
-    for (let k = 0; k < spanLen; k++) {
-      const idx = chosenSlot + k;
-      if (idx >= unifiedTimes.length) break;
-      blockedRowsByDiv[div].add(idx);
-    }
+    for (let k = 0; k < spanLen; k++) blockedRowsByDiv[div].add(chosenSlot + k);
     markTaken(chosenSlot);
   }
 
-  // ===== 2) FILL GENERAL ACTIVITIES (skip league slots for that division) =====
-  const PLACEHOLDER_NAME='Special Activity Needed';
-  function baseFeasible(act,bunk,slotStart,slotEnd,s,allowFieldReuse){
-    const fname=fieldLabel(act?.field); if(!fname) return false;
-    if(!canUseField(fname,slotStart,slotEnd,s)) return false;
-    if(act.sport && globalActivityLock[s].has((act.sport||"").toLowerCase())) return false;
-    const key=activityKey(act); if(key && usedActivityKeysByBunk[bunk]?.has(key)) return false;
-    if(!allowFieldReuse && fieldsUsedByBunk[bunk]?.has(fname)) return false;
+  // ===== 2) Fill general activities =====
+  const PLACEHOLDER_NAME = "Special Activity Needed";
+  const baseFeasible = (act, bunk, s, start, end) => {
+    const fname = fieldLabel(act.field);
+    if (!fname || !canUseField(fname, start, end, s)) return false;
+    if (act.sport && globalActivityLock[s].has(act.sport.toLowerCase())) return false;
     return true;
-  }
-  function chooseActivity(bunk,slotStart,slotEnd,s){
-    const absEnd=new Date(slotStart.getTime()+activityDuration*60000);
-    let pool=allActivities.filter(a=>baseFeasible(a,bunk,slotStart,absEnd,s,false));
-    if(pool.length>0) return pool[Math.floor(Math.random()*pool.length)];
-    pool=allActivities.filter(a=>baseFeasible(a,bunk,slotStart,absEnd,s,true));
-    if(pool.length>0) return pool[Math.floor(Math.random()*pool.length)];
-    return {type:'special', field:{name:PLACEHOLDER_NAME}, sport:null, _placeholder:true};
+  };
+  function chooseActivity(bunk, start, end, s) {
+    const pool = allActivities.filter((a) => baseFeasible(a, bunk, s, start, end));
+    return pool.length
+      ? pool[Math.floor(Math.random() * pool.length)]
+      : { type: "special", field: { name: PLACEHOLDER_NAME } };
   }
 
-  for(let s=0;s<unifiedTimes.length;s++){
-    const slotStart=unifiedTimes[s].start;
-    const absEnd=new Date(slotStart.getTime()+activityDuration*60000);
-
-    for(const div of priorityDivs){
+  for (let s = 0; s < unifiedTimes.length; s++) {
+    const start = unifiedTimes[s].start;
+    const end = new Date(start.getTime() + activityDuration * 60000);
+    for (const div of priorityDivs) {
       if (window.leagueAssignments?.[div]?.[s]) continue;
       if (blockedRowsByDiv[div]?.has(s)) continue;
+      const active = window.divisionActiveRows?.[div]?.has(s) ?? true;
+      if (!active) continue;
 
-      const activeSet = window.divisionActiveRows?.[div];
-      const isActive = activeSet ? activeSet.has(s) : true;
-      if (!isActive) continue;
-
-      for(const bunk of (divisions[div]?.bunks || [])){
-        if(scheduleAssignments[bunk][s]) continue; 
-
-        const chosen=chooseActivity(bunk,slotStart,absEnd,s);
-        const fname=fieldLabel(chosen.field);
-        scheduleAssignments[bunk][s]={ field: fname, sport: chosen.sport, continuation:false, isLeague:false };
-        if(!chosen._placeholder){ reserveField(fname,slotStart,absEnd,s,chosen.sport); }
-
-        for(let k=1;k<spanLen;k++){
-          const idx=s+k; if(idx>=unifiedTimes.length) break;
-          const nextActive = activeSet ? activeSet.has(idx) : true;
-          if(!nextActive) break;
-          if (window.leagueAssignments?.[div]?.[idx]) break;
-          if(scheduleAssignments[bunk][idx]) break;
-          scheduleAssignments[bunk][idx]={ field: fname, sport: chosen.sport, continuation:true, isLeague:false };
-        }
-
-        if(!chosen._placeholder){
-          const key=activityKey(chosen); if(key) usedActivityKeysByBunk[bunk].add(key);
-          fieldsUsedByBunk[bunk].add(fname);
-        }
+      for (const bunk of divisions[div]?.bunks || []) {
+        if (scheduleAssignments[bunk][s]) continue;
+        const chosen = chooseActivity(bunk, start, end, s);
+        const fname = fieldLabel(chosen.field);
+        scheduleAssignments[bunk][s] = { field: fname, sport: chosen.sport || null, continuation: false };
+        if (fname !== PLACEHOLDER_NAME) reserveField(fname, start, end, s, chosen.sport);
       }
     }
   }
@@ -385,134 +406,110 @@ function assignFieldsToBunks(){
   saveSchedule();
 }
 
-// ===== Rendering (merged league cells) =====
-function updateTable(){
-  const scheduleTab=document.getElementById("schedule");
-  if(!scheduleTab) return;
-  scheduleTab.innerHTML="";
-  if(unifiedTimes.length===0) return;
+// ===== Rendering =====
+function updateTable() {
+  const container = document.getElementById("schedule");
+  if (!container) return;
+  container.innerHTML = "";
+  if (!unifiedTimes.length) return;
 
-  Object.keys(scheduleAssignments).forEach(b=>{
-    if(Array.isArray(scheduleAssignments[b])) scheduleAssignments[b].forEach(e=>{ if(e) delete e._skip; });
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const tr1 = document.createElement("tr");
+  const timeTh = document.createElement("th");
+  timeTh.textContent = "Time";
+  tr1.appendChild(timeTh);
+  availableDivisions.forEach((div) => {
+    const th = document.createElement("th");
+    th.colSpan = (divisions[div]?.bunks || []).length;
+    th.textContent = div;
+    th.style.background = divisions[div]?.color || "#333";
+    th.style.color = "#fff";
+    tr1.appendChild(th);
   });
-
-  const table=document.createElement("table");
-  table.className="division-schedule";
-
-  // Header row 1: divisions
-  const thead=document.createElement("thead");
-  const r1=document.createElement("tr");
-  const thTime=document.createElement("th"); thTime.textContent="Time"; r1.appendChild(thTime);
-  availableDivisions.forEach(div=>{
-    const th=document.createElement("th");
-    th.colSpan=(divisions[div]?.bunks || []).length;
-    th.textContent=div; th.style.background=divisions[div]?.color || '#333'; th.style.color="#fff";
-    r1.appendChild(th);
+  thead.appendChild(tr1);
+  const tr2 = document.createElement("tr");
+  const bunkTh = document.createElement("th");
+  bunkTh.textContent = "Bunk";
+  tr2.appendChild(bunkTh);
+  availableDivisions.forEach((div) => {
+    (divisions[div]?.bunks || []).forEach((b) => {
+      const th = document.createElement("th");
+      th.textContent = b;
+      tr2.appendChild(th);
+    });
   });
-  thead.appendChild(r1);
-
-  // Header row 2: bunks
-  const r2=document.createElement("tr");
-  const thB=document.createElement("th"); thB.textContent="Bunk"; r2.appendChild(thB);
-  availableDivisions.forEach(div=>{
-    (divisions[div]?.bunks || []).forEach(b=>{ const th=document.createElement("th"); th.textContent=b; r2.appendChild(th); });
-  });
-  thead.appendChild(r2);
+  thead.appendChild(tr2);
   table.appendChild(thead);
 
-  // Body
-  const tbody=document.createElement("tbody");
-  for(let s=0;s<unifiedTimes.length;s++){
-    const tr=document.createElement("tr");
-    const tdTime=document.createElement("td"); tdTime.textContent=unifiedTimes[s].label; tr.appendChild(tdTime);
+  const tbody = document.createElement("tbody");
+  for (let i = 0; i < unifiedTimes.length; i++) {
+    const tr = document.createElement("tr");
+    const tdTime = document.createElement("td");
+    tdTime.textContent = unifiedTimes[i].label;
+    tr.appendChild(tdTime);
 
-    availableDivisions.forEach(div=>{
-      const bunksInDiv = (divisions[div]?.bunks || []);
-      const leagueHere = window.leagueAssignments?.[div]?.[s];
-
-      if (leagueHere) {
-        const td=document.createElement("td");
-        td.colSpan = bunksInDiv.length;
-        const divColor = divisions[div]?.color || '#4CAF50';
-        td.style.backgroundColor = divColor;
-        td.style.color = 'white';
-        td.style.textAlign = 'center';
-        td.style.fontWeight = '600';
-        const list = leagueHere.matchups.map(m => `${m[0]} vs ${m[1]}`).join(' • ');
-        td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;opacity:0.9;">${leagueHere.leagueName} – ${leagueHere.sport}</span></div>`;
+    availableDivisions.forEach((div) => {
+      const league = window.leagueAssignments?.[div]?.[i];
+      const bunks = divisions[div]?.bunks || [];
+      if (league) {
+        const td = document.createElement("td");
+        td.colSpan = bunks.length;
+        td.style.background = divisions[div]?.color || "#4CAF50";
+        td.style.color = "#fff";
+        td.style.fontWeight = "600";
+        const list = league.games
+          .map((g) => `${g.teams[0]} vs ${g.teams[1]} (${g.sport})`)
+          .join(" • ");
+        td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;">${league.leagueName}</span></div>`;
         tr.appendChild(td);
       } else {
-        bunksInDiv.forEach(b=>{
-          if(scheduleAssignments[b] && scheduleAssignments[b][s] && scheduleAssignments[b][s]._skip) return;
-          const td=document.createElement("td");
-
-          const activeSet = window.divisionActiveRows?.[div];
-          const active = activeSet ? activeSet.has(s) : true;
-          if(!active){ td.className="grey-cell"; tr.appendChild(td); return; }
-
-          const entry=scheduleAssignments[b][s];
-          if (entry && !entry.continuation) {
-            let span=1;
-            for(let k=s+1;k<unifiedTimes.length;k++){
-              const e2=scheduleAssignments[b][k];
-              const sameField=e2 && fieldLabel(e2.field)===fieldLabel(entry.field);
-              const sameSport=(e2 && e2.sport)===(entry && entry.sport);
-              const sameLeague=!!(e2 && e2.isLeague)===!!(entry && entry.isLeague);
-              const sameFixed=!!(e2 && e2._fixed)===!!(entry && entry._fixed);
-              if(!e2 || !e2.continuation || !sameField || !sameSport || !sameLeague || !sameFixed) break;
-              if (window.leagueAssignments?.[div]?.[k]) break;
-              span++;
-              scheduleAssignments[b][k]._skip = true;
-            }
-            td.rowSpan = span;
-
-            if (entry._fixed) {
-              td.innerHTML = `<span class="fixed-pill">${fieldLabel(entry.field)}</span>`;
-              td.style.backgroundColor = '#f1f1f1';
-            } else if (fieldLabel(entry.field)==="Special Activity Needed" && !entry.sport) {
-              td.innerHTML = `<span class="need-special-pill" style="color:#c0392b;">${fieldLabel(entry.field)}</span>`;
-            } else {
-              const label=fieldLabel(entry.field);
-              td.textContent = entry.sport ? `${label} – ${entry.sport}` : label;
-            }
-          } else if(!entry) td.textContent="";
+        bunks.forEach((b) => {
+          const entry = scheduleAssignments[b]?.[i];
+          const td = document.createElement("td");
+          if (entry?.field === "Special Activity Needed")
+            td.innerHTML = `<span style="color:#c0392b;">${entry.field}</span>`;
+          else if (entry?.sport)
+            td.textContent = `${entry.field} – ${entry.sport}`;
+          else td.textContent = entry?.field || "";
           tr.appendChild(td);
         });
       }
     });
-
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
-  scheduleTab.appendChild(table);
+  container.appendChild(table);
 }
 
-// ===== Save / Load =====
-function saveSchedule(){
-  try{
+function saveSchedule() {
+  try {
     localStorage.setItem("scheduleAssignments", JSON.stringify(scheduleAssignments));
     localStorage.setItem("leagueAssignments", JSON.stringify(window.leagueAssignments || {}));
-  }catch(e){ console.error("Save schedule failed:", e); }
+  } catch (e) {
+    console.error("Save schedule failed:", e);
+  }
 }
-function reconcileOrRenderSaved(){
-  let parsedSched=null, parsedLeague=null;
-  try { parsedSched = JSON.parse(localStorage.getItem("scheduleAssignments")||"null"); } catch {}
-  try { parsedLeague = JSON.parse(localStorage.getItem("leagueAssignments")||"null"); } catch {}
-  if (parsedSched && typeof parsedSched==="object") window.scheduleAssignments = parsedSched;
-  if (parsedLeague && typeof parsedLeague==="object") window.leagueAssignments = parsedLeague;
+function reconcileOrRenderSaved() {
+  try {
+    window.scheduleAssignments = JSON.parse(localStorage.getItem("scheduleAssignments") || "{}") || {};
+    window.leagueAssignments = JSON.parse(localStorage.getItem("leagueAssignments") || "{}") || {};
+  } catch {}
   updateTable();
 }
-
-function initScheduleSystem(){
-  try{
-    if(typeof window.loadLeagues==="function") window.loadLeagues();
+function initScheduleSystem() {
+  try {
     reconcileOrRenderSaved();
-  }catch(e){ console.error("Init error:", e); updateTable(); }
+  } catch (e) {
+    console.error("Init error:", e);
+    updateTable();
+  }
 }
 
 window.assignFieldsToBunks = assignFieldsToBunks;
 window.updateTable = updateTable;
 window.initScheduleSystem = initScheduleSystem;
 
-if(document.readyState==="loading") document.addEventListener("DOMContentLoaded", initScheduleSystem);
+if (document.readyState === "loading")
+  document.addEventListener("DOMContentLoaded", initScheduleSystem);
 else initScheduleSystem();
