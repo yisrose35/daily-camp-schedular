@@ -1,6 +1,6 @@
 // -------------------- app2.js --------------------
 // Leagues render as merged cells per division+slot with per-matchup sports.
-// Fixed activities show names properly; early/late times are greyed out.
+// Fixed activities show names properly; early/late times grey per division.
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -280,10 +280,7 @@ function assignFieldsToBunks() {
   }
 
   // Fill general
-  const PLACEHOLDER_NAME = "Special Activity Needed";
   for (let s = 0; s < unifiedTimes.length; s++) {
-    const start = unifiedTimes[s].start;
-    const end = new Date(start.getTime() + activityDuration * 60000);
     for (const div of availableDivisions) {
       if (window.leagueAssignments?.[div]?.[s]) continue;
       if (blockedRowsByDiv[div]?.has(s)) continue;
@@ -307,54 +304,54 @@ function assignFieldsToBunks() {
   saveSchedule();
 }
 
-// ===== RENDERING =====
+// ===== RENDERING (per-division grey-out) =====
 function updateTable() {
   const container = document.getElementById("schedule");
   if (!container) return;
   container.innerHTML = "";
   if (!unifiedTimes.length) return;
 
-  // compute earliest/latest camp day
-  let earliest = null,
-    latest = null;
-  availableDivisions.forEach((d) => {
-    const s = parseTimeToMinutes(divisions[d]?.start),
-      e = parseTimeToMinutes(divisions[d]?.end);
-    if (s != null) earliest = earliest == null ? s : Math.min(earliest, s);
-    if (e != null) latest = latest == null ? e : Math.max(latest, e);
-  });
-
   const table = document.createElement("table");
+
+  // Header
   const thead = document.createElement("thead");
-  const t1 = document.createElement("tr");
+  const tr1 = document.createElement("tr");
   const thTime = document.createElement("th");
   thTime.textContent = "Time";
-  t1.appendChild(thTime);
-  availableDivisions.forEach((d) => {
+  tr1.appendChild(thTime);
+  availableDivisions.forEach((div) => {
     const th = document.createElement("th");
-    th.colSpan = (divisions[d]?.bunks || []).length;
-    th.textContent = d;
-    th.style.background = divisions[d]?.color || "#333";
+    th.colSpan = (divisions[div]?.bunks || []).length;
+    th.textContent = div;
+    th.style.background = divisions[div]?.color || "#333";
     th.style.color = "#fff";
-    t1.appendChild(th);
+    tr1.appendChild(th);
   });
-  thead.appendChild(t1);
+  thead.appendChild(tr1);
 
-  const t2 = document.createElement("tr");
-  const bth = document.createElement("th");
-  bth.textContent = "Bunk";
-  t2.appendChild(bth);
-  availableDivisions.forEach((d) =>
-    (divisions[d]?.bunks || []).forEach((b) => {
+  const tr2 = document.createElement("tr");
+  const bunkTh = document.createElement("th");
+  bunkTh.textContent = "Bunk";
+  tr2.appendChild(bunkTh);
+  availableDivisions.forEach((div) => {
+    (divisions[div]?.bunks || []).forEach((b) => {
       const th = document.createElement("th");
       th.textContent = b;
-      t2.appendChild(th);
-    })
-  );
-  thead.appendChild(t2);
+      tr2.appendChild(th);
+    });
+  });
+  thead.appendChild(tr2);
   table.appendChild(thead);
 
   const tbody = document.createElement("tbody");
+  // cache start/end per division
+  const divTimeRanges = {};
+  availableDivisions.forEach((div) => {
+    const s = parseTimeToMinutes(divisions[div]?.start);
+    const e = parseTimeToMinutes(divisions[div]?.end);
+    divTimeRanges[div] = { start: s, end: e };
+  });
+
   for (let i = 0; i < unifiedTimes.length; i++) {
     const tr = document.createElement("tr");
     const tdTime = document.createElement("td");
@@ -367,11 +364,14 @@ function updateTable() {
         unifiedTimes[i].end.getHours() * 60 +
         unifiedTimes[i].end.getMinutes()) /
       2;
-    const outside = (earliest && mid < earliest) || (latest && mid >= latest);
 
     availableDivisions.forEach((div) => {
+      const { start, end } = divTimeRanges[div];
+      const outside =
+        (start != null && mid < start) || (end != null && mid >= end);
       const league = window.leagueAssignments?.[div]?.[i];
       const bunks = divisions[div]?.bunks || [];
+
       if (outside) {
         const td = document.createElement("td");
         td.colSpan = bunks.length;
@@ -381,6 +381,7 @@ function updateTable() {
         tr.appendChild(td);
         return;
       }
+
       if (league) {
         const td = document.createElement("td");
         td.colSpan = bunks.length;
@@ -415,6 +416,7 @@ function updateTable() {
         });
       }
     });
+
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
