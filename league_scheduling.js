@@ -3,8 +3,7 @@
  * LEAGUE SCHEDULING CORE (league_scheduling.js)
  * =============================================================
  * This file generates and tracks round-robin matchups for leagues.
- * It is called by the main scheduler (app2.js) when it needs to
- * schedule a league game.
+ * It uses a stable algorithm to create valid matches for app2.js.
  *
  * Public Functions:
  * - window.getLeagueMatchups(leagueName, teams)
@@ -73,6 +72,7 @@
       currentRound.push([fixedTeam, rotatingTeams[0]]);
 
       // 2. Pair the remaining teams (using the "Circle Method")
+      // Loop runs up to half the total teams (excluding the fixed one)
       for (let i = 1; i < teams.length / 2; i++) {
         const team1 = rotatingTeams[i];
         const team2 = rotatingTeams[rotatingTeams.length - i];
@@ -97,26 +97,23 @@
 
   /**
    * Public function to get the *next* set of matchups for a league.
-   * This function has side effects: it updates and saves the league's current round.
+   * This function manages the current round state.
    * @param {string} leagueName - The unique name of the league.
    * @param {string[]} teams - The list of team names participating in the league.
    * @returns {Array<string[]>} An array of matchups for the current round.
    */
   function getLeagueMatchups(leagueName, teams) {
     if (!leagueName || !teams || teams.length < 2) {
-      // Safety exit: need at least 2 teams to play a game
       return []; 
     }
 
-    // Load state before generation/access
     loadRoundState();
 
     const state = leagueRoundState[leagueName] || { currentRound: 0 };
     const fullSchedule = generateRoundRobin(teams);
 
     if (fullSchedule.length === 0) {
-      // If the schedule is empty (e.g., only 1 team), log it and exit
-      console.warn(`[League Matchup Error] No schedule generated for ${leagueName}. Team count: ${teams.length}`);
+      // Should not happen if teams.length >= 2, but remains a safety check.
       return []; 
     }
 
@@ -131,10 +128,10 @@
     return todayMatchups;
   }
 
-  // --- Global Exposure ---
+  // --- Global Exposure and Initialization ---
   window.getLeagueMatchups = getLeagueMatchups;
 
-  // IMPORTANT: Load state on initialization so getLeagueMatchups has a starting point
+  // IMPORTANT: Load state on script execution.
   loadRoundState(); 
 
 })();
