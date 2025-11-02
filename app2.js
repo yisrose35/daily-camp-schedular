@@ -1,376 +1,418 @@
-// -------------------- app2.js --------------------
-// Leagues render as merged cells per division+slot with per-matchup sports.
-// Fixed activities show names properly; early/late times grey per division.
+/* app2.js
+ * Daily schedule rendering & interactions
+ * - Duration per activity (independent of grid increment)
+ * - Rowspan-based multi-slot rendering
+ * - Overlap prevention
+ * - Grey-out times not applicable to a division/grade
+ *
+ * Exposes window.Scheduler with:
+ *   - render()
+ *   - addItem(item)
+ *   - removeItem(id)
+ *   - upsertItems(itemsArray)
+ *   - setDivisionWindows(windowsByDivisionId)
+ *   - updateIncrement(mins)
+ *   - rebuildFromDOM()   // re-reads grid (rows/cols) and re-renders
+ *
+ * Required DOM assumptions:
+ *   - Table container has id #scheduleTable (tbody cells have data-row & data-col)
+ *   - Time grid rows are sequential 0..N-1 (built in app1.js)
+ *   - Columns have stable keys in data-col (usually bunk ids)
+ *
+ * Required data (via localStorage or your own state singletons):
+ *   - TIME_SETTINGS: { dayStart: "9:00 AM", dayEnd: "5:00 PM", incrementMin: 15 }
+ *   - DIVISIONS: [{ id, name, color, window?: { start:"9:30 AM", end:"4:00 PM" } }, ...]
+ *   - BUNKS: [{ id, name, divisionId }, ...]
+ *   - FIELDS: optional
+ *   - SCHEDULE_ITEMS: [{ id, label, bunkId, divisionId, fieldId?, start:"11:00 AM", durationMin:45, meta?:{field:"f7"} }, ...]
+ *
+ * Styling:
+ *   Add to styles.css if not present:
+ *     td.activity { vertical-align: middle; font-weight:600; border:2px solid rgba(0,0,0,.08); }
+ *     td.continued { display:none; }
+ *     td.greyed { background: repeating-linear-gradient(45deg, #f3f4f6, #f3f4f6 8px, #e5e7eb 8px, #e5e7eb 16px); color:#9ca3af; }
+ *     td.conflict { outline: 2px dashed #ef4444; }
+ */
 
-// ===== Helpers =====
-function parseTimeToMinutes(str) {
-  if (!str || typeof str !== "string") return null;
-  let s = str.trim().toLowerCase();
-  let mer = null;
-  if (s.endsWith("am") || s.endsWith("pm")) {
-    mer = s.endsWith("am") ? "am" : "pm";
-    s = s.replace(/am|pm/g, "").trim();
-  }
-  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-  if (!m) return null;
-  let hh = parseInt(m[1], 10);
-  const mm = parseInt(m[2], 10);
-  if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-  if (mer) {
-    if (hh === 12) hh = mer === "am" ? 0 : 12;
-    else if (mer === "pm") hh += 12;
-  }
-  return hh * 60 + mm;
-}
-function fieldLabel(f) {
-  if (typeof f === "string") return f;
-  if (f && typeof f === "object" && typeof f.name === "string") return f.name;
-  return "";
-}
-
-// ===== Fixed Activities =====
-function loadActiveFixedActivities() {
-  let raw = localStorage.getItem("fixedActivities_v2");
-  if (!raw) raw = localStorage.getItem("fixedActivities");
-  try {
-    const arr = JSON.parse(raw || "[]");
-    return Array.isArray(arr) ? arr.filter((a) => a && a.enabled) : [];
-  } catch {
-    return [];
-  }
-}
-function findRowsForRange(startStr, endStr) {
-  if (!Array.isArray(window.unifiedTimes) || window.unifiedTimes.length === 0)
-    return [];
-  const startMin = parseTimeToMinutes(startStr),
-    endMin = parseTimeToMinutes(endStr);
-  if (startMin == null || endMin == null || endMin <= startMin) return [];
-  const inside = [];
-  for (let i = 0; i < window.unifiedTimes.length; i++) {
-    const r = window.unifiedTimes[i],
-      rs = r.start.getHours() * 60 + r.start.getMinutes(),
-      re = r.end.getHours() * 60 + r.end.getMinutes();
-    if (rs >= startMin && re <= endMin) inside.push(i);
-  }
-  if (inside.length === 0) {
-    const overlap = [];
-    for (let i = 0; i < window.unifiedTimes.length; i++) {
-      const r = window.unifiedTimes[i],
-        rs = r.start.getHours() * 60 + r.start.getMinutes(),
-        re = r.end.getHours() * 60 + r.end.getMinutes();
-      if (Math.max(rs, startMin) < Math.min(re, endMin)) overlap.push(i);
-    }
-    return overlap;
-  }
-  return inside;
-}
-function computeBlockedRowsByDiv() {
-  const fixed = loadActiveFixedActivities();
-  const blocked = {};
-  fixed.forEach((act) => {
-    const rows = findRowsForRange(act.start, act.end);
-    if (rows.length === 0) return;
-    const targetDivs =
-      Array.isArray(act.divisions) && act.divisions.length > 0
-        ? act.divisions
-        : window.availableDivisions || [];
-    targetDivs.forEach((div) => {
-      blocked[div] = blocked[div] || new Set();
-      rows.forEach((r) => blocked[div].add(r));
-    });
-  });
-  return blocked;
-}
-function prePlaceFixedActivities() {
-  if (window.DailyActivities?.prePlace) {
-    try {
-      window.DailyActivities.prePlace();
-    } catch (e) {
-      console.error("DailyActivities.prePlace error:", e);
-    }
-  }
-  return computeBlockedRowsByDiv();
-}
-
-// ===== League Helpers =====
-function leaguesSnapshot() {
-  if (window.leaguesByName && Object.keys(window.leaguesByName).length > 0)
-    return window.leaguesByName;
-  try {
-    const raw = localStorage.getItem("leagues");
-    const obj = raw ? JSON.parse(raw) : {};
-    return obj && typeof obj === "object" ? obj : {};
-  } catch {
-    return {};
-  }
-}
-function getEnabledLeaguesByDivision() {
-  const result = {};
-  const all = leaguesSnapshot();
-  Object.keys(all).forEach((name) => {
-    const l = all[name];
-    if (!l?.enabled) return;
-    (l.divisions || []).forEach((div) => {
-      result[div] = { name, data: l };
-    });
-  });
-  return result;
-}
-
-// ===== Round-Robin Generator =====
 (function () {
-  const KEY = "camp_league_round_state";
-  let state = {};
-  function load() {
-    try {
-      state = JSON.parse(localStorage.getItem(KEY) || "{}") || {};
-    } catch {
-      state = {};
+  // ---------- LocalStorage helpers ----------
+  const LS = {
+    get(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch {
+        return fallback;
+      }
+    },
+    set(key, value) {
+      localStorage.setItem(key, JSON.stringify(value));
+    },
+  };
+
+  // ---------- Keys (adjust if your project uses different names) ----------
+  const KEY_TIME = "TIME_SETTINGS";
+  const KEY_DIVS = "DIVISIONS";
+  const KEY_BUNKS = "BUNKS";
+  const KEY_FIELDS = "FIELDS";
+  const KEY_ITEMS = "SCHEDULE_ITEMS";
+
+  // ---------- State ----------
+  const state = {
+    timeSettings: LS.get(KEY_TIME, {
+      dayStart: "9:00 AM",
+      dayEnd: "5:00 PM",
+      incrementMin: 15,
+    }),
+    divisions: LS.get(KEY_DIVS, []),
+    bunks: LS.get(KEY_BUNKS, []),
+    fields: LS.get(KEY_FIELDS, []),
+    items: LS.get(KEY_ITEMS, []),
+
+    // Derived from DOM on first render:
+    grid: {
+      rows: 0,
+      cols: [], // array of column keys from data-col attributes
+      table: null, // reference to #scheduleTable
+      timeSlots: [], // array of slot start times (minutes from midnight)
+      dayStartMin: 9 * 60,
+      dayEndMin: 17 * 60,
+      slotMin: 15,
+    },
+
+    // Per-division allowed windows. If empty, uses division.window or global.
+    divisionWindows: {}, // { [divisionId]: { start:"9:30 AM", end:"4:00 PM" } }
+  };
+
+  // ---------- Time utils ----------
+  function toMinutes(t12) {
+    // Accepts "H:MM AM/PM" or "HH:MM AM/PM"
+    if (!t12 || typeof t12 !== "string") return 0;
+    const parts = t12.trim().split(/\s+/);
+    const ampm = (parts[1] || "").toUpperCase();
+    let [h, m] = (parts[0] || "0:00").split(":").map(Number);
+    if (isNaN(h)) h = 0;
+    if (isNaN(m)) m = 0;
+    if (ampm === "PM" && h !== 12) h += 12;
+    if (ampm === "AM" && h === 12) h = 0;
+    return h * 60 + m;
+  }
+
+  function toT12(mins) {
+    mins = Math.max(0, mins) % (24 * 60);
+    let h = Math.floor(mins / 60);
+    const m = mins % 60;
+    const ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12;
+    if (h === 0) h = 12;
+    return `${h}:${m.toString().padStart(2, "0")} ${ampm}`;
+  }
+
+  function slotIndexFor(startT12, dayStartMin, slotMin) {
+    return Math.round((toMinutes(startT12) - dayStartMin) / slotMin);
+  }
+
+  function slotsFor(durationMin, slotMin) {
+    const d = Number(durationMin) || slotMin;
+    return Math.max(1, Math.ceil(d / slotMin));
+  }
+
+  function buildTimeSlots(dayStartMin, dayEndMin, slotMin) {
+    const slots = [];
+    for (let t = dayStartMin; t < dayEndMin; t += slotMin) {
+      slots.push(t);
+    }
+    return slots;
+  }
+
+  // ---------- Division / Column helpers ----------
+  function bunkById(id) {
+    return state.bunks.find((b) => String(b.id) === String(id));
+  }
+  function divisionById(id) {
+    return state.divisions.find((d) => String(d.id) === String(id));
+  }
+  function divisionIdForColumn(colKey) {
+    // Columns are bunks -> find bunk -> its divisionId
+    const bunk = bunkById(colKey);
+    return bunk ? bunk.divisionId : null;
+  }
+  function allowedWindowForDivision(divId) {
+    // 1) explicit override set via API
+    const manual = state.divisionWindows[divId];
+    if (manual && manual.start && manual.end) return manual;
+
+    // 2) division.window on the division itself
+    const div = divisionById(divId);
+    if (div && div.window && div.window.start && div.window.end) return div.window;
+
+    // 3) fallback to global day window
+    return { start: state.timeSettings.dayStart, end: state.timeSettings.dayEnd };
+  }
+
+  // ---------- Grid (re)sync from DOM ----------
+  function rebuildFromDOM() {
+    const table = document.getElementById("scheduleTable");
+    if (!table) return;
+
+    // Collect columns from first data-row row we find
+    const bodyCells = table.querySelectorAll('tbody td[data-col]');
+    const colSet = new Set();
+    bodyCells.forEach((td) => {
+      const col = td.getAttribute("data-col");
+      if (col) colSet.add(col);
+    });
+    const cols = Array.from(colSet);
+
+    // Collect max row index
+    let maxRow = -1;
+    bodyCells.forEach((td) => {
+      const r = Number(td.getAttribute("data-row"));
+      if (!isNaN(r)) maxRow = Math.max(maxRow, r);
+    });
+
+    const slotMin = Number(state.timeSettings.incrementMin) || 15;
+    const dayStartMin = toMinutes(state.timeSettings.dayStart);
+    const dayEndMin = toMinutes(state.timeSettings.dayEnd);
+
+    state.grid.table = table;
+    state.grid.cols = cols;
+    state.grid.rows = maxRow + 1;
+    state.grid.slotMin = slotMin;
+    state.grid.dayStartMin = dayStartMin;
+    state.grid.dayEndMin = dayEndMin;
+    state.grid.timeSlots = buildTimeSlots(dayStartMin, dayEndMin, slotMin);
+  }
+
+  // ---------- Grey-out logic ----------
+  function applyGreyOut() {
+    const { table, cols, rows, slotMin, dayStartMin } = state.grid;
+    if (!table) return;
+
+    for (let r = 0; r < rows; r++) {
+      const slotStartMin = dayStartMin + r * slotMin;
+
+      cols.forEach((colKey) => {
+        const td = table.querySelector(`tbody td[data-row="${r}"][data-col="${colKey}"]`);
+        if (!td) return;
+
+        const divId = divisionIdForColumn(colKey);
+        const win = allowedWindowForDivision(divId);
+        const allowStart = toMinutes(win.start);
+        const allowEnd = toMinutes(win.end);
+
+        // If the slot start is outside allowed window → grey it
+        if (slotStartMin < allowStart || slotStartMin >= allowEnd) {
+          td.classList.add("greyed");
+          td.dataset.greyed = "1";
+        } else {
+          td.classList.remove("greyed");
+          delete td.dataset.greyed;
+        }
+      });
     }
   }
-  function save() {
-    try {
-      localStorage.setItem(KEY, JSON.stringify(state));
-    } catch {}
-  }
-  function genRR(teams) {
-    if (!teams || teams.length < 2) return [];
-    const t = [...teams];
-    let bye = false;
-    if (t.length % 2 !== 0) {
-      t.push("BYE");
-      bye = true;
+
+  // ---------- Main render ----------
+  function clearCells() {
+    const { table, cols, rows } = state.grid;
+    if (!table) return;
+
+    for (let r = 0; r < rows; r++) {
+      cols.forEach((colKey) => {
+        const td = table.querySelector(`tbody td[data-row="${r}"][data-col="${colKey}"]`);
+        if (!td) return;
+        // Reset any previous rowspan/visibility
+        td.style.display = "";
+        td.removeAttribute("rowspan");
+        td.classList.remove("continued", "activity", "conflict");
+        // Keep greyed if applied by applyGreyOut()
+        if (!td.classList.contains("greyed")) {
+          td.textContent = "";
+        } else {
+          // leave grey stripes visible; clear any old text
+          td.textContent = "";
+        }
+      });
     }
-    const fixed = t[0],
-      rot = t.slice(1),
-      rounds = t.length - 1,
-      out = [];
-    for (let r = 0; r < rounds; r++) {
-      const round = [];
-      round.push([fixed, rot[0]]);
-      for (let i = 1; i < t.length / 2; i++)
-        round.push([rot[i], rot[rot.length - i]]);
-      out.push(round);
-      rot.unshift(rot.pop());
-    }
-    if (bye)
-      return out.map((r) => r.filter((m) => m[0] !== "BYE" && m[1] !== "BYE"));
-    return out;
-  }
-  function get(leagueName, teams) {
-    if (!leagueName || !teams || teams.length < 2) return [];
-    load();
-    const cur = state[leagueName]?.currentRound ?? 0;
-    const full = genRR(teams);
-    if (full.length === 0) return [];
-    const today = full[cur];
-    state[leagueName] = { currentRound: (cur + 1) % full.length };
-    save();
-    return today;
-  }
-  window.getLeagueMatchups = get;
-  load();
-})();
-
-// ===== League Sport Rotation =====
-const SPORT_STATE_KEY = "camp_league_sport_rotation";
-let leagueSportRotation = {};
-function loadLeagueSportRotation() {
-  try {
-    leagueSportRotation =
-      JSON.parse(localStorage.getItem(SPORT_STATE_KEY) || "{}") || {};
-  } catch {
-    leagueSportRotation = {};
-  }
-}
-function saveLeagueSportRotation() {
-  try {
-    localStorage.setItem(
-      SPORT_STATE_KEY,
-      JSON.stringify(leagueSportRotation)
-    );
-  } catch {}
-}
-function assignSportsToMatchups(leagueName, matchups, sportsList) {
-  if (!Array.isArray(matchups) || matchups.length === 0) return [];
-  if (!Array.isArray(sportsList) || sportsList.length === 0)
-    return matchups.map((m) => ({ teams: m, sport: "Leagues" }));
-
-  loadLeagueSportRotation();
-  const state = leagueSportRotation[leagueName] || { index: 0 };
-  let idx = state.index;
-
-  const assigned = matchups.map((m) => {
-    const sport = sportsList[idx % sportsList.length];
-    idx++;
-    return { teams: m, sport };
-  });
-
-  leagueSportRotation[leagueName] = { index: idx % sportsList.length };
-  saveLeagueSportRotation();
-  return assigned;
-}
-
-// ====== CORE ASSIGN ======
-window.leagueAssignments = window.leagueAssignments || {};
-
-function assignFieldsToBunks() {
-  window.scheduleAssignments = window.scheduleAssignments || {};
-  window.leagueAssignments = {};
-
-  const inc = parseInt(document.getElementById("increment")?.value || "30", 10);
-  const activityDuration = parseInt(
-    document.getElementById("activityDuration")?.value || "30",
-    10
-  );
-  const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
-
-  const availFields = fields.filter(
-    (f) => f?.available && Array.isArray(f.activities) && f.activities.length
-  );
-  const availSpecials = specialActivities.filter((s) => s?.available);
-
-  const allActivities = [
-    ...availFields.flatMap((f) =>
-      f.activities.map((act) => ({ type: "field", field: f, sport: act }))
-    ),
-    ...availSpecials.map((sa) => ({
-      type: "special",
-      field: { name: sa.name },
-      sport: null,
-    })),
-  ];
-  if (!allActivities.length || !unifiedTimes.length) return;
-
-  // Init grids
-  scheduleAssignments = {};
-  availableDivisions.forEach((d) =>
-    (divisions[d]?.bunks || []).forEach(
-      (b) => (scheduleAssignments[b] = new Array(unifiedTimes.length))
-    )
-  );
-
-  const blockedRowsByDiv = prePlaceFixedActivities();
-  const enabledByDiv = getEnabledLeaguesByDivision();
-  const takenLeagueSlots = new Set();
-
-  for (const div of availableDivisions) {
-    const lg = enabledByDiv[div];
-    if (!lg) continue;
-    const actSet = divisionActiveRows?.[div];
-    const actSlots =
-      actSet && actSet.size
-        ? Array.from(actSet)
-        : unifiedTimes.map((_, i) => i);
-    const candidates = actSlots.filter(
-      (s) => !blockedRowsByDiv[div]?.has(s) && !takenLeagueSlots.has(s)
-    );
-    if (!candidates.length) continue;
-
-    const chosen = candidates[0];
-    const teams = (lg.data.teams || []).map((t) => String(t).trim()).filter(Boolean);
-    if (teams.length < 2) continue;
-    const matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
-    if (!matchups.length) continue;
-
-    const games = assignSportsToMatchups(lg.name, matchups, lg.data.sports);
-    window.leagueAssignments[div] = window.leagueAssignments[div] || {};
-    window.leagueAssignments[div][chosen] = { games, leagueName: lg.name };
-    for (let k = 0; k < spanLen; k++) takenLeagueSlots.add(chosen + k);
   }
 
-  // Fill general
-  for (let s = 0; s < unifiedTimes.length; s++) {
-    for (const div of availableDivisions) {
-      if (window.leagueAssignments?.[div]?.[s]) continue;
-      if (blockedRowsByDiv[div]?.has(s)) continue;
-      const active = divisionActiveRows?.[div]?.has(s) ?? true;
-      if (!active) continue;
+  function renderItems() {
+    const { table, cols, rows, slotMin, dayStartMin, timeSlots } = state.grid;
+    if (!table) return;
 
-      for (const bunk of divisions[div]?.bunks || []) {
-        if (scheduleAssignments[bunk][s]) continue;
-        const pick =
-          allActivities[Math.floor(Math.random() * allActivities.length)];
-        scheduleAssignments[bunk][s] = {
-          field: fieldLabel(pick.field),
-          sport: pick.sport,
-          continuation: false,
-        };
+    // Occupancy map: `${row}:${colKey}` -> true
+    const occupied = new Map();
+
+    // Keep items sorted by start time so rowspans nest predictably
+    const itemsSorted = [...state.items].sort((a, b) => {
+      const sa = toMinutes(a.start);
+      const sb = toMinutes(b.start);
+      if (sa !== sb) return sa - sb;
+      const ca = (a.bunkId ?? a.fieldId ?? a.divisionId ?? "").toString();
+      const cb = (b.bunkId ?? b.fieldId ?? b.divisionId ?? "").toString();
+      return ca.localeCompare(cb);
+    });
+
+    for (const item of itemsSorted) {
+      const colKey = (item.bunkId ?? item.fieldId ?? item.divisionId ?? "").toString();
+      if (!cols.includes(colKey)) continue;
+
+      const rowStart = slotIndexFor(item.start, dayStartMin, slotMin);
+      if (rowStart < 0 || rowStart >= rows) continue;
+
+      const span = slotsFor(item.durationMin ?? slotMin, slotMin);
+      const actualSpan = Math.min(span, rows - rowStart);
+
+      // Skip if any covered cell is greyed (out of allowed window)
+      let blockedByGrey = false;
+      for (let r = rowStart; r < rowStart + actualSpan; r++) {
+        const td = table.querySelector(`tbody td[data-row="${r}"][data-col="${colKey}"]`);
+        if (td && td.classList.contains("greyed")) {
+          blockedByGrey = true;
+          break;
+        }
+      }
+      if (blockedByGrey) continue;
+
+      // Check overlap
+      let overlap = false;
+      for (let r = rowStart; r < rowStart + actualSpan; r++) {
+        if (occupied.get(`${r}:${colKey}`)) {
+          overlap = true;
+          break;
+        }
+      }
+
+      const anchor = table.querySelector(`tbody td[data-row="${rowStart}"][data-col="${colKey}"]`);
+      if (!anchor) continue;
+
+      if (overlap) {
+        anchor.classList.add("conflict");
+        // Still mark occupied for visibility (optional)
+        continue;
+      }
+
+      // Apply rowspan + content
+      if (actualSpan > 1) anchor.setAttribute("rowspan", String(actualSpan));
+      anchor.classList.add("activity");
+
+      const fieldTag = item.meta && item.meta.field ? `${item.meta.field} – ` : "";
+      const label = (item.label && typeof item.label === "string") ? item.label : (item.label?.toString?.() ?? "");
+      const endMin = toMinutes(item.start) + (Number(item.durationMin) || slotMin);
+      anchor.textContent = `${fieldTag}${label} (${item.start}–${toT12(endMin)})`;
+
+      // Hide continued cells
+      for (let r = rowStart + 1; r < rowStart + actualSpan; r++) {
+        const td = table.querySelector(`tbody td[data-row="${r}"][data-col="${colKey}"]`);
+        if (td) {
+          td.classList.add("continued");
+          td.style.display = "none";
+        }
+      }
+
+      // Occupy
+      for (let r = rowStart; r < rowStart + actualSpan; r++) {
+        occupied.set(`${r}:${colKey}`, true);
       }
     }
   }
 
-  updateTable();
-  saveSchedule();
-}
+  function render() {
+    // Keep runtime settings refreshed from LS (in case app1 changed them)
+    state.timeSettings = LS.get(KEY_TIME, state.timeSettings);
+    state.divisions = LS.get(KEY_DIVS, state.divisions);
+    state.bunks = LS.get(KEY_BUNKS, state.bunks);
+    state.fields = LS.get(KEY_FIELDS, state.fields);
+    state.items = LS.get(KEY_ITEMS, state.items);
 
-// ===== RENDERING (per-division grey-out) =====
-function updateTable() {
-  const container = document.getElementById("schedule");
-  if (!container) return;
-  container.innerHTML = "";
-  if (!unifiedTimes.length) return;
+    rebuildFromDOM();
+    clearCells();
+    applyGreyOut();
+    renderItems();
+  }
 
-  const table = document.createElement("table");
+  // ---------- Public API ----------
+  function addItem(item) {
+    // Ensure shape
+    const id = item.id || `it_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const clean = {
+      id,
+      label: String(item.label || "").trim(),
+      bunkId: item.bunkId ?? null,
+      divisionId: item.divisionId ?? null,
+      fieldId: item.fieldId ?? null,
+      start: item.start || state.timeSettings.dayStart,
+      durationMin: Number(item.durationMin) || state.timeSettings.incrementMin,
+      meta: item.meta || {},
+    };
+    state.items.push(clean);
+    LS.set(KEY_ITEMS, state.items);
+    render();
+    return id;
+  }
 
-  // Header
-  const thead = document.createElement("thead");
-  const tr1 = document.createElement("tr");
-  const thTime = document.createElement("th");
-  thTime.textContent = "Time";
-  tr1.appendChild(thTime);
-  availableDivisions.forEach((div) => {
-    const th = document.createElement("th");
-    th.colSpan = (divisions[div]?.bunks || []).length;
-    th.textContent = div;
-    th.style.background = divisions[div]?.color || "#333";
-    th.style.color = "#fff";
-    tr1.appendChild(th);
-  });
-  thead.appendChild(tr1);
+  function removeItem(id) {
+    state.items = state.items.filter((x) => x.id !== id);
+    LS.set(KEY_ITEMS, state.items);
+    render();
+  }
 
-  const tr2 = document.createElement("tr");
-  const bunkTh = document.createElement("th");
-  bunkTh.textContent = "Bunk";
-  tr2.appendChild(bunkTh);
-  availableDivisions.forEach((div) => {
-    (divisions[div]?.bunks || []).forEach((b) => {
-      const th = document.createElement("th");
-      th.textContent = b;
-      tr2.appendChild(th);
+  function upsertItems(itemsArray) {
+    const byId = new Map(state.items.map((i) => [i.id, i]));
+    itemsArray.forEach((it) => {
+      if (!it.id) it.id = `it_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      byId.set(it.id, { ...byId.get(it.id), ...it });
     });
+    state.items = Array.from(byId.values());
+    LS.set(KEY_ITEMS, state.items);
+    render();
+  }
+
+  function setDivisionWindows(map) {
+    // map: { [divisionId]: { start:"10:00 AM", end:"3:30 PM" } }
+    state.divisionWindows = { ...state.divisionWindows, ...map };
+    render();
+  }
+
+  function updateIncrement(mins) {
+    const m = Number(mins);
+    if (![15, 30, 45, 60].includes(m)) return;
+    const ts = LS.get(KEY_TIME, state.timeSettings);
+    ts.incrementMin = m;
+    LS.set(KEY_TIME, ts);
+    render();
+  }
+
+  function rebuildAndRender() {
+    rebuildFromDOM();
+    render();
+  }
+
+  // ---------- Wire global ----------
+  window.Scheduler = {
+    render,
+    addItem,
+    removeItem,
+    upsertItems,
+    setDivisionWindows,
+    updateIncrement,
+    rebuildFromDOM: rebuildAndRender,
+  };
+
+  // ---------- Auto-bind to common app1 events (if present) ----------
+  // If app1 dispatches a custom event after rebuilding the grid, listen & re-render.
+  document.addEventListener("grid:rebuilt", () => {
+    render();
   });
-  thead.appendChild(tr2);
-  table.appendChild(thead);
 
-  const tbody = document.createElement("tbody");
-  // cache start/end per division
-  const divTimeRanges = {};
-  availableDivisions.forEach((div) => {
-    const s = parseTimeToMinutes(divisions[div]?.start);
-    const e = parseTimeToMinutes(divisions[div]?.end);
-    divTimeRanges[div] = { start: s, end: e };
-  });
-
-  for (let i = 0; i < unifiedTimes.length; i++) {
-    const tr = document.createElement("tr");
-    const tdTime = document.createElement("td");
-    tdTime.textContent = unifiedTimes[i].label;
-    tr.appendChild(tdTime);
-
-    const mid =
-      (unifiedTimes[i].start.getHours() * 60 +
-        unifiedTimes[i].start.getMinutes() +
-        unifiedTimes[i].end.getHours() * 60 +
-        unifiedTimes[i].end.getMinutes()) /
-      2;
-
-    availableDivisions.forEach((div) => {
-      const { start, end } = divTimeRanges[div];
-      const outside =
-        (start != null && mid < start) || (end != null && mid >= end);
-      const league = window.leagueAssignments?.[div]?.[i];
-      const bunks = divisions[div]?.bunks || [];
+  // Initial render (after DOM ready)
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", render);
+  } else {
+    render();
+  }
+})();      const bunks = divisions[div]?.bunks || [];
 
       if (outside) {
         const td = document.createElement("td");
