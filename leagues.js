@@ -338,6 +338,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (document.getElementById("leaguesContainer")) initLeaguesTab();
 });
 
-// Expose internal objects/functions for other modules to use
+// CRITICAL FIX: Explicitly expose loadLeagues and saveLeagues to the window object 
+// so app2.js can call them defensively during race conditions.
 window.getLeaguesByName = () => leaguesByName;
+window.loadLeagues = loadLeagues; 
 window.saveLeagues = saveLeagues;
