@@ -85,8 +85,6 @@ function computeBlockedRowsByDiv() {
 function prePlaceFixedActivities() {
   if (window.DailyActivities && typeof window.DailyActivities.prePlace === "function") {
     try {
-      // NOTE: DailyActivities.prePlace is responsible for populating scheduleAssignments 
-      // with fixed activities and updating divisionActiveRows.
       window.DailyActivities.prePlace(); 
     } catch (e) {
       console.error("Error executing DailyActivities.prePlace:", e);
@@ -135,6 +133,10 @@ function assignFieldsToBunks() {
       scheduleAssignments[b] = new Array(unifiedTimes.length);
     });
   });
+  
+  // FIX: Define priorityDivs here so it's globally available in the function scope
+  const priorityDivs = [...availableDivisions].reverse();
+
 
   // -------------------- Resource Locks Initialization --------------------
   const globalResourceUsage = {}; 
@@ -249,7 +251,6 @@ function assignFieldsToBunks() {
 
     if (nonBlockedSlots.length === 0) continue;
 
-    // Use the first available slot after fixed activities
     let chosenSlot = nonBlockedSlots[0]; 
     
     // Get specific matchups (advances round state)
@@ -282,8 +283,7 @@ function assignFieldsToBunks() {
 
         scheduleAssignments[bunk][chosenSlot] = { ...assignmentDetails, continuation: false };
         
-        // **CRITICAL FIX APPLIED:** ONLY TRACK THE GENERIC FIELD USAGE.
-        // DO NOT track the specific sport/activity key (usedActivityKeysByBunk).
+        // **CRITICAL FIX APPLIED (Uniqueness):** Only track the generic field usage.
         fieldsUsedByBunk[bunk].add(leagueFieldName); 
 
         // Fill continuations
@@ -316,7 +316,6 @@ function assignFieldsToBunks() {
 
     // 3. ABSOLUTE RULE: uniqueness check
     const key = activityKey(act);
-    // This check is now safe because the League assignment didn't consume the sport key.
     if (key && usedActivityKeysByBunk[bunk]?.has(key)) return false;
 
     // 4. Soft constraint: field reuse
