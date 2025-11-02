@@ -67,6 +67,10 @@ function initLeaguesTab() {
   leaguesContainer.appendChild(addLeagueDiv);
 
   // -------------------- Render Each League --------------------
+  const sourceDivs = Array.isArray(window.availableDivisions) && window.availableDivisions.length > 0
+    ? window.availableDivisions
+    : Object.keys(window.divisions || {});
+    
   Object.keys(leaguesByName).forEach(leagueName => {
     const leagueData = leaguesByName[leagueName];
 
@@ -177,10 +181,6 @@ function initLeaguesTab() {
     divContainer.style.display = "flex";
     divContainer.style.flexWrap = "wrap";
     divContainer.style.gap = "6px";
-
-    const sourceDivs = Array.isArray(window.availableDivisions) && window.availableDivisions.length > 0
-      ? window.availableDivisions
-      : Object.keys(window.divisions || {});
 
     if (sourceDivs.length === 0) {
       const note = document.createElement("div");
@@ -328,8 +328,16 @@ function initLeaguesTab() {
   });
 }
 
-// -------------------- Init --------------------
+// -------------------- Init (Synchronization Fix Applied) --------------------
+
+// 1. Load the state immediately when the script executes so app2.js can access it.
+loadLeagues(); 
+
 document.addEventListener("DOMContentLoaded", () => {
-  loadLeagues();
+  // 2. Wait for DOMContentLoaded only to run the UI rendering
   if (document.getElementById("leaguesContainer")) initLeaguesTab();
 });
+
+// Expose internal objects/functions for other modules to use
+window.getLeaguesByName = () => leaguesByName;
+window.saveLeagues = saveLeagues;
