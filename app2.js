@@ -1,5 +1,7 @@
-// App 2 // --- Helper Functions for Time Parsing and Fixed Activities ---
+// -------------------- app2.js --------------------
+// Scheduling Core: Guaranteed Leagues + Fixed Activities + No per-bunk repeats
 
+// --- Helper Functions for Time Parsing and Fixed Activities ---
 function parseTimeToMinutes(str) {
   if (!str || typeof str !== "string") return null;
   let s = str.trim().toLowerCase();
@@ -106,6 +108,7 @@ function assignFieldsToBunks() {
   window.leaguesByName = window.leaguesByName || {}; 
   window.divisionActiveRows = window.divisionActiveRows || {}; 
 
+  // read UI values
   const incEl = document.getElementById("increment");
   const inc = incEl ? parseInt(incEl.value, 10) : 30; 
   const durationEl = document.getElementById("activityDuration");
@@ -126,24 +129,23 @@ function assignFieldsToBunks() {
     return;
   }
 
-  // Reset schedule
+  // Reset schedule scaffold
   scheduleAssignments = {};
   availableDivisions.forEach(div => {
     (divisions[div]?.bunks || []).forEach(b => {
       scheduleAssignments[b] = new Array(unifiedTimes.length);
     });
   });
-  
-  // FIX: priorityDivs definition moved to top of scope
-  const priorityDivs = [...availableDivisions].reverse();
 
+  // Priority: later divisions first (keeps your previous behavior)
+  const priorityDivs = [...availableDivisions].reverse();
 
   // -------------------- Resource Locks Initialization --------------------
   const globalResourceUsage = {}; 
   const occupiedFieldsBySlot = Array.from({ length: unifiedTimes.length }, () => new Set());
   const globalActivityLock = Array.from({ length: unifiedTimes.length }, () => new Set()); 
   
-  // Per-bunk once-per-day tracker
+  // Per-bunk once-per-day tracker + field reuse
   const usedActivityKeysByBunk = {}; 
   const fieldsUsedByBunk = {}; 
 
@@ -196,12 +198,13 @@ function assignFieldsToBunks() {
     }
   }
 
+  // Return league object **with its name attached** for a division
   function getLeagueForDivision(div) {
     const allLeagues = window.leaguesByName || {};
     for (const name in allLeagues) {
       const lg = allLeagues[name];
-      if (lg.enabled && Array.isArray(lg.divisions) && lg.divisions.includes(div)) {
-        return lg;
+      if (lg?.enabled && Array.isArray(lg.divisions) && lg.divisions.includes(div)) {
+        return { ...lg, name }; // attach name for getLeagueMatchups
       }
     }
     return null;
@@ -210,9 +213,11 @@ function assignFieldsToBunks() {
   // -------------------- Step 0: Pre-place FIXED Activities (Highest Precedence) --------------------
   const blockedRowsByDiv = prePlaceFixedActivities();
 
-
   // -------------------- Lock Resources for Fixed Activities --------------------
+  // If your DailyActivities.prePlace() already wrote _fixed entries into scheduleAssignments,
+  // lock their resources so we don't double-book those names/times.
   Object.keys(scheduleAssignments).forEach(bunk => {
+    if (!Array.isArray(scheduleAssignments[bunk])) return;
     scheduleAssignments[bunk].forEach((entry, s) => {
       if (entry && entry._fixed && !entry.continuation) {
         let currentSpanLen = 1;
@@ -224,7 +229,6 @@ function assignFieldsToBunks() {
             break;
           }
         }
-        
         const fieldName = fieldLabel(entry.field); 
         const slotStart = unifiedTimes[s].start;
         const absEnd = new Date(slotStart.getTime() + currentSpanLen * inc * 60000);
@@ -233,28 +237,20 @@ function assignFieldsToBunks() {
     });
   });
 
-
   // -------------------- 1) Schedule Guaranteed Leagues (MATCHUPS ONLY) --------------------
   for (const div of priorityDivs) {
-    let leagueData = getLeagueForDivision(div); 
+    let leagueData = getLeagueForDivision(div);
 
-    // --- DEFENSIVE CHECK AND INITIALIZATION ---
+    // Defensive: make sure leagues were loaded & published
     const allLeagues = window.leaguesByName || {};
-    if (Object.keys(allLeagues).length === 0) {
-        if (window.loadLeagues) {
-            window.loadLeagues(); // Force load from leagues.js
-            console.warn("[DEFENSE] Leagues data was missing. Forcing synchronous load now.");
-            leagueData = getLeagueForDivision(div); // Re-check the data after the forced load
-        } else {
-            console.warn("[DEFENSE] Cannot load leagues data. Skipping all league assignments.");
-            continue; 
-        }
+    if (!leagueData && Object.keys(allLeagues).length === 0 && window.loadLeagues) {
+      window.loadLeagues(); // force load from Leagues.js
+      leagueData = getLeagueForDivision(div);
     }
-    // --- END DEFENSIVE CHECK ---
+    if (!leagueData) continue;
 
-    const activeSlots = Array.from(divisionActiveRows[div] || []);
-
-    if (!leagueData || activeSlots.length === 0) continue; 
+    const activeSlots = Array.from(window.divisionActiveRows?.[div] || []);
+    if (activeSlots.length === 0) continue;
 
     const nonBlockedSlots = activeSlots.filter(s => {
       if (blockedRowsByDiv[div]?.has(s)) return false; 
@@ -266,77 +262,76 @@ function assignFieldsToBunks() {
 
     if (nonBlockedSlots.length === 0) continue;
 
-    let chosenSlot = nonBlockedSlots[0]; 
-    
-    // Get specific matchups (advances round state)
-    const teams = leagueData.teams.length > 0 ? leagueData.teams : (divisions[div]?.bunks || []); 
-    
-    // Safety check to ensure round-robin has enough teams
+    const chosenSlot = nonBlockedSlots[0]; // simple: first available
+
+    // Teams = explicit league teams or fall back to bunks of that division
+    const teams = leagueData.teams.length > 0 ? leagueData.teams : (divisions[div]?.bunks || []);
     if (teams.length < 2) {
-         console.warn(`[League Skip] Not enough teams/bunks (${teams.length}) defined for ${div}.`);
-         continue;
+      console.warn(`[League Skip] Not enough teams/bunks (${teams.length}) for ${div}.`);
+      continue;
     }
-    
+
+    // ✅ Use the league name as the stable key for the round-robin state
     const leagueMatchups = window.getLeagueMatchups?.(leagueData.name, teams);
-    
     if (!leagueMatchups || leagueMatchups.length === 0) continue;
 
-    // Determine generic details
+    // Generic details
     const chosenSport = leagueData.sports.length > 0 ? leagueData.sports[0] : 'Leagues';
     const leagueFieldName = "League Game (TBD)"; 
 
+    // Place the matchups (bunk cells only)
     leagueMatchups.forEach(match => {
       const [teamA, teamB] = match;
-      if (teamA === "BYE" || teamB === "BYE") return; 
+      if (teamA === "BYE" || teamB === "BYE") return;
 
       const playingBunks = [teamA, teamB].filter(t => (divisions[div]?.bunks || []).includes(t));
-      if (playingBunks.length < 2) return; 
+      if (playingBunks.length < 2) return;
 
       const assignmentDetails = {
-          field: leagueFieldName,
-          sport: chosenSport,
-          matchup: playingBunks.join(' vs '),
-          isLeague: true,
+        field: leagueFieldName,
+        sport: chosenSport,
+        matchup: playingBunks.join(' vs '),
+        isLeague: true,
+        continuation: false
       };
 
-      // Assign the activity details to the relevant bunks
       playingBunks.forEach(bunk => {
         if (!scheduleAssignments[bunk] || scheduleAssignments[bunk][chosenSlot]) return;
+        scheduleAssignments[bunk][chosenSlot] = { ...assignmentDetails };
 
-        scheduleAssignments[bunk][chosenSlot] = { ...assignmentDetails, continuation: false };
-        
-        // Track usage (only field, NOT sport key)
-        fieldsUsedByBunk[bunk].add(leagueFieldName); 
-
-        // Fill continuations
+        // Continuations for multi-span
         for (let k = 1; k < spanLen; k++) {
           const idx = chosenSlot + k;
           if (idx >= unifiedTimes.length) break;
-          if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
+          if (!(window.divisionActiveRows?.[div]?.has(idx))) break;
           if (scheduleAssignments[bunk][idx]) break; 
-          
           scheduleAssignments[bunk][idx] = { ...assignmentDetails, continuation: true };
         }
       });
     });
-    // NO reserveField CALLS HERE! 
+
+    // NOTE: We do NOT reserve a physical field resource for league here, so other divisions can still use fields.
+    // If you want to reserve a resource, call reserveField(leagueFieldName, ...) with chosenSlot.
   }
 
   // -------------------- 2) Fill Every Remaining Slot --------------------
-  const lastActivityByBunk = {};
   const PLACEHOLDER_NAME = 'Special Activity Needed';
 
   function baseFeasible(act, bunk, slotStart, slotEnd, s, allowFieldReuse) {
     const fname = fieldLabel(act?.field);
     if (!fname) return false;
 
+    // cannot double-book a named field
     if (!canUseField(fname, slotStart, slotEnd, s)) return false;
 
+    // prevent same sport across bunks in same exact slot
     if (act.sport && globalActivityLock[s].has(norm(act.sport))) return false;
 
+    // once per day per bunk per activity/special
     const key = activityKey(act);
     if (key && usedActivityKeysByBunk[bunk]?.has(key)) return false;
 
+    // avoid reusing same field for same bunk unless we weaken the rule
     if (!allowFieldReuse && fieldsUsedByBunk[bunk]?.has(fname)) return false;
 
     return true;
@@ -359,11 +354,10 @@ function assignFieldsToBunks() {
     const absEnd = new Date(slotStart.getTime() + activityDuration * 60000); 
 
     for (const div of priorityDivs) {
-      if (!(divisionActiveRows[div] && divisionActiveRows[div].has(s)))
-        continue;
+      if (!(window.divisionActiveRows?.[div]?.has(s))) continue;
 
       for (const bunk of (divisions[div]?.bunks || [])) {
-        if (scheduleAssignments[bunk][s]) continue; 
+        if (scheduleAssignments[bunk][s]) continue; // already has fixed/league/continuation
 
         const chosen = chooseActivity(bunk, slotStart, absEnd, s);
         const fname = fieldLabel(chosen.field);
@@ -382,7 +376,7 @@ function assignFieldsToBunks() {
         for (let k = 1; k < spanLen; k++) {
           const idx = s + k;
           if (idx >= unifiedTimes.length) break;
-          if (!(divisionActiveRows[div] && divisionActiveRows[div].has(idx))) break;
+          if (!(window.divisionActiveRows?.[div]?.has(idx))) break;
           if (scheduleAssignments[bunk][idx]) break; 
 
           scheduleAssignments[bunk][idx] = {
@@ -398,8 +392,6 @@ function assignFieldsToBunks() {
           if (key) usedActivityKeysByBunk[bunk].add(key);
           fieldsUsedByBunk[bunk].add(fname);
         }
-
-        lastActivityByBunk[bunk] = { field: fname, sport: chosen.sport, isLeague: false };
       }
     }
   }
@@ -408,10 +400,10 @@ function assignFieldsToBunks() {
   saveSchedule(); 
 }
 
-// -------------------- Rendering (FINAL) --------------------
+// -------------------- Rendering --------------------
 function updateTable() {
   const scheduleTab = document.getElementById("schedule");
-  if (!scheduleTab) { return; }
+  if (!scheduleTab) return;
   scheduleTab.innerHTML = "";
   
   if (unifiedTimes.length === 0) return;
@@ -463,7 +455,7 @@ function updateTable() {
     tr.appendChild(tdTime);
 
     availableDivisions.forEach(div => {
-      const activeSet = divisionActiveRows[div] || new Set();
+      const activeSet = window.divisionActiveRows?.[div] || new Set();
       (divisions[div]?.bunks || []).forEach(b => {
         if (scheduleAssignments[b] && scheduleAssignments[b][s] && scheduleAssignments[b][s]._skip) return;
         const td = document.createElement("td");
@@ -486,10 +478,9 @@ function updateTable() {
           td.rowSpan = span;
 
           if (entry.isLeague) {
-            // RENDER MATCHUP ONLY
             const display = entry.matchup 
-                ? `<span style="font-weight:600;">${entry.matchup}</span><br><span style="font-size:0.8em; opacity:0.8;">(${entry.sport})</span>` 
-                : 'Leagues';
+              ? `<span style="font-weight:600;">${entry.matchup}</span><br><span style="font-size:0.8em; opacity:0.8;">(${entry.sport})</span>` 
+              : 'Leagues';
             td.innerHTML = `<div class="league-pill">${display}</div>`;
             td.style.backgroundColor = divisions[div]?.color || '#4CAF50';
             td.style.color = 'white';
@@ -514,8 +505,11 @@ function updateTable() {
 
 // -------------------- Schedule Save / Load --------------------
 function saveSchedule() {
-  console.log("Saving schedule to local storage.");
-  localStorage.setItem("scheduleAssignments", JSON.stringify(scheduleAssignments));
+  try {
+    localStorage.setItem("scheduleAssignments", JSON.stringify(scheduleAssignments));
+  } catch(e) {
+    console.error("Save schedule failed:", e);
+  }
 }
 
 function reconcileOrRenderSaved() {
@@ -551,6 +545,8 @@ function reconcileOrRenderSaved() {
 
 function initScheduleSystem() {
   try {
+    // Ensure leagues are loaded & published before first run
+    if (typeof window.loadLeagues === "function") window.loadLeagues();
     reconcileOrRenderSaved();
   } catch (e) {
     console.error("Init error during schedule load:", e);
@@ -568,3 +564,84 @@ if (document.readyState === "loading") {
 } else {
   initScheduleSystem();
 }
+
+// =============================================================
+// League Round-Robin Helper (stateful)
+// =============================================================
+(function () {
+  'use strict';
+
+  const LEAGUE_STATE_KEY = "camp_league_round_state";
+  let leagueRoundState = {}; // { "League Name": { currentRound: 0 } }
+
+  function loadRoundState() {
+    try {
+      const stored = localStorage.getItem(LEAGUE_STATE_KEY);
+      leagueRoundState = stored ? JSON.parse(stored) : {};
+    } catch (e) {
+      console.error("Failed to load league state:", e);
+      leagueRoundState = {};
+    }
+  }
+
+  function saveRoundState() {
+    try {
+      localStorage.setItem(LEAGUE_STATE_KEY, JSON.stringify(leagueRoundState));
+    } catch (e) {
+      console.error("Failed to save league state:", e);
+    }
+  }
+
+  function generateRoundRobin(teamList) {
+    if (!teamList || teamList.length < 2) return [];
+
+    const teams = [...teamList];
+    let hasBye = false;
+    if (teams.length % 2 !== 0) {
+      teams.push("BYE");
+      hasBye = true;
+    }
+
+    const numRounds = teams.length - 1;
+    const schedule = [];
+
+    const fixedTeam = teams[0];
+    const rotatingTeams = teams.slice(1);
+
+    for (let round = 0; round < numRounds; round++) {
+      const currentRound = [];
+      currentRound.push([fixedTeam, rotatingTeams[0]]);
+      for (let i = 1; i < teams.length / 2; i++) {
+        const team1 = rotatingTeams[i];
+        const team2 = rotatingTeams[rotatingTeams.length - i];
+        currentRound.push([team1, team2]);
+      }
+      schedule.push(currentRound);
+      rotatingTeams.unshift(rotatingTeams.pop());
+    }
+
+    if (hasBye) {
+      return schedule.map(round => round.filter(match => match[0] !== "BYE" && match[1] !== "BYE"));
+    }
+    return schedule;
+  }
+
+  function getLeagueMatchups(leagueName, teams) {
+    if (!leagueName || !teams || teams.length < 2) return [];
+    loadRoundState();
+
+    const state = leagueRoundState[leagueName] || { currentRound: 0 };
+    const fullSchedule = generateRoundRobin(teams);
+    if (fullSchedule.length === 0) return [];
+
+    const todayMatchups = fullSchedule[state.currentRound];
+    const nextRound = (state.currentRound + 1) % fullSchedule.length;
+    leagueRoundState[leagueName] = { currentRound: nextRound };
+    saveRoundState();
+
+    return todayMatchups;
+  }
+
+  window.getLeagueMatchups = getLeagueMatchups;
+  loadRoundState();
+})();
