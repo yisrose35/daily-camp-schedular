@@ -1,27 +1,140 @@
 /**
-   * Public function to get the *next* set of matchups for a league (DEBUG VERSION).
+ * =============================================================
+ * LEAGUE SCHEDULING CORE (league_scheduling.js)
+ * =============================================================
+ * This file generates and tracks round-robin matchups for leagues.
+ * It is called by the main scheduler (app2.js) when it needs to
+ * schedule a league game.
+ *
+ * Public Functions:
+ * - window.getLeagueMatchups(leagueName, teams)
+ * =============================================================
+ */
+
+(function () {
+  'use strict';
+
+  const LEAGUE_STATE_KEY = "camp_league_round_state";
+  let leagueRoundState = {}; // { "League Name": { currentRound: 0 } }
+
+  /**
+   * Loads the current round for all leagues from localStorage.
+   */
+  function loadRoundState() {
+    try {
+      const stored = localStorage.getItem(LEAGUE_STATE_KEY);
+      leagueRoundState = stored ? JSON.parse(stored) : {};
+    } catch (e) {
+      console.error("Failed to load league state:", e);
+      leagueRoundState = {};
+    }
+  }
+
+  /**
+   * Saves the current round for all leagues to localStorage.
+   */
+  function saveRoundState() {
+    try {
+      localStorage.setItem(LEAGUE_STATE_KEY, JSON.stringify(leagueRoundState));
+    } catch (e) {
+      console.error("Failed to save league state:", e);
+    }
+  }
+
+  /**
+   * Generates a full round-robin tournament schedule for a list of teams (STABLE VERSION).
+   * It uses the Circle Method to create balanced rounds.
+   * @param {string[]} teamList - An array of team names.
+   * @returns {Array<Array<string[]>>} An array of rounds.
+   */
+  function generateRoundRobin(teamList) {
+    if (!teamList || teamList.length < 2) {
+      return [];
+    }
+
+    const teams = [...teamList];
+    let hasBye = false;
+    if (teams.length % 2 !== 0) {
+      teams.push("BYE");
+      hasBye = true;
+    }
+
+    const numRounds = teams.length - 1;
+    const schedule = [];
+
+    // Separate the stationary team (teams[0]) and the rotating teams (teams[1] onward)
+    const fixedTeam = teams[0];
+    const rotatingTeams = teams.slice(1);
+
+    for (let round = 0; round < numRounds; round++) {
+      const currentRound = [];
+      
+      // 1. Pair the fixed team with the first rotating team
+      currentRound.push([fixedTeam, rotatingTeams[0]]);
+
+      // 2. Pair the remaining teams (using the "Circle Method")
+      for (let i = 1; i < teams.length / 2; i++) {
+        const team1 = rotatingTeams[i];
+        const team2 = rotatingTeams[rotatingTeams.length - i];
+        currentRound.push([team1, team2]);
+      }
+
+      schedule.push(currentRound);
+
+      // 3. Rotate the rotatingTeams array: last element moves to the front
+      rotatingTeams.unshift(rotatingTeams.pop());
+    }
+
+    // Filter out any "BYE" games from the final schedule
+    if (hasBye) {
+      return schedule.map(round => 
+        round.filter(match => match[0] !== "BYE" && match[1] !== "BYE")
+      );
+    }
+
+    return schedule;
+  }
+
+  /**
+   * Public function to get the *next* set of matchups for a league.
+   * This function has side effects: it updates and saves the league's current round.
+   * @param {string} leagueName - The unique name of the league.
+   * @param {string[]} teams - The list of team names participating in the league.
+   * @returns {Array<string[]>} An array of matchups for the current round.
    */
   function getLeagueMatchups(leagueName, teams) {
-    if (!teams || teams.length < 2) {
-      console.warn(`[DIAGNOSTIC] League ${leagueName} skipped: Teams list is too short.`);
+    if (!leagueName || !teams || teams.length < 2) {
+      // Safety exit: need at least 2 teams to play a game
       return []; 
     }
-    
-    // --- TEMPORARY HARDCODED RETURN ---
-    // This bypasses round-robin, state saving, and rotation entirely.
-    // It guarantees one match for the first two teams.
-    console.log(`[DIAGNOSTIC] Assigning hardcoded match for ${leagueName}.`);
 
-    // Ensure we always save the state so the round number is incremented, 
-    // simulating a successful day (even though the schedule is fake).
+    // Load state before generation/access
     loadRoundState();
+
     const state = leagueRoundState[leagueName] || { currentRound: 0 };
-    const nextRound = (state.currentRound + 1) % 5; // Use a fixed arbitrary number (5)
+    const fullSchedule = generateRoundRobin(teams);
+
+    if (fullSchedule.length === 0) {
+      // If the schedule is empty (e.g., only 1 team), log it and exit
+      console.warn(`[League Matchup Error] No schedule generated for ${leagueName}. Team count: ${teams.length}`);
+      return []; 
+    }
+
+    // Get the matchups for today using the current round index
+    const todayMatchups = fullSchedule[state.currentRound];
+
+    // Increment and save the round number for next time
+    const nextRound = (state.currentRound + 1) % fullSchedule.length;
     leagueRoundState[leagueName] = { currentRound: nextRound };
     saveRoundState();
 
-    return [
-      [teams[0], teams[1]]
-    ];
-    // ---------------------------------
+    return todayMatchups;
   }
+
+  // --- Global Exposure ---
+  window.getLeagueMatchups = getLeagueMatchups;
+
+  // IMPORTANT: Load state on initialization so getLeagueMatchups has a starting point
+  loadRoundState(); 
+
+})();
