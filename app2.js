@@ -134,7 +134,7 @@ function assignFieldsToBunks() {
     });
   });
   
-  // FIX: Define priorityDivs here so it's globally available in the function scope
+  // FIX: priorityDivs definition moved to top of scope
   const priorityDivs = [...availableDivisions].reverse();
 
 
@@ -236,10 +236,20 @@ function assignFieldsToBunks() {
 
   // -------------------- 1) Schedule Guaranteed Leagues (MATCHUPS ONLY) --------------------
   for (const div of priorityDivs) {
-    const leagueData = getLeagueForDivision(div);
+    const leagueData = getLeagueForDivision(div); 
+
+    // <--- START OF DIAGNOSTIC CODE (REQUIRED) --->
+    const allLeagues = window.leaguesByName || {};
+    if (Object.keys(allLeagues).length === 0) {
+        console.warn("[DIAGNOSTIC] window.leaguesByName is empty. Leagues are not initializing.");
+    } else if (leagueData) {
+        console.log(`[DIAGNOSTIC] Successfully loaded league data for division: ${div}`);
+    }
+    // <--- END OF DIAGNOSTIC CODE (REQUIRED) --->
+
     const activeSlots = Array.from(divisionActiveRows[div] || []);
 
-    if (!leagueData || activeSlots.length === 0) continue;
+    if (!leagueData || activeSlots.length === 0) continue; 
 
     const nonBlockedSlots = activeSlots.filter(s => {
       if (blockedRowsByDiv[div]?.has(s)) return false; 
@@ -283,7 +293,7 @@ function assignFieldsToBunks() {
 
         scheduleAssignments[bunk][chosenSlot] = { ...assignmentDetails, continuation: false };
         
-        // **CRITICAL FIX APPLIED (Uniqueness):** Only track the generic field usage.
+        // Track usage (only field, NOT sport key)
         fieldsUsedByBunk[bunk].add(leagueFieldName); 
 
         // Fill continuations
@@ -308,17 +318,13 @@ function assignFieldsToBunks() {
     const fname = fieldLabel(act?.field);
     if (!fname) return false;
 
-    // 1. Resource Lock Check 
     if (!canUseField(fname, slotStart, slotEnd, s)) return false;
 
-    // 2. Sport Lock Check
     if (act.sport && globalActivityLock[s].has(norm(act.sport))) return false;
 
-    // 3. ABSOLUTE RULE: uniqueness check
     const key = activityKey(act);
     if (key && usedActivityKeysByBunk[bunk]?.has(key)) return false;
 
-    // 4. Soft constraint: field reuse
     if (!allowFieldReuse && fieldsUsedByBunk[bunk]?.has(fname)) return false;
 
     return true;
@@ -345,7 +351,7 @@ function assignFieldsToBunks() {
         continue;
 
       for (const bunk of (divisions[div]?.bunks || [])) {
-        if (scheduleAssignments[bunk][s]) continue; // fixed/leagues/continuations already set
+        if (scheduleAssignments[bunk][s]) continue; 
 
         const chosen = chooseActivity(bunk, slotStart, absEnd, s);
         const fname = fieldLabel(chosen.field);
@@ -357,12 +363,10 @@ function assignFieldsToBunks() {
           isLeague: false
         };
 
-        // Reserve only for real activities
         if (!chosen._placeholder) {
           reserveField(fname, slotStart, absEnd, s, chosen.sport);
         }
 
-        // Continuations over spanLen
         for (let k = 1; k < spanLen; k++) {
           const idx = s + k;
           if (idx >= unifiedTimes.length) break;
@@ -377,7 +381,6 @@ function assignFieldsToBunks() {
           };
         }
 
-        // Track per-bunk usage (skip placeholder)
         if (!chosen._placeholder) {
           const key = activityKey(chosen);
           if (key) usedActivityKeysByBunk[bunk].add(key);
