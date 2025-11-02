@@ -236,16 +236,21 @@ function assignFieldsToBunks() {
 
   // -------------------- 1) Schedule Guaranteed Leagues (MATCHUPS ONLY) --------------------
   for (const div of priorityDivs) {
-    const leagueData = getLeagueForDivision(div); 
+    let leagueData = getLeagueForDivision(div); 
 
-    // <--- START OF DIAGNOSTIC CODE (REQUIRED) --->
+    // --- DEFENSIVE CHECK AND INITIALIZATION ---
     const allLeagues = window.leaguesByName || {};
     if (Object.keys(allLeagues).length === 0) {
-        console.warn("[DIAGNOSTIC] window.leaguesByName is empty. Leagues are not initializing.");
-    } else if (leagueData) {
-        console.log(`[DIAGNOSTIC] Successfully loaded league data for division: ${div}`);
+        if (window.loadLeagues) {
+            window.loadLeagues(); // Force load from leagues.js
+            console.warn("[DEFENSE] Leagues data was missing. Forcing synchronous load now.");
+            leagueData = getLeagueForDivision(div); // Re-check the data after the forced load
+        } else {
+            console.warn("[DEFENSE] Cannot load leagues data. Skipping all league assignments.");
+            continue; 
+        }
     }
-    // <--- END OF DIAGNOSTIC CODE (REQUIRED) --->
+    // --- END DEFENSIVE CHECK ---
 
     const activeSlots = Array.from(divisionActiveRows[div] || []);
 
@@ -265,6 +270,13 @@ function assignFieldsToBunks() {
     
     // Get specific matchups (advances round state)
     const teams = leagueData.teams.length > 0 ? leagueData.teams : (divisions[div]?.bunks || []); 
+    
+    // Safety check to ensure round-robin has enough teams
+    if (teams.length < 2) {
+         console.warn(`[League Skip] Not enough teams/bunks (${teams.length}) defined for ${div}.`);
+         continue;
+    }
+    
     const leagueMatchups = window.getLeagueMatchups?.(leagueData.name, teams);
     
     if (!leagueMatchups || leagueMatchups.length === 0) continue;
