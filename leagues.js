@@ -7,21 +7,18 @@ let leaguesByName = {};
 
 // -------------------- Helpers --------------------
 function publishDivisionToggleMap() {
-  // Build { "5th Grade": {enabled:true}, ... } for divisions that appear in ANY enabled league
   const divMap = {};
   Object.values(leaguesByName).forEach(lg => {
     if (lg?.enabled && Array.isArray(lg.divisions)) {
       lg.divisions.forEach(d => { if (d) divMap[d] = { enabled: true }; });
     }
   });
-  // Minimal map for app2 “does this division have leagues enabled?”
   window.leagues = divMap;
 }
 
 function saveLeagues() {
   localStorage.setItem("leagues", JSON.stringify(leaguesByName));
-  // IMPORTANT: publish full object for app2.js
-  window.leaguesByName = leaguesByName;
+  window.leaguesByName = leaguesByName; // publish full map
   publishDivisionToggleMap();
 }
 
@@ -36,8 +33,7 @@ function loadLeagues() {
     l.teams     = Array.isArray(l.teams)     ? l.teams     : [];
     leaguesByName[name] = l;
   });
-  // IMPORTANT: publish full object for app2.js
-  window.leaguesByName = leaguesByName;
+  window.leaguesByName = leaguesByName; // publish full map
   publishDivisionToggleMap();
 }
 
@@ -47,7 +43,6 @@ function initLeaguesTab() {
   if (!leaguesContainer) return;
   leaguesContainer.innerHTML = "";
 
-  // -------------------- Add New League --------------------
   const addLeagueDiv = document.createElement("div");
   addLeagueDiv.style.marginBottom = "15px";
 
@@ -72,7 +67,6 @@ function initLeaguesTab() {
   addLeagueDiv.appendChild(addLeagueBtn);
   leaguesContainer.appendChild(addLeagueDiv);
 
-  // -------------------- Render Each League --------------------
   const sourceDivs = Array.isArray(window.availableDivisions) && window.availableDivisions.length > 0
     ? window.availableDivisions
     : Object.keys(window.divisions || {});
@@ -89,7 +83,6 @@ function initLeaguesTab() {
     section.style.background = "#fafafa";
     section.style.opacity = leagueData.enabled ? "1" : "0.85";
 
-    // Header
     const header = document.createElement("div");
     header.style.display = "flex";
     header.style.justifyContent = "space-between";
@@ -105,7 +98,7 @@ function initLeaguesTab() {
     title.textContent = leagueName;
     title.style.margin = "0";
 
-    // Enabled slider toggle
+    // toggle
     const toggleWrap = document.createElement("label");
     toggleWrap.style.display = "inline-flex";
     toggleWrap.style.alignItems = "center";
@@ -176,7 +169,7 @@ function initLeaguesTab() {
     header.appendChild(deleteBtn);
     section.appendChild(header);
 
-    // -------------------- Division Push Buttons --------------------
+    // Divisions
     const divTitle = document.createElement("p");
     divTitle.textContent = "Divisions in this League:";
     divTitle.style.marginBottom = "6px";
@@ -212,12 +205,8 @@ function initLeaguesTab() {
       divBtn.style.cursor = "pointer";
       divBtn.style.transition = "all 0.15s ease";
 
-      divBtn.onmouseenter = () => {
-        if (!active) divBtn.style.backgroundColor = "#f3f3f3";
-      };
-      divBtn.onmouseleave = () => {
-        if (!active) divBtn.style.backgroundColor = "white";
-      };
+      divBtn.onmouseenter = () => { if (!active) divBtn.style.backgroundColor = "#f3f3f3"; };
+      divBtn.onmouseleave = () => { if (!active) divBtn.style.backgroundColor = "white"; };
 
       divBtn.onclick = () => {
         const idx = leagueData.divisions.indexOf(divName);
@@ -231,7 +220,7 @@ function initLeaguesTab() {
     });
     section.appendChild(divContainer);
 
-    // -------------------- Sports Selection --------------------
+    // Sports
     const sportsTitle = document.createElement("p");
     sportsTitle.textContent = "League Sports:";
     sportsTitle.style.margin = "10px 0 6px";
@@ -274,7 +263,7 @@ function initLeaguesTab() {
     sportsContainer.appendChild(customSportInput);
     section.appendChild(sportsContainer);
 
-    // -------------------- Teams --------------------
+    // Teams
     const teamTitle = document.createElement("p");
     teamTitle.textContent = "Teams:";
     teamTitle.style.margin = "10px 0 6px";
@@ -284,11 +273,15 @@ function initLeaguesTab() {
     teamInput.placeholder = "Enter team name";
     teamInput.style.marginRight = "8px";
     teamInput.onkeypress = e => {
-      if (e.key === "Enter" && teamInput.value.trim() !== "") {
-        leagueData.teams.push(teamInput.value.trim());
+      if (e.key === "Enter") {
+        const val = (teamInput.value || "").trim();
+        if (!val) return;
+        if (!leagueData.teams.includes(val)) {
+          leagueData.teams.push(val);
+          saveLeagues();
+          initLeaguesTab();
+        }
         teamInput.value = "";
-        saveLeagues();
-        initLeaguesTab();
       }
     };
     section.appendChild(teamInput);
@@ -296,12 +289,14 @@ function initLeaguesTab() {
     const addTeamBtn = document.createElement("button");
     addTeamBtn.textContent = "Add Team";
     addTeamBtn.onclick = () => {
-      if (teamInput.value.trim() !== "") {
-        leagueData.teams.push(teamInput.value.trim());
-        teamInput.value = "";
+      const val = (teamInput.value || "").trim();
+      if (!val) return;
+      if (!leagueData.teams.includes(val)) {
+        leagueData.teams.push(val);
         saveLeagues();
         initLeaguesTab();
       }
+      teamInput.value = "";
     };
     section.appendChild(addTeamBtn);
 
@@ -334,17 +329,11 @@ function initLeaguesTab() {
   });
 }
 
-// -------------------- Init (Synchronization Fix Applied) --------------------
-
-// 1) Load state immediately (so app2 can read it on load)
+// Init
 loadLeagues();
-
-// 2) Render UI once DOM is ready
 document.addEventListener("DOMContentLoaded", () => {
   if (document.getElementById("leaguesContainer")) initLeaguesTab();
 });
-
-// 3) Expose helpers for defensive calls from app2
 window.getLeaguesByName = () => leaguesByName;
 window.loadLeagues = loadLeagues;
 window.saveLeagues = saveLeagues;
