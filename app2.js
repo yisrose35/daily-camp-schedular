@@ -111,6 +111,39 @@ function getEnabledLeaguesByDivision(){
   load();
 })();
 
+// ===== League Sport Rotation Tracker =====
+const SPORT_STATE_KEY = "camp_league_sport_rotation";
+let leagueSportRotation = {};
+
+function loadLeagueSportRotation() {
+  try {
+    leagueSportRotation = JSON.parse(localStorage.getItem(SPORT_STATE_KEY) || "{}") || {};
+  } catch {
+    leagueSportRotation = {};
+  }
+}
+
+function saveLeagueSportRotation() {
+  try {
+    localStorage.setItem(SPORT_STATE_KEY, JSON.stringify(leagueSportRotation));
+  } catch {}
+}
+
+/**
+ * Returns the next sport for a league, cycling through its available sports.
+ * @param {string} leagueName 
+ * @param {string[]} sportsList 
+ */
+function getNextLeagueSport(leagueName, sportsList) {
+  if (!Array.isArray(sportsList) || sportsList.length === 0) return "Leagues";
+  loadLeagueSportRotation();
+  const state = leagueSportRotation[leagueName] || { index: 0 };
+  const sport = sportsList[state.index % sportsList.length];
+  leagueSportRotation[leagueName] = { index: (state.index + 1) % sportsList.length };
+  saveLeagueSportRotation();
+  return sport;
+}
+
 // ====== CORE STATE ======
 window.leagueAssignments = window.leagueAssignments || {}; 
 // { [division]: { [slotIndex]: { sport, matchups: [[A,B],...], leagueName } } }
@@ -136,7 +169,7 @@ function assignFieldsToBunks(){
   const availSpecials = specialActivities.filter(s=>s?.available);
 
   const allActivities = [
-    ...availFields.flatMap(f=>f.activities.map(act=>({type:"field", field:f, sport:act}))),
+    ...availFields.flatMap(f=>f.activities.map(act=>({type:"field", field:f, sport:act})) ),
     ...availSpecials.map(sa=>({type:"special", field:{name:sa.name}, sport:null}))
   ];
   if (allActivities.length===0 || unifiedTimes.length===0){
@@ -276,19 +309,19 @@ function assignFieldsToBunks(){
     const matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
     if (matchups.length === 0) continue;
 
-    const sport = (lg.data.sports && lg.data.sports[0]) ? lg.data.sports[0] : "Leagues";
+    // NEW: Cycle through sports for this league
+    const sport = getNextLeagueSport(lg.name, lg.data.sports);
 
     window.leagueAssignments[div] = window.leagueAssignments[div] || {};
     window.leagueAssignments[div][chosenSlot] = { sport, matchups, leagueName: lg.name };
 
-    // Block this slot range for this division (so bunks won’t fill here)…
+    // Block this slot range for this division
     blockedRowsByDiv[div] = blockedRowsByDiv[div] || new Set();
     for (let k = 0; k < spanLen; k++) {
       const idx = chosenSlot + k;
       if (idx >= unifiedTimes.length) break;
       blockedRowsByDiv[div].add(idx);
     }
-    // …and mark it taken globally so other divisions can’t pick the same window.
     markTaken(chosenSlot);
   }
 
@@ -316,7 +349,6 @@ function assignFieldsToBunks(){
     const absEnd=new Date(slotStart.getTime()+activityDuration*60000);
 
     for(const div of priorityDivs){
-      // skip if league is occupying this slot for this division
       if (window.leagueAssignments?.[div]?.[s]) continue;
       if (blockedRowsByDiv[div]?.has(s)) continue;
 
@@ -325,7 +357,7 @@ function assignFieldsToBunks(){
       if (!isActive) continue;
 
       for(const bunk of (divisions[div]?.bunks || [])){
-        if(scheduleAssignments[bunk][s]) continue; // already fixed something here
+        if(scheduleAssignments[bunk][s]) continue; 
 
         const chosen=chooseActivity(bunk,slotStart,absEnd,s);
         const fname=fieldLabel(chosen.field);
@@ -336,7 +368,7 @@ function assignFieldsToBunks(){
           const idx=s+k; if(idx>=unifiedTimes.length) break;
           const nextActive = activeSet ? activeSet.has(idx) : true;
           if(!nextActive) break;
-          if (window.leagueAssignments?.[div]?.[idx]) break; // don’t extend into league
+          if (window.leagueAssignments?.[div]?.[idx]) break;
           if(scheduleAssignments[bunk][idx]) break;
           scheduleAssignments[bunk][idx]={ field: fname, sport: chosen.sport, continuation:true, isLeague:false };
         }
@@ -399,7 +431,6 @@ function updateTable(){
       const leagueHere = window.leagueAssignments?.[div]?.[s];
 
       if (leagueHere) {
-        // Render one merged cell across the division's bunks
         const td=document.createElement("td");
         td.colSpan = bunksInDiv.length;
         const divColor = divisions[div]?.color || '#4CAF50';
@@ -408,10 +439,9 @@ function updateTable(){
         td.style.textAlign = 'center';
         td.style.fontWeight = '600';
         const list = leagueHere.matchups.map(m => `${m[0]} vs ${m[1]}`).join(' • ');
-        td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;opacity:0.9;">(${leagueHere.sport})</span></div>`;
+        td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;opacity:0.9;">${leagueHere.leagueName} – ${leagueHere.sport}</span></div>`;
         tr.appendChild(td);
       } else {
-        // Normal per-bunk cells
         bunksInDiv.forEach(b=>{
           if(scheduleAssignments[b] && scheduleAssignments[b][s] && scheduleAssignments[b][s]._skip) return;
           const td=document.createElement("td");
@@ -430,7 +460,6 @@ function updateTable(){
               const sameLeague=!!(e2 && e2.isLeague)===!!(entry && entry.isLeague);
               const sameFixed=!!(e2 && e2._fixed)===!!(entry && entry._fixed);
               if(!e2 || !e2.continuation || !sameField || !sameSport || !sameLeague || !sameFixed) break;
-              // also stop if a league starts in the next slot for this division
               if (window.leagueAssignments?.[div]?.[k]) break;
               span++;
               scheduleAssignments[b][k]._skip = true;
