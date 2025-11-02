@@ -85,6 +85,8 @@ function computeBlockedRowsByDiv() {
 function prePlaceFixedActivities() {
   if (window.DailyActivities && typeof window.DailyActivities.prePlace === "function") {
     try {
+      // NOTE: DailyActivities.prePlace is responsible for populating scheduleAssignments 
+      // with fixed activities and updating divisionActiveRows.
       window.DailyActivities.prePlace(); 
     } catch (e) {
       console.error("Error executing DailyActivities.prePlace:", e);
@@ -135,7 +137,6 @@ function assignFieldsToBunks() {
   });
 
   // -------------------- Resource Locks Initialization --------------------
-  // These are required for Step 0 (Fixed) and Step 2 (General Fill)
   const globalResourceUsage = {}; 
   const occupiedFieldsBySlot = Array.from({ length: unifiedTimes.length }, () => new Set());
   const globalActivityLock = Array.from({ length: unifiedTimes.length }, () => new Set()); 
@@ -150,6 +151,8 @@ function assignFieldsToBunks() {
       fieldsUsedByBunk[b] = new Set();
     });
   });
+
+  const norm = (s) => (typeof s === "string" ? s.trim().toLowerCase() : null);
 
   function activityKey(act) {
     if (!act) return null;
@@ -248,8 +251,7 @@ function assignFieldsToBunks() {
 
     // Use the first available slot after fixed activities
     let chosenSlot = nonBlockedSlots[0]; 
-    leagueSlotByDiv[div] = chosenSlot;
-
+    
     // Get specific matchups (advances round state)
     const teams = leagueData.teams.length > 0 ? leagueData.teams : (divisions[div]?.bunks || []); 
     const leagueMatchups = window.getLeagueMatchups?.(leagueData.name, teams);
@@ -280,9 +282,8 @@ function assignFieldsToBunks() {
 
         scheduleAssignments[bunk][chosenSlot] = { ...assignmentDetails, continuation: false };
         
-        // Track usage (MANDATORY for general scheduling to skip this slot)
-        const key = activityKey(assignmentDetails);
-        if (key) usedActivityKeysByBunk[bunk].add(key);
+        // **CRITICAL FIX APPLIED:** ONLY TRACK THE GENERIC FIELD USAGE.
+        // DO NOT track the specific sport/activity key (usedActivityKeysByBunk).
         fieldsUsedByBunk[bunk].add(leagueFieldName); 
 
         // Fill continuations
@@ -307,7 +308,7 @@ function assignFieldsToBunks() {
     const fname = fieldLabel(act?.field);
     if (!fname) return false;
 
-    // 1. Resource Lock Check (This will now only check Fixed Activities and previous General Fills)
+    // 1. Resource Lock Check 
     if (!canUseField(fname, slotStart, slotEnd, s)) return false;
 
     // 2. Sport Lock Check
@@ -315,6 +316,7 @@ function assignFieldsToBunks() {
 
     // 3. ABSOLUTE RULE: uniqueness check
     const key = activityKey(act);
+    // This check is now safe because the League assignment didn't consume the sport key.
     if (key && usedActivityKeysByBunk[bunk]?.has(key)) return false;
 
     // 4. Soft constraint: field reuse
@@ -324,10 +326,12 @@ function assignFieldsToBunks() {
   }
 
   function chooseActivity(bunk, slotStart, slotEnd, s) {
-    let pool = allActivities.filter(a => baseFeasible(a, bunk, slotStart, slotEnd, s, false));
+    const absEnd = new Date(slotStart.getTime() + activityDuration * 60000); 
+
+    let pool = allActivities.filter(a => baseFeasible(a, bunk, slotStart, absEnd, s, false));
     if (pool.length > 0) return pool[Math.floor(Math.random() * pool.length)];
 
-    pool = allActivities.filter(a => baseFeasible(a, bunk, slotStart, slotEnd, s, true));
+    pool = allActivities.filter(a => baseFeasible(a, bunk, slotStart, absEnd, s, true));
     if (pool.length > 0) return pool[Math.floor(Math.random() * pool.length)];
 
     return { type: 'special', field: { name: PLACEHOLDER_NAME }, sport: null, _placeholder: true };
