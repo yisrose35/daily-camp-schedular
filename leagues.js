@@ -3,6 +3,7 @@
 // Internal store keyed by LEAGUE NAME for UI/storage
 let leaguesByName = {};
 // app2 expects window.leagues keyed by DIVISION NAME -> { enabled: boolean }
+// app2 also reads window.leaguesByName (full map)
 
 // -------------------- Helpers --------------------
 function publishDivisionToggleMap() {
@@ -13,11 +14,14 @@ function publishDivisionToggleMap() {
       lg.divisions.forEach(d => { if (d) divMap[d] = { enabled: true }; });
     }
   });
+  // Minimal map for app2 “does this division have leagues enabled?”
   window.leagues = divMap;
 }
 
 function saveLeagues() {
   localStorage.setItem("leagues", JSON.stringify(leaguesByName));
+  // IMPORTANT: publish full object for app2.js
+  window.leaguesByName = leaguesByName;
   publishDivisionToggleMap();
 }
 
@@ -32,6 +36,8 @@ function loadLeagues() {
     l.teams     = Array.isArray(l.teams)     ? l.teams     : [];
     leaguesByName[name] = l;
   });
+  // IMPORTANT: publish full object for app2.js
+  window.leaguesByName = leaguesByName;
   publishDivisionToggleMap();
 }
 
@@ -330,16 +336,15 @@ function initLeaguesTab() {
 
 // -------------------- Init (Synchronization Fix Applied) --------------------
 
-// 1. Load the state immediately when the script executes so app2.js can access it.
-loadLeagues(); 
+// 1) Load state immediately (so app2 can read it on load)
+loadLeagues();
 
+// 2) Render UI once DOM is ready
 document.addEventListener("DOMContentLoaded", () => {
-  // 2. Wait for DOMContentLoaded only to run the UI rendering
   if (document.getElementById("leaguesContainer")) initLeaguesTab();
 });
 
-// CRITICAL FIX: Explicitly expose loadLeagues and saveLeagues to the window object 
-// so app2.js can call them defensively during race conditions.
+// 3) Expose helpers for defensive calls from app2
 window.getLeaguesByName = () => leaguesByName;
-window.loadLeagues = loadLeagues; 
+window.loadLeagues = loadLeagues;
 window.saveLeagues = saveLeagues;
