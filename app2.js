@@ -1,41 +1,67 @@
-/* app2.js
- * Daily schedule rendering & interactions
- * - Duration per activity (independent of grid increment)
- * - Rowspan-based multi-slot rendering
- * - Overlap prevention
- * - Grey-out times not applicable to a division/grade
+/* app2.js — Previous working version (before duration support)
  *
- * Exposes window.Scheduler with:
- *   - render()
- *   - addItem(item)
- *   - removeItem(id)
- *   - upsertItems(itemsArray)
- *   - setDivisionWindows(windowsByDivisionId)
- *   - updateIncrement(mins)
- *   - rebuildFromDOM()   // re-reads grid (rows/cols) and re-renders
+ * What it does:
+ *  - Builds the visible schedule from saved data (LocalStorage)
+ *  - One item per time slot (each slot = current increment)
+ *  - Greys out cells outside each division/grade's allowed window
+ *  - Renders fields (e.g., "f7 – Basketball") and league lines
+ *  - Adds subtle division color accents to the grid cells/headers
  *
- * Required DOM assumptions:
- *   - Table container has id #scheduleTable (tbody cells have data-row & data-col)
- *   - Time grid rows are sequential 0..N-1 (built in app1.js)
- *   - Columns have stable keys in data-col (usually bunk ids)
+ * Required DOM (built by app1.js):
+ *  - <table id="scheduleTable"> with a <tbody>
+ *  - Body cells for bunks have:   td[data-bunk="<bunkId>"][data-time="<H:MM AM/PM>"]
+ *  - (Optional) Division banner cells per time have:
+ *      td[data-division-banner="<divisionId>"][data-time="<H:MM AM/PM>"]
  *
- * Required data (via localStorage or your own state singletons):
- *   - TIME_SETTINGS: { dayStart: "9:00 AM", dayEnd: "5:00 PM", incrementMin: 15 }
- *   - DIVISIONS: [{ id, name, color, window?: { start:"9:30 AM", end:"4:00 PM" } }, ...]
- *   - BUNKS: [{ id, name, divisionId }, ...]
- *   - FIELDS: optional
- *   - SCHEDULE_ITEMS: [{ id, label, bunkId, divisionId, fieldId?, start:"11:00 AM", durationMin:45, meta?:{field:"f7"} }, ...]
- *
- * Styling:
- *   Add to styles.css if not present:
- *     td.activity { vertical-align: middle; font-weight:600; border:2px solid rgba(0,0,0,.08); }
- *     td.continued { display:none; }
- *     td.greyed { background: repeating-linear-gradient(45deg, #f3f4f6, #f3f4f6 8px, #e5e7eb 8px, #e5e7eb 16px); color:#9ca3af; }
- *     td.conflict { outline: 2px dashed #ef4444; }
+ * Data in LocalStorage (keys can be adjusted below if yours differ):
+ *  - "TIME_SETTINGS": { dayStart, dayEnd, incrementMin }
+ *  - "DIVISIONS": [{ id, name, color?, startTime?, endTime? }, ...]
+ *  - "BUNKS":     [{ id, name, divisionId }, ...]
+ *  - "FIELDS":    [{ id, name, short? }, ...] (optional)
+ *  - "SCHEDULE_ITEMS": array of items, where each item is either:
+ *      Activity item:
+ *        { id, type:"activity", bunkId, start:"11:00 AM", label:"Basketball", field:"f7" | fieldId? }
+ *      League line (division-wide banner for that time):
+ *        { id, type:"league",  divisionId, start:"11:00 AM", text:"1 vs 4 (Kickball) • 2 vs 3 (Basketball)" }
  */
 
 (function () {
-  // ---------- LocalStorage helpers ----------
+  // ---------------- Utilities ----------------
+  function toMinutes(t12) {
+    if (!t12 || typeof t12 !== "string") return 0;
+    const [time, ampmRaw] = t12.trim().split(/\s+/);
+    const ampm = (ampmRaw || "").toUpperCase();
+    let [h, m] = (time || "0:00").split(":").map(Number);
+    if (isNaN(h)) h = 0;
+    if (isNaN(m)) m = 0;
+    if (ampm === "PM" && h !== 12) h += 12;
+    if (ampm === "AM" && h === 12) h = 0;
+    return h * 60 + m;
+  }
+
+  function toTimeString(minutes) {
+    minutes = Math.max(0, minutes) % (24 * 60);
+    let h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    const ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12 || 12;
+    return `${h}:${m.toString().padStart(2, "0")} ${ampm}`;
+  }
+
+  function safeText(v) {
+    if (v == null) return "";
+    if (typeof v === "string") return v;
+    if (typeof v === "number" || typeof v === "boolean") return String(v);
+    if (typeof v === "object") {
+      // Avoid [object Object] — try common properties first
+      if (v.name) return String(v.name);
+      if (v.label) return String(v.label);
+      try { return JSON.stringify(v); } catch { return ""; }
+    }
+    return "";
+  }
+
+  // ---------------- LocalStorage helpers ----------------
   const LS = {
     get(key, fallback) {
       try {
@@ -45,30 +71,345 @@
         return fallback;
       }
     },
-    set(key, value) {
-      localStorage.setItem(key, JSON.stringify(value));
-    },
+    set(key, val) {
+      localStorage.setItem(key, JSON.stringify(val));
+    }
   };
 
-  // ---------- Keys (adjust if your project uses different names) ----------
-  const KEY_TIME = "TIME_SETTINGS";
-  const KEY_DIVS = "DIVISIONS";
-  const KEY_BUNKS = "BUNKS";
+  // ---------------- Keys (adjust if your project differs) ----------------
+  const KEY_TIME   = "TIME_SETTINGS";
+  const KEY_DIVS   = "DIVISIONS";
+  const KEY_BUNKS  = "BUNKS";
   const KEY_FIELDS = "FIELDS";
-  const KEY_ITEMS = "SCHEDULE_ITEMS";
+  const KEY_ITEMS  = "SCHEDULE_ITEMS";
 
-  // ---------- State ----------
-  const state = {
-    timeSettings: LS.get(KEY_TIME, {
-      dayStart: "9:00 AM",
-      dayEnd: "5:00 PM",
-      incrementMin: 15,
-    }),
-    divisions: LS.get(KEY_DIVS, []),
-    bunks: LS.get(KEY_BUNKS, []),
-    fields: LS.get(KEY_FIELDS, []),
-    items: LS.get(KEY_ITEMS, []),
+  // ---------------- Load state ----------------
+  let timeSettings = LS.get(KEY_TIME, {
+    dayStart: "9:00 AM",
+    dayEnd: "5:00 PM",
+    incrementMin: 30
+  });
 
+  let divisions = LS.get(KEY_DIVS, []);
+  let bunks     = LS.get(KEY_BUNKS, []);
+  let fields    = LS.get(KEY_FIELDS, []);
+  let items     = LS.get(KEY_ITEMS, []);
+
+  // Indexes for faster lookups
+  const bunkById      = Object.fromEntries(bunks.map(b => [String(b.id), b]));
+  const divisionById  = Object.fromEntries(divisions.map(d => [String(d.id), d]));
+  const fieldById     = Object.fromEntries(fields.map(f => [String(f.id), f]));
+
+  // ---------------- Grid building ----------------
+  function buildTimeSlots() {
+    const inc = Number(timeSettings.incrementMin) || 30;
+    const startMin = toMinutes(timeSettings.dayStart);
+    const endMin   = toMinutes(timeSettings.dayEnd);
+    const out = [];
+    for (let t = startMin; t < endMin; t += inc) {
+      out.push(toTimeString(t));
+    }
+    return out;
+  }
+
+  function renderScheduleTable() {
+    const table = document.getElementById("scheduleTable");
+    if (!table) return;
+    const tbody = table.querySelector("tbody");
+    if (!tbody) return;
+
+    tbody.innerHTML = "";
+
+    // Header row is assumed to be already in the THEAD (built by app1)
+    // We only build body rows here.
+    const timeSlots = buildTimeSlots();
+
+    for (let i = 0; i < timeSlots.length; i++) {
+      const start = timeSlots[i];
+      const end   = toTimeString(toMinutes(start) + (Number(timeSettings.incrementMin) || 30));
+
+      const tr = document.createElement("tr");
+
+      // Left time cell
+      const tdTime = document.createElement("td");
+      tdTime.className = "time-cell";
+      tdTime.textContent = `${start} - ${end}`;
+      tr.appendChild(tdTime);
+
+      // Bunk cells
+      bunks.forEach((b) => {
+        const td = document.createElement("td");
+        td.dataset.bunk = String(b.id);
+        td.dataset.time = start;
+        // Add subtle division color accent if available
+        const div = divisionById[String(b.divisionId)];
+        if (div?.color) {
+          td.style.boxShadow = `inset 3px 0 0 0 ${div.color}`;
+        }
+        tr.appendChild(td);
+      });
+
+      tbody.appendChild(tr);
+
+      // Optional "division banner row" below (one line per division for leagues)
+      // Only create if app1 prepared a separate row; otherwise we’ll target
+      // cells with [data-division-banner] when present.
+      // (No-op here; we just rely on existing banner cells if they exist.)
+    }
+  }
+
+  // ---------------- Grey-out logic ----------------
+  function applyGreyOut() {
+    const table = document.getElementById("scheduleTable");
+    if (!table) return;
+
+    const inc = Number(timeSettings.incrementMin) || 30;
+    const startMin = toMinutes(timeSettings.dayStart);
+    const cells = table.querySelectorAll("tbody td[data-bunk][data-time]");
+
+    cells.forEach((cell) => {
+      cell.classList.remove("greyed");
+      const bunkId = String(cell.dataset.bunk);
+      const bunk = bunkById[bunkId];
+      if (!bunk) return;
+
+      const division = divisionById[String(bunk.divisionId)];
+      const windowStart = toMinutes(division?.startTime || timeSettings.dayStart);
+      const windowEnd   = toMinutes(division?.endTime   || timeSettings.dayEnd);
+
+      const cellStart = toMinutes(cell.dataset.time);
+      // Cell represents [cellStart, cellStart+inc)
+      if (cellStart < windowStart || cellStart >= windowEnd) {
+        cell.classList.add("greyed");
+      }
+    });
+  }
+
+  // ---------------- Item rendering ----------------
+  function fmtFieldPrefix(item) {
+    // Field can be a short code (e.g., 'f7') or an id we can resolve
+    if (item.field) return String(item.field);
+    if (item.fieldId && fieldById[String(item.fieldId)]) {
+      const f = fieldById[String(item.fieldId)];
+      return safeText(f.short || f.name || f.id);
+    }
+    return "";
+  }
+
+  function placeActivities() {
+    const table = document.getElementById("scheduleTable");
+    if (!table) return;
+
+    // Clear previous content (but keep greyed state & style)
+    const bunkCells = table.querySelectorAll("tbody td[data-bunk][data-time]");
+    bunkCells.forEach((td) => {
+      // Do not clear the greyed class
+      td.textContent = "";
+      td.removeAttribute("title");
+    });
+
+    // Activities: type === "activity" (default if type missing)
+    items
+      .filter(it => !it.type || it.type === "activity")
+      .forEach((it) => {
+        const bunkId = String(it.bunkId ?? "");
+        const start  = String(it.start ?? "");
+        if (!bunkId || !start) return;
+
+        const cell = table.querySelector(`tbody td[data-bunk="${CSS.escape(bunkId)}"][data-time="${CSS.escape(start)}"]`);
+        if (!cell) return;
+
+        // Build label safely
+        const fieldPrefix = fmtFieldPrefix(it);
+        const label = safeText(it.label);
+        const text = fieldPrefix ? `${fieldPrefix} – ${label}` : label;
+
+        cell.textContent = text;
+        // Useful hover: shows bunk + time
+        cell.title = `${start} • ${label}`;
+      });
+  }
+
+  function placeLeagues() {
+    // League lines typically appear as one banner per division per time
+    // We support two ways:
+    //  1) If your grid has dedicated cells: td[data-division-banner="<divisionId>"][data-time="<time>"]
+    //  2) Otherwise, we write the league text into the *first bunk cell* of that division at that time.
+    const table = document.getElementById("scheduleTable");
+    if (!table) return;
+
+    const leagues = items.filter(it => it.type === "league");
+    if (leagues.length === 0) return;
+
+    // Group bunks by division to know "first bunk cell" fallback
+    const bunksByDiv = new Map();
+    bunks.forEach((b) => {
+      const k = String(b.divisionId);
+      if (!bunksByDiv.has(k)) bunksByDiv.set(k, []);
+      bunksByDiv.get(k).push(b);
+    });
+
+    leagues.forEach((lg) => {
+      const divId = String(lg.divisionId ?? "");
+      const time  = String(lg.start ?? "");
+      if (!divId || !time) return;
+
+      const bannerCell = table.querySelector(
+        `tbody td[data-division-banner="${CSS.escape(divId)}"][data-time="${CSS.escape(time)}"]`
+      );
+
+      const text = safeText(lg.text);
+
+      if (bannerCell) {
+        bannerCell.textContent = text;
+        // add division color accent if possible
+        const div = divisionById[divId];
+        if (div?.color) {
+          bannerCell.style.background = hexToTint(div.color, 0.08);
+          bannerCell.style.borderLeft = `4px solid ${div.color}`;
+          bannerCell.style.fontWeight = "600";
+        }
+        return;
+      }
+
+      // Fallback: write to first bunk of that division at that time
+      const bunksInDiv = (bunksByDiv.get(divId) || []).sort((a, b) =>
+        String(a.name || a.id).localeCompare(String(b.name || b.id))
+      );
+      if (bunksInDiv.length === 0) return;
+
+      const firstBunk = bunksInDiv[0];
+      const cell = table.querySelector(
+        `tbody td[data-bunk="${CSS.escape(String(firstBunk.id))}"][data-time="${CSS.escape(time)}"]`
+      );
+      if (cell) {
+        cell.textContent = text;
+        cell.style.fontWeight = "600";
+      }
+    });
+  }
+
+  // ---------------- Visual accents/helpers ----------------
+  function applyDivisionHeaderColors() {
+    // If your THEAD has bunk headers marked with data-bunk-header="<bunkId>",
+    // add an underline or background tint using the division color.
+    const headers = document.querySelectorAll('thead th[data-bunk-header]');
+    headers.forEach((th) => {
+      const bunkId = String(th.getAttribute('data-bunk-header') || "");
+      const bunk = bunkById[bunkId];
+      if (!bunk) return;
+      const div = divisionById[String(bunk.divisionId)];
+      if (!div?.color) return;
+      th.style.borderBottom = `3px solid ${div.color}`;
+      th.style.background = hexToTint(div.color, 0.05);
+    });
+  }
+
+  function hexToTint(hex, alpha) {
+    // supports #RGB or #RRGGBB
+    if (!hex || typeof hex !== "string") return "";
+    let r, g, b;
+    if (hex.length === 4) {
+      r = parseInt(hex[1] + hex[1], 16);
+      g = parseInt(hex[2] + hex[2], 16);
+      b = parseInt(hex[3] + hex[3], 16);
+    } else if (hex.length === 7) {
+      r = parseInt(hex.slice(1, 3), 16);
+      g = parseInt(hex.slice(3, 5), 16);
+      b = parseInt(hex.slice(5, 7), 16);
+    } else {
+      return "";
+    }
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  // ---------------- Master render ----------------
+  function clearDivisionBanners() {
+    const table = document.getElementById("scheduleTable");
+    if (!table) return;
+    const banners = table.querySelectorAll('tbody td[data-division-banner][data-time]');
+    banners.forEach(td => { td.textContent = ""; });
+  }
+
+  function render() {
+    // Refresh state (in case app1.js changed settings/masters)
+    timeSettings = LS.get(KEY_TIME, timeSettings);
+    divisions    = LS.get(KEY_DIVS, divisions);
+    bunks        = LS.get(KEY_BUNKS, bunks);
+    fields       = LS.get(KEY_FIELDS, fields);
+    items        = LS.get(KEY_ITEMS, items);
+
+    // Rebuild quick indexes
+    Object.keys(bunkById).forEach(k => delete bunkById[k]);
+    bunks.forEach(b => { bunkById[String(b.id)] = b; });
+
+    Object.keys(divisionById).forEach(k => delete divisionById[k]);
+    divisions.forEach(d => { divisionById[String(d.id)] = d; });
+
+    Object.keys(fieldById).forEach(k => delete fieldById[k]);
+    fields.forEach(f => { fieldById[String(f.id)] = f; });
+
+    // Build the body grid, then decorate + fill
+    renderScheduleTable();
+    applyDivisionHeaderColors();
+    applyGreyOut();
+    clearDivisionBanners();
+    placeActivities();
+    placeLeagues();
+  }
+
+  // ---------------- Events & public API ----------------
+  // Re-render when app1 signals the grid changed (e.g., new increment, new bunks)
+  document.addEventListener("grid:rebuilt", render);
+
+  // Initial render
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", render);
+  } else {
+    render();
+  }
+
+  // Expose a tiny API for other scripts (optional convenience)
+  window.ScheduleApp = {
+    render,
+    reloadFromStorage() { render(); },
+    setItems(newItems) {
+      items = Array.isArray(newItems) ? newItems : [];
+      LS.set(KEY_ITEMS, items);
+      render();
+    },
+    pushItem(item) {
+      items = LS.get(KEY_ITEMS, []);
+      const withId = { id: item.id || `it_${Date.now()}`, ...item };
+      items.push(withId);
+      LS.set(KEY_ITEMS, items);
+      render();
+      return withId.id;
+    },
+    replaceItem(id, patch) {
+      items = LS.get(KEY_ITEMS, []);
+      const idx = items.findIndex(x => x.id === id);
+      if (idx >= 0) {
+        items[idx] = { ...items[idx], ...patch };
+        LS.set(KEY_ITEMS, items);
+        render();
+      }
+    },
+    deleteItem(id) {
+      items = LS.get(KEY_ITEMS, []);
+      items = items.filter(x => x.id !== id);
+      LS.set(KEY_ITEMS, items);
+      render();
+    },
+    // For convenience if you change increment from a UI control:
+    updateIncrement(mins) {
+      const ts = LS.get(KEY_TIME, timeSettings);
+      ts.incrementMin = Number(mins);
+      LS.set(KEY_TIME, ts);
+      render();
+    }
+  };
+})();
     // Derived from DOM on first render:
     grid: {
       rows: 0,
