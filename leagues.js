@@ -1,339 +1,435 @@
-// -------------------- Leagues.js --------------------
+// -------------------- State --------------------
+let bunks = [];
+let divisions = {}; // { divName:{ bunks:[], color, start, end } }
+// availableDivisions will be exposed globally as window.availableDivisions
+let availableDivisions = [];
+let selectedDivision = null;
 
-// Internal store keyed by LEAGUE NAME for UI/storage
-let leaguesByName = {};
-// app2 expects window.leagues keyed by DIVISION NAME -> { enabled: boolean }
-// app2 also reads window.leaguesByName (full map)
+let fields = [], specialActivities = [];
+
+let timeTemplates = []; // [{start,end,divisions:[]}]
+let activityDuration = 30;
+// NOTE: Scheduling state (scheduleAssignments, unifiedTimes, divisionActiveRows) 
+// is now primarily managed by app2.js, but these arrays are
+// retained for utility functions.
+let unifiedTimes = []; // [{start:Date,end:Date,label:string}]
+let divisionActiveRows = {}; // { divName: Set(rowIndices) }
+
+
+const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
+let colorIndex = 0;
+const commonActivities = ["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
+
+// Expose internal variable to the window for use by other modules (league.js, daily_activities.js)
+window.divisions = divisions;
+window.availableDivisions = availableDivisions;
+window.fields = fields;
+window.specialActivities = specialActivities;
+window.timeTemplates = timeTemplates;
+
+
+// keep in sync with <select id="activityDuration">
+document.getElementById("activityDuration").onchange = function() {
+  activityDuration = parseInt(this.value, 10);
+};
 
 // -------------------- Helpers --------------------
-function publishDivisionToggleMap() {
-  const divMap = {};
-  Object.values(leaguesByName).forEach(lg => {
-    if (lg?.enabled && Array.isArray(lg.divisions)) {
-      lg.divisions.forEach(d => { if (d) divMap[d] = { enabled: true }; });
+function makeEditable(el, save) {
+  el.ondblclick = e => {
+    e.stopPropagation();
+    const old = el.textContent;
+    const input = document.createElement("input");
+    input.type = "text"; input.value = old;
+    el.replaceWith(input); input.focus();
+    function done() {
+      const val = input.value.trim();
+      if (val && val !== old) save(val);
+      el.textContent = val || old; input.replaceWith(el);
     }
-  });
-  window.leagues = divMap;
-}
-
-function saveLeagues() {
-  localStorage.setItem("leagues", JSON.stringify(leaguesByName));
-  window.leaguesByName = leaguesByName; // publish full map
-  publishDivisionToggleMap();
-}
-
-function loadLeagues() {
-  const stored = localStorage.getItem("leagues");
-  leaguesByName = stored ? (JSON.parse(stored) || {}) : {};
-  Object.keys(leaguesByName).forEach(name => {
-    const l = leaguesByName[name] || {};
-    if (typeof l.enabled === "undefined") l.enabled = false;
-    l.divisions = Array.isArray(l.divisions) ? l.divisions : [];
-    l.sports    = Array.isArray(l.sports)    ? l.sports    : [];
-    l.teams     = Array.isArray(l.teams)     ? l.teams     : [];
-    leaguesByName[name] = l;
-  });
-  window.leaguesByName = leaguesByName; // publish full map
-  publishDivisionToggleMap();
-}
-
-// -------------------- UI --------------------
-function initLeaguesTab() {
-  const leaguesContainer = document.getElementById("leaguesContainer");
-  if (!leaguesContainer) return;
-  leaguesContainer.innerHTML = "";
-
-  const addLeagueDiv = document.createElement("div");
-  addLeagueDiv.style.marginBottom = "15px";
-
-  const newLeagueInput = document.createElement("input");
-  newLeagueInput.placeholder = "Enter new league name";
-  newLeagueInput.style.marginRight = "8px";
-
-  const addLeagueBtn = document.createElement("button");
-  addLeagueBtn.textContent = "Add League";
-  addLeagueBtn.onclick = () => {
-    const name = newLeagueInput.value.trim();
-    if (name !== "" && !leaguesByName[name]) {
-      leaguesByName[name] = { enabled: false, divisions: [], sports: [], teams: [] };
-      newLeagueInput.value = "";
-      saveLeagues();
-      initLeaguesTab();
-    }
+    input.onblur = done; input.onkeyup = e => { if (e.key === "Enter") done(); };
   };
-  newLeagueInput.addEventListener("keypress", e => { if (e.key === "Enter") addLeagueBtn.click(); });
+}
 
-  addLeagueDiv.appendChild(newLeagueInput);
-  addLeagueDiv.appendChild(addLeagueBtn);
-  leaguesContainer.appendChild(addLeagueDiv);
+function parseTime(str) {
+  if (!str) return null;
+  const m = str.match(/^(\d{1,2}):(\d{2})(\s*)?(AM|PM)$/i);
+  if (!m) return null;
+  let h = parseInt(m[1],10), min = parseInt(m[2],10), ap = m[4].toUpperCase();
+  if (ap === "PM" && h !== 12) h += 12; if (ap === "AM" && h === 12) h = 0;
+  return new Date(0,0,0,h,min);
+}
 
-  const sourceDivs = Array.isArray(window.availableDivisions) && window.availableDivisions.length > 0
-    ? window.availableDivisions
-    : Object.keys(window.divisions || {});
-    
-  Object.keys(leaguesByName).forEach(leagueName => {
-    const leagueData = leaguesByName[leagueName];
+function fmtTime(d) {
+  let h = d.getHours(), m = d.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12;
+  return `${h}:${m} ${ap}`;
+}
 
-    const section = document.createElement("div");
-    section.className = "league-section";
-    section.style.border = "1px solid #ccc";
-    section.style.padding = "10px";
-    section.style.marginBottom = "12px";
-    section.style.borderRadius = "8px";
-    section.style.background = "#fafafa";
-    section.style.opacity = leagueData.enabled ? "1" : "0.85";
+// -------------------- Tabs --------------------
+// This function is now defined in index.html in the <script> tag
+// window.showTab = showTab; 
 
-    const header = document.createElement("div");
-    header.style.display = "flex";
-    header.style.justifyContent = "space-between";
-    header.style.alignItems = "center";
-    header.style.gap = "8px";
 
-    const leftHeader = document.createElement("div");
-    leftHeader.style.display = "flex";
-    leftHeader.style.alignItems = "center";
-    leftHeader.style.gap = "10px";
+// -------------------- Bunks --------------------
+function addBunk() {
+  const i = document.getElementById("bunkInput");
+  const name = i.value.trim();
+  if (!name) return;
 
-    const title = document.createElement("h3");
-    title.textContent = leagueName;
-    title.style.margin = "0";
+  // Prevent duplicates (case-insensitive)
+  const exists = bunks.some(b => b.toLowerCase() === name.toLowerCase());
+  if (exists) {
+    alert("That bunk already exists!");
+    i.value = "";
+    return;
+  }
+  
+  bunks.push(name);
+  saveData();
+  i.value = "";
+  updateUnassigned();
+  window.updateTable?.();
+}
+document.getElementById("addBunkBtn").onclick = addBunk;
+document.getElementById("bunkInput").addEventListener("keyup", e => { if (e.key === "Enter") addBunk(); });
 
-    // toggle
-    const toggleWrap = document.createElement("label");
-    toggleWrap.style.display = "inline-flex";
-    toggleWrap.style.alignItems = "center";
-    toggleWrap.style.gap = "8px";
-    toggleWrap.style.cursor = "pointer";
-    toggleWrap.title = "Enable/Disable this league";
-    toggleWrap.style.position = "relative";
-
-    const toggleText = document.createElement("span");
-    toggleText.textContent = leagueData.enabled ? "Enabled" : "Disabled";
-
-    const toggle = document.createElement("input");
-    toggle.type = "checkbox";
-    toggle.checked = !!leagueData.enabled;
-    Object.assign(toggle.style, {
-      appearance: "none",
-      width: "44px",
-      height: "24px",
-      borderRadius: "999px",
-      position: "relative",
-      background: toggle.checked ? "#22c55e" : "#d1d5db",
-      transition: "background 0.15s ease",
-      outline: "none",
-      border: "1px solid #9ca3af"
-    });
-
-    const knob = document.createElement("span");
-    Object.assign(knob.style, {
-      position: "absolute",
-      top: "50%",
-      transform: "translateY(-50%)",
-      left: toggle.checked ? "24px" : "2px",
-      width: "20px",
-      height: "20px",
-      borderRadius: "50%",
-      background: "#fff",
-      boxShadow: "0 1px 2px rgba(0,0,0,0.3)",
-      transition: "left 0.15s ease"
-    });
-
-    toggle.addEventListener("change", () => {
-      leagueData.enabled = toggle.checked;
-      toggle.style.background = toggle.checked ? "#22c55e" : "#d1d5db";
-      knob.style.left = toggle.checked ? "24px" : "2px";
-      toggleText.textContent = toggle.checked ? "Enabled" : "Disabled";
-      section.style.opacity = leagueData.enabled ? "1" : "0.85";
-      saveLeagues();
-    });
-
-    toggleWrap.appendChild(toggle);
-    toggleWrap.appendChild(knob);
-    toggleWrap.appendChild(toggleText);
-
-    const deleteBtn = document.createElement("button");
-    deleteBtn.textContent = "🗑️";
-    deleteBtn.title = "Delete League";
-    deleteBtn.onclick = () => {
-      if (confirm(`Delete ${leagueName}?`)) {
-        delete leaguesByName[leagueName];
-        saveLeagues();
-        initLeaguesTab();
-      }
-    };
-
-    leftHeader.appendChild(title);
-    leftHeader.appendChild(toggleWrap);
-    header.appendChild(leftHeader);
-    header.appendChild(deleteBtn);
-    section.appendChild(header);
-
-    // Divisions
-    const divTitle = document.createElement("p");
-    divTitle.textContent = "Divisions in this League:";
-    divTitle.style.marginBottom = "6px";
-    section.appendChild(divTitle);
-
-    const divContainer = document.createElement("div");
-    divContainer.className = "division-push-buttons";
-    divContainer.style.display = "flex";
-    divContainer.style.flexWrap = "wrap";
-    divContainer.style.gap = "6px";
-
-    if (sourceDivs.length === 0) {
-      const note = document.createElement("div");
-      note.textContent = "No divisions found. Add divisions in Setup.";
-      note.style.fontStyle = "italic";
-      note.style.opacity = "0.7";
-      section.appendChild(note);
-    }
-
-    sourceDivs.forEach(divName => {
-      const divBtn = document.createElement("button");
-      divBtn.textContent = divName;
-      divBtn.className = "push-btn";
-
-      const active = leagueData.divisions.includes(divName);
-      const divColor = window.divisions?.[divName]?.color || "#ccc";
-      divBtn.style.backgroundColor = active ? divColor : "white";
-      divBtn.style.color = active ? "white" : "black";
-      divBtn.style.border = `2px solid ${divColor}`;
-      divBtn.style.borderRadius = "20px";
-      divBtn.style.padding = "6px 10px";
-      divBtn.style.fontWeight = "500";
-      divBtn.style.cursor = "pointer";
-      divBtn.style.transition = "all 0.15s ease";
-
-      divBtn.onmouseenter = () => { if (!active) divBtn.style.backgroundColor = "#f3f3f3"; };
-      divBtn.onmouseleave = () => { if (!active) divBtn.style.backgroundColor = "white"; };
-
-      divBtn.onclick = () => {
-        const idx = leagueData.divisions.indexOf(divName);
-        if (idx >= 0) leagueData.divisions.splice(idx, 1);
-        else leagueData.divisions.push(divName);
-        saveLeagues();
-        initLeaguesTab();
-      };
-
-      divContainer.appendChild(divBtn);
-    });
-    section.appendChild(divContainer);
-
-    // Sports
-    const sportsTitle = document.createElement("p");
-    sportsTitle.textContent = "League Sports:";
-    sportsTitle.style.margin = "10px 0 6px";
-    section.appendChild(sportsTitle);
-
-    const sportsContainer = document.createElement("div");
-    const sportsList = ["Basketball", "Hockey", "Volleyball", "Soccer", "Kickball", "Punchball", "Baseball"];
-    sportsList.forEach(sport => {
-      const btn = document.createElement("button");
-      btn.textContent = sport;
-      const active = leagueData.sports.includes(sport);
-      btn.style.margin = "2px";
-      btn.style.padding = "6px 10px";
-      btn.style.borderRadius = "20px";
-      btn.style.cursor = "pointer";
-      btn.style.border = "2px solid #007BFF";
-      btn.style.backgroundColor = active ? "#007BFF" : "white";
-      btn.style.color = active ? "white" : "black";
-      btn.onclick = () => {
-        const idx = leagueData.sports.indexOf(sport);
-        if (idx >= 0) leagueData.sports.splice(idx, 1);
-        else leagueData.sports.push(sport);
-        saveLeagues();
-        initLeaguesTab();
-      };
-      sportsContainer.appendChild(btn);
-    });
-
-    const customSportInput = document.createElement("input");
-    customSportInput.placeholder = "Other sport";
-    customSportInput.style.marginLeft = "6px";
-    customSportInput.onkeypress = e => {
-      if (e.key === "Enter" && customSportInput.value.trim() !== "") {
-        leagueData.sports.push(customSportInput.value.trim());
-        customSportInput.value = "";
-        saveLeagues();
-        initLeaguesTab();
-      }
-    };
-    sportsContainer.appendChild(customSportInput);
-    section.appendChild(sportsContainer);
-
-    // Teams
-    const teamTitle = document.createElement("p");
-    teamTitle.textContent = "Teams:";
-    teamTitle.style.margin = "10px 0 6px";
-    section.appendChild(teamTitle);
-
-    const teamInput = document.createElement("input");
-    teamInput.placeholder = "Enter team name";
-    teamInput.style.marginRight = "8px";
-    teamInput.onkeypress = e => {
-      if (e.key === "Enter") {
-        const val = (teamInput.value || "").trim();
-        if (!val) return;
-        if (!leagueData.teams.includes(val)) {
-          leagueData.teams.push(val);
-          saveLeagues();
-          initLeaguesTab();
+function updateUnassigned() {
+  const c = document.getElementById("unassignedBunks");
+  c.innerHTML = "";
+  bunks.forEach(b => {
+    const span = document.createElement("span");
+    span.textContent = b;
+    span.className = "bunk-button";
+    let assigned = null;
+    for (const d in divisions) { if (divisions[d].bunks.includes(b)) assigned = d; }
+    if (assigned) { span.style.backgroundColor = divisions[assigned].color; span.style.color = "#fff"; }
+    span.onclick = () => {
+      if (selectedDivision && (!assigned || assigned !== selectedDivision)) {
+        for (const d in divisions) {
+          const i = divisions[d].bunks.indexOf(b);
+          if (i !== -1) divisions[d].bunks.splice(i, 1);
         }
-        teamInput.value = "";
+        divisions[selectedDivision].bunks.push(b);
+        saveData();
+        updateUnassigned();
+        window.updateTable?.();
+      } else if (!selectedDivision) {
+        alert("Select a division first!");
       }
     };
-    section.appendChild(teamInput);
-
-    const addTeamBtn = document.createElement("button");
-    addTeamBtn.textContent = "Add Team";
-    addTeamBtn.onclick = () => {
-      const val = (teamInput.value || "").trim();
-      if (!val) return;
-      if (!leagueData.teams.includes(val)) {
-        leagueData.teams.push(val);
-        saveLeagues();
-        initLeaguesTab();
+    makeEditable(span, newName => {
+      if (!newName.trim()) return;
+      const idx = bunks.indexOf(b);
+      if (idx !== -1) bunks[idx] = newName;
+      for (const d of Object.values(divisions)) {
+        const i = d.bunks.indexOf(b);
+        if (i !== -1) d.bunks[i] = newName;
       }
-      teamInput.value = "";
-    };
-    section.appendChild(addTeamBtn);
-
-    const teamListContainer = document.createElement("div");
-    teamListContainer.style.marginTop = "6px";
-    teamListContainer.style.display = "flex";
-    teamListContainer.style.flexWrap = "wrap";
-    teamListContainer.style.gap = "6px";
-
-    (leagueData.teams || []).forEach(team => {
-      const teamBtn = document.createElement("button");
-      teamBtn.textContent = team;
-      teamBtn.style.padding = "6px 10px";
-      teamBtn.style.border = "1px solid #333";
-      teamBtn.style.borderRadius = "20px";
-      teamBtn.style.cursor = "pointer";
-      teamBtn.style.backgroundColor = "#f9f9f9";
-      teamBtn.onclick = () => {
-        if (confirm(`Remove ${team} from ${leagueName}?`)) {
-          leagueData.teams = leagueData.teams.filter(t => t !== team);
-          saveLeagues();
-          initLeaguesTab();
-        }
-      };
-      teamListContainer.appendChild(teamBtn);
+      
+      // We must also update scheduleAssignments IF it's loaded for a day
+      if (window.scheduleAssignments && window.scheduleAssignments[b]) {
+        window.scheduleAssignments[newName] = window.scheduleAssignments[b];
+        delete window.scheduleAssignments[b];
+        // Note: This only affects the *loaded* day. We need to save it.
+        window.saveCurrentDailyData?.("scheduleAssignments", window.scheduleAssignments);
+      }
+      saveData();
+      updateUnassigned();
+      window.updateTable?.();
     });
-    section.appendChild(teamListContainer);
-
-    leaguesContainer.appendChild(section);
+    c.appendChild(span);
   });
 }
 
-// Init
-loadLeagues();
-document.addEventListener("DOMContentLoaded", () => {
-  if (document.getElementById("leaguesContainer")) initLeaguesTab();
+// -------------------- Divisions --------------------
+function addDivision() {
+  const i = document.getElementById("divisionInput");
+  if (i.value.trim() === "") return;
+  const name = i.value.trim();
+  if (!availableDivisions.includes(name)) {
+    const color = defaultColors[colorIndex % defaultColors.length]; colorIndex++;
+    
+    availableDivisions.push(name);
+    window.availableDivisions = availableDivisions; // Update global
+  
+    divisions[name] = { bunks: [], color, start: null, end: null };
+    
+    i.value = "";
+    saveData();
+    setupDivisionButtons(); 
+    window.initLeaguesTab?.(); // Notify league.js
+    window.DailyActivities?.onDivisionsChanged?.(); // Notify fixed activities
+    window.updateTable?.();
+    renderTimeTemplates();
+  }
+}
+document.getElementById("addDivisionBtn").onclick = addDivision;
+document.getElementById("divisionInput").addEventListener("keyup", e => { if (e.key === "Enter") addDivision(); });
+
+function setupDivisionButtons() {
+  const cont = document.getElementById("divisionButtons"); cont.innerHTML = "";
+  const colorEnabled = document.getElementById("enableColor").checked;
+  availableDivisions.forEach(name => {
+    const obj = divisions[name];
+    const wrap = document.createElement("div"); wrap.className = "divisionWrapper";
+    const span = document.createElement("span"); span.textContent = name; span.className = "bunk-button";
+    span.style.backgroundColor = colorEnabled ? obj.color : "transparent";
+    span.style.color = colorEnabled ? "#fff" : "inherit";
+    span.onclick = () => { 
+        selectedDivision = name; 
+        cont.querySelectorAll('span.bunk-button').forEach(el => el.classList.remove("selected"));
+        span.classList.add("selected"); 
+        saveData(); // Save selectedDivision
+    };
+    // Re-select if it was selected
+    if (selectedDivision === name) span.classList.add("selected");
+    
+    makeEditable(span, newName => {
+      divisions[newName] = divisions[name]; delete divisions[name];
+      availableDivisions[availableDivisions.indexOf(name)] = newName;
+      window.availableDivisions = availableDivisions; // Update global
+      
+      if (selectedDivision === name) selectedDivision = newName;
+      
+      saveData();
+      setupDivisionButtons(); 
+      window.initLeaguesTab?.(); 
+      window.DailyActivities?.onDivisionsChanged?.(); 
+      renderTimeTemplates(); 
+      window.updateTable?.();
+    });
+    wrap.appendChild(span);
+    const col = document.createElement("input"); col.type = "color";
+    col.value = obj.color; col.className = "colorPicker";
+    col.oninput = e => { 
+      obj.color = e.target.value; 
+      if (colorEnabled) { span.style.backgroundColor = e.target.value; span.style.color = "#fff"; } 
+      saveData(); 
+      window.updateTable?.(); 
+      renderTimeTemplates(); 
+      window.DailyActivities?.onDivisionsChanged?.(); 
+    };
+    wrap.appendChild(col);
+    cont.appendChild(wrap);
+  });
+}
+document.getElementById("enableColor").addEventListener("change", setupDivisionButtons);
+
+// -------------------- Time Templates --------------------
+function addTimeTemplate() {
+  const start = document.getElementById("timeStartInput").value.trim();
+  const end = document.getElementById("timeEndInput").value.trim();
+  if (!start || !end) return;
+  timeTemplates.push({ start, end, divisions: [] });
+  document.getElementById("timeStartInput").value = "";
+  document.getElementById("timeEndInput").value = "";
+  saveData();
+  renderTimeTemplates();
+}
+
+function renderTimeTemplates() {
+  const cont = document.getElementById("timeTemplates"); cont.innerHTML = "";
+  timeTemplates.forEach((tpl) => {
+    const wrap = document.createElement("div"); wrap.className = "fieldWrapper";
+    const label = document.createElement("span"); label.textContent = `${tpl.start} - ${tpl.end}`;
+    wrap.appendChild(label);
+    availableDivisions.forEach(div => {
+      const btn = document.createElement("button");
+      btn.textContent = div; btn.className = "bunk-button";
+      if (tpl.divisions.includes(div)) { btn.style.backgroundColor = divisions[div].color; btn.style.color = "#fff"; }
+      else { btn.style.backgroundColor = "#fff"; btn.style.color = "#000"; }
+      btn.onclick = () => {
+        if (tpl.divisions.includes(div)) {
+          tpl.divisions = tpl.divisions.filter(d => d !== div);
+        } else {
+          tpl.divisions.push(div);
+        }
+        saveData();
+        applyTemplatesToDivisions();
+        renderTimeTemplates();
+      };
+      wrap.appendChild(btn);
+    });
+    cont.appendChild(wrap);
+  });
+  applyTemplatesToDivisions();
+}
+
+function applyTemplatesToDivisions() {
+  availableDivisions.forEach(div => {
+    let match = null;
+    for (let i = timeTemplates.length - 1; i >= 0; i--) {
+      if (timeTemplates[i].divisions.includes(div)) { match = timeTemplates[i]; break; }
+    }
+    if (match) { divisions[div].start = match.start; divisions[div].end = match.end; }
+  });
+}
+
+// -------------------- Fields / Specials --------------------
+function addField() {
+  const i = document.getElementById("fieldInput");
+  const n = i.value.trim();
+  if (n) {
+    fields.push({ name: n, activities: [], available: true });
+    i.value = "";
+    saveData();
+    renderFields();
+  }
+}
+document.getElementById("addFieldBtn").onclick = addField;
+document.getElementById("fieldInput").addEventListener("keyup", e => { if (e.key === "Enter") addField(); });
+
+function renderFields() {
+  const c = document.getElementById("fieldList"); c.innerHTML = "";
+  fields.forEach(f => {
+    const w = document.createElement("div"); w.className = "fieldWrapper"; if (!f.available) w.classList.add("unavailable");
+    const t = document.createElement("span"); t.className = "fieldTitle"; t.textContent = f.name;
+    makeEditable(t, newName => { f.name = newName; saveData(); renderFields(); });
+    w.appendChild(t);
+    const tog = document.createElement("label"); tog.className = "switch";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = f.available;
+    cb.onchange = () => { f.available = cb.checked; saveData(); renderFields(); };
+    const sl = document.createElement("span"); sl.className = "slider";
+    tog.appendChild(cb); tog.appendChild(sl); w.appendChild(tog);
+    const bw = document.createElement("div"); bw.style.marginTop = "8px";
+    commonActivities.forEach(act => {
+      const b = document.createElement("button"); b.textContent = act; b.className = "activity-button";
+      if (f.activities.includes(act)) b.classList.add("active");
+      b.onclick = () => { 
+        if (f.activities.includes(act)) f.activities = f.activities.filter(a => a !== act); 
+        else f.activities.push(act); 
+        saveData(); renderFields(); 
+      };
+      bw.appendChild(b);
+    });
+    w.appendChild(bw);
+    const other = document.createElement("input"); other.placeholder = "Other activity";
+    other.onkeyup = e => {
+      if (e.key === "Enter" && other.value.trim()) {
+        const v = other.value.trim(); 
+        if (!f.activities.includes(v)) f.activities.push(v);
+        other.value = ""; saveData(); renderFields();
+      }
+    };
+    w.appendChild(other);
+    if (f.activities.length > 0) {
+      const p = document.createElement("p"); p.style.marginTop = "6px"; p.textContent = "Activities: " + f.activities.join(", ");
+      w.appendChild(p);
+    }
+    c.appendChild(w);
+  });
+}
+
+function addSpecial() {
+  const i = document.getElementById("specialInput");
+  const n = i.value.trim();
+  if (n) {
+    specialActivities.push({ name: n, available: true });
+    i.value = "";
+    saveData();
+    renderSpecials();
+  }
+}
+document.getElementById("addSpecialBtn").onclick = addSpecial;
+document.getElementById("specialInput").addEventListener("keyup", e => { if (e.key === "Enter") addSpecial(); });
+
+function renderSpecials() {
+  const c = document.getElementById("specialList"); c.innerHTML = "";
+  specialActivities.forEach(s => {
+    const w = document.createElement("div"); w.className = "fieldWrapper"; if (!s.available) w.classList.add("unavailable");
+    const t = document.createElement("span"); t.className = "fieldTitle"; t.textContent = s.name;
+    makeEditable(t, newName => { s.name = newName; saveData(); renderSpecials(); });
+    w.appendChild(t);
+    const tog = document.createElement("label"); tog.className = "switch";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = s.available;
+    cb.onchange = () => { s.available = cb.checked; saveData(); renderSpecials(); };
+    const sl = document.createElement("span"); sl.className = "slider";
+    tog.appendChild(cb); tog.appendChild(sl); w.appendChild(tog);
+    c.appendChild(w);
+  });
+}
+
+// -------------------- Generate Times --------------------
+function generateTimes() {
+  const inc = parseInt(document.getElementById("increment").value, 10);
+  applyTemplatesToDivisions();
+  
+  const starts = availableDivisions.map(d => parseTime(divisions[d].start)).filter(Boolean);
+  const ends   = availableDivisions.map(d => parseTime(divisions[d].end)).filter(Boolean);
+  if (starts.length === 0 || ends.length === 0) { alert("Please set time templates for divisions first."); return; }
+  
+  const earliest = new Date(Math.min(...starts.map(d => d.getTime())));
+  const latest   = new Date(Math.max(...ends.map(d => d.getTime())));
+  
+  unifiedTimes = [];
+  let cur = new Date(earliest);
+  while (cur < latest) {
+    let nxt = new Date(cur.getTime() + inc*60000);
+    if (nxt > latest) nxt = latest;
+    unifiedTimes.push({ start:new Date(cur), end:new Date(nxt), label:`${fmtTime(cur)} - ${fmtTime(nxt)}` });
+    cur = nxt;
+  }
+  
+  divisionActiveRows = {};
+  availableDivisions.forEach(div => {
+    const s = parseTime(divisions[div].start), e = parseTime(divisions[div].end);
+    const rows = new Set();
+    unifiedTimes.forEach((t, idx) => {
+      if (s && e && t.start >= s && t.start < e) rows.add(idx);
+    });
+    divisionActiveRows[div] = rows;
+  });
+  
+  // Expose the schedule times globally for app2.js
+  window.unifiedTimes = unifiedTimes;
+  window.divisionActiveRows = divisionActiveRows;
+  
+  // handoff to scheduling
+  window.assignFieldsToBunks?.();
+  // Note: initScheduleSystem() is *not* called here, assignFieldsToBunks handles saving and rendering.
+}
+
+// -------------------- Local Storage (UPDATED) --------------------
+function saveData() {
+  // This now saves to the *Global Settings* object
+  const data = { bunks, divisions, availableDivisions, selectedDivision, fields, specialActivities, timeTemplates };
+  window.saveGlobalSettings?.("app1", data);
+}
+
+function loadData() {
+  // This now loads from the *Global Settings* object
+  const data = window.loadGlobalSettings?.().app1 || {};
+  
+  try {
+    bunks = data.bunks || [];
+    divisions = data.divisions || {};
+    
+    // Ensure availableDivisions is derived from divisions data
+    availableDivisions = Object.keys(divisions);
+    window.availableDivisions = availableDivisions;
+    // Load saved order if it exists
+    if (data.availableDivisions) availableDivisions = data.availableDivisions; 
+
+    selectedDivision = data.selectedDivision || null;
+    fields = data.fields || [];
+    specialActivities = data.specialActivities || [];
+    timeTemplates = data.timeTemplates || [];
+  } catch (e) { console.error("Error loading data:", e); }
+}
+
+// REMOVED: The "eraseAllBtn" click handler is now in calendar.js
+// document.getElementById("eraseAllBtn")?.addEventListener("click", ...);
+
+// -------------------- Init --------------------
+window.addEventListener("DOMContentLoaded", () => {
+  loadData();
+  updateUnassigned();
+  setupDivisionButtons();
+  renderFields();
+  renderSpecials();
+  renderTimeTemplates();
 });
-window.getLeaguesByName = () => leaguesByName;
-window.loadLeagues = loadLeagues;
-window.saveLeagues = saveLeagues;
+
+// Expose internal objects for other modules to use (Data Source for the whole app)
+window.getDivisions = () => divisions; 
+window.getFields = () => fields;
+window.getSpecials = () => specialActivities;
