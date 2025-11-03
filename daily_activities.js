@@ -13,6 +13,7 @@
   function load() {
     try {
       // UPDATED: Load from global settings
+      // Relies on calendar.js migration logic to find old keys once
       const raw = window.loadGlobalSettings?.().fixedActivities;
       let parsed = Array.isArray(raw) ? raw : [];
       
@@ -368,7 +369,7 @@
    */
   function prePlace(){
     const summary = [];
-    if(!Array.isArray(window.unifiedTimes) || unifiedTimes.length===0) return summary;
+    if(!Array.isArray(window.unifiedTimes) || window.unifiedTimes.length===0) return summary;
   
     window.divisionActiveRows = window.divisionActiveRows || {};
   
@@ -378,9 +379,10 @@
       divBunks[d] = b;
     });
   
-    // UPDATED: Must load the 'fixedActivities' from the global store
-    // This function runs *after* app1.js loads, but *before* this file's init()
-    // so we need to call load() again to be safe.
+    // UPDATED: This function is called by app2.js *after* app1.js loads
+    // and *after* calendar.js runs its migration.
+    // The global `fixedActivities` variable should be correctly populated by init().
+    // We call load() one more time just to be absolutely safe.
     load();
     
     fixedActivities.filter(x=>x.enabled).forEach(item => {
@@ -443,7 +445,6 @@
   // Expose window.DailyActivities immediately.
   window.DailyActivities = { init, onDivisionsChanged, prePlace, getAll, setAll };
   
-  // Auto-init on DOMContentLoaded
-  // (This is now handled by index.html's boot() function)
+  // Auto-init on DOMContentLoaded (Handled by index.html's boot() script)
   // document.addEventListener('DOMContentLoaded', init);
 })();
