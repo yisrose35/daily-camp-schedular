@@ -385,7 +385,6 @@ function generateTimes() {
   
   // handoff to scheduling
   window.assignFieldsToBunks?.();
-  // Note: initScheduleSystem() is *not* called here, assignFieldsToBunks handles saving and rendering.
 }
 
 // -------------------- Local Storage (UPDATED) --------------------
@@ -397,16 +396,15 @@ function saveData() {
 
 function loadData() {
   // This now loads from the *Global Settings* object
+  // It relies on calendar.js's migration logic to pull in old data once
   const data = window.loadGlobalSettings?.().app1 || {};
   
   try {
     bunks = data.bunks || [];
     divisions = data.divisions || {};
     
-    // Ensure availableDivisions is derived from divisions data
     availableDivisions = Object.keys(divisions);
     window.availableDivisions = availableDivisions;
-    // Load saved order if it exists
     if (data.availableDivisions) availableDivisions = data.availableDivisions; 
 
     selectedDivision = data.selectedDivision || null;
@@ -416,8 +414,7 @@ function loadData() {
   } catch (e) { console.error("Error loading data:", e); }
 }
 
-// REMOVED: The "eraseAllBtn" click handler is now in calendar.js
-// document.getElementById("eraseAllBtn")?.addEventListener("click", ...);
+// "eraseAllBtn" is now handled by calendar.js
 
 // -------------------- Init --------------------
 window.addEventListener("DOMContentLoaded", () => {
