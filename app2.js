@@ -1,7 +1,7 @@
 // -------------------- app2.js --------------------
 // Leagues render as merged cells per division+slot with per-matchup sports.
 // Fixed activities show names properly; early/late times grey per division.
-// Activity length is INDEPENDENT of the grid increment via rowSpan.
+// Activity length is INDEPENDENT of the grid increment via rowSpan, with strict per-division alignment.
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -41,7 +41,8 @@ function loadActiveFixedActivities() {
   }
 }
 function findRowsForRange(startStr, endStr) {
-  if (!Array.isArray(window.unifiedTimes) || window.unifiedTimes.length === 0) return [];
+  if (!Array.isArray(window.unifiedTimes) || window.unifiedTimes.length === 0)
+    return [];
   const startMin = parseTimeToMinutes(startStr),
     endMin = parseTimeToMinutes(endStr);
   if (startMin == null || endMin == null || endMin <= startMin) return [];
@@ -346,7 +347,6 @@ function assignFieldsToBunks() {
 
   for (let s = 0; s < unifiedTimes.length; s++) {
     for (const div of availableDivisions) {
-      // Skip league start rows entirely for general activities in this division
       if (window.leagueAssignments?.[div]?.[s]) continue;
 
       const active = divisionActiveRows?.[div]?.has(s) ?? true;
@@ -366,7 +366,6 @@ function assignFieldsToBunks() {
           disallowedByDiv[div]
         );
 
-        // Start
         scheduleAssignments[bunk][s] = {
           field: fieldLabel(pick.field),
           sport: pick.sport,
@@ -374,7 +373,6 @@ function assignFieldsToBunks() {
           span
         };
 
-        // Continuations
         for (let k = 1; k < span; k++) {
           const rr = s + k;
           if (rr >= unifiedTimes.length) break;
@@ -388,7 +386,7 @@ function assignFieldsToBunks() {
   saveSchedule();
 }
 
-// ===== RENDERING (per-division grey-out + rowSpan) =====
+// ===== RENDERING (per-division grey-out + rowSpan + alignment guards) =====
 function updateTable() {
   const container = document.getElementById("schedule");
   if (!container) return;
@@ -427,19 +425,17 @@ function updateTable() {
   thead.appendChild(tr2);
   table.appendChild(thead);
 
-  // Precompute division time ranges
   const tbody = document.createElement("tbody");
+
+  // Precompute division time ranges and league continuation sets
   const divTimeRanges = {};
+  const spanDefault = desiredSpanLen();
+  const leagueContinuationRowsByDiv = {};
   availableDivisions.forEach((div) => {
     const s = parseTimeToMinutes(divisions[div]?.start);
     const e = parseTimeToMinutes(divisions[div]?.end);
     divTimeRanges[div] = { start: s, end: e };
-  });
 
-  // Build league continuation sets for quick checks
-  const spanDefault = desiredSpanLen();
-  const leagueContinuationRowsByDiv = {};
-  availableDivisions.forEach((div) => {
     leagueContinuationRowsByDiv[div] = new Set();
     const starts = window.leagueAssignments?.[div]
       ? Object.keys(window.leagueAssignments[div])
@@ -465,8 +461,6 @@ function updateTable() {
         unifiedTimes[i].end.getMinutes()) /
       2;
 
-    // Each division contributes either: a grey cell, a league start cell (rowSpanned),
-    // nothing (because covered by a previous row's league rowSpan), or N bunk cells.
     availableDivisions.forEach((div) => {
       const { start, end } = divTimeRanges[div];
       const outside =
@@ -475,12 +469,10 @@ function updateTable() {
       const leagueContinuing = leagueContinuationRowsByDiv[div]?.has(i);
       const bunks = divisions[div]?.bunks || [];
 
-      // Covered by a league rowSpan that started earlier — append nothing for this division.
-      if (leagueContinuing) {
-        return; // move to next division; the spanning cell from above occupies these columns
-      }
+      // Covered by an earlier league rowSpan — add nothing for this division.
+      if (leagueContinuing) return;
 
-      // Outside division time: add a single grey cell covering the division's columns.
+      // Outside hours — one grey cell spanning the division's columns.
       if (outside) {
         const td = document.createElement("td");
         td.colSpan = bunks.length;
@@ -491,7 +483,7 @@ function updateTable() {
         return;
       }
 
-      // League starts here for this division
+      // League starts here — single merged cell for the whole division.
       if (leagueStart) {
         const td = document.createElement("td");
         td.colSpan = bunks.length;
@@ -507,22 +499,19 @@ function updateTable() {
         return;
       }
 
-      // Regular bunk cells for this division at this row
-      bunks.forEach((b) => {
+      // Regular bunk cells for this division.
+      let produced = 0;
+      (bunks || []).forEach((b) => {
         const entry = scheduleAssignments[b]?.[i];
-
-        // If this row is a continuation for this bunk, we skip making a td:
-        // the start-row cell has a rowSpan that visually covers this row.
-        if (entry?.continuation) return;
-
+        if (entry?.continuation) return; // covered by rowSpan
         const td = document.createElement("td");
+        produced++;
 
         if (!entry) {
           tr.appendChild(td);
           return;
         }
 
-        // Start cell: apply rowSpan
         if (!entry.continuation && entry.span && entry.span > 1) {
           td.rowSpan = entry.span;
         }
@@ -540,10 +529,21 @@ function updateTable() {
         }
         tr.appendChild(td);
       });
+
+      // 🔒 Alignment guard: if nothing rendered for this division (no starts and no explicit blanks),
+      // fill with empty placeholders to keep subsequent divisions aligned.
+      if (produced === 0 && bunks.length > 0) {
+        const td = document.createElement("td");
+        td.colSpan = bunks.length;
+        // Keep it visibly empty (no dash) to distinguish from "outside" grey.
+        td.innerHTML = "&nbsp;";
+        tr.appendChild(td);
+      }
     });
 
     tbody.appendChild(tr);
   }
+
   table.appendChild(tbody);
   container.appendChild(table);
 }
