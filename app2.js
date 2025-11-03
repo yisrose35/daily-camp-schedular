@@ -1,20 +1,6 @@
-// -------------------- app2.js (H2H Tuned) --------------------
-// Leagues render as merged cells per division+slot with per-matchup sports.
-// Fixed activities show names properly; early/late times grey per division.
-// FIX: Activity length now correctly uses 'activityDuration' instead of single increments.
-// FIX 2 (Aesthetic): Use rowspan to merge cells for multi-slot activities.
-// FIX 3 (Critical): Prevent general activities from OVERWRITING fixed activities.
-// FIX 4 (Critical): Prevent LEAGUE activities from overwriting *or* being fragmented.
-// (General activities are *allowed* to be fragmented by fixed activities).
-// FIX 5: Assign specific fields to leagues. Leagues get *priority* and reserve fields first.
-// FIX 6: Make general scheduler "smarter" to try all activities before leaving a slot blank.
-// FIX 7 (Corrected): Smart "Field-First" League Scheduling. Assigns most constrained
-//                   games first *within the first available time slot*.
-// FIX 8: Prevent bunks from repeating a *general* activity (sport or special).
-// FIX 9 (Tuned): Add Bunk-vs-Bunk (H2H) scheduling. Chance lowered to 10%.
-// FIX 10: Render H2H games in the table as "Sport Field vs Opponent".
-// FIX 11 (NEW/Tuned): Track Bunk-vs-Bunk pairings (e.g., 1v2) to limit to 1x per day.
-// FIX 12: Track *total* H2H games per bunk, limited to 2 per day.
+// -------------------- app2.js (Calendar-Aware) --------------------
+// (All logic from FIX 1 to FIX 12 is included)
+// (UPDATED to use calendar.js save/load)
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -52,14 +38,9 @@ function getActivityName(pick) {
 
 // ===== Fixed Activities =====
 function loadActiveFixedActivities() {
-  let raw = localStorage.getItem("fixedActivities_v2");
-  if (!raw) raw = localStorage.getItem("fixedActivities");
-  try {
-    const arr = JSON.parse(raw || "[]");
-    return Array.isArray(arr) ? arr.filter((a) => a && a.enabled) : [];
-  } catch {
-    return [];
-  }
+  // UPDATED: Load from global settings
+  const allFixed = window.loadGlobalSettings?.().fixedActivities || [];
+  return Array.isArray(allFixed) ? allFixed.filter((a) => a && a.enabled) : [];
 }
 function findRowsForRange(startStr, endStr) {
   if (!Array.isArray(window.unifiedTimes) || window.unifiedTimes.length === 0)
@@ -116,15 +97,8 @@ function prePlaceFixedActivities() {
 
 // ===== League Helpers =====
 function leaguesSnapshot() {
-  if (window.leaguesByName && Object.keys(window.leaguesByName).length > 0)
-    return window.leaguesByName;
-  try {
-    const raw = localStorage.getItem("leagues");
-    const obj = raw ? JSON.parse(raw) : {};
-    return obj && typeof obj === "object" ? obj : {};
-  } catch {
-    return {};
-  }
+  // UPDATED: Load from global settings
+  return window.loadGlobalSettings?.().leaguesByName || {};
 }
 function getEnabledLeaguesByDivision() {
   const result = {};
@@ -140,77 +114,28 @@ function getEnabledLeaguesByDivision() {
 }
 
 // ===== Round-Robin Generator =====
-(function () {
-  const KEY = "camp_league_round_state";
-  let state = {};
-  function load() {
-    try {
-      state = JSON.parse(localStorage.getItem(KEY) || "{}") || {};
-    } catch {
-      state = {};
-    }
-  }
-  function save() {
-    try {
-      localStorage.setItem(KEY, JSON.stringify(state));
-    } catch {}
-  }
-  function genRR(teams) {
-    if (!teams || teams.length < 2) return [];
-    const t = [...teams];
-    let bye = false;
-    if (t.length % 2 !== 0) {
-      t.push("BYE");
-      bye = true;
-    }
-    const fixed = t[0],
-      rot = t.slice(1),
-      rounds = t.length - 1,
-      out = [];
-    for (let r = 0; r < rounds; r++) {
-      const round = [];
-      round.push([fixed, rot[0]]);
-      for (let i = 1; i < t.length / 2; i++)
-        round.push([rot[i], rot[rot.length - i]]);
-      out.push(round);
-      rot.unshift(rot.pop());
-    }
-    if (bye)
-      return out.map((r) => r.filter((m) => m[0] !== "BYE" && m[1] !== "BYE"));
-    return out;
-  }
-  function get(leagueName, teams) {
-    if (!leagueName || !teams || teams.length < 2) return [];
-    load();
-    const cur = state[leagueName]?.currentRound ?? 0;
-    const full = genRR(teams);
-    if (full.length === 0) return [];
-    const today = full[cur];
-    state[leagueName] = { currentRound: (cur + 1) % full.length };
-    save();
-    return today;
-  }
-  window.getLeagueMatchups = get;
-  load();
-})();
+// This is now in league_scheduling.js
+// (function () { ... window.getLeagueMatchups = get; ... })();
 
-// ===== League Sport Rotation =====
-const SPORT_STATE_KEY = "camp_league_sport_rotation";
+// ===== League Sport Rotation (UPDATED) =====
+// const SPORT_STATE_KEY = "camp_league_sport_rotation"; // No longer used
 let leagueSportRotation = {};
 function loadLeagueSportRotation() {
   try {
-    leagueSportRotation =
-      JSON.parse(localStorage.getItem(SPORT_STATE_KEY) || "{}") || {};
+    // UPDATED: Load from the globally scoped daily object
+    if (window.currentDailyData && window.currentDailyData.leagueSportRotation) {
+        leagueSportRotation = window.currentDailyData.leagueSportRotation;
+    } else {
+        leagueSportRotation = {};
+    }
   } catch {
     leagueSportRotation = {};
   }
 }
 function saveLeagueSportRotation() {
   try {
-    localStorage.setItem(
-      SPORT_STATE_KEY,
-      JSON.stringify(leagueSportRotation)
-    );
+    // UPDATED: Save to the globally scoped daily object
+    window.saveCurrentDailyData?.("leagueSportRotation", leagueSportRotation);
   } catch {}
 }
 function assignSportsToMatchups(leagueName, matchups, sportsList) {
@@ -239,6 +164,29 @@ window.leagueAssignments = window.leagueAssignments || {};
 function assignFieldsToBunks() {
   window.scheduleAssignments = window.scheduleAssignments || {};
   window.leagueAssignments = {};
+  
+  // Note: 'fields' and 'divisions' are loaded globally from app1.js
+  // We can just use them.
+  const globalSettings = window.loadGlobalSettings?.() || {};
+  const app1Data = globalSettings.app1 || {};
+  
+  // Use the master lists from settings
+  const masterFields = app1Data.fields || [];
+  const masterDivisions = app1Data.divisions || {};
+  const masterAvailableDivs = app1Data.availableDivisions || [];
+  const masterSpecials = app1Data.specialActivities || [];
+  
+  // TODO: In the future, we will filter these master lists
+  // using window.currentDailyData.overrides
+  const availFields = masterFields.filter(f => f.available);
+  const availSpecials = masterSpecials.filter(s => s.available);
+  const availableDivisions = [...masterAvailableDivs];
+  const divisions = { ...masterDivisions };
+  
+  // Make sure these are globally available for prePlace() and renderTable()
+  window.availableDivisions = availableDivisions;
+  window.divisions = divisions;
+
 
   const inc = parseInt(document.getElementById("increment")?.value || "30", 10);
   const activityDuration = parseInt(
@@ -246,11 +194,6 @@ function assignFieldsToBunks() {
     10
   );
   const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
-
-  const availFields = fields.filter(
-    (f) => f?.available && Array.isArray(f.activities) && f.activities.length
-  );
-  const availSpecials = specialActivities.filter((s) => s?.available);
 
   // Create Field-Sport Inventory
   const fieldsBySport = {};
@@ -275,20 +218,22 @@ function assignFieldsToBunks() {
       sport: null,
     })),
   ];
-  // ===== FIX 9: Create list of H2H-eligible activities (sports only) =====
   const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
-  const H2H_CHANCE = 0.10; // Tuned down to 10%
-  // ====================================================================
+  const H2H_CHANCE = 0.10; 
 
-  if (!allActivities.length || !unifiedTimes.length) return;
+  if (!allActivities.length || !window.unifiedTimes || window.unifiedTimes.length === 0) {
+      console.warn("Cannot assign fields: No activities or unified times are set. Did you click 'Generate Schedule Times'?");
+      return;
+  }
 
   // Init grids
   scheduleAssignments = {};
   availableDivisions.forEach((d) =>
     (divisions[d]?.bunks || []).forEach(
-      (b) => (scheduleAssignments[b] = new Array(unifiedTimes.length))
+      (b) => (scheduleAssignments[b] = new Array(window.unifiedTimes.length))
     )
   );
+  window.scheduleAssignments = scheduleAssignments; // Expose for prePlace
 
   const blockedRowsByDiv = prePlaceFixedActivities();
 
@@ -307,10 +252,10 @@ function assignFieldsToBunks() {
     });
   });
 
-  // ===== FIX 8, 11, 12: Init Activity Histories =====
+  // Init Activity Histories
   const generalActivityHistory = {};
-  const h2hHistory = {}; // FIX 11 (Bunk vs Bunk)
-  const h2hGameCount = {}; // FIX 12 (Total per Bunk)
+  const h2hHistory = {};
+  const h2hGameCount = {};
   availableDivisions.forEach(div => {
       (divisions[div]?.bunks || []).forEach(b => { 
           generalActivityHistory[b] = new Set(); 
@@ -329,29 +274,27 @@ function assignFieldsToBunks() {
        }
     });
   });
-  // ===============================================
-
+  
   const enabledByDiv = getEnabledLeaguesByDivision();
   const takenLeagueSlots = new Set(); 
 
-  // --- ===== FIX 7 (Corrected): Smartest Field-First League Scheduling ===== ---
+  // --- Place Leagues ---
   for (const div of availableDivisions) {
     const lg = enabledByDiv[div];
     if (!lg) continue;
-    const actSet = divisionActiveRows?.[div];
+    const actSet = window.divisionActiveRows?.[div];
     const actSlots =
       actSet && actSet.size
         ? Array.from(actSet)
-        : unifiedTimes.map((_, i) => i);
+        : window.unifiedTimes.map((_, i) => i);
 
     const bunksInDiv = divisions[div]?.bunks || [];
     const firstBunk = bunksInDiv.length > 0 ? bunksInDiv[0] : null;
 
-    // 1. Find the *first available* time slot
     const candidates = actSlots.filter((s) => {
       for (let k = 0; k < spanLen; k++) {
         const slot = s + k;
-        if (slot >= unifiedTimes.length) return false;
+        if (slot >= window.unifiedTimes.length) return false;
         if (blockedRowsByDiv[div]?.has(slot)) return false;
         if (takenLeagueSlots.has(slot)) return false;
         if (firstBunk && scheduleAssignments[firstBunk]?.[slot])
@@ -364,7 +307,6 @@ function assignFieldsToBunks() {
 
     const chosenSlot = candidates[0]; 
 
-    // 2. Generate the games
     const teams = (lg.data.teams || [])
       .map((t) => String(t).trim())
       .filter(Boolean);
@@ -377,7 +319,6 @@ function assignFieldsToBunks() {
       lg.data.sports
     );
 
-    // 3. Find all fields that are *completely free* for this *chosen* span
     const availableFieldsForSpan = new Set(allFieldNames);
     for (let k = 0; k < spanLen; k++) {
         const slot = chosenSlot + k;
@@ -386,21 +327,18 @@ function assignFieldsToBunks() {
         }
     }
 
-    // 4. Map each game to its list of *possible, available* fields
     const gamesWithPossibleFields = gamesWithSports.map(game => {
         const possibleFields = (fieldsBySport[game.sport] || [])
             .filter(field => availableFieldsForSpan.has(field));
         return { game, possibleFields };
     });
 
-    // 5. Sort games by *fewest* options first (most constrained)
     gamesWithPossibleFields.sort((a, b) => a.possibleFields.length - b.possibleFields.length);
 
-    // 6. Try to assign them
     const tempReservedFields = new Set();
     const gamesWithFields = gamesWithPossibleFields.map(item => {
         const { game, possibleFields } = item;
-        let assignedField = "No Field Available"; // Default
+        let assignedField = "No Field Available"; 
         
         for (const field of possibleFields) {
             if (!tempReservedFields.has(field)) {
@@ -412,14 +350,13 @@ function assignFieldsToBunks() {
         return { ...game, field: assignedField };
     });
 
-    // 7. Now, schedule the league and *permanently* reserve the fields
     window.leagueAssignments[div] = window.leagueAssignments[div] || {};
     const leagueData = { games: gamesWithFields, leagueName: lg.name, isContinuation: false };
     const leagueContinuation = { leagueName: lg.name, isContinuation: true };
 
     for (let k = 0; k < spanLen; k++) {
       const slot = chosenSlot + k;
-      if (slot >= unifiedTimes.length) break; 
+      if (slot >= window.unifiedTimes.length) break; 
       
       window.leagueAssignments[div][slot] = (k === 0) ? leagueData : leagueContinuation;
       takenLeagueSlots.add(slot);
@@ -432,16 +369,14 @@ function assignFieldsToBunks() {
       });
     }
   }
-  // --- ===== END FIX 7 ===== ---
 
-
-  // --- ===== FIX 6, 8, 9, 11, 12: "Smarter" General Activity Filler ===== ---
+  // --- Fill General Activities ---
   for (const div of availableDivisions) {
-    const isActive = (s) => divisionActiveRows?.[div]?.has(s) ?? true;
+    const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
     const allBunksInDiv = divisions[div]?.bunks || [];
 
     for (const bunk of allBunksInDiv) {
-      for (let s = 0; s < unifiedTimes.length; s++) { 
+      for (let s = 0; s < window.unifiedTimes.length; s++) { 
         if (scheduleAssignments[bunk][s]) continue;
         if (window.leagueAssignments?.[div]?.[s]) continue;
         if (blockedRowsByDiv[div]?.has(s)) continue;
@@ -450,42 +385,34 @@ function assignFieldsToBunks() {
         let assignedSpan = 0;
         let didH2H = false;
 
-        // --- ===== FIX 9, 11, 12: Try to schedule H2H ===== ---
-        // FIX 12: Check if this bunk can play *any* H2H
-        // FIX 9: Check the random chance
         if (h2hGameCount[bunk] < 2 && Math.random() < H2H_CHANCE) {
             
-            // 1. Find a free opponent
             const opponents = allBunksInDiv.filter(b => {
-                if (b === bunk) return false; // Not yourself
-                if (scheduleAssignments[b][s]) return false; // Opponent not free
-                // ===== FIX 11 Check (Tuned): =====
-                if ((h2hHistory[bunk][b] || 0) >= 1) return false; // Already played 1x
-                if (h2hGameCount[b] >= 2) return false; // FIX 12 (Opponent total limit)
+                if (b === bunk) return false;
+                if (scheduleAssignments[b][s]) return false;
+                if ((h2hHistory[bunk][b] || 0) >= 1) return false; // 1x per day limit
+                if (h2hGameCount[b] >= 2) return false;
                 return true;
             });
 
             if (opponents.length > 0) {
                 const opponent = opponents[Math.floor(Math.random() * opponents.length)];
                 
-                // 2. Find a valid H2H activity (sport) that *neither* bunk has done
                 const h2hPicks = [...h2hActivities].sort(() => 0.5 - Math.random());
                 for (const pick of h2hPicks) {
                     const activityName = getActivityName(pick);
                     const pickedField = fieldLabel(pick.field);
 
-                    // FIX 8 Check:
                     if (generalActivityHistory[bunk].has(activityName) || 
                         generalActivityHistory[opponent].has(activityName)) {
-                        continue; // One or both bunks already did this
+                        continue; 
                     }
 
-                    // 3. Check if the field is free for the full duration
                     let canFit = true;
                     let spanForThisPick = 0;
                     for (let k = 0; k < spanLen; k++) {
                         const currentSlot = s + k;
-                        if (currentSlot >= unifiedTimes.length) { canFit = false; break; }
+                        if (currentSlot >= window.unifiedTimes.length) { canFit = false; break; }
                         if (
                             scheduleAssignments[bunk][currentSlot] || scheduleAssignments[opponent][currentSlot] ||
                             window.leagueAssignments?.[div]?.[currentSlot] ||
@@ -498,7 +425,6 @@ function assignFieldsToBunks() {
                         spanForThisPick++;
                     }
 
-                    // 4. Assign H2H to *both* bunks
                     if (canFit && spanForThisPick > 0) {
                         for (let k = 0; k < spanForThisPick; k++) {
                             const currentSlot = s + k;
@@ -518,7 +444,6 @@ function assignFieldsToBunks() {
                         generalActivityHistory[bunk].add(activityName);
                         generalActivityHistory[opponent].add(activityName);
                         
-                        // FIX 11 & 12 Update:
                         h2hHistory[bunk][opponent] = (h2hHistory[bunk][opponent] || 0) + 1;
                         h2hHistory[opponent][bunk] = (h2hHistory[opponent][bunk] || 0) + 1;
                         h2hGameCount[bunk]++;
@@ -530,9 +455,7 @@ function assignFieldsToBunks() {
                 }
             }
         }
-        // --- ===== END FIX 9, 11, 12 ===== ---
         
-        // --- ===== FIX 6 & 8: Fallback to General Activity ===== ---
         if (!didH2H) {
             const availablePicks = allActivities.filter(pick => {
                 return !generalActivityHistory[bunk].has(getActivityName(pick));
@@ -548,7 +471,7 @@ function assignFieldsToBunks() {
 
                 for (let k = 0; k < spanLen; k++) {
                     const currentSlot = s + k;
-                    if (currentSlot >= unifiedTimes.length) break; 
+                    if (currentSlot >= window.unifiedTimes.length) break; 
 
                     if (
                         scheduleAssignments[bunk][currentSlot] || 
@@ -596,11 +519,17 @@ function assignFieldsToBunks() {
 
 // ===== RENDERING (per-division grey-out) =====
 function updateTable() {
-  const container = document.getElementById("schedule");
+  const container = document.getElementById("scheduleTable"); // Changed ID to match HTML
   if (!container) return;
   container.innerHTML = "";
-  if (!unifiedTimes.length) return;
-
+  
+  // Use global variables that were set by generateTimes() or loaded by reconcile()
+  if (!window.unifiedTimes || !window.unifiedTimes.length) return;
+  
+  const availableDivisions = window.availableDivisions || [];
+  const divisions = window.divisions || {};
+  const unifiedTimes = window.unifiedTimes || [];
+  
   const table = document.createElement("table");
 
   // Header
@@ -696,7 +625,6 @@ function updateTable() {
 
       if (league) {
         if (league.isContinuation) {
-          // This cell is already covered by a rowspan, do nothing.
         } else {
           let span = 1;
           for (let j = i + 1; j < unifiedTimes.length; j++) {
@@ -723,7 +651,7 @@ function updateTable() {
         }
       } else {
         bunks.forEach((b) => {
-          const entry = scheduleAssignments[b]?.[i];
+          const entry = window.scheduleAssignments[b]?.[i];
 
           if (!entry) {
             const td = document.createElement("td");
@@ -737,7 +665,7 @@ function updateTable() {
 
           let span = 1;
           for (let j = i + 1; j < unifiedTimes.length; j++) {
-            if (scheduleAssignments[b]?.[j]?.continuation) {
+            if (window.scheduleAssignments[b]?.[j]?.continuation) {
               span++;
             } else {
               break;
@@ -748,13 +676,11 @@ function updateTable() {
           td.rowSpan = span; 
           td.style.verticalAlign = "top"; 
 
-          // ===== FIX 10: Render H2H Games =====
           if (entry._h2h) {
             td.textContent = `${entry.sport} ${entry.field} vs ${entry.vs}`;
-            td.style.background = "#e8f4ff"; // Light blue background
+            td.style.background = "#e8f4ff"; 
             td.style.fontWeight = "bold";
           } 
-          // ======================================
           else if (entry._fixed) {
             td.textContent = fieldLabel(entry.field);
             td.style.background = "#f1f1f1";
@@ -781,30 +707,26 @@ function updateTable() {
   container.appendChild(table);
 }
 
-// ===== Save/Init =====
+// ===== Save/Init (UPDATED) =====
 function saveSchedule() {
   try {
-    localStorage.setItem(
-      "scheduleAssignments",
-      JSON.stringify(scheduleAssignments)
-    );
-    localStorage.setItem(
-      "leagueAssignments",
-      JSON.stringify(window.leagueAssignments || {})
-    );
+    // UPDATED: Save to the current day
+    window.saveCurrentDailyData?.("scheduleAssignments", window.scheduleAssignments);
+    window.saveCurrentDailyData?.("leagueAssignments", window.leagueAssignments);
   } catch (e) {
     console.error("Save schedule failed:", e);
   }
 }
 function reconcileOrRenderSaved() {
   try {
-    window.scheduleAssignments =
-      JSON.parse(localStorage.getItem("scheduleAssignments") || "{}") || {};
-    window.leagueAssignments =
-      JSON.parse(localStorage.getItem("leagueAssignments") || "{}") || {};
+    // UPDATED: Load from the current day
+    const data = window.loadCurrentDailyData?.() || {};
+    window.scheduleAssignments = data.scheduleAssignments || {};
+    window.leagueAssignments = data.leagueAssignments || {};
   } catch {}
   updateTable();
 }
+
 function initScheduleSystem() {
   try {
     reconcileOrRenderSaved();
