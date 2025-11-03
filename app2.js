@@ -1,9 +1,10 @@
-// -------------------- app2.js (Fixed Activity Fix) --------------------
+// -------------------- app2.js (Full Fixed-Activity Fix) --------------------
 // Leagues render as merged cells per division+slot with per-matchup sports.
 // Fixed activities show names properly; early/late times grey per division.
 // FIX: Activity length now correctly uses 'activityDuration' instead of single increments.
 // FIX 2 (Aesthetic): Use rowspan to merge cells for multi-slot activities.
 // FIX 3 (Critical): Prevent general activities from overwriting pre-placed fixed activities.
+// FIX 4 (Critical): Prevent LEAGUE activities from overwriting pre-placed fixed activities.
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -265,9 +266,33 @@ function assignFieldsToBunks() {
       actSet && actSet.size
         ? Array.from(actSet)
         : unifiedTimes.map((_, i) => i);
-    const candidates = actSlots.filter(
-      (s) => !blockedRowsByDiv[div]?.has(s) && !takenLeagueSlots.has(s)
-    );
+
+    // ===== CRITICAL FIX 4 =====
+    // We must check if the *entire span* for the league is free.
+    const bunksInDiv = divisions[div]?.bunks || [];
+    const firstBunk = bunksInDiv.length > 0 ? bunksInDiv[0] : null;
+
+    const candidates = actSlots.filter((s) => {
+      // Loop for spanLen to check if the *entire block* is free
+      for (let k = 0; k < spanLen; k++) {
+        const slot = s + k;
+
+        // Check 1: Out of bounds
+        if (slot >= unifiedTimes.length) return false;
+        // Check 2: Blocked by computeBlockedRowsByDiv
+        if (blockedRowsByDiv[div]?.has(slot)) return false;
+        // Check 3: Already taken by another league
+        if (takenLeagueSlots.has(slot)) return false;
+        // Check 4: Already pre-placed by prePlace() (e.g., "Lunch")
+        // We check the first bunk as a representative for the whole division.
+        if (firstBunk && scheduleAssignments[firstBunk]?.[slot])
+          return false;
+      }
+      // If we got here, the whole span is free
+      return true;
+    });
+    // ===== END FIX 4 =====
+    
     if (!candidates.length) continue;
 
     const chosen = candidates[0];
@@ -288,11 +313,11 @@ function assignFieldsToBunks() {
     const leagueData = { games, leagueName: lg.name, isContinuation: false };
     const leagueContinuation = { leagueName: lg.name, isContinuation: true };
 
+    // This loop is now safe because `candidates` filter already checked all slots
     for (let k = 0; k < spanLen; k++) {
       const slot = chosen + k;
-      if (slot >= unifiedTimes.length) break; // Don't go out of bounds
+      if (slot >= unifiedTimes.length) break; 
 
-      // Assign to *all* slots in the span
       window.leagueAssignments[div][slot] =
         k === 0 ? leagueData : leagueContinuation;
       takenLeagueSlots.add(slot);
@@ -320,10 +345,10 @@ function assignFieldsToBunks() {
           const currentSlot = s + k;
           if (currentSlot >= unifiedTimes.length) break; // Out of time bounds
 
-          // ===== CRITICAL FIX 3 =====
+          // ===== CRITICAL FIX 3 (from previous) =====
           // Check if this *next* slot is blocked/league/inactive/FIXED
           if (
-            scheduleAssignments[bunk][currentSlot] || // <-- THIS IS THE FIX
+            scheduleAssignments[bunk][currentSlot] || // <-- FIX FOR GENERAL
             window.leagueAssignments?.[div]?.[currentSlot] ||
             blockedRowsByDiv[div]?.[currentSlot] ||
             !isActive(currentSlot)
@@ -400,7 +425,7 @@ function updateTable() {
   const divTimeRanges = {};
   availableDivisions.forEach((div) => {
     const s = parseTimeToMinutes(divisions[div]?.start);
-    const e = parseTimeToMinutes(divisions[div]?.end);
+    const e = parseTimeToMinutes(divisions[dim v]?.end);
     divTimeRanges[div] = { start: s, end: e };
   });
 
@@ -548,7 +573,7 @@ function reconcileOrRenderSaved() {
 }
 function initScheduleSystem() {
   try {
-    reconcBileOrRenderSaved();
+    reconcileOrRenderSaved();
   } catch (e) {
     console.error("Init error:", e);
     updateTable();
