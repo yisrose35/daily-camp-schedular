@@ -1,4 +1,4 @@
-// -------------------- app2.js (Leagues Have Field Priority) --------------------
+// -------------------- app2.js (Smarter Scheduling) --------------------
 // Leagues render as merged cells per division+slot with per-matchup sports.
 // Fixed activities show names properly; early/late times grey per division.
 // FIX: Activity length now correctly uses 'activityDuration' instead of single increments.
@@ -8,6 +8,10 @@
 // (General activities are *allowed* to be fragmented by fixed activities).
 // FIX 5: Assign specific fields to leagues. Leagues get *priority* and reserve fields first.
 // FIX 6: Make general scheduler "smarter" to try all activities before leaving a slot blank.
+// FIX 7 (NEW): Smarter league field assignment. Solves "bin packing" problem
+//              by assigning most constrained games (fewest field options) first.
+// FIX 8 (NEW): Prevent bunks from repeating a *general* activity (sport or special)
+//              more than once per day. Does not apply to leagues or fixed.
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -33,6 +37,15 @@ function fieldLabel(f) {
   if (typeof f === "string") return f;
   if (f && typeof f === "object" && typeof f.name === "string") return f.name;
   return "";
+}
+
+// ===== FIX 8 HELPER =====
+// Gets a unique name for an activity (sport name or special activity name)
+function getActivityName(pick) {
+    if (pick.sport) {
+        return pick.sport; // e.g., "Basketball"
+    }
+    return fieldLabel(pick.field); // e.g., "gameroom"
 }
 
 // ===== Fixed Activities =====
@@ -271,7 +284,6 @@ function assignFieldsToBunks() {
   const blockedRowsByDiv = prePlaceFixedActivities();
 
   // Create Field Reservation System
-  // Pre-populate with fields used by Fixed Activities (e.g., "Lunch Room")
   const fieldUsageBySlot = {};
   (availableDivisions || []).forEach(div => {
     (divisions[div]?.bunks || []).forEach(bunk => {
@@ -285,6 +297,27 @@ function assignFieldsToBunks() {
        }
     });
   });
+
+  // ===== FIX 8: Init General Activity History =====
+  const generalActivityHistory = {};
+  availableDivisions.forEach(div => {
+      (divisions[div]?.bunks || []).forEach(b => { 
+          generalActivityHistory[b] = new Set(); 
+      }); 
+  });
+  // Pre-populate history with fixed activities
+  availableDivisions.forEach(div => {
+    (divisions[div]?.bunks || []).forEach(bunk => {
+       if (scheduleAssignments[bunk]) {
+         scheduleAssignments[bunk].forEach((entry) => {
+           if (entry && entry._fixed) {
+               generalActivityHistory[bunk].add(fieldLabel(entry.field));
+           }
+         });
+       }
+    });
+  });
+  // ===============================================
 
   const enabledByDiv = getEnabledLeaguesByDivision();
   const takenLeagueSlots = new Set(); 
@@ -325,45 +358,63 @@ function assignFieldsToBunks() {
     const matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
     if (!matchups.length) continue;
 
-    // Leagues get field priority. Assign fields one by one.
     const gamesWithSports = assignSportsToMatchups(
       lg.name,
       matchups,
       lg.data.sports
     );
 
-    const gamesWithFields = gamesWithSports.map(game => {
-        const { sport } = game;
-        const possibleFields = fieldsBySport[sport] || [];
-        let assignedField = "No Field Available"; // Default if none found
+    // ===== FIX 7: Smarter Field Assignment =====
+    
+    // 1. Find all fields that are *completely free* for this entire span
+    const availableFieldsForSpan = new Set();
+    availFields.forEach(f => availableFieldsForSpan.add(f.name));
+    
+    for (let k = 0; k < spanLen; k++) {
+        const slot = chosen + k;
+        if (fieldUsageBySlot[slot]) {
+            fieldUsageBySlot[slot].forEach(f => availableFieldsForSpan.delete(f));
+        }
+    }
+
+    // 2. Map each game to its list of *possible, available* fields
+    const gamesWithPossibleFields = gamesWithSports.map(game => {
+        const possibleFields = (fieldsBySport[game.sport] || [])
+            .filter(field => availableFieldsForSpan.has(field));
+        return { game, possibleFields };
+    });
+
+    // 3. Sort games by *fewest* options first (most constrained)
+    gamesWithPossibleFields.sort((a, b) => a.possibleFields.length - b.possibleFields.length);
+
+    // 4. Try to assign them
+    const tempReservedFields = new Set();
+    const gamesWithFields = gamesWithPossibleFields.map(item => {
+        const { game, possibleFields } = item;
+        let assignedField = "No Field Available";
         
-        // Find a field for this sport that is not yet taken in this slot span
         for (const field of possibleFields) {
-            let isTaken = false;
-            // Check all slots in the span
-            for (let k = 0; k < spanLen; k++) {
-                const slot = chosen + k;
-                if (fieldUsageBySlot[slot]?.has(field)) {
-                    isTaken = true;
-                    break;
-                }
-            }
-            
-            if (!isTaken) {
+            if (!tempReservedFields.has(field)) {
                 assignedField = field;
-                // Now, *reserve* this field for the entire span
-                for (let k = 0; k < spanLen; k++) {
-                    const slot = chosen + k;
-                    if (slot >= unifiedTimes.length) break;
-                    fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || new Set();
-                    fieldUsageBySlot[slot].add(assignedField);
-                }
-                break; // Found our field, stop looking
+                tempReservedFields.add(field); // Reserve it for this loop
+                break;
             }
         }
         return { ...game, field: assignedField };
     });
-    // --- End League Field Assignment ---
+
+    // 5. Now, *permanently* reserve the fields that were successfully assigned
+    const successfullyAssignedGames = gamesWithFields.filter(g => g.field !== "No Field Available");
+    
+    successfullyAssignedGames.forEach(game => {
+        for (let k = 0; k < spanLen; k++) {
+            const slot = chosen + k;
+            if (slot >= unifiedTimes.length) break;
+            fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || new Set();
+            fieldUsageBySlot[slot].add(game.field);
+        }
+    });
+    // ===== END FIX 7 =====
 
     window.leagueAssignments[div] = window.leagueAssignments[div] || {};
     
@@ -379,35 +430,37 @@ function assignFieldsToBunks() {
     }
   }
 
-  // --- ===== FIX 6: "Smarter" General Activity Filler ===== ---
-  // This loop runs *after* leagues and respects fieldUsageBySlot
+  // --- ===== FIX 6 & 8: "Smarter" General Activity Filler w/ No Repeats ===== ---
   for (const div of availableDivisions) {
     const isActive = (s) => divisionActiveRows?.[div]?.has(s) ?? true;
 
     for (const bunk of divisions[div]?.bunks || []) {
       for (let s = 0; s < unifiedTimes.length; s++) { 
-        // Check if STARTING slot is already filled
         if (scheduleAssignments[bunk][s]) continue;
         if (window.leagueAssignments?.[div]?.[s]) continue;
         if (blockedRowsByDiv[div]?.has(s)) continue;
         if (!isActive(s)) continue;
 
-        // This slot is free. Try to fill it.
         let assignedSpan = 0;
-        // Shuffle all activities to try them one by one
-        const shuffledPicks = [...allActivities].sort(() => 0.5 - Math.random());
+        
+        // ===== FIX 8: Filter out repeats first =====
+        const availablePicks = allActivities.filter(pick => {
+            return !generalActivityHistory[bunk].has(getActivityName(pick));
+        });
+        
+        const shuffledPicks = [...availablePicks].sort(() => 0.5 - Math.random());
+        // ==========================================
 
         for (const pick of shuffledPicks) {
             const pickedField = fieldLabel(pick.field);
+            const activityName = getActivityName(pick);
             let canFitThisPick = true;
             let spanForThisPick = 0;
 
-            // Check if this pick can fit (for its allowed fragment)
             for (let k = 0; k < spanLen; k++) {
                 const currentSlot = s + k;
                 if (currentSlot >= unifiedTimes.length) break; 
 
-                // Check for all conflicts (fixed, league, block, inactive, OR field busy)
                 if (
                     scheduleAssignments[bunk][currentSlot] || 
                     window.leagueAssignments?.[div]?.[currentSlot] ||
@@ -415,17 +468,13 @@ function assignFieldsToBunks() {
                     !isActive(currentSlot) ||
                     (pickedField && fieldUsageBySlot[currentSlot]?.has(pickedField))
                 ) {
-                    // This slot has a conflict.
-                    // If k=0, this pick is completely invalid.
                     if (k === 0) canFitThisPick = false; 
-                    break; // Stop checking this span
+                    break; 
                 }
-                spanForThisPick++; // This slot is clear, add to span
+                spanForThisPick++;
             }
             
-            // If the *first* slot (k=0) was clear and we found *any* valid span...
             if (canFitThisPick && spanForThisPick > 0) {
-                // ...then this pick is good! Assign it.
                 for (let k = 0; k < spanForThisPick; k++) {
                     const currentSlot = s + k;
                     scheduleAssignments[bunk][currentSlot] = {
@@ -433,24 +482,24 @@ function assignFieldsToBunks() {
                         sport: pick.sport,
                         continuation: (k > 0),
                     };
-                    // Reserve the field
                     if (pickedField) {
                         fieldUsageBySlot[currentSlot] = fieldUsageBySlot[currentSlot] || new Set();
                         fieldUsageBySlot[currentSlot].add(pickedField);
                     }
                 }
                 assignedSpan = spanForThisPick;
-                break; // IMPORTANT: Break from the `for (const pick ...)` loop
+                
+                // ===== FIX 8: Add to history =====
+                generalActivityHistory[bunk].add(activityName);
+                // =================================
+                
+                break; 
             }
-            // ... otherwise, this pick didn't work, try the next pick in shuffledPicks
         }
         
-        // If we assigned an activity, skip the slots we filled
         if (assignedSpan > 0) {
            s += (assignedSpan - 1);
         }
-        // If assignedSpan is 0, we tried all activities and none fit.
-        // The slot remains blank, and 's' increments by 1.
       }
     }
   }
