@@ -1,6 +1,7 @@
-// -------------------- app2.js (Calendar-Aware) --------------------
+// -------------------- app2.js (Calendar-Aware + Overrides) --------------------
 // (All logic from FIX 1 to FIX 12 is included)
 // (UPDATED to use calendar.js save/load)
+// (UPDATED to read from Daily Overrides)
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -39,7 +40,8 @@ function getActivityName(pick) {
 // ===== Fixed Activities =====
 function loadActiveFixedActivities() {
   // UPDATED: Load from global settings
-  const allFixed = window.loadGlobalSettings?.().fixedActivities || [];
+  const globalSettings = window.loadGlobalSettings?.() || {};
+  const allFixed = globalSettings.fixedActivities || [];
   return Array.isArray(allFixed) ? allFixed.filter((a) => a && a.enabled) : [];
 }
 function findRowsForRange(startStr, endStr) {
@@ -100,10 +102,14 @@ function leaguesSnapshot() {
   // UPDATED: Load from global settings
   return window.loadGlobalSettings?.().leaguesByName || {};
 }
-function getEnabledLeaguesByDivision() {
+function getEnabledLeaguesByDivision(masterLeagues, overrides) {
   const result = {};
-  const all = leaguesSnapshot();
+  const all = masterLeagues || {};
+  
   Object.keys(all).forEach((name) => {
+    // Check override list
+    if (overrides.leagues.includes(name)) return; 
+    
     const l = all[name];
     if (!l?.enabled) return;
     (l.divisions || []).forEach((div) => {
@@ -113,16 +119,10 @@ function getEnabledLeaguesByDivision() {
   return result;
 }
 
-// ===== Round-Robin Generator =====
-// This is now in league_scheduling.js
-// (function () { ... window.getLeagueMatchups = get; ... })();
-
 // ===== League Sport Rotation (UPDATED) =====
-// const SPORT_STATE_KEY = "camp_league_sport_rotation"; // No longer used
 let leagueSportRotation = {};
 function loadLeagueSportRotation() {
   try {
-    // UPDATED: Load from the globally scoped daily object
     if (window.currentDailyData && window.currentDailyData.leagueSportRotation) {
         leagueSportRotation = window.currentDailyData.leagueSportRotation;
     } else {
@@ -134,7 +134,6 @@ function loadLeagueSportRotation() {
 }
 function saveLeagueSportRotation() {
   try {
-    // UPDATED: Save to the globally scoped daily object
     window.saveCurrentDailyData?.("leagueSportRotation", leagueSportRotation);
   } catch {}
 }
@@ -165,27 +164,50 @@ function assignFieldsToBunks() {
   window.scheduleAssignments = window.scheduleAssignments || {};
   window.leagueAssignments = {};
   
-  // Note: 'fields' and 'divisions' are loaded globally from app1.js
-  // We can just use them.
+  // ===== NEW: Override Loading System =====
+  // 1. Load Master Lists
   const globalSettings = window.loadGlobalSettings?.() || {};
   const app1Data = globalSettings.app1 || {};
-  
-  // Use the master lists from settings
   const masterFields = app1Data.fields || [];
   const masterDivisions = app1Data.divisions || {};
   const masterAvailableDivs = app1Data.availableDivisions || [];
   const masterSpecials = app1Data.specialActivities || [];
+  const masterLeagues = globalSettings.leaguesByName || {};
+
+  // 2. Load Daily Overrides
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const overrides = dailyData.overrides || { fields: [], bunks: [], leagues: [] };
+
+  // 3. Create Today's Filtered Lists
+  const availFields = masterFields.filter(f => 
+      f.available && !overrides.fields.includes(f.name)
+  );
+  const availSpecials = masterSpecials.filter(s => 
+      s.available && !overrides.fields.includes(s.name) // Can also override specials
+  );
   
-  // TODO: In the future, we will filter these master lists
-  // using window.currentDailyData.overrides
-  const availFields = masterFields.filter(f => f.available);
-  const availSpecials = masterSpecials.filter(s => s.available);
-  const availableDivisions = [...masterAvailableDivs];
-  const divisions = { ...masterDivisions };
+  const availableDivisions = masterAvailableDivs.filter(divName => {
+      // Check if the *entire division* is overridden
+      return !overrides.bunks.includes(divName);
+  });
+  
+  const divisions = {};
+  for (const divName of availableDivisions) {
+      // Deep copy the division object
+      divisions[divName] = JSON.parse(JSON.stringify(masterDivisions[divName]));
+      // Filter individual bunks
+      divisions[divName].bunks = (divisions[divName].bunks || []).filter(bunkName => 
+          !overrides.bunks.includes(bunkName)
+      );
+  }
   
   // Make sure these are globally available for prePlace() and renderTable()
   window.availableDivisions = availableDivisions;
   window.divisions = divisions;
+  
+  // 4. Get Filtered Leagues
+  const enabledByDiv = getEnabledLeaguesByDivision(masterLeagues, overrides);
+  // ===== END Override Loading System =====
 
 
   const inc = parseInt(document.getElementById("increment")?.value || "30", 10);
@@ -195,7 +217,7 @@ function assignFieldsToBunks() {
   );
   const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
 
-  // Create Field-Sport Inventory
+  // Create Field-Sport Inventory (from today's available fields)
   const fieldsBySport = {};
   let allFieldNames = [];
   availFields.forEach(f => {
@@ -208,6 +230,7 @@ function assignFieldsToBunks() {
     }
   });
 
+  // Create Activity Lists (from today's available items)
   const allActivities = [
     ...availFields.flatMap((f) =>
       f.activities.map((act) => ({ type: "field", field: f, sport: act }))
@@ -223,6 +246,7 @@ function assignFieldsToBunks() {
 
   if (!allActivities.length || !window.unifiedTimes || window.unifiedTimes.length === 0) {
       console.warn("Cannot assign fields: No activities or unified times are set. Did you click 'Generate Schedule Times'?");
+      updateTable(); // Render an empty table
       return;
   }
 
@@ -275,12 +299,11 @@ function assignFieldsToBunks() {
     });
   });
   
-  const enabledByDiv = getEnabledLeaguesByDivision();
   const takenLeagueSlots = new Set(); 
 
   // --- Place Leagues ---
   for (const div of availableDivisions) {
-    const lg = enabledByDiv[div];
+    const lg = enabledByDiv[div]; // Uses the new filtered list
     if (!lg) continue;
     const actSet = window.divisionActiveRows?.[div];
     const actSlots =
@@ -390,7 +413,7 @@ function assignFieldsToBunks() {
             const opponents = allBunksInDiv.filter(b => {
                 if (b === bunk) return false;
                 if (scheduleAssignments[b][s]) return false;
-                if ((h2hHistory[bunk][b] || 0) >= 1) return false; // 1x per day limit
+                if ((h2hHistory[bunk][b] || 0) >= 1) return false;
                 if (h2hGameCount[b] >= 2) return false;
                 return true;
             });
@@ -526,6 +549,8 @@ function updateTable() {
   // Use global variables that were set by generateTimes() or loaded by reconcile()
   if (!window.unifiedTimes || !window.unifiedTimes.length) return;
   
+  // UPDATED: These must be read from the globally-scoped versions
+  // that assignFieldsToBunks just created.
   const availableDivisions = window.availableDivisions || [];
   const divisions = window.divisions || {};
   const unifiedTimes = window.unifiedTimes || [];
@@ -651,6 +676,7 @@ function updateTable() {
         }
       } else {
         bunks.forEach((b) => {
+          // UPDATED: Load from window.scheduleAssignments
           const entry = window.scheduleAssignments[b]?.[i];
 
           if (!entry) {
@@ -723,12 +749,16 @@ function reconcileOrRenderSaved() {
     const data = window.loadCurrentDailyData?.() || {};
     window.scheduleAssignments = data.scheduleAssignments || {};
     window.leagueAssignments = data.leagueAssignments || {};
-  } catch {}
+  } catch {
+      window.scheduleAssignments = {};
+      window.leagueAssignments = {};
+  }
   updateTable();
 }
 
 function initScheduleSystem() {
   try {
+    // This is the main load function for the schedule tab
     reconcileOrRenderSaved();
   } catch (e) {
     console.error("Init error:", e);
@@ -740,6 +770,8 @@ window.assignFieldsToBunks = assignFieldsToBunks;
 window.updateTable = updateTable;
 window.initScheduleSystem = initScheduleSystem;
 
-if (document.readyState === "loading")
-  document.addEventListener("DOMContentLoaded", initScheduleSystem);
-else initScheduleSystem();
+// UPDATED: This no longer auto-runs. It's called by calendar.js
+// or by the "Generate" button.
+// if (document.readyState === "loading")
+//   document.addEventListener("DOMContentLoaded", initScheduleSystem);
+// else initScheduleSystem();
