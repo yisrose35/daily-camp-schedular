@@ -1,7 +1,7 @@
 // -------------------- app2.js --------------------
 // Leagues render as merged cells per division+slot with per-matchup sports.
 // Fixed activities show names properly; early/late times grey per division.
-// Activity length is INDEPENDENT of the grid increment: we span multiple rows with rowSpan.
+// Activity length is INDEPENDENT of the grid increment via rowSpan.
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -41,8 +41,7 @@ function loadActiveFixedActivities() {
   }
 }
 function findRowsForRange(startStr, endStr) {
-  if (!Array.isArray(window.unifiedTimes) || window.unifiedTimes.length === 0)
-    return [];
+  if (!Array.isArray(window.unifiedTimes) || window.unifiedTimes.length === 0) return [];
   const startMin = parseTimeToMinutes(startStr),
     endMin = parseTimeToMinutes(endStr);
   if (startMin == null || endMin == null || endMin <= startMin) return [];
@@ -186,10 +185,7 @@ function loadLeagueSportRotation() {
 }
 function saveLeagueSportRotation() {
   try {
-    localStorage.setItem(
-      SPORT_STATE_KEY,
-      JSON.stringify(leagueSportRotation)
-    );
+    localStorage.setItem(SPORT_STATE_KEY, JSON.stringify(leagueSportRotation));
   } catch {}
 }
 function assignSportsToMatchups(leagueName, matchups, sportsList) {
@@ -224,8 +220,7 @@ function desiredSpanLen() {
   const dur = getActivityDurationMinutes();
   return Math.max(1, Math.ceil(dur / Math.max(1, inc)));
 }
-function buildDivisionDisallowedRowSets(blockedRowsByDiv, leagueStartsByDiv, maxRows) {
-  // Per-division set of rows where we cannot place/continue (blocked or league rows)
+function buildDivisionDisallowedRowSets(blockedRowsByDiv, leagueStartsByDiv) {
   const out = {};
   (availableDivisions || []).forEach((div) => {
     out[div] = new Set([...(blockedRowsByDiv[div] || [])]);
@@ -234,7 +229,6 @@ function buildDivisionDisallowedRowSets(blockedRowsByDiv, leagueStartsByDiv, max
   return out;
 }
 function computeMaxSpanFor(div, startRow, spanTarget, disallowedSet) {
-  // Trim span when approaching end, blocked rows, or division inactive times
   const actSet = divisionActiveRows?.[div];
   let span = 0;
   for (let k = 0; k < spanTarget; k++) {
@@ -242,7 +236,7 @@ function computeMaxSpanFor(div, startRow, spanTarget, disallowedSet) {
     if (r >= unifiedTimes.length) break;
     const active = actSet ? actSet.has(r) : true;
     if (!active) break;
-    if (disallowedSet?.has(r) && k > 0) break; // can't continue into a blocked/league row (ok if the first row itself is allowed; if first is blocked we won't be here)
+    if (disallowedSet?.has(r) && k > 0) break;
     span++;
   }
   return Math.max(1, span);
@@ -255,7 +249,6 @@ function assignFieldsToBunks() {
   window.scheduleAssignments = window.scheduleAssignments || {};
   window.leagueAssignments = {};
 
-  const inc = getIncrementMinutes();
   const spanLenTarget = desiredSpanLen();
 
   const availFields = fields.filter(
@@ -295,51 +288,42 @@ function assignFieldsToBunks() {
 
     const actSet = divisionActiveRows?.[div];
     const candidateRows =
-      actSet && actSet.size ? Array.from(actSet).sort((a, b) => a - b) : unifiedTimes.map((_, i) => i);
+      actSet && actSet.size
+        ? Array.from(actSet).sort((a, b) => a - b)
+        : unifiedTimes.map((_, i) => i);
 
     const disallowed = new Set([...(blockedRowsByDiv[div] || [])]);
-    // find first row that can host a full/trimmed span
+
     let start = null;
     let chosenSpan = null;
     for (const r of candidateRows) {
       if (disallowed.has(r)) continue;
       if (takenLeagueRows.has(r)) continue;
-      // tentative span (may be trimmed)
-      const span = Math.max(
-        1,
-        Math.min(
-          spanLenTarget,
-          unifiedTimes.length - r
-        )
-      );
-      // ensure we don't cross blocked rows or already-taken league rows inside the span
+
+      const span = Math.max(1, Math.min(spanLenTarget, unifiedTimes.length - r));
       let ok = true;
+      let trimAt = span;
       for (let k = 0; k < span; k++) {
         const rr = r + k;
         if (blockedRowsByDiv[div]?.has(rr) || takenLeagueRows.has(rr)) {
-          if (k === 0) ok = false; // can't even start here
-          else {
-            // trim to k
-            chosenSpan = k;
-          }
+          if (k === 0) ok = false;
+          else trimAt = k;
           break;
         }
       }
       if (!ok) continue;
+
       start = r;
-      if (chosenSpan == null) chosenSpan = span;
+      chosenSpan = trimAt;
       break;
     }
     if (start == null) continue;
 
-    // Save league assignment metadata
     leagueStartsByDiv[div] = leagueStartsByDiv[div] || [];
     leagueStartsByDiv[div].push(start);
-    // Reserve rows for league span
-    const spanCount = chosenSpan ?? spanLenTarget;
-    for (let k = 0; k < spanCount; k++) takenLeagueRows.add(start + k);
 
-    // Generate games list now and save on the start row
+    for (let k = 0; k < chosenSpan; k++) takenLeagueRows.add(start + k);
+
     const teams = (lg.data.teams || []).map((t) => String(t).trim()).filter(Boolean);
     if (teams.length < 2) continue;
     const matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
@@ -350,36 +334,39 @@ function assignFieldsToBunks() {
     window.leagueAssignments[div][start] = {
       games,
       leagueName: lg.name,
-      span: spanCount
+      span: chosenSpan
     };
   }
 
   // General activities: place with row-spans per bunk
-  const disallowedByDiv = buildDivisionDisallowedRowSets(blockedRowsByDiv, leagueStartsByDiv, unifiedTimes.length);
+  const disallowedByDiv = buildDivisionDisallowedRowSets(
+    blockedRowsByDiv,
+    leagueStartsByDiv
+  );
 
   for (let s = 0; s < unifiedTimes.length; s++) {
     for (const div of availableDivisions) {
-      // Skip rows inside an active league block (handled via disallowed + continuation logic)
-      if (window.leagueAssignments?.[div]?.[s]) {
-        // league starts at s; general activities for bunks are not placed here
-        continue;
-      }
+      // Skip league start rows entirely for general activities in this division
+      if (window.leagueAssignments?.[div]?.[s]) continue;
+
       const active = divisionActiveRows?.[div]?.has(s) ?? true;
       if (!active) continue;
       if (blockedRowsByDiv[div]?.has(s)) continue;
 
       for (const bunk of divisions[div]?.bunks || []) {
-        // if something already occupies this row (start or continuation), skip
         if (scheduleAssignments[bunk][s]) continue;
 
-        // Choose an activity and compute a span that doesn't cross blocked/league/inactive
         const pick =
           allActivities[Math.floor(Math.random() * allActivities.length)];
 
-        const spanTarget = spanLenTarget;
-        const span = computeMaxSpanFor(div, s, spanTarget, disallowedByDiv[div]);
+        const span = computeMaxSpanFor(
+          div,
+          s,
+          spanLenTarget,
+          disallowedByDiv[div]
+        );
 
-        // Write the start cell
+        // Start
         scheduleAssignments[bunk][s] = {
           field: fieldLabel(pick.field),
           sport: pick.sport,
@@ -387,13 +374,11 @@ function assignFieldsToBunks() {
           span
         };
 
-        // Fill continuation markers
+        // Continuations
         for (let k = 1; k < span; k++) {
           const rr = s + k;
           if (rr >= unifiedTimes.length) break;
-          scheduleAssignments[bunk][rr] = {
-            continuation: true
-          };
+          scheduleAssignments[bunk][rr] = { continuation: true };
         }
       }
     }
@@ -451,19 +436,19 @@ function updateTable() {
     divTimeRanges[div] = { start: s, end: e };
   });
 
-  // Build league continuation sets for fast skip
+  // Build league continuation sets for quick checks
   const spanDefault = desiredSpanLen();
   const leagueContinuationRowsByDiv = {};
   availableDivisions.forEach((div) => {
     leagueContinuationRowsByDiv[div] = new Set();
     const starts = window.leagueAssignments?.[div]
-      ? Object.keys(window.leagueAssignments[div]).map((k) => parseInt(k, 10)).sort((a, b) => a - b)
+      ? Object.keys(window.leagueAssignments[div])
+          .map((k) => parseInt(k, 10))
+          .sort((a, b) => a - b)
       : [];
     starts.forEach((startRow) => {
       const span = window.leagueAssignments[div][startRow]?.span ?? spanDefault;
-      for (let k = 1; k < span; k++) {
-        leagueContinuationRowsByDiv[div].add(startRow + k);
-      }
+      for (let k = 1; k < span; k++) leagueContinuationRowsByDiv[div].add(startRow + k);
     });
   });
 
@@ -480,6 +465,8 @@ function updateTable() {
         unifiedTimes[i].end.getMinutes()) /
       2;
 
+    // Each division contributes either: a grey cell, a league start cell (rowSpanned),
+    // nothing (because covered by a previous row's league rowSpan), or N bunk cells.
     availableDivisions.forEach((div) => {
       const { start, end } = divTimeRanges[div];
       const outside =
@@ -488,12 +475,12 @@ function updateTable() {
       const leagueContinuing = leagueContinuationRowsByDiv[div]?.has(i);
       const bunks = divisions[div]?.bunks || [];
 
-      // If we are in a league continuation row, skip generating any cells for this division;
-      // the league cell from the start row will be rowSpanned into this row.
+      // Covered by a league rowSpan that started earlier — append nothing for this division.
       if (leagueContinuing) {
-        return;
+        return; // move to next division; the spanning cell from above occupies these columns
       }
 
+      // Outside division time: add a single grey cell covering the division's columns.
       if (outside) {
         const td = document.createElement("td");
         td.colSpan = bunks.length;
@@ -504,6 +491,7 @@ function updateTable() {
         return;
       }
 
+      // League starts here for this division
       if (leagueStart) {
         const td = document.createElement("td");
         td.colSpan = bunks.length;
@@ -516,39 +504,42 @@ function updateTable() {
         td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;">${leagueStart.leagueName}</span></div>`;
         td.rowSpan = Math.max(1, leagueStart.span ?? spanDefault);
         tr.appendChild(td);
-      } else {
-        // Regular bunk cells (respect rowSpan and continuation)
-        bunks.forEach((b) => {
-          const entry = scheduleAssignments[b]?.[i];
-          // If this row is a continuation for this bunk, skip creating a cell (it is covered by the start row's rowSpan td).
-          if (entry?.continuation) return;
-
-          const td = document.createElement("td");
-
-          if (!entry) {
-            tr.appendChild(td);
-            return;
-          }
-
-          // If this is a start cell, apply rowSpan
-          if (!entry.continuation && entry.span && entry.span > 1) {
-            td.rowSpan = entry.span;
-          }
-
-          if (entry._fixed) {
-            td.textContent = fieldLabel(entry.field);
-            td.style.background = "#f1f1f1";
-            td.style.fontWeight = "600";
-          } else if (fieldLabel(entry.field) === "Special Activity Needed") {
-            td.innerHTML = `<span style="color:#c0392b;">${fieldLabel(entry.field)}</span>`;
-          } else if (entry.sport) {
-            td.textContent = `${fieldLabel(entry.field)} – ${entry.sport}`;
-          } else {
-            td.textContent = fieldLabel(entry.field);
-          }
-          tr.appendChild(td);
-        });
+        return;
       }
+
+      // Regular bunk cells for this division at this row
+      bunks.forEach((b) => {
+        const entry = scheduleAssignments[b]?.[i];
+
+        // If this row is a continuation for this bunk, we skip making a td:
+        // the start-row cell has a rowSpan that visually covers this row.
+        if (entry?.continuation) return;
+
+        const td = document.createElement("td");
+
+        if (!entry) {
+          tr.appendChild(td);
+          return;
+        }
+
+        // Start cell: apply rowSpan
+        if (!entry.continuation && entry.span && entry.span > 1) {
+          td.rowSpan = entry.span;
+        }
+
+        if (entry._fixed) {
+          td.textContent = fieldLabel(entry.field);
+          td.style.background = "#f1f1f1";
+          td.style.fontWeight = "600";
+        } else if (fieldLabel(entry.field) === "Special Activity Needed") {
+          td.innerHTML = `<span style="color:#c0392b;">${fieldLabel(entry.field)}</span>`;
+        } else if (entry.sport) {
+          td.textContent = `${fieldLabel(entry.field)} – ${entry.sport}`;
+        } else {
+          td.textContent = fieldLabel(entry.field);
+        }
+        tr.appendChild(td);
+      });
     });
 
     tbody.appendChild(tr);
