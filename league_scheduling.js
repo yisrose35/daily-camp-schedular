@@ -3,12 +3,6 @@
  * LEAGUE SCHEDULING CORE (league_scheduling.js)
  * (UPDATED to use calendar.js save/load)
  * =============================================================
- * This file generates and tracks round-robin matchups for leagues.
- * It uses a stable algorithm to create valid matches for app2.js.
- *
- * Public Functions:
- * - window.getLeagueMatchups(leagueName, teams)
- * =============================================================
  */
 
 (function () {
@@ -25,7 +19,11 @@
       // UPDATED: Load from the globally scoped daily object
       if (window.currentDailyData && window.currentDailyData.leagueRoundState) {
         leagueRoundState = window.currentDailyData.leagueRoundState;
-      } else {
+      } else if (window.loadCurrentDailyData) {
+        // If it's the first load, loadCurrentDailyData will run and populate it
+        leagueRoundState = window.loadCurrentDailyData().leagueRoundState || {};
+      }
+      else {
         leagueRoundState = {};
       }
     } catch (e) {
@@ -121,13 +119,8 @@
   // --- Global Exposure and Initialization ---
   window.getLeagueMatchups = getLeagueMatchups;
   
-  // IMPORTANT: Load state on script execution (will be loaded by calendar.js)
-  // We also add a listener in case the date changes.
-  document.addEventListener("DOMContentLoaded", () => {
-     if (window.calendar) { // A bit redundant, but safe
-        window.calendar.onDateChange(loadRoundState);
-     }
-     loadRoundState(); 
-  });
+  // IMPORTANT: Load state on script execution
+  // It will load the state for the current date set by calendar.js
+  loadRoundState(); 
   
 })();
