@@ -1,6 +1,6 @@
 // -------------------- State --------------------
 let bunks = [];
-let divisions = {};  // { divName:{ bunks:[], color, start, end } }
+let divisions = {}; // { divName:{ bunks:[], color, start, end } }
 // availableDivisions will be exposed globally as window.availableDivisions
 let availableDivisions = [];
 let selectedDivision = null;
@@ -10,8 +10,8 @@ let fields = [], specialActivities = [];
 let timeTemplates = []; // [{start,end,divisions:[]}]
 let activityDuration = 30;
 // NOTE: Scheduling state (scheduleAssignments, unifiedTimes, divisionActiveRows) 
-// is now primarily managed by app2.js, but these arrays are retained for utility
-// functions that are still in app1.js (like generateTimes).
+// is now primarily managed by app2.js, but these arrays are
+// retained for utility functions.
 let unifiedTimes = []; // [{start:Date,end:Date,label:string}]
 let divisionActiveRows = {}; // { divName: Set(rowIndices) }
 
@@ -65,20 +65,8 @@ function fmtTime(d) {
 }
 
 // -------------------- Tabs --------------------
-function showTab(id) {
-  document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-  document.getElementById(id).classList.add('active');
-  document.querySelector(`.tab-button[onclick="showTab('${id}')"]`).classList.add('active');
-  
-  // Only call external init/update functions when tab is selected
-  if (id === 'schedule') window.updateTable?.();
-  if (id === 'leagues') window.initLeaguesTab?.(); // Calls the new league.js function
-  if (id === 'fixed-activities') window.DailyActivities?.onDivisionsChanged?.(); // Calls the new daily_activities.js function
-}
-// Expose the core tab function globally as well, in case the index.html inline function 
-// is replaced, or external calls are needed.
-window.showTab = showTab; 
+// This function is now defined in index.html in the <script> tag
+// window.showTab = showTab; 
 
 
 // -------------------- Bunks --------------------
@@ -94,7 +82,7 @@ function addBunk() {
     i.value = "";
     return;
   }
-
+  
   bunks.push(name);
   saveData();
   i.value = "";
@@ -136,10 +124,13 @@ function updateUnassigned() {
         const i = d.bunks.indexOf(b);
         if (i !== -1) d.bunks[i] = newName;
       }
-      // The original code was managing scheduleAssignments here, which is fine to keep.
+      
+      // We must also update scheduleAssignments IF it's loaded for a day
       if (window.scheduleAssignments && window.scheduleAssignments[b]) {
         window.scheduleAssignments[newName] = window.scheduleAssignments[b];
         delete window.scheduleAssignments[b];
+        // Note: This only affects the *loaded* day. We need to save it.
+        window.saveCurrentDailyData?.("scheduleAssignments", window.scheduleAssignments);
       }
       saveData();
       updateUnassigned();
@@ -157,19 +148,16 @@ function addDivision() {
   if (!availableDivisions.includes(name)) {
     const color = defaultColors[colorIndex % defaultColors.length]; colorIndex++;
     
-    // FIX 2a: Update the internal list and the global list
     availableDivisions.push(name);
-    window.availableDivisions = availableDivisions;
-
+    window.availableDivisions = availableDivisions; // Update global
+  
     divisions[name] = { bunks: [], color, start: null, end: null };
-    // LEAGUE REMOVAL: Delete the line that created the old leagues object
-    // leagues[name] = { enabled: false, sports: [] };
     
     i.value = "";
     saveData();
     setupDivisionButtons(); 
-    window.initLeaguesTab?.(); // Notify league.js a new division was created
-    window.DailyActivities?.onDivisionsChanged?.(); // Notify fixed activities module
+    window.initLeaguesTab?.(); // Notify league.js
+    window.DailyActivities?.onDivisionsChanged?.(); // Notify fixed activities
     window.updateTable?.();
     renderTimeTemplates();
   }
@@ -186,32 +174,39 @@ function setupDivisionButtons() {
     const span = document.createElement("span"); span.textContent = name; span.className = "bunk-button";
     span.style.backgroundColor = colorEnabled ? obj.color : "transparent";
     span.style.color = colorEnabled ? "#fff" : "inherit";
-    span.onclick = () => { selectedDivision = name; cont.querySelectorAll('span.bunk-button').forEach(el => el.classList.remove("selected")); span.classList.add("selected"); saveData(); };
+    span.onclick = () => { 
+        selectedDivision = name; 
+        cont.querySelectorAll('span.bunk-button').forEach(el => el.classList.remove("selected"));
+        span.classList.add("selected"); 
+        saveData(); // Save selectedDivision
+    };
+    // Re-select if it was selected
+    if (selectedDivision === name) span.classList.add("selected");
+    
     makeEditable(span, newName => {
       divisions[newName] = divisions[name]; delete divisions[name];
-      
-      // LEAGUE REMOVAL: Delete the line that moved/deleted the old leagues data
-      // leagues[newName] = leagues[name] || { enabled: false, sports: [] }; delete leagues[name];
-      
       availableDivisions[availableDivisions.indexOf(name)] = newName;
+      window.availableDivisions = availableDivisions; // Update global
+      
       if (selectedDivision === name) selectedDivision = newName;
       
       saveData();
       setupDivisionButtons(); 
-      window.initLeaguesTab?.(); // Notify league.js of the name change
-      window.DailyActivities?.onDivisionsChanged?.(); // Notify fixed activities module
+      window.initLeaguesTab?.(); 
+      window.DailyActivities?.onDivisionsChanged?.(); 
       renderTimeTemplates(); 
       window.updateTable?.();
     });
     wrap.appendChild(span);
-    const col = document.createElement("input"); col.type = "color"; col.value = obj.color; col.className = "colorPicker";
+    const col = document.createElement("input"); col.type = "color";
+    col.value = obj.color; col.className = "colorPicker";
     col.oninput = e => { 
       obj.color = e.target.value; 
       if (colorEnabled) { span.style.backgroundColor = e.target.value; span.style.color = "#fff"; } 
       saveData(); 
       window.updateTable?.(); 
       renderTimeTemplates(); 
-      window.DailyActivities?.onDivisionsChanged?.(); // Notify fixed activities module of color change
+      window.DailyActivities?.onDivisionsChanged?.(); 
     };
     wrap.appendChild(col);
     cont.appendChild(wrap);
@@ -288,7 +283,8 @@ function renderFields() {
   fields.forEach(f => {
     const w = document.createElement("div"); w.className = "fieldWrapper"; if (!f.available) w.classList.add("unavailable");
     const t = document.createElement("span"); t.className = "fieldTitle"; t.textContent = f.name;
-    makeEditable(t, newName => { f.name = newName; saveData(); renderFields(); }); w.appendChild(t);
+    makeEditable(t, newName => { f.name = newName; saveData(); renderFields(); });
+    w.appendChild(t);
     const tog = document.createElement("label"); tog.className = "switch";
     const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = f.available;
     cb.onchange = () => { f.available = cb.checked; saveData(); renderFields(); };
@@ -341,7 +337,8 @@ function renderSpecials() {
   specialActivities.forEach(s => {
     const w = document.createElement("div"); w.className = "fieldWrapper"; if (!s.available) w.classList.add("unavailable");
     const t = document.createElement("span"); t.className = "fieldTitle"; t.textContent = s.name;
-    makeEditable(t, newName => { s.name = newName; saveData(); renderSpecials(); }); w.appendChild(t);
+    makeEditable(t, newName => { s.name = newName; saveData(); renderSpecials(); });
+    w.appendChild(t);
     const tog = document.createElement("label"); tog.className = "switch";
     const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = s.available;
     cb.onchange = () => { s.available = cb.checked; saveData(); renderSpecials(); };
@@ -351,21 +348,18 @@ function renderSpecials() {
   });
 }
 
-// LEAGUE REMOVAL: Delete the entire renderLeagues function
-// function renderLeagues() { /* ... function body ... */ }
-
 // -------------------- Generate Times --------------------
 function generateTimes() {
   const inc = parseInt(document.getElementById("increment").value, 10);
   applyTemplatesToDivisions();
-
+  
   const starts = availableDivisions.map(d => parseTime(divisions[d].start)).filter(Boolean);
   const ends   = availableDivisions.map(d => parseTime(divisions[d].end)).filter(Boolean);
   if (starts.length === 0 || ends.length === 0) { alert("Please set time templates for divisions first."); return; }
-
+  
   const earliest = new Date(Math.min(...starts.map(d => d.getTime())));
   const latest   = new Date(Math.max(...ends.map(d => d.getTime())));
-
+  
   unifiedTimes = [];
   let cur = new Date(earliest);
   while (cur < latest) {
@@ -374,7 +368,7 @@ function generateTimes() {
     unifiedTimes.push({ start:new Date(cur), end:new Date(nxt), label:`${fmtTime(cur)} - ${fmtTime(nxt)}` });
     cur = nxt;
   }
-
+  
   divisionActiveRows = {};
   availableDivisions.forEach(div => {
     const s = parseTime(divisions[div].start), e = parseTime(divisions[div].end);
@@ -388,67 +382,42 @@ function generateTimes() {
   // Expose the schedule times globally for app2.js
   window.unifiedTimes = unifiedTimes;
   window.divisionActiveRows = divisionActiveRows;
-
-  // handoff to scheduling (app2.js functions must be loaded)
+  
+  // handoff to scheduling
   window.assignFieldsToBunks?.();
-  window.initScheduleSystem?.();
-  window.updateTable?.();
+  // Note: initScheduleSystem() is *not* called here, assignFieldsToBunks handles saving and rendering.
 }
 
-// -------------------- Local Storage --------------------
+// -------------------- Local Storage (UPDATED) --------------------
 function saveData() {
-  // LEAGUE REMOVAL: Removed 'leagues' from the saved object
+  // This now saves to the *Global Settings* object
   const data = { bunks, divisions, availableDivisions, selectedDivision, fields, specialActivities, timeTemplates };
-  localStorage.setItem("campSchedulerData", JSON.stringify(data));
+  window.saveGlobalSettings?.("app1", data);
 }
 
 function loadData() {
-  const stored = localStorage.getItem("campSchedulerData");
-  if (!stored) return;
+  // This now loads from the *Global Settings* object
+  const data = window.loadGlobalSettings?.().app1 || {};
+  
   try {
-    const data = JSON.parse(stored);
     bunks = data.bunks || [];
     divisions = data.divisions || {};
     
-    // FIX 2b: Ensure availableDivisions is derived from divisions data and is consistent.
+    // Ensure availableDivisions is derived from divisions data
     availableDivisions = Object.keys(divisions);
     window.availableDivisions = availableDivisions;
-    // Update the internal availableDivisions from storage if available, then override with keys
-    // This maintains backward compatibility but enforces the canonical source (divisions keys)
+    // Load saved order if it exists
     if (data.availableDivisions) availableDivisions = data.availableDivisions; 
 
     selectedDivision = data.selectedDivision || null;
     fields = data.fields || [];
     specialActivities = data.specialActivities || [];
-    // LEAGUE REMOVAL: Delete the line that loaded the old leagues object
-    // leagues = data.leagues || {};
-    
     timeTemplates = data.timeTemplates || [];
   } catch (e) { console.error("Error loading data:", e); }
 }
 
-document.getElementById("eraseAllBtn")?.addEventListener("click", () => {
-  if (confirm("Erase all camp data?")) {
-    localStorage.removeItem("campSchedulerData");
-    bunks = []; divisions = {}; 
-    availableDivisions = []; 
-    window.availableDivisions = availableDivisions; // Reset global exposure
-    selectedDivision = null;
-    
-    fields = []; specialActivities = []; 
-    // LEAGUE REMOVAL: Removed leagues = {};
-    timeTemplates = [];
-    
-    updateUnassigned(); 
-    setupDivisionButtons(); 
-    renderFields(); 
-    renderSpecials(); 
-    window.initLeaguesTab?.(); // Notify league.js to reset its view
-    window.DailyActivities?.onDivisionsChanged?.(); // Notify fixed activities module
-    renderTimeTemplates(); 
-    window.updateTable?.();
-  }
-});
+// REMOVED: The "eraseAllBtn" click handler is now in calendar.js
+// document.getElementById("eraseAllBtn")?.addEventListener("click", ...);
 
 // -------------------- Init --------------------
 window.addEventListener("DOMContentLoaded", () => {
@@ -457,8 +426,6 @@ window.addEventListener("DOMContentLoaded", () => {
   setupDivisionButtons();
   renderFields();
   renderSpecials();
-  // LEAGUE REMOVAL: Delete the call to renderLeagues()
-  // renderLeagues();
   renderTimeTemplates();
 });
 
