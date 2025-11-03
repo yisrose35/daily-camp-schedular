@@ -113,3 +113,35 @@ input:checked + .slider:before {
   padding:4px 8px;
   cursor:pointer;
 }
+/* --- Add to end of styles.css --- */
+
+/* Styles for Daily Overrides Tab */
+.override-section {
+  margin-bottom: 25px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 20px;
+}
+
+.override-section h3 {
+  border-bottom: 2px solid #eee;
+  padding-bottom: 8px;
+}
+
+label.override-checkbox {
+  display: block;
+  margin: 8px 0;
+  font-size: 1.1em;
+  cursor: pointer;
+}
+
+label.override-checkbox input {
+  width: 16px;
+  height: 16px;
+  margin-right: 10px;
+  vertical-align: middle;
+}
+
+label.override-checkbox span {
+  vertical-align: middle;
+}
