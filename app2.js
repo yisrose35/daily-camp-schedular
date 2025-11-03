@@ -1,4 +1,4 @@
-// -------------------- app2.js (Complete & Fixed) --------------------
+// -------------------- app2.js (Field Assignment) --------------------
 // Leagues render as merged cells per division+slot with per-matchup sports.
 // Fixed activities show names properly; early/late times grey per division.
 // FIX: Activity length now correctly uses 'activityDuration' instead of single increments.
@@ -6,6 +6,7 @@
 // FIX 3 (Critical): Prevent general activities from OVERWRITING fixed activities.
 // FIX 4 (Critical): Prevent LEAGUE activities from overwriting *or* being fragmented.
 // (General activities are *allowed* to be fragmented by fixed activities).
+// FIX 5 (NEW): Assign specific fields to leagues and track field usage for all activities.
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -235,6 +236,17 @@ function assignFieldsToBunks() {
   );
   const availSpecials = specialActivities.filter((s) => s?.available);
 
+  // ===== CHANGE 1: Create Field-Sport Inventory =====
+  const fieldsBySport = {};
+  availFields.forEach(f => {
+    if (Array.isArray(f.activities)) {
+      f.activities.forEach(sport => {
+        fieldsBySport[sport] = fieldsBySport[sport] || [];
+        fieldsBySport[sport].push(f.name); // Use f.name
+      });
+    }
+  });
+
   const allActivities = [
     ...availFields.flatMap((f) =>
       f.activities.map((act) => ({ type: "field", field: f, sport: act }))
@@ -256,10 +268,28 @@ function assignFieldsToBunks() {
   );
 
   const blockedRowsByDiv = prePlaceFixedActivities();
-  const enabledByDiv = getEnabledLeaguesByDivision();
-  const takenLeagueSlots = new Set();
 
-  // --- Place Leagues (STRICT: Must fit full span) ---
+  // ===== CHANGE 2: Create Field Reservation System =====
+  // Pre-populate with fields used by Fixed Activities (e.g., "Lunch Room")
+  const fieldUsageBySlot = {};
+  (availableDivisions || []).forEach(div => {
+    (divisions[div]?.bunks || []).forEach(bunk => {
+       if (scheduleAssignments[bunk]) {
+         scheduleAssignments[bunk].forEach((entry, slot) => {
+           // Check for _fixed flag from dailyActivities.js
+           if (entry && entry._fixed && entry.field) {
+               fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || new Set();
+               fieldUsageBySlot[slot].add(fieldLabel(entry.field));
+           }
+         });
+       }
+    });
+  });
+
+  const enabledByDiv = getEnabledLeaguesByDivision();
+  const takenLeagueSlots = new Set(); // This tracks TIME, fieldUsageBySlot tracks FIELDS
+
+  // --- Place Leagues (STRICT: Must fit full span & find a field) ---
   for (const div of availableDivisions) {
     const lg = enabledByDiv[div];
     if (!lg) continue;
@@ -269,12 +299,10 @@ function assignFieldsToBunks() {
         ? Array.from(actSet)
         : unifiedTimes.map((_, i) => i);
 
-    // We must check if the *entire span* for the league is free.
     const bunksInDiv = divisions[div]?.bunks || [];
     const firstBunk = bunksInDiv.length > 0 ? bunksInDiv[0] : null;
 
     const candidates = actSlots.filter((s) => {
-      // Loop for spanLen to check if the *entire block* is free
       for (let k = 0; k < spanLen; k++) {
         const slot = s + k;
         if (slot >= unifiedTimes.length) return false;
@@ -288,7 +316,7 @@ function assignFieldsToBunks() {
     
     if (!candidates.length) continue;
 
-    const chosen = candidates[0];
+    const chosen = candidates[0]; // The starting slot index
     const teams = (lg.data.teams || [])
       .map((t) => String(t).trim())
       .filter(Boolean);
@@ -296,14 +324,49 @@ function assignFieldsToBunks() {
     const matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
     if (!matchups.length) continue;
 
-    const games = assignSportsToMatchups(
+    // ===== CHANGE 3: Assign fields to league games =====
+    const gamesWithSports = assignSportsToMatchups(
       lg.name,
       matchups,
       lg.data.sports
     );
-    window.leagueAssignments[div] = window.leagueAssignments[div] || {};
 
-    const leagueData = { games, leagueName: lg.name, isContinuation: false };
+    const gamesWithFields = gamesWithSports.map(game => {
+        const { sport } = game;
+        const possibleFields = fieldsBySport[sport] || [];
+        let assignedField = "No Field"; // Default if none found
+        
+        // Find a field for this sport that is not yet taken in this slot span
+        for (const field of possibleFields) {
+            let isTaken = false;
+            // Check all slots in the span
+            for (let k = 0; k < spanLen; k++) {
+                const slot = chosen + k;
+                if (fieldUsageBySlot[slot]?.has(field)) {
+                    isTaken = true;
+                    break;
+                }
+            }
+            
+            if (!isTaken) {
+                assignedField = field;
+                // Now, *reserve* this field for the entire span
+                for (let k = 0; k < spanLen; k++) {
+                    const slot = chosen + k;
+                    if (slot >= unifiedTimes.length) break;
+                    fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || new Set();
+                    fieldUsageBySlot[slot].add(assignedField);
+                }
+                break; // Found our field, stop looking
+            }
+        }
+        return { ...game, field: assignedField };
+    });
+    // ===== END CHANGE 3 =====
+
+    window.leagueAssignments[div] = window.leagueAssignments[div] || {};
+    
+    const leagueData = { games: gamesWithFields, leagueName: lg.name, isContinuation: false };
     const leagueContinuation = { leagueName: lg.name, isContinuation: true };
 
     for (let k = 0; k < spanLen; k++) {
@@ -321,42 +384,49 @@ function assignFieldsToBunks() {
 
     for (const bunk of divisions[div]?.bunks || []) {
       for (let s = 0; s < unifiedTimes.length; s++) { 
-        // Check if STARTING slot is already filled
         if (scheduleAssignments[bunk][s]) continue;
         if (window.leagueAssignments?.[div]?.[s]) continue;
         if (blockedRowsByDiv[div]?.has(s)) continue;
         if (!isActive(s)) continue;
 
-        // This slot is free. Let's fill it and its continuations.
         const pick =
           allActivities[Math.floor(Math.random() * allActivities.length)];
+        const pickedField = fieldLabel(pick.field); // Get the field name
         
         let assignedSpan = 0;
-        // Loop forward and fill *until* we hit a conflict
         for (let k = 0; k < spanLen; k++) {
           const currentSlot = s + k;
-          if (currentSlot >= unifiedTimes.length) break; // Out of time bounds
+          if (currentSlot >= unifiedTimes.length) break; 
 
-          // Check if this *next* slot is blocked/league/fixed
+          // ===== CHANGE 4: Check fieldUsageBySlot =====
           if (
-            scheduleAssignments[bunk][currentSlot] || // <-- This is FIX 3
+            scheduleAssignments[bunk][currentSlot] || 
             window.leagueAssignments?.[div]?.[currentSlot] ||
-            blockedRowsByDiv[div]?.[currentSlot] ||
-            !isActive(currentSlot)) {
-            // Can't continue, so stop this span
-            break; // This creates the 15-min fragment
+            blockedRowsByDiv[div]?.has(currentSlot) ||
+            !isActive(currentSlot) ||
+            // Is the field for this 'pick' already taken by a league or fixed activity?
+            (pickedField && fieldUsageBySlot[currentSlot]?.has(pickedField))
+          ) {
+            break; 
           }
           
           // Assign the slot
           scheduleAssignments[bunk][currentSlot] = {
-            field: fieldLabel(pick.field),
+            field: pickedField, // Use the field name
             sport: pick.sport,
-            continuation: (k > 0), // k=0 is false, k>0 is true
+            continuation: (k > 0),
           };
-          assignedSpan++; // Track how many we actually assigned
+
+          // *Reserve* this field in this slot
+          if (pickedField) {
+              fieldUsageBySlot[currentSlot] = fieldUsageBySlot[currentSlot] || new Set();
+              fieldUsageBySlot[currentSlot].add(pickedField);
+          }
+          // ===== END CHANGE 4 =====
+          
+          assignedSpan++;
         }
         
-        // Skip the slots we just filled.
         if (assignedSpan > 0) {
            s += (assignedSpan - 1);
         }
@@ -364,7 +434,6 @@ function assignFieldsToBunks() {
     }
   }
 
-  // ===== THIS WAS MISSING =====
   updateTable();
   saveSchedule();
 }
@@ -413,8 +482,7 @@ function updateTable() {
   const divTimeRanges = {};
   availableDivisions.forEach((div) => {
     const s = parseTimeToMinutes(divisions[div]?.start);
-    // ===== THIS TYPO WAS CRASHING THE CODE =====
-    const e = parseTimeToMinutes(divisions[div]?.end); // Was 'dim v'
+    const e = parseTimeToMinutes(divisions[div]?.end);
     divTimeRanges[div] = { start: s, end: e };
   });
 
@@ -438,9 +506,7 @@ function updateTable() {
       const league = window.leagueAssignments?.[div]?.[i];
       const bunks = divisions[div]?.bunks || [];
 
-      // ===== THIS ROWSPAN LOGIC WAS MISSING =====
       if (outside) {
-        // Check if this 'outside' cell is already part of a rowspan from a previous row
         let covered = false;
         if (i > 0) {
              const prevMid = (unifiedTimes[i - 1].start.getHours() * 60 + unifiedTimes[i - 1].start.getMinutes() +
@@ -448,9 +514,7 @@ function updateTable() {
              const prevOutside = (start != null && prevMid < start) || (end != null && prevMid >= end);
              if (prevOutside) covered = true;
         }
-
         if (!covered) {
-            // This is the START of a grey block. Calculate rowspan.
             let span = 1;
             for (let j = i + 1; j < unifiedTimes.length; j++) {
                 const nextMid = (unifiedTimes[j].start.getHours() * 60 + unifiedTimes[j].start.getMinutes() +
@@ -470,58 +534,52 @@ function updateTable() {
             td.textContent = "—";
             tr.appendChild(td);
         }
-        return; // Skips to the next division
+        return; 
       }
-      // ===== END RESTORED LOGIC =====
 
-      // ===== AESTHETIC FIX 1: LEAGUE ROWSPAN =====
       if (league) {
-        // If this is a continuation, it was handled by a rowspan. Skip.
         if (league.isContinuation) {
           // This cell is already covered by a rowspan, do nothing.
         } else {
-          // This is the START of a league block. Calculate rowspan.
           let span = 1;
           for (let j = i + 1; j < unifiedTimes.length; j++) {
             if (window.leagueAssignments?.[div]?.[j]?.isContinuation) {
               span++;
             } else {
-              break; // Not a continuation, stop counting
+              break; 
             }
           }
-
           const td = document.createElement("td");
           td.colSpan = bunks.length;
-          td.rowSpan = span; // Apply the calculated rowspan
+          td.rowSpan = span; 
           td.style.background = divisions[div]?.color || "#4CAF50";
           td.style.color = "#fff";
           td.style.fontWeight = "600";
-          td.style.verticalAlign = "top"; // Looks better with rowspan
+          td.style.verticalAlign = "top"; 
 
+          // ===== CHANGE 5: Render the assigned field =====
           const list = league.games
-            .map((g) => `${g.teams[0]} vs ${g.teams[1]} (${g.sport})`)
+            .map((g) => `${g.teams[0]} vs ${g.teams[1]} (${g.sport}) @ ${g.field || '???'}`)
             .join("<br> • ");
+          // ===== END CHANGE 5 =====
+
           td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;">${league.leagueName}</span></div>`;
           tr.appendChild(td);
         }
       } else {
-        // ===== AESTHETIC FIX 2: GENERAL ACTIVITY ROWSPAN =====
         bunks.forEach((b) => {
           const entry = scheduleAssignments[b]?.[i];
 
           if (!entry) {
             const td = document.createElement("td");
-            tr.appendChild(td); // Render an empty cell
-            return; // Skips to the next bunk
+            tr.appendChild(td); 
+            return; 
           }
 
-          // If this is a continuation, it was handled by a rowspan. Skip.
           if (entry.continuation) {
-            // This cell is already covered by a rowspan, do nothing.
-            return; // Skips to the next bunk
+            return; 
           }
 
-          // This is the START of an activity. Calculate rowspan.
           let span = 1;
           for (let j = i + 1; j < unifiedTimes.length; j++) {
             if (scheduleAssignments[b]?.[j]?.continuation) {
@@ -532,10 +590,9 @@ function updateTable() {
           }
 
           const td = document.createElement("td");
-          td.rowSpan = span; // Apply the calculated rowspan
-          td.style.verticalAlign = "top"; // Looks better
+          td.rowSpan = span; 
+          td.style.verticalAlign = "top"; 
 
-          // Now apply the original styling logic
           if (entry._fixed) {
             td.textContent = fieldLabel(entry.field);
             td.style.background = "#f1f1f1";
@@ -588,8 +645,7 @@ function reconcileOrRenderSaved() {
 }
 function initScheduleSystem() {
   try {
-    // ===== THIS TYPO WAS PREVENTING LOAD =====
-    reconcileOrRenderSaved(); // Was 'reconcBileOrRenderSaved'
+    reconcileOrRenderSaved();
   } catch (e) {
     console.error("Init error:", e);
     updateTable();
