@@ -1,9 +1,10 @@
 // dailyActivities.js — Fixed Daily Activities
 // (Lunch/Mincha/Swim/etc.)
 // NEW: Added Pre- and Post-activity buffer times (e.g., "Changing" for Swim)
+// (UPDATED to use calendar.js save/load)
 
 (function(){
-  const STORAGE_KEY = "fixedActivities_v2";
+  // const STORAGE_KEY = "fixedActivities_v2"; // No longer used
   let fixedActivities = []; // { id, name, start, end, divisions, enabled, preName, preMin, postName, postMin }
 
   // -------------------- Helpers --------------------
@@ -11,8 +12,10 @@
 
   function load() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      let parsed = Array.isArray(JSON.parse(raw)) ? JSON.parse(raw) : [];
+      // UPDATED: Load from global settings
+      const raw = window.loadGlobalSettings?.().fixedActivities;
+      let parsed = Array.isArray(raw) ? raw : [];
+      
       // Ensure new fields exist for old data
       fixedActivities = parsed.map(item => ({
           ...item,
@@ -26,12 +29,12 @@
     }
   }
   function save() { 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(fixedActivities)); 
+    // UPDATED: Save to global settings
+    window.saveGlobalSettings?.("fixedActivities", fixedActivities);
   }
 
   function pad(n){ return (n<10?'0':'') + n; }
 
-  // Function for time normalization (Accepts 12h or 24h, returns HH:MM 24h)
   function normalizeTime(str){
     if(!str) return null;
     str = String(str).trim().toLowerCase();
@@ -80,7 +83,6 @@
       if(!(row && row.start && row.end)) continue;
       const rs = minutesOf(new Date(row.start));
       const re = minutesOf(new Date(row.end));
-      // Use overlapping logic: row starts before block ends, row ends after block starts
       if(Math.max(rs, startMin) < Math.min(re, endMin)){ 
           rows.push(i); 
       }
@@ -96,12 +98,8 @@
 
   // -------------------- UI --------------------
   let rootEl, chipsWrap, listEl, nameInput, startInput, endInput, addBtn, infoEl;
-  // NEW UI Elements
   let preNameInput, preTimeInput, postNameInput, postTimeInput;
   
-  /**
-   * Helper to create the 5/10/15 min button UI
-   */
   function createTimeInput(id, label) {
     const wrapper = document.createElement('div');
     wrapper.style.marginBottom = '8px';
@@ -138,7 +136,6 @@
   }
 
   function ensureMount(){
-    // Select the existing elements from index.html 
     nameInput = document.getElementById('fixedName');
     startInput = document.getElementById('fixedStart');
     endInput = document.getElementById('fixedEnd');
@@ -148,11 +145,9 @@
     
     rootEl = document.getElementById('fixed-activities'); 
     
-    // --- Create and Inject NEW UI elements ---
     if (addBtn && addBtn.parentElement && !document.getElementById('fixedPreName')) {
         const parent = addBtn.parentElement;
         
-        // Create Pre-Activity Name
         const preNameLbl = document.createElement('label');
         preNameLbl.textContent = 'Pre-Activity Name (e.g., "Changing")';
         preNameLbl.style.display = 'block';
@@ -164,11 +159,9 @@
         preNameInput.style.width = '100%';
         preNameInput.style.boxSizing = 'border-box';
 
-        // Create Pre-Activity Time
         const preTime = createTimeInput('fixedPreTime', 'Pre-Activity Duration');
         preTimeInput = preTime.input;
 
-        // Create Post-Activity Name
         const postNameLbl = document.createElement('label');
         postNameLbl.textContent = 'Post-Activity Name (e.g., "Changing")';
         postNameLbl.style.display = 'block';
@@ -180,11 +173,9 @@
         postNameInput.style.width = '100%';
         postNameInput.style.boxSizing = 'border-box';
 
-        // Create Post-Activity Time
         const postTime = createTimeInput('fixedPostTime', 'Post-Activity Duration');
         postTimeInput = postTime.input;
         
-        // Inject before the Add button
         parent.insertBefore(preNameLbl, addBtn);
         parent.insertBefore(preNameInput, addBtn);
         parent.insertBefore(preTime.wrapper, addBtn);
@@ -192,13 +183,11 @@
         parent.insertBefore(postNameInput, addBtn);
         parent.insertBefore(postTime.wrapper, addBtn);
     } else {
-        // Select them if they were already injected
         preNameInput = document.getElementById('fixedPreName');
         preTimeInput = document.getElementById('fixedPreTime');
         postNameInput = document.getElementById('fixedPostName');
         postTimeInput = document.getElementById('fixedPostTime');
     }
-    // --- End NEW UI ---
     
     if (!document.getElementById('da_info')) {
       infoEl = document.createElement('div');
@@ -224,21 +213,16 @@
     const divs = Array.isArray(window.availableDivisions) ? window.availableDivisions : [];
     divs.forEach(d => {
       const el = document.createElement('span');
-      // Using your .bunk-button class
       el.className = 'bunk-button'; 
       el.textContent = d;
       el.dataset.value = d;
-      
-      // Toggling your .selected class on click
       el.addEventListener('click', ()=> el.classList.toggle('selected'));
-      
       chipsWrap.appendChild(el);
     });
   }
   
   function getSelectedDivisions(){
     if (!chipsWrap) return []; 
-    // Querying for your .bunk-button.selected elements
     return Array.from(chipsWrap.querySelectorAll('.bunk-button.selected')).map(x=>x.dataset.value);
   }
   
@@ -256,18 +240,16 @@
       const targets = resolveTargetDivisions(item.divisions);
       const label = `${targets.join(', ') || 'All'}`;
       
-      // --- NEW: Build details string with buffer times ---
       let details = `<div class="muted" style="font-size: 0.9em;">Total: ${to12hLabel(item.start)} - ${to12hLabel(item.end)} &bull; Applies to: ${escapeHtml(label)}</div>`;
 
       if (item.preMin > 0) {
-        const preLabel = item.preName || 'Preparation'; // Default label
+        const preLabel = item.preName || 'Preparation';
         details += `<div class="muted" style="font-size: 0.8em; padding-left: 10px;">&hookrightarrow; <strong>${escapeHtml(preLabel)}:</strong> First ${item.preMin} mins</div>`;
       }
       if (item.postMin > 0) {
-        const postLabel = item.postName || 'Cleanup'; // Default label
+        const postLabel = item.postName || 'Cleanup';
         details += `<div class="muted" style="font-size: 0.8em; padding-left: 10px;">&hookrightarrow; <strong>${escapeHtml(postLabel)}:</strong> Last ${item.postMin} mins</div>`;
       }
-      // --- END NEW ---
       
       row.innerHTML = `
         <div style="flex-grow:1;">
@@ -314,16 +296,14 @@
     const ms = toMinutes(ns), me = toMinutes(ne);
     if(me<=ms){ return tip('End must be after start.'); }
 
-    // --- NEW: Get buffer values ---
-    const preName = (preNameInput.value || '').trim() || name; // Default to main name
+    const preName = (preNameInput.value || '').trim() || name;
     const preMin = parseInt(preTimeInput.value) || 0;
-    const postName = (postNameInput.value || '').trim() || name; // Default to main name
+    const postName = (postNameInput.value || '').trim() || name;
     const postMin = parseInt(postTimeInput.value) || 0;
 
     if ((preMin + postMin) >= (me - ms)) {
         return tip('Buffer times cannot be longer than the total activity duration.');
     }
-    // --- END NEW ---
 
     const divisionsSel = getSelectedDivisions();
     
@@ -342,7 +322,6 @@
     
     save();
     nameInput.value = ''; startInput.value = ''; endInput.value = '';
-    // Clear new inputs
     preNameInput.value = ''; preTimeInput.value = '';
     postNameInput.value = ''; postTimeInput.value = '';
     
@@ -386,7 +365,6 @@
   
   /**
    * Pre-place enabled fixed activities into the schedule grid.
-   * --- NEW: This function is completely overhauled to support buffer times ---
    */
   function prePlace(){
     const summary = [];
@@ -400,14 +378,18 @@
       divBunks[d] = b;
     });
   
+    // UPDATED: Must load the 'fixedActivities' from the global store
+    // This function runs *after* app1.js loads, but *before* this file's init()
+    // so we need to call load() again to be safe.
+    load();
+    
     fixedActivities.filter(x=>x.enabled).forEach(item => {
       const totalStartMin = toMinutes(item.start);
       const totalEndMin = toMinutes(item.end);
       const allRows = rowsForBlock(totalStartMin, totalEndMin);
       if(allRows.length===0) return;
 
-      // Calculate time boundaries
-      const preName = item.preName || item.name; // Default to main name
+      const preName = item.preName || item.name;
       const postName = item.postName || item.name;
       const preMin = item.preMin || 0;
       const postMin = item.postMin || 0;
@@ -424,16 +406,14 @@
         bunks.forEach(b => {
           if(!window.scheduleAssignments[b]) window.scheduleAssignments[b] = new Array(unifiedTimes.length);
           
-          let previousActivityName = null; // Track for continuation
+          let previousActivityName = null; 
           
           allRows.forEach((r, idx)=>{
             const row = unifiedTimes[r];
-            // Get the row's start time to determine which part it belongs to
             const rs = minutesOf(new Date(row.start)); 
             
-            let currentActivityName = item.name; // Default to main activity
+            let currentActivityName = item.name; 
             
-            // Determine which activity this row is part of
             if (preMin > 0 && rs < preEndMin) {
                 currentActivityName = preName;
             } else if (postMin > 0 && rs >= postStartMin) {
@@ -448,7 +428,7 @@
               _skip: false
             };
             summary.push({ bunk:b, row:r, name:currentActivityName });
-            previousActivityName = currentActivityName; // Update for next iteration
+            previousActivityName = currentActivityName; 
           });
         });
       });
@@ -464,5 +444,6 @@
   window.DailyActivities = { init, onDivisionsChanged, prePlace, getAll, setAll };
   
   // Auto-init on DOMContentLoaded
-  document.addEventListener('DOMContentLoaded', init);
+  // (This is now handled by index.html's boot() function)
+  // document.addEventListener('DOMContentLoaded', init);
 })();
