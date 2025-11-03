@@ -3,6 +3,8 @@
 // This is the new "brain" of the application.
 // It manages the currently selected date and all data saving/loading.
 // All other files will call functions from this file.
+//
+// NEW: Now includes a one-time migration for old data.
 // =================================================================
 
 (function() {
@@ -54,7 +56,7 @@
         // 2. Tell app2.js to re-initialize and render the schedule
         window.initScheduleSystem?.();
         
-        // 3. NEW: Tell daily_overrides.js to refresh its view
+        // 3. Tell daily_overrides.js to refresh its view
         window.initDailyOverrides?.();
     }
 
@@ -62,16 +64,66 @@
 
     /**
      * [GLOBAL] Loads the entire "Global Settings" object (bunks, fields, etc.)
+     * --- NEW: Includes one-time migration logic ---
      */
     window.loadGlobalSettings = function() {
         try {
-            const data = localStorage.getItem(GLOBAL_SETTINGS_KEY);
-            return data ? JSON.parse(data) : {};
+            // 1. Try to load the new settings format
+            const newData = localStorage.getItem(GLOBAL_SETTINGS_KEY);
+            if (newData) {
+                return JSON.parse(newData);
+            }
+
+            // 2. If it doesn't exist, try to migrate old data
+            console.warn("New settings key not found. Attempting to migrate old data...");
+            
+            let newSettings = {};
+            let didMigrate = false;
+
+            // 2a. Migrate app1.js data ("campSchedulerData")
+            const oldApp1Data = localStorage.getItem("campSchedulerData");
+            if (oldApp1Data) {
+                newSettings.app1 = JSON.parse(oldApp1Data);
+                localStorage.removeItem("campSchedulerData"); // Clean up
+                didMigrate = true;
+                console.log("Migrated old app1 data.");
+            }
+
+            // 2b. Migrate leagues.js data ("leagues")
+            const oldLeaguesData = localStorage.getItem("leagues");
+            if (oldLeaguesData) {
+                newSettings.leaguesByName = JSON.parse(oldLeaguesData);
+                localStorage.removeItem("leagues"); // Clean up
+                didMigrate = true;
+                console.log("Migrated old leagues data.");
+            }
+
+            // 2c. Migrate dailyActivities.js data ("fixedActivities_v2")
+            const oldFixedData = localStorage.getItem("fixedActivities_v2") || localStorage.getItem("fixedActivities");
+            if (oldFixedData) {
+                newSettings.fixedActivities = JSON.parse(oldFixedData);
+                localStorage.removeItem("fixedActivities_v2"); // Clean up
+                localStorage.removeItem("fixedActivities");
+                didMigrate = true;
+                console.log("Migrated old fixed activities data.");
+            }
+
+            // 3. If we migrated anything, save it in the new format
+            if (didMigrate) {
+                console.log("Migration successful. Saving to new global settings.", newSettings);
+                localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(newSettings));
+                return newSettings;
+            }
+
+            // 4. If nothing to migrate, just return an empty object
+            return {};
+
         } catch (e) {
-            console.error("Failed to load global settings:", e);
+            console.error("Failed to load/migrate global settings:", e);
             return {};
         }
     }
+
 
     /**
      * [GLOBAL] Saves one piece of the "Global Settings" (e.g., "fields" or "leagues")
@@ -112,7 +164,7 @@
                 leagueAssignments: {},
                 leagueRoundState: {},
                 leagueSportRotation: {},
-                overrides: { fields: [], bunks: [], leagues: [] } // Add default overrides
+                overrides: { fields: [], bunks: [], leagues: [] } 
             };
         }
         
