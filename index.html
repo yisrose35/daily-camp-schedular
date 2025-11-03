@@ -13,11 +13,13 @@
     <label for="calendar-date-picker" style="font-weight: bold; margin-right: 10px; font-size: 1.1em;">Current Schedule Date:</label>
     <input type="date" id="calendar-date-picker" style="font-size: 1.1em; padding: 5px;">
   </div>
+
   <div class="tabs">
     <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button>
     <button class="tab-button" onclick="showTab('schedule')">Daily Schedule</button>
     <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
     <button class="tab-button" onclick="showTab('fixed-activities')">🗓️ Daily Fixed</button>
+    <button class="tab-button" onclick="showTab('daily-overrides'); window.initDailyOverrides?.();">Daily Overrides</button>
   </div>
   
   <div id="setup" class="tab-content active">
@@ -83,25 +85,24 @@
   
   <div id="fixed-activities" class="tab-content">
     <h2>Fixed Daily Activities (Lunch, Assembly, etc.)</h2>
-  
     <div style="border: 1px solid #ccc; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
       <label for="fixedName" style="display: block; margin-bottom: 5px; font-weight: 600;">Activity Name:</label>
       <input type="text" id="fixedName" placeholder="e.g., Lunch, Tefillah" style="margin-right: 8px; width: 250px;">
-  
       <label for="fixedStart" style="display: inline-block; margin-top: 10px; font-weight: 600;">Start Time:</label>
       <input id="fixedStart" placeholder="e.g., 12:00pm" style="margin-right: 8px;">
-  
       <label for="fixedEnd" style="display: inline-block; font-weight: 600;">End Time:</label>
       <input id="fixedEnd" placeholder="e.g., 12:30pm" style="margin-right: 8px;">
-  
       <button id="addFixedBtn" class="bunk-button" style="background: #007BFF; color: white; margin-top: 15px;">Add Fixed Activity</button>
-  
       <p style="margin-top: 15px; font-weight: 600;">Select Divisions:</p>
       <div id="fixedDivisionsBox" style="display: flex; flex-wrap: wrap; gap: 4px;"></div>
     </div>
-  
     <h3>Active Fixed Activities List</h3>
     <div id="fixedList"></div>
+  </div>
+
+  <div id="daily-overrides" class="tab-content">
+    <div id="daily-overrides-content">
+      </div>
   </div>
   
   <script>
@@ -109,33 +110,29 @@
      document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
      document.getElementById(id).classList.add('active');
-     document.querySelector(`.tab-button[onclick="showTab('${id}')"]`)?.classList.add('active');
+     document.querySelector(`.tab-button[onclick^="showTab('${id}')"]`)?.classList.add('active');
   
      if (id === 'schedule') {
        window.updateTable?.();
      } else if (id === 'leagues') {
        window.initLeaguesTab?.();
      } else if (id === 'fixed-activities') {
-       // Refresh division chips when you enter the tab
        window.DailyActivities?.onDivisionsChanged?.();
      }
+     // Note: initDailyOverrides is called from the button click itself
     }
   
-    // Boot after all deferred scripts parse
-   (document.readyState === "loading"
+    (document.readyState === "loading"
      ? document.addEventListener("DOMContentLoaded", boot)
      : boot());
   
     function boot() {
-     // If DailyActivities is present, initialize once.
      if (window.DailyActivities && typeof window.DailyActivities.init === "function") {
        window.DailyActivities.init();
      } else {
-       // Don’t alert; just log to avoid blocking the app if the file name/path is wrong.
        console.warn("DailyActivities not loaded yet. Ensure daily_activities.js sets window.DailyActivities.");
      }
   
-     // Optional: if app1 exposes a divisions change bus, rewire DailyActivities when divisions change
      if (typeof window.onDivisionsChanged === "function") {
        window.onDivisionsChanged(() => {
          window.DailyActivities?.onDivisionsChanged?.();
@@ -145,6 +142,7 @@
   </script>
   
   <script src="calendar.js" defer></script>
+  <script src="daily_overrides.js" defer></script>
   <script src="app1.js" defer></script>
   <script src="daily_activities.js" defer></script>
   <script src="leagues.js" defer></script>      
