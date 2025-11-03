@@ -1,8 +1,9 @@
-// -------------------- app2.js (Rowspan Fix) --------------------
+// -------------------- app2.js (Fixed Activity Fix) --------------------
 // Leagues render as merged cells per division+slot with per-matchup sports.
 // Fixed activities show names properly; early/late times grey per division.
 // FIX: Activity length now correctly uses 'activityDuration' instead of single increments.
 // FIX 2 (Aesthetic): Use rowspan to merge cells for multi-slot activities.
+// FIX 3 (Critical): Prevent general activities from overwriting pre-placed fixed activities.
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -319,8 +320,10 @@ function assignFieldsToBunks() {
           const currentSlot = s + k;
           if (currentSlot >= unifiedTimes.length) break; // Out of time bounds
 
-          // Check if this *next* slot is blocked/league/inactive
+          // ===== CRITICAL FIX 3 =====
+          // Check if this *next* slot is blocked/league/inactive/FIXED
           if (
+            scheduleAssignments[bunk][currentSlot] || // <-- THIS IS THE FIX
             window.leagueAssignments?.[div]?.[currentSlot] ||
             blockedRowsByDiv[div]?.[currentSlot] ||
             !isActive(currentSlot)
@@ -328,6 +331,7 @@ function assignFieldsToBunks() {
             // Can't continue, so stop this span
             break;
           }
+          // ===== END FIX 3 =====
 
           // Assign the slot
           scheduleAssignments[bunk][currentSlot] = {
@@ -544,7 +548,7 @@ function reconcileOrRenderSaved() {
 }
 function initScheduleSystem() {
   try {
-    reconcileOrRenderSaved();
+    reconcBileOrRenderSaved();
   } catch (e) {
     console.error("Init error:", e);
     updateTable();
