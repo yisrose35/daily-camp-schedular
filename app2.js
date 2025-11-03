@@ -1,4 +1,4 @@
-// -------------------- app2.js (H2H Scheduling) --------------------
+// -------------------- app2.js (Tuned H2H) --------------------
 // Leagues render as merged cells per division+slot with per-matchup sports.
 // Fixed activities show names properly; early/late times grey per division.
 // FIX: Activity length now correctly uses 'activityDuration' instead of single increments.
@@ -11,8 +11,10 @@
 // FIX 7 (Corrected): Smart "Field-First" League Scheduling. Assigns most constrained
 //                   games first *within the first available time slot*.
 // FIX 8: Prevent bunks from repeating a *general* activity (sport or special).
-// FIX 9 (NEW): Add Bunk-vs-Bunk (H2H) scheduling for general activities.
-// FIX 10 (NEW): Render H2H games in the table as "Sport Field vs Opponent".
+// FIX 9 (Tuned): Add Bunk-vs-Bunk (H2H) scheduling. Chance lowered to 10%.
+// FIX 10: Render H2H games in the table as "Sport Field vs Opponent".
+// FIX 11: Track Bunk-vs-Bunk pairings (e.g., 1v2) to limit to 2x per day.
+// FIX 12 (NEW): Track *total* H2H games per bunk, limited to 2 per day.
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -275,7 +277,7 @@ function assignFieldsToBunks() {
   ];
   // ===== FIX 9: Create list of H2H-eligible activities (sports only) =====
   const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
-  const H2H_CHANCE = 0.25; // 25% chance to try scheduling an H2H game
+  const H2H_CHANCE = 0.10; // Tuned down to 10%
   // ====================================================================
 
   if (!allActivities.length || !unifiedTimes.length) return;
@@ -305,11 +307,15 @@ function assignFieldsToBunks() {
     });
   });
 
-  // ===== FIX 8: Init General Activity History =====
+  // ===== FIX 8, 11, 12: Init Activity Histories =====
   const generalActivityHistory = {};
+  const h2hHistory = {}; // FIX 11 (Bunk vs Bunk)
+  const h2hGameCount = {}; // FIX 12 (Total per Bunk)
   availableDivisions.forEach(div => {
       (divisions[div]?.bunks || []).forEach(b => { 
           generalActivityHistory[b] = new Set(); 
+          h2hHistory[b] = {};
+          h2hGameCount[b] = 0; // NEW
       }); 
   });
   availableDivisions.forEach(div => {
@@ -429,7 +435,7 @@ function assignFieldsToBunks() {
   // --- ===== END FIX 7 ===== ---
 
 
-  // --- ===== FIX 9 & 6 & 8: "Smarter" General Activity Filler w/ H2H & No Repeats ===== ---
+  // --- ===== FIX 6, 8, 9, 11, 12: "Smarter" General Activity Filler ===== ---
   for (const div of availableDivisions) {
     const isActive = (s) => divisionActiveRows?.[div]?.has(s) ?? true;
     const allBunksInDiv = divisions[div]?.bunks || [];
@@ -444,12 +450,17 @@ function assignFieldsToBunks() {
         let assignedSpan = 0;
         let didH2H = false;
 
-        // --- ===== FIX 9: Try to schedule H2H ===== ---
-        if (Math.random() < H2H_CHANCE) {
-            // 1. Find a free opponent in the same division
+        // --- ===== FIX 9, 11, 12: Try to schedule H2H ===== ---
+        // FIX 12: Check if this bunk can play *any* H2H
+        // FIX 9: Check the random chance
+        if (h2hGameCount[bunk] < 2 && Math.random() < H2H_CHANCE) {
+            
+            // 1. Find a free opponent
             const opponents = allBunksInDiv.filter(b => {
                 if (b === bunk) return false; // Not yourself
                 if (scheduleAssignments[b][s]) return false; // Opponent not free
+                if ((h2hHistory[bunk][b] || 0) >= 2) return false; // FIX 11 (Bunk vs Bunk limit)
+                if (h2hGameCount[b] >= 2) return false; // FIX 12 (Opponent total limit)
                 return true;
             });
 
@@ -462,6 +473,7 @@ function assignFieldsToBunks() {
                     const activityName = getActivityName(pick);
                     const pickedField = fieldLabel(pick.field);
 
+                    // FIX 8 Check:
                     if (generalActivityHistory[bunk].has(activityName) || 
                         generalActivityHistory[opponent].has(activityName)) {
                         continue; // One or both bunks already did this
@@ -490,15 +502,12 @@ function assignFieldsToBunks() {
                         for (let k = 0; k < spanForThisPick; k++) {
                             const currentSlot = s + k;
                             const cont = k > 0;
-                            // Assign to Bunk 1
                             scheduleAssignments[bunk][currentSlot] = {
                                 field: pickedField, sport: pick.sport, continuation: cont, _h2h: true, vs: opponent
                             };
-                            // Assign to Bunk 2
                             scheduleAssignments[opponent][currentSlot] = {
                                 field: pickedField, sport: pick.sport, continuation: cont, _h2h: true, vs: bunk
                             };
-                            // Reserve field
                             if (pickedField) {
                                 fieldUsageBySlot[currentSlot] = fieldUsageBySlot[currentSlot] || new Set();
                                 fieldUsageBySlot[currentSlot].add(pickedField);
@@ -507,13 +516,20 @@ function assignFieldsToBunks() {
                         assignedSpan = spanForThisPick;
                         generalActivityHistory[bunk].add(activityName);
                         generalActivityHistory[opponent].add(activityName);
-                        didH2H = true; // Mark as success
-                        break; // Stop H2H pick loop
+                        
+                        // FIX 11 & 12 Update:
+                        h2hHistory[bunk][opponent] = (h2hHistory[bunk][opponent] || 0) + 1;
+                        h2hHistory[opponent][bunk] = (h2hHistory[opponent][bunk] || 0) + 1;
+                        h2hGameCount[bunk]++;
+                        h2hGameCount[opponent]++;
+                        
+                        didH2H = true; 
+                        break; 
                     }
                 }
             }
         }
-        // --- ===== END FIX 9 ===== ---
+        // --- ===== END FIX 9, 11, 12 ===== ---
         
         // --- ===== FIX 6 & 8: Fallback to General Activity ===== ---
         if (!didH2H) {
