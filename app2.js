@@ -469,7 +469,7 @@ function updateTable() {
       const leagueContinuing = leagueContinuationRowsByDiv[div]?.has(i);
       const bunks = divisions[div]?.bunks || [];
 
-      // Covered by an earlier league rowSpan — add nothing for this division.
+      // If this row is covered by a previous league rowSpan, add nothing for this division.
       if (leagueContinuing) return;
 
       // Outside hours — one grey cell spanning the division's columns.
@@ -501,9 +501,15 @@ function updateTable() {
 
       // Regular bunk cells for this division.
       let produced = 0;
+      let anyContinuation = false;
       (bunks || []).forEach((b) => {
         const entry = scheduleAssignments[b]?.[i];
-        if (entry?.continuation) return; // covered by rowSpan
+
+        if (entry?.continuation) { // covered by a rowSpan from a previous row
+          anyContinuation = true;
+          return;
+        }
+
         const td = document.createElement("td");
         produced++;
 
@@ -530,13 +536,13 @@ function updateTable() {
         tr.appendChild(td);
       });
 
-      // 🔒 Alignment guard: if nothing rendered for this division (no starts and no explicit blanks),
-      // fill with empty placeholders to keep subsequent divisions aligned.
-      if (produced === 0 && bunks.length > 0) {
+      // Alignment guard:
+      // ONLY add an empty placeholder if we produced nothing *and* there are NO continuations,
+      // meaning the division truly has nothing occupying this row.
+      if (produced === 0 && !anyContinuation && bunks.length > 0) {
         const td = document.createElement("td");
         td.colSpan = bunks.length;
-        // Keep it visibly empty (no dash) to distinguish from "outside" grey.
-        td.innerHTML = "&nbsp;";
+        td.innerHTML = "&nbsp;"; // empty, not greyed
         tr.appendChild(td);
       }
     });
