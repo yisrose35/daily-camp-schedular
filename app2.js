@@ -386,7 +386,7 @@ function assignFieldsToBunks() {
   saveSchedule();
 }
 
-// ===== RENDERING (per-division grey-out + rowSpan + alignment guards) =====
+// ===== RENDERING (per-division grey-out + rowSpan + strict fill) =====
 function updateTable() {
   const container = document.getElementById("schedule");
   if (!container) return;
@@ -469,7 +469,7 @@ function updateTable() {
       const leagueContinuing = leagueContinuationRowsByDiv[div]?.has(i);
       const bunks = divisions[div]?.bunks || [];
 
-      // If this row is covered by a previous league rowSpan, add nothing for this division.
+      // If a league rowSpan from an earlier row covers this row, add nothing (those columns are already occupied).
       if (leagueContinuing) return;
 
       // Outside hours — one grey cell spanning the division's columns.
@@ -499,22 +499,25 @@ function updateTable() {
         return;
       }
 
-      // Regular bunk cells for this division.
+      // Regular bunk cells for this division at this row.
       let produced = 0;
-      let anyContinuation = false;
+      let contCount = 0;
+
       (bunks || []).forEach((b) => {
         const entry = scheduleAssignments[b]?.[i];
 
-        if (entry?.continuation) { // covered by a rowSpan from a previous row
-          anyContinuation = true;
+        // Continuations occupy a column via rowSpan from above — count them, but don't render a td.
+        if (entry?.continuation) {
+          contCount++;
           return;
         }
 
+        // For non-continuations, render either the activity (start) or an explicit empty cell
         const td = document.createElement("td");
         produced++;
 
         if (!entry) {
-          tr.appendChild(td);
+          tr.appendChild(td); // empty placeholder for this bunk/column
           return;
         }
 
@@ -536,14 +539,14 @@ function updateTable() {
         tr.appendChild(td);
       });
 
-      // Alignment guard:
-      // ONLY add an empty placeholder if we produced nothing *and* there are NO continuations,
-      // meaning the division truly has nothing occupying this row.
-      if (produced === 0 && !anyContinuation && bunks.length > 0) {
-        const td = document.createElement("td");
-        td.colSpan = bunks.length;
-        td.innerHTML = "&nbsp;"; // empty, not greyed
-        tr.appendChild(td);
+      // STRICT FILL: make sure continuations + produced + placeholders = bunks.length
+      const remaining = Math.max(0, bunks.length - contCount - produced);
+      if (remaining > 0) {
+        for (let r = 0; r < remaining; r++) {
+          const td = document.createElement("td");
+          td.innerHTML = "&nbsp;";
+          tr.appendChild(td);
+        }
       }
     });
 
