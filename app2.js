@@ -1,4 +1,4 @@
-// -------------------- app2.js (Smarter Scheduling) --------------------
+// -------------------- app2.js (Corrected Priority) --------------------
 // Leagues render as merged cells per division+slot with per-matchup sports.
 // Fixed activities show names properly; early/late times grey per division.
 // FIX: Activity length now correctly uses 'activityDuration' instead of single increments.
@@ -8,10 +8,12 @@
 // (General activities are *allowed* to be fragmented by fixed activities).
 // FIX 5: Assign specific fields to leagues. Leagues get *priority* and reserve fields first.
 // FIX 6: Make general scheduler "smarter" to try all activities before leaving a slot blank.
-// FIX 7 (NEW): Smarter league field assignment. Solves "bin packing" problem
-//              by assigning most constrained games (fewest field options) first.
-// FIX 8 (NEW): Prevent bunks from repeating a *general* activity (sport or special)
-//              more than once per day. Does not apply to leagues or fixed.
+// FIX 7 (Corrected): Smart "Field-First" League Scheduling. Assigns most constrained
+//                   games first *within the first available time slot*.
+//                   Will schedule games with "No Field" if necessary, but won't
+//                   cancel the entire league.
+// FIX 8: Prevent bunks from repeating a *general* activity (sport or special)
+//        more than once per day. Does not apply to leagues or fixed.
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -252,11 +254,13 @@ function assignFieldsToBunks() {
 
   // Create Field-Sport Inventory
   const fieldsBySport = {};
+  let allFieldNames = [];
   availFields.forEach(f => {
+    allFieldNames.push(f.name);
     if (Array.isArray(f.activities)) {
       f.activities.forEach(sport => {
         fieldsBySport[sport] = fieldsBySport[sport] || [];
-        fieldsBySport[sport].push(f.name); // Use f.name
+        fieldsBySport[sport].push(f.name);
       });
     }
   });
@@ -322,7 +326,7 @@ function assignFieldsToBunks() {
   const enabledByDiv = getEnabledLeaguesByDivision();
   const takenLeagueSlots = new Set(); 
 
-  // --- Place Leagues (STRICT: Must fit full span & find a field) ---
+  // --- ===== FIX 7 (Corrected): Smartest Field-First League Scheduling ===== ---
   for (const div of availableDivisions) {
     const lg = enabledByDiv[div];
     if (!lg) continue;
@@ -335,7 +339,7 @@ function assignFieldsToBunks() {
     const bunksInDiv = divisions[div]?.bunks || [];
     const firstBunk = bunksInDiv.length > 0 ? bunksInDiv[0] : null;
 
-    // Find first available time slot
+    // 1. Find the *first available* time slot
     const candidates = actSlots.filter((s) => {
       for (let k = 0; k < spanLen; k++) {
         const slot = s + k;
@@ -348,50 +352,47 @@ function assignFieldsToBunks() {
       return true;
     });
     
-    if (!candidates.length) continue;
+    if (!candidates.length) continue; // No free time slots at all, skip this league
 
-    const chosen = candidates[0]; // The starting slot index
+    const chosenSlot = candidates[0]; // Take the *first* one
+
+    // 2. Generate the games
     const teams = (lg.data.teams || [])
       .map((t) => String(t).trim())
       .filter(Boolean);
     if (teams.length < 2) continue;
     const matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
     if (!matchups.length) continue;
-
     const gamesWithSports = assignSportsToMatchups(
       lg.name,
       matchups,
       lg.data.sports
     );
 
-    // ===== FIX 7: Smarter Field Assignment =====
-    
-    // 1. Find all fields that are *completely free* for this entire span
-    const availableFieldsForSpan = new Set();
-    availFields.forEach(f => availableFieldsForSpan.add(f.name));
-    
+    // 3. Find all fields that are *completely free* for this *chosen* span
+    const availableFieldsForSpan = new Set(allFieldNames);
     for (let k = 0; k < spanLen; k++) {
-        const slot = chosen + k;
+        const slot = chosenSlot + k;
         if (fieldUsageBySlot[slot]) {
             fieldUsageBySlot[slot].forEach(f => availableFieldsForSpan.delete(f));
         }
     }
 
-    // 2. Map each game to its list of *possible, available* fields
+    // 4. Map each game to its list of *possible, available* fields
     const gamesWithPossibleFields = gamesWithSports.map(game => {
         const possibleFields = (fieldsBySport[game.sport] || [])
             .filter(field => availableFieldsForSpan.has(field));
         return { game, possibleFields };
     });
 
-    // 3. Sort games by *fewest* options first (most constrained)
+    // 5. Sort games by *fewest* options first (most constrained)
     gamesWithPossibleFields.sort((a, b) => a.possibleFields.length - b.possibleFields.length);
 
-    // 4. Try to assign them
+    // 6. Try to assign them
     const tempReservedFields = new Set();
     const gamesWithFields = gamesWithPossibleFields.map(item => {
         const { game, possibleFields } = item;
-        let assignedField = "No Field Available";
+        let assignedField = "No Field Available"; // Default
         
         for (const field of possibleFields) {
             if (!tempReservedFields.has(field)) {
@@ -403,32 +404,30 @@ function assignFieldsToBunks() {
         return { ...game, field: assignedField };
     });
 
-    // 5. Now, *permanently* reserve the fields that were successfully assigned
-    const successfullyAssignedGames = gamesWithFields.filter(g => g.field !== "No Field Available");
-    
-    successfullyAssignedGames.forEach(game => {
-        for (let k = 0; k < spanLen; k++) {
-            const slot = chosen + k;
-            if (slot >= unifiedTimes.length) break;
-            fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || new Set();
-            fieldUsageBySlot[slot].add(game.field);
-        }
-    });
-    // ===== END FIX 7 =====
-
+    // 7. Now, schedule the league and *permanently* reserve the fields
     window.leagueAssignments[div] = window.leagueAssignments[div] || {};
-    
     const leagueData = { games: gamesWithFields, leagueName: lg.name, isContinuation: false };
     const leagueContinuation = { leagueName: lg.name, isContinuation: true };
 
     for (let k = 0; k < spanLen; k++) {
-      const slot = chosen + k;
+      const slot = chosenSlot + k;
       if (slot >= unifiedTimes.length) break; 
-      window.leagueAssignments[div][slot] =
-        k === 0 ? leagueData : leagueContinuation;
+      
+      // Reserve time for division
+      window.leagueAssignments[div][slot] = (k === 0) ? leagueData : leagueContinuation;
       takenLeagueSlots.add(slot);
+      
+      // Reserve fields that were successfully assigned
+      gamesWithFields.forEach(game => {
+          if (game.field !== "No Field Available") {
+              fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || new Set();
+              fieldUsageBySlot[slot].add(game.field);
+          }
+      });
     }
   }
+  // --- ===== END FIX 7 ===== ---
+
 
   // --- ===== FIX 6 & 8: "Smarter" General Activity Filler w/ No Repeats ===== ---
   for (const div of availableDivisions) {
