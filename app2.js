@@ -1,4 +1,4 @@
-// -------------------- app2.js (Tuned H2H) --------------------
+// -------------------- app2.js (H2H Tuned) --------------------
 // Leagues render as merged cells per division+slot with per-matchup sports.
 // Fixed activities show names properly; early/late times grey per division.
 // FIX: Activity length now correctly uses 'activityDuration' instead of single increments.
@@ -13,8 +13,8 @@
 // FIX 8: Prevent bunks from repeating a *general* activity (sport or special).
 // FIX 9 (Tuned): Add Bunk-vs-Bunk (H2H) scheduling. Chance lowered to 10%.
 // FIX 10: Render H2H games in the table as "Sport Field vs Opponent".
-// FIX 11: Track Bunk-vs-Bunk pairings (e.g., 1v2) to limit to 2x per day.
-// FIX 12 (NEW): Track *total* H2H games per bunk, limited to 2 per day.
+// FIX 11 (NEW/Tuned): Track Bunk-vs-Bunk pairings (e.g., 1v2) to limit to 1x per day.
+// FIX 12: Track *total* H2H games per bunk, limited to 2 per day.
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -315,7 +315,7 @@ function assignFieldsToBunks() {
       (divisions[div]?.bunks || []).forEach(b => { 
           generalActivityHistory[b] = new Set(); 
           h2hHistory[b] = {};
-          h2hGameCount[b] = 0; // NEW
+          h2hGameCount[b] = 0;
       }); 
   });
   availableDivisions.forEach(div => {
@@ -459,7 +459,8 @@ function assignFieldsToBunks() {
             const opponents = allBunksInDiv.filter(b => {
                 if (b === bunk) return false; // Not yourself
                 if (scheduleAssignments[b][s]) return false; // Opponent not free
-                if ((h2hHistory[bunk][b] || 0) >= 2) return false; // FIX 11 (Bunk vs Bunk limit)
+                // ===== FIX 11 Check (Tuned): =====
+                if ((h2hHistory[bunk][b] || 0) >= 1) return false; // Already played 1x
                 if (h2hGameCount[b] >= 2) return false; // FIX 12 (Opponent total limit)
                 return true;
             });
@@ -687,6 +688,7 @@ function updateTable() {
             td.className = "grey-cell";
             td.style.background = "#ddd";
             td.textContent = "—";
+    
             tr.appendChild(td);
         }
         return; 
