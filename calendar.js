@@ -1,6 +1,8 @@
 // =================================================================
 // calendar.js
 // This is the new "brain" of the application.
+//
+// NEW: Added function to load *yesterday's* data for cross-day logic.
 // =================================================================
 
 (function() {
@@ -14,6 +16,8 @@
      * Helper function to get a date in YYYY-MM-DD format.
      */
     function getTodayString(date = new Date()) {
+        // Force time to noon to avoid timezone-off-by-one errors
+        date.setHours(12, 0, 0, 0); 
         const year = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, '0');
         const day = String(date.getDate()).padStart(2, '0');
@@ -47,8 +51,8 @@
         window.currentScheduleDate = newDate;
         
         window.loadCurrentDailyData();
-        window.initScheduleSystem?.();
-        window.initDailyOverrides?.();
+        window.initScheduleSystem?.(); // Reloads schedule in app2.js
+        window.initDailyOverrides?.(); // Reloads overrides tab
     }
 
     // --- 3. NEW GLOBAL DATA API ---
@@ -160,9 +164,17 @@
      */
     window.loadPreviousDailyData = function() {
         try {
-            const currentDate = new Date(window.currentScheduleDate + "T12:00:00"); // Use T12 to avoid timezone issues
-            const yesterday = new Date(currentDate.setDate(currentDate.getDate() - 1));
-            const yesterdayString = getTodayString(yesterday);
+            // Parse the current date string safely
+            const [year, month, day] = window.currentScheduleDate.split('-').map(Number);
+            // Create a date object (month is 0-indexed)
+            const currentDate = new Date(year, month - 1, day, 12, 0, 0); 
+            
+            // Go back one day
+            currentDate.setDate(currentDate.getDate() - 1);
+            
+            const yesterdayString = getTodayString(currentDate);
+            
+            console.log("Loading previous day's data from:", yesterdayString);
             
             const allData = window.loadAllDailyData();
             return allData[yesterdayString] || {}; // Return yesterday's data or empty
