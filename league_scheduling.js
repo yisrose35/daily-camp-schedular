@@ -9,7 +9,7 @@
   'use strict';
 
   // const LEAGUE_STATE_KEY = "camp_league_round_state"; // No longer used
-  let leagueRoundState = {}; // { "League Name": { currentRound: 0 } }
+  var leagueRoundState = {}; // <-- CHANGED TO VAR
 
   /**
    * Loads the current round for all leagues from the *current day's* data.
