@@ -1,3 +1,36 @@
+<hr style="margin: 20px 0;">
+
+    <h3>Clear Schedules</h3>
+    <p>Use these buttons to clear saved schedule data. Your Setup (bunks, fields, etc.) will NOT be affected.</p>
+    
+    <button id="eraseTodayBtn" 
+            style="background: #db7a00; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-right: 8px;" 
+            onclick="if(confirm('Are you sure you want to delete the schedule for today?')) window.eraseCurrentDailyData?.();">
+      Delete ONLY This Day's Schedule
+    </button>
+    
+    <button id="eraseAllSchedulesBtn" 
+            style="background: #c0392b; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;" 
+            onclick="if(confirm('Are you sure you want to delete ALL saved schedules for ALL days? Your setup will be kept.')) window.eraseAllDailyData?.();">
+      Delete ALL Daily Schedules
+    </button>
+
+    <hr style="margin: 20px 0;">
+
+    <h3>Erase All Data</h3>
+    <p><strong>⚠️ Warning:</strong> This deletes everything. It deletes all schedules AND all of your setup (bunks, divisions, fields, leagues, etc.).</p>
+    
+    <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">
+      Erase All Camp Data (Reset Application)
+    </button>
+
+  </div> ```
+
+### 2. Full Updated `index.html` File
+
+Here is the complete `index.html` file with that new section included for you to copy and paste.
+
+```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -69,11 +102,32 @@
     <button id="addSpecialBtn">Add Special</button>
     <div id="specialList"></div>
   
+    <hr style="margin: 20px 0;">
+
+    <h3>Clear Schedules</h3>
+    <p>Use these buttons to clear saved schedule data. Your Setup (bunks, fields, etc.) will NOT be affected.</p>
+    
+    <button id="eraseTodayBtn" 
+            style="background: #db7a00; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-right: 8px;" 
+            onclick="if(confirm('Are you sure you want to delete the schedule for today?')) window.eraseCurrentDailyData?.();">
+      Delete ONLY This Day's Schedule
+    </button>
+    
+    <button id="eraseAllSchedulesBtn" 
+            style="background: #c0392b; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;" 
+            onclick="if(confirm('Are you sure you want to delete ALL saved schedules for ALL days? Your setup will be kept.')) window.eraseAllDailyData?.();">
+      Delete ALL Daily Schedules
+    </button>
+
+    <hr style="margin: 20px 0;">
+
     <h3>Erase All Data</h3>
-    <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">Erase All</button>
-  </div>
-  
-  <div id="schedule" class="tab-content">
+    <p><strong>⚠️ Warning:</strong> This deletes everything. It deletes all schedules AND all of your setup (bunks, divisions, fields, leagues, etc.).</p>
+    
+    <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">
+      Erase All Camp Data (Reset Application)
+    </button>
+    </div> <div id="schedule" class="tab-content">
     <h3>Daily Schedule</h3>
     <div id="scheduleTable"></div>
   </div>
@@ -163,6 +217,7 @@
       }
     }
   </script>
+  
   <script src="calendar.js" defer></script>
   <script src="daily_overrides.js" defer></script>
   <script src="app1.js" defer></script>
