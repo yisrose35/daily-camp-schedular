@@ -1,8 +1,7 @@
 // =================================================================
 // calendar.js
-// This is the new "brain" of the application.
 //
-// NEW: Added function to erase all daily schedule data.
+// UPDATED: To support 'trips' and remove 'bunk' overrides.
 // =================================================================
 
 (function() {
@@ -150,10 +149,20 @@
                 leagueAssignments: {},
                 leagueRoundState: {},
                 leagueSportRotation: {},
-                overrides: { fields: [], bunks: [], leagues: [] } 
+                // UPDATED: Bunks removed, trips added
+                overrides: { fields: [], leagues: [] }, 
+                trips: [] 
             };
         }
         
+        // Ensure sub-keys exist for older data
+        if (!allData[date].overrides) {
+            allData[date].overrides = { fields: [], leagues: [] };
+        }
+        if (!allData[date].trips) {
+            allData[date].trips = [];
+        }
+
         window.currentDailyData = allData[date];
         return window.currentDailyData;
     }
@@ -228,10 +237,7 @@
     // Initial load on script start
     window.loadCurrentDailyData();
 
-    // --- 5. NEW: ERASE CURRENT DAY FUNCTION ---
-    /**
-     * [DAILY] Erases all schedule data for the currently selected date.
-     */
+    // --- 5. ERASE CURRENT DAY FUNCTION ---
     window.eraseCurrentDailyData = function() {
         try {
             const allData = window.loadAllDailyData();
@@ -242,22 +248,17 @@
                 localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allData));
                 console.log(`Erased schedule data for ${date}.`);
                 
-                // Reload the (now empty) data and refresh the table
-                window.loadCurrentDailyData(); // This will create a new, empty object
-                window.initScheduleSystem?.(); // This will render the empty schedule
+                window.loadCurrentDailyData(); 
+                window.initScheduleSystem?.(); 
             }
         } catch (e) {
             console.error(`Failed to erase daily data for ${date}:`, e);
         }
     }
     
-    // --- 6. NEW: ERASE ALL SCHEDULES FUNCTION ---
-    /**
-     * [DAILY] Erases ALL daily data but leaves GLOBAL settings.
-     */
+    // --- 6. ERASE ALL SCHEDULES FUNCTION ---
     window.eraseAllDailyData = function() {
         try {
-            // This just removes the daily data key
             localStorage.removeItem(DAILY_DATA_KEY);
             
             // Also clean up old stray keys
@@ -267,9 +268,6 @@
             localStorage.removeItem("camp_league_sport_rotation");
 
             console.log("Erased ALL daily schedules.");
-            
-            // Reload the page, which will reload global settings
-            // and create a new, empty daily data object.
             window.location.reload();
             
         } catch (e) {
