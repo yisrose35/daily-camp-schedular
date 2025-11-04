@@ -1,8 +1,6 @@
 // =================================================================
 // calendar.js
 // This is the new "brain" of the application.
-//
-// NEW: Added function to load *yesterday's* data for cross-day logic.
 // =================================================================
 
 (function() {
@@ -164,14 +162,9 @@
      */
     window.loadPreviousDailyData = function() {
         try {
-            // Parse the current date string safely
             const [year, month, day] = window.currentScheduleDate.split('-').map(Number);
-            // Create a date object (month is 0-indexed)
             const currentDate = new Date(year, month - 1, day, 12, 0, 0); 
-            
-            // Go back one day
             currentDate.setDate(currentDate.getDate() - 1);
-            
             const yesterdayString = getTodayString(currentDate);
             
             console.log("Loading previous day's data from:", yesterdayString);
@@ -233,5 +226,32 @@
 
     // Initial load on script start
     window.loadCurrentDailyData();
+
+    // --- 5. NEW: ERASE CURRENT DAY FUNCTION ---
+    /**
+     * [DAILY] Erases all schedule data for the currently selected date.
+     */
+    window.eraseCurrentDailyData = function() {
+        try {
+            const allData = window.loadAllDailyData();
+            const date = window.currentScheduleDate;
+
+            if (allData[date]) {
+                // Delete the data for this day
+                delete allData[date];
+                
+                // Save the modified object
+                localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allData));
+                
+                console.log(`Erased schedule data for ${date}.`);
+                
+                // Reload the (now empty) data and refresh the table
+                window.loadCurrentDailyData(); // This will create a new, empty object
+                window.initScheduleSystem?.(); // This will render the empty schedule
+            }
+        } catch (e) {
+            console.error(`Failed to erase daily data for ${date}:`, e);
+        }
+    }
 
 })();
