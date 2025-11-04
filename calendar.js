@@ -3,6 +3,7 @@
 // This is the new "brain" of the application.
 //
 // NEW: Added function to erase all daily schedule data.
+//
 // =================================================================
 
 (function() {
@@ -16,7 +17,6 @@
      * Helper function to get a date in YYYY-MM-DD format.
      */
     function getTodayString(date = new Date()) {
-        // Force time to noon to avoid timezone-off-by-one errors
         date.setHours(12, 0, 0, 0); 
         const year = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -30,15 +30,7 @@
     
     let datePicker; 
     
-    document.addEventListener("DOMContentLoaded", () => {
-        datePicker = document.getElementById("calendar-date-picker");
-        if (datePicker) {
-            datePicker.value = window.currentScheduleDate;
-            datePicker.addEventListener("change", onDateChanged);
-        } else {
-            console.error("CRITICAL: calendar-date-picker element not found in index.html");
-        }
-    });
+    // ===== REMOVED DOMCONTENTLOADED LISTENER HERE =====
 
     /**
      * Fired when the user changes the date in the calendar.
@@ -224,7 +216,7 @@
             };
         }
     }
-    document.addEventListener("DOMContentLoaded", setupEraseAll);
+    // ===== REMOVED DOMCONTENTLOADED LISTENER HERE =====
 
     // Initial load on script start
     window.loadCurrentDailyData();
@@ -277,5 +269,26 @@
             console.error("Failed to erase all daily data:", e);
         }
     }
+
+    // =============================================
+    // ===== START OF NEW INIT FUNCTION =====
+    // =============================================
+    function initCalendar() {
+      // From the first listener
+      datePicker = document.getElementById("calendar-date-picker");
+      if (datePicker) {
+        datePicker.value = window.currentScheduleDate;
+        datePicker.addEventListener("change", onDateChanged);
+      } else {
+        console.error("CRITICAL: calendar-date-picker element not found in index.html");
+      }
+    
+      // From the second listener
+      setupEraseAll();
+    }
+    window.initCalendar = initCalendar;
+    // =============================================
+    // ===== END OF NEW INIT FUNCTION =====
+    // =============================================
 
 })();
