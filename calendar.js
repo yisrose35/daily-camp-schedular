@@ -16,6 +16,7 @@
      * Helper function to get a date in YYYY-MM-DD format.
      */
     function getTodayString(date = new Date()) {
+        // Force time to noon to avoid timezone-off-by-one errors
         date.setHours(12, 0, 0, 0); 
         const year = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, '0');
