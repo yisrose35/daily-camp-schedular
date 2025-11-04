@@ -5,6 +5,7 @@
 // - General activities will avoid yesterday's activities.
 // - BUGFIX: Correctly rotate sports in 'assignSportsToMatchups'.
 // - UPDATED: Now uses calendar.js to save/load per-day.
+// - NEW BUGFIX: Inherit yesterday's sport rotation state.
 // =================================================================
 
 // ===== Helpers =====
@@ -124,12 +125,24 @@ function getEnabledLeaguesByDivision(masterLeagues, overrides) {
 let leagueSportRotation = {};
 function loadLeagueSportRotation() {
   try {
-    if (window.currentDailyData && window.currentDailyData.leagueSportRotation) {
+    // 1. Try to load THIS day's data
+    if (window.currentDailyData && window.currentDailyData.leagueSportRotation && Object.keys(window.currentDailyData.leagueSportRotation).length > 0) {
         leagueSportRotation = window.currentDailyData.leagueSportRotation;
-    } else {
+    } 
+    // 2. If this day is blank, load YESTERDAY'S data
+    else if (window.loadPreviousDailyData) {
+        console.log("No sport rotation for today. Loading from yesterday.");
+        const yesterdayData = window.loadPreviousDailyData();
+        leagueSportRotation = yesterdayData.leagueSportRotation || {};
+        
+        // IMPORTANT: Save this inherited state to the CURRENT day
+        saveLeagueSportRotation();
+    }
+    else {
         leagueSportRotation = {};
     }
-  } catch {
+  } catch(e) {
+    console.error("Failed to load league sport rotation:", e);
     leagueSportRotation = {};
   }
 }
@@ -142,11 +155,6 @@ function saveLeagueSportRotation() {
 /**
  * UPDATED assignSportsToMatchups (FIX 13 + BUGFIX)
  * Now takes history to avoid back-to-back sports.
- * @param {string} leagueName - The name of the league.
- * @param {Array} matchups - e.g., [ [T1, T2], [T3, T4] ]
- * @param {Array} sportsList - e.g., ["Basketball", "Hockey"]
- * @param {Object} yesterdayHistory - e.g., { "T1": "Basketball", "T2": "Soccer" }
- * @returns {Array} - e.g., [ { teams: [T1, T2], sport: "Hockey" }, ... ]
  */
 function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHistory) {
   if (!Array.isArray(matchups) || matchups.length === 0) return [];
@@ -157,10 +165,8 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
   const state = leagueSportRotation[leagueName] || { index: 0 };
   let idx = state.index;
   
-  const assigned = []; // Create an array to push to
+  const assigned = []; 
 
-  // ===== BUG FIX: Replaced .map() with a for...of loop =====
-  // This ensures 'idx' is correctly updated after each game.
   for (const match of matchups) {
     const [teamA, teamB] = match;
     const lastSportA = yesterdayHistory[teamA];
@@ -170,11 +176,11 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
 
     // 1. Try to find a "preferred" sport (one neither team played)
     for (let i = 0; i < sportsList.length; i++) {
-        const sportIdx = (idx + i) % sportsList.length; // Start search from current idx
+        const sportIdx = (idx + i) % sportsList.length; 
         const sport = sportsList[sportIdx];
         if (sport !== lastSportA && sport !== lastSportB) {
             chosenSport = sport;
-            idx = sportIdx + 1; // GOOD: This updates idx for the *next* game
+            idx = sportIdx + 1; 
             break;
         }
     }
@@ -182,12 +188,11 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
     // 2. If no preferred sport is found, relax the rule and just pick the next one
     if (!chosenSport) {
         chosenSport = sportsList[idx % sportsList.length];
-        idx++; // GOOD: This updates idx for the *next* game
+        idx++; 
     }
     
     assigned.push({ teams: match, sport: chosenSport });
   }
-  // ===== END BUG FIX =====
 
   leagueSportRotation[leagueName] = { index: idx % sportsList.length };
   saveLeagueSportRotation();
