@@ -7,8 +7,8 @@
 // - UPDATED: Now uses calendar.js to save/load per-day.
 // - NEW BUGFIX: Inherit yesterday's sport rotation state.
 //
-=================================================================
-
+// =================================================================
+ 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
   if (!str || typeof str !== "string") return null;
@@ -34,7 +34,7 @@ function fieldLabel(f) {
   if (f && typeof f === "object" && typeof f.name === "string") return f.name;
   return "";
 }
-
+ 
 // ===== FIX 8 HELPER =====
 function getActivityName(pick) {
     if (pick.sport) {
@@ -42,7 +42,7 @@ function getActivityName(pick) {
     }
     return fieldLabel(pick.field); // e.g., "gameroom"
 }
-
+ 
 // ===== Fixed Activities =====
 function loadActiveFixedActivities() {
   const globalSettings = window.loadGlobalSettings?.() || {};
@@ -101,7 +101,7 @@ function prePlaceFixedActivities() {
   }
   return computeBlockedRowsByDiv();
 }
-
+ 
 // ===== League Helpers =====
 function leaguesSnapshot() {
   return window.loadGlobalSettings?.().leaguesByName || {};
@@ -121,8 +121,7 @@ function getEnabledLeaguesByDivision(masterLeagues, overrides) {
   });
   return result;
 }
-
-
+ 
 // ===== League Sport Rotation (UPDATED) =====
 let leagueSportRotation = {};
 function loadLeagueSportRotation() {
@@ -153,7 +152,7 @@ function saveLeagueSportRotation() {
    window.saveCurrentDailyData?.("leagueSportRotation", leagueSportRotation);
   } catch {}
 }
-
+ 
 /**
  * UPDATED assignSportsToMatchups (FIX 13 + BUGFIX)
  * Now takes history to avoid back-to-back sports.
@@ -200,10 +199,10 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
   saveLeagueSportRotation();
   return assigned;
 }
-
+ 
 // ====== CORE ASSIGN ======
 window.leagueAssignments = window.leagueAssignments || {};
-
+ 
 function assignFieldsToBunks() {
   window.scheduleAssignments = window.scheduleAssignments || {};
   window.leagueAssignments = {};
@@ -369,7 +368,7 @@ function assignFieldsToBunks() {
   // ===============================================
 
   const takenLeagueSlots = new Set(); 
-
+ 
   // --- ===== FIX 7 & 13: Smart Field-First League Scheduling ===== ---
   for (const div of availableDivisions) {
     const lg = enabledByDiv[div];
@@ -464,7 +463,7 @@ function assignFieldsToBunks() {
       });
     }
   }
-
+ 
   // --- ===== FIX 6, 8, 9, 11, 12, 13: "Smarter" General Activity Filler ===== ---
   for (const div of availableDivisions) {
     const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
@@ -606,11 +605,11 @@ function assignFieldsToBunks() {
       }
     }
   }
-
+ 
   updateTable();
   saveSchedule();
 }
-
+ 
 /**
  * Helper for FIX 13: Checks if a general activity can fit in a slot.
  */
@@ -636,7 +635,7 @@ function canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, is
     }
     return [canFitThisPick, spanForThisPick];
 }
-
+ 
 /**
  * Helper for FIX 13: Assigns a general activity to the schedule.
  */
@@ -659,8 +658,8 @@ function assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, genera
     generalActivityHistory[bunk].add(activityName); // Add to *today's* history
     return spanForThisPick;
 }
-
-
+ 
+ 
 // ===== RENDERING (per-division grey-out) =====
 function updateTable() {
   const container = document.getElementById("scheduleTable");
@@ -674,7 +673,7 @@ function updateTable() {
   const unifiedTimes = window.unifiedTimes || [];
   
   const table = document.createElement("table");
-
+ 
   // Header
   const thead = document.createElement("thead");
   const tr1 = document.createElement("tr");
@@ -690,7 +689,7 @@ function updateTable() {
     tr1.appendChild(th);
   });
   thead.appendChild(tr1);
-
+ 
   const tr2 = document.createElement("tr");
   const bunkTh = document.createElement("th");
   bunkTh.textContent = "Bunk";
@@ -704,7 +703,7 @@ function updateTable() {
   });
   thead.appendChild(tr2);
   table.appendChild(thead);
-
+ 
   const tbody = document.createElement("tbody");
   const divTimeRanges = {};
   availableDivisions.forEach((div) => {
@@ -712,27 +711,27 @@ function updateTable() {
     const e = parseTimeToMinutes(divisions[div]?.end);
     divTimeRanges[div] = { start: s, end: e };
   });
-
+ 
   for (let i = 0; i < unifiedTimes.length; i++) {
     const tr = document.createElement("tr");
     const tdTime = document.createElement("td");
     tdTime.textContent = unifiedTimes[i].label;
     tr.appendChild(tdTime);
-
+ 
     const mid =
       (unifiedTimes[i].start.getHours() * 60 +
         unifiedTimes[i].start.getMinutes() +
         unifiedTimes[i].end.getHours() * 60 +
         unifiedTimes[i].end.getMinutes()) /
       2;
-
+ 
     availableDivisions.forEach((div) => {
       const { start, end } = divTimeRanges[div];
       const outside =
         (start != null && mid < start) || (end != null && mid >= end);
       const league = window.leagueAssignments?.[div]?.[i];
       const bunks = divisions[div]?.bunks || [];
-
+ 
       if (outside) {
         let covered = false;
         if (i > 0) {
@@ -762,15 +761,9 @@ function updateTable() {
     
             tr.appendChild(td);
         }
-        // =============================================
-        // ===== START OF FIX 2 =====
-        // =============================================
-        continue; // FIX: Was 'return', which broke the loop.
-        // =============================================
-        // ===== END OF FIX 2 =====
-        // =============================================
+        return; 
       }
-
+ 
       if (league) {
         if (league.isContinuation) {
         } else {
@@ -789,28 +782,28 @@ function updateTable() {
           td.style.color = "#fff";
           td.style.fontWeight = "600";
           td.style.verticalAlign = "top"; 
-
+ 
           const list = league.games
             .map((g) => `${g.teams[0]} vs ${g.teams[1]} (${g.sport}) @ ${g.field}`)
             .join("<br> • ");
-
+ 
           td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;">${league.leagueName}</span></div>`;
           tr.appendChild(td);
         }
       } else {
         bunks.forEach((b) => {
           const entry = window.scheduleAssignments[b]?.[i];
-
+ 
           if (!entry) {
             const td = document.createElement("td");
             tr.appendChild(td); 
             return; 
           }
-
+ 
           if (entry.continuation) {
             return; 
           }
-
+ 
           let span = 1;
           for (let j = i + 1; j < unifiedTimes.length; j++) {
             if (window.scheduleAssignments[b]?.[j]?.continuation) {
@@ -819,11 +812,11 @@ function updateTable() {
               break;
             }
           }
-
+ 
           const td = document.createElement("td");
           td.rowSpan = span; 
           td.style.verticalAlign = "top"; 
-
+ 
           if (entry._h2h) {
             td.textContent = `${entry.sport} ${entry.field} vs ${entry.vs}`;
             td.style.background = "#e8f4ff"; 
@@ -848,13 +841,13 @@ function updateTable() {
         });
       }
     });
-
+ 
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
   container.appendChild(table);
 }
-
+ 
 // ===== Save/Init (UPDATED) =====
 function saveSchedule() {
   try {
@@ -877,7 +870,7 @@ function reconcileOrRenderSaved() {
   }
   updateTable();
 }
-
+ 
 function initScheduleSystem() {
   try {
     // This is the main load function for the schedule tab
@@ -887,10 +880,10 @@ function initScheduleSystem() {
     updateTable();
   }
 }
-
+ 
 window.assignFieldsToBunks = assignFieldsToBunks;
 window.updateTable = updateTable;
 window.initScheduleSystem = initScheduleSystem;
-
+ 
 // This is now called by calendar.js when the date changes
 // or by generateTimes() in app1.js
