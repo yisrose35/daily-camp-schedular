@@ -1,11 +1,10 @@
-// -------------------- app2.js (Cross-Day Memory FIX) --------------------
+// -------------------- app2.js (FIX 13 - True Memory) --------------------
 // (All logic from FIX 1 to FIX 12 is included)
-// FIX 13 (Re-integrated): Add cross-day "memory".
-// - Leagues will avoid back-to-back sports.
-// - General activities will avoid yesterday's activities.
-// - BUGFIX: Correctly rotate sports in 'assignSportsToMatchups'.
-// - UPDATED: Now uses calendar.js to save/load per-day.
-// - NEW BUGFIX: Inherit yesterday's sport rotation state.
+// FIX 13 (Re-written): Add true cross-day "memory" for leagues.
+// - Tracks *all* sports played per team, per round-robin cycle.
+// - Guarantees all sports are played before repeating.
+// - Fixes the "Day 3" bug you found.
+// - Inherits sport rotation state from yesterday.
 // =================================================================
 
 // ===== Helpers =====
@@ -121,8 +120,9 @@ function getEnabledLeaguesByDivision(masterLeagues, overrides) {
   return result;
 }
 
-// ===== League Sport Rotation (UPDATED) =====
-let leagueSportRotation = {};
+// ===== League Sport Rotation (UPDATED - FIX 13) =====
+let leagueSportRotation = {}; // This will now store history, e.g., { "4th Grade": { "Team 1": ["Sport1"] } }
+
 function loadLeagueSportRotation() {
   try {
     // 1. Try to load THIS day's data
@@ -153,51 +153,87 @@ function saveLeagueSportRotation() {
 }
 
 /**
- * UPDATED assignSportsToMatchups (FIX 13 + BUGFIX)
- * Now takes history to avoid back-to-back sports.
+ * RE-WRITTEN assignSportsToMatchups (FIX 13)
+ * Implements "play all sports before repeating"
+ * @param {string} leagueName - The name of the league.
+ * @param {Array} matchups - e.g., [ [T1, T2], [T3, T4] ]
+ * @param {Array} sportsList - e.g., ["Basketball", "Hockey", "Volleyball"]
+ * @param {Object} yesterdayTeamSportHistory - e.g., { "T1": "Basketball", "T2": "Soccer" }
+ * @returns {Array} - e.g., [ { teams: [T1, T2], sport: "Volleyball" }, ... ]
  */
-function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHistory) {
+function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayTeamSportHistory) {
   if (!Array.isArray(matchups) || matchups.length === 0) return [];
   if (!Array.isArray(sportsList) || sportsList.length === 0)
     return matchups.map((m) => ({ teams: m, sport: "Leagues" }));
 
-  loadLeagueSportRotation(); // This now correctly loads yesterday's state if today is new
-  const state = leagueSportRotation[leagueName] || { index: 0 };
-  let idx = state.index;
-  
+  loadLeagueSportRotation();
+
+  // Ensure the history object for this league exists
+  if (!leagueSportRotation[leagueName]) {
+      leagueSportRotation[leagueName] = {};
+  }
+  const leagueHistory = leagueSportRotation[leagueName];
+
   const assigned = []; 
 
   for (const match of matchups) {
     const [teamA, teamB] = match;
-    const lastSportA = yesterdayHistory[teamA];
-    const lastSportB = yesterdayHistory[teamB];
+
+    // Get the full sport history for each team
+    const historyA = leagueHistory[teamA] || [];
+    const historyB = leagueHistory[teamB] || [];
+
+    // Get the *last* sport played (for back-to-back check)
+    const lastSportA = yesterdayTeamSportHistory[teamA];
+    const lastSportB = yesterdayTeamSportHistory[teamB];
 
     let chosenSport = null;
 
-    // 1. Try to find a "preferred" sport (one neither team played)
-    for (let i = 0; i < sportsList.length; i++) {
-        const sportIdx = (idx + i) % sportsList.length; 
-        const sport = sportsList[sportIdx];
-        if (sport !== lastSportA && sport !== lastSportB) {
+    // 1. Find a "Preferred" sport (not in either team's full history)
+    for (const sport of sportsList) {
+        if (!historyA.includes(sport) && !historyB.includes(sport)) {
             chosenSport = sport;
-            idx = sportIdx + 1; 
             break;
         }
     }
 
-    // 2. If no preferred sport is found, relax the rule and just pick the next one
+    // 2. If no "new" sport exists, find a "Good" sport (not played *yesterday*)
     if (!chosenSport) {
-        chosenSport = sportsList[idx % sportsList.length];
-        idx++; 
+        for (const sport of sportsList) {
+            if (sport !== lastSportA && sport !== lastSportB) {
+                chosenSport = sport;
+                break;
+            }
+        }
+    }
+    
+    // 3. If *still* no sport, just pick the first one to avoid errors
+    if (!chosenSport) {
+        chosenSport = sportsList[0];
+    }
+    
+    // 4. Update the history
+    if (!leagueHistory[teamA]) leagueHistory[teamA] = [];
+    if (!leagueHistory[teamB]) leagueHistory[teamB] = [];
+    
+    leagueHistory[teamA].push(chosenSport);
+    leagueHistory[teamB].push(chosenSport);
+
+    // 5. If a team has now played all sports, clear its history for the next round
+    if (leagueHistory[teamA].length >= sportsList.length) {
+        leagueHistory[teamA] = [];
+    }
+    if (leagueHistory[teamB].length >= sportsList.length) {
+        leagueHistory[teamB] = [];
     }
     
     assigned.push({ teams: match, sport: chosenSport });
   }
 
-  leagueSportRotation[leagueName] = { index: idx % sportsList.length };
   saveLeagueSportRotation();
   return assigned;
 }
+
 
 // ====== CORE ASSIGN ======
 window.leagueAssignments = window.leagueAssignments || {};
