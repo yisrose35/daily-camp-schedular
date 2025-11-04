@@ -4,6 +4,7 @@
 // - Leagues will avoid back-to-back sports.
 // - General activities will avoid yesterday's activities.
 // - BUGFIX: Correctly rotate sports in 'assignSportsToMatchups'.
+// - UPDATED: Now uses calendar.js to save/load per-day.
 // =================================================================
 
 // ===== Helpers =====
@@ -232,6 +233,7 @@ function assignFieldsToBunks() {
   
   const divisions = {};
   for (const divName of availableDivisions) {
+      if (!masterDivisions[divName]) continue; // Safety check
       divisions[divName] = JSON.parse(JSON.stringify(masterDivisions[divName]));
       divisions[divName].bunks = (divisions[divName].bunks || []).filter(bunkName => 
           !overrides.bunks.includes(bunkName)
@@ -276,7 +278,7 @@ function assignFieldsToBunks() {
   const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
   const H2H_CHANCE = 0.10; 
 
-  if (!allActivities.length || !window.unifiedTimes || window.unifiedTimes.length === 0) {
+  if ((!allActivities.length && !availSpecials.length) || !window.unifiedTimes || window.unifiedTimes.length === 0) {
       console.warn("Cannot assign fields: No activities or unified times are set. Did you click 'Generate Schedule Times'?");
       updateTable(); 
       return;
@@ -843,6 +845,7 @@ function updateTable() {
 // ===== Save/Init (UPDATED) =====
 function saveSchedule() {
   try {
+    // UPDATED: Save to the current day
     window.saveCurrentDailyData?.("scheduleAssignments", window.scheduleAssignments);
     window.saveCurrentDailyData?.("leagueAssignments", window.leagueAssignments);
   } catch (e) {
@@ -851,6 +854,7 @@ function saveSchedule() {
 }
 function reconcileOrRenderSaved() {
   try {
+    // UPDATED: Load from the current day
     const data = window.loadCurrentDailyData?.() || {};
     window.scheduleAssignments = data.scheduleAssignments || {};
     window.leagueAssignments = data.leagueAssignments || {};
@@ -863,6 +867,7 @@ function reconcileOrRenderSaved() {
 
 function initScheduleSystem() {
   try {
+    // This is the main load function for the schedule tab
     reconcileOrRenderSaved();
   } catch (e) {
     console.error("Init error:", e);
