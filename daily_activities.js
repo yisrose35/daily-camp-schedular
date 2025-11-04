@@ -5,7 +5,7 @@
 
 (function(){
   // const STORAGE_KEY = "fixedActivities_v2"; // No longer used
-  let fixedActivities = []; // { id, name, start, end, divisions, enabled, preName, preMin, postName, postMin }
+  var fixedActivities = []; // <-- CHANGED TO VAR
 
   // -------------------- Helpers --------------------
   function uid() { return Math.random().toString(36).slice(2,9); }
