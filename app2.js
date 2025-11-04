@@ -761,7 +761,7 @@ function updateTable() {
     
             tr.appendChild(td);
         }
-        continue; // This is the fix for the rendering bug
+        return; 
       }
  
       if (league) {
