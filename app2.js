@@ -1,7 +1,7 @@
-// -------------------- app2.js (Cross-Day Memory) --------------------
+// -------------------- app2.js (Cross-Day Memory Fix) --------------------
 // (All logic from FIX 1 to FIX 12 is included)
 // FIX 13 (NEW): Add cross-day "memory".
-// - Leagues will avoid back-to-back sports.
+// - Leagues will avoid back-to-back sports. (THIS IS NOW FIXED)
 // - General activities will avoid yesterday's activities, or at least
 //   change the field.
 // =================================================================
@@ -155,8 +155,12 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
   loadLeagueSportRotation();
   const state = leagueSportRotation[leagueName] || { index: 0 };
   let idx = state.index;
+  
+  const assigned = []; // Create an array to push to
 
-  const assigned = matchups.map((match) => {
+  // ===== BUG FIX: Replaced .map() with a for...of loop =====
+  // This ensures 'idx' is correctly updated after each game.
+  for (const match of matchups) {
     const [teamA, teamB] = match;
     const lastSportA = yesterdayHistory[teamA];
     const lastSportB = yesterdayHistory[teamB];
@@ -180,8 +184,9 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
         idx++;
     }
     
-    return { teams: match, sport: chosenSport };
-  });
+    assigned.push({ teams: match, sport: chosenSport });
+  }
+  // ===== END BUG FIX =====
 
   leagueSportRotation[leagueName] = { index: idx % sportsList.length };
   saveLeagueSportRotation();
@@ -468,10 +473,11 @@ function assignFieldsToBunks() {
 
         // --- Try H2H ---
         if (h2hGameCount[bunk] < 2 && Math.random() < H2H_CHANCE) {
+            
             const opponents = allBunksInDiv.filter(b => {
                 if (b === bunk) return false;
                 if (scheduleAssignments[b][s]) return false;
-                if ((h2hHistory[bunk][b] || 0) >= 1) return false;
+                if ((h2hHistory[bunk][b] || 0) >= 1) return false; 
                 if (h2hGameCount[b] >= 2) return false;
                 return true;
             });
@@ -479,7 +485,6 @@ function assignFieldsToBunks() {
             if (opponents.length > 0) {
                 const opponent = opponents[Math.floor(Math.random() * opponents.length)];
                 
-                // FIX 8 Check: Filter out activities *both* bunks have done
                 const h2hPicks = h2hActivities.filter(pick => {
                     const actName = getActivityName(pick);
                     return !generalActivityHistory[bunk].has(actName) && !generalActivityHistory[opponent].has(actName);
@@ -554,22 +559,17 @@ function assignFieldsToBunks() {
             const shuffledPreferred = preferredPicks.sort(() => 0.5 - Math.random());
             const shuffledNonPreferred = nonPreferredPicks.sort(() => 0.5 - Math.random());
 
-            // Try to assign a preferred activity first
+            // 1. Try to assign a preferred activity first
             for (const pick of shuffledPreferred) {
                 const pickedField = fieldLabel(pick.field);
-                const activityName = getActivityName(pick);
-                
-                // This is a preferred pick, so we don't check field history
-                
                 let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, blockedRowsByDiv);
-
                 if (canFit && spanForThisPick > 0) {
                     assignedSpan = assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory);
                     break;
                 }
             }
 
-            // If no preferred activity could be scheduled, try a non-preferred one
+            // 2. If no preferred activity could be scheduled, try a non-preferred one
             if (assignedSpan === 0) {
                 for (const pick of shuffledNonPreferred) {
                     const pickedField = fieldLabel(pick.field);
@@ -577,12 +577,11 @@ function assignFieldsToBunks() {
                     
                     // FIX 13 RULE 2: Avoid the same field if possible
                     const yesterdayField = generalFieldHistory[bunk][activityName];
-                    if (pickedField === yesterdayField) {
+                    if (pickedField === yesterdayField && allFieldNames.length > 1) { // Only skip if other fields exist
                         continue; // Try the next pick (e.g., "Basketball" on a *different* field)
                     }
                     
                     let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, blockedRowsByDiv);
-
                     if (canFit && spanForThisPick > 0) {
                         assignedSpan = assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory);
                         break;
@@ -851,7 +850,6 @@ function saveSchedule() {
 }
 function reconcileOrRenderSaved() {
   try {
-    // UPDATED: Load from the current day
     const data = window.loadCurrentDailyData?.() || {};
     window.scheduleAssignments = data.scheduleAssignments || {};
     window.leagueAssignments = data.leagueAssignments || {};
