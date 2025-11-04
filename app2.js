@@ -1,11 +1,13 @@
-// -------------------- app2.js (FIX 13 - True Memory) --------------------
+// -------------------- app2.js (Cross-Day Memory FIX) --------------------
 // (All logic from FIX 1 to FIX 12 is included)
-// FIX 13 (Re-written): Add true cross-day "memory" for leagues.
-// - Tracks *all* sports played per team, per round-robin cycle.
-// - Guarantees all sports are played before repeating.
-// - Fixes the "Day 3" bug you found.
-// - Inherits sport rotation state from yesterday.
-// =================================================================
+// FIX 13 (Re-integrated): Add cross-day "memory".
+// - Leagues will avoid back-to-back sports.
+// - General activities will avoid yesterday's activities.
+// - BUGFIX: Correctly rotate sports in 'assignSportsToMatchups'.
+// - UPDATED: Now uses calendar.js to save/load per-day.
+// - NEW BUGFIX: Inherit yesterday's sport rotation state.
+//
+=================================================================
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -108,7 +110,7 @@ function getEnabledLeaguesByDivision(masterLeagues, overrides) {
   const result = {};
   const all = masterLeagues || {};
   
-  Object.keys(all).forEach((name) => {
+ Object.keys(all).forEach((name) => {
     if (overrides.leagues.includes(name)) return; 
     
     const l = all[name];
@@ -120,9 +122,8 @@ function getEnabledLeaguesByDivision(masterLeagues, overrides) {
   return result;
 }
 
-// ===== League Sport Rotation (UPDATED - FIX 13) =====
-let leagueSportRotation = {}; // This will now store history, e.g., { "4th Grade": { "Team 1": ["Sport1"] } }
-
+// ===== League Sport Rotation (UPDATED) =====
+let leagueSportRotation = {};
 function loadLeagueSportRotation() {
   try {
     // 1. Try to load THIS day's data
@@ -142,98 +143,62 @@ function loadLeagueSportRotation() {
         leagueSportRotation = {};
     }
   } catch(e) {
-    console.error("Failed to load league sport rotation:", e);
-    leagueSportRotation = {};
+   console.error("Failed to load league sport rotation:", e);
+   leagueSportRotation = {};
   }
 }
 function saveLeagueSportRotation() {
   try {
-    window.saveCurrentDailyData?.("leagueSportRotation", leagueSportRotation);
+   window.saveCurrentDailyData?.("leagueSportRotation", leagueSportRotation);
   } catch {}
 }
 
 /**
- * RE-WRITTEN assignSportsToMatchups (FIX 13)
- * Implements "play all sports before repeating"
- * @param {string} leagueName - The name of the league.
- * @param {Array} matchups - e.g., [ [T1, T2], [T3, T4] ]
- * @param {Array} sportsList - e.g., ["Basketball", "Hockey", "Volleyball"]
- * @param {Object} yesterdayTeamSportHistory - e.g., { "T1": "Basketball", "T2": "Soccer" }
- * @returns {Array} - e.g., [ { teams: [T1, T2], sport: "Volleyball" }, ... ]
+ * UPDATED assignSportsToMatchups (FIX 13 + BUGFIX)
+ * Now takes history to avoid back-to-back sports.
  */
-function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayTeamSportHistory) {
+function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHistory) {
   if (!Array.isArray(matchups) || matchups.length === 0) return [];
   if (!Array.isArray(sportsList) || sportsList.length === 0)
     return matchups.map((m) => ({ teams: m, sport: "Leagues" }));
 
-  loadLeagueSportRotation();
-
-  // Ensure the history object for this league exists
-  if (!leagueSportRotation[leagueName]) {
-      leagueSportRotation[leagueName] = {};
-  }
-  const leagueHistory = leagueSportRotation[leagueName];
-
-  const assigned = []; 
+  loadLeagueSportRotation(); // This now correctly loads yesterday's state if today is new
+  const state = leagueSportRotation[leagueName] || { index: 0 };
+  let idx = state.index;
+  
+  const assigned = [];
 
   for (const match of matchups) {
     const [teamA, teamB] = match;
-
-    // Get the full sport history for each team
-    const historyA = leagueHistory[teamA] || [];
-    const historyB = leagueHistory[teamB] || [];
-
-    // Get the *last* sport played (for back-to-back check)
-    const lastSportA = yesterdayTeamSportHistory[teamA];
-    const lastSportB = yesterdayTeamSportHistory[teamB];
+    const lastSportA = yesterdayHistory[teamA];
+    const lastSportB = yesterdayHistory[teamB];
 
     let chosenSport = null;
 
-    // 1. Find a "Preferred" sport (not in either team's full history)
-    for (const sport of sportsList) {
-        if (!historyA.includes(sport) && !historyB.includes(sport)) {
+    // 1. Try to find a "preferred" sport (one neither team played)
+    for (let i = 0; i < sportsList.length; i++) {
+        const sportIdx = (idx + i) % sportsList.length; 
+        const sport = sportsList[sportIdx];
+        if (sport !== lastSportA && sport !== lastSportB) {
             chosenSport = sport;
+            idx = sportIdx + 1; 
             break;
         }
     }
 
-    // 2. If no "new" sport exists, find a "Good" sport (not played *yesterday*)
+    // 2. If no preferred sport is found, relax the rule and just pick the next one
     if (!chosenSport) {
-        for (const sport of sportsList) {
-            if (sport !== lastSportA && sport !== lastSportB) {
-                chosenSport = sport;
-                break;
-            }
-        }
-    }
-    
-    // 3. If *still* no sport, just pick the first one to avoid errors
-    if (!chosenSport) {
-        chosenSport = sportsList[0];
-    }
-    
-    // 4. Update the history
-    if (!leagueHistory[teamA]) leagueHistory[teamA] = [];
-    if (!leagueHistory[teamB]) leagueHistory[teamB] = [];
-    
-    leagueHistory[teamA].push(chosenSport);
-    leagueHistory[teamB].push(chosenSport);
-
-    // 5. If a team has now played all sports, clear its history for the next round
-    if (leagueHistory[teamA].length >= sportsList.length) {
-        leagueHistory[teamA] = [];
-    }
-    if (leagueHistory[teamB].length >= sportsList.length) {
-        leagueHistory[teamB] = [];
+        chosenSport = sportsList[idx % sportsList.length];
+        idx++; 
     }
     
     assigned.push({ teams: match, sport: chosenSport });
   }
 
+  leagueSportRotation[leagueName] = { index: idx % sportsList.length };
   saveLeagueSportRotation();
   return assigned;
 }
-
 
 // ====== CORE ASSIGN ======
 window.leagueAssignments = window.leagueAssignments || {};
@@ -262,10 +227,10 @@ function assignFieldsToBunks() {
 
   // 3. Create Today's Filtered Lists
   const availFields = masterFields.filter(f => 
-      f.available && !overrides.fields.includes(f.name)
+     f.available && !overrides.fields.includes(f.name)
   );
   const availSpecials = masterSpecials.filter(s => 
-      s.available && !overrides.fields.includes(s.name)
+     s.available && !overrides.fields.includes(s.name)
   );
   
   const availableDivisions = masterAvailableDivs.filter(divName => {
@@ -277,7 +242,7 @@ function assignFieldsToBunks() {
       if (!masterDivisions[divName]) continue; // Safety check
       divisions[divName] = JSON.parse(JSON.stringify(masterDivisions[divName]));
       divisions[divName].bunks = (divisions[divName].bunks || []).filter(bunkName => 
-          !overrides.bunks.includes(bunkName)
+         !overrides.bunks.includes(bunkName)
       );
   }
   
@@ -321,8 +286,8 @@ function assignFieldsToBunks() {
 
   if ((!allActivities.length && !availSpecials.length) || !window.unifiedTimes || window.unifiedTimes.length === 0) {
       console.warn("Cannot assign fields: No activities or unified times are set. Did you click 'Generate Schedule Times'?");
-      updateTable(); 
-      return;
+       updateTable(); 
+       return;
   }
 
   // Init grids
@@ -333,7 +298,7 @@ function assignFieldsToBunks() {
     )
   );
   window.scheduleAssignments = scheduleAssignments; 
-
+  
   const blockedRowsByDiv = prePlaceFixedActivities();
 
   // Create Field Reservation System
@@ -364,7 +329,7 @@ function assignFieldsToBunks() {
           generalFieldHistory[b] = {};
           h2hHistory[b] = {};
           h2hGameCount[b] = 0;
-          
+           
           const yBunkSchedule = yesterdaySchedule[b] || [];
           yBunkSchedule.forEach(entry => {
               if (entry && !entry._fixed && !entry._h2h) {
@@ -381,7 +346,7 @@ function assignFieldsToBunks() {
        if (scheduleAssignments[bunk]) {
          scheduleAssignments[bunk].forEach((entry) => {
            if (entry && entry._fixed) {
-               generalActivityHistory[bunk].add(fieldLabel(entry.field));
+             generalActivityHistory[bunk].add(fieldLabel(entry.field));
            }
          });
        }
@@ -516,7 +481,7 @@ function assignFieldsToBunks() {
 
         // --- Try H2H ---
         if (h2hGameCount[bunk] < 2 && Math.random() < H2H_CHANCE) {
-            
+          
             const opponents = allBunksInDiv.filter(b => {
                 if (b === bunk) return false;
                 if (scheduleAssignments[b][s]) return false;
@@ -635,7 +600,7 @@ function assignFieldsToBunks() {
         }
         
         if (assignedSpan > 0) {
-           s += (assignedSpan - 1);
+          s += (assignedSpan - 1);
         }
       }
     }
@@ -770,10 +735,10 @@ function updateTable() {
       if (outside) {
         let covered = false;
         if (i > 0) {
-             const prevMid = (unifiedTimes[i - 1].start.getHours() * 60 + unifiedTimes[i - 1].start.getMinutes() +
+            const prevMid = (unifiedTimes[i - 1].start.getHours() * 60 + unifiedTimes[i - 1].start.getMinutes() +
                              unifiedTimes[i - 1].end.getHours() * 60 + unifiedTimes[i - 1].end.getMinutes()) / 2;
-             const prevOutside = (start != null && prevMid < start) || (end != null && prevMid >= end);
-             if (prevOutside) covered = true;
+            const prevOutside = (start != null && prevMid < start) || (end != null && prevMid >= end);
+            if (prevOutside) covered = true;
         }
         if (!covered) {
             let span = 1;
@@ -796,7 +761,13 @@ function updateTable() {
     
             tr.appendChild(td);
         }
-        return; 
+        // =============================================
+        // ===== START OF FIX 2 =====
+        // =============================================
+        continue; // FIX: Was 'return', which broke the loop.
+        // =============================================
+        // ===== END OF FIX 2 =====
+        // =============================================
       }
 
       if (league) {
@@ -900,8 +871,8 @@ function reconcileOrRenderSaved() {
     window.scheduleAssignments = data.scheduleAssignments || {};
     window.leagueAssignments = data.leagueAssignments || {};
   } catch {
-      window.scheduleAssignments = {};
-      window.leagueAssignments = {};
+     window.scheduleAssignments = {};
+     window.leagueAssignments = {};
   }
   updateTable();
 }
