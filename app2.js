@@ -161,7 +161,7 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
   if (!Array.isArray(sportsList) || sportsList.length === 0)
     return matchups.map((m) => ({ teams: m, sport: "Leagues" }));
 
-  loadLeagueSportRotation();
+  loadLeagueSportRotation(); // This now correctly loads yesterday's state if today is new
   const state = leagueSportRotation[leagueName] || { index: 0 };
   let idx = state.index;
   
