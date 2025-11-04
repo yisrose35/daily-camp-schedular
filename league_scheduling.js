@@ -2,26 +2,34 @@
  * =============================================================
  * LEAGUE SCHEDULING CORE (league_scheduling.js)
  * (UPDATED to use calendar.js save/load)
+ * (FIX: Now inherits previous day's round state)
  * =============================================================
  */
 
 (function () {
   'use strict';
 
-  // const LEAGUE_STATE_KEY = "camp_league_round_state"; // No longer used
   var leagueRoundState = {}; // <-- CHANGED TO VAR
 
   /**
    * Loads the current round for all leagues from the *current day's* data.
+   * If today is blank, it *inherits* from yesterday.
    */
   function loadRoundState() {
     try {
-      // UPDATED: Load from the globally scoped daily object
-      if (window.currentDailyData && window.currentDailyData.leagueRoundState) {
+      // 1. Try to load THIS day's data (if it has data, use it)
+      if (window.currentDailyData && window.currentDailyData.leagueRoundState && Object.keys(window.currentDailyData.leagueRoundState).length > 0) {
         leagueRoundState = window.currentDailyData.leagueRoundState;
-      } else if (window.loadCurrentDailyData) {
-        // If it's the first load, loadCurrentDailyData will run and populate it
-        leagueRoundState = window.loadCurrentDailyData().leagueRoundState || {};
+      } 
+      // 2. If this day is blank, load YESTERDAY'S data
+      else if (window.loadPreviousDailyData) {
+        console.log("No round state for today. Loading from yesterday.");
+        const yesterdayData = window.loadPreviousDailyData();
+        leagueRoundState = yesterdayData.leagueRoundState || {};
+        
+        // IMPORTANT: Save this inherited state to the CURRENT day
+        // so if we regenerate today, it doesn't re-use yesterday's state.
+        saveRoundState();
       }
       else {
         leagueRoundState = {};
@@ -37,7 +45,6 @@
    */
   function saveRoundState() {
     try {
-      // UPDATED: Save to the globally scoped daily object
       window.saveCurrentDailyData?.("leagueRoundState", leagueRoundState);
     } catch (e) {
       console.error("Failed to save league state:", e);
@@ -120,7 +127,7 @@
   window.getLeagueMatchups = getLeagueMatchups;
   
   // IMPORTANT: Load state on script execution
-  // It will load the state for the current date set by calendar.js
+  // This will load the state for the current date set by calendar.js
   loadRoundState(); 
   
 })();
