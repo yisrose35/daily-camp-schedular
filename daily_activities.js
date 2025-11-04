@@ -58,11 +58,19 @@
     return `${pad(hh)}:${pad(mm)}`;
   }
 
+  // =============================================
+  // ===== START OF FIX 2 =====
+  // =============================================
   function toMinutes(hhmm){
     if(!hhmm) return null;
-    const [h,m] = hhmm.split(":").map(Number);
+    // FIX: Ensure hhmm is a string before splitting to prevent .split is not a function
+    const [h,m] = String(hhmm).split(":").map(Number);
+    if (isNaN(h) || isNaN(m)) return null; // Add safety check for invalid format
     return h*60+m;
   }
+  // =============================================
+  // ===== END OF FIX 2 =====
+  // =============================================
 
   function to12hLabel(hhmm){
     const mins = toMinutes(hhmm);
