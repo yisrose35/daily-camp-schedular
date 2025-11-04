@@ -2,7 +2,7 @@
 // daily_overrides.js
 // This file creates the UI for the "Daily Overrides" tab.
 //
-// NEW: Replaced "Unavailable Bunks" with a "Daily Trips" scheduler.
+// UPDATED: "Daily Trips" UI now separates Division chips and Bunk chips.
 // =================================================================
 
 (function() {
@@ -34,7 +34,7 @@
 
         // 3. Render the UI sections
         renderFieldsOverride();
-        renderTripsSection(); // <-- NEW
+        renderTripsSection(); // <-- This function is now updated
         renderLeaguesOverride();
     }
 
@@ -95,34 +95,51 @@
             <label for="tripEnd" style="display: inline-block; font-weight: 600;">End Time:</label>
             <input id="tripEnd" placeholder="e.g., 2:00pm" style="margin-right: 8px;">
             
-            <p style="margin-top: 15px; font-weight: 600;">Select Divisions / Bunks:</p>
+            <p style="margin-top: 15px; font-weight: 600;">Select Divisions:</p>
         `;
 
-        const chipBox = document.createElement('div');
-        chipBox.className = 'chips';
-        
+        // ===== UPDATED CHIP LOGIC =====
         const divisions = masterSettings.app1.divisions || {};
         const availableDivisions = masterSettings.app1.availableDivisions || [];
 
-        // Add chips for each Division
+        // 1. Create Division Chip Box
+        const divisionChipBox = document.createElement('div');
+        divisionChipBox.className = 'chips';
+        divisionChipBox.style.marginBottom = '5px'; // Add a little space
+
         availableDivisions.forEach(divName => {
             const chip = createChip(divName);
             chip.style.backgroundColor = divisions[divName]?.color;
             chip.style.color = 'white';
             chip.style.border = 'none';
-            chipBox.appendChild(chip);
+            chip.style.fontWeight = 'bold'; // Make divisions stand out
+            divisionChipBox.appendChild(chip);
         });
+        
+        form.appendChild(divisionChipBox); // Add the first box
 
-        // Add chips for each Bunk
+        // 2. Add a separator
+        const bunkHeader = document.createElement('p');
+        bunkHeader.textContent = 'Or Select Individual Bunks:';
+        bunkHeader.style.marginTop = '15px';
+        bunkHeader.style.fontWeight = '600';
+        form.appendChild(bunkHeader);
+
+        // 3. Create Bunk Chip Box
+        const bunkChipBox = document.createElement('div');
+        bunkChipBox.className = 'chips';
+        
         availableDivisions.forEach(divName => {
             const bunkList = divisions[divName]?.bunks || [];
             bunkList.forEach(bunkName => {
                 const chip = createChip(bunkName);
-                chipBox.appendChild(chip);
+                chip.style.border = '1px solid #ccc'; 
+                bunkChipBox.appendChild(chip);
             });
         });
-        
-        form.appendChild(chipBox);
+
+        form.appendChild(bunkChipBox); // Add the second box
+        // ===== END UPDATED CHIP LOGIC =====
 
         const addBtn = document.createElement('button');
         addBtn.textContent = 'Add Trip';
@@ -136,7 +153,11 @@
             const start = document.getElementById('tripStart').value;
             const end = document.getElementById('tripEnd').value;
             
-            const selectedTargets = Array.from(chipBox.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
+            // UPDATED: Query both boxes for selected chips
+            const selectedDivChips = Array.from(divisionChipBox.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
+            const selectedBunkChips = Array.from(bunkChipBox.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
+            
+            const selectedTargets = [...selectedDivChips, ...selectedBunkChips]; // Combine them
             
             if (!name || !start || !end) {
                 alert('Please enter a name, start time, and end time for the trip.');
@@ -152,7 +173,7 @@
                 name,
                 start,
                 end,
-                targets: selectedTargets // This can be mixed: ["5th Grade", "Bunk 1"]
+                targets: selectedTargets
             });
             
             window.saveCurrentDailyData("trips", currentTrips);
