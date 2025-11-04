@@ -427,7 +427,7 @@ window.addEventListener("DOMContentLoaded", () => {
   renderFields();
   renderSpecials();
   renderTimeTemplates();
-  
+  
   // NEW: Add listener for the erase day button
   const eraseBtn = document.getElementById("eraseDayBtn");
   if (eraseBtn) {
@@ -435,6 +435,16 @@ window.addEventListener("DOMContentLoaded", () => {
       if (confirm("Are you sure you want to erase all schedule data for " + window.currentScheduleDate + "?\n\nThis cannot be undone.")) {
         window.eraseCurrentDailyData?.();
       }
+    };
+  }
+  
+  // NEW: Add listener for the erase ALL schedules button
+  const eraseAllSchedulesBtn = document.getElementById("eraseAllSchedulesBtn");
+  if (eraseAllSchedulesBtn) {
+    eraseAllSchedulesBtn.onclick = () => {
+        if (confirm("Are you sure you want to delete ALL schedules for ALL days?\n\nThis will NOT delete your bunks, fields, or league settings.")) {
+            window.eraseAllDailyData?.();
+        }
     };
   }
 });
