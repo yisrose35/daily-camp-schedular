@@ -57,7 +57,8 @@
     <button onclick="addTimeTemplate()">Add Time</button>
     <div id="timeTemplates"></div>
   
-    <button style="margin-top:12px;" onclick="generateTimes()">Generate Schedule Times</button>
+    <button style="margin-top:12px;" onclick="generateTimes()">Generate Daily Schedule</button>
+    <button id="eraseDayBtn" style="margin-top:12px; background-color: #c0392b; color: white; margin-left: 10px;">Erase This Day's Schedule</button>
   
     <h3>Add Fields / Courts</h3>
     <input id="fieldInput" placeholder="Enter field/court name (e.g., Court 1)">
@@ -85,17 +86,23 @@
   
   <div id="fixed-activities" class="tab-content">
     <h2>Fixed Daily Activities (Lunch, Assembly, etc.)</h2>
+  
     <div style="border: 1px solid #ccc; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
       <label for="fixedName" style="display: block; margin-bottom: 5px; font-weight: 600;">Activity Name:</label>
       <input type="text" id="fixedName" placeholder="e.g., Lunch, Tefillah" style="margin-right: 8px; width: 250px;">
+  
       <label for="fixedStart" style="display: inline-block; margin-top: 10px; font-weight: 600;">Start Time:</label>
       <input id="fixedStart" placeholder="e.g., 12:00pm" style="margin-right: 8px;">
+  
       <label for="fixedEnd" style="display: inline-block; font-weight: 600;">End Time:</label>
       <input id="fixedEnd" placeholder="e.g., 12:30pm" style="margin-right: 8px;">
+  
       <button id="addFixedBtn" class="bunk-button" style="background: #007BFF; color: white; margin-top: 15px;">Add Fixed Activity</button>
+  
       <p style="margin-top: 15px; font-weight: 600;">Select Divisions:</p>
       <div id="fixedDivisionsBox" style="display: flex; flex-wrap: wrap; gap: 4px;"></div>
     </div>
+  
     <h3>Active Fixed Activities List</h3>
     <div id="fixedList"></div>
   </div>
