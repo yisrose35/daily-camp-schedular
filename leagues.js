@@ -337,9 +337,19 @@ function initLeaguesTab() {
 
 // Init
 loadLeagues();
-document.addEventListener("DOMContentLoaded", () => {
-  if (document.getElementById("leaguesContainer")) initLeaguesTab();
-});
+// ===== REMOVED DOMCONTENTLOADED LISTENER HERE =====
 window.getLeaguesByName = () => leaguesByName;
 window.loadLeagues = loadLeagues;
 window.saveLeagues = saveLeagues;
+
+// =============================================
+// ===== START OF NEW INIT FUNCTION =====
+// =============================================
+function initLeagues() {
+  // loadLeagues() is already called at the top level of this file.
+  if (document.getElementById("leaguesContainer")) initLeaguesTab();
+}
+window.initLeagues = initLeagues;
+// =============================================
+// ===== END OF NEW INIT FUNCTION =====
+// =============================================
