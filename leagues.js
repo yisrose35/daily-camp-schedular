@@ -2,7 +2,7 @@
 // (UPDATED to use calendar.js save/load)
 
 // Internal store keyed by LEAGUE NAME for UI/storage
-let leaguesByName = {};
+var leaguesByName = {}; // <-- CHANGED TO VAR
 // app2 expects window.leagues keyed by DIVISION NAME -> { enabled: boolean }
 // app2 also reads window.leaguesByName (full map)
 
@@ -336,6 +336,7 @@ function initLeaguesTab() {
 }
 
 // Init
+// UPDATED: This runs *after* calendar.js has run its migration
 loadLeagues();
 document.addEventListener("DOMContentLoaded", () => {
   if (document.getElementById("leaguesContainer")) initLeaguesTab();
