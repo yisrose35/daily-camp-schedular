@@ -1,10 +1,6 @@
 // =================================================================
 // calendar.js
 // This is the new "brain" of the application.
-// It manages the currently selected date and all data saving/loading.
-// All other files will call functions from this file.
-//
-// NEW: Now includes a one-time migration for old data.
 // =================================================================
 
 (function() {
@@ -50,13 +46,8 @@
         console.log(`Date changed to: ${newDate}`);
         window.currentScheduleDate = newDate;
         
-        // 1. Load the new day's data
         window.loadCurrentDailyData();
-        
-        // 2. Tell app2.js to re-initialize and render the schedule
         window.initScheduleSystem?.();
-        
-        // 3. Tell daily_overrides.js to refresh its view
         window.initDailyOverrides?.();
     }
 
@@ -64,58 +55,50 @@
 
     /**
      * [GLOBAL] Loads the entire "Global Settings" object (bunks, fields, etc.)
-     * --- NEW: Includes one-time migration logic ---
      */
     window.loadGlobalSettings = function() {
         try {
-            // 1. Try to load the new settings format
             const newData = localStorage.getItem(GLOBAL_SETTINGS_KEY);
             if (newData) {
                 return JSON.parse(newData);
             }
 
-            // 2. If it doesn't exist, try to migrate old data
             console.warn("New settings key not found. Attempting to migrate old data...");
             
             let newSettings = {};
             let didMigrate = false;
 
-            // 2a. Migrate app1.js data ("campSchedulerData")
             const oldApp1Data = localStorage.getItem("campSchedulerData");
             if (oldApp1Data) {
                 newSettings.app1 = JSON.parse(oldApp1Data);
-                localStorage.removeItem("campSchedulerData"); // Clean up
+                localStorage.removeItem("campSchedulerData"); 
                 didMigrate = true;
                 console.log("Migrated old app1 data.");
             }
 
-            // 2b. Migrate leagues.js data ("leagues")
             const oldLeaguesData = localStorage.getItem("leagues");
             if (oldLeaguesData) {
                 newSettings.leaguesByName = JSON.parse(oldLeaguesData);
-                localStorage.removeItem("leagues"); // Clean up
+                localStorage.removeItem("leagues"); 
                 didMigrate = true;
                 console.log("Migrated old leagues data.");
             }
 
-            // 2c. Migrate dailyActivities.js data ("fixedActivities_v2")
             const oldFixedData = localStorage.getItem("fixedActivities_v2") || localStorage.getItem("fixedActivities");
             if (oldFixedData) {
                 newSettings.fixedActivities = JSON.parse(oldFixedData);
-                localStorage.removeItem("fixedActivities_v2"); // Clean up
+                localStorage.removeItem("fixedActivities_v2"); 
                 localStorage.removeItem("fixedActivities");
                 didMigrate = true;
                 console.log("Migrated old fixed activities data.");
             }
 
-            // 3. If we migrated anything, save it in the new format
             if (didMigrate) {
                 console.log("Migration successful. Saving to new global settings.", newSettings);
                 localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(newSettings));
                 return newSettings;
             }
 
-            // 4. If nothing to migrate, just return an empty object
             return {};
 
         } catch (e) {
@@ -126,7 +109,7 @@
 
 
     /**
-     * [GLOBAL] Saves one piece of the "Global Settings" (e.g., "fields" or "leagues")
+     * [GLOBAL] Saves one piece of the "Global Settings"
      */
     window.saveGlobalSettings = function(key, data) {
         try {
@@ -170,6 +153,23 @@
         
         window.currentDailyData = allData[date];
         return window.currentDailyData;
+    }
+
+    /**
+     * [DAILY] (FIX 13) Gets the data object *for the previous day*.
+     */
+    window.loadPreviousDailyData = function() {
+        try {
+            const currentDate = new Date(window.currentScheduleDate + "T12:00:00"); // Use T12 to avoid timezone issues
+            const yesterday = new Date(currentDate.setDate(currentDate.getDate() - 1));
+            const yesterdayString = getTodayString(yesterday);
+            
+            const allData = window.loadAllDailyData();
+            return allData[yesterdayString] || {}; // Return yesterday's data or empty
+        } catch (e) {
+            console.error("Could not load previous day's data", e);
+            return {};
+        }
     }
 
     /**
