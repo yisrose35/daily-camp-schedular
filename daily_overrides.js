@@ -2,7 +2,8 @@
 // daily_overrides.js
 // This file creates the UI for the "Daily Overrides" tab.
 //
-// UPDATED: "Daily Trips" UI now separates Division chips and Bunk chips.
+// FIX: "Add Trip" button now correctly finds form fields.
+// FIX: Division/Bunk chips now change color when selected.
 // =================================================================
 
 (function() {
@@ -34,7 +35,7 @@
 
         // 3. Render the UI sections
         renderFieldsOverride();
-        renderTripsSection(); // <-- This function is now updated
+        renderTripsSection(); 
         renderLeaguesOverride();
     }
 
@@ -98,25 +99,22 @@
             <p style="margin-top: 15px; font-weight: 600;">Select Divisions:</p>
         `;
 
-        // ===== UPDATED CHIP LOGIC =====
         const divisions = masterSettings.app1.divisions || {};
         const availableDivisions = masterSettings.app1.availableDivisions || [];
 
         // 1. Create Division Chip Box
         const divisionChipBox = document.createElement('div');
         divisionChipBox.className = 'chips';
-        divisionChipBox.style.marginBottom = '5px'; // Add a little space
+        divisionChipBox.style.marginBottom = '5px'; 
 
         availableDivisions.forEach(divName => {
-            const chip = createChip(divName);
-            chip.style.backgroundColor = divisions[divName]?.color;
-            chip.style.color = 'white';
-            chip.style.border = 'none';
-            chip.style.fontWeight = 'bold'; // Make divisions stand out
+            const divColor = divisions[divName]?.color || '#333';
+            // Pass the division color to the chip factory
+            const chip = createChip(divName, divColor, true); // true = isDivision
             divisionChipBox.appendChild(chip);
         });
         
-        form.appendChild(divisionChipBox); // Add the first box
+        form.appendChild(divisionChipBox); 
 
         // 2. Add a separator
         const bunkHeader = document.createElement('p');
@@ -132,14 +130,12 @@
         availableDivisions.forEach(divName => {
             const bunkList = divisions[divName]?.bunks || [];
             bunkList.forEach(bunkName => {
-                const chip = createChip(bunkName);
-                chip.style.border = '1px solid #ccc'; 
+                const chip = createChip(bunkName, '#007BFF', false); // false = isBunk
                 bunkChipBox.appendChild(chip);
             });
         });
 
-        form.appendChild(bunkChipBox); // Add the second box
-        // ===== END UPDATED CHIP LOGIC =====
+        form.appendChild(bunkChipBox); 
 
         const addBtn = document.createElement('button');
         addBtn.textContent = 'Add Trip';
@@ -149,15 +145,16 @@
         addBtn.style.marginTop = '15px';
         
         addBtn.onclick = () => {
-            const name = document.getElementById('tripName').value.trim();
-            const start = document.getElementById('tripStart').value;
-            const end = document.getElementById('tripEnd').value;
+            // ===== FIX 1: Query from the 'form' element, not the 'document' =====
+            const name = form.querySelector('#tripName').value.trim();
+            const start = form.querySelector('#tripStart').value;
+            const end = form.querySelector('#tripEnd').value;
+            // ===================================================================
             
-            // UPDATED: Query both boxes for selected chips
             const selectedDivChips = Array.from(divisionChipBox.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
             const selectedBunkChips = Array.from(bunkChipBox.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
             
-            const selectedTargets = [...selectedDivChips, ...selectedBunkChips]; // Combine them
+            const selectedTargets = [...selectedDivChips, ...selectedBunkChips]; 
             
             if (!name || !start || !end) {
                 alert('Please enter a name, start time, and end time for the trip.');
@@ -195,7 +192,7 @@
 
         currentTrips.forEach(trip => {
             const item = document.createElement('div');
-            item.className = 'item'; // Use the style from dailyActivities
+            item.className = 'item'; 
             item.innerHTML = `
                 <div style="flex-grow:1;">
                   <div><strong>${trip.name}</strong></div>
@@ -272,14 +269,25 @@
     }
     
     /**
-     * Helper to create a bunk/division chip
+     * ===== FIX 2: Helper to create a bunk/division chip =====
+     * Now visually toggles its own color.
      */
-    function createChip(name) {
+    function createChip(name, color = '#007BFF', isDivision = false) {
         const el = document.createElement('span');
         el.className = 'bunk-button'; 
         el.textContent = name;
         el.dataset.value = name;
-        el.addEventListener('click', ()=> el.classList.toggle('selected'));
+        
+        // Set default border color
+        const defaultBorder = isDivision ? color : '#ccc';
+        el.style.borderColor = defaultBorder;
+        
+        el.addEventListener('click', () => {
+            const isSelected = el.classList.toggle('selected');
+            el.style.backgroundColor = isSelected ? color : 'white';
+            el.style.color = isSelected ? 'white' : 'black';
+            el.style.borderColor = isSelected ? color : defaultBorder;
+        });
         return el;
     }
 
