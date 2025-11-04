@@ -448,3 +448,4 @@
   // Auto-init on DOMContentLoaded (Handled by index.html's boot() script)
   // document.addEventListener('DOMContentLoaded', init);
 })();
+
