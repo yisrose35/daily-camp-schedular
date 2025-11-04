@@ -2,8 +2,7 @@
 // daily_overrides.js
 // This file creates the UI for the "Daily Overrides" tab.
 //
-// FIX: "Add Trip" button now correctly finds form fields.
-// FIX: Division/Bunk chips now change color when selected.
+// NEW: Added console.log messages for debugging.
 // =================================================================
 
 (function() {
@@ -19,11 +18,15 @@
      */
     function init() {
         container = document.getElementById("daily-overrides-content");
-        if (!container) return; // Failsafe
+        if (!container) {
+            console.error("Daily Overrides: Could not find container #daily-overrides-content");
+            return;
+        }
 
+        console.log("Daily Overrides: Initializing for", window.currentScheduleDate);
         container.innerHTML = "<h2>Overrides & Trips for " + window.currentScheduleDate + "</h2>";
 
-        // 1. Load Master "Setup" Data (from app1, leagues)
+        // 1. Load Master "Setup" Data
         masterSettings.global = window.loadGlobalSettings?.() || {};
         masterSettings.app1 = masterSettings.global.app1 || {};
         masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
@@ -65,6 +68,7 @@
                 } else {
                     currentOverrides.fields = currentOverrides.fields.filter(f => f !== item.name);
                 }
+                console.log("Daily Overrides: Saving field overrides...", currentOverrides.fields);
                 window.saveCurrentDailyData("overrides", currentOverrides);
             };
             wrapper.appendChild(el.wrapper);
@@ -73,14 +77,13 @@
     }
 
     /**
-     * NEW: Renders the "Daily Trips" section
+     * Renders the "Daily Trips" section
      */
     function renderTripsSection() {
         const wrapper = document.createElement('div');
         wrapper.className = 'override-section';
         wrapper.innerHTML = '<h3>Daily Trips</h3>';
         
-        // --- 1. Create the "Add Trip" Form ---
         const form = document.createElement('div');
         form.style.border = '1px solid #ccc';
         form.style.padding = '15px';
@@ -109,7 +112,6 @@
 
         availableDivisions.forEach(divName => {
             const divColor = divisions[divName]?.color || '#333';
-            // Pass the division color to the chip factory
             const chip = createChip(divName, divColor, true); // true = isDivision
             divisionChipBox.appendChild(chip);
         });
@@ -145,17 +147,28 @@
         addBtn.style.marginTop = '15px';
         
         addBtn.onclick = () => {
-            // ===== FIX 1: Query from the 'form' element, not the 'document' =====
-            const name = form.querySelector('#tripName').value.trim();
-            const start = form.querySelector('#tripStart').value;
-            const end = form.querySelector('#tripEnd').value;
-            // ===================================================================
+            console.log("Daily Overrides: 'Add Trip' button clicked.");
+            
+            const nameEl = form.querySelector('#tripName');
+            const startEl = form.querySelector('#tripStart');
+            const endEl = form.querySelector('#tripEnd');
+
+            if (!nameEl || !startEl || !endEl) {
+                console.error("Daily Overrides: Could not find trip form elements!");
+                return;
+            }
+
+            const name = nameEl.value.trim();
+            const start = startEl.value;
+            const end = endEl.value;
             
             const selectedDivChips = Array.from(divisionChipBox.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
             const selectedBunkChips = Array.from(bunkChipBox.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
             
             const selectedTargets = [...selectedDivChips, ...selectedBunkChips]; 
             
+            console.log("Daily Overrides: Trip Data:", { name, start, end, selectedTargets });
+
             if (!name || !start || !end) {
                 alert('Please enter a name, start time, and end time for the trip.');
                 return;
@@ -173,6 +186,7 @@
                 targets: selectedTargets
             });
             
+            console.log("Daily Overrides: Saving trips...", currentTrips);
             window.saveCurrentDailyData("trips", currentTrips);
             init(); // Re-render the whole tab
         };
@@ -205,6 +219,7 @@
             `;
             
             item.querySelector('button').onclick = () => {
+                console.log("Daily Overrides: Removing trip", trip.id);
                 currentTrips = currentTrips.filter(t => t.id !== trip.id);
                 window.saveCurrentDailyData("trips", currentTrips);
                 init(); // Re-render
@@ -242,6 +257,7 @@
                 } else {
                     currentOverrides.leagues = currentOverrides.leagues.filter(l => l !== leagueName);
                 }
+                console.log("Daily Overrides: Saving league overrides...", currentOverrides.leagues);
                 window.saveCurrentDailyData("overrides", currentOverrides);
             };
             wrapper.appendChild(el.wrapper);
@@ -269,8 +285,7 @@
     }
     
     /**
-     * ===== FIX 2: Helper to create a bunk/division chip =====
-     * Now visually toggles its own color.
+     * Helper to create a bunk/division chip
      */
     function createChip(name, color = '#007BFF', isDivision = false) {
         const el = document.createElement('span');
@@ -278,12 +293,15 @@
         el.textContent = name;
         el.dataset.value = name;
         
-        // Set default border color
         const defaultBorder = isDivision ? color : '#ccc';
         el.style.borderColor = defaultBorder;
+        // Make sure it renders in the "unselected" state by default
+        el.style.backgroundColor = 'white';
+        el.style.color = 'black';
         
         el.addEventListener('click', () => {
             const isSelected = el.classList.toggle('selected');
+            console.log("Daily Overrides: Chip clicked:", name, "Selected:", isSelected);
             el.style.backgroundColor = isSelected ? color : 'white';
             el.style.color = isSelected ? 'white' : 'black';
             el.style.borderColor = isSelected ? color : defaultBorder;
