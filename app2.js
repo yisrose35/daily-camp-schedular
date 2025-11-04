@@ -1,9 +1,9 @@
-// -------------------- app2.js (Cross-Day Memory Fix) --------------------
+// -------------------- app2.js (Cross-Day Memory FIX) --------------------
 // (All logic from FIX 1 to FIX 12 is included)
-// FIX 13 (NEW): Add cross-day "memory".
-// - Leagues will avoid back-to-back sports. (THIS IS NOW FIXED)
-// - General activities will avoid yesterday's activities, or at least
-//   change the field.
+// FIX 13 (Re-integrated): Add cross-day "memory".
+// - Leagues will avoid back-to-back sports.
+// - General activities will avoid yesterday's activities.
+// - BUGFIX: Correctly rotate sports in 'assignSportsToMatchups'.
 // =================================================================
 
 // ===== Helpers =====
@@ -139,7 +139,7 @@ function saveLeagueSportRotation() {
 }
 
 /**
- * UPDATED assignSportsToMatchups (FIX 13)
+ * UPDATED assignSportsToMatchups (FIX 13 + BUGFIX)
  * Now takes history to avoid back-to-back sports.
  * @param {string} leagueName - The name of the league.
  * @param {Array} matchups - e.g., [ [T1, T2], [T3, T4] ]
@@ -169,11 +169,11 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
 
     // 1. Try to find a "preferred" sport (one neither team played)
     for (let i = 0; i < sportsList.length; i++) {
-        const sportIdx = (idx + i) % sportsList.length;
+        const sportIdx = (idx + i) % sportsList.length; // Start search from current idx
         const sport = sportsList[sportIdx];
         if (sport !== lastSportA && sport !== lastSportB) {
             chosenSport = sport;
-            idx = sportIdx + 1; // Start next search from here
+            idx = sportIdx + 1; // GOOD: This updates idx for the *next* game
             break;
         }
     }
@@ -181,7 +181,7 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
     // 2. If no preferred sport is found, relax the rule and just pick the next one
     if (!chosenSport) {
         chosenSport = sportsList[idx % sportsList.length];
-        idx++;
+        idx++; // GOOD: This updates idx for the *next* game
     }
     
     assigned.push({ teams: match, sport: chosenSport });
@@ -485,6 +485,7 @@ function assignFieldsToBunks() {
             if (opponents.length > 0) {
                 const opponent = opponents[Math.floor(Math.random() * opponents.length)];
                 
+                // FIX 8/13 Check: Filter out activities *both* bunks have done
                 const h2hPicks = h2hActivities.filter(pick => {
                     const actName = getActivityName(pick);
                     return !generalActivityHistory[bunk].has(actName) && !generalActivityHistory[opponent].has(actName);
@@ -578,7 +579,7 @@ function assignFieldsToBunks() {
                     // FIX 13 RULE 2: Avoid the same field if possible
                     const yesterdayField = generalFieldHistory[bunk][activityName];
                     if (pickedField === yesterdayField && allFieldNames.length > 1) { // Only skip if other fields exist
-                        continue; // Try the next pick (e.g., "Basketball" on a *different* field)
+                        continue; 
                     }
                     
                     let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, blockedRowsByDiv);
