@@ -380,37 +380,16 @@ function assignFieldsToBunks() {
         : window.unifiedTimes.map((_, i) => i);
 
     const bunksInDiv = divisions[div]?.bunks || [];
-    // const firstBunk = bunksInDiv.length > 0 ? bunksInDiv[0] : null; // Old, flawed check
+    const firstBunk = bunksInDiv.length > 0 ? bunksInDiv[0] : null;
 
     const candidates = actSlots.filter((s) => {
       for (let k = 0; k < spanLen; k++) {
         const slot = s + k;
         if (slot >= window.unifiedTimes.length) return false;
-        
-        // =============================================
-        // ===== START OF FIX 1 (League Scheduling) ====
-        // =============================================
-        // NEW, ROBUST CHECK:
-        // Check if *any* bunk in this division is already busy with a fixed activity.
-        // This stops the league from scheduling over "Lunch".
-        let isBunkBusy = false;
-        for (const bunk of bunksInDiv) {
-          if (scheduleAssignments[bunk]?.[slot]) {
-            isBunkBusy = true;
-            break;
-          }
-        }
-        if (isBunkBusy) return false;
-        // =============================================
-        // ===== END OF FIX 1 (League Scheduling) ======
-        // =============================================
-        
-        if (blockedRowsByDiv[div]?.has(slot)) return false; // This check is redundant but safe
+        if (blockedRowsByDiv[div]?.has(slot)) return false;
         if (takenLeagueSlots.has(slot)) return false;
-        
-        // REMOVED OLD, WEAK CHECK
-        // if (firstBunk && scheduleAssignments[firstBunk]?.[slot])
-        //   return false;
+        if (firstBunk && scheduleAssignments[firstBunk]?.[slot])
+          return false;
       }
       return true;
     });
@@ -492,7 +471,7 @@ function assignFieldsToBunks() {
 
     for (const bunk of allBunksInDiv) {
       for (let s = 0; s < window.unifiedTimes.length; s++) { 
-        if (scheduleAssignments[bunk][s]) continue; // This correctly skips fixed activities
+        if (scheduleAssignments[bunk][s]) continue;
         if (window.leagueAssignments?.[div]?.[s]) continue;
         if (blockedRowsByDiv[div]?.has(s)) continue;
         if (!isActive(s)) continue;
@@ -782,41 +761,11 @@ function updateTable() {
     
             tr.appendChild(td);
         }
-        continue; 
+        continue; // This is the fix for the rendering bug
       }
  
-      // =============================================
-      // ===== START OF FIX 2 (Rendering) =====
-      // =============================================
-      
-      // Check if the *first bunk* has a fixed activity. If so, render that with priority.
-      // Since prePlace applies fixed activities to ALL bunks in a division, checking the first is sufficient.
-      const firstBunk = bunks.length > 0 ? bunks[0] : null;
-      const fixedEntry = firstBunk ? window.scheduleAssignments[firstBunk]?.[i] : null;
-
-      if (fixedEntry && fixedEntry._fixed && !fixedEntry.continuation) {
-        // This slot is a fixed activity. Render it for the whole division.
-        let span = 1;
-        for (let j = i + 1; j < unifiedTimes.length; j++) {
-          if (window.scheduleAssignments[firstBunk]?.[j]?.continuation) span++;
-          else break;
-        }
-        const td = document.createElement("td");
-        td.rowSpan = span;
-        td.colSpan = bunks.length;
-        td.textContent = fieldLabel(fixedEntry.field);
-        td.style.background = "#f1f1f1";
-        td.style.fontWeight = "600";
-        td.style.verticalAlign = "top";
-        tr.appendChild(td);
-
-      } else if (league) { // ONLY if not fixed, check for a league
-      // =============================================
-      // ===== END OF FIX 2 (Rendering) =====
-      // =============================================
-
+      if (league) {
         if (league.isContinuation) {
-          // Do nothing, it's covered by the rowspan
         } else {
           let span = 1;
           for (let j = i + 1; j < unifiedTimes.length; j++) {
@@ -841,7 +790,7 @@ function updateTable() {
           td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;">${league.leagueName}</span></div>`;
           tr.appendChild(td);
         }
-      } else { // ONLY if no fixed and no league, render individual bunks
+      } else {
         bunks.forEach((b) => {
           const entry = window.scheduleAssignments[b]?.[i];
  
@@ -874,7 +823,6 @@ function updateTable() {
             td.style.fontWeight = "bold";
           } 
           else if (entry._fixed) {
-            // This case should be caught by the new logic above, but as a fallback:
             td.textContent = fieldLabel(entry.field);
             td.style.background = "#f1f1f1";
             td.style.fontWeight = "600";
