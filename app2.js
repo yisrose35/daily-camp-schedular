@@ -464,9 +464,6 @@ function assignFieldsToBunks() {
     }
   }
  
-  // =============================================
-  // ===== START OF SCHEDULER LOGIC UPDATE =====
-  // =============================================
   // --- ===== FIX 6, 8, 9, 11, 12, 13: "Smarter" General Activity Filler ===== ---
   for (const div of availableDivisions) {
     const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
@@ -510,9 +507,17 @@ function assignFieldsToBunks() {
         // 1b. If no preferred activity could be scheduled, try a non-preferred one
         if (assignedSpan === 0) {
             for (const pick of shuffledNonPreferred) {
+                
+                // =============================================
+                // ===== START OF BUG FIX =====
+                // =============================================
+                // These two lines were missing, causing a ReferenceError
                 const pickedField = fieldLabel(pick.field);
                 const activityName = getActivityName(pick);
-                
+                // =============================================
+                // ===== END OF BUG FIX =====
+                // =============================================
+
                 const yesterdayField = generalFieldHistory[bunk][activityName];
                 if (pickedField === yesterdayField && allFieldNames.length > 1) {
                     continue; 
@@ -527,9 +532,7 @@ function assignFieldsToBunks() {
         }
         
         // --- 2. If General Activity FAILED, Try H2H as a Fallback ---
-        // (This was the old "Try H2H" logic, now moved down and modified)
         if (assignedSpan === 0 && h2hGameCount[bunk] < 2) { // Check constraint
-            // No random check! We are actively trying to fill the slot.
             
             const opponents = allBunksInDiv.filter(b => {
                 if (b === bunk) return false;
@@ -599,9 +602,6 @@ function assignFieldsToBunks() {
       }
     }
   }
-  // =============================================
-  // ===== END OF SCHEDULER LOGIC UPDATE =====
-  // =============================================
  
   updateTable();
   saveSchedule();
