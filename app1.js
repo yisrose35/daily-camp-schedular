@@ -264,19 +264,13 @@ function addField() {
   const i = document.getElementById("fieldInput");
   const n = i.value.trim();
   if (n) {
-    // =============================================
-    // ===== START OF DATA STRUCTURE CHANGE =====
-    // =============================================
     fields.push({ 
         name: n, 
         activities: [], 
         available: true,
-        sharable: false,      // NEW: Can this field be shared?
-        allowedDivisions: []  // NEW: Which divisions are allowed to share it?
+        sharable: false,      // NEW
+        allowedDivisions: []  // NEW
     });
-    // =============================================
-    // ===== END OF DATA STRUCTURE CHANGE =====
-    // =============================================
     i.value = "";
     saveData();
     renderFields();
@@ -296,23 +290,32 @@ function renderFields() {
     const t = document.createElement("span"); t.className = "fieldTitle"; t.textContent = f.name;
     makeEditable(t, newName => { f.name = newName; saveData(); renderFields(); });
     w.appendChild(t);
+
+    // =============================================
+    // ===== START OF NEW UI (FIELDS) =====
+    // =============================================
+    
+    // --- Container for Toggles ---
+    const toggleContainer = document.createElement("div");
+    toggleContainer.style.display = "flex";
+    toggleContainer.style.alignItems = "center";
+    toggleContainer.style.marginTop = "8px";
+
+    // --- Available Toggle ---
     const tog = document.createElement("label"); tog.className = "switch";
     const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = f.available;
     cb.onchange = () => { f.available = cb.checked; saveData(); renderFields(); };
     const sl = document.createElement("span"); sl.className = "slider";
-    tog.appendChild(cb); tog.appendChild(sl); w.appendChild(tog);
-
-    // =============================================
-    // ===== START OF NEW UI CODE =====
-    // =============================================
-
-    // --- Sharable Checkbox ---
-    const shareWrap = document.createElement("div");
-    shareWrap.style.marginTop = "10px";
+    tog.appendChild(cb); tog.appendChild(sl); 
+    toggleContainer.appendChild(tog);
     
+    // --- Sharable Checkbox ---
     const shareLabel = document.createElement("label");
     shareLabel.style.cursor = "pointer";
     shareLabel.style.fontWeight = "600";
+    shareLabel.style.marginLeft = "15px"; // Puts it next to the toggle
+    shareLabel.style.display = "inline-flex";
+    shareLabel.style.alignItems = "center";
     
     const shareCheck = document.createElement("input");
     shareCheck.type = "checkbox";
@@ -325,9 +328,9 @@ function renderFields() {
     };
     
     shareLabel.appendChild(shareCheck);
-    shareLabel.appendChild(document.createTextNode(" Allow 2 bunks on this field at once?"));
-    shareWrap.appendChild(shareLabel);
-    w.appendChild(shareWrap);
+    shareLabel.appendChild(document.createTextNode("Allow 2 bunks?"));
+    toggleContainer.appendChild(shareLabel);
+    w.appendChild(toggleContainer);
 
     // --- Allowed Divisions (only if sharable) ---
     if (f.sharable) {
@@ -338,7 +341,7 @@ function renderFields() {
         divWrap.style.borderRadius = "4px";
 
         const divLabel = document.createElement("p");
-        divLabel.textContent = "Which divisions can share this field?";
+        divLabel.textContent = "Which divisions can share this field? (Leave blank for all)";
         divLabel.style.margin = "0 0 8px 0";
         divLabel.style.fontWeight = "500";
         divWrap.appendChild(divLabel);
@@ -372,11 +375,9 @@ function renderFields() {
         divWrap.appendChild(chips);
         w.appendChild(divWrap);
     }
-
     // =============================================
-    // ===== END OF NEW UI CODE =====
+    // ===== END OF NEW UI (FIELDS) =====
     // =============================================
-
 
     const bw = document.createElement("div"); bw.style.marginTop = "8px";
     commonActivities.forEach(act => {
@@ -411,7 +412,18 @@ function addSpecial() {
   const i = document.getElementById("specialInput");
   const n = i.value.trim();
   if (n) {
-    specialActivities.push({ name: n, available: true });
+    // =============================================
+    // ===== START OF DATA STRUCTURE CHANGE (SPECIAL) =====
+    // =============================================
+    specialActivities.push({ 
+        name: n, 
+        available: true,
+        sharable: false,
+        allowedDivisions: []
+    });
+    // =============================================
+    // ===== END OF DATA STRUCTURE CHANGE (SPECIAL) =====
+    // =============================================
     i.value = "";
     saveData();
     renderSpecials();
@@ -423,15 +435,103 @@ document.getElementById("specialInput").addEventListener("keyup", e => { if (e.k
 function renderSpecials() {
   const c = document.getElementById("specialList"); c.innerHTML = "";
   specialActivities.forEach(s => {
+    // Ensure new properties exist for old data
+    s.sharable = s.sharable || false;
+    s.allowedDivisions = s.allowedDivisions || [];
+
     const w = document.createElement("div"); w.className = "fieldWrapper"; if (!s.available) w.classList.add("unavailable");
     const t = document.createElement("span"); t.className = "fieldTitle"; t.textContent = s.name;
     makeEditable(t, newName => { s.name = newName; saveData(); renderSpecials(); });
     w.appendChild(t);
+
+    // =============================================
+    // ===== START OF NEW UI (SPECIALS) =====
+    // =============================================
+    
+    // --- Container for Toggles ---
+    const toggleContainer = document.createElement("div");
+    toggleContainer.style.display = "flex";
+    toggleContainer.style.alignItems = "center";
+    toggleContainer.style.marginTop = "8px";
+
+    // --- Available Toggle ---
     const tog = document.createElement("label"); tog.className = "switch";
     const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = s.available;
     cb.onchange = () => { s.available = cb.checked; saveData(); renderSpecials(); };
     const sl = document.createElement("span"); sl.className = "slider";
-    tog.appendChild(cb); tog.appendChild(sl); w.appendChild(tog);
+    tog.appendChild(cb); tog.appendChild(sl);
+    toggleContainer.appendChild(tog);
+
+    // --- Sharable Checkbox ---
+    const shareLabel = document.createElement("label");
+    shareLabel.style.cursor = "pointer";
+    shareLabel.style.fontWeight = "600";
+    shareLabel.style.marginLeft = "15px";
+    shareLabel.style.display = "inline-flex";
+    shareLabel.style.alignItems = "center";
+    
+    const shareCheck = document.createElement("input");
+    shareCheck.type = "checkbox";
+    shareCheck.checked = s.sharable;
+    shareCheck.style.marginRight = "6px";
+    shareCheck.onchange = () => {
+        s.sharable = shareCheck.checked;
+        saveData();
+        renderSpecials(); // Re-render to show/hide division list
+    };
+    
+    shareLabel.appendChild(shareCheck);
+    shareLabel.appendChild(document.createTextNode("Allow 2 bunks?"));
+    toggleContainer.appendChild(shareLabel);
+    w.appendChild(toggleContainer);
+
+    // --- Allowed Divisions (only if sharable) ---
+    if (s.sharable) {
+        const divWrap = document.createElement("div");
+        divWrap.style.padding = "8px";
+        divWrap.style.margin = "8px 0";
+        divWrap.style.border = "1px solid #eee";
+        divWrap.style.borderRadius = "4px";
+
+        const divLabel = document.createElement("p");
+        divLabel.textContent = "Which divisions can share this activity? (Leave blank for all)";
+        divLabel.style.margin = "0 0 8px 0";
+        divLabel.style.fontWeight = "500";
+        divWrap.appendChild(divLabel);
+
+        const chips = document.createElement("div");
+        chips.className = "chips";
+        availableDivisions.forEach(divName => {
+            const btn = document.createElement("button");
+            btn.textContent = divName;
+            btn.className = "bunk-button";
+            
+            if (s.allowedDivisions.includes(divName)) {
+                btn.classList.add("selected");
+                if (divisions[divName]) {
+                    btn.style.backgroundColor = divisions[divName].color;
+                    btn.style.color = "#fff";
+                }
+            }
+            
+            btn.onclick = () => {
+                if (s.allowedDivisions.includes(divName)) {
+                    s.allowedDivisions = s.allowedDivisions.filter(d => d !== divName);
+                } else {
+                    s.allowedDivisions.push(divName);
+                }
+                saveData();
+                renderSpecials(); // Re-render to update selection
+            };
+            chips.appendChild(btn);
+        });
+        divWrap.appendChild(chips);
+        w.appendChild(divWrap);
+    }
+    // =============================================
+    // ===== END OF NEW UI (SPECIALS) =====
+    // =============================================
+
     c.appendChild(w);
   });
 }
