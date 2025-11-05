@@ -464,13 +464,18 @@ function assignFieldsToBunks() {
     }
   }
  
-  // --- ===== FIX 6, 8, 9, 11, 12, 13: "Smarter" General Activity Filler ===== ---
+  // =============================================
+  // ===== START OF NEW "TWO-PASS" SCHEDULER LOGIC =====
+  // =============================================
+
+  // --- ===== PASS 1: Fill with General Activities ===== ---
   for (const div of availableDivisions) {
     const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
     const allBunksInDiv = divisions[div]?.bunks || [];
 
     for (const bunk of allBunksInDiv) {
       for (let s = 0; s < window.unifiedTimes.length; s++) { 
+        // Skip if slot is already filled by fixed, league, or (in theory) a previous pass
         if (scheduleAssignments[bunk][s]) continue;
         if (window.leagueAssignments?.[div]?.[s]) continue;
         if (blockedRowsByDiv[div]?.has(s)) continue;
@@ -478,7 +483,7 @@ function assignFieldsToBunks() {
 
         let assignedSpan = 0;
  
-        // --- 1. Try to Assign a General Activity ---
+        // --- Try to Assign a General Activity ---
         const preferredPicks = [];
         const nonPreferredPicks = [];
         
@@ -503,13 +508,13 @@ function assignFieldsToBunks() {
             }
         }
 
-        // 1b. If no preferred activity could be scheduled, try a non-preferred one
+        // 1b. If no preferred activity, try a non-preferred one
         if (assignedSpan === 0) {
             for (const pick of shuffledNonPreferred) {
                 const pickedField = fieldLabel(pick.field);
                 const activityName = getActivityName(pick);
-
                 const yesterdayField = generalFieldHistory[bunk][activityName];
+                
                 if (pickedField === yesterdayField && allFieldNames.length > 1) {
                     continue; 
                 }
@@ -522,21 +527,38 @@ function assignFieldsToBunks() {
             }
         }
         
-        // --- 2. If General Activity FAILED, Try H2H as a Fallback ---
-        if (assignedSpan === 0 && h2hGameCount[bunk] < 2) { // Check constraint
+        // --- Advance the time slot ---
+        if (assignedSpan > 0) {
+          s += (assignedSpan - 1);
+        }
+      }
+    }
+  }
+
+  // --- ===== PASS 2: Fill remaining gaps with H2H ===== ---
+  for (const div of availableDivisions) {
+    const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
+    const allBunksInDiv = divisions[div]?.bunks || [];
+
+    for (const bunk of allBunksInDiv) {
+      for (let s = 0; s < window.unifiedTimes.length; s++) { 
+        // If the slot is ALREADY FILLED (by fixed, league, or Pass 1), skip it.
+        if (scheduleAssignments[bunk][s]) continue;
+        
+        // Also skip if it's a league/fixed/inactive slot
+        if (window.leagueAssignments?.[div]?.[s]) continue;
+        if (blockedRowsByDiv[div]?.has(s)) continue;
+        if (!isActive(s)) continue;
+
+        // --- This slot is EMPTY. Try to fill it with H2H. ---
+        let assignedSpan = 0;
+        
+        if (h2hGameCount[bunk] < 2) { // Check H2H limit for this bunk
             
             const opponents = allBunksInDiv.filter(b => {
                 if (b === bunk) return false;
                 if (scheduleAssignments[b][s]) return false; // Opponent must be free
-                
-                // =============================================
-                // ===== H2H REMATCH RULE RE-ADDED =====
-                // =============================================
-                // This rule PREVENTS a bunk from playing the same opponent twice
-                if ((h2hHistory[bunk][b] || 0) >= 1) return false; 
-                // =============================================
-                // =============================================
-                
+                if ((h2hHistory[bunk][b] || 0) >= 1) return false; // No rematches
                 if (h2hGameCount[b] >= 2) return false; // Opponent must be under H2H limit
                 return true;
             });
@@ -594,13 +616,16 @@ function assignFieldsToBunks() {
             }
         }
         
-        // --- 3. Advance the time slot ---
+        // --- Advance the time slot ---
         if (assignedSpan > 0) {
           s += (assignedSpan - 1);
         }
       }
     }
   }
+  // =============================================
+  // ===== END OF NEW "TWO-PASS" LOGIC =====
+  // =============================================
  
   updateTable();
   saveSchedule();
