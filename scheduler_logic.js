@@ -1,15 +1,6 @@
-// -------------------- app2.js (Cross-Day Memory + League First + Aggressive Fill) --------------------
-// PART 1 of 2 — ~first 800 lines. Ask for Part 2 to get the remainder (rendering + save/init exports).
-// 
-// Includes FIX 1..12 + FIX 13 + later upgrades:
-// - Cross-day "memory" for leagues/general activities.
-// - Leagues avoid back-to-back sports; general avoids yesterday's.
-// - Uses calendar.js for per-day save/load; inherits yesterday's sport rotation state.
-// - Sharable logic for activities/fields (capacity 2), sharing within SAME division only.
-// - H2H exclusive field locking; 60% H2H-first attempts; max 2 H2H/day per bunk.
-// - Forced H2H fill that can recruit partners (and evict general assignments) within grade.
-// - Aggressive doubling to saturate sharables; final fallback using sharable specials.
-// - Leagues scheduled FIRST with multi-slot search; eviction-based rescue if needed.
+// -------------------- scheduler_logic.js (Part 1 of 2) --------------------
+// This is the "BRAIN". It contains all the logic for
+// HOW to build the schedule.
 //
 // =================================================================
 
@@ -466,113 +457,7 @@ function assignFieldsToBunks() {
             takenLeagueSlots.add(slot);
             finalGames.forEach(game => { fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {}; fieldUsageBySlot[slot][game.field] = 2; });
           }
-          placedLeague = true; break;
-        }
-      }
-      if (!placedLeague) console.warn(`Skipping league "${lg.name}": Not enough fields across candidate slots (even after eviction).`);
-    }
-  }
-
-  // ========================================================
-  // ===== 3. SCHEDULE GENERAL/H2H (NEW PRIORITY LOGIC) =====
-  // ========================================================
-  for (const div of availableDivisions) {
-    const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
-    const allBunksInDiv = divisions[div]?.bunks || [];
-
-    for (const bunk of allBunksInDiv) {
-      for (let s = 0; s < window.unifiedTimes.length; s++) {
-        if (scheduleAssignments[bunk][s]) continue;
-        if (window.leagueAssignments?.[div]?.[s]) continue;
-        if (!isActive(s)) continue;
-        let assignedSpan = 0;
-
-        const preferredPicks = [];
-        const nonPreferredPicks = [];
-        allActivities.forEach(pick => { (generalActivityHistory[bunk].has(getActivityName(pick)) ? nonPreferredPicks : preferredPicks).push(pick); });
-        const shuffledPreferred = preferredPicks.sort(() => 0.5 - Math.random());
-        const shuffledNonPreferred = nonPreferredPicks.sort(() => 0.5 - Math.random());
-
-        // 2a. With probability, attempt H2H FIRST
-        if (assignedSpan === 0 && (h2hGameCount[bunk] || 0) < 2 && Math.random() < H2H_PROB) {
-          assignedSpan = tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, activityProperties, h2hHistory, h2hGameCount, generalActivityHistory);
-        }
-        // 2b. Preferred general
-        if (assignedSpan === 0) {
-          assignedSpan = tryGeneralActivity(bunk, div, s, spanLen, shuffledPreferred, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties);
-        }
-        // 3. H2H again if still open
-        if (assignedSpan === 0 && (h2hGameCount[bunk] || 0) < 2) {
-          assignedSpan = tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, activityProperties, h2hHistory, h2hGameCount, generalActivityHistory);
-        }
-        // 4. Non-preferred
-        if (assignedSpan === 0) {
-          assignedSpan = tryGeneralActivity(bunk, div, s, spanLen, shuffledNonPreferred, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties);
-        }
-        // 5. Advance
-        if (assignedSpan > 0) { s += (assignedSpan - 1); }
-      }
-    }
-  }
-
-  // Pass 2.5: forced H2H within grade (aggressive), before doubling
-  fillRemainingWithForcedH2HPlus(window.availableDivisions || [], window.divisions || {}, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount);
-
-  // Pass 3: aggressive doubling on sharables
-  fillRemainingWithDoublingAggressive(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
-
-  // Final fallback: sharable specials to remove any blanks
-  fillRemainingWithFallbackSpecials(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
-
-  updateTable();
-  saveSchedule();
-}
-
-// ===== Helpers for General/H2H placement =====
-function tryGeneralActivity(bunk, div, s, spanLen, activityList, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties) {
-  for (const pick of activityList) {
-    const pickedField = fieldLabel(pick.field);
-    const activityName = getActivityName(pick);
-    if (generalFieldHistory && generalFieldHistory[bunk][activityName] === pickedField && (window.allSchedulableNames || []).length > 1) continue; // avoid same field as yesterday when non-preferred
-    let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties);
-    if (canFit && spanForThisPick > 0) {
-      return assignActivity(bunk, div, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory);
-    }
-  }
-  return 0;
-}
-
-function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, activityProperties, h2hHistory, h2hGameCount, generalActivityHistory) {
-  const opponents = allBunksInDiv.filter(b => {
-    if (b === bunk) return false;
-    if (scheduleAssignments[b][s]) return false;
-    if ((h2hHistory[bunk]?.[b] || 0) >= 1) return false; // no rematch
-    if ((h2hGameCount[b] || 0) >= 2) return false; // opponent cap
-    if (window.leagueAssignments?.[div]?.[s]) return false;
-    return true;
-  });
-  if (opponents.length > 0) {
-    const opponent = opponents[Math.floor(Math.random() * opponents.length)];
-    const h2hPicks = h2hActivities.filter(pick => {
-      const actName = getActivityName(pick);
-      return !generalActivityHistory[bunk].has(actName) && !generalActivityHistory[opponent].has(actName);
-    }).sort(() => 0.5 - Math.random());
-    for (const pick of h2hPicks) {
-      const activityName = getActivityName(pick);
-      const pickedField = fieldLabel(pick.field);
-      let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties, true); // H2H is exclusive
-      let [oppCanFit, oppSpan] = canActivityFit(opponent, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties, true); // H2H is exclusive
-      const finalSpan = Math.min(spanForThisPick, oppSpan);
-      if (canFit && oppCanFit && finalSpan > 0) {
-        for (let k = 0; k < finalSpan; k++) {
-          const currentSlot = s + k; const cont = k > 0;
-          scheduleAssignments[bunk][currentSlot] = { field: pickedField, sport: pick.sport, continuation: cont, _h2h: true, vs: opponent };
-          scheduleAssignments[opponent][currentSlot] = { field: pickedField, sport: pick.sport, continuation: cont, _h2h: true, vs: bunk };
-          if (pickedField && (window.allSchedulableNames || []).includes(pickedField)) {
-            fieldUsageBySlot[currentSlot] = fieldUsageBySlot[currentSlot] || {};
-            fieldUsageBySlot[currentSlot][pickedField] = 2; // exclusive lock
-          }
-    _allBunksInDiv[b] = { ..._allBunksInDiv[b], bunk: b, isFree: true, div: div };
+      _allBunksInDiv[b] = { ..._allBunksInDiv[b], bunk: b, isFree: true, div: div };
   }
 });
 
@@ -685,101 +570,21 @@ for (let s = 0; s < (window.unifiedTimes || []).length; s += spanLen) {
   }
 
   // --- 2b. Assign all remaining free bunks to General Activities ---
-  for (const bunk of slotBunks) {
-    if (bunksAssigned.has(bunk)) continue; // Already in an H2H game
-
-    const div = bunkToDivision[bunk];
-    const preferred = shuffle(allActivities.filter(p => !generalActivityHistory[bunk].has(getActivityName(p))));
-    const nonPreferred = shuffle(allActivities.filter(p => generalActivityHistory[bunk].has(getActivityName(p))));
-    
-    let chosenPick = null;
-
-    // Try Preferred
-    for (const pick of preferred) {
-      const fName = fieldLabel(pick.field);
-      if (!slotFields[fName]) continue; // Field not available in this slot
-      
-      const fieldCap = slotFields[fName].capacity;
-      const fieldUsage = fieldsUsed[fName] || 0;
-      
-      if (fieldUsage < fieldCap) {
-        // If field is empty, OR it's sharable and this div is allowed
-        if (fieldUsage === 0 || (slotFields[fName].props.sharable && slotFields[fName].props.allowedDivisions.includes(div))) {
-          chosenPick = pick;
-          break;
+s, spanLen, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties, allSchedulableNames);
         }
-      }
-    }
-
-    // Try Non-Preferred
-    if (!chosenPick) {
-      for (const pick of nonPreferred) {
-        const fName = fieldLabel(pick.field);
-        if (!slotFields[fName]) continue;
-        
-        // Avoid same field as yesterday
-        const actName = getActivityName(pick);
-        const yField = generalFieldHistory[bunk][actName];
-        if (fName === yField && allSchedulableNames.length > 1) continue;
-        
-        const fieldCap = slotFields[fName].capacity;
-        const fieldUsage = fieldsUsed[fName] || 0;
-        
-        if (fieldUsage < fieldCap) {
-          if (fieldUsage === 0 || (slotFields[fName].props.sharable && slotFields[fName].props.allowedDivisions.includes(div))) {
-            chosenPick = pick;
-            break;
-          }
+        // 3. H2H again if still open
+        if (assignedSpan === 0 && (h2hGameCount[bunk] || 0) < 2) {
+          assignedSpan = tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, activityProperties, h2hHistory, h2hGameCount, generalActivityHistory);
         }
+        // 4. Non-preferred
+        if (assignedSpan === 0) {
+          assignedSpan = tryGeneralActivity(bunk, div, s, spanLen, shuffledNonPreferred, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties, allSchedulableNames);
+        }
+        // 5. Advance
+        if (assignedSpan > 0) { s += (assignedSpan - 1); }
       }
-    }
-    
-    // Add the assignment
-    if (chosenPick) {
-      assignments.push({ bunk: bunk, pick: chosenPick, isH2H: false, partner: null });
-      bunksAssigned.add(bunk);
-      const fName = fieldLabel(chosenPick.field);
-      fieldsUsed[fName] = (fieldsUsed[fName] || 0) + 1;
-    } else {
-      // This bunk could not be scheduled
-      assignments.push({ bunk: bunk, pick: { field: "Special Activity Needed" }, isH2H: false, partner: null });
-      bunksAssigned.add(bunk);
     }
   }
 
-  // 3. Commit all assignments for this slot to the main schedule
-  for (const assignment of assignments) {
-    const { bunk, pick, isH2H, partner } = assignment;
-    const fieldName = fieldLabel(pick.field);
-    const sportName = pick.sport || null;
-    const div = bunkToDivision[bunk];
-    
-    for (let k = 0; k < spanLen; k++) {
-      const slot = s + k;
-      if (slot >= (window.unifiedTimes || []).length) break;
-      const cont = k > 0;
-      
-      if (isH2H) {
-        scheduleAssignments[bunk][slot] = { field: fieldName, sport: sportName, continuation: cont, _h2h: true, vs: partner };
-        // Also update the field usage in the main map
-        if (allSchedulableNames.includes(fieldName)) {
-          fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
-          fieldUsageBySlot[slot][fieldName] = { count: 2, division: div };
-        }
-      } else {
-        scheduleAssignments[bunk][slot] = { field: fieldName, sport: sportName, continuation: cont };
-        // Update field usage
-        if (allSchedulableNames.includes(fieldName)) {
-          fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
-          const usage = fieldUsageBySlot[slot][fieldName]?.count || 0;
-          fieldUsageBySlot[slot][fieldName] = { count: usage + 1, division: div };
-        }
-      }
-    }
-    
-    // Update histories
-    if (isH2H) {
-      h2hHistory[bunk] = h2hHistory[bunk] || {};
-      h2hHistory[partner] = h2hHistory[partner] || {};
-      h2hHistory[bunk][partner] = (h2hHistory[bunk][partner] || 0) + 1;
-id: '17300305842852509170', model_name: 'gemini-1.5-pro-latest', blocked: true, finish_reason: 2}
+  // Pass 2.5: forced H2H within grade (aggressive), before doubling
+  fillRemainingWithForcedH2HPlus(window.availableDivisions || [], window.divisions || {}, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount, generalActivityHistory);
