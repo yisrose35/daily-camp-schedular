@@ -28,10 +28,12 @@ window.specialActivities = specialActivities;
 window.timeTemplates = timeTemplates;
 
 
-// keep in sync with <select id="activityDuration">
-document.getElementById("activityDuration").onchange = function() {
-  activityDuration = parseInt(this.value, 10);
-};
+// =============================================
+// ===== THIS CODE BLOCK WAS MOVED (see line 429) =====
+// =============================================
+// document.getElementById("activityDuration").onchange = function() {
+//   activityDuration = parseInt(this.value, 10);
+// };
 
 // -------------------- Helpers --------------------
 function makeEditable(el, save) {
@@ -417,12 +419,24 @@ function loadData() {
 // "eraseAllBtn" is now handled by calendar.js
 
 // -------------------- Init --------------------
-// ===== REMOVED DOMCONTENTLOADED LISTENER HERE =====
 
 // =============================================
-// ===== START OF NEW INIT FUNCTION =====
+// ===== START OF FIX =====
 // =============================================
 function initApp1() {
+  // This code was moved from the global scope (line 32) to inside initApp1()
+  // to ensure the DOM is ready before it runs.
+  const activityDurationSelect = document.getElementById("activityDuration");
+  if (activityDurationSelect) {
+     activityDurationSelect.onchange = function() {
+       activityDuration = parseInt(this.value, 10);
+     };
+     // Also set the initial value
+     activityDuration = parseInt(activityDurationSelect.value, 10);
+  } else {
+    console.error("Could not find #activityDuration element");
+  }
+
   loadData();
   updateUnassigned();
   setupDivisionButtons();
@@ -432,7 +446,7 @@ function initApp1() {
 }
 window.initApp1 = initApp1;
 // =============================================
-// ===== END OF NEW INIT FUNCTION =====
+// ===== END OF FIX =====
 // =============================================
 
 // Expose internal objects for other modules to use (Data Source for the whole app)
