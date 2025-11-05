@@ -758,7 +758,13 @@ function updateTable() {
     
             tr.appendChild(td);
         }
-        continue; 
+        // =============================================
+        // ===== START OF BUG FIX =====
+        // =============================================
+        return; // <-- This was changed from 'continue' back to 'return'
+        // =============================================
+        // ===== END OF BUG FIX =====
+        // =============================================
       }
  
       if (league) {
