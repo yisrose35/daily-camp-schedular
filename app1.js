@@ -28,13 +28,6 @@ window.specialActivities = specialActivities;
 window.timeTemplates = timeTemplates;
 
 
-// =============================================
-// ===== THIS CODE BLOCK WAS MOVED (see line 429) =====
-// =============================================
-// document.getElementById("activityDuration").onchange = function() {
-//   activityDuration = parseInt(this.value, 10);
-// };
-
 // -------------------- Helpers --------------------
 function makeEditable(el, save) {
   el.ondblclick = e => {
@@ -271,7 +264,19 @@ function addField() {
   const i = document.getElementById("fieldInput");
   const n = i.value.trim();
   if (n) {
-    fields.push({ name: n, activities: [], available: true });
+    // =============================================
+    // ===== START OF DATA STRUCTURE CHANGE =====
+    // =============================================
+    fields.push({ 
+        name: n, 
+        activities: [], 
+        available: true,
+        sharable: false,      // NEW: Can this field be shared?
+        allowedDivisions: []  // NEW: Which divisions are allowed to share it?
+    });
+    // =============================================
+    // ===== END OF DATA STRUCTURE CHANGE =====
+    // =============================================
     i.value = "";
     saveData();
     renderFields();
@@ -283,6 +288,10 @@ document.getElementById("fieldInput").addEventListener("keyup", e => { if (e.key
 function renderFields() {
   const c = document.getElementById("fieldList"); c.innerHTML = "";
   fields.forEach(f => {
+    // Ensure new properties exist for old data
+    f.sharable = f.sharable || false;
+    f.allowedDivisions = f.allowedDivisions || [];
+
     const w = document.createElement("div"); w.className = "fieldWrapper"; if (!f.available) w.classList.add("unavailable");
     const t = document.createElement("span"); t.className = "fieldTitle"; t.textContent = f.name;
     makeEditable(t, newName => { f.name = newName; saveData(); renderFields(); });
@@ -292,6 +301,83 @@ function renderFields() {
     cb.onchange = () => { f.available = cb.checked; saveData(); renderFields(); };
     const sl = document.createElement("span"); sl.className = "slider";
     tog.appendChild(cb); tog.appendChild(sl); w.appendChild(tog);
+
+    // =============================================
+    // ===== START OF NEW UI CODE =====
+    // =============================================
+
+    // --- Sharable Checkbox ---
+    const shareWrap = document.createElement("div");
+    shareWrap.style.marginTop = "10px";
+    
+    const shareLabel = document.createElement("label");
+    shareLabel.style.cursor = "pointer";
+    shareLabel.style.fontWeight = "600";
+    
+    const shareCheck = document.createElement("input");
+    shareCheck.type = "checkbox";
+    shareCheck.checked = f.sharable;
+    shareCheck.style.marginRight = "6px";
+    shareCheck.onchange = () => {
+        f.sharable = shareCheck.checked;
+        saveData();
+        renderFields(); // Re-render to show/hide division list
+    };
+    
+    shareLabel.appendChild(shareCheck);
+    shareLabel.appendChild(document.createTextNode(" Allow 2 bunks on this field at once?"));
+    shareWrap.appendChild(shareLabel);
+    w.appendChild(shareWrap);
+
+    // --- Allowed Divisions (only if sharable) ---
+    if (f.sharable) {
+        const divWrap = document.createElement("div");
+        divWrap.style.padding = "8px";
+        divWrap.style.margin = "8px 0";
+        divWrap.style.border = "1px solid #eee";
+        divWrap.style.borderRadius = "4px";
+
+        const divLabel = document.createElement("p");
+        divLabel.textContent = "Which divisions can share this field?";
+        divLabel.style.margin = "0 0 8px 0";
+        divLabel.style.fontWeight = "500";
+        divWrap.appendChild(divLabel);
+
+        const chips = document.createElement("div");
+        chips.className = "chips";
+        availableDivisions.forEach(divName => {
+            const btn = document.createElement("button");
+            btn.textContent = divName;
+            btn.className = "bunk-button";
+            
+            if (f.allowedDivisions.includes(divName)) {
+                btn.classList.add("selected");
+                if (divisions[divName]) {
+                    btn.style.backgroundColor = divisions[divName].color;
+                    btn.style.color = "#fff";
+                }
+            }
+            
+            btn.onclick = () => {
+                if (f.allowedDivisions.includes(divName)) {
+                    f.allowedDivisions = f.allowedDivisions.filter(d => d !== divName);
+                } else {
+                    f.allowedDivisions.push(divName);
+                }
+                saveData();
+                renderFields(); // Re-render to update selection
+            };
+            chips.appendChild(btn);
+        });
+        divWrap.appendChild(chips);
+        w.appendChild(divWrap);
+    }
+
+    // =============================================
+    // ===== END OF NEW UI CODE =====
+    // =============================================
+
+
     const bw = document.createElement("div"); bw.style.marginTop = "8px";
     commonActivities.forEach(act => {
       const b = document.createElement("button"); b.textContent = act; b.className = "activity-button";
@@ -419,19 +505,12 @@ function loadData() {
 // "eraseAllBtn" is now handled by calendar.js
 
 // -------------------- Init --------------------
-
-// =============================================
-// ===== START OF FIX =====
-// =============================================
 function initApp1() {
-  // This code was moved from the global scope (line 32) to inside initApp1()
-  // to ensure the DOM is ready before it runs.
   const activityDurationSelect = document.getElementById("activityDuration");
   if (activityDurationSelect) {
      activityDurationSelect.onchange = function() {
        activityDuration = parseInt(this.value, 10);
      };
-     // Also set the initial value
      activityDuration = parseInt(activityDurationSelect.value, 10);
   } else {
     console.error("Could not find #activityDuration element");
@@ -445,9 +524,6 @@ function initApp1() {
   renderTimeTemplates();
 }
 window.initApp1 = initApp1;
-// =============================================
-// ===== END OF FIX =====
-// =============================================
 
 // Expose internal objects for other modules to use (Data Source for the whole app)
 window.getDivisions = () => divisions; 
