@@ -566,11 +566,17 @@ function assignFieldsToBunks() {
             if (opponents.length > 0) {
                 const opponent = opponents[Math.floor(Math.random() * opponents.length)];
                 
-                // Find activities neither bunk has done
-                const h2hPicks = h2hActivities.filter(pick => {
-                    const actName = getActivityName(pick);
-                    return !generalActivityHistory[bunk].has(actName) && !generalActivityHistory[opponent].has(actName);
-                }).sort(() => 0.5 - Math.random());
+                // =============================================
+                // ===== START OF H2H FIX =====
+                // =============================================
+                // Get all H2H activities and shuffle them.
+                // We REMOVED the filter that checked activity history.
+                // This allows H2H games to be scheduled even if the bunks
+                // have already played that *sport* (but not each other).
+                const h2hPicks = h2hActivities.sort(() => 0.5 - Math.random());
+                // =============================================
+                // ===== END OF H2H FIX =====
+                // =============================================
 
                 for (const pick of h2hPicks) {
                     const activityName = getActivityName(pick);
