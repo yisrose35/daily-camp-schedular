@@ -1,4 +1,133 @@
-<script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Camp Scheduler</title>
+  <link rel="stylesheet" href="styles.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+  <h1>🏕️ Camp Scheduler</h1>
+  
+  <div style="padding: 10px 15px; background: #f4f4f4; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ddd;">
+    <label for="calendar-date-picker" style="font-weight: bold; margin-right: 10px; font-size: 1.1em;">Current Schedule Date:</label>
+    <input type="date" id="calendar-date-picker" style="font-size: 1.1em; padding: 5px;">
+  </div>
+
+  <div class="tabs">
+    <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button>
+    <button class="tab-button" onclick="showTab('schedule')">Daily Schedule</button>
+    <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
+    <button class="tab-button" onclick="showTab('fixed-activities')">🗓️ Daily Fixed</button>
+    <button class="tab-button" onclick="showTab('daily-overrides'); window.initDailyOverrides?.();">Daily Overrides</button>
+  </div>
+  
+  <div id="setup" class="tab-content active">
+    <h3>Add Bunks</h3>
+    <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
+    <button id="addBunkBtn">Add Bunk</button>
+    <div id="unassignedBunks" class="bunk-container"></div>
+  
+    <h3>Add Divisions</h3>
+    <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
+    <button id="addDivisionBtn">Add Division</button>
+    <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable Colors</label>
+    <div id="divisionButtons" style="margin-top:8px;"></div>
+  
+    <h3>Schedule Increments</h3>
+    <select id="increment">
+      <option value="15">15 minutes</option>
+      <option value="30" selected>30 minutes</option>
+      <option value="45">45 minutes</option>
+      <option value="60">60 minutes</option>
+    </select>
+  
+    <h3>Activity Duration</h3>
+    <select id="activityDuration">
+      <option value="15">15 minutes</option>
+      <option value="30" selected>30 minutes</option>
+      <option value="45">45 minutes</option>
+      <option value="60">60 minutes</option>
+      <option value="90">90 minutes</option>
+    </select>
+  
+    <h3>Division Time Templates</h3>
+    <input id="timeStartInput" placeholder="Start (e.g., 9:00 AM)">
+    <input id="timeEndInput" placeholder="End (e.g., 4:00 PM)">
+    <button onclick="addTimeTemplate()">Add Time</button>
+    <div id="timeTemplates"></div>
+  
+    <button style="margin-top:12px;" onclick="generateTimes()">Generate Schedule Times</button>
+  
+    <h3>Add Fields / Courts</h3>
+    <input id="fieldInput" placeholder="Enter field/court name (e.g., Court 1)">
+    <button id="addFieldBtn">Add Field/Court</button>
+    <div id="fieldList"></div>
+  
+    <h3>Add Special Activities</h3>
+    <input id="specialInput" placeholder="Enter special activity (e.g., Canteen)">
+    <button id="addSpecialBtn">Add Special</button>
+    <div id="specialList"></div>
+  
+    <hr style="margin: 20px 0;">
+
+    <h3>Clear Schedules</h3>
+    <p>Use these buttons to clear saved schedule data. Your Setup (bunks, fields, etc.) will NOT be affected.</p>
+    
+    <button id="eraseTodayBtn" 
+            style="background: #db7a00; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-right: 8px;" 
+            onclick="if(confirm('Are you sure you want to delete the schedule for today?')) window.eraseCurrentDailyData?.();">
+      Delete ONLY This Day's Schedule
+    </button>
+    
+    <button id="eraseAllSchedulesBtn" 
+            style="background: #c0392b; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;" 
+            onclick="if(confirm('Are you sure you want to delete ALL saved schedules for ALL days? Your setup will be kept.')) window.eraseAllDailyData?.();">
+      Delete ALL Daily Schedules
+    </button>
+
+    <hr style="margin: 20px 0;">
+
+    <h3>Erase All Data</h3>
+    <p><strong>⚠️ Warning:</strong> This deletes everything. It deletes all schedules AND all of your setup (bunks, divisions, fields, leagues, etc.).</p>
+    
+    <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">
+      Erase All Camp Data (Reset Application)
+    </button>
+
+  </div> <div id="schedule" class="tab-content">
+    <h3>Daily Schedule</h3>
+    <div id="scheduleTable"></div>
+  </div>
+  
+  <div id="leagues" class="tab-content">
+    <h3>Leagues Setup</h3>
+    <div id="leaguesContainer"></div>
+  </div>
+  
+  <div id="fixed-activities" class="tab-content">
+    <h2>Fixed Daily Activities (Lunch, Assembly, etc.)</h2>
+    <div style="border: 1px solid #ccc; padding: 15px; border-radius: 8px; margin-bottom:  20px;">
+      <label for="fixedName" style="display: block; margin-bottom: 5px; font-weight: 600;">Activity Name:</label>
+      <input type="text" id="fixedName" placeholder="e.g., Lunch, Tefillah" style="margin-right: 8px; width: 250px;">
+      <label for="fixedStart" style="display: inline-block; margin-top: 10px; font-weight: 600;">Start Time:</label>
+      <input id="fixedStart" placeholder="e.g., 12:00pm" style="margin-right: 8px;">
+      <label for="fixedEnd" style="display: inline-block; font-weight: 600;">End Time:</label>
+      <input id="fixedEnd" placeholder="e.g., 12:30pm" style="margin-right: 8px;">
+      <button id="addFixedBtn" class="bunk-button" style="background: #007BFF; color: white; margin-top: 15px;">Add Fixed Activity</button>
+      <p style="margin-top: 15px; font-weight: 600;">Select Divisions:</p>
+      <div id="fixedDivisionsBox" style="display: flex; flex-wrap: wrap; gap: 4px;"></div>
+    </div>
+    <h3>Active Fixed Activities List</h3>
+    <div id="fixedList"></div>
+  </div>
+
+  <div id="daily-overrides" class="tab-content">
+    <div id="daily-overrides-content">
+    </div>
+  </div>
+  
+  <script>
     function showTab(id) {
      document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -15,12 +144,8 @@
      // Note: initDailyOverrides is called from the button click itself
     }
     
-    // =============================================
-    // ===== START OF BOOT FUNCTION FIX =====
-    // =============================================
-    
-    // This is simpler and GUARANTEES all 'defer' scripts
-    // have run before boot() is called.
+    // This listener CORRECTLY waits for the whole HTML document
+    // to be parsed before running boot()
     document.addEventListener("DOMContentLoaded", boot);
 
     function boot() {
@@ -59,9 +184,6 @@
          console.warn("initScheduleSystem not found.");
       }
     }
-    // =============================================
-    // ===== END OF BOOT FUNCTION FIX =====
-    // =============================================
   </script>
   
   <script src="calendar.js" defer></script>
