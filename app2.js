@@ -282,8 +282,8 @@ function assignFieldsToBunks() {
     })),
   ];
   const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
-  const H2H_CHANCE = 0.10; 
-
+  // const H2H_CHANCE = 0.10; // No longer used
+ 
   if ((!allActivities.length && !availSpecials.length) || !window.unifiedTimes || window.unifiedTimes.length === 0) {
       console.warn("Cannot assign fields: No activities or unified times are set. Did you click 'Generate Schedule Times'?");
        updateTable(); 
@@ -464,6 +464,9 @@ function assignFieldsToBunks() {
     }
   }
  
+  // =============================================
+  // ===== START OF SCHEDULER LOGIC UPDATE =====
+  // =============================================
   // --- ===== FIX 6, 8, 9, 11, 12, 13: "Smarter" General Activity Filler ===== ---
   for (const div of availableDivisions) {
     const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
@@ -477,23 +480,69 @@ function assignFieldsToBunks() {
         if (!isActive(s)) continue;
 
         let assignedSpan = 0;
-        let didH2H = false;
+        // let didH2H = false; // We no longer need this flag
+ 
+        // --- 1. Try to Assign a General Activity (This was the old "Fallback" logic) ---
+        const preferredPicks = [];
+        const nonPreferredPicks = [];
+        
+        allActivities.forEach(pick => {
+            if (generalActivityHistory[bunk].has(getActivityName(pick))) {
+                nonPreferredPicks.push(pick);
+            } else {
+                preferredPicks.push(pick);
+            }
+        });
 
-        // --- Try H2H ---
-        if (h2hGameCount[bunk] < 2 && Math.random() < H2H_CHANCE) {
-          
+        const shuffledPreferred = preferredPicks.sort(() => 0.5 - Math.random());
+        const shuffledNonPreferred = nonPreferredPicks.sort(() => 0.5 - Math.random());
+
+        // 1a. Try to assign a preferred activity first
+        for (const pick of shuffledPreferred) {
+            const pickedField = fieldLabel(pick.field);
+            let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, blockedRowsByDiv);
+            if (canFit && spanForThisPick > 0) {
+                assignedSpan = assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory);
+                break;
+            }
+        }
+
+        // 1b. If no preferred activity could be scheduled, try a non-preferred one
+        if (assignedSpan === 0) {
+            for (const pick of shuffledNonPreferred) {
+                const pickedField = fieldLabel(pick.field);
+                const activityName = getActivityName(pick);
+                
+                const yesterdayField = generalFieldHistory[bunk][activityName];
+                if (pickedField === yesterdayField && allFieldNames.length > 1) {
+                    continue; 
+                }
+                
+                let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, blockedRowsByDiv);
+                if (canFit && spanForThisPick > 0) {
+                    assignedSpan = assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory);
+                    break;
+                }
+            }
+        }
+        
+        // --- 2. If General Activity FAILED, Try H2H as a Fallback ---
+        // (This was the old "Try H2H" logic, now moved down and modified)
+        if (assignedSpan === 0 && h2hGameCount[bunk] < 2) { // Check constraint
+            // No random check! We are actively trying to fill the slot.
+            
             const opponents = allBunksInDiv.filter(b => {
                 if (b === bunk) return false;
-                if (scheduleAssignments[b][s]) return false;
+                if (scheduleAssignments[b][s]) return false; // Opponent must be free
                 if ((h2hHistory[bunk][b] || 0) >= 1) return false; 
-                if (h2hGameCount[b] >= 2) return false;
+                if (h2hGameCount[b] >= 2) return false; // Opponent must be under H2H limit
                 return true;
             });
 
             if (opponents.length > 0) {
                 const opponent = opponents[Math.floor(Math.random() * opponents.length)];
                 
-                // FIX 8/13 Check: Filter out activities *both* bunks have done
+                // Find activities neither bunk has done
                 const h2hPicks = h2hActivities.filter(pick => {
                     const actName = getActivityName(pick);
                     return !generalActivityHistory[bunk].has(actName) && !generalActivityHistory[opponent].has(actName);
@@ -503,25 +552,18 @@ function assignFieldsToBunks() {
                     const activityName = getActivityName(pick);
                     const pickedField = fieldLabel(pick.field);
 
-                    let canFit = true;
-                    let spanForThisPick = 0;
-                    for (let k = 0; k < spanLen; k++) {
-                        const currentSlot = s + k;
-                        if (currentSlot >= window.unifiedTimes.length) { canFit = false; break; }
-                        if (
-                            scheduleAssignments[bunk][currentSlot] || scheduleAssignments[opponent][currentSlot] ||
-                            window.leagueAssignments?.[div]?.[currentSlot] ||
-                            blockedRowsByDiv[div]?.[currentSlot] || !isActive(currentSlot) ||
-                            (pickedField && fieldUsageBySlot[currentSlot]?.has(pickedField))
-                        ) {
-                            if (k === 0) canFit = false;
-                            break;
-                        }
-                        spanForThisPick++;
-                    }
+                    // Check if *this* bunk can fit
+                    let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, blockedRowsByDiv);
+                    
+                    // Check if the *opponent* can fit
+                    let [oppCanFit, oppSpan] = canActivityFit(opponent, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, blockedRowsByDiv);
+                    
+                    // Both must be able to fit for the same duration
+                    const finalSpan = Math.min(spanForThisPick, oppSpan);
 
-                    if (canFit && spanForThisPick > 0) {
-                        for (let k = 0; k < spanForThisPick; k++) {
+                    if (canFit && oppCanFit && finalSpan > 0) {
+                        // Assign to BOTH bunks
+                        for (let k = 0; k < finalSpan; k++) {
                             const currentSlot = s + k;
                             const cont = k > 0;
                             scheduleAssignments[bunk][currentSlot] = {
@@ -535,7 +577,7 @@ function assignFieldsToBunks() {
                                 fieldUsageBySlot[currentSlot].add(pickedField);
                             }
                         }
-                        assignedSpan = spanForThisPick;
+                        assignedSpan = finalSpan; // Set the span
                         generalActivityHistory[bunk].add(activityName);
                         generalActivityHistory[opponent].add(activityName);
                         
@@ -544,67 +586,22 @@ function assignFieldsToBunks() {
                         h2hGameCount[bunk]++;
                         h2hGameCount[opponent]++;
                         
-                        didH2H = true; 
-                        break; 
+                        break; // Found an H2H game, stop looking for more
                     }
                 }
             }
         }
         
-        // --- Fallback to General Activity ---
-        if (!didH2H) {
-            // FIX 13: Create preferred list (not from history) and non-preferred (from history)
-            const preferredPicks = [];
-            const nonPreferredPicks = [];
-            
-            allActivities.forEach(pick => {
-                if (generalActivityHistory[bunk].has(getActivityName(pick))) {
-                    nonPreferredPicks.push(pick);
-                } else {
-                    preferredPicks.push(pick);
-                }
-            });
-
-            const shuffledPreferred = preferredPicks.sort(() => 0.5 - Math.random());
-            const shuffledNonPreferred = nonPreferredPicks.sort(() => 0.5 - Math.random());
-
-            // 1. Try to assign a preferred activity first
-            for (const pick of shuffledPreferred) {
-                const pickedField = fieldLabel(pick.field);
-                let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, blockedRowsByDiv);
-                if (canFit && spanForThisPick > 0) {
-                    assignedSpan = assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory);
-                    break;
-                }
-            }
-
-            // 2. If no preferred activity could be scheduled, try a non-preferred one
-            if (assignedSpan === 0) {
-                for (const pick of shuffledNonPreferred) {
-                    const pickedField = fieldLabel(pick.field);
-                    const activityName = getActivityName(pick);
-                    
-                    // FIX 13 RULE 2: Avoid the same field if possible
-                    const yesterdayField = generalFieldHistory[bunk][activityName];
-                    if (pickedField === yesterdayField && allFieldNames.length > 1) { // Only skip if other fields exist
-                        continue; 
-                    }
-                    
-                    let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, blockedRowsByDiv);
-                    if (canFit && spanForThisPick > 0) {
-                        assignedSpan = assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory);
-                        break;
-                    }
-                }
-            }
-        }
-        
+        // --- 3. Advance the time slot ---
         if (assignedSpan > 0) {
           s += (assignedSpan - 1);
         }
       }
     }
   }
+  // =============================================
+  // ===== END OF SCHEDULER LOGIC UPDATE =====
+  // =============================================
  
   updateTable();
   saveSchedule();
@@ -761,7 +758,7 @@ function updateTable() {
     
             tr.appendChild(td);
         }
-        return; 
+        continue; 
       }
  
       if (league) {
