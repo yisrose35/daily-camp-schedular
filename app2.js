@@ -246,17 +246,20 @@ function assignFieldsToBunks() {
   // Create a lookup map for activity properties (sharable, allowedDivisions)
   // This now includes BOTH fields and special activities
   const activityProperties = {};
+  // Use the GLOBAL window.availableDivisions from app1.js, which is guaranteed to be loaded
+  const allGlobalDivisions = window.availableDivisions || []; 
+  
   availFields.forEach(f => {
     activityProperties[f.name] = {
         sharable: f.sharable || false,
         // If allowedDivisions is empty, it means "all divisions"
-        allowedDivisions: (f.allowedDivisions || []).length > 0 ? f.allowedDivisions : availableDivisions
+        allowedDivisions: (f.allowedDivisions || []).length > 0 ? f.allowedDivisions : allGlobalDivisions // <--- FIX
     };
   });
   availSpecials.forEach(s => {
     activityProperties[s.name] = {
         sharable: s.sharable || false,
-        allowedDivisions: (s.allowedDivisions || []).length > 0 ? s.allowedDivisions : availableDivisions
+        allowedDivisions: (s.allowedDivisions || []).length > 0 ? s.allowedDivisions : allGlobalDivisions // <--- FIX
     };
   });
   // =============================================
@@ -290,13 +293,9 @@ function assignFieldsToBunks() {
 
   // Create Field-Sport Inventory
   const fieldsBySport = {};
-  // =============================================
-  // ===== START OF NEW SHARABLE LOGIC =====
-  // =============================================
-  // This list now includes all schedulable activity names (fields AND specials)
-  const allSchedulableNames = []; 
+  const allFieldNames = []; // This list ONLY contains fields, not special activities
   availFields.forEach(f => {
-    allSchedulableNames.push(f.name);
+    allFieldNames.push(f.name);
     if (Array.isArray(f.activities)) {
       f.activities.forEach(sport => {
         fieldsBySport[sport] = fieldsBySport[sport] || [];
@@ -304,12 +303,9 @@ function assignFieldsToBunks() {
       });
     }
   });
-  availSpecials.forEach(s => {
-      allSchedulableNames.push(s.name);
-  });
-  // =============================================
-  // ===== END OF NEW SHARABLE LOGIC =====
-  // =============================================
+  
+  // This list includes all schedulable activity names (fields AND specials)
+  const allSchedulableNames = allFieldNames.concat(availSpecials.map(s => s.name));
 
   const allActivities = [
     ...availFields.flatMap((f) =>
@@ -340,9 +336,6 @@ function assignFieldsToBunks() {
   
   const blockedRowsByDiv = prePlaceFixedActivities();
 
-  // =============================================
-  // ===== START OF NEW SHARABLE LOGIC (FIELD USAGE) =====
-  // =============================================
   // Create Field Reservation System (NOW TRACKS COUNTS)
   // fieldUsageBySlot = { 0: {"Gym": 2, "Field A": 1}, 1: ... }
   const fieldUsageBySlot = {};
@@ -363,9 +356,6 @@ function assignFieldsToBunks() {
        }
     });
   });
-  // =============================================
-  // ===== END OF NEW SHARABLE LOGIC (FIELD USAGE) =====
-  // =============================================
 
   // ===== Init Activity Histories =====
   const generalActivityHistory = {}; // { Bunk1: Set("Basketball", "Gameroom") }
@@ -475,9 +465,16 @@ function assignFieldsToBunks() {
     
     // Check for available fields for this specific slot SPAN
     const availableFieldsForSpan = {}; // e.g., {"Gym": 2, "Field A": 1}
-    allSchedulableNames.forEach(name => {
+    // =============================================
+    // ===== START OF BUG FIX =====
+    // =============================================
+    // Leagues are played on FIELDS, so we iterate allFieldNames, NOT allSchedulableNames
+    allFieldNames.forEach(name => { 
+    // =============================================
+    // ===== END OF BUG FIX =====
+    // =============================================
         const fieldProps = activityProperties[name];
-        if (!fieldProps) return; // Should not happen, but a good safeguard
+        if (!fieldProps) return; 
         
         let capacity = fieldProps.sharable ? 2 : 1;
 
@@ -507,13 +504,17 @@ function assignFieldsToBunks() {
         for (const fieldName of possibleFields) {
             const fieldProps = activityProperties[fieldName];
             const maxCap = fieldProps.sharable ? 2 : 1;
-            const currentUsage = availableFieldsForSpan[fieldName] || 0;
+            // This is the capacity *before* this league
+            const currentUsage = (availableFieldsForSpan[fieldName] || 0);
             const tempUsage = tempReservedFields[fieldName] || 0;
 
             if ((currentUsage - tempUsage) > 0) {
                 // Check if this division is allowed to share
                 // (maxCap - currentUsage) > 0 means (2-1) > 0 -> field is already in use
-                if ( (maxCap - currentUsage) > 0 ) { 
+                // This logic was flawed. We just need to know if the field is *at all* in use.
+                const isFieldInUse = (maxCap - currentUsage) > 0;
+                
+                if (isFieldInUse) { 
                     if (fieldProps.allowedDivisions.includes(div)) {
                          assignedField = fieldName;
                     }
@@ -679,7 +680,7 @@ function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageB
                     scheduleAssignments[opponent][currentSlot] = {
                         field: pickedField, sport: pick.sport, continuation: cont, _h2h: true, vs: bunk
                     };
-                    if (pickedField) {
+                    if (pickedField && allSchedulableNames.includes(pickedField)) { // Check if it's a real field/activity
                         fieldUsageBySlot[currentSlot] = fieldUsageBySlot[currentSlot] || {};
                         fieldUsageBySlot[currentSlot][pickedField] = (fieldUsageBySlot[currentSlot][pickedField] || 0) + 1;
                     }
@@ -924,7 +925,10 @@ function updateTable() {
           td.style.verticalAlign = "top"; 
  
           const list = league.games
-            .map((g) => `${g.teams[0]} vs ${g.teams[1]} (${g.sport}) @ ${g.field}`)
+            .map((g) => {
+                const gameField = g.field ? `@ ${g.field}` : "@ No Field";
+                return `${g.teams[0]} vs ${g.teams[1]} (${g.sport}) ${gameField}`
+            })
             .join("<br> • ");
  
           td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;">${league.leagueName}</span></div>`;
