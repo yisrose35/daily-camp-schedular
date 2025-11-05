@@ -437,7 +437,6 @@ function assignFieldsToBunks() {
       for (let k = 0; k < spanLen; k++) {
         const slot = s + k;
         if (slot >= window.unifiedTimes.length) return false;
-        
         let isBunkBusy = false;
         for (const bunk of bunksInDiv) {
           if (scheduleAssignments[bunk]?.[slot]) { 
@@ -446,7 +445,6 @@ function assignFieldsToBunks() {
           }
         }
         if (isBunkBusy) return false;
-
         if (takenLeagueSlots.has(slot)) return false;
       }
       return true;
@@ -454,7 +452,91 @@ function assignFieldsToBunks() {
     
     if (!candidates.length) continue; 
 
-    const chosenSlot = candidates[0]; 
+    // NEW: try each candidate slot until one has enough fields
+    let placedLeague = false;
+    for (const chosenSlot of candidates) {
+      const teams = (lg.data.teams || [])
+        .map((t) => String(t).trim())
+        .filter(Boolean);
+      if (teams.length < 2) break;
+      const matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
+      if (!matchups.length) break;
+
+      const gamesWithSports = assignSportsToMatchups(
+        lg.name,
+        matchups,
+        lg.data.sports,
+        leagueTeamSportHistory
+      );
+
+      // ===== LEAGUE FIELDS AVAILABILITY (non-sharable) =====
+      const availableFieldsForSpan = {}; // e.g., {"Gym": 1, "Field A": 0}
+      allFieldNames.forEach(name => {
+          let capacity = 1; // Leagues ALWAYS have capacity 1
+          for (let k = 0; k < spanLen; k++) {
+              const slot = chosenSlot + k;
+              const usage = fieldUsageBySlot[slot]?.[name] || 0;
+              if (usage > 0) { capacity = 0; break; }
+          }
+          availableFieldsForSpan[name] = capacity; // 1 (free) or 0 (busy)
+      });
+
+      const gamesWithPossibleFields = gamesWithSports.map(game => {
+          const possibleFields = (fieldsBySport[game.sport] || [])
+              .filter(fieldName => (availableFieldsForSpan[fieldName] || 0) > 0);
+          return { game, possibleFields };
+      });
+
+      gamesWithPossibleFields.sort((a, b) => a.possibleFields.length - b.possibleFields.length);
+
+      const tempReservedFields = {};
+      let allGamesCanBeScheduled = true;
+      const gamesWithFields = gamesWithPossibleFields.map(item => {
+          const { game, possibleFields } = item;
+          let assignedField = null; 
+          for (const fieldName of possibleFields) {
+              if ((availableFieldsForSpan[fieldName] || 0) > 0 && !tempReservedFields[fieldName]) {
+                  assignedField = fieldName;
+                  tempReservedFields[fieldName] = 1; // Mark as used
+                  break;
+              }
+          }
+          if (!assignedField) allGamesCanBeScheduled = false;
+          return { ...game, field: assignedField };
+      });
+
+      if (!allGamesCanBeScheduled) {
+        // try next candidate slot
+        continue; 
+      }
+
+      // Book league at this chosenSlot
+      window.leagueAssignments[div] = window.leagueAssignments[div] || {};
+      const leagueData = { games: gamesWithFields, leagueName: lg.name, isContinuation: false };
+      const leagueContinuation = { leagueName: lg.name, isContinuation: true };
+
+      for (let k = 0; k < spanLen; k++) {
+        const slot = chosenSlot + k;
+        if (slot >= window.unifiedTimes.length) break; 
+        window.leagueAssignments[div][slot] = (k === 0) ? leagueData : leagueContinuation;
+        takenLeagueSlots.add(slot);
+        gamesWithFields.forEach(game => {
+            if (game.field) {
+                fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
+                fieldUsageBySlot[slot][game.field] = 2; 
+            }
+        });
+      }
+      placedLeague = true;
+      break; // stop checking further candidates
+    }
+
+    if (!placedLeague) {
+      console.warn(`Skipping league "${lg.name}": Not enough fields across candidate slots.`);
+    }
+
+    // proceed to next division
+    continue;
 
     const teams = (lg.data.teams || [])
       .map((t) => String(t).trim())
@@ -787,66 +869,85 @@ function assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, genera
  */
 function fillRemainingWithForcedH2H(availableDivisions, divisions, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount) {
   const unifiedTimes = window.unifiedTimes || [];
+
+  // Precompute fields that are commonly needed for leagues (by sport mapping)
+  const leaguePreferredFields = new Set();
+  const global = window.loadGlobalSettings?.() || {};
+  const leaguesByName = global.leaguesByName || {};
+  Object.values(leaguesByName).forEach(L => {
+    (L.sports || []).forEach(sp => {
+      const fields = (window._lastFieldsBySportCache || {})[sp] || [];
+      fields.forEach(f => leaguePreferredFields.add(f));
+    });
+  });
+
   for (const div of availableDivisions) {
     const bunks = divisions[div]?.bunks || [];
     const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
 
     for (let s = 0; s < unifiedTimes.length; s++) {
-      if (window.leagueAssignments?.[div]?.[s]) continue; // skip league slots
+      if (window.leagueAssignments?.[div]?.[s]) continue; // skip league slots for this div
 
       // Gather empty bunks at this slot that still can play H2H
       const empties = bunks.filter(b => !window.scheduleAssignments[b][s] && isActive(s) && ((h2hGameCount[b] || 0) < 2));
       if (empties.length < 2) continue;
 
-      // Greedy pair up empties and try to schedule H2H
-      const used = new Set();
-      for (let i = 0; i < empties.length; i++) {
-        const a = empties[i];
-        if (used.has(a)) continue;
-        for (let j = i + 1; j < empties.length; j++) {
-          const b = empties[j];
-          if (used.has(b)) continue;
-          if ((h2hHistory[a]?.[b] || 0) >= 1) continue; // no rematch in same day
+      // Try multiple pairing passes to maximize fill
+      let adjusted = true;
+      let guard = 0;
+      while (adjusted && guard++ < 3) {
+        adjusted = false;
+        const used = new Set();
+        for (let i = 0; i < empties.length; i++) {
+          const a = empties[i];
+          if (used.has(a) || window.scheduleAssignments[a][s]) continue;
+          for (let j = i + 1; j < empties.length; j++) {
+            const b = empties[j];
+            if (used.has(b) || window.scheduleAssignments[b][s]) continue;
+            if ((h2hHistory[a]?.[b] || 0) >= 1) continue; // no rematch in same day
 
-          // Try each H2H-capable activity until one fits both bunks
-          const shuffled = h2hActivities.slice().sort(() => 0.5 - Math.random());
-          let placed = false;
-          for (const pick of shuffled) {
-            const fName = fieldLabel(pick.field);
-            // Check capacity and fit for full span for both bunks
-            let fitsBoth = true;
-            for (let k = 0; k < spanLen; k++) {
-              const slot = s + k;
-              if (slot >= unifiedTimes.length) { fitsBoth = false; break; }
-              if (window.scheduleAssignments[a][slot] || window.scheduleAssignments[b][slot]) { fitsBoth = false; break; }
-              if (window.leagueAssignments?.[div]?.[slot]) { fitsBoth = false; break; }
-              const props = activityProperties[fName];
-              const usage = (fieldUsageBySlot[slot]?.[fName] || 0);
-              // H2H requires exclusive field (usage must be 0 across span)
-              if (!props || usage > 0) { fitsBoth = false; break; }
+            // Choose fields for H2H that are LEAST likely to be needed for leagues
+            const sortedPicks = h2hActivities.slice().sort((p1, p2) => {
+              const f1 = fieldLabel(p1.field), f2 = fieldLabel(p2.field);
+              const s1 = leaguePreferredFields.has(f1) ? 1 : 0;
+              const s2 = leaguePreferredFields.has(f2) ? 1 : 0;
+              return s1 - s2; // prefer non-league fields first
+            });
+
+            let placed = false;
+            for (const pick of sortedPicks) {
+              const fName = fieldLabel(pick.field);
+              let fitsBoth = true;
+              for (let k = 0; k < spanLen; k++) {
+                const slot = s + k;
+                if (slot >= unifiedTimes.length) { fitsBoth = false; break; }
+                if (window.scheduleAssignments[a][slot] || window.scheduleAssignments[b][slot]) { fitsBoth = false; break; }
+                if (window.leagueAssignments?.[div]?.[slot]) { fitsBoth = false; break; }
+                const usage = (fieldUsageBySlot[slot]?.[fName] || 0);
+                if (usage > 0) { fitsBoth = false; break; } // exclusive
+              }
+              if (!fitsBoth) continue;
+
+              for (let k = 0; k < spanLen; k++) {
+                const slot = s + k;
+                const cont = k > 0;
+                window.scheduleAssignments[a][slot] = { field: fName, sport: pick.sport, continuation: cont, _h2h: true, vs: b };
+                window.scheduleAssignments[b][slot] = { field: fName, sport: pick.sport, continuation: cont, _h2h: true, vs: a };
+                fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
+                fieldUsageBySlot[slot][fName] = 2;
+              }
+              h2hHistory[a] = h2hHistory[a] || {}; h2hHistory[b] = h2hHistory[b] || {};
+              h2hHistory[a][b] = (h2hHistory[a][b] || 0) + 1;
+              h2hHistory[b][a] = (h2hHistory[b][a] || 0) + 1;
+              h2hGameCount[a] = (h2hGameCount[a] || 0) + 1;
+              h2hGameCount[b] = (h2hGameCount[b] || 0) + 1;
+
+              used.add(a); used.add(b);
+              placed = true;
+              adjusted = true;
+              break;
             }
-            if (!fitsBoth) continue;
-
-            // Place H2H across the span and lock field
-            for (let k = 0; k < spanLen; k++) {
-              const slot = s + k;
-              const cont = k > 0;
-              window.scheduleAssignments[a][slot] = { field: fName, sport: pick.sport, continuation: cont, _h2h: true, vs: b };
-              window.scheduleAssignments[b][slot] = { field: fName, sport: pick.sport, continuation: cont, _h2h: true, vs: a };
-              fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
-              fieldUsageBySlot[slot][fName] = 2; // exclusive lock
-            }
-            h2hHistory[a] = h2hHistory[a] || {}; h2hHistory[b] = h2hHistory[b] || {};
-            h2hHistory[a][b] = (h2hHistory[a][b] || 0) + 1;
-            h2hHistory[b][a] = (h2hHistory[b][a] || 0) + 1;
-            h2hGameCount[a] = (h2hGameCount[a] || 0) + 1;
-            h2hGameCount[b] = (h2hGameCount[b] || 0) + 1;
-
-            used.add(a); used.add(b);
-            placed = true;
-            break;
           }
-          if (placed) break; // move to next 'a'
         }
       }
     }
