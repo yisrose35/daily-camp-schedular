@@ -184,17 +184,7 @@ function updateTable() {
         }
 
         const td = document.createElement("td");
-        td.rowSpan = span;
-        td.style.verticalAlign = "top";
-
-        if (entry._h2h) {
-          td.textContent = `${entry.sport} ${entry.field} vs ${entry.vs}`;
-          td.style.background = "#e8f4ff";
-          td.style.fontWeight = "bold";
-        } else if (entry._fixed) {
-          td.textContent = fieldLabel(entry.field);
-          td.style.background = "#f1f1f1";
-          td.style.fontWeight = "600";
+t.style.fontWeight = "600";
         } else if (fieldLabel(entry.field) === "Special Activity Needed") {
           td.innerHTML = `<span style="color:#c0392b;">${fieldLabel(entry.field)}</span>`;
         } else if (entry.sport) {
