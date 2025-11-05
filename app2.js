@@ -805,6 +805,9 @@ function fillRemainingWithFallbackSpecials(availableDivisions, divisions, spanLe
   }
 }
 
+// app2.js (Part 2 of 2)
+// FULL REMAINDER — rendering, save/load, init, exports
+
 // ===== RENDERING (per-division grey-out) =====
 function updateTable() {
   const container = document.getElementById("scheduleTable");
@@ -1014,8 +1017,48 @@ function updateTable() {
   container.appendChild(table);
 }
 
-// ===== Save/Load =====
+// ===== Save/Load/Init =====
 function saveSchedule() {
   try {
     window.saveCurrentDailyData?.("scheduleAssignments", window.scheduleAssignments);
-    window.saveCurrentDailyData?.("leagueAssignments", window.leagueAssignments
+    window.saveCurrentDailyData?.("leagueAssignments", window.leagueAssignments);
+  } catch (e) {
+    console.error("Save schedule failed:", e);
+  }
+}
+
+function reconcileOrRenderSaved() {
+  try {
+    const data = window.loadCurrentDailyData?.() || {};
+    window.scheduleAssignments = data.scheduleAssignments || {};
+    window.leagueAssignments = data.leagueAssignments || {};
+  } catch (e) {
+    console.error("Reconcile saved failed:", e);
+    window.scheduleAssignments = {};
+    window.leagueAssignments = {};
+  }
+  updateTable();
+}
+
+function initScheduleSystem() {
+  try {
+    // Ensure globals exist
+    window.scheduleAssignments = window.scheduleAssignments || {};
+    window.leagueAssignments = window.leagueAssignments || {};
+
+    // Render whatever is saved for the selected calendar day
+    reconcileOrRenderSaved();
+  } catch (e) {
+    console.error("Init error:", e);
+    updateTable();
+  }
+}
+
+// ===== Exports =====
+window.assignFieldsToBunks = window.assignFieldsToBunks || assignFieldsToBunks;
+window.updateTable = window.updateTable || updateTable;
+window.initScheduleSystem = window.initScheduleSystem || initScheduleSystem;
+
+// If calendar.js changes the date, it should call initScheduleSystem() or
+// directly call assignFieldsToBunks() after times are generated. End of file.
+
