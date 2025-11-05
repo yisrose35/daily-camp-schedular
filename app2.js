@@ -217,7 +217,20 @@ function assignFieldsToBunks() {
   const masterLeagues = globalSettings.leaguesByName || {};
 
   const dailyData = window.loadCurrentDailyData?.() || {};
-  const overrides = dailyData.overrides || { fields: [], bunks: [], leagues: [] };
+  
+  // =============================================
+  // ===== START OF FIX =====
+  // =============================================
+  // Safely initialize the overrides object
+  const loadedOverrides = dailyData.overrides || {};
+  const overrides = {
+      fields: loadedOverrides.fields || [],
+      bunks: loadedOverrides.bunks || [],
+      leagues: loadedOverrides.leagues || []
+  };
+  // =============================================
+  // ===== END OF FIX =====
+  // =============================================
 
   // ===== NEW (FIX 13): Load *Yesterday's* Data =====
   const yesterdayData = window.loadPreviousDailyData?.() || {};
@@ -282,27 +295,8 @@ function assignFieldsToBunks() {
     })),
   ];
   const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
-  const H2H_CHANCE = 0.10; // This is the base chance
+  const H2H_CHANCE = 0.10; 
 
-  // =============================================
-  // ===== START OF NEW DYNAMIC H2H LOGIC =====
-  // =============================================
-  const numBunks = availableDivisions.flatMap(div => divisions[div]?.bunks || []).length;
-  const numFields = allFieldNames.length;
-  let dynamicH2HChance = H2H_CHANCE; // Default
-  if (numFields > 0 && numBunks > numFields) {
-      // Calculate the ratio of bunks-per-field. e.g., 20 bunks / 12 fields = 1.67
-      const bunkFieldRatio = numBunks / numFields;
-      // (1.67 - 1) / 1.67 = 0.4. This is the "necessity" ratio.
-      const necessity = (bunkFieldRatio - 1) / bunkFieldRatio;
-      // Add necessity to base chance, but cap it at 0.8 (80%)
-      dynamicH2HChance = Math.min(0.80, H2H_CHANCE + necessity);
-  }
-  console.log(`Bunks: ${numBunks}, Fields: ${numFields}, Dynamic H2H Chance: ${dynamicH2HChance.toFixed(2)}`);
-  // =============================================
-  // ===== END OF NEW DYNAMIC H2H LOGIC =====
-  // =============================================
- 
   if ((!allActivities.length && !availSpecials.length) || !window.unifiedTimes || window.unifiedTimes.length === 0) {
       console.warn("Cannot assign fields: No activities or unified times are set. Did you click 'Generate Schedule Times'?");
        updateTable(); 
@@ -399,31 +393,22 @@ function assignFieldsToBunks() {
         : window.unifiedTimes.map((_, i) => i);
 
     const bunksInDiv = divisions[div]?.bunks || [];
-    
-    // THIS IS THE CORRECTED LOGIC FOR LEAGUE BLOCKING
+    const firstBunk = bunksInDiv.length > 0 ? bunksInDiv[0] : null;
+
     const candidates = actSlots.filter((s) => {
       for (let k = 0; k < spanLen; k++) {
         const slot = s + k;
         if (slot >= window.unifiedTimes.length) return false;
-        
-        // Check if ANY bunk in this division is busy with a fixed activity.
-        let isBunkBusy = false;
-        for (const bunk of bunksInDiv) {
-          if (scheduleAssignments[bunk]?.[slot]) { // scheduleAssignments only has fixed activities right now
-            isBunkBusy = true;
-            break;
-          }
-        }
-        if (isBunkBusy) return false;
-
+        if (blockedRowsByDiv[div]?.has(slot)) return false;
         if (takenLeagueSlots.has(slot)) return false;
+        if (firstBunk && scheduleAssignments[firstBunk]?.[slot])
+          return false;
       }
       return true;
     });
     
     if (!candidates.length) continue; 
 
-    // Find the first available candidate slot
     const chosenSlot = candidates[0]; 
 
     const teams = (lg.data.teams || [])
@@ -433,14 +418,14 @@ function assignFieldsToBunks() {
     const matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
     if (!matchups.length) continue;
     
+    // FIX 13: Pass yesterday's history to the sport assigner
     const gamesWithSports = assignSportsToMatchups(
       lg.name,
       matchups,
       lg.data.sports,
-      leagueTeamSportHistory
+      leagueTeamSportHistory // Pass the history
     );
 
-    // Check for available fields for this specific slot
     const availableFieldsForSpan = new Set(allFieldNames);
     for (let k = 0; k < spanLen; k++) {
         const slot = chosenSlot + k;
@@ -458,10 +443,9 @@ function assignFieldsToBunks() {
     gamesWithPossibleFields.sort((a, b) => a.possibleFields.length - b.possibleFields.length);
 
     const tempReservedFields = new Set();
-    let allGamesCanBeScheduled = true;
     const gamesWithFields = gamesWithPossibleFields.map(item => {
         const { game, possibleFields } = item;
-        let assignedField = null; // Use null, not "No Field Available"
+        let assignedField = "No Field Available"; 
         
         for (const field of possibleFields) {
             if (!tempReservedFields.has(field)) {
@@ -470,20 +454,9 @@ function assignFieldsToBunks() {
                 break;
             }
         }
-
-        if (!assignedField) {
-            allGamesCanBeScheduled = false;
-        }
         return { ...game, field: assignedField };
     });
 
-    // If even one game couldn't find a field, DO NOT schedule the league for this time.
-    if (!allGamesCanBeScheduled) {
-      console.warn(`Skipping league "${lg.name}" at slot ${chosenSlot}: Not enough fields.`);
-      continue; // Try the next candidate slot (or in this simple case, just skip)
-    }
-
-    // All games have fields! Now, book them.
     window.leagueAssignments[div] = window.leagueAssignments[div] || {};
     const leagueData = { games: gamesWithFields, leagueName: lg.name, isContinuation: false };
     const leagueContinuation = { leagueName: lg.name, isContinuation: true };
@@ -495,9 +468,8 @@ function assignFieldsToBunks() {
       window.leagueAssignments[div][slot] = (k === 0) ? leagueData : leagueContinuation;
       takenLeagueSlots.add(slot);
       
-      // Add these fields to the main reservation system
       gamesWithFields.forEach(game => {
-          if (game.field) {
+          if (game.field !== "No Field Available") {
               fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || new Set();
               fieldUsageBySlot[slot].add(game.field);
           }
@@ -521,12 +493,8 @@ function assignFieldsToBunks() {
         let didH2H = false;
 
         // --- Try H2H ---
-        // =============================================
-        // ===== USE THE DYNAMIC CHANCE =====
-        // =============================================
-        if (h2hGameCount[bunk] < 2 && Math.random() < dynamicH2HChance) {
-        // =============================================
-            
+        if (h2hGameCount[bunk] < 2 && Math.random() < H2H_CHANCE) {
+          
             const opponents = allBunksInDiv.filter(b => {
                 if (b === bunk) return false;
                 if (scheduleAssignments[b][s]) return false;
