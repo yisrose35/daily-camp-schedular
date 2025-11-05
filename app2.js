@@ -243,12 +243,20 @@ function assignFieldsToBunks() {
   // =============================================
   // ===== START OF NEW SHARABLE LOGIC =====
   // =============================================
-  // Create a lookup map for field properties (sharable, allowedDivisions)
-  const fieldsByName = {};
+  // Create a lookup map for activity properties (sharable, allowedDivisions)
+  // This now includes BOTH fields and special activities
+  const activityProperties = {};
   availFields.forEach(f => {
-    fieldsByName[f.name] = {
+    activityProperties[f.name] = {
         sharable: f.sharable || false,
-        allowedDivisions: f.allowedDivisions || []
+        // If allowedDivisions is empty, it means "all divisions"
+        allowedDivisions: (f.allowedDivisions || []).length > 0 ? f.allowedDivisions : availableDivisions
+    };
+  });
+  availSpecials.forEach(s => {
+    activityProperties[s.name] = {
+        sharable: s.sharable || false,
+        allowedDivisions: (s.allowedDivisions || []).length > 0 ? s.allowedDivisions : availableDivisions
     };
   });
   // =============================================
@@ -282,9 +290,13 @@ function assignFieldsToBunks() {
 
   // Create Field-Sport Inventory
   const fieldsBySport = {};
-  let allFieldNames = [];
+  // =============================================
+  // ===== START OF NEW SHARABLE LOGIC =====
+  // =============================================
+  // This list now includes all schedulable activity names (fields AND specials)
+  const allSchedulableNames = []; 
   availFields.forEach(f => {
-    allFieldNames.push(f.name);
+    allSchedulableNames.push(f.name);
     if (Array.isArray(f.activities)) {
       f.activities.forEach(sport => {
         fieldsBySport[sport] = fieldsBySport[sport] || [];
@@ -292,6 +304,12 @@ function assignFieldsToBunks() {
       });
     }
   });
+  availSpecials.forEach(s => {
+      allSchedulableNames.push(s.name);
+  });
+  // =============================================
+  // ===== END OF NEW SHARABLE LOGIC =====
+  // =============================================
 
   const allActivities = [
     ...availFields.flatMap((f) =>
@@ -299,7 +317,7 @@ function assignFieldsToBunks() {
     ),
     ...availSpecials.map((sa) => ({
       type: "special",
-      field: { name: sa.name },
+      field: sa, // Pass the whole object
       sport: null,
     })),
   ];
@@ -323,9 +341,9 @@ function assignFieldsToBunks() {
   const blockedRowsByDiv = prePlaceFixedActivities();
 
   // =============================================
-  // ===== START OF NEW SHARABLE LOGIC =====
+  // ===== START OF NEW SHARABLE LOGIC (FIELD USAGE) =====
   // =============================================
-  // Create Field Reservation System (NOW TRACKS COUNTS, NOT A SET)
+  // Create Field Reservation System (NOW TRACKS COUNTS)
   // fieldUsageBySlot = { 0: {"Gym": 2, "Field A": 1}, 1: ... }
   const fieldUsageBySlot = {};
   (availableDivisions || []).forEach(div => {
@@ -334,8 +352,8 @@ function assignFieldsToBunks() {
          scheduleAssignments[bunk].forEach((entry, slot) => {
            if (entry && entry._fixed && entry.field) {
                const fieldName = fieldLabel(entry.field);
-               // Only track usage for "real" fields, not "Lunch"
-               if (allFieldNames.includes(fieldName)) {
+               // Only track usage for "real" fields/activities
+               if (allSchedulableNames.includes(fieldName)) {
                   fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
                   // A fixed activity takes ALL capacity of the field. Mark it as full (e.g., 2).
                   fieldUsageBySlot[slot][fieldName] = 2; 
@@ -346,7 +364,7 @@ function assignFieldsToBunks() {
     });
   });
   // =============================================
-  // ===== END OF NEW SHARABLE LOGIC =====
+  // ===== END OF NEW SHARABLE LOGIC (FIELD USAGE) =====
   // =============================================
 
   // ===== Init Activity Histories =====
@@ -454,12 +472,13 @@ function assignFieldsToBunks() {
     // =============================================
     // ===== START OF NEW SHARABLE LOGIC (LEAGUES) =====
     // =============================================
-
+    
     // Check for available fields for this specific slot SPAN
-    // We must check usage for all slots in the span.
     const availableFieldsForSpan = {}; // e.g., {"Gym": 2, "Field A": 1}
-    allFieldNames.forEach(name => {
-        const fieldProps = fieldsByName[name];
+    allSchedulableNames.forEach(name => {
+        const fieldProps = activityProperties[name];
+        if (!fieldProps) return; // Should not happen, but a good safeguard
+        
         let capacity = fieldProps.sharable ? 2 : 1;
 
         for (let k = 0; k < spanLen; k++) {
@@ -486,14 +505,15 @@ function assignFieldsToBunks() {
         let assignedField = null; 
         
         for (const fieldName of possibleFields) {
-            const fieldProps = fieldsByName[fieldName];
+            const fieldProps = activityProperties[fieldName];
             const maxCap = fieldProps.sharable ? 2 : 1;
             const currentUsage = availableFieldsForSpan[fieldName] || 0;
             const tempUsage = tempReservedFields[fieldName] || 0;
 
             if ((currentUsage - tempUsage) > 0) {
                 // Check if this division is allowed to share
-                if ( (maxCap - currentUsage) > 0 ) { // Field is already in use
+                // (maxCap - currentUsage) > 0 means (2-1) > 0 -> field is already in use
+                if ( (maxCap - currentUsage) > 0 ) { 
                     if (fieldProps.allowedDivisions.includes(div)) {
                          assignedField = fieldName;
                     }
@@ -576,16 +596,16 @@ function assignFieldsToBunks() {
         const shuffledNonPreferred = nonPreferredPicks.sort(() => 0.5 - Math.random());
 
         // --- 2. Try to assign a PREFERRED activity first ---
-        assignedSpan = tryGeneralActivity(bunk, div, s, spanLen, shuffledPreferred, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, fieldsByName);
+        assignedSpan = tryGeneralActivity(bunk, div, s, spanLen, shuffledPreferred, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties);
 
         // --- 3. If PREFERRED fails, try H2H (by necessity) ---
         if (assignedSpan === 0 && h2hGameCount[bunk] < 2) {
-            assignedSpan = tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, fieldsByName);
+            assignedSpan = tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, activityProperties);
         }
         
         // --- 4. If BOTH preferred and H2H fail, use NON-PREFERRED ---
         if (assignedSpan === 0) {
-            assignedSpan = tryGeneralActivity(bunk, div, s, spanLen, shuffledNonPreferred, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, fieldsByName);
+            assignedSpan = tryGeneralActivity(bunk, div, s, spanLen, shuffledNonPreferred, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties);
         }
 
         // --- 5. Advance the time slot ---
@@ -603,17 +623,17 @@ function assignFieldsToBunks() {
 /**
  * Helper: Tries to schedule a General Activity
  */
-function tryGeneralActivity(bunk, div, s, spanLen, activityList, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, fieldsByName) {
+function tryGeneralActivity(bunk, div, s, spanLen, activityList, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties) {
     for (const pick of activityList) {
         const pickedField = fieldLabel(pick.field);
         const activityName = getActivityName(pick);
 
         // Check if this is a non-preferred activity that used the same field yesterday
-        if (generalFieldHistory && generalFieldHistory[bunk][activityName] === pickedField && allFieldNames.length > 1) {
+        if (generalFieldHistory && generalFieldHistory[bunk][activityName] === pickedField && allSchedulableNames.length > 1) {
             continue; // Skip this, try another field
         }
 
-        let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, fieldsByName);
+        let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties);
         if (canFit && spanForThisPick > 0) {
             return assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory);
         }
@@ -624,7 +644,7 @@ function tryGeneralActivity(bunk, div, s, spanLen, activityList, fieldUsageBySlo
 /**
  * Helper: Tries to schedule an H2H game
  */
-function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, fieldsByName) {
+function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, activityProperties) {
     const opponents = allBunksInDiv.filter(b => {
         if (b === bunk) return false;
         if (scheduleAssignments[b][s]) return false; // Opponent must be free
@@ -643,8 +663,8 @@ function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageB
             const activityName = getActivityName(pick);
             const pickedField = fieldLabel(pick.field);
 
-            let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, fieldsByName);
-            let [oppCanFit, oppSpan] = canActivityFit(opponent, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, fieldsByName);
+            let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties);
+            let [oppCanFit, oppSpan] = canActivityFit(opponent, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties);
             
             const finalSpan = Math.min(spanForThisPick, oppSpan);
 
@@ -682,7 +702,7 @@ function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageB
 /**
  * Helper: Checks if a general activity can fit in a slot.
  */
-function canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, fieldsByName) {
+function canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties) {
     let canFitThisPick = true;
     let spanForThisPick = 0;
 
@@ -704,8 +724,8 @@ function canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, is
         // =============================================
         // ===== START OF NEW SHARABLE LOGIC (CHECK) =====
         // =============================================
-        if (pickedField && fieldsByName[pickedField]) { // Check if it's a real field
-            const fieldProps = fieldsByName[pickedField];
+        if (pickedField && activityProperties[pickedField]) { // Check if it's a real field/activity
+            const fieldProps = activityProperties[pickedField];
             const usage = fieldUsageBySlot[currentSlot]?.[pickedField] || 0;
             
             if (usage > 0) { // Field is in use
@@ -714,7 +734,7 @@ function canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, is
                 } else if (!fieldProps.allowedDivisions.includes(div)) {
                     canFitThisPick = false; // Field is sharable, but not for this division
                 }
-                // else: field is sharable, has space, and this div is allowed.
+                // else: field is sharable (usage=1), has space (max=2), and this div is allowed.
             }
         }
         // =============================================
@@ -747,7 +767,7 @@ function assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, genera
         // =============================================
         // ===== START OF NEW SHARABLE LOGIC (ASSIGN) =====
         // =============================================
-        if (pickedField && allFieldNames.includes(pickedField)) { // Only track real fields
+        if (pickedField && allSchedulableNames.includes(pickedField)) { // Only track real fields/activities
             fieldUsageBySlot[currentSlot] = fieldUsageBySlot[currentSlot] || {};
             fieldUsageBySlot[currentSlot][pickedField] = (fieldUsageBySlot[currentSlot][pickedField] || 0) + 1;
         }
