@@ -282,7 +282,7 @@ function assignFieldsToBunks() {
     })),
   ];
   const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
-  // const H2H_CHANCE = 0.40; // No longer used
+  // const H2H_CHANCE = 0.10; // No longer used
  
   if ((!allActivities.length && !availSpecials.length) || !window.unifiedTimes || window.unifiedTimes.length === 0) {
       console.warn("Cannot assign fields: No activities or unified times are set. Did you click 'Generate Schedule Times'?");
@@ -477,9 +477,8 @@ function assignFieldsToBunks() {
         if (!isActive(s)) continue;
 
         let assignedSpan = 0;
-        // let didH2H = false; // We no longer need this flag
  
-        // --- 1. Try to Assign a General Activity (This was the old "Fallback" logic) ---
+        // --- 1. Try to Assign a General Activity ---
         const preferredPicks = [];
         const nonPreferredPicks = [];
         
@@ -507,16 +506,8 @@ function assignFieldsToBunks() {
         // 1b. If no preferred activity could be scheduled, try a non-preferred one
         if (assignedSpan === 0) {
             for (const pick of shuffledNonPreferred) {
-                
-                // =============================================
-                // ===== START OF BUG FIX =====
-                // =============================================
-                // These two lines were missing, causing a ReferenceError
                 const pickedField = fieldLabel(pick.field);
                 const activityName = getActivityName(pick);
-                // =============================================
-                // ===== END OF BUG FIX =====
-                // =============================================
 
                 const yesterdayField = generalFieldHistory[bunk][activityName];
                 if (pickedField === yesterdayField && allFieldNames.length > 1) {
@@ -537,7 +528,15 @@ function assignFieldsToBunks() {
             const opponents = allBunksInDiv.filter(b => {
                 if (b === bunk) return false;
                 if (scheduleAssignments[b][s]) return false; // Opponent must be free
+                
+                // =============================================
+                // ===== H2H REMATCH RULE RE-ADDED =====
+                // =============================================
+                // This rule PREVENTS a bunk from playing the same opponent twice
                 if ((h2hHistory[bunk][b] || 0) >= 1) return false; 
+                // =============================================
+                // =============================================
+                
                 if (h2hGameCount[b] >= 2) return false; // Opponent must be under H2H limit
                 return true;
             });
@@ -758,13 +757,7 @@ function updateTable() {
     
             tr.appendChild(td);
         }
-        // =============================================
-        // ===== START OF BUG FIX =====
-        // =============================================
-        return; // <-- This was changed from 'continue' back to 'return'
-        // =============================================
-        // ===== END OF BUG FIX =====
-        // =============================================
+        return; 
       }
  
       if (league) {
