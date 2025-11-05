@@ -302,7 +302,7 @@ function assignFieldsToBunks() {
   const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
 
   // Create Field-Sport Inventory
-  const fieldsBySport = {};
+  const fieldsBySport = {}; window._lastFieldsBySportCache = fieldsBySport;
   const allFieldNames = []; // This list ONLY contains fields, not special activities
   availFields.forEach(f => {
     allFieldNames.push(f.name);
@@ -688,10 +688,10 @@ function assignFieldsToBunks() {
  
   // Pass 3: force doubling up to fill blanks where possible on sharable activities
   // Pass 2.5: before doubling, try to force H2H to fill remaining empties (same division only)
-  fillRemainingWithForcedH2H(window.availableDivisions || [], window.divisions || {}, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount);
+  fillRemainingWithForcedH2HPlus(window.availableDivisions || [], window.divisions || {}, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount);
 
   // Pass 3: then allow sharable doubling to catch any remaining empties
-  fillRemainingWithDoubling(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
+  fillRemainingWithDoublingAggressive(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
  
   updateTable();
   saveSchedule();
@@ -867,7 +867,7 @@ function assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, genera
  * Pass 2.5: If cells remain empty, try to create H2H games within the same division
  * to fill blanks, respecting max 2 H2H per bunk and exclusive field lock.
  */
-function fillRemainingWithForcedH2H(availableDivisions, divisions, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount) {
+function fillRemainingWithForcedH2HPlus(availableDivisions, divisions, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount) {
   const unifiedTimes = window.unifiedTimes || [];
 
   // Precompute fields that are commonly needed for leagues (by sport mapping)
@@ -958,7 +958,7 @@ function fillRemainingWithForcedH2H(availableDivisions, divisions, spanLen, h2hA
  * Pass 3: If cells remain empty, try to double up bunks onto existing sharable activities
  * in the same division and slot (capacity max=2), without touching H2H or leagues.
  */
-function fillRemainingWithDoubling(availableDivisions, divisions, spanLen, fieldUsageBySlot, activityProperties) {
+function fillRemainingWithDoublingAggressive(availableDivisions, divisions, spanLen, fieldUsageBySlot, activityProperties) {
   const unifiedTimes = window.unifiedTimes || [];
   for (const div of availableDivisions) {
     const bunks = divisions[div]?.bunks || [];
@@ -1021,6 +1021,178 @@ function fillRemainingWithDoubling(availableDivisions, divisions, spanLen, field
   }
 }
  
+
+// --- Aggressive Pass 2.5 (enhanced): recruit partners + multiple passes ---
+function fillRemainingWithForcedH2HPlus(availableDivisions, divisions, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount) {
+  const unifiedTimes = window.unifiedTimes || [];
+  const leaguePreferredFields = new Set();
+  const global = window.loadGlobalSettings?.() || {};
+  const leaguesByName = global.leaguesByName || {};
+  Object.values(leaguesByName).forEach(L => {
+    (L.sports || []).forEach(sp => {
+      const fields = (window._lastFieldsBySportCache || {})[sp] || [];
+      fields.forEach(f => leaguePreferredFields.add(f));
+    });
+  });
+
+  for (const div of (availableDivisions || [])) {
+    const bunks = divisions[div]?.bunks || [];
+    const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
+
+    for (let s = 0; s < unifiedTimes.length; s++) {
+      if (window.leagueAssignments?.[div]?.[s]) continue;
+
+      const eligible = bunks.filter(b => isActive(s) && ((h2hGameCount[b] || 0) < 2));
+      if (eligible.length < 1) continue;
+
+      let changed = true; let tries = 0;
+      while (changed && tries++ < 10) {
+        changed = false;
+        const empties = eligible.filter(b => !window.scheduleAssignments[b][s]);
+
+        // 1) Pair empty-empty first
+        for (let i = 0; i < empties.length; i++) {
+          const a = empties[i];
+          if (window.scheduleAssignments[a][s]) continue;
+          for (let j = i + 1; j < empties.length; j++) {
+            const b = empties[j];
+            if (window.scheduleAssignments[b][s]) continue;
+            if ((h2hHistory[a]?.[b] || 0) >= 1) continue;
+            if (placeH2HPairPlus(a, b, div, s, spanLen)) { changed = true; break; }
+          }
+        }
+
+        // 2) If single empties remain, recruit a partner currently on sharable activity (usage<2)
+        const singles = eligible.filter(b => !window.scheduleAssignments[b][s]);
+        for (const a of singles) {
+          for (const cand of bunks) {
+            if (cand === a) continue;
+            if ((h2hGameCount[cand] || 0) >= 2) continue;
+            if ((h2hHistory[a]?.[cand] || 0) >= 1) continue;
+            const e2 = window.scheduleAssignments[cand]?.[s];
+            if (!e2 || e2._h2h || e2._fixed || e2.continuation) continue;
+            const f2 = fieldLabel(e2.field);
+            const props = activityProperties[f2];
+            const usage = (fieldUsageBySlot[s]?.[f2] || 0);
+            if (!props || !props.sharable || usage >= 2) continue;
+            if (placeH2HPairPlus(a, cand, div, s, spanLen, /*evict*/true)) { changed = true; break; }
+          }
+        }
+      }
+    }
+  }
+
+  function placeH2HPairPlus(a, b, div, s, spanLen, evict=false) {
+    const sortedPicks = (h2hActivities || []).slice().sort((p1, p2) => {
+      const f1 = fieldLabel(p1.field), f2 = fieldLabel(p2.field);
+      const s1 = leaguePreferredFields.has(f1) ? 1 : 0;
+      const s2 = leaguePreferredFields.has(f2) ? 1 : 0;
+      return s1 - s2;
+    });
+    for (const pick of sortedPicks) {
+      const fName = fieldLabel(pick.field);
+      let fitsBoth = true;
+      for (let k = 0; k < spanLen; k++) {
+        const slot = s + k;
+        if (slot >= (window.unifiedTimes || []).length) { fitsBoth = false; break; }
+        if (window.scheduleAssignments[a][slot] || window.scheduleAssignments[b][slot]) { fitsBoth = false; break; }
+        if (window.leagueAssignments?.[div]?.[slot]) { fitsBoth = false; break; }
+        if ((fieldUsageBySlot[slot]?.[fName] || 0) > 0) { fitsBoth = false; break; }
+      }
+      if (!fitsBoth) continue;
+
+      if (evict) {
+        const e2 = window.scheduleAssignments[b][s];
+        if (e2 && !e2._fixed && !e2._h2h) {
+          for (let k = 0; k < spanLen; k++) {
+            const slot = s + k;
+            const prev = window.scheduleAssignments[b][slot];
+            if (prev && !prev._fixed && !prev._h2h) {
+              const pf = fieldLabel(prev.field);
+              window.scheduleAssignments[b][slot] = undefined;
+              if (pf) {
+                fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
+                fieldUsageBySlot[slot][pf] = Math.max(0, (fieldUsageBySlot[slot][pf] || 1) - 1);
+              }
+            }
+          }
+        }
+      }
+
+      for (let k = 0; k < spanLen; k++) {
+        const slot = s + k;
+        const cont = k > 0;
+        window.scheduleAssignments[a][slot] = { field: fName, sport: pick.sport, continuation: cont, _h2h: true, vs: b };
+        window.scheduleAssignments[b][slot] = { field: fName, sport: pick.sport, continuation: cont, _h2h: true, vs: a };
+        fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
+        fieldUsageBySlot[slot][fName] = 2;
+      }
+      h2hHistory[a] = h2hHistory[a] || {}; h2hHistory[b] = h2hHistory[b] || {};
+      h2hHistory[a][b] = (h2hHistory[a][b] || 0) + 1;
+      h2hHistory[b][a] = (h2hHistory[b][a] || 0) + 1;
+      h2hGameCount[a] = (h2hGameCount[a] || 0) + 1;
+      h2hGameCount[b] = (h2hGameCount[b] || 0) + 1;
+      return true;
+    }
+    return false;
+  }
+}
+
+// --- Aggressive Pass 3: iterate doubling until saturation ---
+function fillRemainingWithDoublingAggressive(availableDivisions, divisions, spanLen, fieldUsageBySlot, activityProperties) {
+  const unifiedTimes = window.unifiedTimes || [];
+  let changed = true;
+  let safety = 0;
+  while (changed && safety++ < 6) {
+    changed = false;
+    for (const div of (availableDivisions || [])) {
+      const bunks = divisions[div]?.bunks || [];
+      const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
+      for (let s = 0; s < unifiedTimes.length; s++) {
+        if (window.leagueAssignments?.[div]?.[s]) continue;
+        const sharableOpen = {};
+        for (const b of bunks) {
+          const e = window.scheduleAssignments[b]?.[s];
+          if (!e || e._h2h || e._fixed || e.continuation) continue;
+          const f = fieldLabel(e.field);
+          const props = activityProperties[f];
+          if (!props || !props.sharable) continue;
+          const usage = (fieldUsageBySlot[s]?.[f] || 0);
+          if (usage < 2 && props.allowedDivisions.includes(div)) {
+            sharableOpen[f] = e;
+          }
+        }
+        if (Object.keys(sharableOpen).length === 0) continue;
+        for (const b of bunks) {
+          if (window.scheduleAssignments[b][s]) continue;
+          if (!isActive(s)) continue;
+          let seated = false;
+          for (const [f, exemplar] of Object.entries(sharableOpen)) {
+            let fits = true;
+            for (let k = 0; k < spanLen; k++) {
+              const slot = s + k;
+              if (slot >= unifiedTimes.length) { fits = false; break; }
+              const usage = (fieldUsageBySlot[slot]?.[f] || 0);
+              const props = activityProperties[f];
+              if (!props || !props.sharable || usage >= 2 || !props.allowedDivisions.includes(div)) { fits = false; break; }
+              if (window.scheduleAssignments[b][slot] || window.leagueAssignments?.[div]?.[slot]) { fits = false; break; }
+            }
+            if (!fits) continue;
+            for (let k = 0; k < spanLen; k++) {
+              const slot = s + k;
+              window.scheduleAssignments[b][slot] = { field: f, sport: exemplar.sport, continuation: k > 0 };
+              fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
+              fieldUsageBySlot[slot][f] = (fieldUsageBySlot[slot][f] || 0) + 1;
+            }
+            changed = true; seated = true; break;
+          }
+          if (!seated) { /* try next bunk */ }
+        }
+      }
+    }
+  }
+}
+
 // ===== RENDERING (per-division grey-out) ===== (per-division grey-out) =====
 function updateTable() {
   const container = document.getElementById("scheduleTable");
