@@ -6,9 +6,10 @@
 // - BUGFIX: Correctly rotate sports in 'assignSportsToMatchups'.
 // - UPDATED: Now uses calendar.js to save/load per-day.
 // - NEW BUGFIX: Inherit yesterday's sport rotation state.
-//
+// - NEW BUGFIX (Nov 4, 2025): Make allSchedulableNames global so helpers can access it.
+// - NEW BUGFIX (Nov 4, 2025): H2H consumes field exclusively (blocks other assignments).
 // =================================================================
- 
+
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
   if (!str || typeof str !== "string") return null;
@@ -34,7 +35,10 @@ function fieldLabel(f) {
   if (f && typeof f === "object" && typeof f.name === "string") return f.name;
   return "";
 }
- 
+
+// Global cache so helpers can access without closure issues
+window.allSchedulableNames = window.allSchedulableNames || [];
+
 // ===== FIX 8 HELPER =====
 function getActivityName(pick) {
     if (pick.sport) {
@@ -42,7 +46,7 @@ function getActivityName(pick) {
     }
     return fieldLabel(pick.field); // e.g., "gameroom"
 }
- 
+
 // ===== Fixed Activities =====
 function loadActiveFixedActivities() {
   const globalSettings = window.loadGlobalSettings?.() || {};
@@ -101,7 +105,7 @@ function prePlaceFixedActivities() {
   }
   return computeBlockedRowsByDiv();
 }
- 
+
 // ===== League Helpers =====
 function leaguesSnapshot() {
   return window.loadGlobalSettings?.().leaguesByName || {};
@@ -109,10 +113,10 @@ function leaguesSnapshot() {
 function getEnabledLeaguesByDivision(masterLeagues, overrides) {
   const result = {};
   const all = masterLeagues || {};
-  
- Object.keys(all).forEach((name) => {
-    if (overrides.leagues.includes(name)) return; 
-    
+  const ov = overrides || { leagues: [] };
+
+  Object.keys(all).forEach((name) => {
+    if ((ov.leagues || []).includes(name)) return; 
     const l = all[name];
     if (!l?.enabled) return;
     (l.divisions || []).forEach((div) => {
@@ -121,7 +125,7 @@ function getEnabledLeaguesByDivision(masterLeagues, overrides) {
   });
   return result;
 }
- 
+
 // ===== League Sport Rotation (UPDATED) =====
 let leagueSportRotation = {};
 function loadLeagueSportRotation() {
@@ -135,8 +139,7 @@ function loadLeagueSportRotation() {
         console.log("No sport rotation for today. Loading from yesterday.");
         const yesterdayData = window.loadPreviousDailyData();
         leagueSportRotation = yesterdayData.leagueSportRotation || {};
-        
-        // IMPORTANT: Save this inherited state to the CURRENT day
+        // Save inherited state to CURRENT day
         saveLeagueSportRotation();
     }
     else {
@@ -152,7 +155,7 @@ function saveLeagueSportRotation() {
    window.saveCurrentDailyData?.("leagueSportRotation", leagueSportRotation);
   } catch {}
 }
- 
+
 /**
  * UPDATED assignSportsToMatchups (FIX 13 + BUGFIX)
  * Now takes history to avoid back-to-back sports.
@@ -162,10 +165,10 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
   if (!Array.isArray(sportsList) || sportsList.length === 0)
     return matchups.map((m) => ({ teams: m, sport: "Leagues" }));
 
-  loadLeagueSportRotation(); // This now correctly loads yesterday's state if today is new
+  loadLeagueSportRotation(); // Load yesterday's state if today is new
   const state = leagueSportRotation[leagueName] || { index: 0 };
   let idx = state.index;
-  
+
   const assigned = [];
 
   for (const match of matchups) {
@@ -175,7 +178,7 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
 
     let chosenSport = null;
 
-    // 1. Try to find a "preferred" sport (one neither team played)
+    // 1. Try to find a sport neither team played yesterday
     for (let i = 0; i < sportsList.length; i++) {
         const sportIdx = (idx + i) % sportsList.length; 
         const sport = sportsList[sportIdx];
@@ -186,12 +189,11 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
         }
     }
 
-    // 2. If no preferred sport is found, relax the rule and just pick the next one
+    // 2. If none found, just pick the next one in rotation
     if (!chosenSport) {
         chosenSport = sportsList[idx % sportsList.length];
         idx++; 
     }
-    
     assigned.push({ teams: match, sport: chosenSport });
   }
 
@@ -199,10 +201,13 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
   saveLeagueSportRotation();
   return assigned;
 }
- 
+
 // ====== CORE ASSIGN ======
 window.leagueAssignments = window.leagueAssignments || {};
- 
+
+// Tunable: chance a bunk attempts H2H first when scheduling (0.0 - 1.0)
+const H2H_PROB = 0.4;
+
 function assignFieldsToBunks() {
   window.scheduleAssignments = window.scheduleAssignments || {};
   window.leagueAssignments = {};
@@ -253,19 +258,27 @@ function assignFieldsToBunks() {
       );
   }
   
-  window.availableDivisions = availableDivisions; // This is the filtered list for *today*
+  window.availableDivisions = availableDivisions; // Filtered list for *today*
   window.divisions = divisions;
+
+  // Build a quick bunk -> division map for sharing rules
+  window.bunkToDivision = {};
+  availableDivisions.forEach(dv => {
+    (divisions[dv]?.bunks || []).forEach(bk => window.bunkToDivision[bk] = dv);
+  });
   
-  const allGlobalDivisions = app1Data.availableDivisions || masterAvailableDivs; // This is the master list from Setup
+  const allGlobalDivisions = app1Data.availableDivisions || masterAvailableDivs; // Master list from Setup
 
   // =============================================
-  // ===== SHARABLE LOGIC UPGRADE =====
+  // ===== START OF NEW SHARABLE LOGIC =====
   // =============================================
+  // Create a lookup map for activity properties (sharable, allowedDivisions)
   const activityProperties = {};
   
   availFields.forEach(f => {
     activityProperties[f.name] = {
         sharable: f.sharable || false,
+        // If allowedDivisions is empty, it means "all divisions"
         allowedDivisions: (f.allowedDivisions || []).length > 0 ? f.allowedDivisions : allGlobalDivisions
     };
   });
@@ -276,6 +289,7 @@ function assignFieldsToBunks() {
     };
   });
   // =============================================
+  // ===== END OF NEW SHARABLE LOGIC =====
   // =============================================
 
   const enabledByDiv = getEnabledLeaguesByDivision(masterLeagues, overrides);
@@ -289,7 +303,7 @@ function assignFieldsToBunks() {
 
   // Create Field-Sport Inventory
   const fieldsBySport = {};
-  const allFieldNames = []; // This list ONLY contains fields
+  const allFieldNames = []; // This list ONLY contains fields, not special activities
   availFields.forEach(f => {
     allFieldNames.push(f.name);
     if (Array.isArray(f.activities)) {
@@ -301,7 +315,8 @@ function assignFieldsToBunks() {
   });
   
   // This list includes all schedulable activity names (fields AND specials)
-  const allSchedulableNames = allFieldNames.concat(availSpecials.map(s => s.name));
+  const allSchedulableNamesLocal = allFieldNames.concat(availSpecials.map(s => s.name));
+  window.allSchedulableNames = allSchedulableNamesLocal; // <-- expose globally for helpers
 
   const allActivities = [
     ...availFields.flatMap((f) =>
@@ -314,12 +329,6 @@ function assignFieldsToBunks() {
     })),
   ];
   const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
-  
-  // =============================================
-  // ===== H2H CHANCE (YOUR NEW LOGIC) =====
-  // =============================================
-  const H2H_CHANCE = 0.40; // Set to 40% as requested
-  // =============================================
  
   if ((!allActivities.length && !availSpecials.length) || !window.unifiedTimes || window.unifiedTimes.length === 0) {
       console.warn("Cannot assign fields: No activities or unified times are set. Did you click 'Generate Schedule Times'?");
@@ -338,10 +347,8 @@ function assignFieldsToBunks() {
   
   const blockedRowsByDiv = prePlaceFixedActivities();
 
-  // =============================================
-  // ===== UPGRADED FIELD RESERVATION SYSTEM =====
-  // =============================================
-  // fieldUsageBySlot = { 0: {"Gym": { count: 2, bunks: ["Bunk A", "Bunk B"], division: "5th Grade" }}, 1: ... }
+  // Create Field Reservation System (NOW TRACKS COUNTS)
+  // fieldUsageBySlot = { 0: {"Gym": 2, "Field A": 1}, 1: ... }
   const fieldUsageBySlot = {};
   (availableDivisions || []).forEach(div => {
     (divisions[div]?.bunks || []).forEach(bunk => {
@@ -349,18 +356,17 @@ function assignFieldsToBunks() {
          scheduleAssignments[bunk].forEach((entry, slot) => {
            if (entry && entry._fixed && entry.field) {
                const fieldName = fieldLabel(entry.field);
-               if (allSchedulableNames.includes(fieldName)) {
+               // Only track usage for "real" fields/activities
+               if ((window.allSchedulableNames || []).includes(fieldName)) {
                   fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
-                  // A fixed activity takes ALL capacity of the field.
-                  fieldUsageBySlot[slot][fieldName] = { count: 2, bunks: [], division: div }; 
+                  // A fixed activity takes ALL capacity of the field. Mark it as full (e.g., 2).
+                  fieldUsageBySlot[slot][fieldName] = 2; 
                }
            }
          });
        }
     });
   });
-  // =============================================
-  // =============================================
 
   // ===== Init Activity Histories =====
   const generalActivityHistory = {}; // { Bunk1: Set("Basketball", "Gameroom") }
@@ -403,7 +409,7 @@ function assignFieldsToBunks() {
   const leagueTeamSportHistory = {}; // { "Team A": "Basketball" }
   Object.values(yesterdayLeagues).forEach(div => {
       Object.values(div).forEach(slot => {
-          if (slot.games && !slot.isContinuation) {
+          if (slot && slot.games && !slot.isContinuation) {
               slot.games.forEach(game => {
                   leagueTeamSportHistory[game.teams[0]] = game.sport;
                   leagueTeamSportHistory[game.teams[1]] = game.sport;
@@ -414,7 +420,7 @@ function assignFieldsToBunks() {
 
   const takenLeagueSlots = new Set(); 
  
-  // --- ===== SCHEDULING PASS 1: Leagues (Priority 2) ===== ---
+  // --- ===== FIX 7 & 13: Smart Field-First League Scheduling ===== ---
   for (const div of availableDivisions) {
     const lg = enabledByDiv[div];
     if (!lg) continue;
@@ -464,23 +470,20 @@ function assignFieldsToBunks() {
       leagueTeamSportHistory
     );
 
-    // Check for available fields for this specific slot SPAN
-    // LEAGUES ARE NOT SHARABLE. Capacity is 1.
+    // ===== LEAGUE FIELDS AVAILABILITY (non-sharable) =====
     const availableFieldsForSpan = {}; // e.g., {"Gym": 1, "Field A": 0}
     allFieldNames.forEach(name => {
         let capacity = 1; // Leagues ALWAYS have capacity 1
-
         for (let k = 0; k < spanLen; k++) {
             const slot = chosenSlot + k;
-            const usage = fieldUsageBySlot[slot]?.[name]?.count || 0;
+            const usage = fieldUsageBySlot[slot]?.[name] || 0;
             if (usage > 0) { // If it's used AT ALL, it's unavailable for a league
                  capacity = 0;
                  break;
             }
         }
-        availableFieldsForSpan[name] = capacity; // Will be 1 (free) or 0 (busy)
+        availableFieldsForSpan[name] = capacity; // 1 (free) or 0 (busy)
     });
-
 
     const gamesWithPossibleFields = gamesWithSports.map(game => {
         const possibleFields = (fieldsBySport[game.sport] || [])
@@ -497,7 +500,6 @@ function assignFieldsToBunks() {
         let assignedField = null; 
         
         for (const fieldName of possibleFields) {
-            // Check if it's free in our main list AND our temp list
             if ((availableFieldsForSpan[fieldName] || 0) > 0 && !tempReservedFields[fieldName]) {
                 assignedField = fieldName;
                 tempReservedFields[fieldName] = 1; // Mark as used
@@ -533,15 +535,21 @@ function assignFieldsToBunks() {
           if (game.field) {
               fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
               // TAKE THE WHOLE FIELD. SET USAGE TO 2 (MAX)
-              fieldUsageBySlot[slot][game.field] = { count: 2, bunks: [], division: div }; 
+              fieldUsageBySlot[slot][game.field] = 2; 
           }
       });
     }
   }
  
   // ========================================================
-  // ===== 3. SCHEDULE GENERAL/H2H (Original Logic + Fixes) =====
+  // ===== 3. SCHEDULE GENERAL/H2H (NEW PRIORITY LOGIC) =====
   // ========================================================
+  // Strategy per slot per bunk:
+  // - With probability H2H_PROB (and under per-bunk limit), try H2H first (same-division only).
+  // - Else try Preferred general activity first.
+  // - If still empty, try H2H (if under limit).
+  // - Else try Non-Preferred.
+
   for (const div of availableDivisions) {
     const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
     const allBunksInDiv = divisions[div]?.bunks || [];
@@ -551,54 +559,57 @@ function assignFieldsToBunks() {
         // Skip if slot is already filled
         if (scheduleAssignments[bunk][s]) continue;
         if (window.leagueAssignments?.[div]?.[s]) continue;
-        // blockedRowsByDiv check is redundant, as scheduleAssignments is populated by it
         if (!isActive(s)) continue;
 
         let assignedSpan = 0;
-        let didH2H = false;
  
-        // --- Try H2H (Based on your 40% chance logic) ---
-        if (h2hGameCount[bunk] < 2 && Math.random() < H2H_CHANCE) {
-            // =============================================
-            // ===== START OF BUG FIX (Passing parameters) =====
-            // =============================================
-            assignedSpan = tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, activityProperties, allSchedulableNames, h2hHistory, h2hGameCount, generalActivityHistory);
-            // =============================================
-            // ===== END OF BUG FIX =====
-            // =============================================
-            if (assignedSpan > 0) didH2H = true;
+        // --- 1. Create preferred/non-preferred lists ---
+        const preferredPicks = [];
+        const nonPreferredPicks = [];
+        allActivities.forEach(pick => {
+            if (generalActivityHistory[bunk].has(getActivityName(pick))) {
+                nonPreferredPicks.push(pick);
+            } else {
+                preferredPicks.push(pick);
+            }
+        });
+        const shuffledPreferred = preferredPicks.sort(() => 0.5 - Math.random());
+        const shuffledNonPreferred = nonPreferredPicks.sort(() => 0.5 - Math.random());
+
+        // --- 2a. With probability, attempt H2H FIRST ---
+        if (assignedSpan === 0 && (h2hGameCount[bunk] || 0) < 2 && Math.random() < H2H_PROB) {
+            assignedSpan = tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, activityProperties, h2hHistory, h2hGameCount);
+        }
+
+        // --- 2b. Try to assign a PREFERRED activity ---
+        if (assignedSpan === 0) {
+            assignedSpan = tryGeneralActivity(bunk, div, s, spanLen, shuffledPreferred, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties);
+        }
+
+        // --- 3. If still empty, try H2H now (limit 2 per bunk) ---
+        if (assignedSpan === 0 && (h2hGameCount[bunk] || 0) < 2) {
+            assignedSpan = tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, activityProperties, h2hHistory, h2hGameCount);
         }
         
-        // --- If H2H didn't happen (or wasn't tried), do General Activity ---
-        if (!didH2H) {
-            const preferredPicks = [];
-            const nonPreferredPicks = [];
-            allActivities.forEach(pick => {
-                if (generalActivityHistory[bunk].has(getActivityName(pick))) {
-                    nonPreferredPicks.push(pick);
-                } else {
-                    preferredPicks.push(pick);
-                }
-            });
-            const shuffledPreferred = preferredPicks.sort(() => 0.5 - Math.random());
-            const shuffledNonPreferred = nonPreferredPicks.sort(() => 0.5 - Math.random());
-
-            // 1. Try to assign a PREFERRED activity first
-            assignedSpan = tryGeneralActivity(bunk, div, s, spanLen, shuffledPreferred, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties, allSchedulableNames);
-            
-            // 2. If PREFERRED fails, use NON-PREFERRED
-            if (assignedSpan === 0) {
-                assignedSpan = tryGeneralActivity(bunk, div, s, spanLen, shuffledNonPreferred, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties, allSchedulableNames);
-            }
+        // --- 4. If BOTH preferred and H2H fail, use NON-PREFERRED ---
+        if (assignedSpan === 0) {
+            assignedSpan = tryGeneralActivity(bunk, div, s, spanLen, shuffledNonPreferred, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties);
         }
 
-        // --- Advance the time slot ---
+        // --- 5. Advance the time slot ---
         if (assignedSpan > 0) {
           s += (assignedSpan - 1);
         }
       }
     }
   }
+ 
+  // Pass 3: force doubling up to fill blanks where possible on sharable activities
+  // Pass 2.5: before doubling, try to force H2H to fill remaining empties (same division only)
+  fillRemainingWithForcedH2H(window.availableDivisions || [], window.divisions || {}, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount);
+
+  // Pass 3: then allow sharable doubling to catch any remaining empties
+  fillRemainingWithDoubling(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
  
   updateTable();
   saveSchedule();
@@ -607,19 +618,19 @@ function assignFieldsToBunks() {
 /**
  * Helper: Tries to schedule a General Activity
  */
-function tryGeneralActivity(bunk, div, s, spanLen, activityList, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties, allSchedulableNames) {
+function tryGeneralActivity(bunk, div, s, spanLen, activityList, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties) {
     for (const pick of activityList) {
         const pickedField = fieldLabel(pick.field);
         const activityName = getActivityName(pick);
 
-        // Check if this is a non-preferred activity that used the same field yesterday
-        if (generalFieldHistory && generalFieldHistory[bunk][activityName] === pickedField && allSchedulableNames.length > 1) {
-            continue; // Skip this, try another field
+        // Avoid same field for the same activity as yesterday if we have options
+        if (generalFieldHistory && generalFieldHistory[bunk][activityName] === pickedField && (window.allSchedulableNames || []).length > 1) {
+            continue; // Try another field
         }
 
-        let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties, false); // false = don't forceNoShare
+        let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties);
         if (canFit && spanForThisPick > 0) {
-            return assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory, allSchedulableNames);
+            return assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory);
         }
     }
     return 0; // No activity from this list could be scheduled
@@ -628,44 +639,31 @@ function tryGeneralActivity(bunk, div, s, spanLen, activityList, fieldUsageBySlo
 /**
  * Helper: Tries to schedule an H2H game
  */
-function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, activityProperties, allSchedulableNames, h2hHistory, h2hGameCount, generalActivityHistory) {
+function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, activityProperties, h2hHistory, h2hGameCount) {
     const opponents = allBunksInDiv.filter(b => {
         if (b === bunk) return false;
         if (scheduleAssignments[b][s]) return false; // Opponent must be free
-        if ((h2hHistory[bunk][b] || 0) >= 1) return false; // No rematches
-        if (h2hGameCount[b] >= 2) return false; // Opponent must be under H2H limit
-        
+        if ((h2hHistory[bunk]?.[b] || 0) >= 1) return false; // No rematches
+        if ((h2hGameCount[b] || 0) >= 2) return false; // Opponent under H2H limit
         if (window.leagueAssignments?.[div]?.[s]) return false;
         return true;
     });
 
     if (opponents.length > 0) {
         const opponent = opponents[Math.floor(Math.random() * opponents.length)];
-        
-        // =============================================
-        // ===== START OF BUG FIX (H2H PICKING) =====
-        // =============================================
-        // We filter out activities *both* bunks have done
-        const h2hPicks = h2hActivities.filter(pick => {
-            const actName = getActivityName(pick);
-            return !generalActivityHistory[bunk].has(actName) && !generalActivityHistory[opponent].has(actName);
-        }).sort(() => 0.5 - Math.random());
-        // =============================================
-        // ===== END OF BUG FIX =====
-        // =============================================
+        const h2hPicks = h2hActivities.sort(() => 0.5 - Math.random());
 
         for (const pick of h2hPicks) {
             const activityName = getActivityName(pick);
             const pickedField = fieldLabel(pick.field);
 
-            // H2H games are NOT sharable. They need a 100% free field. (forceNoShare = true)
-            let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties, true); 
-            let [oppCanFit, oppSpan] = canActivityFit(opponent, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties, true); 
+            let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties);
+            let [oppCanFit, oppSpan] = canActivityFit(opponent, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties);
             
             const finalSpan = Math.min(spanForThisPick, oppSpan);
 
             if (canFit && oppCanFit && finalSpan > 0) {
-                // Assign to BOTH bunks
+                // Assign to BOTH bunks and LOCK the field (exclusive use for H2H)
                 for (let k = 0; k < finalSpan; k++) {
                     const currentSlot = s + k;
                     const cont = k > 0;
@@ -675,19 +673,18 @@ function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageB
                     scheduleAssignments[opponent][currentSlot] = {
                         field: pickedField, sport: pick.sport, continuation: cont, _h2h: true, vs: bunk
                     };
-                    if (pickedField && allSchedulableNames.includes(pickedField)) { 
+                    if (pickedField && (window.allSchedulableNames || []).includes(pickedField)) {
                         fieldUsageBySlot[currentSlot] = fieldUsageBySlot[currentSlot] || {};
-                        // H2H Games take the FULL capacity
-                        fieldUsageBySlot[currentSlot][pickedField] = { count: 2, bunks: [bunk, opponent], division: div };
+                        // H2H should fully consume the field so others can't use it
+                        fieldUsageBySlot[currentSlot][pickedField] = 2; // exclusive lock
                     }
                 }
-                generalActivityHistory[bunk].add(activityName);
-                generalActivityHistory[opponent].add(activityName);
-                
+                h2hHistory[bunk] = h2hHistory[bunk] || {};
+                h2hHistory[opponent] = h2hHistory[opponent] || {};
                 h2hHistory[bunk][opponent] = (h2hHistory[bunk][opponent] || 0) + 1;
                 h2hHistory[opponent][bunk] = (h2hHistory[opponent][bunk] || 0) + 1;
-                h2hGameCount[bunk]++;
-                h2hGameCount[opponent]++;
+                h2hGameCount[bunk] = (h2hGameCount[bunk] || 0) + 1;
+                h2hGameCount[opponent] = (h2hGameCount[opponent] || 0) + 1;
                 
                 return finalSpan; // Return the span, which is > 0
             }
@@ -699,14 +696,14 @@ function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageB
 /**
  * Helper: Checks if a general activity can fit in a slot.
  */
-function canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties, forceNoShare = false) {
-    let canFit = true; 
+function canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties) {
+    let canFitThisPick = true;
     let spanForThisPick = 0;
 
     for (let k = 0; k < spanLen; k++) {
         const currentSlot = s + k;
         if (currentSlot >= window.unifiedTimes.length) { 
-            canFit = false; 
+            canFitThisPick = false; 
             break; 
         }
 
@@ -720,48 +717,50 @@ function canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, is
             isBusy = true;
         }
 
-        if (!isBusy && pickedField && activityProperties[pickedField]) { 
+        // ===== SHARABLE LOGIC (CHECK) =====
+        if (!isBusy && pickedField && activityProperties[pickedField]) { // Check if it's a real field/activity
             const fieldProps = activityProperties[pickedField];
-            const usageData = fieldUsageBySlot[currentSlot]?.[pickedField];
-            const usageCount = usageData?.count || 0;
-            
-            if (forceNoShare) {
-                // H2H and Leagues use this. Field must be 100% free.
-                if (usageCount > 0) isBusy = true;
-            } else {
-                // General Activities use this.
-                if (usageCount > 0) { // Field is in use
-                    if (!fieldProps.sharable || usageCount >= 2) {
-                        isBusy = true; // Field is not sharable or is full
-                    } else if (!fieldProps.allowedDivisions.includes(div)) {
-                        isBusy = true; // Field is sharable, but not for this division
+            const usage = fieldUsageBySlot[currentSlot]?.[pickedField] || 0;
+            if (usage > 0) {
+                // If already used, only allow sharing within the SAME division
+                if (!fieldProps.sharable || usage >= 2 || !fieldProps.allowedDivisions.includes(div)) {
+                    isBusy = true;
+                } else {
+                    // Find who is using this field at this slot and enforce same-division sharing
+                    let occupyingDivision = null;
+                    const allDivs = window.availableDivisions || [];
+                    const divs = window.divisions || {};
+                    for (const dv of allDivs) {
+                      const bunksHere = divs[dv]?.bunks || [];
+                      for (const b2 of bunksHere) {
+                        const e2 = window.scheduleAssignments[b2]?.[currentSlot];
+                        if (e2 && !e2._fixed && !e2._h2h && fieldLabel(e2.field) === pickedField) {
+                          occupyingDivision = window.bunkToDivision?.[b2] || dv;
+                          break;
+                        }
+                      }
+                      if (occupyingDivision) break;
                     }
-                    // =============================================
-                    // ===== NEW SHARING RULE =====
-                    // =============================================
-                    else if (usageData.division !== div) {
-                        isBusy = true; // Field is sharable, but only with the SAME division
+                    if (occupyingDivision && occupyingDivision !== div) {
+                      isBusy = true; // block cross-division sharing
                     }
-                    // =============================================
-                    // =============================================
-                    // else: field is sharable (usage=1), has space (max=2), and this div is allowed AND matches.
                 }
             }
         }
-        
+
         if (isBusy) {
-            if (k === 0) canFit = false; 
+            if (k === 0) canFitThisPick = false; // Fix for early break logic
             break; 
         }
         spanForThisPick++;
     }
-    return [canFit, spanForThisPick];
+    return [canFitThisPick, spanForThisPick];
 }
- 
+
 /**
  * Helper: Assigns a general activity to the schedule.
  */
-function assignActivity(bunk, div, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory, allSchedulableNames) {
+function assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory) {
     const pickedField = fieldLabel(pick.field);
     const activityName = getActivityName(pick);
     
@@ -772,29 +771,156 @@ function assignActivity(bunk, div, s, spanForThisPick, pick, fieldUsageBySlot, g
             sport: pick.sport,
             continuation: (k > 0),
         };
-        if (pickedField && allSchedulableNames.includes(pickedField)) { // Only track real fields/activities
+        // Track real fields/activities
+        if (pickedField && (window.allSchedulableNames || []).includes(pickedField)) {
             fieldUsageBySlot[currentSlot] = fieldUsageBySlot[currentSlot] || {};
-            
-            // =============================================
-            // ===== UPGRADED USAGE TRACKING =====
-            // =============================================
-            let usageData = fieldUsageBySlot[currentSlot][pickedField];
-            if (usageData) {
-                usageData.count++;
-                usageData.bunks.push(bunk);
-            } else {
-                fieldUsageBySlot[currentSlot][pickedField] = { count: 1, bunks: [bunk], division: div };
-            }
-            // =============================================
-            // =============================================
+            fieldUsageBySlot[currentSlot][pickedField] = (fieldUsageBySlot[currentSlot][pickedField] || 0) + 1;
         }
     }
     generalActivityHistory[bunk].add(activityName); // Add to *today's* history
     return spanForThisPick;
 }
+
+/**
+ * Pass 2.5: If cells remain empty, try to create H2H games within the same division
+ * to fill blanks, respecting max 2 H2H per bunk and exclusive field lock.
+ */
+function fillRemainingWithForcedH2H(availableDivisions, divisions, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount) {
+  const unifiedTimes = window.unifiedTimes || [];
+  for (const div of availableDivisions) {
+    const bunks = divisions[div]?.bunks || [];
+    const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
+
+    for (let s = 0; s < unifiedTimes.length; s++) {
+      if (window.leagueAssignments?.[div]?.[s]) continue; // skip league slots
+
+      // Gather empty bunks at this slot that still can play H2H
+      const empties = bunks.filter(b => !window.scheduleAssignments[b][s] && isActive(s) && ((h2hGameCount[b] || 0) < 2));
+      if (empties.length < 2) continue;
+
+      // Greedy pair up empties and try to schedule H2H
+      const used = new Set();
+      for (let i = 0; i < empties.length; i++) {
+        const a = empties[i];
+        if (used.has(a)) continue;
+        for (let j = i + 1; j < empties.length; j++) {
+          const b = empties[j];
+          if (used.has(b)) continue;
+          if ((h2hHistory[a]?.[b] || 0) >= 1) continue; // no rematch in same day
+
+          // Try each H2H-capable activity until one fits both bunks
+          const shuffled = h2hActivities.slice().sort(() => 0.5 - Math.random());
+          let placed = false;
+          for (const pick of shuffled) {
+            const fName = fieldLabel(pick.field);
+            // Check capacity and fit for full span for both bunks
+            let fitsBoth = true;
+            for (let k = 0; k < spanLen; k++) {
+              const slot = s + k;
+              if (slot >= unifiedTimes.length) { fitsBoth = false; break; }
+              if (window.scheduleAssignments[a][slot] || window.scheduleAssignments[b][slot]) { fitsBoth = false; break; }
+              if (window.leagueAssignments?.[div]?.[slot]) { fitsBoth = false; break; }
+              const props = activityProperties[fName];
+              const usage = (fieldUsageBySlot[slot]?.[fName] || 0);
+              // H2H requires exclusive field (usage must be 0 across span)
+              if (!props || usage > 0) { fitsBoth = false; break; }
+            }
+            if (!fitsBoth) continue;
+
+            // Place H2H across the span and lock field
+            for (let k = 0; k < spanLen; k++) {
+              const slot = s + k;
+              const cont = k > 0;
+              window.scheduleAssignments[a][slot] = { field: fName, sport: pick.sport, continuation: cont, _h2h: true, vs: b };
+              window.scheduleAssignments[b][slot] = { field: fName, sport: pick.sport, continuation: cont, _h2h: true, vs: a };
+              fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
+              fieldUsageBySlot[slot][fName] = 2; // exclusive lock
+            }
+            h2hHistory[a] = h2hHistory[a] || {}; h2hHistory[b] = h2hHistory[b] || {};
+            h2hHistory[a][b] = (h2hHistory[a][b] || 0) + 1;
+            h2hHistory[b][a] = (h2hHistory[b][a] || 0) + 1;
+            h2hGameCount[a] = (h2hGameCount[a] || 0) + 1;
+            h2hGameCount[b] = (h2hGameCount[b] || 0) + 1;
+
+            used.add(a); used.add(b);
+            placed = true;
+            break;
+          }
+          if (placed) break; // move to next 'a'
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Pass 3: If cells remain empty, try to double up bunks onto existing sharable activities
+ * in the same division and slot (capacity max=2), without touching H2H or leagues.
+ */
+function fillRemainingWithDoubling(availableDivisions, divisions, spanLen, fieldUsageBySlot, activityProperties) {
+  const unifiedTimes = window.unifiedTimes || [];
+  for (const div of availableDivisions) {
+    const bunks = divisions[div]?.bunks || [];
+    const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
+
+    for (let s = 0; s < unifiedTimes.length; s++) {
+      if (window.leagueAssignments?.[div]?.[s]) continue; // skip league slots
+
+      // Map of field -> exemplar entry to copy (sport/field)
+      const sharableOpen = {};
+      for (const b of bunks) {
+        const e = window.scheduleAssignments[b]?.[s];
+        if (!e || e._h2h || e._fixed) continue; // don't clone H2H or fixed
+        if (e.continuation) continue;
+        const f = fieldLabel(e.field);
+        const props = activityProperties[f];
+        if (!props || !props.sharable) continue;
+        const usage = (fieldUsageBySlot[s]?.[f] || 0);
+        if (usage < 2 && props.allowedDivisions.includes(div)) {
+          sharableOpen[f] = e; // keep one exemplar
+        }
+      }
+
+      if (Object.keys(sharableOpen).length === 0) continue;
+
+      // Try to seat empty bunks onto one of the sharableOpen fields
+      for (const b of bunks) {
+        if (window.scheduleAssignments[b][s]) continue; // already filled
+        if (!isActive(s)) continue;
+
+        // attempt to fit onto any sharable with remaining capacity
+        for (const [f, exemplar] of Object.entries(sharableOpen)) {
+          // Check span capacity and fit
+          let fitsAll = true;
+          for (let k = 0; k < spanLen; k++) {
+            const slot = s + k;
+            if (slot >= unifiedTimes.length) { fitsAll = false; break; }
+            const usage = (fieldUsageBySlot[slot]?.[f] || 0);
+            const props = activityProperties[f];
+            if (!props || !props.sharable || usage >= 2 || !props.allowedDivisions.includes(div)) { fitsAll = false; break; }
+            if (window.scheduleAssignments[b][slot] || window.leagueAssignments?.[div]?.[slot]) { fitsAll = false; break; }
+          }
+          if (!fitsAll) continue;
+
+          // Assign the same activity to this bunk across the span
+          for (let k = 0; k < spanLen; k++) {
+            const slot = s + k;
+            window.scheduleAssignments[b][slot] = {
+              field: f,
+              sport: exemplar.sport,
+              continuation: k > 0,
+            };
+            fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
+            fieldUsageBySlot[slot][f] = (fieldUsageBySlot[slot][f] || 0) + 1;
+          }
+          break; // move to next bunk
+        }
+      }
+    }
+  }
+}
  
- 
-// ===== RENDERING (per-division grey-out) =====
+// ===== RENDERING (per-division grey-out) ===== (per-division grey-out) =====
 function updateTable() {
   const container = document.getElementById("scheduleTable");
   if (!container) return;
@@ -920,6 +1046,7 @@ function updateTable() {
       
       } else if (league) {
         if (league.isContinuation) {
+          // merged by previous row
         } else {
           let span = 1;
           for (let j = i + 1; j < unifiedTimes.length; j++) {
@@ -975,12 +1102,12 @@ function updateTable() {
           td.style.verticalAlign = "top"; 
  
           if (entry._h2h) {
-            td.textContent = `${entry.sport} ${entry.field} vs ${entry.vs}`;
+            td.textContent = `${entry.sport} ${fieldLabel(entry.field)} vs ${entry.vs}`;
             td.style.background = "#e8f4ff"; 
             td.style.fontWeight = "bold";
           } 
           else if (entry._fixed) {
-            // This should no longer be hit, but is a safe fallback
+            // Safe fallback
             td.textContent = fieldLabel(entry.field);
             td.style.background = "#f1f1f1";
             td.style.fontWeight = "600";
@@ -1044,4 +1171,4 @@ window.updateTable = updateTable;
 window.initScheduleSystem = initScheduleSystem;
  
 // This is now called by calendar.js when the date changes
-// or by generateTimes() in app1.js
+// or by generateTimes() in app1.js.
