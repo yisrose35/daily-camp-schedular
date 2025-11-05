@@ -240,32 +240,6 @@ function assignFieldsToBunks() {
      s.available && !overrides.fields.includes(s.name)
   );
   
-  // =============================================
-  // ===== START OF NEW SHARABLE LOGIC =====
-  // =============================================
-  // Create a lookup map for activity properties (sharable, allowedDivisions)
-  // This now includes BOTH fields and special activities
-  const activityProperties = {};
-  // Use the GLOBAL window.availableDivisions from app1.js, which is guaranteed to be loaded
-  const allGlobalDivisions = window.availableDivisions || []; 
-  
-  availFields.forEach(f => {
-    activityProperties[f.name] = {
-        sharable: f.sharable || false,
-        // If allowedDivisions is empty, it means "all divisions"
-        allowedDivisions: (f.allowedDivisions || []).length > 0 ? f.allowedDivisions : allGlobalDivisions // <--- FIX
-    };
-  });
-  availSpecials.forEach(s => {
-    activityProperties[s.name] = {
-        sharable: s.sharable || false,
-        allowedDivisions: (s.allowedDivisions || []).length > 0 ? s.allowedDivisions : allGlobalDivisions // <--- FIX
-    };
-  });
-  // =============================================
-  // ===== END OF NEW SHARABLE LOGIC =====
-  // =============================================
-
   const availableDivisions = masterAvailableDivs.filter(divName => {
       return !overrides.bunks.includes(divName);
   });
@@ -279,9 +253,34 @@ function assignFieldsToBunks() {
       );
   }
   
-  window.availableDivisions = availableDivisions;
+  window.availableDivisions = availableDivisions; // This is the filtered list for *today*
   window.divisions = divisions;
   
+  const allGlobalDivisions = app1Data.availableDivisions || masterAvailableDivs; // This is the master list from Setup
+
+  // =============================================
+  // ===== START OF NEW SHARABLE LOGIC =====
+  // =============================================
+  // Create a lookup map for activity properties (sharable, allowedDivisions)
+  const activityProperties = {};
+  
+  availFields.forEach(f => {
+    activityProperties[f.name] = {
+        sharable: f.sharable || false,
+        // If allowedDivisions is empty, it means "all divisions"
+        allowedDivisions: (f.allowedDivisions || []).length > 0 ? f.allowedDivisions : allGlobalDivisions
+    };
+  });
+  availSpecials.forEach(s => {
+    activityProperties[s.name] = {
+        sharable: s.sharable || false,
+        allowedDivisions: (s.allowedDivisions || []).length > 0 ? s.allowedDivisions : allGlobalDivisions
+    };
+  });
+  // =============================================
+  // ===== END OF NEW SHARABLE LOGIC =====
+  // =============================================
+
   const enabledByDiv = getEnabledLeaguesByDivision(masterLeagues, overrides);
 
   const inc = parseInt(document.getElementById("increment")?.value || "30", 10);
@@ -460,30 +459,24 @@ function assignFieldsToBunks() {
     );
 
     // =============================================
-    // ===== START OF NEW SHARABLE LOGIC (LEAGUES) =====
+    // ===== START OF LEAGUE SHARABLE FIX =====
     // =============================================
     
     // Check for available fields for this specific slot SPAN
-    const availableFieldsForSpan = {}; // e.g., {"Gym": 2, "Field A": 1}
-    // =============================================
-    // ===== START OF BUG FIX =====
-    // =============================================
-    // Leagues are played on FIELDS, so we iterate allFieldNames, NOT allSchedulableNames
-    allFieldNames.forEach(name => { 
-    // =============================================
-    // ===== END OF BUG FIX =====
-    // =============================================
-        const fieldProps = activityProperties[name];
-        if (!fieldProps) return; 
-        
-        let capacity = fieldProps.sharable ? 2 : 1;
+    // LEAGUES ARE NOT SHARABLE. Capacity is 1.
+    const availableFieldsForSpan = {}; // e.g., {"Gym": 1, "Field A": 0}
+    allFieldNames.forEach(name => {
+        let capacity = 1; // Leagues ALWAYS have capacity 1
 
         for (let k = 0; k < spanLen; k++) {
             const slot = chosenSlot + k;
             const usage = fieldUsageBySlot[slot]?.[name] || 0;
-            capacity = Math.min(capacity, (fieldProps.sharable ? 2 : 1) - usage);
+            if (usage > 0) { // If it's used AT ALL, it's unavailable for a league
+                 capacity = 0;
+                 break;
+            }
         }
-        availableFieldsForSpan[name] = capacity;
+        availableFieldsForSpan[name] = capacity; // Will be 1 (free) or 0 (busy)
     });
 
 
@@ -502,31 +495,11 @@ function assignFieldsToBunks() {
         let assignedField = null; 
         
         for (const fieldName of possibleFields) {
-            const fieldProps = activityProperties[fieldName];
-            const maxCap = fieldProps.sharable ? 2 : 1;
-            // This is the capacity *before* this league
-            const currentUsage = (availableFieldsForSpan[fieldName] || 0);
-            const tempUsage = tempReservedFields[fieldName] || 0;
-
-            if ((currentUsage - tempUsage) > 0) {
-                // Check if this division is allowed to share
-                // (maxCap - currentUsage) > 0 means (2-1) > 0 -> field is already in use
-                // This logic was flawed. We just need to know if the field is *at all* in use.
-                const isFieldInUse = (maxCap - currentUsage) > 0;
-                
-                if (isFieldInUse) { 
-                    if (fieldProps.allowedDivisions.includes(div)) {
-                         assignedField = fieldName;
-                    }
-                    // else, field is in use, but this div can't share it
-                } else { // Field is completely free
-                    assignedField = fieldName;
-                }
-
-                if (assignedField) {
-                    tempReservedFields[fieldName] = (tempReservedFields[fieldName] || 0) + 1;
-                    break;
-                }
+            // Check if it's free in our main list AND our temp list
+            if ((availableFieldsForSpan[fieldName] || 0) > 0 && !tempReservedFields[fieldName]) {
+                assignedField = fieldName;
+                tempReservedFields[fieldName] = 1; // Mark as used
+                break;
             }
         }
 
@@ -536,7 +509,7 @@ function assignFieldsToBunks() {
         return { ...game, field: assignedField };
     });
     // =============================================
-    // ===== END OF NEW SHARABLE LOGIC (LEAGUES) =====
+    // ===== END OF LEAGUE SHARABLE FIX =====
     // =============================================
 
     if (!allGamesCanBeScheduled) {
@@ -560,7 +533,8 @@ function assignFieldsToBunks() {
       gamesWithFields.forEach(game => {
           if (game.field) {
               fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
-              fieldUsageBySlot[slot][game.field] = (fieldUsageBySlot[slot][game.field] || 0) + 1;
+              // TAKE THE WHOLE FIELD. SET USAGE TO 2 (MAX)
+              fieldUsageBySlot[slot][game.field] = 2; 
           }
       });
     }
@@ -714,26 +688,28 @@ function canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, is
             break; 
         }
 
+        let isBusy = false;
+
         if (
             window.scheduleAssignments[bunk][currentSlot] || // Bunk is busy (e.g., fixed)
             window.leagueAssignments?.[div]?.[currentSlot] || // Division is busy (league)
             !isActive(currentSlot) // Bunk is not active at this time
         ) {
-            canFitThisPick = false;
+            isBusy = true;
         }
 
         // =============================================
         // ===== START OF NEW SHARABLE LOGIC (CHECK) =====
         // =============================================
-        if (pickedField && activityProperties[pickedField]) { // Check if it's a real field/activity
+        if (!isBusy && pickedField && activityProperties[pickedField]) { // Check if it's a real field/activity
             const fieldProps = activityProperties[pickedField];
             const usage = fieldUsageBySlot[currentSlot]?.[pickedField] || 0;
             
             if (usage > 0) { // Field is in use
                 if (!fieldProps.sharable || usage >= 2) {
-                    canFitThisPick = false; // Field is not sharable or is full
+                    isBusy = true; // Field is not sharable or is full
                 } else if (!fieldProps.allowedDivisions.includes(div)) {
-                    canFitThisPick = false; // Field is sharable, but not for this division
+                    isBusy = true; // Field is sharable, but not for this division
                 }
                 // else: field is sharable (usage=1), has space (max=2), and this div is allowed.
             }
@@ -742,13 +718,19 @@ function canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, is
         // ===== END OF NEW SHARABLE LOGIC (CHECK) =====
         // =============================================
 
-        if (!canFitThisPick) {
-            if (k === 0) canFit = false; // Can't even fit in the first slot
+        if (isBusy) {
+            // =============================================
+            // ===== START OF BUG FIX =====
+            // =============================================
+            if (k === 0) canFitThisPick = false; // This was the typo. It's now fixed.
+            // =============================================
+            // ===== END OF BUG FIX =====
+            // =============================================
             break; 
         }
         spanForThisPick++;
     }
-    return [canFit, spanForThisPick];
+    return [canFitThisPick, spanForThisPick];
 }
  
 /**
