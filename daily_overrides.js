@@ -2,8 +2,8 @@
 // daily_overrides.js
 // This file creates the UI for the "Daily Overrides" tab.
 //
-// NEW: Replaced simple field override with time-based availability.
-// NEW: Updated toggle to a slider and improved time validation.
+// NEW: Fixed page-jump bug on field override add/remove.
+// NEW: Fixed "Add Trip" functionality and split render functions.
 // =================================================================
 
 (function() {
@@ -16,6 +16,12 @@ let currentOverrides = {
   leagues: []
 };
 let currentTrips = [];
+
+// --- Helper containers ---
+let fieldOverridesContainer = null;
+let tripsFormContainer = null;
+let tripsListContainer = null;
+let leaguesContainer = null;
 
 /**
  * This is a copy of the helper from scheduler_logic_core.js
@@ -52,7 +58,30 @@ function init() {
   }
 
   console.log("Daily Overrides: Initializing for", window.currentScheduleDate);
-  container.innerHTML = "<h2>Overrides & Trips for " + window.currentScheduleDate + "</h2>";
+  container.innerHTML = `
+    <h2>Overrides & Trips for ${window.currentScheduleDate}</h2>
+    
+    <div class="override-section" id="field-overrides-container">
+      <h3>Field & Special Activity Time Overrides</h3>
+    </div>
+    
+    <div class="override-section">
+      <h3>Daily Trips</h3>
+      <div id="trips-form-container"></div>
+      <div id="trips-list-container"></div>
+    </div>
+    
+    <div class="override-section" id="league-overrides-container">
+      <h3>Disabled Leagues</h3>
+    </div>
+  `;
+
+  // Get references to the new containers
+  fieldOverridesContainer = document.getElementById("field-overrides-container");
+  tripsFormContainer = document.getElementById("trips-form-container");
+  tripsListContainer = document.getElementById("trips-list-container");
+  leaguesContainer = document.getElementById("league-overrides-container");
+
 
   // 1. Load Master "Setup" Data
   masterSettings.global = window.loadGlobalSettings?.() || {};
@@ -88,8 +117,9 @@ function init() {
   currentTrips = dailyData.trips || [];
 
   // 3. Render the UI sections
-  renderFieldsOverride(); // Updated function
-  renderTripsSection();
+  renderFieldsOverride();
+  renderTripsForm();
+  renderTripsList();
   renderLeaguesOverride();
 }
 
@@ -186,7 +216,7 @@ function renderDailyAvailabilityControls(item, onSave) {
     pill.style.cursor = "pointer";
     pill.onclick = () => {
       item.exceptions.splice(index, 1);
-      onSave();
+      onSave(); // This will just save and re-render this specific control
     };
     exceptionList.appendChild(pill);
   });
@@ -236,23 +266,22 @@ function renderDailyAvailabilityControls(item, onSave) {
 
 /**
 * Renders the "Field & Special Activity Time Overrides" section
+* NEW: This function now renders in-place and does not cause a page jump.
 */
 function renderFieldsOverride() {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'override-section';
-  wrapper.innerHTML = '<h3>Field & Special Activity Time Overrides</h3>';
+  // Clear only its own container
+  fieldOverridesContainer.innerHTML = '<h3>Field & Special Activity Time Overrides</h3>';
 
   const allFields = (masterSettings.app1.fields || []).concat(masterSettings.app1.specialActivities || []);
 
   if (allFields.length === 0) {
-    wrapper.innerHTML += '<p class="muted">No fields or special activities found in Setup.</p>';
-    container.appendChild(wrapper);
+    fieldOverridesContainer.innerHTML += '<p class="muted">No fields or special activities found in Setup.</p>';
     return;
   }
 
   allFields.forEach(item => {
     const itemName = item.name;
-    const overrideData = currentOverrides.fieldAvailability[itemName];
+    let overrideData = currentOverrides.fieldAvailability[itemName];
     
     const itemWrapper = document.createElement("div");
     itemWrapper.style.padding = "10px";
@@ -268,77 +297,101 @@ function renderFieldsOverride() {
     const title = document.createElement("strong");
     title.textContent = itemName;
     header.appendChild(title);
-
-    const saveAndRerender = () => {
-      console.log("Daily Overrides: Saving field availability...", currentOverrides.fieldAvailability);
+    
+    // --- Create ALL controls, but hide/show them ---
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "Add Daily Time Override";
+    
+    const removeBtn = document.createElement("button");
+    removeBtn.textContent = "Remove Daily Override";
+    removeBtn.style.background = "#c0392b";
+    removeBtn.style.color = "white";
+    
+    const globalEl = document.createElement("p");
+    globalEl.style.fontSize = "0.9em";
+    globalEl.style.fontStyle = "italic";
+    globalEl.style.opacity = "0.7";
+    globalEl.style.margin = "5px 0 0 0";
+    
+    const controlsPlaceholder = document.createElement("div");
+    
+    // Function to save data and re-render *only* this item's controls
+    const saveAndRefreshControls = () => {
       window.saveCurrentDailyData("fieldAvailability", currentOverrides.fieldAvailability);
-      // We don't need to call init() for this, just re-render this one item
-      renderFieldsOverride();
+      // Re-render just the controls for this item
+      controlsPlaceholder.innerHTML = "";
+      controlsPlaceholder.appendChild(
+        renderDailyAvailabilityControls(overrideData, saveAndRefreshControls)
+      );
+    };
+
+    // --- Button Click Handlers ---
+    addBtn.onclick = () => {
+      // Create a default override based on the global rule
+      overrideData = {
+        mode: item.availabilityMode || "available",
+        exceptions: JSON.parse(JSON.stringify(item.availabilityExceptions || [])) // Deep copy
+      };
+      currentOverrides.fieldAvailability[itemName] = overrideData;
+      
+      window.saveCurrentDailyData("fieldAvailability", currentOverrides.fieldAvailability);
+      
+      // Show the remove button and controls
+      addBtn.style.display = "none";
+      removeBtn.style.display = "block";
+      globalEl.style.display = "block";
+      saveAndRefreshControls(); // Render controls for the first time
     };
     
-    const saveOnly = () => {
-        console.log("Daily Overrides: Saving field availability...", currentOverrides.fieldAvailability);
-        window.saveCurrentDailyData("fieldAvailability", currentOverrides.fieldAvailability);
-        // Re-render this section to update pill list
-        renderFieldsOverride();
+    removeBtn.onclick = () => {
+      delete currentOverrides.fieldAvailability[itemName];
+      overrideData = null; // Clear the local reference
+      
+      window.saveCurrentDailyData("fieldAvailability", currentOverrides.fieldAvailability);
+      
+      // Show the add button and hide controls
+      addBtn.style.display = "block";
+      removeBtn.style.display = "none";
+      globalEl.style.display = "none";
+      controlsPlaceholder.innerHTML = "";
     };
 
+    // --- Initial State ---
     if (overrideData) {
-      // --- Render the full controls ---
-      const removeBtn = document.createElement("button");
-      removeBtn.textContent = "Remove Daily Override";
-      removeBtn.style.background = "#c0392b";
-      removeBtn.style.color = "white";
-      removeBtn.onclick = () => {
-        delete currentOverrides.fieldAvailability[itemName];
-        saveAndRerender();
-      };
-      header.appendChild(removeBtn);
-      itemWrapper.appendChild(header);
-
-      // Get the global rule for display
+      // Already overridden: Show remove button and controls
+      addBtn.style.display = "none";
+      removeBtn.style.display = "block";
+      
       const globalRule = item.availabilityMode === 'unavailable' ? 'Unavailable' : 'Available';
       const globalExceptions = (item.availabilityExceptions || []).join(', ');
-      const globalText = `(Global Rule: ${globalRule}${globalExceptions ? ` except ${globalExceptions}` : ''})`;
-      const globalEl = document.createElement("p");
-      globalEl.textContent = globalText;
-      globalEl.style.fontSize = "0.9em";
-      globalEl.style.fontStyle = "italic";
-      globalEl.style.opacity = "0.7";
-      globalEl.style.margin = "5px 0 0 0";
-      itemWrapper.appendChild(globalEl);
-
-      const controls = renderDailyAvailabilityControls(overrideData, saveOnly);
-      itemWrapper.appendChild(controls);
-
+      globalEl.textContent = `(Global Rule: ${globalRule}${globalExceptions ? ` except ${globalExceptions}` : ''})`;
+      globalEl.style.display = "block";
+      
+      controlsPlaceholder.appendChild(
+        renderDailyAvailabilityControls(overrideData, saveAndRefreshControls)
+      );
     } else {
-      // --- Render the "Add" button ---
-      const addBtn = document.createElement("button");
-      addBtn.textContent = "Add Daily Time Override";
-      addBtn.onclick = () => {
-        // Create a default override based on the global rule
-        currentOverrides.fieldAvailability[itemName] = {
-          mode: item.availabilityMode || "available",
-          exceptions: JSON.parse(JSON.stringify(item.availabilityExceptions || [])) // Deep copy
-        };
-        saveAndRerender();
-      };
-      header.appendChild(addBtn);
-      itemWrapper.appendChild(header);
+      // Not overridden: Show add button, hide controls
+      addBtn.style.display = "block";
+      removeBtn.style.display = "none";
+      globalEl.style.display = "none";
     }
     
-    wrapper.appendChild(itemWrapper);
+    header.appendChild(addBtn);
+    header.appendChild(removeBtn);
+    itemWrapper.appendChild(header);
+    itemWrapper.appendChild(globalEl);
+    itemWrapper.appendChild(controlsPlaceholder);
+    
+    fieldOverridesContainer.appendChild(itemWrapper);
   });
-  container.appendChild(wrapper);
 }
 
 /**
-* Renders the "Daily Trips" section
-*/
-function renderTripsSection() {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'override-section';
-  wrapper.innerHTML = '<h3>Daily Trips</h3>';
+ * NEW: Renders *only* the "Daily Trips" form
+ */
+function renderTripsForm() {
+  tripsFormContainer.innerHTML = ""; // Clear only the form container
 
   const form = document.createElement('div');
   form.style.border = '1px solid #ccc';
@@ -444,20 +497,37 @@ function renderTripsSection() {
 
     console.log("Daily Overrides: Saving trips...", currentTrips);
     window.saveCurrentDailyData("trips", currentTrips);
-    init(); // Re-render the whole tab
+    
+    // --- FIX: Re-render ONLY the list and clear the form ---
+    renderTripsList();
+    
+    // Clear form
+    nameEl.value = "";
+    startEl.value = "";
+    endEl.value = "";
+    form.querySelectorAll('.bunk-button.selected').forEach(chip => {
+        chip.click(); // This will toggle the class and style
+    });
+    // --- END FIX ---
   };
 
   form.appendChild(addBtn);
-  wrapper.appendChild(form);
+  tripsFormContainer.appendChild(form);
+}
 
-  // --- 2. Create the "Current Trips" List ---
+/**
+ * NEW: Renders *only* the list of current trips
+ */
+function renderTripsList() {
+  tripsListContainer.innerHTML = ""; // Clear only the list container
+
   const listHeader = document.createElement('h4');
   listHeader.textContent = 'Scheduled Trips for This Day:';
   listHeader.style.marginTop = '20px';
-  wrapper.appendChild(listHeader);
+  tripsListContainer.appendChild(listHeader);
 
   if (currentTrips.length === 0) {
-    wrapper.innerHTML += '<p class="muted">No trips scheduled for this day.</p>';
+    tripsListContainer.innerHTML += '<p class="muted">No trips scheduled for this day.</p>';
   }
 
   currentTrips.forEach(trip => {
@@ -478,28 +548,24 @@ function renderTripsSection() {
       console.log("Daily Overrides: Removing trip", trip.id);
       currentTrips = currentTrips.filter(t => t.id !== trip.id);
       window.saveCurrentDailyData("trips", currentTrips);
-      init(); // Re-render
+      renderTripsList(); // Re-render only this list
     };
-    wrapper.appendChild(item);
+    tripsListContainer.appendChild(item);
   });
-
-  container.appendChild(wrapper);
 }
+
 
 /**
 * Renders the "Disabled Leagues" checklist
 */
 function renderLeaguesOverride() {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'override-section';
-  wrapper.innerHTML = '<h3>Disabled Leagues</h3>';
+  leaguesContainer.innerHTML = '<h3>Disabled Leagues</h3>'; // Clear only its container
 
   const leagues = masterSettings.leaguesByName || {};
   const leagueNames = Object.keys(leagues);
 
   if (leagueNames.length === 0) {
-    wrapper.innerHTML += '<p class="muted">No leagues found in Setup.</p>';
-    container.appendChild(wrapper);
+    leaguesContainer.innerHTML += '<p class="muted">No leagues found in Setup.</p>';
     return;
   }
 
@@ -522,9 +588,8 @@ function renderLeaguesOverride() {
       console.log("Daily Overrides: Saving league overrides...", fullOverrides.leagues);
       window.saveCurrentDailyData("overrides", fullOverrides);
     };
-    wrapper.appendChild(el.wrapper);
+    leaguesContainer.appendChild(el.wrapper);
   });
-  container.appendChild(wrapper);
 }
 
 /**
