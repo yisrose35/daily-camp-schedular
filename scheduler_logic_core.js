@@ -236,6 +236,9 @@ function assignFieldsToBunks() {
   ];
   const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
 
+  // make activities available to failsafe
+  window._allActivitiesCache = allActivities;
+
   if ((!allActivities.length && !availSpecials.length) || !window.unifiedTimes || window.unifiedTimes.length === 0) {
     console.warn("Cannot assign fields: No activities or unified times are set. Did you click 'Generate Schedule Times'?");
     updateTable();
@@ -539,6 +542,9 @@ function assignFieldsToBunks() {
   fillRemainingWithDoublingAggressive(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
   fillRemainingWithFallbackSpecials(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
 
+  // ===== NEW: Absolute failsafe (no placeholders) =====
+  fillAbsolutelyAllCellsNoPlaceholders(window.availableDivisions || [], window.divisions || {}, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount);
+
   updateTable();
   saveSchedule();
 }
@@ -603,8 +609,8 @@ function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageB
         }
         h2hHistory[bunk] = h2hHistory[bunk] || {};
         h2hHistory[opponent] = h2hHistory[opponent] || {};
-        h2hHistory[bunk][opponent] = (h2hHistory[bunk][opponent] || 0) + 1;
-        h2hHistory[opponent][bunk] = (h2hHistory[opponent][bunk] || 0) + 1;
+        h2hHistory[bunk][opponent] = (H2H_PROB && h2hHistory[bunk][opponent] || 0) + 1; // keep as before, just increment
+        h2hHistory[opponent][bunk] = (H2H_PROB && h2hHistory[opponent][bunk] || 0) + 1;
         h2hGameCount[bunk] = (h2hGameCount[bunk] || 0) + 1;
         h2hGameCount[opponent] = (h2hGameCount[opponent] || 0) + 1;
 
