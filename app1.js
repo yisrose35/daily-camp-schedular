@@ -452,6 +452,7 @@ function addField() {
       name: n, 
       activities: [], 
       available: true,
+      sharable: false, // <-- FIXED
       availabilityMode: 'available',
       availabilityExceptions: []
     });
@@ -464,6 +465,9 @@ function addField() {
 document.getElementById("addFieldBtn").onclick = addField;
 document.getElementById("fieldInput").addEventListener("keyup", e => { if (e.key === "Enter") addField(); });
 
+//
+// ===== THIS IS THE FIRST MAJORLY UPDATED FUNCTION =====
+//
 function renderFields() {
   const c = document.getElementById("fieldList"); c.innerHTML = "";
   fields.forEach(f => {
@@ -471,11 +475,40 @@ function renderFields() {
     const t = document.createElement("span"); t.className = "fieldTitle"; t.textContent = f.name;
     makeEditable(t, newName => { f.name = newName; saveData(); renderFields(); });
     w.appendChild(t);
+
+    // --- START: Re-add toggles ---
+    const controls = document.createElement("div");
+    controls.style.display = "flex";
+    controls.style.gap = "20px";
+    controls.style.margin = "8px 0";
+
+    // 1. Available Toggle
     const tog = document.createElement("label"); tog.className = "switch";
+    tog.title = "Available (Master)";
     const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = f.available;
     cb.onchange = () => { f.available = cb.checked; saveData(); renderFields(); };
     const sl = document.createElement("span"); sl.className = "slider";
-    tog.appendChild(cb); tog.appendChild(sl); w.appendChild(tog);
+    tog.appendChild(cb); tog.appendChild(sl); 
+    const togLabel = document.createElement("span"); togLabel.textContent = "Available";
+    const availWrap = document.createElement("label"); availWrap.style.display="flex"; availWrap.style.alignItems="center"; availWrap.style.gap="5px"; availWrap.style.cursor="pointer";
+    availWrap.appendChild(tog); availWrap.appendChild(togLabel);
+    controls.appendChild(availWrap);
+
+    // 2. Sharable Toggle
+    const togS = document.createElement("label"); togS.className = "switch";
+    togS.title = "Sharable";
+    const cbS = document.createElement("input"); cbS.type = "checkbox"; cbS.checked = f.sharable;
+    cbS.onchange = () => { f.sharable = cbS.checked; saveData(); }; // No re-render needed
+    const slS = document.createElement("span"); slS.className = "slider";
+    togS.appendChild(cbS); togS.appendChild(slS);
+    const togLabelS = document.createElement("span"); togLabelS.textContent = "Sharable";
+    const shareWrap = document.createElement("label"); shareWrap.style.display="flex"; shareWrap.style.alignItems="center"; shareWrap.style.gap="5px"; shareWrap.style.cursor="pointer";
+    shareWrap.appendChild(togS); shareWrap.appendChild(togLabelS);
+    controls.appendChild(shareWrap);
+
+    w.appendChild(controls);
+    // --- END: Re-add toggles ---
+    
     const bw = document.createElement("div"); bw.style.marginTop = "8px";
     commonActivities.forEach(act => {
       const b = document.createElement("button"); b.textContent = act; b.className = "activity-button";
@@ -501,7 +534,7 @@ function renderFields() {
       const p = document.createElement("p"); p.style.marginTop = "6px"; p.textContent = "Activities: " + f.activities.join(", ");
       w.appendChild(p);
     }
-
+    
     // --- (NEW) Availability Controls ---
     const availabilityControls = renderAvailabilityControls(f, saveData, renderFields);
     w.appendChild(availabilityControls);
@@ -519,6 +552,7 @@ function addSpecial() {
     specialActivities.push({ 
       name: n, 
       available: true,
+      sharable: true, // <-- FIXED (Specials default to sharable)
       availabilityMode: 'available',
       availabilityExceptions: []
     });
@@ -531,6 +565,10 @@ function addSpecial() {
 document.getElementById("addSpecialBtn").onclick = addSpecial;
 document.getElementById("specialInput").addEventListener("keyup", e => { if (e.key === "Enter") addSpecial(); });
 
+
+//
+// ===== THIS IS THE SECOND MAJORLY UPDATED FUNCTION =====
+//
 function renderSpecials() {
   const c = document.getElementById("specialList"); c.innerHTML = "";
   specialActivities.forEach(s => {
@@ -538,11 +576,39 @@ function renderSpecials() {
     const t = document.createElement("span"); t.className = "fieldTitle"; t.textContent = s.name;
     makeEditable(t, newName => { s.name = newName; saveData(); renderSpecials(); });
     w.appendChild(t);
+
+    // --- START: Re-add toggles ---
+    const controls = document.createElement("div");
+    controls.style.display = "flex";
+    controls.style.gap = "20px";
+    controls.style.margin = "8px 0";
+
+    // 1. Available Toggle
     const tog = document.createElement("label"); tog.className = "switch";
+    tog.title = "Available (Master)";
     const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = s.available;
     cb.onchange = () => { s.available = cb.checked; saveData(); renderSpecials(); };
     const sl = document.createElement("span"); sl.className = "slider";
-    tog.appendChild(cb); tog.appendChild(sl); w.appendChild(tog);
+    tog.appendChild(cb); tog.appendChild(sl); 
+    const togLabel = document.createElement("span"); togLabel.textContent = "Available";
+    const availWrap = document.createElement("label"); availWrap.style.display="flex"; availWrap.style.alignItems="center"; availWrap.style.gap="5px"; availWrap.style.cursor="pointer";
+    availWrap.appendChild(tog); availWrap.appendChild(togLabel);
+    controls.appendChild(availWrap);
+
+    // 2. Sharable Toggle
+    const togS = document.createElement("label"); togS.className = "switch";
+    togS.title = "Sharable";
+    const cbS = document.createElement("input"); cbS.type = "checkbox"; cbS.checked = s.sharable;
+    cbS.onchange = () => { s.sharable = cbS.checked; saveData(); }; // No re-render needed
+    const slS = document.createElement("span"); slS.className = "slider";
+    togS.appendChild(cbS); togS.appendChild(slS);
+    const togLabelS = document.createElement("span"); togLabelS.textContent = "Sharable";
+    const shareWrap = document.createElement("label"); shareWrap.style.display="flex"; shareWrap.style.alignItems="center"; shareWrap.style.gap="5px"; shareWrap.style.cursor="pointer";
+    shareWrap.appendChild(togS); shareWrap.appendChild(togLabelS);
+    controls.appendChild(shareWrap);
+
+    w.appendChild(controls);
+    // --- END: Re-add toggles ---
 
     // --- (NEW) Availability Controls ---
     const availabilityControls = renderAvailabilityControls(s, saveData, renderSpecials);
@@ -601,6 +667,9 @@ function saveData() {
   window.saveGlobalSettings?.("app1", data);
 }
 
+//
+// ===== THIS IS THE THIRD MAJORLY UPDATED FUNCTION =====
+//
 function loadData() {
   // This now loads from the *Global Settings* object
   // It relies on calendar.js's migration logic to pull in old data once
@@ -621,10 +690,14 @@ function loadData() {
     
     // --- NEW: Ensure new properties exist on loaded data ---
     fields.forEach(f => {
+      f.available = f.available !== false; // default true
+      f.sharable = f.sharable === true; // <-- FIXED (default false)
       f.availabilityMode = f.availabilityMode || 'available';
       f.availabilityExceptions = f.availabilityExceptions || [];
     });
     specialActivities.forEach(s => {
+      s.available = s.available !== false; // default true
+      s.sharable = s.sharable !== false; // <-- FIXED (default true)
       s.availabilityMode = s.availabilityMode || 'available';
       s.availabilityExceptions = s.availabilityExceptions || [];
     });
