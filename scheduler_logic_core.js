@@ -1,427 +1,677 @@
-// -------------------- scheduler_logic_fillers.js --------------------
-// Post-passes: forced H2H, doubling, specials fallback, and the final
-// no-placeholders failsafe that guarantees every *fillable* cell is filled.
+// -------------------- scheduler_logic_core.js --------------------
+// Core logic: helpers, fixed-activity plumbing, league helpers/rotation,
+// uniqueness rules, and primary scheduling (assignFieldsToBunks).
 
-// --- Aggressive Pass 2.5 (enhanced): recruit partners + multiple passes ---
-window.fillRemainingWithForcedH2HPlus = function (
-  availableDivisions, divisions, spanLen, h2hActivities, fieldUsageBySlot,
-  activityProperties, h2hHistory, h2hGameCount
-) {
-  const unifiedTimes = window.unifiedTimes || [];
-  const leaguePreferredFields = new Set();
-  const global = window.loadGlobalSettings?.() || {};
-  const leaguesByName = global.leaguesByName || {};
-  Object.values(leaguesByName).forEach(L => {
-    (L.sports || []).forEach(sp => {
-      const fields = (window._lastFieldsBySportCache || {})[sp] || [];
-      fields.forEach(f => leaguePreferredFields.add(f));
+// ===== Helpers =====
+function parseTimeToMinutes(str) {
+  if (!str || typeof str !== "string") return null;
+  let s = str.trim().toLowerCase();
+  let mer = null;
+  if (s.endsWith("am") || s.endsWith("pm")) {
+    mer = s.endsWith("am") ? "am" : "pm";
+    s = s.replace(/am|pm/g, "").trim();
+  }
+  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+  if (!m) return null;
+  let hh = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
+  if (mer) {
+    if (hh === 12) hh = mer === "am" ? 0 : 12;
+    else if (mer === "pm") hh += 12;
+  }
+  return hh * 60 + mm;
+}
+function fieldLabel(f) {
+  if (typeof f === "string") return f;
+  if (f && typeof f === "object" && typeof f.name === "string") return f.name;
+  return "";
+}
+
+// ===== FIX 8 HELPER =====
+function getActivityName(pick) {
+  if (pick.sport) return pick.sport; // e.g., "Basketball"
+  return fieldLabel(pick.field);     // e.g., "Gameroom" or special name
+}
+
+// ===== Fixed Activities =====
+function loadActiveFixedActivities() {
+  const globalSettings = window.loadGlobalSettings?.() || {};
+  const allFixed = globalSettings.fixedActivities || [];
+  return Array.isArray(allFixed) ? allFixed.filter((a) => a && a.enabled) : [];
+}
+function findRowsForRange(startStr, endStr) {
+  if (!Array.isArray(window.unifiedTimes) || window.unifiedTimes.length === 0) return [];
+  const startMin = parseTimeToMinutes(startStr), endMin = parseTimeToMinutes(endStr);
+  if (startMin == null || endMin == null || endMin <= startMin) return [];
+  const inside = [];
+  for (let i = 0; i < window.unifiedTimes.length; i++) {
+    const r = window.unifiedTimes[i], rs = r.start.getHours() * 60 + r.start.getMinutes(), re = r.end.getHours() * 60 + r.end.getMinutes();
+    if (rs >= startMin && re <= endMin) inside.push(i);
+  }
+  if (inside.length === 0) {
+    const overlap = [];
+    for (let i = 0; i < window.unifiedTimes.length; i++) {
+      const r = window.unifiedTimes[i], rs = r.start.getHours() * 60 + r.start.getMinutes(), re = r.end.getHours() * 60 + r.end.getMinutes();
+      if (Math.max(rs, startMin) < Math.min(re, endMin)) overlap.push(i);
+    }
+    return overlap;
+  }
+  return inside;
+}
+function computeBlockedRowsByDiv() {
+  const fixed = loadActiveFixedActivities();
+  const blocked = {};
+  fixed.forEach((act) => {
+    const rows = findRowsForRange(act.start, act.end);
+    if (rows.length === 0) return;
+    const targetDivs = Array.isArray(act.divisions) && act.divisions.length > 0 ? act.divisions : window.availableDivisions || [];
+    targetDivs.forEach((div) => {
+      blocked[div] = blocked[div] || new Set();
+      rows.forEach((r) => blocked[div].add(r));
+    });
+  });
+  return blocked;
+}
+function prePlaceFixedActivities() {
+  if (window.DailyActivities?.prePlace) {
+    try { window.DailyActivities.prePlace(); } catch (e) { console.error("DailyActivities.prePlace error:", e); }
+  }
+  return computeBlockedRowsByDiv();
+}
+
+// ===== League Helpers =====
+function leaguesSnapshot() { return window.loadGlobalSettings?.().leaguesByName || {}; }
+function getEnabledLeaguesByDivision(masterLeagues, overrides) {
+  const result = {};
+  const all = masterLeagues || {};
+  Object.keys(all).forEach((name) => {
+    if (overrides.leagues.includes(name)) return; 
+    const l = all[name];
+    if (!l?.enabled) return;
+    (l.divisions || []).forEach((div) => { result[div] = { name, data: l }; });
+  });
+  return result;
+}
+
+// ===== League Sport Rotation (UPDATED) =====
+let leagueSportRotation = {};
+function loadLeagueSportRotation() {
+  try {
+    if (window.currentDailyData && window.currentDailyData.leagueSportRotation && Object.keys(window.currentDailyData.leagueSportRotation).length > 0) {
+      leagueSportRotation = window.currentDailyData.leagueSportRotation;
+    } else if (window.loadPreviousDailyData) {
+      const yesterdayData = window.loadPreviousDailyData();
+      leagueSportRotation = yesterdayData.leagueSportRotation || {};
+      saveLeagueSportRotation();
+    } else {
+      leagueSportRotation = {};
+    }
+  } catch(e) {
+    console.error("Failed to load league sport rotation:", e);
+    leagueSportRotation = {};
+  }
+}
+function saveLeagueSportRotation() {
+  try { window.saveCurrentDailyData?.("leagueSportRotation", leagueSportRotation); } catch {}
+}
+
+// UPDATED assignSportsToMatchups (FIX 13 + BUGFIX)
+function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHistory) {
+  if (!Array.isArray(matchups) || matchups.length === 0) return [];
+  if (!Array.isArray(sportsList) || sportsList.length === 0) return matchups.map((m) => ({ teams: m, sport: "Leagues" }));
+  loadLeagueSportRotation();
+  const state = leagueSportRotation[leagueName] || { index: 0 };
+  let idx = state.index;
+  const assigned = [];
+  for (const match of matchups) {
+    const [teamA, teamB] = match;
+    const lastSportA = yesterdayHistory[teamA];
+    const lastSportB = yesterdayHistory[teamB];
+    let chosenSport = null;
+    for (let i = 0; i < sportsList.length; i++) {
+      const sportIdx = (idx + i) % sportsList.length; 
+      const sport = sportsList[sportIdx];
+      if (sport !== lastSportA && sport !== lastSportB) { chosenSport = sport; idx = sportIdx + 1; break; }
+    }
+    if (!chosenSport) { chosenSport = sportsList[idx % sportsList.length]; idx++; }
+    assigned.push({ teams: match, sport: chosenSport });
+  }
+  leagueSportRotation[leagueName] = { index: idx % sportsList.length };
+  saveLeagueSportRotation();
+  return assigned;
+}
+
+// ====== CORE ASSIGN ======
+window.leagueAssignments = window.leagueAssignments || {};
+const H2H_PROB = 0.6; // 60% attempt per bunk/slot
+
+function assignFieldsToBunks() {
+  window.scheduleAssignments = window.scheduleAssignments || {};
+  window.leagueAssignments = {};
+
+  // ===== 1. LOAD MASTER & OVERRIDE DATA =====
+  const globalSettings = window.loadGlobalSettings?.() || {};
+  const app1Data = globalSettings.app1 || {};
+  const masterFields = app1Data.fields || [];
+  const masterDivisions = app1Data.divisions || {};
+  const masterAvailableDivs = app1Data.availableDivisions || [];
+  const masterSpecials = app1Data.specialActivities || [];
+  const masterLeagues = globalSettings.leaguesByName || {};
+  const dailyData = window.loadCurrentDailyData?.() || {};
+
+  // Safely initialize the overrides object
+  const loadedOverrides = dailyData.overrides || {};
+  const overrides = {
+    fields: loadedOverrides.fields || [],
+    bunks: loadedOverrides.bunks || [],
+    leagues: loadedOverrides.leagues || []
+  };
+
+  // ===== Load *Yesterday's* Data =====
+  const yesterdayData = window.loadPreviousDailyData?.() || {};
+  const yesterdayLeagues = yesterdayData.leagueAssignments || {};
+  const yesterdaySchedule = yesterdayData.scheduleAssignments || {};
+
+  // 3. Create Today's Filtered Lists
+  const availFields = masterFields.filter(f => f.available && !overrides.fields.includes(f.name));
+  const availSpecials = masterSpecials.filter(s => s.available && !overrides.fields.includes(s.name));
+  const availableDivisions = masterAvailableDivs.filter(divName => !overrides.bunks.includes(divName));
+
+  const divisions = {};
+  for (const divName of availableDivisions) {
+    if (!masterDivisions[divName]) continue;
+    divisions[divName] = JSON.parse(JSON.stringify(masterDivisions[divName]));
+    divisions[divName].bunks = (divisions[divName].bunks || []).filter(bunkName => !overrides.bunks.includes(bunkName));
+  }
+  window.availableDivisions = availableDivisions;
+  window.divisions = divisions;
+
+  // Build bunk -> division map for sharing rules
+  window.bunkToDivision = {};
+  availableDivisions.forEach(dv => { (divisions[dv]?.bunks || []).forEach(bk => window.bunkToDivision[bk] = dv); });
+
+  const allGlobalDivisions = app1Data.availableDivisions || masterAvailableDivs;
+
+  // Activity properties (sharable, allowedDivisions)
+  const activityProperties = {};
+  availFields.forEach(f => {
+    activityProperties[f.name] = {
+      sharable: f.sharable || false,
+      allowedDivisions: (f.allowedDivisions || []).length > 0 ? f.allowedDivisions : allGlobalDivisions
+    };
+  });
+  availSpecials.forEach(s => {
+    activityProperties[s.name] = {
+      sharable: s.sharable || false,
+      allowedDivisions: (s.allowedDivisions || []).length > 0 ? s.allowedDivisions : allGlobalDivisions
+    };
+  });
+
+  const enabledByDiv = getEnabledLeaguesByDivision(masterLeagues, overrides);
+
+  const inc = parseInt(document.getElementById("increment")?.value || "30", 10);
+  const activityDuration = parseInt(document.getElementById("activityDuration")?.value || "30", 10);
+  const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
+
+  // Field-Sport Inventory
+  const fieldsBySport = {}; window._lastFieldsBySportCache = fieldsBySport;
+  const allFieldNames = [];
+  availFields.forEach(f => {
+    allFieldNames.push(f.name);
+    if (Array.isArray(f.activities)) {
+      f.activities.forEach(sport => {
+        fieldsBySport[sport] = fieldsBySport[sport] || [];
+        fieldsBySport[sport].push(f.name);
+        window._lastFieldsBySportCache = fieldsBySport;
+      });
+    }
+  });
+  // Global list of schedulable names (fields + specials)
+  window.allSchedulableNames = allFieldNames.concat(availSpecials.map(s => s.name));
+
+  const allActivities = [
+    ...availFields.flatMap((f) => (f.activities || []).map((act) => ({ type: "field", field: f, sport: act }))),
+    ...availSpecials.map((sa) => ({ type: "special", field: sa, sport: null }))
+  ];
+  const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
+
+  // make activities available to failsafe
+  window._allActivitiesCache = allActivities;
+
+  if ((!allActivities.length && !availSpecials.length) || !window.unifiedTimes || window.unifiedTimes.length === 0) {
+    console.warn("Cannot assign fields: No activities or unified times are set. Did you click 'Generate Schedule Times'?");
+    updateTable();
+    return;
+  }
+
+  // Init grids
+  scheduleAssignments = {};
+  availableDivisions.forEach((d) => (divisions[d]?.bunks || []).forEach((b) => (scheduleAssignments[b] = new Array(window.unifiedTimes.length))));
+  window.scheduleAssignments = scheduleAssignments;
+
+  // Place fixed blocks
+  const blockedRowsByDiv = prePlaceFixedActivities();
+
+  // ===== Per-day uniqueness tracker =====
+  window.todayActivityUsed = {};
+  availableDivisions.forEach(div => {
+    (divisions[div]?.bunks || []).forEach(b => {
+      window.todayActivityUsed[b] = new Set();
     });
   });
 
-  for (const div of (availableDivisions || [])) {
-    const bunks = divisions[div]?.bunks || [];
-    const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
-
-    for (let s = 0; s < unifiedTimes.length; s++) {
-      if (window.leagueAssignments?.[div]?.[s]) continue;
-      const eligible = bunks.filter(b => isActive(s) && ((h2hGameCount[b] || 0) < 2));
-      if (eligible.length < 1) continue;
-      let changed = true; let tries = 0;
-      while (changed && tries++ < 20) {
-        changed = false;
-        const empties = eligible.filter(b => !window.scheduleAssignments[b][s]);
-        // 1) empty-empty
-        for (let i = 0; i < empties.length; i++) {
-          const a = empties[i]; if (window.scheduleAssignments[a][s]) continue;
-          for (let j = i + 1; j < empties.length; j++) {
-            const b = empties[j]; if (window.scheduleAssignments[b][s]) continue; if ((h2hHistory[a]?.[b] || 0) >= 1) continue;
-            if (placeH2HPairPlus(a, b, div, s, spanLen)) { changed = true; break; }
-          }
-        }
-        // 2) recruit partner (prefer sharable, else any general)
-        const singles = eligible.filter(b => !window.scheduleAssignments[b][s]);
-        for (const a of singles) {
-          for (const cand of bunks) {
-            if (cand === a) continue;
-            if ((h2hGameCount[cand] || 0) >= 2) continue;
-            if ((h2hHistory[a]?.[cand] || 0) >= 1) continue;
-            const e2 = window.scheduleAssignments[cand]?.[s];
-            if (!e2 || e2._h2h || e2._fixed || e2.continuation) continue;
-            const f2 = fieldLabel(e2.field);
-            const props = activityProperties[f2];
-            const usage = (fieldUsageBySlot[s]?.[f2] || 0);
-            let recruited = false;
-            if (props && props.sharable && usage < 2) {
-              if (placeH2HPairPlus(a, cand, div, s, spanLen, /*evict*/true)) { changed = true; recruited = true; break; }
-            }
-            if (!recruited) {
-              if (placeH2HPairPlus(a, cand, div, s, spanLen, /*evict*/true)) { changed = true; break; }
+  // fieldUsageBySlot = { slot: { FieldName: usageCount } } ; fixed take usage=2
+  const fieldUsageBySlot = {};
+  (availableDivisions || []).forEach(div => {
+    (divisions[div]?.bunks || []).forEach(bunk => {
+      if (scheduleAssignments[bunk]) {
+        scheduleAssignments[bunk].forEach((entry, slot) => {
+          if (entry && entry._fixed && entry.field) {
+            const fieldName = fieldLabel(entry.field);
+            if (window.allSchedulableNames.includes(fieldName)) {
+              fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
+              fieldUsageBySlot[slot][fieldName] = 2;
             }
           }
-        }
+          // Seed uniqueness from fixed or existing
+          if (entry) {
+            const name = entry.sport ? entry.sport : fieldLabel(entry.field);
+            if (name) window.todayActivityUsed[bunk].add(name);
+          }
+        });
       }
-    }
-  };
-
-  function placeH2HPairPlus(a, b, div, s, spanLen, evict=false) {
-    const todayActivityUsed = window.todayActivityUsed || {};
-    const sortedPicks = (h2hActivities || []).slice().sort((p1, p2) => {
-      const f1 = fieldLabel(p1.field), f2 = fieldLabel(p2.field);
-      const s1 = leaguePreferredFields.has(f1) ? 1 : 0;
-      const s2 = leaguePreferredFields.has(f2) ? 1 : 0;
-      return s1 - s2; // prefer non-league fields
     });
-    for (const pick of sortedPicks) {
-      const sportName = getActivityName(pick);
-      if (todayActivityUsed[a]?.has(sportName) || todayActivityUsed[b]?.has(sportName)) continue;
+  });
 
-      const fName = fieldLabel(pick.field);
-      let fitsBoth = true;
+  // Histories
+  const generalActivityHistory = {}; // { bunk: Set(activityName) }
+  const generalFieldHistory = {};    // { bunk: { activityName: fieldName } }
+  const h2hHistory = {};             // { bunk: { otherBunk: count } }
+  const h2hGameCount = {};           // { bunk: number }
+
+  // Seed with yesterday
+  availableDivisions.forEach(div => {
+    (divisions[div]?.bunks || []).forEach(b => {
+      generalActivityHistory[b] = new Set();
+      generalFieldHistory[b] = {};
+      h2hHistory[b] = {};
+      h2hGameCount[b] = 0;
+      const yBunkSchedule = yesterdaySchedule[b] || [];
+      yBunkSchedule.forEach(entry => {
+        if (entry && !entry._fixed && !entry._h2h) {
+          const actName = entry.sport || fieldLabel(entry.field);
+          generalActivityHistory[b].add(actName);
+          generalFieldHistory[b][actName] = fieldLabel(entry.field);
+        }
+      });
+    });
+  });
+  // Mark today's fixed into history
+  availableDivisions.forEach(div => {
+    (divisions[div]?.bunks || []).forEach(bunk => {
+      if (scheduleAssignments[bunk]) {
+        scheduleAssignments[bunk].forEach((entry) => { if (entry && entry._fixed) generalActivityHistory[bunk].add(fieldLabel(entry.field)); });
+      }
+    });
+  });
+
+  // Yesterday's team sport map for leagues
+  const leagueTeamSportHistory = {};
+  Object.values(yesterdayLeagues).forEach(div => {
+    Object.values(div).forEach(slot => {
+      if (slot && slot.games && !slot.isContinuation) {
+        slot.games.forEach(game => {
+          if (game.teams && game.teams.length >= 2) {
+            leagueTeamSportHistory[game.teams[0]] = game.sport;
+            leagueTeamSportHistory[game.teams[1]] = game.sport;
+          }
+        });
+      }
+    });
+  });
+
+  const takenLeagueSlots = new Set();
+
+  // --- Leagues FIRST: Smart placement + eviction rescue ---
+  function evictAssignmentsOnFields(slotStart, span, targetFields, fus) {
+    const unified = window.unifiedTimes || [];
+    const endSlot = Math.min(slotStart + span, unified.length);
+    for (let slot = slotStart; slot < endSlot; slot++) {
+      for (const dv of (window.availableDivisions || [])) {
+        const bunks = (window.divisions?.[dv]?.bunks) || [];
+        for (const b of bunks) {
+          const e = window.scheduleAssignments?.[b]?.[slot];
+          if (!e || e._fixed || e._h2h) continue;
+          const f = fieldLabel(e.field);
+          if (!f || !targetFields.has(f)) continue;
+          // walk to start of its span
+          let k = slot;
+          while (k > 0 && window.scheduleAssignments[b][k-1] && window.scheduleAssignments[b][k-1].continuation) k--;
+          // clear forward
+          while (k < unified.length && window.scheduleAssignments[b][k] && (k===slot || window.scheduleAssignments[b][k].continuation)) {
+            const rem = window.scheduleAssignments[b][k];
+            const rf = fieldLabel(rem.field);
+            window.scheduleAssignments[b][k] = undefined;
+            if (rf) {
+              fus[k] = fus[k] || {};
+              fus[k][rf] = Math.max(0, (fus[k][rf] || 1) - 1);
+            }
+            k++;
+          }
+        }
+      }
+    }
+  }
+
+  for (const div of availableDivisions) {
+    const lg = enabledByDiv[div];
+    if (!lg) continue;
+
+    const actSet = window.divisionActiveRows?.[div];
+    const actSlots = actSet && actSet.size ? Array.from(actSet) : window.unifiedTimes.map((_, i) => i);
+
+    const bunksInDiv = divisions[div]?.bunks || [];
+
+    const candidates = actSlots.filter((s) => {
       for (let k = 0; k < spanLen; k++) {
         const slot = s + k;
-        if (slot >= (window.unifiedTimes || []).length) { fitsBoth = false; break; }
-        if (window.scheduleAssignments[a][slot] || window.scheduleAssignments[b][slot]) { fitsBoth = false; break; }
-        if (window.leagueAssignments?.[div]?.[slot]) { fitsBoth = false; break; }
-        if ((fieldUsageBySlot[slot]?.[fName] || 0) > 0) { fitsBoth = false; break; }
+        if (slot >= window.unifiedTimes.length) return false;
+        let busy = false;
+        for (const bunk of bunksInDiv) { if (scheduleAssignments[bunk]?.[slot]) { busy = true; break; } }
+        if (busy) return false;
+        if (takenLeagueSlots.has(slot)) return false;
       }
-      if (!fitsBoth) continue;
-      if (evict) {
-        const e2 = window.scheduleAssignments[b][s];
-        if (e2 && !e2._fixed && !e2._h2h) {
+      return true;
+    });
+
+    if (!candidates.length) continue;
+
+    let placedLeague = false;
+
+    // try each candidate slot without eviction first
+    for (const chosenSlot of candidates) {
+      const teams = (lg.data.teams || []).map((t) => String(t).trim()).filter(Boolean);
+      if (teams.length < 2) break;
+      const matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
+      if (!matchups.length) break;
+      const gamesWithSports = assignSportsToMatchups(lg.name, matchups, lg.data.sports, leagueTeamSportHistory);
+
+      // availability snapshot
+      const availableFieldsForSpan = {};
+      allFieldNames.forEach(name => {
+        let capacity = 1;
+        for (let k = 0; k < spanLen; k++) { const slot = chosenSlot + k; const usage = fieldUsageBySlot[slot]?.[name] || 0; if (usage > 0) { capacity = 0; break; } }
+        availableFieldsForSpan[name] = capacity;
+      });
+
+      const gamesWithPossibleFields = gamesWithSports.map(game => {
+        const possibleFields = (fieldsBySport[game.sport] || []).filter(fieldName => (availableFieldsForSpan[fieldName] || 0) > 0);
+        return { game, possibleFields };
+      }).sort((a, b) => a.possibleFields.length - b.possibleFields.length);
+
+      const tempReservedFields = {};
+      let allGamesCanBeScheduled = true;
+      const gamesWithFields = gamesWithPossibleFields.map(item => {
+        const { game, possibleFields } = item;
+        let assignedField = null; 
+        for (const fieldName of possibleFields) {
+          if ((availableFieldsForSpan[fieldName] || 0) > 0 && !tempReservedFields[fieldName]) { assignedField = fieldName; tempReservedFields[fieldName] = 1; break; }
+        }
+        if (!assignedField) allGamesCanBeScheduled = false;
+        return { ...game, field: assignedField };
+      });
+
+      if (!allGamesCanBeScheduled) continue; // try next candidate
+
+      // book
+      window.leagueAssignments[div] = window.leagueAssignments[div] || {};
+      const leagueData = { games: gamesWithFields, leagueName: lg.name, isContinuation: false };
+      const leagueContinuation = { leagueName: lg.name, isContinuation: true };
+      for (let k = 0; k < spanLen; k++) {
+        const slot = chosenSlot + k; if (slot >= window.unifiedTimes.length) break;
+        window.leagueAssignments[div][slot] = (k === 0) ? leagueData : leagueContinuation;
+        takenLeagueSlots.add(slot);
+        gamesWithFields.forEach(game => { if (game.field) { fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {}; fieldUsageBySlot[slot][game.field] = 2; } });
+      }
+      // Mark league sports as used today for each team
+      (gamesWithFields || []).forEach(g => {
+        const sportName = g.sport;
+        const [teamA, teamB] = g.teams || [];
+        if (sportName) {
+          if (teamA && window.todayActivityUsed[teamA]) window.todayActivityUsed[teamA].add(sportName);
+          if (teamB && window.todayActivityUsed[teamB]) window.todayActivityUsed[teamB].add(sportName);
+        }
+      });
+
+      placedLeague = true; break;
+    }
+
+    // eviction-based rescue
+    if (!placedLeague) {
+      for (const chosenSlot of candidates) {
+        const teams = (lg.data.teams || []).map((t) => String(t).trim()).filter(Boolean);
+        if (teams.length < 2) break;
+        const matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
+        if (!matchups.length) break;
+        const gamesWithSports = assignSportsToMatchups(lg.name, matchups, lg.data.sports, leagueTeamSportHistory);
+        const candidateFields = new Set();
+        gamesWithSports.forEach(g => (fieldsBySport[g.sport] || []).forEach(f => candidateFields.add(f)));
+        evictAssignmentsOnFields(chosenSlot, spanLen, candidateFields, fieldUsageBySlot);
+        const avail = {}; allFieldNames.forEach(name => { let cap = 1; for (let k = 0; k < spanLen; k++) { const slot = chosenSlot + k; if ((fieldUsageBySlot[slot]?.[name] || 0) > 0) { cap = 0; break; } } avail[name] = cap; });
+        const temp = {}; const finalGames = [];
+        const byHardness = gamesWithSports.map(g => ({ g, poss: (fieldsBySport[g.sport] || []).filter(fn => (avail[fn] || 0) > 0) }))
+          .sort((a,b)=> a.poss.length - b.poss.length);
+        let ok = true;
+        for (const item of byHardness) {
+          let chosen = null; for (const f of item.poss) { if (!temp[f]) { chosen = f; temp[f]=1; break; } }
+          if (!chosen) { ok = false; break; }
+          finalGames.push({ teams: item.g.teams, sport: item.g.sport, field: chosen });
+        }
+        if (ok) {
+          window.leagueAssignments[div] = window.leagueAssignments[div] || {};
+          const leagueData = { games: finalGames, leagueName: lg.name, isContinuation: false };
+          const leagueContinuation = { leagueName: lg.name, isContinuation: true };
           for (let k = 0; k < spanLen; k++) {
-            const slot = s + k; const prev = window.scheduleAssignments[b][slot];
-            if (prev && !prev._fixed && !prev._h2h) {
-              const pf = fieldLabel(prev.field);
-              window.scheduleAssignments[b][slot] = undefined;
-              if (pf) { fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {}; fieldUsageBySlot[slot][pf] = Math.max(0, (fieldUsageBySlot[slot][pf] || 1) - 1); }
-            }
+            const slot = chosenSlot + k; if (slot >= window.unifiedTimes.length) break;
+            window.leagueAssignments[div][slot] = (k === 0) ? leagueData : leagueContinuation;
+            takenLeagueSlots.add(slot);
+            finalGames.forEach(game => { fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {}; fieldUsageBySlot[slot][game.field] = 2; });
           }
+          // Mark league sports as used today for each team
+          (finalGames || []).forEach(g => {
+            const sportName = g.sport;
+            const [teamA, teamB] = g.teams || [];
+            if (sportName) {
+              if (teamA && window.todayActivityUsed[teamA]) window.todayActivityUsed[teamA].add(sportName);
+              if (teamB && window.todayActivityUsed[teamB]) window.todayActivityUsed[teamB].add(sportName);
+            }
+          });
+
+          placedLeague = true; break;
         }
       }
-      for (let k = 0; k < spanLen; k++) {
-        const slot = s + k; const cont = k > 0;
-        window.scheduleAssignments[a][slot] = { field: fName, sport: sportName, continuation: cont, _h2h: true, vs: b };
-        window.scheduleAssignments[b][slot] = { field: fName, sport: sportName, continuation: cont, _h2h: true, vs: a };
-        fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {}; fieldUsageBySlot[slot][fName] = 2;
-      }
-      h2hHistory[a] = h2hHistory[a] || {}; h2hHistory[b] = h2hHistory[b] || {};
-      h2hHistory[a][b] = (h2hHistory[a][b] || 0) + 1; h2hHistory[b][a] = (h2hHistory[b][a] || 0) + 1;
-      h2hGameCount[a] = (h2hGameCount[a] || 0) + 1; h2hGameCount[b] = (h2hGameCount[b] || 0) + 1;
-
-      todayActivityUsed[a].add(sportName);
-      todayActivityUsed[b].add(sportName);
-      return true;
+      if (!placedLeague) console.warn(`Skipping league "${lg.name}": Not enough fields across candidate slots (even after eviction).`);
     }
-    return false;
   }
-};
 
-// --- Aggressive Pass 3: iterate doubling until saturation ---
-window.fillRemainingWithDoublingAggressive = function (
-  availableDivisions, divisions, spanLen, fieldUsageBySlot, activityProperties
-) {
-  const unifiedTimes = window.unifiedTimes || [];
-  let changed = true; let safety = 0;
-  while (changed && safety++ < 6) {
-    changed = false;
-    for (const div of (availableDivisions || [])) {
-      const bunks = divisions[div]?.bunks || [];
-      const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
-      for (let s = 0; s < unifiedTimes.length; s++) {
+  // ========================================================
+  // ===== 3. SCHEDULE GENERAL/H2H (NEW PRIORITY LOGIC) =====
+  // ========================================================
+  for (const div of availableDivisions) {
+    const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
+    const allBunksInDiv = divisions[div]?.bunks || [];
+
+    for (const bunk of allBunksInDiv) {
+      for (let s = 0; s < window.unifiedTimes.length; s++) {
+        if (scheduleAssignments[bunk][s]) continue;
         if (window.leagueAssignments?.[div]?.[s]) continue;
-        const sharableOpen = {};
-        for (const b of bunks) {
-          const e = window.scheduleAssignments[b]?.[s];
-          if (!e || e._h2h || e._fixed || e.continuation) continue;
-          const f = fieldLabel(e.field);
-          const props = activityProperties[f];
-          if (!props || !props.sharable) continue;
-          const usage = (fieldUsageBySlot[s]?.[f] || 0);
-          if (usage < 2 && props.allowedDivisions.includes(div)) { sharableOpen[f] = e; }
+        if (!isActive(s)) continue;
+        let assignedSpan = 0;
+
+        const preferredPicks = [];
+        const nonPreferredPicks = [];
+        allActivities.forEach(pick => { (generalActivityHistory[bunk].has(getActivityName(pick)) ? nonPreferredPicks : preferredPicks).push(pick); });
+        const shuffledPreferred = preferredPicks.sort(() => 0.5 - Math.random());
+        const shuffledNonPreferred = nonPreferredPicks.sort(() => 0.5 - Math.random());
+
+        // 2a. With probability, attempt H2H FIRST
+        if (assignedSpan === 0 && (h2hGameCount[bunk] || 0) < 2 && Math.random() < H2H_PROB) {
+          assignedSpan = tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, activityProperties, h2hHistory, h2hGameCount);
         }
-        if (Object.keys(sharableOpen).length === 0) continue;
-        for (const b of bunks) {
-          if (window.scheduleAssignments[b][s]) continue; if (!isActive(s)) continue;
-          let seated = false;
-          for (const [f, exemplar] of Object.entries(sharableOpen)) {
-            let fits = true;
-            for (let k = 0; k < spanLen; k++) {
-              const slot = s + k; if (slot >= unifiedTimes.length) { fits = false; break; }
-              const usage = (fieldUsageBySlot[slot]?.[f] || 0); const props = activityProperties[f];
-              if (!props || !props.sharable || usage >= 2 || !props.allowedDivisions.includes(div)) { fits = false; break; }
-              if (window.scheduleAssignments[b][slot] || window.leagueAssignments?.[div]?.[slot]) { fits = false; break; }
-            }
-            if (!fits) continue;
-            for (let k = 0; k < spanLen; k++) {
-              const slot = s + k;
-              window.scheduleAssignments[b][slot] = { field: f, sport: exemplar.sport, continuation: k > 0 };
-              fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
-              fieldUsageBySlot[slot][f] = (fieldUsageBySlot[slot][f] || 0) + 1;
-            }
-            seated = true; break;
-          }
+        // 2b. Preferred general
+        if (assignedSpan === 0) {
+          assignedSpan = tryGeneralActivity(bunk, div, s, spanLen, shuffledPreferred, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties);
         }
+        // 3. H2H again if still open
+        if (assignedSpan === 0 && (h2hGameCount[bunk] || 0) < 2) {
+          assignedSpan = tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, activityProperties, h2hHistory, h2hGameCount);
+        }
+        // 4. Non-preferred
+        if (assignedSpan === 0) {
+          assignedSpan = tryGeneralActivity(bunk, div, s, spanLen, shuffledNonPreferred, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties);
+        }
+        // 5. Advance
+        if (assignedSpan > 0) { s += (assignedSpan - 1); }
       }
     }
   }
-};
 
-// Final fallback filler with multi-pass: fill every *fillable* cell.
-// It keeps iterating (bounded) because earlier evictions can create new gaps.
-window.fillAbsolutelyAllCellsNoPlaceholders = function (
-  availableDivisions, divisions, spanLen, h2hActivities, fieldUsageBySlot,
-  activityProperties, h2hHistory, h2hGameCount
-) {
-  const unifiedTimes = window.unifiedTimes || [];
-  const allActivities = window._allActivitiesCache || [];
+  // ===== Post-passes (defined in scheduler_logic_fillers.js) =====
+  fillRemainingWithForcedH2HPlus(window.availableDivisions || [], window.divisions || {}, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount);
+  fillRemainingWithDoublingAggressive(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
+  fillRemainingWithFallbackSpecials(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
+
+  // ===== NEW: Absolute failsafe (no placeholders) =====
+  fillAbsolutelyAllCellsNoPlaceholders(window.availableDivisions || [], window.divisions || {}, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount);
+
+  updateTable();
+  saveSchedule();
+}
+
+// ===== Helpers for General/H2H placement =====
+function tryGeneralActivity(bunk, div, s, spanLen, activityList, fieldUsageBySlot, isActive, generalActivityHistory, generalFieldHistory, activityProperties) {
   const todayActivityUsed = window.todayActivityUsed || {};
-  const fieldsBySport = window._lastFieldsBySportCache || {};
+  for (const pick of activityList) {
+    const pickedField = fieldLabel(pick.field);
+    const activityName = getActivityName(pick); // sport for fields-with-sport, else special/field name
 
-  // Count empties helper (inside active windows, non-league slots)
-  function countEmpties() {
-    let c = 0;
-    for (const div of (availableDivisions || [])) {
-      const bunks = divisions[div]?.bunks || [];
-      const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
-      for (let s = 0; s < unifiedTimes.length; s++) {
-        if (!isActive(s)) continue;
-        if (window.leagueAssignments?.[div]?.[s]) continue;
-        for (const b of bunks) if (!window.scheduleAssignments[b][s]) c++;
+    // Per-day uniqueness: block if already used today
+    if (todayActivityUsed[bunk]?.has(activityName)) continue;
+
+    // Avoid same field as yesterday when non-preferred
+    if (generalFieldHistory && generalFieldHistory[bunk][activityName] === pickedField && (window.allSchedulableNames || []).length > 1) continue;
+
+    let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties);
+    if (canFit && spanForThisPick > 0) {
+      const placed = assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory);
+      if (placed > 0) {
+        // Mark as used today
+        todayActivityUsed[bunk].add(activityName);
       }
+      return placed;
     }
-    return c;
   }
+  return 0;
+}
 
-  // Helper: evict general (same-division, non-fixed/non-H2H) occupying a field range
-  function evictOnFieldRange(div, s, span, fieldName) {
-    const end = Math.min(s + span, unifiedTimes.length);
-    for (let slot = s; slot < end; slot++) {
-      if ((fieldUsageBySlot[slot]?.[fieldName] || 0) === 0) continue; // already free
-      let evicted = false;
-      const bunksHere = divisions[div]?.bunks || [];
-      for (const b of bunksHere) {
-        const e = window.scheduleAssignments[b]?.[slot];
-        if (!e || e._fixed || e._h2h) continue;
-        if (fieldLabel(e.field) !== fieldName) continue;
-
-        // Walk to the start of that occupant's span and clear its continuation range
-        let k = slot;
-        while (k > 0 && window.scheduleAssignments[b][k-1] && window.scheduleAssignments[b][k-1].continuation) k--;
-        while (k < unifiedTimes.length && window.scheduleAssignments[b][k] && (k === slot || window.scheduleAssignments[b][k].continuation)) {
-          const prev = window.scheduleAssignments[b][k];
-          const pf = fieldLabel(prev.field);
-          window.scheduleAssignments[b][k] = undefined;
-          if (pf) {
-            fieldUsageBySlot[k] = fieldUsageBySlot[k] || {};
-            fieldUsageBySlot[k][pf] = Math.max(0, (fieldUsageBySlot[k][pf] || 1) - 1);
-          }
-          k++;
-        }
-        evicted = true;
-        break;
-      }
-      if (!evicted) return false; // couldn't free this slot on the field
-    }
+function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageBySlot, isActive, activityProperties, h2hHistory, h2hGameCount) {
+  const todayActivityUsed = window.todayActivityUsed || {};
+  const opponents = allBunksInDiv.filter(b => {
+    if (b === bunk) return false;
+    if (scheduleAssignments[b][s]) return false;
+    if ((h2hHistory[bunk]?.[b] || 0) >= 1) return false; // no rematch
+    if ((h2hGameCount[b] || 0) >= 2) return false; // opponent cap
+    if (window.leagueAssignments?.[div]?.[s]) return false;
     return true;
-  }
+  });
+  if (opponents.length > 0) {
+    const opponent = opponents[Math.floor(Math.random() * opponents.length)];
+    const h2hPicks = h2hActivities.sort(() => 0.5 - Math.random());
+    for (const pick of h2hPicks) {
+      const sportName = getActivityName(pick); // sport
+      // Per-day uniqueness for both bunks
+      if (todayActivityUsed[bunk]?.has(sportName) || todayActivityUsed[opponent]?.has(sportName)) continue;
 
-  function placeH2HWithPossibleEviction(a, b, div, s, span, sportName) {
-    const fields = fieldsBySport[sportName] || [];
-    for (const fName of fields) {
-      if (todayActivityUsed[a]?.has(sportName) || todayActivityUsed[b]?.has(sportName)) continue;
-
-      let free = true;
-      for (let k = 0; k < span; k++) {
-        const slot = s + k;
-        if (slot >= unifiedTimes.length) { free = false; break; }
-        if (window.leagueAssignments?.[div]?.[slot]) { free = false; break; }
-        if (window.scheduleAssignments[a][slot] || window.scheduleAssignments[b][slot]) { free = false; break; }
-        if ((fieldUsageBySlot[slot]?.[fName] || 0) > 0) { free = false; break; }
-      }
-      if (!free) {
-        if (!evictOnFieldRange(div, s, span, fName)) continue;
-        // re-check conflicts after eviction
-        free = true;
-        for (let k = 0; k < span; k++) {
-          const slot = s + k;
-          if (slot >= unifiedTimes.length) { free = false; break; }
-          if (window.leagueAssignments?.[div]?.[slot]) { free = false; break; }
-          if (window.scheduleAssignments[a][slot] || window.scheduleAssignments[b][slot]) { free = false; break; }
-          if ((fieldUsageBySlot[slot]?.[fName] || 0) > 0) { free = false; break; }
-        }
-      }
-      if (!free) continue;
-
-      for (let k = 0; k < span; k++) {
-        const slot = s + k; const cont = k > 0;
-        window.scheduleAssignments[a][slot] = { field: fName, sport: sportName, continuation: cont, _h2h: true, vs: b };
-        window.scheduleAssignments[b][slot] = { field: fName, sport: sportName, continuation: cont, _h2h: true, vs: a };
-        fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
-        fieldUsageBySlot[slot][fName] = 2; // exclusive lock
-      }
-      h2hHistory[a] = h2hHistory[a] || {}; h2hHistory[b] = h2hHistory[b] || {};
-      h2hHistory[a][b] = (h2hHistory[a][b] || 0) + 1; h2hHistory[b][a] = (h2hHistory[b][a] || 0) + 1;
-      h2hGameCount[a] = (h2hGameCount[a] || 0) + 1; h2hGameCount[b] = (h2hGameCount[b] || 0) + 1;
-
-      todayActivityUsed[a].add(sportName);
-      todayActivityUsed[b].add(sportName);
-      return true;
-    }
-    return false;
-  }
-
-  function placeSoloGeneralWithEviction(a, div, s, span) {
-    // Prefer specials first (often easier to place), then field sports
-    const candidates = [
-      ...allActivities.filter(x => !x.sport),         // specials
-      ...allActivities.filter(x => !!x.sport)         // sports
-    ];
-
-    for (const pick of candidates) {
-      const actName = getActivityName(pick);
-      if (todayActivityUsed[a]?.has(actName)) continue;
-
-      const fName = fieldLabel(pick.field);
-      const props = activityProperties[fName];
-      if (props && props.allowedDivisions && !props.allowedDivisions.includes(div)) continue;
-
-      // check free span
-      let free = true, maxSpan = 0;
-      for (let k = 0; k < span; k++) {
-        const slot = s + k;
-        if (slot >= unifiedTimes.length) break;
-        if (window.leagueAssignments?.[div]?.[slot]) { free = false; break; }
-        if (window.scheduleAssignments[a][slot]) { free = false; break; }
-        if ((fieldUsageBySlot[slot]?.[fName] || 0) > 0) { free = false; break; }
-        maxSpan++;
-      }
-      if (!free || maxSpan === 0) {
-        if (!evictOnFieldRange(div, s, span, fName)) continue;
-        // re-check quickly
-        free = true; maxSpan = 0;
-        for (let k = 0; k < span; k++) {
-          const slot = s + k;
-          if (slot >= unifiedTimes.length) break;
-          if (window.leagueAssignments?.[div]?.[slot]) { free = false; break; }
-          if (window.scheduleAssignments[a][slot]) { free = false; break; }
-          if ((fieldUsageBySlot[slot]?.[fName] || 0) > 0) { free = false; break; }
-          maxSpan++;
-        }
-        if (!free || maxSpan === 0) continue;
-      }
-
-      for (let k = 0; k < maxSpan; k++) {
-        const slot = s + k;
-        window.scheduleAssignments[a][slot] = { field: fName, sport: pick.sport || null, continuation: k > 0 };
-        fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
-        fieldUsageBySlot[slot][fName] = (fieldUsageBySlot[slot][fName] || 0) + 1;
-      }
-      todayActivityUsed[a].add(actName);
-      return true;
-    }
-    return false;
-  }
-
-  // === MULTI-PASS LOOP: iterate until no fillable empties (bounded) ===
-  let passes = 0;
-  let previousEmpties = Infinity;
-  while (passes++ < 6) {
-    let changedAny = false;
-
-    for (const div of (availableDivisions || [])) {
-      const bunks = divisions[div]?.bunks || [];
-      const isActive = (s) => window.divisionActiveRows?.[div]?.has(s) ?? true;
-
-      for (let s = 0; s < unifiedTimes.length; s++) {
-        if (!isActive(s)) continue;
-        if (window.leagueAssignments?.[div]?.[s]) continue;
-
-        // Gather empties for this slot
-        let empties = bunks.filter(b => !window.scheduleAssignments[b][s]);
-        if (empties.length === 0) continue;
-
-        // STEP 1: try to pair empties into H2H (with eviction if needed)
-        empties.sort(() => 0.5 - Math.random());
-        const usedInPair = new Set();
-        for (let i = 0; i < empties.length; i++) {
-          const a = empties[i]; if (usedInPair.has(a)) continue;
-          let paired = false;
-          for (let j = i + 1; j < empties.length; j++) {
-            const b = empties[j]; if (usedInPair.has(b)) continue;
-            if ((h2hHistory[a]?.[b] || 0) >= 1) continue;
-            if ((h2hGameCount[a] || 0) >= 2 || (h2hGameCount[b] || 0) >= 2) continue;
-
-            const candidateSports = (h2hActivities || [])
-              .map(p => getActivityName(p))
-              .filter((sp, idx, arr) => sp && arr.indexOf(sp) === idx)
-              .filter(sp => !todayActivityUsed[a]?.has(sp) && !todayActivityUsed[b]?.has(sp));
-
-            let placed = false;
-            for (const sp of candidateSports) {
-              if (placeH2HWithPossibleEviction(a, b, div, s, spanLen, sp)) { placed = true; break; }
-            }
-            if (placed) { usedInPair.add(a); usedInPair.add(b); paired = true; changedAny = true; break; }
+      const pickedField = fieldLabel(pick.field);
+      let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties);
+      let [oppCanFit, oppSpan] = canActivityFit(opponent, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties);
+      const finalSpan = Math.min(spanForThisPick, oppSpan);
+      if (canFit && oppCanFit && finalSpan > 0) {
+        for (let k = 0; k < finalSpan; k++) {
+          const currentSlot = s + k; const cont = k > 0;
+          scheduleAssignments[bunk][currentSlot] = { field: pickedField, sport: pick.sport, continuation: cont, _h2h: true, vs: opponent };
+          scheduleAssignments[opponent][currentSlot] = { field: pickedField, sport: pick.sport, continuation: cont, _h2h: true, vs: bunk };
+          if (pickedField && (window.allSchedulableNames || []).includes(pickedField)) {
+            fieldUsageBySlot[currentSlot] = fieldUsageBySlot[currentSlot] || {};
+            fieldUsageBySlot[currentSlot][pickedField] = 2; // exclusive lock
           }
         }
+        h2hHistory[bunk] = h2hHistory[bunk] || {};
+        h2hHistory[opponent] = h2hHistory[opponent] || {};
+        h2hHistory[bunk][opponent] = (H2H_PROB && h2hHistory[bunk][opponent] || 0) + 1; // keep as before, just increment
+        h2hHistory[opponent][bunk] = (H2H_PROB && h2hHistory[opponent][bunk] || 0) + 1;
+        h2hGameCount[bunk] = (h2hGameCount[bunk] || 0) + 1;
+        h2hGameCount[opponent] = (h2hGameCount[opponent] || 0) + 1;
 
-        // refresh empties after H2H pairing
-        empties = bunks.filter(b => !window.scheduleAssignments[b][s]);
-        if (empties.length === 0) continue;
+        // Mark as used today for both teams
+        todayActivityUsed[bunk].add(sportName);
+        todayActivityUsed[opponent].add(sportName);
 
-        // STEP 2: join existing sharables
-        const sharableOpen = {};
-        for (const b of bunks) {
-          const e = window.scheduleAssignments[b]?.[s];
-          if (!e || e._h2h || e._fixed || e.continuation) continue;
-          const f = fieldLabel(e.field);
-          const props = activityProperties[f];
-          if (!props || !props.sharable || !props.allowedDivisions.includes(div)) continue;
-          const usage = (fieldUsageBySlot[s]?.[f] || 0);
-          if (usage < 2) sharableOpen[f] = e;
-        }
+        return finalSpan;
+      }
+    }
+  }
+  return 0;
+}
 
-        for (const b of empties.slice()) {
-          let sat = false;
-          for (const [f, exemplar] of Object.entries(sharableOpen)) {
-            const actName = exemplar.sport ? exemplar.sport : f;
-            if (todayActivityUsed[b]?.has(actName)) continue;
-
-            let fits = true; let maxSpan = 0;
-            for (let k = 0; k < spanLen; k++) {
-              const slot = s + k; if (slot >= unifiedTimes.length) break;
-              if (window.scheduleAssignments[b][slot] || window.leagueAssignments?.[div]?.[slot]) { fits = false; break; }
-              const usage = (fieldUsageBySlot[slot]?.[f] || 0);
-              const props = activityProperties[f];
-              if (!props || !props.sharable || usage >= 2 || !props.allowedDivisions.includes(div)) { fits = false; break; }
-              maxSpan++;
+function canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties) {
+  let canFitThisPick = true;
+  let spanForThisPick = 0;
+  for (let k = 0; k < spanLen; k++) {
+    const currentSlot = s + k;
+    if (currentSlot >= window.unifiedTimes.length) { canFitThisPick = false; break; }
+    let isBusy = false;
+    if (window.scheduleAssignments[bunk][currentSlot] || window.leagueAssignments?.[div]?.[currentSlot] || !isActive(currentSlot)) { isBusy = true; }
+    if (!isBusy && pickedField && activityProperties[pickedField]) {
+      const fieldProps = activityProperties[pickedField];
+      const usage = fieldUsageBySlot[currentSlot]?.[pickedField] || 0;
+      if (usage > 0) {
+        if (!fieldProps.sharable || usage >= 2 || !fieldProps.allowedDivisions.includes(div)) { isBusy = true; }
+        else {
+          // Enforce same-division sharing
+          let occupyingDivision = null;
+          const allDivs = window.availableDivisions || [];
+          const divs = window.divisions || {};
+          for (const dv of allDivs) {
+            const bunksHere = divs[dv]?.bunks || [];
+            for (const b2 of bunksHere) {
+              const e2 = window.scheduleAssignments[b2]?.[currentSlot];
+              if (e2 && !e2._fixed && !e2._h2h && fieldLabel(e2.field) === pickedField) { occupyingDivision = window.bunkToDivision?.[b2] || dv; break; }
             }
-            if (!fits || maxSpan === 0) continue;
-
-            for (let k = 0; k < maxSpan; k++) {
-              const slot = s + k;
-              window.scheduleAssignments[b][slot] = { field: f, sport: exemplar.sport || null, continuation: k > 0 };
-              fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
-              fieldUsageBySlot[slot][f] = (fieldUsageBySlot[slot][f] || 0) + 1;
-            }
-            todayActivityUsed[b].add(actName);
-            changedAny = true;
-            // remove from empties
-            empties = empties.filter(x => x !== b);
-            break;
+            if (occupyingDivision) break;
           }
-        }
-        if (empties.length === 0) continue;
-
-        // STEP 3: start solo general (with same-division eviction if needed)
-        for (const b of empties.slice()) {
-          const placed = placeSoloGeneralWithEviction(b, div, s, spanLen);
-          if (placed) { changedAny = true; empties = empties.filter(x => x !== b); }
+          if (occupyingDivision && occupyingDivision !== div) isBusy = true;
         }
       }
     }
-
-    const current = countEmpties();
-    if (!changedAny || current >= previousEmpties) break; // stabilized
-    previousEmpties = current;
+    if (isBusy) { if (k === 0) canFitThisPick = false; break; }
+    spanForThisPick++;
   }
-};
+  return [canFitThisPick, spanForThisPick];
+}
+
+function assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory) {
+  const pickedField = fieldLabel(pick.field);
+  const activityName = getActivityName(pick);
+  for (let k = 0; k < spanForThisPick; k++) {
+    const currentSlot = s + k;
+    window.scheduleAssignments[bunk][currentSlot] = { field: pickedField, sport: pick.sport, continuation: (k > 0) };
+    if (pickedField && (window.allSchedulableNames || []).includes(pickedField)) {
+      fieldUsageBySlot[currentSlot] = fieldUsageBySlot[currentSlot] || {};
+      fieldUsageBySlot[currentSlot][pickedField] = (fieldUsageBySlot[currentSlot][pickedField] || 0) + 1;
+    }
+  }
+  generalActivityHistory[bunk].add(activityName);
+  return spanForThisPick;
+}
