@@ -1,12 +1,12 @@
+// -------------------- app1.js --------------------
+
 // -------------------- State --------------------
 let bunks = [];
 let divisions = {}; // { divName:{ bunks:[], color, start, end } }
 // availableDivisions will be exposed globally as window.availableDivisions
 let availableDivisions = [];
 let selectedDivision = null;
-
 let fields = [], specialActivities = [];
-
 let timeTemplates = []; // [{start,end,divisions:[]}]
 let activityDuration = 30;
 // NOTE: Scheduling state (scheduleAssignments, unifiedTimes, divisionActiveRows) 
@@ -14,12 +14,9 @@ let activityDuration = 30;
 // retained for utility functions.
 let unifiedTimes = []; // [{start:Date,end:Date,label:string}]
 let divisionActiveRows = {}; // { divName: Set(rowIndices) }
-
-
 const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
 let colorIndex = 0;
 const commonActivities = ["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
-
 // Expose internal variable to the window for use by other modules (league.js, daily_activities.js)
 window.divisions = divisions;
 window.availableDivisions = availableDivisions;
@@ -27,605 +24,391 @@ window.fields = fields;
 window.specialActivities = specialActivities;
 window.timeTemplates = timeTemplates;
 
+// Global App1 data object
+window.app1Data = {
+  divisions: divisions,
+  availableDivisions: availableDivisions,
+  fields: fields,
+  specialActivities: specialActivities,
+  timeTemplates: timeTemplates
+};
 
 // -------------------- Helpers --------------------
-function makeEditable(el, save) {
-  el.ondblclick = e => {
-    e.stopPropagation();
-    const old = el.textContent;
-    const input = document.createElement("input");
-    input.type = "text"; input.value = old;
-    el.replaceWith(input); input.focus();
-    function done() {
-      const val = input.value.trim();
-      if (val && val !== old) save(val);
-      el.textContent = val || old; input.replaceWith(el);
+function makeEditable(el, save) { el.ondblclick = e => { e.stopPropagation(); const old = el.textContent; const input = document.createElement("input"); input.type = "text"; input.value = old; el.replaceWith(input); input.focus(); function done() { const val = input.value.trim(); if (val && val !== old) save(val); el.textContent = val || old; input.replaceWith(el); } input.onblur = done; input.onkeyup = e => { if (e.key === "Enter") done(); }; };}
+function parseTime(str) { if (!str) return null; const m = str.match(/^(\d{1,2}):(\d{2})(\s*)?(AM|PM)$/i); if (!m) return null; let h = parseInt(m[1],10), min = parseInt(m[2],10), ap = m[4].toUpperCase(); if (ap === "PM" && h !== 12) h += 12; if (ap === "AM" && h === 12) h = 0; return new Date(0,0,0,h,min);}
+function fmtTime(d) { let h = d.getHours(), m = d.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12; return `${h}:${m} ${ap}`;}
+
+// -------------------- NEW HELPER FUNCTION --------------------
+/**
+ * Renders the "Available / Unavailable" time-based controls
+ * @param {object} item - The field or special activity object
+ * @param {function} onSave - The function to call to save all data
+ * @returns {HTMLElement}
+ */
+function renderAvailabilityControls(item, onSave) {
+  const container = document.createElement("div");
+  container.style.marginTop = "10px";
+  container.style.paddingLeft = "15px";
+  container.style.borderLeft = "3px solid #eee";
+
+  // --- 1. Mode Toggle (Available / Unavailable) ---
+  const modeLabel = document.createElement("label");
+  modeLabel.style.display = "flex";
+  modeLabel.style.alignItems = "center";
+  modeLabel.style.gap = "8px";
+  modeLabel.style.marginBottom = "8px";
+  modeLabel.style.cursor = "pointer";
+
+  const modeToggle = document.createElement("input");
+  modeToggle.type = "checkbox";
+  // "available" = unchecked (false), "unavailable" = checked (true)
+  item.availabilityMode = item.availabilityMode || "available";
+  modeToggle.checked = item.availabilityMode === "unavailable";
+
+  const modeText = document.createElement("span");
+  modeText.textContent = modeToggle.checked ? "Unavailable" : "Available";
+
+  modeToggle.addEventListener("change", () => {
+    item.availabilityMode = modeToggle.checked ? "unavailable" : "available";
+    modeText.textContent = modeToggle.checked ? "Unavailable" : "Available";
+    onSave();
+  });
+
+  modeLabel.appendChild(modeToggle);
+  modeLabel.appendChild(modeText);
+  container.appendChild(modeLabel);
+
+  // --- 2. "Except for..." Text ---
+  const exceptLabel = document.createElement("span");
+  exceptLabel.textContent = " except for:";
+  exceptLabel.style.fontWeight = "500";
+  container.appendChild(exceptLabel);
+
+  // --- 3. Exception Time List ---
+  const exceptionList = document.createElement("div");
+  exceptionList.style.display = "flex";
+  exceptionList.style.flexWrap = "wrap";
+  exceptionList.style.gap = "6px";
+  exceptionList.style.marginTop = "6px";
+
+  item.availabilityExceptions = item.availabilityExceptions || [];
+  item.availabilityExceptions.forEach((timeStr, index) => {
+    const pill = document.createElement("span");
+    pill.textContent = `${timeStr} ✖`;
+    pill.style.background = "#ddd";
+    pill.style.padding = "4px 8px";
+    pill.style.borderRadius = "12px";
+    pill.style.cursor = "pointer";
+    pill.onclick = () => {
+      item.availabilityExceptions.splice(index, 1);
+      onSave();
+      renderApp1Specials(); // Re-render to reflect change
+    };
+    exceptionList.appendChild(pill);
+  });
+  container.appendChild(exceptionList);
+
+  // --- 4. Add New Exception Input ---
+  const addContainer = document.createElement("div");
+  addContainer.style.marginTop = "6px";
+  const timeInput = document.createElement("input");
+  timeInput.placeholder = "e.g., 9:00-10:30 or 14:00-15:00";
+  timeInput.style.marginRight = "5px";
+
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "Add Time";
+  addBtn.onclick = () => {
+    const val = timeInput.value.trim();
+    // Basic validation for "HH:MM-HH:MM" format
+    if (/^\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}$/.test(val)) {
+      item.availabilityExceptions.push(val.replace(/\s/g, ''));
+      timeInput.value = "";
+      onSave();
+      renderApp1Specials(); // Re-render to reflect change
+    } else {
+      alert("Invalid format. Use HH:MM-HH:MM (e.g., 9:00-10:30).");
     }
-    input.onblur = done; input.onkeyup = e => { if (e.key === "Enter") done(); };
   };
-}
-
-function parseTime(str) {
-  if (!str) return null;
-  const m = str.match(/^(\d{1,2}):(\d{2})(\s*)?(AM|PM)$/i);
-  if (!m) return null;
-  let h = parseInt(m[1],10), min = parseInt(m[2],10), ap = m[4].toUpperCase();
-  if (ap === "PM" && h !== 12) h += 12; if (ap === "AM" && h === 12) h = 0;
-  return new Date(0,0,0,h,min);
-}
-
-function fmtTime(d) {
-  let h = d.getHours(), m = d.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12;
-  return `${h}:${m} ${ap}`;
-}
-
-// -------------------- Tabs --------------------
-// This function is now defined in index.html in the <script> tag
-// window.showTab = showTab; 
-
-
-// -------------------- Bunks --------------------
-function addBunk() {
-  const i = document.getElementById("bunkInput");
-  const name = i.value.trim();
-  if (!name) return;
-
-  // Prevent duplicates (case-insensitive)
-  const exists = bunks.some(b => b.toLowerCase() === name.toLowerCase());
-  if (exists) {
-    alert("That bunk already exists!");
-    i.value = "";
-    return;
-  }
+  timeInput.onkeypress = (e) => { if (e.key === "Enter") addBtn.click(); };
   
-  bunks.push(name);
-  saveData();
-  i.value = "";
-  updateUnassigned();
-  window.updateTable?.();
-}
-document.getElementById("addBunkBtn").onclick = addBunk;
-document.getElementById("bunkInput").addEventListener("keyup", e => { if (e.key === "Enter") addBunk(); });
+  addContainer.appendChild(timeInput);
+  addContainer.appendChild(addBtn);
+  container.appendChild(addContainer);
 
-function updateUnassigned() {
-  const c = document.getElementById("unassignedBunks");
-  c.innerHTML = "";
-  bunks.forEach(b => {
-    const span = document.createElement("span");
-    span.textContent = b;
-    span.className = "bunk-button";
-    let assigned = null;
-    for (const d in divisions) { if (divisions[d].bunks.includes(b)) assigned = d; }
-    if (assigned) { span.style.backgroundColor = divisions[assigned].color; span.style.color = "#fff"; }
-    span.onclick = () => {
-      if (selectedDivision && (!assigned || assigned !== selectedDivision)) {
-        for (const d in divisions) {
-          const i = divisions[d].bunks.indexOf(b);
-          if (i !== -1) divisions[d].bunks.splice(i, 1);
-        }
-        divisions[selectedDivision].bunks.push(b);
-        saveData();
-        updateUnassigned();
-        window.updateTable?.();
-      } else if (!selectedDivision) {
-        alert("Select a division first!");
-      }
-    };
-    makeEditable(span, newName => {
-      if (!newName.trim()) return;
-      const idx = bunks.indexOf(b);
-      if (idx !== -1) bunks[idx] = newName;
-      for (const d of Object.values(divisions)) {
-        const i = d.bunks.indexOf(b);
-        if (i !== -1) d.bunks[i] = newName;
-      }
-      
-      // We must also update scheduleAssignments IF it's loaded for a day
-      if (window.scheduleAssignments && window.scheduleAssignments[b]) {
-        window.scheduleAssignments[newName] = window.scheduleAssignments[b];
-        delete window.scheduleAssignments[b];
-        // Note: This only affects the *loaded* day. We need to save it.
-        window.saveCurrentDailyData?.("scheduleAssignments", window.scheduleAssignments);
-      }
-      saveData();
-      updateUnassigned();
-      window.updateTable?.();
-    });
-    c.appendChild(span);
-  });
+  return container;
 }
 
-// -------------------- Divisions --------------------
-function addDivision() {
-  const i = document.getElementById("divisionInput");
-  if (i.value.trim() === "") return;
-  const name = i.value.trim();
-  if (!availableDivisions.includes(name)) {
-    const color = defaultColors[colorIndex % defaultColors.length]; colorIndex++;
-    
-    availableDivisions.push(name);
-    window.availableDivisions = availableDivisions; // Update global
+
+// -------------------- Save/Load --------------------
+function saveApp1Data() {
+  // Update the global object with the latest state
+  const app1Data = {
+    divisions: divisions,
+    availableDivisions: availableDivisions,
+    fields: fields,
+    specialActivities: specialActivities,
+    timeTemplates: timeTemplates
+  };
+  window.app1Data = app1Data;
   
-    divisions[name] = { bunks: [], color, start: null, end: null };
-    
-    i.value = "";
-    saveData();
-    setupDivisionButtons(); 
-    window.initLeaguesTab?.(); // Notify league.js
-    window.DailyActivities?.onDivisionsChanged?.(); // Notify fixed activities
-    window.updateTable?.();
-    renderTimeTemplates();
-  }
-}
-document.getElementById("addDivisionBtn").onclick = addDivision;
-document.getElementById("divisionInput").addEventListener("keyup", e => { if (e.key === "Enter") addDivision(); });
+  // Call the global save function (defined in calendar.js or main.js)
+  window.saveGlobalSettings?.("app1", app1Data);
+  console.log("App1 Data Saved.");
 
-function setupDivisionButtons() {
-  const cont = document.getElementById("divisionButtons"); cont.innerHTML = "";
-  const colorEnabled = document.getElementById("enableColor").checked;
-  availableDivisions.forEach(name => {
-    const obj = divisions[name];
-    const wrap = document.createElement("div"); wrap.className = "divisionWrapper";
-    const span = document.createElement("span"); span.textContent = name; span.className = "bunk-button";
-    span.style.backgroundColor = colorEnabled ? obj.color : "transparent";
-    span.style.color = colorEnabled ? "#fff" : "inherit";
-    span.onclick = () => { 
-        selectedDivision = name; 
-        cont.querySelectorAll('span.bunk-button').forEach(el => el.classList.remove("selected"));
-        span.classList.add("selected"); 
-        saveData(); // Save selectedDivision
-    };
-    // Re-select if it was selected
-    if (selectedDivision === name) span.classList.add("selected");
-    
-    makeEditable(span, newName => {
-      divisions[newName] = divisions[name]; delete divisions[name];
-      availableDivisions[availableDivisions.indexOf(name)] = newName;
-      window.availableDivisions = availableDivisions; // Update global
-      
-      if (selectedDivision === name) selectedDivision = newName;
-      
-      saveData();
-      setupDivisionButtons(); 
-      window.initLeaguesTab?.(); 
-      window.DailyActivities?.onDivisionsChanged?.(); 
-      renderTimeTemplates(); 
-      window.updateTable?.();
-    });
-    wrap.appendChild(span);
-    const col = document.createElement("input"); col.type = "color";
-    col.value = obj.color; col.className = "colorPicker";
-    col.oninput = e => { 
-      obj.color = e.target.value; 
-      if (colorEnabled) { span.style.backgroundColor = e.target.value; span.style.color = "#fff"; } 
-      saveData(); 
-      window.updateTable?.(); 
-      renderTimeTemplates(); 
-      window.DailyActivities?.onDivisionsChanged?.(); 
-    };
-    wrap.appendChild(col);
-    cont.appendChild(wrap);
-  });
-}
-document.getElementById("enableColor").addEventListener("change", setupDivisionButtons);
-
-// -------------------- Time Templates --------------------
-function addTimeTemplate() {
-  const start = document.getElementById("timeStartInput").value.trim();
-  const end = document.getElementById("timeEndInput").value.trim();
-  if (!start || !end) return;
-  timeTemplates.push({ start, end, divisions: [] });
-  document.getElementById("timeStartInput").value = "";
-  document.getElementById("timeEndInput").value = "";
-  saveData();
-  renderTimeTemplates();
+  // Re-publish global variables that other modules might be using
+  window.divisions = divisions;
+  window.availableDivisions = availableDivisions;
 }
 
-function renderTimeTemplates() {
-  const cont = document.getElementById("timeTemplates"); cont.innerHTML = "";
-  timeTemplates.forEach((tpl) => {
-    const wrap = document.createElement("div"); wrap.className = "fieldWrapper";
-    const label = document.createElement("span"); label.textContent = `${tpl.start} - ${tpl.end}`;
-    wrap.appendChild(label);
-    availableDivisions.forEach(div => {
-      const btn = document.createElement("button");
-      btn.textContent = div; btn.className = "bunk-button";
-      if (tpl.divisions.includes(div)) { btn.style.backgroundColor = divisions[div].color; btn.style.color = "#fff"; }
-      else { btn.style.backgroundColor = "#fff"; btn.style.color = "#000"; }
-      btn.onclick = () => {
-        if (tpl.divisions.includes(div)) {
-          tpl.divisions = tpl.divisions.filter(d => d !== div);
-        } else {
-          tpl.divisions.push(div);
-        }
-        saveData();
-        applyTemplatesToDivisions();
-        renderTimeTemplates();
-      };
-      wrap.appendChild(btn);
-    });
-    cont.appendChild(wrap);
-  });
-  applyTemplatesToDivisions();
-}
+function loadApp1Data() {
+  const globalSettings = window.loadGlobalSettings?.() || {};
+  const app1Data = globalSettings.app1 || {};
 
-function applyTemplatesToDivisions() {
-  availableDivisions.forEach(div => {
-    let match = null;
-    for (let i = timeTemplates.length - 1; i >= 0; i--) {
-      if (timeTemplates[i].divisions.includes(div)) { match = timeTemplates[i]; break; }
-    }
-    if (match) { divisions[div].start = match.start; divisions[div].end = match.end; }
-  });
-}
-
-// -------------------- Fields / Specials --------------------
-function addField() {
-  const i = document.getElementById("fieldInput");
-  const n = i.value.trim();
-  if (n) {
-    fields.push({ 
-        name: n, 
-        activities: [], 
-        available: true,
-        sharable: false,      // NEW
-        allowedDivisions: []  // NEW
-    });
-    i.value = "";
-    saveData();
-    renderFields();
-  }
-}
-document.getElementById("addFieldBtn").onclick = addField;
-document.getElementById("fieldInput").addEventListener("keyup", e => { if (e.key === "Enter") addField(); });
-
-function renderFields() {
-  const c = document.getElementById("fieldList"); c.innerHTML = "";
+  // Load data, providing defaults
+  divisions = app1Data.divisions || {};
+  availableDivisions = app1Data.availableDivisions || [];
+  fields = app1Data.fields || [];
+  specialActivities = app1Data.specialActivities || [];
+  timeTemplates = app1Data.timeTemplates || [];
+  
+  // Ensure defaults for nested properties
   fields.forEach(f => {
-    // Ensure new properties exist for old data
-    f.sharable = f.sharable || false;
+    f.available = f.available !== false; // default true
+    f.sharable = f.sharable === true; // default false
     f.allowedDivisions = f.allowedDivisions || [];
-
-    const w = document.createElement("div"); w.className = "fieldWrapper"; if (!f.available) w.classList.add("unavailable");
-    const t = document.createElement("span"); t.className = "fieldTitle"; t.textContent = f.name;
-    makeEditable(t, newName => { f.name = newName; saveData(); renderFields(); });
-    w.appendChild(t);
-
-    // =============================================
-    // ===== START OF NEW UI (FIELDS) =====
-    // =============================================
-    
-    // --- Container for Toggles ---
-    const toggleContainer = document.createElement("div");
-    toggleContainer.style.display = "flex";
-    toggleContainer.style.alignItems = "center";
-    toggleContainer.style.marginTop = "8px";
-
-    // --- Available Toggle ---
-    const tog = document.createElement("label"); tog.className = "switch";
-    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = f.available;
-    cb.onchange = () => { f.available = cb.checked; saveData(); renderFields(); };
-    const sl = document.createElement("span"); sl.className = "slider";
-    tog.appendChild(cb); tog.appendChild(sl); 
-    toggleContainer.appendChild(tog);
-    
-    // --- Sharable Checkbox ---
-    const shareLabel = document.createElement("label");
-    shareLabel.style.cursor = "pointer";
-    shareLabel.style.fontWeight = "600";
-    shareLabel.style.marginLeft = "15px"; // Puts it next to the toggle
-    shareLabel.style.display = "inline-flex";
-    shareLabel.style.alignItems = "center";
-    
-    const shareCheck = document.createElement("input");
-    shareCheck.type = "checkbox";
-    shareCheck.checked = f.sharable;
-    shareCheck.style.marginRight = "6px";
-    shareCheck.onchange = () => {
-        f.sharable = shareCheck.checked;
-        saveData();
-        renderFields(); // Re-render to show/hide division list
-    };
-    
-    shareLabel.appendChild(shareCheck);
-    shareLabel.appendChild(document.createTextNode("Allow 2 bunks?"));
-    toggleContainer.appendChild(shareLabel);
-    w.appendChild(toggleContainer);
-
-    // --- Allowed Divisions (only if sharable) ---
-    if (f.sharable) {
-        const divWrap = document.createElement("div");
-        divWrap.style.padding = "8px";
-        divWrap.style.margin = "8px 0";
-        divWrap.style.border = "1px solid #eee";
-        divWrap.style.borderRadius = "4px";
-
-        const divLabel = document.createElement("p");
-        divLabel.textContent = "Which divisions can share this field? (Leave blank for all)";
-        divLabel.style.margin = "0 0 8px 0";
-        divLabel.style.fontWeight = "500";
-        divWrap.appendChild(divLabel);
-
-        const chips = document.createElement("div");
-        chips.className = "chips";
-        availableDivisions.forEach(divName => {
-            const btn = document.createElement("button");
-            btn.textContent = divName;
-            btn.className = "bunk-button";
-            
-            if (f.allowedDivisions.includes(divName)) {
-                btn.classList.add("selected");
-                if (divisions[divName]) {
-                    btn.style.backgroundColor = divisions[divName].color;
-                    btn.style.color = "#fff";
-                }
-            }
-            
-            btn.onclick = () => {
-                if (f.allowedDivisions.includes(divName)) {
-                    f.allowedDivisions = f.allowedDivisions.filter(d => d !== divName);
-                } else {
-                    f.allowedDivisions.push(divName);
-                }
-                saveData();
-                renderFields(); // Re-render to update selection
-            };
-            chips.appendChild(btn);
-        });
-        divWrap.appendChild(chips);
-        w.appendChild(divWrap);
-    }
-    // =============================================
-    // ===== END OF NEW UI (FIELDS) =====
-    // =============================================
-
-    const bw = document.createElement("div"); bw.style.marginTop = "8px";
-    commonActivities.forEach(act => {
-      const b = document.createElement("button"); b.textContent = act; b.className = "activity-button";
-      if (f.activities.includes(act)) b.classList.add("active");
-      b.onclick = () => { 
-        if (f.activities.includes(act)) f.activities = f.activities.filter(a => a !== act); 
-        else f.activities.push(act); 
-        saveData(); renderFields(); 
-      };
-      bw.appendChild(b);
-    });
-    w.appendChild(bw);
-    const other = document.createElement("input"); other.placeholder = "Other activity";
-    other.onkeyup = e => {
-      if (e.key === "Enter" && other.value.trim()) {
-        const v = other.value.trim(); 
-        if (!f.activities.includes(v)) f.activities.push(v);
-        other.value = ""; saveData(); renderFields();
-      }
-    };
-    w.appendChild(other);
-    if (f.activities.length > 0) {
-      const p = document.createElement("p"); p.style.marginTop = "6px"; p.textContent = "Activities: " + f.activities.join(", ");
-      w.appendChild(p);
-    }
-    c.appendChild(w);
+    f.availabilityMode = f.availabilityMode || 'available';
+    f.availabilityExceptions = f.availabilityExceptions || [];
   });
+  specialActivities.forEach(s => {
+    s.available = s.available !== false; // default true
+    s.sharable = s.sharable === true; // default false
+    s.allowedDivisions = s.allowedDivisions || [];
+    s.availabilityMode = s.availabilityMode || 'available';
+    s.availabilityExceptions = s.availabilityExceptions || [];
+  });
+
+  // Re-publish global variables
+  window.app1Data = app1Data;
+  window.divisions = divisions;
+  window.availableDivisions = availableDivisions;
+  window.fields = fields;
+  window.specialActivities = specialActivities;
+  window.timeTemplates = timeTemplates;
+  
+  console.log("App1 Data Loaded.");
 }
 
-function addSpecial() {
-  const i = document.getElementById("specialInput");
-  const n = i.value.trim();
-  if (n) {
-    // =============================================
-    // ===== START OF DATA STRUCTURE CHANGE (SPECIAL) =====
-    // =============================================
-    specialActivities.push({ 
-        name: n, 
+// -------------------- Render Functions --------------------
+
+/**
+ * UPDATED RENDER FUNCTION
+ * This now includes the 'Available', 'Sharable' toggles and time-based availability
+ */
+function renderApp1Fields() {
+  const container = document.getElementById("app1-fields-container");
+  if (!container) return;
+  container.innerHTML = "";
+
+  fields.forEach((field, index) => {
+    const div = document.createElement("div");
+    div.className = "app1-item";
+    
+    const header = document.createElement("div");
+    header.className = "app1-item-header";
+
+    const title = document.createElement("strong");
+    title.textContent = field.name || "Field";
+    header.appendChild(title);
+
+    const controls = document.createElement("div");
+    
+    // --- Available Toggle ---
+    const availableLabel = document.createElement("label");
+    availableLabel.textContent = "Available: ";
+    const availableCheck = document.createElement("input");
+    availableCheck.type = "checkbox";
+    availableCheck.checked = field.available;
+    availableCheck.onchange = () => {
+      field.available = availableCheck.checked;
+      saveApp1Data();
+    };
+    availableLabel.appendChild(availableCheck);
+    controls.appendChild(availableLabel);
+
+    // --- Sharable Toggle ---
+    const sharableLabel = document.createElement("label");
+    sharableLabel.textContent = "Sharable: ";
+    const sharableCheck = document.createElement("input");
+    sharableCheck.type = "checkbox";
+    sharableCheck.checked = field.sharable;
+    sharableCheck.onchange = () => {
+      field.sharable = sharableCheck.checked;
+      saveApp1Data();
+    };
+    sharableLabel.appendChild(sharableCheck);
+    controls.appendChild(sharableLabel);
+
+    // --- Delete Button ---
+    const deleteBtn = document.createElement("button");
+    deleteBtn.textContent = "Delete";
+    deleteBtn.onclick = () => {
+      if (confirm(`Delete ${field.name}?`)) {
+        fields.splice(index, 1);
+        saveApp1Data();
+        renderApp1Fields(); // Re-render
+      }
+    };
+    controls.appendChild(deleteBtn);
+    header.appendChild(controls);
+    div.appendChild(header);
+
+    // --- (ADD YOUR 'allowedDivisions' LOGIC HERE) ---
+    // e.g., const allowedDivsEl = renderAllowedDivisions(field, saveApp1Data);
+    // div.appendChild(allowedDivsEl);
+    
+    // --- (NEW) Availability Controls ---
+    const availabilityControls = renderAvailabilityControls(field, () => {
+        saveApp1Data();
+        renderApp1Fields(); // Re-render this section
+    });
+    div.appendChild(availabilityControls);
+    // --- END NEW ---
+
+    container.appendChild(div);
+  });
+
+  // "Add Field" button
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "Add Field";
+  addBtn.onclick = () => {
+    const name = prompt("Enter new field name:");
+    if (name) {
+      fields.push({
+        name: name,
         available: true,
         sharable: false,
-        allowedDivisions: []
-    });
-    // =============================================
-    // ===== END OF DATA STRUCTURE CHANGE (SPECIAL) =====
-    // =============================================
-    i.value = "";
-    saveData();
-    renderSpecials();
-  }
-}
-document.getElementById("addSpecialBtn").onclick = addSpecial;
-document.getElementById("specialInput").addEventListener("keyup", e => { if (e.key === "Enter") addSpecial(); });
-
-function renderSpecials() {
-  const c = document.getElementById("specialList"); c.innerHTML = "";
-  specialActivities.forEach(s => {
-    // Ensure new properties exist for old data
-    s.sharable = s.sharable || false;
-    s.allowedDivisions = s.allowedDivisions || [];
-
-    const w = document.createElement("div"); w.className = "fieldWrapper"; if (!s.available) w.classList.add("unavailable");
-    const t = document.createElement("span"); t.className = "fieldTitle"; t.textContent = s.name;
-    makeEditable(t, newName => { s.name = newName; saveData(); renderSpecials(); });
-    w.appendChild(t);
-
-    // =============================================
-    // ===== START OF NEW UI (SPECIALS) =====
-    // =============================================
-    
-    // --- Container for Toggles ---
-    const toggleContainer = document.createElement("div");
-    toggleContainer.style.display = "flex";
-    toggleContainer.style.alignItems = "center";
-    toggleContainer.style.marginTop = "8px";
-
-    // --- Available Toggle ---
-    const tog = document.createElement("label"); tog.className = "switch";
-    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = s.available;
-    cb.onchange = () => { s.available = cb.checked; saveData(); renderSpecials(); };
-    const sl = document.createElement("span"); sl.className = "slider";
-    tog.appendChild(cb); tog.appendChild(sl);
-    toggleContainer.appendChild(tog);
-
-    // --- Sharable Checkbox ---
-    const shareLabel = document.createElement("label");
-    shareLabel.style.cursor = "pointer";
-    shareLabel.style.fontWeight = "600";
-    shareLabel.style.marginLeft = "15px";
-    shareLabel.style.display = "inline-flex";
-    shareLabel.style.alignItems = "center";
-    
-    const shareCheck = document.createElement("input");
-    shareCheck.type = "checkbox";
-    shareCheck.checked = s.sharable;
-    shareCheck.style.marginRight = "6px";
-    shareCheck.onchange = () => {
-        s.sharable = shareCheck.checked;
-        saveData();
-        renderSpecials(); // Re-render to show/hide division list
-    };
-    
-    shareLabel.appendChild(shareCheck);
-    shareLabel.appendChild(document.createTextNode("Allow 2 bunks?"));
-    toggleContainer.appendChild(shareLabel);
-    w.appendChild(toggleContainer);
-
-    // --- Allowed Divisions (only if sharable) ---
-    if (s.sharable) {
-        const divWrap = document.createElement("div");
-        divWrap.style.padding = "8px";
-        divWrap.style.margin = "8px 0";
-        divWrap.style.border = "1px solid #eee";
-        divWrap.style.borderRadius = "4px";
-
-        const divLabel = document.createElement("p");
-        divLabel.textContent = "Which divisions can share this activity? (Leave blank for all)";
-        divLabel.style.margin = "0 0 8px 0";
-        divLabel.style.fontWeight = "500";
-        divWrap.appendChild(divLabel);
-
-        const chips = document.createElement("div");
-        chips.className = "chips";
-        availableDivisions.forEach(divName => {
-            const btn = document.createElement("button");
-            btn.textContent = divName;
-            btn.className = "bunk-button";
-            
-            if (s.allowedDivisions.includes(divName)) {
-                btn.classList.add("selected");
-                if (divisions[divName]) {
-                    btn.style.backgroundColor = divisions[divName].color;
-                    btn.style.color = "#fff";
-                }
-            }
-            
-            btn.onclick = () => {
-                if (s.allowedDivisions.includes(divName)) {
-                    s.allowedDivisions = s.allowedDivisions.filter(d => d !== divName);
-                } else {
-                    s.allowedDivisions.push(divName);
-                }
-                saveData();
-                renderSpecials(); // Re-render to update selection
-            };
-            chips.appendChild(btn);
-        });
-        divWrap.appendChild(chips);
-        w.appendChild(divWrap);
+        activities: [],
+        allowedDivisions: [],
+        availabilityMode: 'available',
+        availabilityExceptions: []
+      });
+      saveApp1Data();
+      renderApp1Fields();
     }
-    // =============================================
-    // ===== END OF NEW UI (SPECIALS) =====
-    // =============================================
-
-    c.appendChild(w);
-  });
+  };
+  container.appendChild(addBtn);
 }
 
-// -------------------- Generate Times --------------------
-function generateTimes() {
-  const inc = parseInt(document.getElementById("increment").value, 10);
-  applyTemplatesToDivisions();
-  
-  const starts = availableDivisions.map(d => parseTime(divisions[d].start)).filter(Boolean);
-  const ends   = availableDivisions.map(d => parseTime(divisions[d].end)).filter(Boolean);
-  if (starts.length === 0 || ends.length === 0) { alert("Please set time templates for divisions first."); return; }
-  
-  const earliest = new Date(Math.min(...starts.map(d => d.getTime())));
-  const latest   = new Date(Math.max(...ends.map(d => d.getTime())));
-  
-  unifiedTimes = [];
-  let cur = new Date(earliest);
-  while (cur < latest) {
-    let nxt = new Date(cur.getTime() + inc*60000);
-    if (nxt > latest) nxt = latest;
-    unifiedTimes.push({ start:new Date(cur), end:new Date(nxt), label:`${fmtTime(cur)} - ${fmtTime(nxt)}` });
-    cur = nxt;
-  }
-  
-  divisionActiveRows = {};
-  availableDivisions.forEach(div => {
-    const s = parseTime(divisions[div].start), e = parseTime(divisions[div].end);
-    const rows = new Set();
-    unifiedTimes.forEach((t, idx) => {
-      if (s && e && t.start >= s && t.start < e) rows.add(idx);
-    });
-    divisionActiveRows[div] = rows;
-  });
-  
-  // Expose the schedule times globally for app2.js
-  window.unifiedTimes = unifiedTimes;
-  window.divisionActiveRows = divisionActiveRows;
-  
-  // handoff to scheduling
-  window.assignFieldsToBunks?.();
-}
+/**
+ * UPDATED RENDER FUNCTION
+ * This now includes the 'Available', 'Sharable' toggles and time-based availability
+ */
+function renderApp1Specials() {
+  const container = document.getElementById("app1-specials-container");
+  if (!container) return;
+  container.innerHTML = "";
 
-// -------------------- Local Storage (UPDATED) --------------------
-function saveData() {
-  // This now saves to the *Global Settings* object
-  const data = { bunks, divisions, availableDivisions, selectedDivision, fields, specialActivities, timeTemplates };
-  window.saveGlobalSettings?.("app1", data);
-}
-
-function loadData() {
-  // This now loads from the *Global Settings* object
-  // It relies on calendar.js's migration logic to pull in old data once
-  const data = window.loadGlobalSettings?.().app1 || {};
-  
-  try {
-    bunks = data.bunks || [];
-    divisions = data.divisions || {};
+  specialActivities.forEach((special, index) => {
+    const div = document.createElement("div");
+    div.className = "app1-item";
     
-    availableDivisions = Object.keys(divisions);
-    window.availableDivisions = availableDivisions;
-    if (data.availableDivisions) availableDivisions = data.availableDivisions; 
+    const header = document.createElement("div");
+    header.className = "app1-item-header";
 
-    selectedDivision = data.selectedDivision || null;
-    fields = data.fields || [];
-    specialActivities = data.specialActivities || [];
-    timeTemplates = data.timeTemplates || [];
-  } catch (e) { console.error("Error loading data:", e); }
+    const title = document.createElement("strong");
+    title.textContent = special.name || "Special Activity";
+    header.appendChild(title);
+
+    const controls = document.createElement("div");
+    
+    // --- Available Toggle ---
+    const availableLabel = document.createElement("label");
+    availableLabel.textContent = "Available: ";
+    const availableCheck = document.createElement("input");
+    availableCheck.type = "checkbox";
+    availableCheck.checked = special.available;
+    availableCheck.onchange = () => {
+      special.available = availableCheck.checked;
+      saveApp1Data();
+    };
+    availableLabel.appendChild(availableCheck);
+    controls.appendChild(availableLabel);
+
+    // --- Sharable Toggle ---
+    const sharableLabel = document.createElement("label");
+    sharableLabel.textContent = "Sharable: ";
+    const sharableCheck = document.createElement("input");
+    sharableCheck.type = "checkbox";
+    sharableCheck.checked = special.sharable;
+    sharableCheck.onchange = () => {
+      special.sharable = sharableCheck.checked;
+      saveApp1Data();
+    };
+    sharableLabel.appendChild(sharableCheck);
+    controls.appendChild(sharableLabel);
+
+    // --- Delete Button ---
+    const deleteBtn = document.createElement("button");
+    deleteBtn.textContent = "Delete";
+    deleteBtn.onclick = () => {
+      if (confirm(`Delete ${special.name}?`)) {
+        specialActivities.splice(index, 1);
+        saveApp1Data();
+        renderApp1Specials(); // Re-render
+      }
+    };
+    controls.appendChild(deleteBtn);
+    header.appendChild(controls);
+    div.appendChild(header);
+
+    // --- (ADD YOUR 'allowedDivisions' LOGIC HERE) ---
+    // e.g., const allowedDivsEl = renderAllowedDivisions(special, saveApp1Data);
+    // div.appendChild(allowedDivsEl);
+
+    // --- (NEW) Availability Controls ---
+    const availabilityControls = renderAvailabilityControls(special, () => {
+        saveApp1Data();
+        renderApp1Specials(); // Re-render this section
+    });
+    div.appendChild(availabilityControls);
+    // --- END NEW ---
+
+    container.appendChild(div);
+  });
+  
+  // "Add Special" button
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "Add Special Activity";
+  addBtn.onclick = () => {
+    const name = prompt("Enter new special activity name:");
+    if (name) {
+      specialActivities.push({
+        name: name,
+        available: true,
+        sharable: true, // Specials default to sharable
+        allowedDivisions: [],
+        availabilityMode: 'available',
+        availabilityExceptions: []
+      });
+      saveApp1Data();
+      renderApp1Specials();
+    }
+  };
+  container.appendChild(addBtn);
 }
-
-// "eraseAllBtn" is now handled by calendar.js
 
 // -------------------- Init --------------------
 function initApp1() {
-  const activityDurationSelect = document.getElementById("activityDuration");
-  if (activityDurationSelect) {
-     activityDurationSelect.onchange = function() {
-       activityDuration = parseInt(this.value, 10);
-     };
-     activityDuration = parseInt(activityDurationSelect.value, 10);
-  } else {
-    console.error("Could not find #activityDuration element");
-  }
+  loadApp1Data();
+  
+  // Call your other render functions
+  // renderApp1Divisions(); // (You have this function, I assume)
+  renderApp1Fields(); // Updated
+  renderApp1Specials(); // Updated
+  // renderApp1TimeTemplates(); // (You have this function, I assume)
 
-  loadData();
-  updateUnassigned();
-  setupDivisionButtons();
-  renderFields();
-  renderSpecials();
-  renderTimeTemplates();
+  console.log("App1 (Setup) Initialized.");
 }
-window.initApp1 = initApp1;
 
-// Expose internal objects for other modules to use (Data Source for the whole app)
-window.getDivisions = () => divisions; 
-window.getFields = () => fields;
-window.getSpecials = () => specialActivities;
+// Expose the init function to the global window
+window.initApp1 = initApp1;
