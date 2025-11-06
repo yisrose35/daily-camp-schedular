@@ -1,6 +1,10 @@
 // -------------------- scheduler_logic_core.js --------------------
 // Core logic: helpers, fixed-activity plumbing, league helpers/rotation,
 // uniqueness rules, and primary scheduling (assignFieldsToBunks).
+//
+// NEW: Includes league sport-vs-opponent history.
+// NEW: Includes daily override logic for activity availability.
+// --------------------
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -80,12 +84,110 @@ function prePlaceFixedActivities() {
   return computeBlockedRowsByDiv();
 }
 
+/**
+ * NEW: THIS FUNCTION IS UPDATED
+ * It now checks for daily overrides before applying global rules.
+ */
+function computeActivityBlockedSlots() {
+  const globalSettings = window.loadGlobalSettings?.() || {};
+  const allFields = globalSettings.app1?.fields || [];
+  const allSpecials = globalSettings.app1?.specialActivities || [];
+  const allActivities = [...allFields, ...allSpecials];
+  
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const dailyOverrides = dailyData.fieldAvailability || {};
+  
+  const unifiedTimes = window.unifiedTimes || [];
+  if (unifiedTimes.length === 0) return {};
+
+  const activityBlockedSlots = {};
+
+  allActivities.forEach(item => {
+    if (!item || !item.name) return;
+    
+    const activityName = item.name;
+    activityBlockedSlots[activityName] = new Set();
+    
+    // Check if a daily override exists for this activity
+    const dailyRule = dailyOverrides[activityName];
+    let ruleToApply;
+
+    if (dailyRule) {
+      // A daily override exists! Use it.
+      ruleToApply = {
+        mode: dailyRule.mode || "available",
+        exceptions: dailyRule.exceptions || []
+      };
+    } else {
+      // No daily override. Use the global rule from Setup.
+      ruleToApply = {
+        mode: item.availabilityMode || "available",
+        exceptions: item.availabilityExceptions || []
+      };
+    }
+    
+    const { mode, exceptions } = ruleToApply;
+
+    // 1. Parse exception strings into minute-ranges
+    const exceptionRanges = [];
+    exceptions.forEach(rangeStr => {
+      const parts = rangeStr.split('-');
+      if (parts.length === 2) {
+        const startMin = parseTimeToMinutes(parts[0]);
+        const endMin = parseTimeToMinutes(parts[1]);
+        if (startMin != null && endMin != null && endMin > startMin) {
+          exceptionRanges.push({ start: startMin, end: endMin });
+        }
+      }
+    });
+
+    // 2. Iterate every time slot and check it
+    for (let i = 0; i < unifiedTimes.length; i++) {
+      const slot = unifiedTimes[i];
+      const slotStart = slot.start.getHours() * 60 + slot.start.getMinutes();
+      const slotEnd = slot.end.getHours() * 60 + slot.end.getMinutes();
+
+      let inExceptionRange = false;
+      for (const range of exceptionRanges) {
+        // Check for overlap: Math.max(start1, start2) < Math.min(end1, end2)
+        if (Math.max(slotStart, range.start) < Math.min(slotEnd, range.end)) {
+          inExceptionRange = true;
+          break;
+        }
+      }
+
+      // 3. Apply the logic
+      let isBlocked = false;
+      if (mode === "available") {
+        // "Available EXCEPT for..."
+        // Block if it's IN the exception range
+        if (inExceptionRange) {
+          isBlocked = true;
+        }
+      } else {
+        // "Unavailable EXCEPT for..."
+        // Block if it's NOT IN the exception range
+        if (!inExceptionRange) {
+          isBlocked = true;
+        }
+      }
+
+      if (isBlocked) {
+        activityBlockedSlots[activityName].add(i);
+      }
+    }
+  });
+
+  return activityBlockedSlots;
+}
+
 // ===== League Helpers =====
 function leaguesSnapshot() { return window.loadGlobalSettings?.().leaguesByName || {}; }
 function getEnabledLeaguesByDivision(masterLeagues, overrides) {
   const result = {};
   const all = masterLeagues || {};
   Object.keys(all).forEach((name) => {
+    // Check against daily override list
     if (overrides.leagues.includes(name)) return; 
     const l = all[name];
     if (!l?.enabled) return;
@@ -244,9 +346,10 @@ function assignFieldsToBunks() {
   // Safely initialize the overrides object
   const loadedOverrides = dailyData.overrides || {};
   const overrides = {
-    fields: loadedOverrides.fields || [],
-    bunks: loadedOverrides.bunks || [],
+    // Note: old `fields` override is deprecated,
+    // we now use `dailyData.fieldAvailability`
     leagues: loadedOverrides.leagues || []
+    // `bunks` override is handled by `renderTripsSection` logic
   };
 
   // ===== Load *Yesterday's* Data =====
@@ -255,18 +358,22 @@ function assignFieldsToBunks() {
   const yesterdaySchedule = yesterdayData.scheduleAssignments || {};
 
   // 3. Create Today's Filtered Lists
-  const availFields = masterFields.filter(f => f.available && !overrides.fields.includes(f.name));
-  const availSpecials = masterSpecials.filter(s => s.available && !overrides.fields.includes(s.name));
-  const availableDivisions = masterAvailableDivs.filter(divName => !overrides.bunks.includes(divName));
-
+  // Note: We don't filter fields/specials here anymore.
+  // The new time-based availability handles this.
+  const availFields = masterFields.filter(f => f.available);
+  const availSpecials = masterSpecials.filter(s => s.available);
+  const availableDivisions = masterAvailableDivs; // Bunk/Div overrides are handled by trips
+  
   const divisions = {};
   for (const divName of availableDivisions) {
     if (!masterDivisions[divName]) continue;
     divisions[divName] = JSON.parse(JSON.stringify(masterDivisions[divName]));
-    divisions[divName].bunks = (divisions[divName].bunks || []).filter(bunkName => !overrides.bunks.includes(bunkName));
   }
   window.availableDivisions = availableDivisions;
   window.divisions = divisions;
+  
+  // NEW: Compute activity availability *after* divisions are set
+  window.activityBlockedSlots = computeActivityBlockedSlots(); 
 
   // Build bunk -> division map for sharing rules
   window.bunkToDivision = {};
@@ -331,7 +438,7 @@ function assignFieldsToBunks() {
   availableDivisions.forEach((d) => (divisions[d]?.bunks || []).forEach((b) => (scheduleAssignments[b] = new Array(window.unifiedTimes.length))));
   window.scheduleAssignments = scheduleAssignments;
 
-  // Place fixed blocks
+  // Place fixed blocks (trips)
   const blockedRowsByDiv = prePlaceFixedActivities();
 
   // ===== Per-day uniqueness tracker =====
@@ -482,7 +589,15 @@ function assignFieldsToBunks() {
       const availableFieldsForSpan = {};
       allFieldNames.forEach(name => {
         let capacity = 1;
-        for (let k = 0; k < spanLen; k++) { const slot = chosenSlot + k; const usage = fieldUsageBySlot[slot]?.[name] || 0; if (usage > 0) { capacity = 0; break; } }
+        for (let k = 0; k < spanLen; k++) { 
+          const slot = chosenSlot + k; 
+          const usage = fieldUsageBySlot[slot]?.[name] || 0; 
+          // NEW Check
+          if (usage > 0 || window.activityBlockedSlots?.[name]?.has(slot)) { 
+            capacity = 0; 
+            break; 
+          } 
+        }
         availableFieldsForSpan[name] = capacity;
       });
 
@@ -539,7 +654,17 @@ function assignFieldsToBunks() {
         const candidateFields = new Set();
         gamesWithSports.forEach(g => (fieldsBySport[g.sport] || []).forEach(f => candidateFields.add(f)));
         evictAssignmentsOnFields(chosenSlot, spanLen, candidateFields, fieldUsageBySlot);
-        const avail = {}; allFieldNames.forEach(name => { let cap = 1; for (let k = 0; k < spanLen; k++) { const slot = chosenSlot + k; if ((fieldUsageBySlot[slot]?.[name] || 0) > 0) { cap = 0; break; } } avail[name] = cap; });
+        const avail = {}; allFieldNames.forEach(name => { 
+          let cap = 1; 
+          for (let k = 0; k < spanLen; k++) { 
+            const slot = chosenSlot + k; 
+            if ((fieldUsageBySlot[slot]?.[name] || 0) > 0 || window.activityBlockedSlots?.[name]?.has(slot)) { 
+              cap = 0; 
+              break; 
+            } 
+          } 
+          avail[name] = cap; 
+        });
         const temp = {}; const finalGames = [];
         const byHardness = gamesWithSports.map(g => ({ g, poss: (fieldsBySport[g.sport] || []).filter(fn => (avail[fn] || 0) > 0) }))
           .sort((a,b)=> a.poss.length - b.poss.length);
@@ -706,14 +831,30 @@ function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageB
   return 0;
 }
 
+/**
+ * THIS FUNCTION IS UPDATED
+ * It includes the check against the activityBlockedSlots map.
+ */
 function canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties) {
   let canFitThisPick = true;
   let spanForThisPick = 0;
   for (let k = 0; k < spanLen; k++) {
     const currentSlot = s + k;
     if (currentSlot >= window.unifiedTimes.length) { canFitThisPick = false; break; }
+
     let isBusy = false;
-    if (window.scheduleAssignments[bunk][currentSlot] || window.leagueAssignments?.[div]?.[currentSlot] || !isActive(currentSlot)) { isBusy = true; }
+
+    // NEW: Check activity-specific blocks first
+    if (window.activityBlockedSlots?.[pickedField]?.has(currentSlot)) {
+      isBusy = true;
+    }
+
+    // Check bunk/league/division blocks
+    if (!isBusy && (window.scheduleAssignments[bunk][currentSlot] || window.leagueAssignments?.[div]?.[currentSlot] || !isActive(currentSlot))) {
+      isBusy = true;
+    }
+    
+    // Check field usage / sharable logic
     if (!isBusy && pickedField && activityProperties[pickedField]) {
       const fieldProps = activityProperties[pickedField];
       const usage = fieldUsageBySlot[currentSlot]?.[pickedField] || 0;
@@ -736,6 +877,7 @@ function canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, is
         }
       }
     }
+    
     if (isBusy) { if (k === 0) canFitThisPick = false; break; }
     spanForThisPick++;
   }
