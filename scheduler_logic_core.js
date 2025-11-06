@@ -2,8 +2,8 @@
 // Core logic: helpers, fixed-activity plumbing, league helpers/rotation,
 // uniqueness rules, and primary scheduling (assignFieldsToBunks).
 //
-// NEW: Includes league sport-vs-opponent history.
-// NEW: Includes daily override logic for activity availability.
+// NEW: prePlaceFixedActivities now correctly processes Daily Trips
+//      and overrides Global Fixed Activities.
 // --------------------
 
 // ===== Helpers =====
@@ -21,8 +21,8 @@ function parseTimeToMinutes(str) {
   const mm = parseInt(m[2], 10);
   if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
   if (mer) {
-    if (hh === 12) hh = mer === "am" ? 0 : 12;
-    else if (mer === "pm") hh += 12;
+    if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
+    else if (mer === "pm") hh += 12; // 1pm -> 13
   }
   return hh * 60 + mm;
 }
@@ -63,123 +63,104 @@ function findRowsForRange(startStr, endStr) {
   }
   return inside;
 }
-function computeBlockedRowsByDiv() {
-  const fixed = loadActiveFixedActivities();
-  const blocked = {};
-  fixed.forEach((act) => {
-    const rows = findRowsForRange(act.start, act.end);
-    if (rows.length === 0) return;
-    const targetDivs = Array.isArray(act.divisions) && act.divisions.length > 0 ? act.divisions : window.availableDivisions || [];
-    targetDivs.forEach((div) => {
-      blocked[div] = blocked[div] || new Set();
-      rows.forEach((r) => blocked[div].add(r));
-    });
-  });
-  return blocked;
-}
-function prePlaceFixedActivities() {
-  if (window.DailyActivities?.prePlace) {
-    try { window.DailyActivities.prePlace(); } catch (e) { console.error("DailyActivities.prePlace error:", e); }
-  }
-  return computeBlockedRowsByDiv();
-}
 
 /**
- * NEW: THIS FUNCTION IS UPDATED
- * It now checks for daily overrides before applying global rules.
+ * NEW UPGRADED FUNCTION
+ * This function now handles BOTH Daily Trips and Global Fixed Activities.
+ * It places them directly on the grid AND returns the combined blocked row map.
+ * * 1. Places Daily Trips (Highest Priority).
+ * 2. Places Global Fixed Activities (e.g., Lunch) in remaining slots.
  */
-function computeActivityBlockedSlots() {
-  const globalSettings = window.loadGlobalSettings?.() || {};
-  const allFields = globalSettings.app1?.fields || [];
-  const allSpecials = globalSettings.app1?.specialActivities || [];
-  const allActivities = [...allFields, ...allSpecials];
-  
+function prePlaceFixedActivities() {
   const dailyData = window.loadCurrentDailyData?.() || {};
-  const dailyOverrides = dailyData.fieldAvailability || {};
-  
-  const unifiedTimes = window.unifiedTimes || [];
-  if (unifiedTimes.length === 0) return {};
+  const globalSettings = window.loadGlobalSettings?.() || {};
+  const allDivisionsMap = window.divisions || {};
+  const allBunks = (window.availableDivisions || []).flatMap(div => allDivisionsMap[div]?.bunks || []);
 
-  const activityBlockedSlots = {};
+  const blocked = {}; // This is what we will return
 
-  allActivities.forEach(item => {
-    if (!item || !item.name) return;
-    
-    const activityName = item.name;
-    activityBlockedSlots[activityName] = new Set();
-    
-    // Check if a daily override exists for this activity
-    const dailyRule = dailyOverrides[activityName];
-    let ruleToApply;
+  // --- 1. Place Daily Trips (Highest Priority) ---
+  const trips = dailyData.trips || [];
+  trips.forEach(trip => {
+    const rows = findRowsForRange(trip.start, trip.end); // Use existing helper
+    if (rows.length === 0) return;
 
-    if (dailyRule) {
-      // A daily override exists! Use it.
-      ruleToApply = {
-        mode: dailyRule.mode || "available",
-        exceptions: dailyRule.exceptions || []
-      };
-    } else {
-      // No daily override. Use the global rule from Setup.
-      ruleToApply = {
-        mode: item.availabilityMode || "available",
-        exceptions: item.availabilityExceptions || []
-      };
-    }
-    
-    const { mode, exceptions } = ruleToApply;
-
-    // 1. Parse exception strings into minute-ranges
-    const exceptionRanges = [];
-    exceptions.forEach(rangeStr => {
-      const parts = rangeStr.split('-');
-      if (parts.length === 2) {
-        const startMin = parseTimeToMinutes(parts[0]);
-        const endMin = parseTimeToMinutes(parts[1]);
-        if (startMin != null && endMin != null && endMin > startMin) {
-          exceptionRanges.push({ start: startMin, end: endMin });
-        }
+    // Resolve targets (divisions + bunks) into a flat list of bunk names
+    const targetBunks = new Set();
+    (trip.targets || []).forEach(target => {
+      if (allDivisionsMap[target]) {
+        // It's a division
+        (allDivisionsMap[target].bunks || []).forEach(b => targetBunks.add(b));
+      } else if (allBunks.includes(target)) {
+        // It's a single bunk
+        targetBunks.add(target);
       }
     });
 
-    // 2. Iterate every time slot and check it
-    for (let i = 0; i < unifiedTimes.length; i++) {
-      const slot = unifiedTimes[i];
-      const slotStart = slot.start.getHours() * 60 + slot.start.getMinutes();
-      const slotEnd = slot.end.getHours() * 60 + slot.end.getMinutes();
-
-      let inExceptionRange = false;
-      for (const range of exceptionRanges) {
-        // Check for overlap: Math.max(start1, start2) < Math.min(end1, end2)
-        if (Math.max(slotStart, range.start) < Math.min(slotEnd, range.end)) {
-          inExceptionRange = true;
-          break;
-        }
+    // Place the trip on the grid for each bunk
+    targetBunks.forEach(bunk => {
+      const div = window.bunkToDivision?.[bunk];
+      if (!window.scheduleAssignments[bunk]) {
+         console.warn(`Trip placer: Could not find schedule row for bunk ${bunk}`);
+         return;
       }
 
-      // 3. Apply the logic
-      let isBlocked = false;
-      if (mode === "available") {
-        // "Available EXCEPT for..."
-        // Block if it's IN the exception range
-        if (inExceptionRange) {
-          isBlocked = true;
+      rows.forEach((r, k) => {
+        // Stamp the trip onto the grid
+        window.scheduleAssignments[bunk][r] = {
+          field: trip.name, // "Museum Trip"
+          _fixed: true,
+          continuation: k > 0
+        };
+        
+        // Also mark this row as blocked for this bunk's division
+        if (div) {
+          blocked[div] = blocked[div] || new Set();
+          blocked[div].add(r);
         }
-      } else {
-        // "Unavailable EXCEPT for..."
-        // Block if it's NOT IN the exception range
-        if (!inExceptionRange) {
-          isBlocked = true;
-        }
-      }
-
-      if (isBlocked) {
-        activityBlockedSlots[activityName].add(i);
-      }
-    }
+      });
+    });
   });
 
-  return activityBlockedSlots;
+  // --- 2. Place Global Fixed Activities (Lower Priority) ---
+  const globalFixed = loadActiveFixedActivities(); // Uses existing helper
+  globalFixed.forEach(act => {
+    const rows = findRowsForRange(act.start, act.end);
+    if (rows.length === 0) return;
+    
+    const targetDivs = Array.isArray(act.divisions) && act.divisions.length > 0 
+      ? act.divisions 
+      : window.availableDivisions || [];
+      
+    targetDivs.forEach(div => {
+      if (!allDivisionsMap[div]) return;
+      
+      // Mark as blocked (for the main scheduler)
+      blocked[div] = blocked[div] || new Set();
+      rows.forEach(r => blocked[div].add(r));
+
+      // Place on grid *only* for bunks that are not already on a trip
+      (allDivisionsMap[div].bunks || []).forEach(bunk => {
+        if (!window.scheduleAssignments[bunk]) return;
+        
+        rows.forEach((r, k) => {
+          // *** KEY LOGIC ***: Don't override an existing trip
+          if (!window.scheduleAssignments[bunk][r]) { 
+            window.scheduleAssignments[bunk][r] = {
+              field: act.name, // "Lunch"
+              _fixed: true,
+              continuation: k > 0
+            };
+          }
+        });
+      });
+    });
+  });
+
+  return blocked;
 }
+// --- END OF UPDATED FUNCTION ---
+
 
 // ===== League Helpers =====
 function leaguesSnapshot() { return window.loadGlobalSettings?.().leaguesByName || {}; }
@@ -187,7 +168,6 @@ function getEnabledLeaguesByDivision(masterLeagues, overrides) {
   const result = {};
   const all = masterLeagues || {};
   Object.keys(all).forEach((name) => {
-    // Check against daily override list
     if (overrides.leagues.includes(name)) return; 
     const l = all[name];
     if (!l?.enabled) return;
@@ -325,6 +305,103 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
   return assigned;
 }
 
+/**
+ * NEW: THIS FUNCTION IS UPDATED
+ * It now checks for daily overrides before applying global rules.
+ */
+function computeActivityBlockedSlots() {
+  const globalSettings = window.loadGlobalSettings?.() || {};
+  const allFields = globalSettings.app1?.fields || [];
+  const allSpecials = globalSettings.app1?.specialActivities || [];
+  const allActivities = [...allFields, ...allSpecials];
+  
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const dailyOverrides = dailyData.fieldAvailability || {};
+  
+  const unifiedTimes = window.unifiedTimes || [];
+  if (unifiedTimes.length === 0) return {};
+
+  const activityBlockedSlots = {};
+
+  allActivities.forEach(item => {
+    if (!item || !item.name) return;
+    
+    const activityName = item.name;
+    activityBlockedSlots[activityName] = new Set();
+    
+    // Check if a daily override exists for this activity
+    const dailyRule = dailyOverrides[activityName];
+    let ruleToApply;
+
+    if (dailyRule) {
+      // A daily override exists! Use it.
+      ruleToApply = {
+        mode: dailyRule.mode || "available",
+        exceptions: dailyRule.exceptions || []
+      };
+    } else {
+      // No daily override. Use the global rule from Setup.
+      ruleToApply = {
+        mode: item.availabilityMode || "available",
+        exceptions: item.availabilityExceptions || []
+      };
+    }
+    
+    const { mode, exceptions } = ruleToApply;
+
+    // 1. Parse exception strings into minute-ranges
+    const exceptionRanges = [];
+    exceptions.forEach(rangeStr => {
+      const parts = rangeStr.split('-');
+      if (parts.length === 2) {
+        const startMin = parseTimeToMinutes(parts[0]);
+        const endMin = parseTimeToMinutes(parts[1]);
+        if (startMin != null && endMin != null && endMin > startMin) {
+          exceptionRanges.push({ start: startMin, end: endMin });
+        }
+      }
+    });
+
+    // 2. Iterate every time slot and check it
+    for (let i = 0; i < unifiedTimes.length; i++) {
+      const slot = unifiedTimes[i];
+      const slotStart = slot.start.getHours() * 60 + slot.start.getMinutes();
+      const slotEnd = slot.end.getHours() * 60 + slot.end.getMinutes();
+
+      let inExceptionRange = false;
+      for (const range of exceptionRanges) {
+        // Check for overlap: Math.max(start1, start2) < Math.min(end1, end2)
+        if (Math.max(slotStart, range.start) < Math.min(slotEnd, range.end)) {
+          inExceptionRange = true;
+          break;
+        }
+      }
+
+      // 3. Apply the logic
+      let isBlocked = false;
+      if (mode === "available") {
+        // "Available EXCEPT for..."
+        // Block if it's IN the exception range
+        if (inExceptionRange) {
+          isBlocked = true;
+        }
+      } else {
+        // "Unavailable EXCEPT for..."
+        // Block if it's NOT IN the exception range
+        if (!inExceptionRange) {
+          isBlocked = true;
+        }
+      }
+
+      if (isBlocked) {
+        activityBlockedSlots[activityName].add(i);
+      }
+    }
+  });
+
+  return activityBlockedSlots;
+}
+
 // ====== CORE ASSIGN ======<br>
 window.leagueAssignments = window.leagueAssignments || {};
 const H2H_PROB = 0.6; // 60% attempt per bunk/slot
@@ -371,12 +448,21 @@ function assignFieldsToBunks() {
   window.availableDivisions = availableDivisions;
   window.divisions = divisions;
   
-  // NEW: Compute activity availability *after* divisions are set
-  window.activityBlockedSlots = computeActivityBlockedSlots(); 
-
   // Build bunk -> division map for sharing rules
   window.bunkToDivision = {};
   availableDivisions.forEach(dv => { (divisions[dv]?.bunks || []).forEach(bk => window.bunkToDivision[bk] = dv); });
+
+  // Init grids
+  scheduleAssignments = {};
+  availableDivisions.forEach((d) => (divisions[d]?.bunks || []).forEach((b) => (scheduleAssignments[b] = new Array(window.unifiedTimes.length))));
+  window.scheduleAssignments = scheduleAssignments;
+
+  // Place fixed blocks (trips AND fixed activities)
+  // This MUST run after divisions, bunks, and scheduleAssignments are initialized
+  const blockedRowsByDiv = prePlaceFixedActivities();
+  
+  // NEW: Compute activity availability *after* divisions are set
+  window.activityBlockedSlots = computeActivityBlockedSlots(); 
 
   const allGlobalDivisions = app1Data.availableDivisions || masterAvailableDivs;
 
@@ -431,14 +517,6 @@ function assignFieldsToBunks() {
     updateTable();
     return;
   }
-
-  // Init grids
-  scheduleAssignments = {};
-  availableDivisions.forEach((d) => (divisions[d]?.bunks || []).forEach((b) => (scheduleAssignments[b] = new Array(window.unifiedTimes.length))));
-  window.scheduleAssignments = scheduleAssignments;
-
-  // Place fixed blocks (trips)
-  const blockedRowsByDiv = prePlaceFixedActivities();
 
   // ===== Per-day uniqueness tracker =====
   window.todayActivityUsed = {};
