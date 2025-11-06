@@ -43,9 +43,10 @@ function fmtTime(d) { let h = d.getHours(), m = d.getMinutes().toString().padSta
  * Renders the "Available / Unavailable" time-based controls
  * @param {object} item - The field or special activity object
  * @param {function} onSave - The function to call to save all data
+ * @param {function} onRerender - The function to call to rerender this section
  * @returns {HTMLElement}
  */
-function renderAvailabilityControls(item, onSave) {
+function renderAvailabilityControls(item, onSave, onRerender) {
   const container = document.createElement("div");
   container.style.marginTop = "10px";
   container.style.paddingLeft = "15px";
@@ -102,7 +103,7 @@ function renderAvailabilityControls(item, onSave) {
     pill.onclick = () => {
       item.availabilityExceptions.splice(index, 1);
       onSave();
-      renderApp1Specials(); // Re-render to reflect change
+      onRerender(); // Re-render to reflect change
     };
     exceptionList.appendChild(pill);
   });
@@ -124,7 +125,7 @@ function renderAvailabilityControls(item, onSave) {
       item.availabilityExceptions.push(val.replace(/\s/g, ''));
       timeInput.value = "";
       onSave();
-      renderApp1Specials(); // Re-render to reflect change
+      onRerender(); // Re-render to reflect change
     } else {
       alert("Invalid format. Use HH:MM-HH:MM (e.g., 9:00-10:30).");
     }
@@ -267,10 +268,7 @@ function renderApp1Fields() {
     // div.appendChild(allowedDivsEl);
     
     // --- (NEW) Availability Controls ---
-    const availabilityControls = renderAvailabilityControls(field, () => {
-        saveApp1Data();
-        renderApp1Fields(); // Re-render this section
-    });
+    const availabilityControls = renderAvailabilityControls(field, saveApp1Data, renderApp1Fields);
     div.appendChild(availabilityControls);
     // --- END NEW ---
 
@@ -366,10 +364,7 @@ function renderApp1Specials() {
     // div.appendChild(allowedDivsEl);
 
     // --- (NEW) Availability Controls ---
-    const availabilityControls = renderAvailabilityControls(special, () => {
-        saveApp1Data();
-        renderApp1Specials(); // Re-render this section
-    });
+    const availabilityControls = renderAvailabilityControls(special, saveApp1Data, renderApp1Specials);
     div.appendChild(availabilityControls);
     // --- END NEW ---
 
@@ -402,10 +397,10 @@ function initApp1() {
   loadApp1Data();
   
   // Call your other render functions
-  // renderApp1Divisions(); // (You have this function, I assume)
+  // renderApp1Divisions(); // (Assuming you have this)
   renderApp1Fields(); // Updated
   renderApp1Specials(); // Updated
-  // renderApp1TimeTemplates(); // (You have this function, I assume)
+  // renderApp1TimeTemplates(); // (Assuming you have this)
 
   console.log("App1 (Setup) Initialized.");
 }
