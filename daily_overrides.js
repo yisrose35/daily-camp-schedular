@@ -3,6 +3,7 @@
 // This file creates the UI for the "Daily Overrides" tab.
 //
 // NEW: Replaced simple field override with time-based availability.
+// NEW: Updated toggle to a slider and improved time validation.
 // =================================================================
 
 (function() {
@@ -16,7 +17,10 @@ let currentOverrides = {
 };
 let currentTrips = [];
 
-// Helper function (copied from core)
+/**
+ * This is a copy of the helper from scheduler_logic_core.js
+ * It's needed here for validation.
+ */
 function parseTimeToMinutes(str) {
   if (!str || typeof str !== "string") return null;
   let s = str.trim().toLowerCase();
@@ -31,8 +35,8 @@ function parseTimeToMinutes(str) {
   const mm = parseInt(m[2], 10);
   if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
   if (mer) {
-    if (hh === 12) hh = mer === "am" ? 0 : 12;
-    else if (mer === "pm") hh += 12;
+    if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
+    else if (mer === "pm") hh += 12; // 1pm -> 13
   }
   return hh * 60 + mm;
 }
@@ -90,7 +94,7 @@ function init() {
 }
 
 /**
- * Helper: Renders the "Available / Unavailable" controls for daily overrides
+ * UPDATED: Renders the new "Available / Unavailable" SLIDER toggle
  */
 function renderDailyAvailabilityControls(item, onSave) {
   const container = document.createElement("div");
@@ -102,27 +106,61 @@ function renderDailyAvailabilityControls(item, onSave) {
   const modeLabel = document.createElement("label");
   modeLabel.style.display = "flex";
   modeLabel.style.alignItems = "center";
-  modeLabel.style.gap = "8px";
-  modeLabel.style.marginBottom = "8px";
+  modeLabel.style.gap = "10px";
   modeLabel.style.cursor = "pointer";
-
-  const modeToggle = document.createElement("input");
-  modeToggle.type = "checkbox";
-  // "available" = unchecked (false), "unavailable" = checked (true)
-  item.mode = item.mode || "available";
-  modeToggle.checked = item.mode === "unavailable";
-
-  const modeText = document.createElement("span");
-  modeText.textContent = modeToggle.checked ? "Unavailable" : "Available";
-
-  modeToggle.addEventListener("change", () => {
-    item.mode = modeToggle.checked ? "unavailable" : "available";
-    modeText.textContent = modeToggle.checked ? "Unavailable" : "Available";
-    onSave();
+  
+  const textAvailable = document.createElement("span");
+  textAvailable.textContent = "Available";
+  
+  const toggleTrack = document.createElement("span");
+  Object.assign(toggleTrack.style, {
+    width: "44px",
+    height: "24px",
+    borderRadius: "99px",
+    position: "relative",
+    display: "inline-block",
+    border: "1px solid #ccc",
+    backgroundColor: item.mode === 'available' ? '#22c55e' : '#d1d5db', // green or grey
+    transition: "background-color 0.2s"
   });
 
-  modeLabel.appendChild(modeToggle);
-  modeLabel.appendChild(modeText);
+  const toggleKnob = document.createElement("span");
+  Object.assign(toggleKnob.style, {
+    width: "20px",
+    height: "20px",
+    borderRadius: "50%",
+    backgroundColor: "white",
+    position: "absolute",
+    top: "1px",
+    left: item.mode === 'available' ? '21px' : '1px', // right or left
+    transition: "left 0.2s"
+  });
+  
+  toggleTrack.appendChild(toggleKnob);
+  
+  const textUnavailable = document.createElement("span");
+  textUnavailable.textContent = "Unavailable";
+  
+  // Set initial text style
+  textAvailable.style.fontWeight = item.mode === 'available' ? 'bold' : 'normal';
+  textUnavailable.style.fontWeight = item.mode === 'unavailable' ? 'bold' : 'normal';
+
+  // Use onclick on the label to toggle state
+  modeLabel.onclick = () => {
+    item.mode = (item.mode === 'available') ? 'unavailable' : 'available';
+    
+    // Update styles
+    toggleTrack.style.backgroundColor = item.mode === 'available' ? '#22c55e' : '#d1d5db';
+    toggleKnob.style.left = item.mode === 'available' ? '21px' : '1px';
+    textAvailable.style.fontWeight = item.mode === 'available' ? 'bold' : 'normal';
+    textUnavailable.style.fontWeight = item.mode === 'unavailable' ? 'bold' : 'normal';
+    
+    onSave();
+  };
+
+  modeLabel.appendChild(textAvailable);
+  modeLabel.appendChild(toggleTrack);
+  modeLabel.appendChild(textUnavailable);
   container.appendChild(modeLabel);
 
   // --- 2. "Except for..." Text ---
@@ -158,19 +196,33 @@ function renderDailyAvailabilityControls(item, onSave) {
   const addContainer = document.createElement("div");
   addContainer.style.marginTop = "6px";
   const timeInput = document.createElement("input");
-  timeInput.placeholder = "e.g., 9:00-10:30 or 14:00-15:00";
+  // UPDATED Placeholder
+  timeInput.placeholder = "e.g., 9:00am-10:30am";
   timeInput.style.marginRight = "5px";
 
   const addBtn = document.createElement("button");
   addBtn.textContent = "Add Time";
+  
+  // UPDATED Validation Logic
   addBtn.onclick = () => {
     const val = timeInput.value.trim();
-    if (/^\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}$/.test(val)) {
-      item.exceptions.push(val.replace(/\s/g, ''));
-      timeInput.value = "";
-      onSave();
+    const parts = val.split('-');
+    if (parts.length === 2) {
+      const startMin = parseTimeToMinutes(parts[0]);
+      const endMin = parseTimeToMinutes(parts[1]);
+      
+      if (startMin != null && endMin != null && endMin > startMin) {
+        // Valid! Push the original, user-formatted string
+        item.exceptions.push(val);
+        timeInput.value = "";
+        onSave();
+      } else {
+        // Invalid time or range
+        alert("Invalid time range. Use format '9:00am-10:30am'. Ensure end time is after start time.");
+      }
     } else {
-      alert("Invalid format. Use HH:MM-HH:MM (e.g., 9:00-10:30).");
+      // Invalid format
+      alert("Invalid format. Must be a range separated by a hyphen (e.g., '9:00am-10:30am').");
     }
   };
   timeInput.onkeypress = (e) => { if (e.key === "Enter") addBtn.click(); };
@@ -223,6 +275,13 @@ function renderFieldsOverride() {
       // We don't need to call init() for this, just re-render this one item
       renderFieldsOverride();
     };
+    
+    const saveOnly = () => {
+        console.log("Daily Overrides: Saving field availability...", currentOverrides.fieldAvailability);
+        window.saveCurrentDailyData("fieldAvailability", currentOverrides.fieldAvailability);
+        // Re-render this section to update pill list
+        renderFieldsOverride();
+    };
 
     if (overrideData) {
       // --- Render the full controls ---
@@ -249,9 +308,7 @@ function renderFieldsOverride() {
       globalEl.style.margin = "5px 0 0 0";
       itemWrapper.appendChild(globalEl);
 
-      const controls = renderDailyAvailabilityControls(overrideData, () => {
-         window.saveCurrentDailyData("fieldAvailability", currentOverrides.fieldAvailability);
-      });
+      const controls = renderDailyAvailabilityControls(overrideData, saveOnly);
       itemWrapper.appendChild(controls);
 
     } else {
