@@ -346,10 +346,9 @@ function assignFieldsToBunks() {
   // Safely initialize the overrides object
   const loadedOverrides = dailyData.overrides || {};
   const overrides = {
-    // Note: old `fields` override is deprecated,
-    // we now use `dailyData.fieldAvailability`
+    // Note: old `fields` and `bunks` overrides are deprecated.
+    // They are now handled by `fieldAvailability` and `trips`.
     leagues: loadedOverrides.leagues || []
-    // `bunks` override is handled by `renderTripsSection` logic
   };
 
   // ===== Load *Yesterday's* Data =====
@@ -358,16 +357,16 @@ function assignFieldsToBunks() {
   const yesterdaySchedule = yesterdayData.scheduleAssignments || {};
 
   // 3. Create Today's Filtered Lists
-  // Note: We don't filter fields/specials here anymore.
-  // The new time-based availability handles this.
+  // UPDATED: We no longer filter by `overrides.fields` or `overrides.bunks` here.
   const availFields = masterFields.filter(f => f.available);
   const availSpecials = masterSpecials.filter(s => s.available);
-  const availableDivisions = masterAvailableDivs; // Bunk/Div overrides are handled by trips
+  const availableDivisions = masterAvailableDivs; // "Trips" will block rows, not remove divisions
   
   const divisions = {};
   for (const divName of availableDivisions) {
     if (!masterDivisions[divName]) continue;
     divisions[divName] = JSON.parse(JSON.stringify(masterDivisions[divName]));
+    // We also no longer filter bunks here. Trips handle this.
   }
   window.availableDivisions = availableDivisions;
   window.divisions = divisions;
@@ -654,10 +653,12 @@ function assignFieldsToBunks() {
         const candidateFields = new Set();
         gamesWithSports.forEach(g => (fieldsBySport[g.sport] || []).forEach(f => candidateFields.add(f)));
         evictAssignmentsOnFields(chosenSlot, spanLen, candidateFields, fieldUsageBySlot);
+        
         const avail = {}; allFieldNames.forEach(name => { 
           let cap = 1; 
           for (let k = 0; k < spanLen; k++) { 
             const slot = chosenSlot + k; 
+            // NEW Check
             if ((fieldUsageBySlot[slot]?.[name] || 0) > 0 || window.activityBlockedSlots?.[name]?.has(slot)) { 
               cap = 0; 
               break; 
@@ -665,6 +666,7 @@ function assignFieldsToBunks() {
           } 
           avail[name] = cap; 
         });
+        
         const temp = {}; const finalGames = [];
         const byHardness = gamesWithSports.map(g => ({ g, poss: (fieldsBySport[g.sport] || []).filter(fn => (avail[fn] || 0) > 0) }))
           .sort((a,b)=> a.poss.length - b.poss.length);
