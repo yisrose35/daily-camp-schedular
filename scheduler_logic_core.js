@@ -2,8 +2,8 @@
 // Core logic: helpers, fixed-activity plumbing, league helpers/rotation,
 // uniqueness rules, and primary scheduling (assignFieldsToBunks).
 //
-// NEW: prePlaceFixedActivities now correctly processes Daily Trips
-//      and overrides Global Fixed Activities.
+// NEW: `canActivityFit` and `activityProperties` now support
+//      advanced `sharableWith` rules (all, none, custom).
 // --------------------
 
 // ===== Helpers =====
@@ -67,9 +67,6 @@ function findRowsForRange(startStr, endStr) {
 /**
  * NEW UPGRADED FUNCTION
  * This function now handles BOTH Daily Trips and Global Fixed Activities.
- * It places them directly on the grid AND returns the combined blocked row map.
- * * 1. Places Daily Trips (Highest Priority).
- * 2. Places Global Fixed Activities (e.g., Lunch) in remaining slots.
  */
 function prePlaceFixedActivities() {
   const dailyData = window.loadCurrentDailyData?.() || {};
@@ -159,7 +156,25 @@ function prePlaceFixedActivities() {
 
   return blocked;
 }
-// --- END OF UPDATED FUNCTION ---
+
+/**
+ * NEW: Helper for canActivityFit
+ * Finds the bunk and division of the *first* occupant on a field in a slot.
+ */
+function findOccupantBunk(currentSlot, pickedField) {
+  const allDivs = window.availableDivisions || [];
+  const divs = window.divisions || {};
+  for (const dv of allDivs) {
+    const bunksHere = divs[dv]?.bunks || [];
+    for (const b of bunksHere) {
+      const e = window.scheduleAssignments[b]?.[currentSlot];
+      if (e && !e._fixed && !e._h2h && fieldLabel(e.field) === pickedField) {
+        return { bunk: b, div: dv };
+      }
+    }
+  }
+  return null;
+}
 
 
 // ===== League Helpers =====
@@ -262,7 +277,6 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
     }
 
     // --- Pass 2: Relaxed Mode (Respects Req #1, but allows back-to-back) ---
-    // This runs if Pass 1 failed (e.g., the only available sport was played yesterday)
     if (!chosenSport) {
       for (let i = 0; i < sportsList.length; i++) {
         const sportIdx = (idx + i) % sportsList.length;
@@ -270,7 +284,6 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
 
         if (sport === lastSportVsOpponent) continue; // STILL Fail Req #1
 
-        // We are now ignoring Req #3 (back-to-back) to satisfy Req #1
         chosenSport = sport;
         chosenSportIdx = sportIdx;
         break;
@@ -278,26 +291,19 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
     }
     
     // --- Pass 3: Failsafe (Req #1 cannot be met) ---
-    // This runs if all available sports have been played against this opponent
-    // (e.g., only 1 sport in the league). We just pick the next one in rotation.
     if (!chosenSport) {
       chosenSportIdx = idx % sportsList.length;
       chosenSport = sportsList[chosenSportIdx];
-      // This choice may violate Req #1, but we have no other option.
     }
     
-    // Update the league's rotation index to start after the chosen sport
     idx = (chosenSportIdx + 1) % sportsList.length;
-
     assigned.push({ teams: match, sport: chosenSport });
 
-    // Save this sport to the *new* matchup history
     const newHist = leagueHist[matchupKey] || [];
     newHist.push(chosenSport);
     leagueHist[matchupKey] = newHist;
   }
 
-  // Save the new state
   leagueSportRotation[leagueName] = { index: idx };
   leagueMatchupHistory[leagueName] = leagueHist;
   saveLeagueStates(); // Use the new function
@@ -306,8 +312,7 @@ function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHisto
 }
 
 /**
- * NEW: THIS FUNCTION IS UPDATED
- * It now checks for daily overrides before applying global rules.
+ * This function now checks for daily overrides before applying global rules.
  */
 function computeActivityBlockedSlots() {
   const globalSettings = window.loadGlobalSettings?.() || {};
@@ -329,18 +334,15 @@ function computeActivityBlockedSlots() {
     const activityName = item.name;
     activityBlockedSlots[activityName] = new Set();
     
-    // Check if a daily override exists for this activity
     const dailyRule = dailyOverrides[activityName];
     let ruleToApply;
 
     if (dailyRule) {
-      // A daily override exists! Use it.
       ruleToApply = {
         mode: dailyRule.mode || "available",
         exceptions: dailyRule.exceptions || []
       };
     } else {
-      // No daily override. Use the global rule from Setup.
       ruleToApply = {
         mode: item.availabilityMode || "available",
         exceptions: item.availabilityExceptions || []
@@ -349,7 +351,6 @@ function computeActivityBlockedSlots() {
     
     const { mode, exceptions } = ruleToApply;
 
-    // 1. Parse exception strings into minute-ranges
     const exceptionRanges = [];
     exceptions.forEach(rangeStr => {
       const parts = rangeStr.split('-');
@@ -362,7 +363,6 @@ function computeActivityBlockedSlots() {
       }
     });
 
-    // 2. Iterate every time slot and check it
     for (let i = 0; i < unifiedTimes.length; i++) {
       const slot = unifiedTimes[i];
       const slotStart = slot.start.getHours() * 60 + slot.start.getMinutes();
@@ -370,24 +370,18 @@ function computeActivityBlockedSlots() {
 
       let inExceptionRange = false;
       for (const range of exceptionRanges) {
-        // Check for overlap: Math.max(start1, start2) < Math.min(end1, end2)
         if (Math.max(slotStart, range.start) < Math.min(slotEnd, range.end)) {
           inExceptionRange = true;
           break;
         }
       }
 
-      // 3. Apply the logic
       let isBlocked = false;
       if (mode === "available") {
-        // "Available EXCEPT for..."
-        // Block if it's IN the exception range
         if (inExceptionRange) {
           isBlocked = true;
         }
       } else {
-        // "Unavailable EXCEPT for..."
-        // Block if it's NOT IN the exception range
         if (!inExceptionRange) {
           isBlocked = true;
         }
@@ -420,11 +414,8 @@ function assignFieldsToBunks() {
   const masterLeagues = globalSettings.leaguesByName || {};
   const dailyData = window.loadCurrentDailyData?.() || {};
 
-  // Safely initialize the overrides object
   const loadedOverrides = dailyData.overrides || {};
   const overrides = {
-    // Note: old `fields` and `bunks` overrides are deprecated.
-    // They are now handled by `fieldAvailability` and `trips`.
     leagues: loadedOverrides.leagues || []
   };
 
@@ -434,52 +425,48 @@ function assignFieldsToBunks() {
   const yesterdaySchedule = yesterdayData.scheduleAssignments || {};
 
   // 3. Create Today's Filtered Lists
-  // UPDATED: We no longer filter by `overrides.fields` or `overrides.bunks` here.
   const availFields = masterFields.filter(f => f.available);
   const availSpecials = masterSpecials.filter(s => s.available);
-  const availableDivisions = masterAvailableDivs; // "Trips" will block rows, not remove divisions
+  const availableDivisions = masterAvailableDivs; 
   
   const divisions = {};
   for (const divName of availableDivisions) {
     if (!masterDivisions[divName]) continue;
     divisions[divName] = JSON.parse(JSON.stringify(masterDivisions[divName]));
-    // We also no longer filter bunks here. Trips handle this.
   }
   window.availableDivisions = availableDivisions;
   window.divisions = divisions;
   
-  // Build bunk -> division map for sharing rules
   window.bunkToDivision = {};
   availableDivisions.forEach(dv => { (divisions[dv]?.bunks || []).forEach(bk => window.bunkToDivision[bk] = dv); });
 
-  // Init grids
   scheduleAssignments = {};
   availableDivisions.forEach((d) => (divisions[d]?.bunks || []).forEach((b) => (scheduleAssignments[b] = new Array(window.unifiedTimes.length))));
   window.scheduleAssignments = scheduleAssignments;
 
   // Place fixed blocks (trips AND fixed activities)
-  // This MUST run after divisions, bunks, and scheduleAssignments are initialized
   const blockedRowsByDiv = prePlaceFixedActivities();
   
-  // NEW: Compute activity availability *after* divisions are set
   window.activityBlockedSlots = computeActivityBlockedSlots(); 
 
   const allGlobalDivisions = app1Data.availableDivisions || masterAvailableDivs;
 
-  // Activity properties (sharable, allowedDivisions)
+  // ===== UPDATED: Activity properties =====
+  // Now includes the new `sharableWith` object
   const activityProperties = {};
   availFields.forEach(f => {
     activityProperties[f.name] = {
-      sharable: f.sharable || false,
+      sharableWith: f.sharableWith || { type: 'not_sharable' }, // <-- NEW
       allowedDivisions: (f.allowedDivisions || []).length > 0 ? f.allowedDivisions : allGlobalDivisions
     };
   });
   availSpecials.forEach(s => {
     activityProperties[s.name] = {
-      sharable: s.sharable || false,
+      sharableWith: s.sharableWith || { type: 'all' }, // <-- NEW
       allowedDivisions: (s.allowedDivisions || []).length > 0 ? s.allowedDivisions : allGlobalDivisions
     };
   });
+  // ===== END UPDATE =====
 
   const enabledByDiv = getEnabledLeaguesByDivision(masterLeagues, overrides);
 
@@ -487,7 +474,6 @@ function assignFieldsToBunks() {
   const activityDuration = parseInt(document.getElementById("activityDuration")?.value || "30", 10);
   const spanLen = Math.max(1, Math.ceil(activityDuration / inc));
 
-  // Field-Sport Inventory
   const fieldsBySport = {}; window._lastFieldsBySportCache = fieldsBySport;
   const allFieldNames = [];
   availFields.forEach(f => {
@@ -500,7 +486,6 @@ function assignFieldsToBunks() {
       });
     }
   });
-  // Global list of schedulable names (fields + specials)
   window.allSchedulableNames = allFieldNames.concat(availSpecials.map(s => s.name));
 
   const allActivities = [
@@ -509,7 +494,6 @@ function assignFieldsToBunks() {
   ];
   const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
 
-  // make activities available to failsafe
   window._allActivitiesCache = allActivities;
 
   if ((!allActivities.length && !availSpecials.length) || !window.unifiedTimes || window.unifiedTimes.length === 0) {
@@ -518,7 +502,6 @@ function assignFieldsToBunks() {
     return;
   }
 
-  // ===== Per-day uniqueness tracker =====
   window.todayActivityUsed = {};
   availableDivisions.forEach(div => {
     (divisions[div]?.bunks || []).forEach(b => {
@@ -526,7 +509,6 @@ function assignFieldsToBunks() {
     });
   });
 
-  // fieldUsageBySlot = { slot: { FieldName: usageCount } } ; fixed take usage=2
   const fieldUsageBySlot = {};
   (availableDivisions || []).forEach(div => {
     (divisions[div]?.bunks || []).forEach(bunk => {
@@ -539,7 +521,6 @@ function assignFieldsToBunks() {
               fieldUsageBySlot[slot][fieldName] = 2;
             }
           }
-          // Seed uniqueness from fixed or existing
           if (entry) {
             const name = entry.sport ? entry.sport : fieldLabel(entry.field);
             if (name) window.todayActivityUsed[bunk].add(name);
@@ -555,7 +536,6 @@ function assignFieldsToBunks() {
   const h2hHistory = {};             // { bunk: { otherBunk: count } }
   const h2hGameCount = {};           // { bunk: number }
 
-  // Seed with yesterday
   availableDivisions.forEach(div => {
     (divisions[div]?.bunks || []).forEach(b => {
       generalActivityHistory[b] = new Set();
@@ -572,7 +552,6 @@ function assignFieldsToBunks() {
       });
     });
   });
-  // Mark today's fixed into history
   availableDivisions.forEach(div => {
     (divisions[div]?.bunks || []).forEach(bunk => {
       if (scheduleAssignments[bunk]) {
@@ -581,7 +560,6 @@ function assignFieldsToBunks() {
     });
   });
 
-  // Yesterday's team sport map for leagues
   const leagueTeamSportHistory = {};
   Object.values(yesterdayLeagues).forEach(div => {
     Object.values(div).forEach(slot => {
@@ -598,7 +576,6 @@ function assignFieldsToBunks() {
 
   const takenLeagueSlots = new Set();
 
-  // --- Leagues FIRST: Smart placement + eviction rescue ---
   function evictAssignmentsOnFields(slotStart, span, targetFields, fus) {
     const unified = window.unifiedTimes || [];
     const endSlot = Math.min(slotStart + span, unified.length);
@@ -610,10 +587,8 @@ function assignFieldsToBunks() {
           if (!e || e._fixed || e._h2h) continue;
           const f = fieldLabel(e.field);
           if (!f || !targetFields.has(f)) continue;
-          // walk to start of its span
           let k = slot;
           while (k > 0 && window.scheduleAssignments[b][k-1] && window.scheduleAssignments[b][k-1].continuation) k--;
-          // clear forward
           while (k < unified.length && window.scheduleAssignments[b][k] && (k===slot || window.scheduleAssignments[b][k].continuation)) {
             const rem = window.scheduleAssignments[b][k];
             const rf = fieldLabel(rem.field);
@@ -654,7 +629,6 @@ function assignFieldsToBunks() {
 
     let placedLeague = false;
 
-    // try each candidate slot without eviction first
     for (const chosenSlot of candidates) {
       const teams = (lg.data.teams || []).map((t) => String(t).trim()).filter(Boolean);
       if (teams.length < 2) break;
@@ -662,14 +636,12 @@ function assignFieldsToBunks() {
       if (!matchups.length) break;
       const gamesWithSports = assignSportsToMatchups(lg.name, matchups, lg.data.sports, leagueTeamSportHistory);
 
-      // availability snapshot
       const availableFieldsForSpan = {};
       allFieldNames.forEach(name => {
         let capacity = 1;
         for (let k = 0; k < spanLen; k++) { 
           const slot = chosenSlot + k; 
           const usage = fieldUsageBySlot[slot]?.[name] || 0; 
-          // NEW Check
           if (usage > 0 || window.activityBlockedSlots?.[name]?.has(slot)) { 
             capacity = 0; 
             break; 
@@ -695,9 +667,8 @@ function assignFieldsToBunks() {
         return { ...game, field: assignedField };
       });
 
-      if (!allGamesCanBeScheduled) continue; // try next candidate
+      if (!allGamesCanBeScheduled) continue; 
 
-      // book
       window.leagueAssignments[div] = window.leagueAssignments[div] || {};
       const leagueData = { games: gamesWithFields, leagueName: lg.name, isContinuation: false };
       const leagueContinuation = { leagueName: lg.name, isContinuation: true };
@@ -707,7 +678,6 @@ function assignFieldsToBunks() {
         takenLeagueSlots.add(slot);
         gamesWithFields.forEach(game => { if (game.field) { fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {}; fieldUsageBySlot[slot][game.field] = 2; } });
       }
-      // Mark league sports as used today for each team
       (gamesWithFields || []).forEach(g => {
         const sportName = g.sport;
         const [teamA, teamB] = g.teams || [];
@@ -720,7 +690,6 @@ function assignFieldsToBunks() {
       placedLeague = true; break;
     }
 
-    // eviction-based rescue
     if (!placedLeague) {
       for (const chosenSlot of candidates) {
         const teams = (lg.data.teams || []).map((t) => String(t).trim()).filter(Boolean);
@@ -736,7 +705,6 @@ function assignFieldsToBunks() {
           let cap = 1; 
           for (let k = 0; k < spanLen; k++) { 
             const slot = chosenSlot + k; 
-            // NEW Check
             if ((fieldUsageBySlot[slot]?.[name] || 0) > 0 || window.activityBlockedSlots?.[name]?.has(slot)) { 
               cap = 0; 
               break; 
@@ -764,7 +732,6 @@ function assignFieldsToBunks() {
             takenLeagueSlots.add(slot);
             finalGames.forEach(game => { fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {}; fieldUsageBySlot[slot][game.field] = 2; });
           }
-          // Mark league sports as used today for each team
           (finalGames || []).forEach(g => {
             const sportName = g.sport;
             const [teamA, teamB] = g.teams || [];
@@ -842,17 +809,13 @@ function tryGeneralActivity(bunk, div, s, spanLen, activityList, fieldUsageBySlo
     const pickedField = fieldLabel(pick.field);
     const activityName = getActivityName(pick); // sport for fields-with-sport, else special/field name
 
-    // Per-day uniqueness: block if already used today
     if (todayActivityUsed[bunk]?.has(activityName)) continue;
-
-    // Avoid same field as yesterday when non-preferred
     if (generalFieldHistory && generalFieldHistory[bunk][activityName] === pickedField && (window.allSchedulableNames || []).length > 1) continue;
 
     let [canFit, spanForThisPick] = canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties);
     if (canFit && spanForThisPick > 0) {
       const placed = assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory);
       if (placed > 0) {
-        // Mark as used today
         todayActivityUsed[bunk].add(activityName);
       }
       return placed;
@@ -876,7 +839,6 @@ function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageB
     const h2hPicks = h2hActivities.sort(() => 0.5 - Math.random());
     for (const pick of h2hPicks) {
       const sportName = getActivityName(pick); // sport
-      // Per-day uniqueness for both bunks
       if (todayActivityUsed[bunk]?.has(sportName) || todayActivityUsed[opponent]?.has(sportName)) continue;
 
       const pickedField = fieldLabel(pick.field);
@@ -895,12 +857,11 @@ function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageB
         }
         h2hHistory[bunk] = h2hHistory[bunk] || {};
         h2hHistory[opponent] = h2hHistory[opponent] || {};
-        h2hHistory[bunk][opponent] = (H2H_PROB && h2hHistory[bunk][opponent] || 0) + 1; // keep as before, just increment
+        h2hHistory[bunk][opponent] = (H2H_PROB && h2hHistory[bunk][opponent] || 0) + 1;
         h2hHistory[opponent][bunk] = (H2H_PROB && h2hHistory[opponent][bunk] || 0) + 1;
         h2hGameCount[bunk] = (h2hGameCount[bunk] || 0) + 1;
         h2hGameCount[opponent] = (h2hGameCount[opponent] || 0) + 1;
 
-        // Mark as used today for both teams
         todayActivityUsed[bunk].add(sportName);
         todayActivityUsed[opponent].add(sportName);
 
@@ -911,58 +872,97 @@ function tryH2H(bunk, div, s, spanLen, allBunksInDiv, h2hActivities, fieldUsageB
   return 0;
 }
 
+
 /**
- * THIS FUNCTION IS UPDATED
- * It includes the check against the activityBlockedSlots map.
+ * ==========================================================
+ * ===== THIS IS THE MOST IMPORTANTLY UPDATED FUNCTION =====
+ * ==========================================================
+ * Replaces the old `canActivityFit` function.
+ * This new version understands the `sharableWith` object.
  */
 function canActivityFit(bunk, div, s, spanLen, pickedField, fieldUsageBySlot, isActive, activityProperties) {
   let canFitThisPick = true;
   let spanForThisPick = 0;
+  
   for (let k = 0; k < spanLen; k++) {
     const currentSlot = s + k;
     if (currentSlot >= window.unifiedTimes.length) { canFitThisPick = false; break; }
 
     let isBusy = false;
 
-    // NEW: Check activity-specific blocks first
-    if (window.activityBlockedSlots?.[pickedField]?.has(currentSlot)) {
+    // 1. Check if bunk is already busy (Trip, League, Inactive)
+    if (window.scheduleAssignments[bunk][currentSlot] || window.leagueAssignments?.[div]?.[currentSlot] || !isActive(currentSlot)) {
+      isBusy = true;
+    }
+    
+    // 2. Check if the activity itself is time-blocked
+    if (!isBusy && window.activityBlockedSlots?.[pickedField]?.has(currentSlot)) {
       isBusy = true;
     }
 
-    // Check bunk/league/division blocks
-    if (!isBusy && (window.scheduleAssignments[bunk][currentSlot] || window.leagueAssignments?.[div]?.[currentSlot] || !isActive(currentSlot))) {
+    // 3. Check if this division is allowed to use this activity at all
+    const fieldProps = activityProperties[pickedField];
+    if (!isBusy && fieldProps && !fieldProps.allowedDivisions.includes(div)) {
       isBusy = true;
     }
     
-    // Check field usage / sharable logic
-    if (!isBusy && pickedField && activityProperties[pickedField]) {
-      const fieldProps = activityProperties[pickedField];
+    // 4. Check field usage (the sharing logic)
+    if (!isBusy && fieldProps) {
       const usage = fieldUsageBySlot[currentSlot]?.[pickedField] || 0;
-      if (usage > 0) {
-        if (!fieldProps.sharable || usage >= 2 || !fieldProps.allowedDivisions.includes(div)) { isBusy = true; }
-        else {
-          // Enforce same-division sharing
-          let occupyingDivision = null;
-          const allDivs = window.availableDivisions || [];
-          const divs = window.divisions || {};
-          for (const dv of allDivs) {
-            const bunksHere = divs[dv]?.bunks || [];
-            for (const b2 of bunksHere) {
-              const e2 = window.scheduleAssignments[b2]?.[currentSlot];
-              if (e2 && !e2._fixed && !e2._h2h && fieldLabel(e2.field) === pickedField) { occupyingDivision = window.bunkToDivision?.[b2] || dv; break; }
-            }
-            if (occupyingDivision) break;
+      
+      if (usage === 0) {
+        // Field is free. We can take it.
+      } 
+      else if (usage === 1) {
+        // Field is in use by one other bunk. Check if we can share.
+        const rules = fieldProps.sharableWith || { type: 'not_sharable' };
+
+        if (rules.type === 'not_sharable') {
+          isBusy = true; // In use and not sharable
+        } 
+        else if (rules.type === 'all') {
+          // 'Sharable with All' - we can join.
+        }
+        else if (rules.type === 'custom') {
+          // 'Sharable with Specific...'
+          const rules = fieldProps.sharableWith;
+          const allowedDivs = rules.divisions || [];
+          const allowedBunks = rules.bunks || [];
+          
+          // Find the current occupant
+          const occupant = findOccupantBunk(currentSlot, pickedField);
+          
+          // Check if *our* bunk/div is in the allowed list
+          const weCanShare = allowedDivs.includes(div) || allowedBunks.includes(bunk);
+          
+          // Check if the *occupant's* bunk/div is *also* in the allowed list
+          const theyCanShare = occupant && (allowedDivs.includes(occupant.div) || allowedBunks.includes(occupant.bunk));
+          
+          if (weCanShare && theyCanShare) {
+            // Both parties are in the "club". We can share.
+          } else {
+            // One or both bunks are not in the allowed sharing list.
+            isBusy = true;
           }
-          if (occupyingDivision && occupyingDivision !== div) isBusy = true;
         }
       }
+      else { // usage >= 2
+        isBusy = true; // Field is full
+      }
+    }
+
+    if (isBusy) { 
+      if (k === 0) canFitThisPick = false; // Can't even start
+      break; // Stop checking this span
     }
     
-    if (isBusy) { if (k === 0) canFitThisPick = false; break; }
     spanForThisPick++;
   }
+  
   return [canFitThisPick, spanForThisPick];
 }
+// ===== END OF REPLACED FUNCTION =====
+
 
 function assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory) {
   const pickedField = fieldLabel(pick.field);
