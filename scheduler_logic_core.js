@@ -96,53 +96,134 @@ function getEnabledLeaguesByDivision(masterLeagues, overrides) {
 
 // ===== League Sport Rotation (UPDATED) =====
 let leagueSportRotation = {};
-function loadLeagueSportRotation() {
+let leagueMatchupHistory = {}; // NEW: For tracking sport per opponent
+
+// Renamed from loadLeagueSportRotation
+function loadLeagueStates() {
   try {
-    if (window.currentDailyData && window.currentDailyData.leagueSportRotation && Object.keys(window.currentDailyData.leagueSportRotation).length > 0) {
+    if (window.currentDailyData && window.currentDailyData.leagueSportRotation) {
+      // Load from today's data if it exists
       leagueSportRotation = window.currentDailyData.leagueSportRotation;
+      leagueMatchupHistory = window.currentDailyData.leagueMatchupHistory || {};
     } else if (window.loadPreviousDailyData) {
+      // Otherwise, load from yesterday and save to today
       const yesterdayData = window.loadPreviousDailyData();
       leagueSportRotation = yesterdayData.leagueSportRotation || {};
-      saveLeagueSportRotation();
+      leagueMatchupHistory = yesterdayData.leagueMatchupHistory || {};
+      saveLeagueStates(); // Carry-forward to today's data
     } else {
+      // No data, start fresh
       leagueSportRotation = {};
+      leagueMatchupHistory = {};
     }
   } catch(e) {
-    console.error("Failed to load league sport rotation:", e);
+    console.error("Failed to load league states:", e);
     leagueSportRotation = {};
+    leagueMatchupHistory = {};
   }
-}
-function saveLeagueSportRotation() {
-  try { window.saveCurrentDailyData?.("leagueSportRotation", leagueSportRotation); } catch {}
 }
 
-// UPDATED assignSportsToMatchups (FIX 13 + BUGFIX)
+// Renamed from saveLeagueSportRotation
+function saveLeagueStates() {
+  try {
+    window.saveCurrentDailyData?.("leagueSportRotation", leagueSportRotation);
+    window.saveCurrentDailyData?.("leagueMatchupHistory", leagueMatchupHistory);
+  } catch {}
+}
+
+// Helper for league matchup history
+function getMatchupKey(teamA, teamB) {
+  return [teamA, teamB].sort().join('-');
+}
+
+// UPDATED assignSportsToMatchups (Handles Req #1 and #3)
 function assignSportsToMatchups(leagueName, matchups, sportsList, yesterdayHistory) {
   if (!Array.isArray(matchups) || matchups.length === 0) return [];
-  if (!Array.isArray(sportsList) || sportsList.length === 0) return matchups.map((m) => ({ teams: m, sport: "Leagues" }));
-  loadLeagueSportRotation();
+  if (!Array.isArray(sportsList) || sportsList.length === 0) {
+    return matchups.map((m) => ({ teams: m, sport: "Leagues" }));
+  }
+
+  loadLeagueStates(); // Use the new function
+
+  const leagueHist = leagueMatchupHistory[leagueName] || {};
   const state = leagueSportRotation[leagueName] || { index: 0 };
   let idx = state.index;
+
   const assigned = [];
+
   for (const match of matchups) {
     const [teamA, teamB] = match;
+    const matchupKey = getMatchupKey(teamA, teamB);
+    const hist = leagueHist[matchupKey] || [];
+    
+    // REQ #1: Get last sport played *against this opponent*
+    const lastSportVsOpponent = hist.length > 0 ? hist[hist.length - 1] : null;
+
+    // REQ #3: Get last sport played *yesterday*
     const lastSportA = yesterdayHistory[teamA];
     const lastSportB = yesterdayHistory[teamB];
+
     let chosenSport = null;
+    let chosenSportIdx = -1;
+
+    // --- Pass 1: Strict Mode (Respects Req #1 AND #3) ---
     for (let i = 0; i < sportsList.length; i++) {
-      const sportIdx = (idx + i) % sportsList.length; 
+      const sportIdx = (idx + i) % sportsList.length;
       const sport = sportsList[sportIdx];
-      if (sport !== lastSportA && sport !== lastSportB) { chosenSport = sport; idx = sportIdx + 1; break; }
+
+      if (sport === lastSportVsOpponent) continue; // Fail Req #1
+      if (sport === lastSportA || sport === lastSportB) continue; // Fail Req #3 (back-to-back)
+
+      chosenSport = sport;
+      chosenSportIdx = sportIdx;
+      break;
     }
-    if (!chosenSport) { chosenSport = sportsList[idx % sportsList.length]; idx++; }
+
+    // --- Pass 2: Relaxed Mode (Respects Req #1, but allows back-to-back) ---
+    // This runs if Pass 1 failed (e.g., the only available sport was played yesterday)
+    if (!chosenSport) {
+      for (let i = 0; i < sportsList.length; i++) {
+        const sportIdx = (idx + i) % sportsList.length;
+        const sport = sportsList[sportIdx];
+
+        if (sport === lastSportVsOpponent) continue; // STILL Fail Req #1
+
+        // We are now ignoring Req #3 (back-to-back) to satisfy Req #1
+        chosenSport = sport;
+        chosenSportIdx = sportIdx;
+        break;
+      }
+    }
+    
+    // --- Pass 3: Failsafe (Req #1 cannot be met) ---
+    // This runs if all available sports have been played against this opponent
+    // (e.g., only 1 sport in the league). We just pick the next one in rotation.
+    if (!chosenSport) {
+      chosenSportIdx = idx % sportsList.length;
+      chosenSport = sportsList[chosenSportIdx];
+      // This choice may violate Req #1, but we have no other option.
+    }
+    
+    // Update the league's rotation index to start after the chosen sport
+    idx = (chosenSportIdx + 1) % sportsList.length;
+
     assigned.push({ teams: match, sport: chosenSport });
+
+    // Save this sport to the *new* matchup history
+    const newHist = leagueHist[matchupKey] || [];
+    newHist.push(chosenSport);
+    leagueHist[matchupKey] = newHist;
   }
-  leagueSportRotation[leagueName] = { index: idx % sportsList.length };
-  saveLeagueSportRotation();
+
+  // Save the new state
+  leagueSportRotation[leagueName] = { index: idx };
+  leagueMatchupHistory[leagueName] = leagueHist;
+  saveLeagueStates(); // Use the new function
+
   return assigned;
 }
 
-// ====== CORE ASSIGN ======
+// ====== CORE ASSIGN ======<br>
 window.leagueAssignments = window.leagueAssignments || {};
 const H2H_PROB = 0.6; // 60% attempt per bunk/slot
 
