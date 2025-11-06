@@ -1,5 +1,3 @@
-// -------------------- app1.js --------------------
-
 // -------------------- State --------------------
 let bunks = [];
 let divisions = {}; // { divName:{ bunks:[], color, start, end } }
