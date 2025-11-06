@@ -46,7 +46,9 @@ publishDivisionToggleMap();
 // -------------------- UI --------------------
 /**
  * UPDATED FUNCTION
- * Fixes the bug where the custom sport input had no "Add" button.
+ * - Fixes the bug where the custom sport input had no "Add" button.
+ * - NEW: Renders buttons for ALL saved sports (including custom ones).
+ * - NEW: All sport buttons now toggle (add/remove) on click.
  */
 function initLeaguesTab() {
   const leaguesContainer = document.getElementById("leaguesContainer");
@@ -237,11 +239,24 @@ function initLeaguesTab() {
     section.appendChild(sportsTitle);
 
     const sportsContainer = document.createElement("div");
+
+    // --- START OF FIX ---
+
+    // This is the list of *suggested* sports
     const sportsList = ["Basketball", "Hockey", "Volleyball", "Soccer", "Kickball", "Punchball", "Baseball"];
-    sportsList.forEach(sport => {
+    
+    // This is the *master list* of all sports to display:
+    // (the suggestions + any custom sports already saved to this league)
+    const allSportsToShow = Array.from(new Set([...sportsList, ...leagueData.sports]));
+    
+    // Now, loop over the master list to create the buttons
+    allSportsToShow.forEach(sport => {
       const btn = document.createElement("button");
       btn.textContent = sport;
-      const active = leagueData.sports.includes(sport);
+      
+      // 'active' means it's currently in this league's sport list
+      const active = leagueData.sports.includes(sport); 
+      
       btn.style.margin = "2px";
       btn.style.padding = "6px 10px";
       btn.style.borderRadius = "20px";
@@ -249,17 +264,24 @@ function initLeaguesTab() {
       btn.style.border = "2px solid #007BFF";
       btn.style.backgroundColor = active ? "#007BFF" : "white";
       btn.style.color = active ? "white" : "black";
+      
+      // This toggle logic now handles BOTH adding and removing
       btn.onclick = () => {
         const idx = leagueData.sports.indexOf(sport);
-        if (idx >= 0) leagueData.sports.splice(idx, 1);
-        else leagueData.sports.push(sport);
+        if (idx >= 0) {
+          // It's active, so REMOVE it
+          leagueData.sports.splice(idx, 1);
+        } else {
+          // It's inactive, so ADD it
+          leagueData.sports.push(sport);
+        }
         saveLeagues();
-        initLeaguesTab();
+        initLeaguesTab(); // Re-render
       };
       sportsContainer.appendChild(btn);
     });
 
-    // --- START OF FIX ---
+    // --- END OF FIX ---
 
     const customSportInput = document.createElement("input");
     customSportInput.placeholder = "Other sport";
@@ -294,8 +316,6 @@ function initLeaguesTab() {
     addCustomSportBtn.style.marginLeft = "4px";
     addCustomSportBtn.onclick = addCustomSport; // Assign the same logic
     sportsContainer.appendChild(addCustomSportBtn);
-
-    // --- END OF FIX ---
 
     section.appendChild(sportsContainer);
 
