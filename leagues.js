@@ -8,54 +8,58 @@ let leaguesByName = {};
 
 // -------------------- Helpers --------------------
 function publishDivisionToggleMap() {
-  const divMap = {};
-  Object.values(leaguesByName).forEach(lg => {
-    if (lg?.enabled && Array.isArray(lg.divisions)) {
-      lg.divisions.forEach(d => { if (d) divMap[d] = { enabled: true }; });
-    }
-  });
-  window.leagues = divMap;
+const divMap = {};
+Object.values(leaguesByName).forEach(lg => {
+if (lg?.enabled && Array.isArray(lg.divisions)) {
+lg.divisions.forEach(d => { if (d) divMap[d] = { enabled: true }; });
+}
+});
+window.leagues = divMap;
 }
 
 function saveLeagues() {
-  // UPDATED: Save to global settings
-  window.saveGlobalSettings?.("leaguesByName", leaguesByName);
-  
-  window.leaguesByName = leaguesByName; // publish full map
-  publishDivisionToggleMap();
+// UPDATED: Save to global settings
+window.saveGlobalSettings?.("leaguesByName", leaguesByName);
+
+window.leaguesByName = leaguesByName; // publish full map
+publishDivisionToggleMap();
 }
 
 function loadLeagues() {
-  // UPDATED: Load from global settings
-  // Relies on calendar.js migration logic to find "leagues" key once
-  const stored = window.loadGlobalSettings?.().leaguesByName;
-  
-  leaguesByName = stored || {};
-  Object.keys(leaguesByName).forEach(name => {
-    const l = leaguesByName[name] || {};
-    if (typeof l.enabled === "undefined") l.enabled = false;
-    l.divisions = Array.isArray(l.divisions) ? l.divisions : [];
-    l.sports    = Array.isArray(l.sports)    ? l.sports    : [];
-    l.teams     = Array.isArray(l.teams)     ? l.teams     : [];
-    leaguesByName[name] = l;
-  });
-  window.leaguesByName = leaguesByName; // publish full map
-  publishDivisionToggleMap();
+// UPDATED: Load from global settings
+// Relies on calendar.js migration logic to find "leagues" key once
+const stored = window.loadGlobalSettings?.().leaguesByName;
+
+leaguesByName = stored || {};
+Object.keys(leaguesByName).forEach(name => {
+const l = leaguesByName[name] || {};
+if (typeof l.enabled === "undefined") l.enabled = false;
+l.divisions = Array.isArray(l.divisions) ? l.divisions : [];
+l.sports = Array.isArray(l.sports) ? l.sports : [];
+l.teams = Array.isArray(l.teams) ? l.teams : [];
+leaguesByName[name] = l;
+});
+window.leaguesByName = leaguesByName; // publish full map
+publishDivisionToggleMap();
 }
 
 // -------------------- UI --------------------
+/**
+ * UPDATED FUNCTION
+ * Fixes the bug where the custom sport input had no "Add" button.
+ */
 function initLeaguesTab() {
   const leaguesContainer = document.getElementById("leaguesContainer");
   if (!leaguesContainer) return;
   leaguesContainer.innerHTML = "";
-  
+
   const addLeagueDiv = document.createElement("div");
   addLeagueDiv.style.marginBottom = "15px";
-  
+
   const newLeagueInput = document.createElement("input");
   newLeagueInput.placeholder = "Enter new league name";
   newLeagueInput.style.marginRight = "8px";
-  
+
   const addLeagueBtn = document.createElement("button");
   addLeagueBtn.textContent = "Add League";
   addLeagueBtn.onclick = () => {
@@ -68,18 +72,18 @@ function initLeaguesTab() {
     }
   };
   newLeagueInput.addEventListener("keypress", e => { if (e.key === "Enter") addLeagueBtn.click(); });
-  
+
   addLeagueDiv.appendChild(newLeagueInput);
   addLeagueDiv.appendChild(addLeagueBtn);
   leaguesContainer.appendChild(addLeagueDiv);
-  
+
   const sourceDivs = Array.isArray(window.availableDivisions) && window.availableDivisions.length > 0
     ? window.availableDivisions
     : Object.keys(window.divisions || {});
-      
+
   Object.keys(leaguesByName).forEach(leagueName => {
     const leagueData = leaguesByName[leagueName];
-  
+
     const section = document.createElement("div");
     section.className = "league-section";
     section.style.border = "1px solid #ccc";
@@ -88,22 +92,22 @@ function initLeaguesTab() {
     section.style.borderRadius = "8px";
     section.style.background = "#fafafa";
     section.style.opacity = leagueData.enabled ? "1" : "0.85";
-  
+
     const header = document.createElement("div");
     header.style.display = "flex";
     header.style.justifyContent = "space-between";
     header.style.alignItems = "center";
     header.style.gap = "8px";
-  
+
     const leftHeader = document.createElement("div");
     leftHeader.style.display = "flex";
     leftHeader.style.alignItems = "center";
     leftHeader.style.gap = "10px";
-  
+
     const title = document.createElement("h3");
     title.textContent = leagueName;
     title.style.margin = "0";
-  
+
     // toggle
     const toggleWrap = document.createElement("label");
     toggleWrap.style.display = "inline-flex";
@@ -112,10 +116,10 @@ function initLeaguesTab() {
     toggleWrap.style.cursor = "pointer";
     toggleWrap.title = "Enable/Disable this league";
     toggleWrap.style.position = "relative";
-  
+
     const toggleText = document.createElement("span");
     toggleText.textContent = leagueData.enabled ? "Enabled" : "Disabled";
-  
+
     const toggle = document.createElement("input");
     toggle.type = "checkbox";
     toggle.checked = !!leagueData.enabled;
@@ -130,7 +134,7 @@ function initLeaguesTab() {
       outline: "none",
       border: "1px solid #9ca3af"
     });
-  
+
     const knob = document.createElement("span");
     Object.assign(knob.style, {
       position: "absolute",
@@ -144,7 +148,7 @@ function initLeaguesTab() {
       boxShadow: "0 1px 2px rgba(0,0,0,0.3)",
       transition: "left 0.15s ease"
     });
-  
+
     toggle.addEventListener("change", () => {
       leagueData.enabled = toggle.checked;
       toggle.style.background = toggle.checked ? "#22c55e" : "#d1d5db";
@@ -153,11 +157,11 @@ function initLeaguesTab() {
       section.style.opacity = leagueData.enabled ? "1" : "0.85";
       saveLeagues();
     });
-  
+
     toggleWrap.appendChild(toggle);
     toggleWrap.appendChild(knob);
     toggleWrap.appendChild(toggleText);
-  
+
     const deleteBtn = document.createElement("button");
     deleteBtn.textContent = "🗑️";
     deleteBtn.title = "Delete League";
@@ -168,25 +172,25 @@ function initLeaguesTab() {
         initLeaguesTab();
       }
     };
-  
+
     leftHeader.appendChild(title);
     leftHeader.appendChild(toggleWrap);
     header.appendChild(leftHeader);
     header.appendChild(deleteBtn);
     section.appendChild(header);
-  
+
     // Divisions
     const divTitle = document.createElement("p");
     divTitle.textContent = "Divisions in this League:";
     divTitle.style.marginBottom = "6px";
     section.appendChild(divTitle);
-  
+
     const divContainer = document.createElement("div");
     divContainer.className = "division-push-buttons";
     divContainer.style.display = "flex";
     divContainer.style.flexWrap = "wrap";
     divContainer.style.gap = "6px";
-  
+
     if (sourceDivs.length === 0) {
       const note = document.createElement("div");
       note.textContent = "No divisions found. Add divisions in Setup.";
@@ -194,12 +198,12 @@ function initLeaguesTab() {
       note.style.opacity = "0.7";
       section.appendChild(note);
     }
-  
+
     sourceDivs.forEach(divName => {
       const divBtn = document.createElement("button");
       divBtn.textContent = divName;
       divBtn.className = "push-btn";
-  
+
       const active = leagueData.divisions.includes(divName);
       const divColor = window.divisions?.[divName]?.color || "#ccc";
       divBtn.style.backgroundColor = active ? divColor : "white";
@@ -210,10 +214,10 @@ function initLeaguesTab() {
       divBtn.style.fontWeight = "500";
       divBtn.style.cursor = "pointer";
       divBtn.style.transition = "all 0.15s ease";
-  
+
       divBtn.onmouseenter = () => { if (!active) divBtn.style.backgroundColor = "#f3f3f3"; };
       divBtn.onmouseleave = () => { if (!active) divBtn.style.backgroundColor = "white"; };
-  
+
       divBtn.onclick = () => {
         const idx = leagueData.divisions.indexOf(divName);
         if (idx >= 0) leagueData.divisions.splice(idx, 1);
@@ -221,17 +225,17 @@ function initLeaguesTab() {
         saveLeagues();
         initLeaguesTab();
       };
-  
+
       divContainer.appendChild(divBtn);
     });
     section.appendChild(divContainer);
-  
+
     // Sports
     const sportsTitle = document.createElement("p");
     sportsTitle.textContent = "League Sports:";
     sportsTitle.style.margin = "10px 0 6px";
     section.appendChild(sportsTitle);
-  
+
     const sportsContainer = document.createElement("div");
     const sportsList = ["Basketball", "Hockey", "Volleyball", "Soccer", "Kickball", "Punchball", "Baseball"];
     sportsList.forEach(sport => {
@@ -254,27 +258,53 @@ function initLeaguesTab() {
       };
       sportsContainer.appendChild(btn);
     });
-  
+
+    // --- START OF FIX ---
+
     const customSportInput = document.createElement("input");
     customSportInput.placeholder = "Other sport";
     customSportInput.style.marginLeft = "6px";
+    
+    // Create a shared function for adding the sport
+    const addCustomSport = () => {
+      const val = customSportInput.value.trim();
+      if (val === "") return; // Do nothing if empty
+
+      if (leagueData.sports.includes(val)) {
+        customSportInput.value = ""; // Just clear it
+        return;
+      }
+
+      leagueData.sports.push(val);
+      customSportInput.value = "";
+      saveLeagues();
+      initLeaguesTab(); // Re-render the whole tab to show the new button
+    };
+
     customSportInput.onkeypress = e => {
-      if (e.key === "Enter" && customSportInput.value.trim() !== "") {
-        leagueData.sports.push(customSportInput.value.trim());
-        customSportInput.value = "";
-        saveLeagues();
-        initLeaguesTab();
+      if (e.key === "Enter") {
+        addCustomSport();
       }
     };
     sportsContainer.appendChild(customSportInput);
+
+    // Create the "Add" button
+    const addCustomSportBtn = document.createElement("button");
+    addCustomSportBtn.textContent = "Add";
+    addCustomSportBtn.style.marginLeft = "4px";
+    addCustomSportBtn.onclick = addCustomSport; // Assign the same logic
+    sportsContainer.appendChild(addCustomSportBtn);
+
+    // --- END OF FIX ---
+
     section.appendChild(sportsContainer);
-  
+
     // Teams
     const teamTitle = document.createElement("p");
     teamTitle.textContent = "Teams:";
     teamTitle.style.margin = "10px 0 6px";
     section.appendChild(teamTitle);
-  
+
     const teamInput = document.createElement("input");
     teamInput.placeholder = "Enter team name";
     teamInput.style.marginRight = "8px";
@@ -291,7 +321,7 @@ function initLeaguesTab() {
       }
     };
     section.appendChild(teamInput);
-  
+
     const addTeamBtn = document.createElement("button");
     addTeamBtn.textContent = "Add Team";
     addTeamBtn.onclick = () => {
@@ -305,13 +335,13 @@ function initLeaguesTab() {
       teamInput.value = "";
     };
     section.appendChild(addTeamBtn);
-  
+
     const teamListContainer = document.createElement("div");
     teamListContainer.style.marginTop = "6px";
     teamListContainer.style.display = "flex";
     teamListContainer.style.flexWrap = "wrap";
     teamListContainer.style.gap = "6px";
-  
+
     (leagueData.teams || []).forEach(team => {
       const teamBtn = document.createElement("button");
       teamBtn.textContent = team;
@@ -330,7 +360,7 @@ function initLeaguesTab() {
       teamListContainer.appendChild(teamBtn);
     });
     section.appendChild(teamListContainer);
-  
+
     leaguesContainer.appendChild(section);
   });
 }
@@ -346,10 +376,137 @@ window.saveLeagues = saveLeagues;
 // ===== START OF NEW INIT FUNCTION =====
 // =============================================
 function initLeagues() {
-  // loadLeagues() is already called at the top level of this file.
-  if (document.getElementById("leaguesContainer")) initLeaguesTab();
+// loadLeagues() is already called at the top level of this file.
+if (document.getElementById("leaguesContainer")) initLeaguesTab();
 }
 window.initLeagues = initLeagues;
 // =============================================
 // ===== END OF NEW INIT FUNCTION =====
 // =============================================
+
+/**
+* =============================================================
+* LEAGUE SCHEDULING CORE (league_scheduling.js)
+* (UPDATED to use calendar.js save/load)
+* =============================================================
+*/
+
+(function () {
+'use strict';
+
+// const LEAGUE_STATE_KEY = "camp_league_round_state"; // No longer used
+let leagueRoundState = {}; // { "League Name": { currentRound: 0 } }
+
+/**
+* Loads the current round for all leagues from the *current day's* data.
+*/
+function loadRoundState() {
+try {
+// UPDATED: Load from the globally scoped daily object
+if (window.currentDailyData && window.currentDailyData.leagueRoundState) {
+leagueRoundState = window.currentDailyData.leagueRoundState;
+} else if (window.loadCurrentDailyData) {
+// If it's the first load, loadCurrentDailyData will run and populate it
+leagueRoundState = window.loadCurrentDailyData().leagueRoundState || {};
+}
+else {
+leagueRoundState = {};
+}
+} catch (e) {
+console.error("Failed to load league state:", e);
+leagueRoundState = {};
+}
+}
+
+/**
+* Saves the current round for all leagues to the *current day's* data.
+*/
+function saveRoundState() {
+try {
+// UPDATED: Save to the globally scoped daily object
+window.saveCurrentDailyData?.("leagueRoundState", leagueRoundState);
+} catch (e) {
+console.error("Failed to save league state:", e);
+}
+}
+
+/**
+* Generates a full round-robin tournament schedule for a list of teams.
+*/
+function generateRoundRobin(teamList) {
+if (!teamList || teamList.length < 2) {
+return [];
+}
+
+const teams = [...teamList];
+let hasBye = false;
+if (teams.length % 2 !== 0) {
+teams.push("BYE");
+hasBye = true;
+}
+
+const numRounds = teams.length - 1;
+const schedule = [];
+
+const fixedTeam = teams[0];
+const rotatingTeams = teams.slice(1);
+
+for (let round = 0; round < numRounds; round++) {
+const currentRound = [];
+
+currentRound.push([fixedTeam, rotatingTeams[0]]);
+
+for (let i = 1; i < teams.length / 2; i++) {
+const team1 = rotatingTeams[i];
+const team2 = rotatingTeams[rotatingTeams.length - i];
+currentRound.push([team1, team2]);
+}
+
+schedule.push(currentRound);
+rotatingTeams.unshift(rotatingTeams.pop());
+}
+
+if (hasBye) {
+return schedule.map(round =>
+round.filter(match => match[0] !== "BYE" && match[1] !== "BYE")
+);
+}
+
+return schedule;
+}
+
+/**
+* Public function to get the *next* set of matchups for a league.
+*/
+function getLeagueMatchups(leagueName, teams) {
+if (!leagueName || !teams || teams.length < 2) {
+return [];
+}
+
+loadRoundState();
+
+const state = leagueRoundState[leagueName] || { currentRound: 0 };
+const fullSchedule = generateRoundRobin(teams);
+
+if (fullSchedule.length === 0) {
+return [];
+}
+
+const todayMatchups = fullSchedule[state.currentRound];
+
+// Increment and save the round number for next time
+const nextRound = (state.currentRound + 1) % fullSchedule.length;
+leagueRoundState[leagueName] = { currentRound: nextRound };
+saveRoundState();
+
+return todayMatchups;
+}
+
+// --- Global Exposure and Initialization ---
+window.getLeagueMatchups = getLeagueMatchups;
+
+// IMPORTANT: Load state on script execution
+// It will load the state for the current date set by calendar.js
+loadRoundState();
+
+})();
