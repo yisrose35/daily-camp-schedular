@@ -66,9 +66,34 @@ function fmtTime(d) {
   return `${h}:${m} ${ap}`;
 }
 
-// -------------------- NEW HELPER FUNCTION --------------------
+// -------------------- NEW/UPDATED HELPER FUNCTIONS --------------------
+
 /**
- * Renders the "Available / Unavailable" time-based controls
+ * This is a copy of the helper from scheduler_logic_core.js
+ * It's needed here for validation.
+ */
+function parseTimeToMinutes(str) {
+  if (!str || typeof str !== "string") return null;
+  let s = str.trim().toLowerCase();
+  let mer = null;
+  if (s.endsWith("am") || s.endsWith("pm")) {
+    mer = s.endsWith("am") ? "am" : "pm";
+    s = s.replace(/am|pm/g, "").trim();
+  }
+  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+  if (!m) return null;
+  let hh = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
+  if (mer) {
+    if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
+    else if (mer === "pm") hh += 12; // 1pm -> 13
+  }
+  return hh * 60 + mm;
+}
+
+/**
+ * UPDATED: Renders the new "Available / Unavailable" SLIDER toggle
  * @param {object} item - The field or special activity object
  * @param {function} onSave - The function to call to save all data
  * @param {function} onRerender - The function to call to rerender this section
@@ -84,28 +109,63 @@ function renderAvailabilityControls(item, onSave, onRerender) {
   const modeLabel = document.createElement("label");
   modeLabel.style.display = "flex";
   modeLabel.style.alignItems = "center";
-  modeLabel.style.gap = "8px";
-  modeLabel.style.marginBottom = "8px";
+  modeLabel.style.gap = "10px";
   modeLabel.style.cursor = "pointer";
-
-  const modeToggle = document.createElement("input");
-  modeToggle.type = "checkbox";
-  // "available" = unchecked (false), "unavailable" = checked (true)
-  item.availabilityMode = item.availabilityMode || "available";
-  modeToggle.checked = item.availabilityMode === "unavailable";
-
-  const modeText = document.createElement("span");
-  modeText.textContent = modeToggle.checked ? "Unavailable" : "Available";
-
-  modeToggle.addEventListener("change", () => {
-    item.availabilityMode = modeToggle.checked ? "unavailable" : "available";
-    modeText.textContent = modeToggle.checked ? "Unavailable" : "Available";
-    onSave();
+  
+  const textAvailable = document.createElement("span");
+  textAvailable.textContent = "Available";
+  
+  const toggleTrack = document.createElement("span");
+  Object.assign(toggleTrack.style, {
+    width: "44px",
+    height: "24px",
+    borderRadius: "99px",
+    position: "relative",
+    display: "inline-block",
+    border: "1px solid #ccc",
+    backgroundColor: item.availabilityMode === 'available' ? '#22c55e' : '#d1d5db', // green or grey
+    transition: "background-color 0.2s"
   });
 
-  modeLabel.appendChild(modeToggle);
-  modeLabel.appendChild(modeText);
+  const toggleKnob = document.createElement("span");
+  Object.assign(toggleKnob.style, {
+    width: "20px",
+    height: "20px",
+    borderRadius: "50%",
+    backgroundColor: "white",
+    position: "absolute",
+    top: "1px",
+    left: item.availabilityMode === 'available' ? '21px' : '1px', // right or left
+    transition: "left 0.2s"
+  });
+  
+  toggleTrack.appendChild(toggleKnob);
+  
+  const textUnavailable = document.createElement("span");
+  textUnavailable.textContent = "Unavailable";
+  
+  // Set initial text style
+  textAvailable.style.fontWeight = item.availabilityMode === 'available' ? 'bold' : 'normal';
+  textUnavailable.style.fontWeight = item.availabilityMode === 'unavailable' ? 'bold' : 'normal';
+
+  // Use onclick on the label to toggle state
+  modeLabel.onclick = () => {
+    item.availabilityMode = (item.availabilityMode === 'available') ? 'unavailable' : 'available';
+    
+    // Update styles
+    toggleTrack.style.backgroundColor = item.availabilityMode === 'available' ? '#22c55e' : '#d1d5db';
+    toggleKnob.style.left = item.availabilityMode === 'available' ? '21px' : '1px';
+    textAvailable.style.fontWeight = item.availabilityMode === 'available' ? 'bold' : 'normal';
+    textUnavailable.style.fontWeight = item.availabilityMode === 'unavailable' ? 'bold' : 'normal';
+    
+    onSave();
+  };
+
+  modeLabel.appendChild(textAvailable);
+  modeLabel.appendChild(toggleTrack);
+  modeLabel.appendChild(textUnavailable);
   container.appendChild(modeLabel);
+
 
   // --- 2. "Except for..." Text ---
   const exceptLabel = document.createElement("span");
@@ -141,21 +201,34 @@ function renderAvailabilityControls(item, onSave, onRerender) {
   const addContainer = document.createElement("div");
   addContainer.style.marginTop = "6px";
   const timeInput = document.createElement("input");
-  timeInput.placeholder = "e.g., 9:00-10:30 or 14:00-15:00";
+  // UPDATED Placeholder
+  timeInput.placeholder = "e.g., 9:00am-10:30am";
   timeInput.style.marginRight = "5px";
 
   const addBtn = document.createElement("button");
   addBtn.textContent = "Add Time";
+  
+  // UPDATED Validation Logic
   addBtn.onclick = () => {
     const val = timeInput.value.trim();
-    // Basic validation for "HH:MM-HH:MM" format
-    if (/^\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}$/.test(val)) {
-      item.availabilityExceptions.push(val.replace(/\s/g, ''));
-      timeInput.value = "";
-      onSave();
-      onRerender(); // Re-render to reflect change
+    const parts = val.split('-');
+    if (parts.length === 2) {
+      const startMin = parseTimeToMinutes(parts[0]);
+      const endMin = parseTimeToMinutes(parts[1]);
+      
+      if (startMin != null && endMin != null && endMin > startMin) {
+        // Valid! Push the original, user-formatted string
+        item.availabilityExceptions.push(val);
+        timeInput.value = "";
+        onSave();
+        onRerender(); // Re-render to reflect change
+      } else {
+        // Invalid time or range
+        alert("Invalid time range. Use format '9:00am-10:30am'. Ensure end time is after start time.");
+      }
     } else {
-      alert("Invalid format. Use HH:MM-HH:MM (e.g., 9:00-10:30).");
+      // Invalid format
+      alert("Invalid format. Must be a range separated by a hyphen (e.g., '9:00am-10:30am').");
     }
   };
   timeInput.onkeypress = (e) => { if (e.key === "Enter") addBtn.click(); };
@@ -166,7 +239,7 @@ function renderAvailabilityControls(item, onSave, onRerender) {
 
   return container;
 }
-// --- END OF NEW HELPER FUNCTION ---
+// --- END OF NEW/UPDATED HELPER FUNCTIONS ---
 
 
 // -------------------- Tabs --------------------
