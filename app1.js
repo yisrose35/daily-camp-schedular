@@ -353,7 +353,10 @@ function createChipPicker(allItems, selectedItems, onToggle) {
     chip.style.cursor = "pointer";
     chip.style.border = "1px solid #ccc";
     
-    const isActive = selectedItems.includes(name);
+    // THIS IS THE LINE THAT WAS CRASHING
+    // We added checks in `loadData` to ensure `selectedItems` is always an array
+    const isActive = selectedItems.includes(name); 
+    
     chip.style.backgroundColor = isActive ? "#007BFF" : "#f0f0f0";
     chip.style.color = isActive ? "white" : "black";
     
@@ -580,16 +583,14 @@ function addField() {
   const i = document.getElementById("fieldInput");
   const n = i.value.trim();
   if (n) {
-    // --- UPDATED to include new properties ---
     fields.push({ 
       name: n, 
       activities: [], 
       available: true,
-      sharableWith: { type: 'not_sharable' }, // <-- FIXED: Default to not sharable
+      sharableWith: { type: 'not_sharable' }, // Default to not sharable
       availabilityMode: 'available',
       availabilityExceptions: []
     });
-    // --- END UPDATE ---
     i.value = "";
     saveData();
     renderFields();
@@ -598,9 +599,7 @@ function addField() {
 document.getElementById("addFieldBtn").onclick = addField;
 document.getElementById("fieldInput").addEventListener("keyup", e => { if (e.key === "Enter") addField(); });
 
-//
-// ===== THIS IS THE FIRST MAJORLY UPDATED FUNCTION =====
-//
+
 function renderFields() {
   const c = document.getElementById("fieldList"); c.innerHTML = "";
   fields.forEach(f => {
@@ -609,7 +608,6 @@ function renderFields() {
     makeEditable(t, newName => { f.name = newName; saveData(); renderFields(); });
     w.appendChild(t);
 
-    // --- START: "Available" toggle ---
     const controls = document.createElement("div");
     controls.style.display = "flex";
     controls.style.gap = "20px";
@@ -628,7 +626,6 @@ function renderFields() {
     controls.appendChild(availWrap);
     
     w.appendChild(controls);
-    // --- END: "Available" toggle ---
     
     const bw = document.createElement("div"); bw.style.marginTop = "8px";
     commonActivities.forEach(act => {
@@ -674,15 +671,13 @@ function addSpecial() {
   const i = document.getElementById("specialInput");
   const n = i.value.trim();
   if (n) {
-    // --- UPDATED to include new properties ---
     specialActivities.push({ 
       name: n, 
       available: true,
-      sharableWith: { type: 'not_sharable' }, // <-- FIXED: Default to not sharable
+      sharableWith: { type: 'not_sharable' }, // Default to not sharable
       availabilityMode: 'available',
       availabilityExceptions: []
     });
-    // --- END UPDATE ---
     i.value = "";
     saveData();
     renderSpecials();
@@ -692,9 +687,6 @@ document.getElementById("addSpecialBtn").onclick = addSpecial;
 document.getElementById("specialInput").addEventListener("keyup", e => { if (e.key === "Enter") addSpecial(); });
 
 
-//
-// ===== THIS IS THE SECOND MAJORLY UPDATED FUNCTION =====
-//
 function renderSpecials() {
   const c = document.getElementById("specialList"); c.innerHTML = "";
   specialActivities.forEach(s => {
@@ -703,7 +695,6 @@ function renderSpecials() {
     makeEditable(t, newName => { s.name = newName; saveData(); renderSpecials(); });
     w.appendChild(t);
 
-    // --- START: "Available" toggle ---
     const controls = document.createElement("div");
     controls.style.display = "flex";
     controls.style.gap = "20px";
@@ -722,7 +713,6 @@ function renderSpecials() {
     controls.appendChild(availWrap);
 
     w.appendChild(controls);
-    // --- END: "Available" toggle ---
 
     // --- (NEW) Sharable Controls ---
     const sharableControls = renderSharableControls(s, saveData, renderSpecials);
@@ -787,7 +777,7 @@ function saveData() {
 }
 
 //
-// ===== THIS IS THE THIRD MAJORLY UPDATED FUNCTION =====
+// ===== THIS IS THE NEWLY FIXED loadData FUNCTION =====
 //
 function loadData() {
   // This now loads from the *GlobalSettings* object
@@ -806,34 +796,50 @@ function loadData() {
     specialActivities = data.specialActivities || [];
     timeTemplates = data.timeTemplates || [];
     
-    // --- NEW: Data Migration and Property Initialization ---
+    // --- START: FIX ---
+    // This logic now ensures all properties are correctly initialized.
     fields.forEach(f => {
       f.available = f.available !== false; // default true
-      // Migrate old 'sharable' boolean to new 'sharableWith' object
+      
+      // Migrate old 'sharable' boolean
       if (typeof f.sharable === 'boolean') {
         f.sharableWith = { type: f.sharable ? 'all' : 'not_sharable' };
-        delete f.sharable; // Remove old property
-      } else {
-        f.sharableWith = f.sharableWith || { type: 'not_sharable' }; // Default
+        delete f.sharable; 
       }
+      
+      // Ensure object exists and has a type
+      f.sharableWith = f.sharableWith || { type: 'not_sharable' };
+      
+      // THIS IS THE FIX: Ensure the arrays always exist
+      f.sharableWith.divisions = f.sharableWith.divisions || [];
+      f.sharableWith.bunks = f.sharableWith.bunks || [];
+
       f.availabilityMode = f.availabilityMode || 'available';
       f.availabilityExceptions = f.availabilityExceptions || [];
     });
+    
     specialActivities.forEach(s => {
       s.available = s.available !== false; // default true
-      // Migrate old 'sharable' boolean to new 'sharableWith' object
+      
+      // Migrate old 'sharable' boolean
       if (typeof s.sharable === 'boolean') {
         // Old specials defaulted to sharable
         s.sharableWith = { type: s.sharable ? 'all' : 'not_sharable' };
-        delete s.sharable; // Remove old property
-      } else {
-        // NEW specials default to NOT sharable
-        s.sharableWith = s.sharableWith || { type: 'not_sharable' }; 
+        delete s.sharable;
       }
+      
+      // Ensure object exists and has a type
+      // NEW: Default to not_sharable
+      s.sharableWith = s.sharableWith || { type: 'not_sharable' }; 
+      
+      // THIS IS THE FIX: Ensure the arrays always exist
+      s.sharableWith.divisions = s.sharableWith.divisions || [];
+      s.sharableWith.bunks = s.sharableWith.bunks || [];
+
       s.availabilityMode = s.availabilityMode || 'available';
       s.availabilityExceptions = s.availabilityExceptions || [];
     });
-    // --- END NEW ---
+    // --- END: FIX ---
     
   } catch (e) { console.error("Error loading data:", e); }
 }
