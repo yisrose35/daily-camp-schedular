@@ -242,75 +242,92 @@ function renderSharableControls(item, onSave, onRerender) {
   container.style.marginTop = "10px";
   
   const rules = item.sharableWith || { type: 'not_sharable' };
+  const isSharable = rules.type !== 'not_sharable';
 
-  // --- 1. Radio Buttons ---
-  const radioGroup = document.createElement("div");
-  radioGroup.style.display = "flex";
-  radioGroup.style.gap = "15px";
-  
-  const types = [
-    { id: 'not_sharable', label: 'Not Sharable' },
-    { id: 'all', label: 'Sharable with All' },
-    { id: 'custom', label: 'Sharable with Specific...' }
-  ];
+  // --- 1. Master "Sharable" Toggle ---
+  const tog = document.createElement("label"); 
+  tog.className = "switch";
+  tog.title = "Toggle Sharable";
+  const cb = document.createElement("input"); 
+  cb.type = "checkbox"; 
+  cb.checked = isSharable;
+  cb.onchange = () => {
+    if (cb.checked) {
+      rules.type = 'all'; // Default to 'all' when turned on
+    } else {
+      rules.type = 'not_sharable';
+    }
+    rules.divisions = []; // Clear custom rules
+    rules.bunks = [];     // Clear custom rules
+    onSave();
+    onRerender();
+  };
+  const sl = document.createElement("span"); sl.className = "slider";
+  tog.appendChild(cb); 
+  tog.appendChild(sl); 
+  const togLabel = document.createElement("span"); 
+  togLabel.textContent = "Sharable";
+  const shareWrap = document.createElement("label"); 
+  shareWrap.style.display="flex"; 
+  shareWrap.style.alignItems="center"; 
+  shareWrap.style.gap="5px"; 
+  shareWrap.style.cursor="pointer";
+  shareWrap.appendChild(tog); 
+  shareWrap.appendChild(togLabel);
+  container.appendChild(shareWrap);
 
-  types.forEach(typeInfo => {
-    const label = document.createElement("label");
-    label.style.cursor = "pointer";
-    label.style.display = "flex";
-    label.style.alignItems = "center";
-    label.style.gap = "4px";
-    
-    const radio = document.createElement("input");
-    radio.type = "radio";
-    radio.name = `sharable-${item.name}`;
-    radio.value = typeInfo.id;
-    radio.checked = rules.type === typeInfo.id;
-    
-    radio.onchange = () => {
-      if (radio.checked) {
-        rules.type = typeInfo.id;
-        if (typeInfo.id === 'custom') {
-          rules.divisions = rules.divisions || [];
-          rules.bunks = rules.bunks || [];
-        }
-        onSave();
-        onRerender(); // Re-render to show/hide the custom panel
-      }
-    };
-    
-    label.appendChild(radio);
-    label.appendChild(document.createTextNode(typeInfo.label));
-    radioGroup.appendChild(label);
-  });
-  container.appendChild(radioGroup);
-
-  // --- 2. Custom Panel (if "Specific" is checked) ---
-  if (rules.type === 'custom') {
+  // --- 2. Custom Panel (if "Sharable" is ON) ---
+  if (isSharable) {
     const customPanel = document.createElement("div");
     customPanel.style.paddingLeft = "20px";
     customPanel.style.marginTop = "10px";
     
-    // Get all bunks for the picker
-    const allBunks = [];
-    (window.availableDivisions || []).forEach(div => {
-      (window.divisions[div]?.bunks || []).forEach(bunk => {
-        allBunks.push(bunk);
-      });
-    });
-
     // --- Division Picker ---
-    customPanel.appendChild(document.createTextNode("Allowed Divisions:"));
-    const divChipBox = createChipPicker(window.availableDivisions || [], rules.divisions, onSave);
+    const divLabel = document.createElement("div");
+    divLabel.textContent = "Limit to Divisions (if none selected, sharable with all):";
+    customPanel.appendChild(divLabel);
+    
+    const onDivToggle = () => {
+      // Logic: If divisions are selected, it's custom. If not, it's 'all'.
+      if (rules.divisions.length > 0) {
+        rules.type = 'custom';
+      } else {
+        rules.type = 'all';
+      }
+      rules.bunks = []; // Any division change resets the bunk selection
+      onSave();
+      onRerender(); // Re-render to show/hide the bunks panel
+    };
+    
+    const divChipBox = createChipPicker(window.availableDivisions || [], rules.divisions, onDivToggle);
     customPanel.appendChild(divChipBox);
     
-    // --- Bunk Picker ---
-    const bunkLabel = document.createElement("div");
-    bunkLabel.textContent = "Allowed Bunks:";
-    bunkLabel.style.marginTop = "10px";
-    customPanel.appendChild(bunkLabel);
-    const bunkChipBox = createChipPicker(allBunks, rules.bunks, onSave);
-    customPanel.appendChild(bunkChipBox);
+    // --- Bunk Picker (if divisions are selected) ---
+    if (rules.type === 'custom' && rules.divisions.length > 0) {
+      const bunkLabel = document.createElement("div");
+      bunkLabel.textContent = "Limit to Bunks (overrides division selection):";
+      bunkLabel.style.marginTop = "10px";
+      customPanel.appendChild(bunkLabel);
+      
+      // Get bunks *only* from selected divisions
+      const bunksFromSelectedDivs = [];
+      rules.divisions.forEach(divName => {
+        (window.divisions[divName]?.bunks || []).forEach(bunk => {
+          bunksFromSelectedDivs.push(bunk);
+        });
+      });
+      
+      const onBunkToggle = () => {
+        // Logic: Bunk selection is always 'custom'.
+        // The scheduler will see 'bunks' has items and will ignore 'divisions'.
+        rules.type = 'custom';
+        onSave();
+        onRerender(); // Just to re-render the chips
+      };
+
+      const bunkChipBox = createChipPicker(bunksFromSelectedDivs, rules.bunks, onBunkToggle);
+      customPanel.appendChild(bunkChipBox);
+    }
 
     container.appendChild(customPanel);
   }
@@ -321,7 +338,7 @@ function renderSharableControls(item, onSave, onRerender) {
 /**
  * NEW: Helper for renderSharableControls to create chip pickers
  */
-function createChipPicker(allItems, selectedItems, onSave) {
+function createChipPicker(allItems, selectedItems, onToggle) {
   const chipBox = document.createElement("div");
   chipBox.style.display = "flex";
   chipBox.style.flexWrap = "wrap";
@@ -347,10 +364,7 @@ function createChipPicker(allItems, selectedItems, onSave) {
       } else {
         selectedItems.push(name);
       }
-      onSave();
-      // We don't re-render the whole component, just this chip
-      chip.style.backgroundColor = !isActive ? "#007BFF" : "#f0f0f0";
-      chip.style.color = !isActive ? "white" : "black";
+      onToggle(); // Call the specific toggle logic
     };
     chipBox.appendChild(chip);
   });
@@ -595,7 +609,7 @@ function renderFields() {
     makeEditable(t, newName => { f.name = newName; saveData(); renderFields(); });
     w.appendChild(t);
 
-    // --- START: Re-add "Available" toggle ---
+    // --- START: "Available" toggle ---
     const controls = document.createElement("div");
     controls.style.display = "flex";
     controls.style.gap = "20px";
@@ -613,10 +627,8 @@ function renderFields() {
     availWrap.appendChild(tog); availWrap.appendChild(togLabel);
     controls.appendChild(availWrap);
     
-    // (The simple "Sharable" toggle is now replaced by renderSharableControls below)
-
     w.appendChild(controls);
-    // --- END: Re-add "Available" toggle ---
+    // --- END: "Available" toggle ---
     
     const bw = document.createElement("div"); bw.style.marginTop = "8px";
     commonActivities.forEach(act => {
@@ -666,7 +678,7 @@ function addSpecial() {
     specialActivities.push({ 
       name: n, 
       available: true,
-      sharableWith: { type: 'all' }, // <-- FIXED: Specials default to sharable with all
+      sharableWith: { type: 'not_sharable' }, // <-- FIXED: Default to not sharable
       availabilityMode: 'available',
       availabilityExceptions: []
     });
@@ -691,7 +703,7 @@ function renderSpecials() {
     makeEditable(t, newName => { s.name = newName; saveData(); renderSpecials(); });
     w.appendChild(t);
 
-    // --- START: Re-add "Available" toggle ---
+    // --- START: "Available" toggle ---
     const controls = document.createElement("div");
     controls.style.display = "flex";
     controls.style.gap = "20px";
@@ -709,10 +721,8 @@ function renderSpecials() {
     availWrap.appendChild(tog); availWrap.appendChild(togLabel);
     controls.appendChild(availWrap);
 
-    // (The simple "Sharable" toggle is now replaced by renderSharableControls below)
-
     w.appendChild(controls);
-    // --- END: Re-add "Available" toggle ---
+    // --- END: "Available" toggle ---
 
     // --- (NEW) Sharable Controls ---
     const sharableControls = renderSharableControls(s, saveData, renderSpecials);
@@ -780,8 +790,7 @@ function saveData() {
 // ===== THIS IS THE THIRD MAJORLY UPDATED FUNCTION =====
 //
 function loadData() {
-  // This now loads from the *Global Settings* object
-  // It relies on calendar.js's migration logic to pull in old data once
+  // This now loads from the *GlobalSettings* object
   const data = window.loadGlobalSettings?.().app1 || {};
   
   try {
@@ -814,11 +823,12 @@ function loadData() {
       s.available = s.available !== false; // default true
       // Migrate old 'sharable' boolean to new 'sharableWith' object
       if (typeof s.sharable === 'boolean') {
+        // Old specials defaulted to sharable
         s.sharableWith = { type: s.sharable ? 'all' : 'not_sharable' };
         delete s.sharable; // Remove old property
       } else {
-        // Specials default to 'all'
-        s.sharableWith = s.sharableWith || { type: 'all' }; 
+        // NEW specials default to NOT sharable
+        s.sharableWith = s.sharableWith || { type: 'not_sharable' }; 
       }
       s.availabilityMode = s.availabilityMode || 'available';
       s.availabilityExceptions = s.availabilityExceptions || [];
