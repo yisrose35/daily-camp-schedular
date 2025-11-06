@@ -353,8 +353,7 @@ function createChipPicker(allItems, selectedItems, onToggle) {
     chip.style.cursor = "pointer";
     chip.style.border = "1px solid #ccc";
     
-    // THIS IS THE LINE THAT WAS CRASHING
-    // We added checks in `loadData` to ensure `selectedItems` is always an array
+    // `selectedItems` is guaranteed to be an array by `loadData`
     const isActive = selectedItems.includes(name); 
     
     chip.style.backgroundColor = isActive ? "#007BFF" : "#f0f0f0";
@@ -583,14 +582,16 @@ function addField() {
   const i = document.getElementById("fieldInput");
   const n = i.value.trim();
   if (n) {
+    // --- UPDATED: New items now have the full sharableWith object ---
     fields.push({ 
       name: n, 
       activities: [], 
       available: true,
-      sharableWith: { type: 'not_sharable' }, // Default to not sharable
+      sharableWith: { type: 'not_sharable', divisions: [], bunks: [] }, // <-- FIXED
       availabilityMode: 'available',
       availabilityExceptions: []
     });
+    // --- END UPDATE ---
     i.value = "";
     saveData();
     renderFields();
@@ -671,13 +672,15 @@ function addSpecial() {
   const i = document.getElementById("specialInput");
   const n = i.value.trim();
   if (n) {
+    // --- UPDATED: New items now have the full sharableWith object and default to not_sharable ---
     specialActivities.push({ 
       name: n, 
       available: true,
-      sharableWith: { type: 'not_sharable' }, // Default to not sharable
+      sharableWith: { type: 'not_sharable', divisions: [], bunks: [] }, // <-- FIXED
       availabilityMode: 'available',
       availabilityExceptions: []
     });
+    // --- END UPDATE ---
     i.value = "";
     saveData();
     renderSpecials();
@@ -819,18 +822,17 @@ function loadData() {
     });
     
     specialActivities.forEach(s => {
-      s.available = s.available !== false; // default true
+      s.available = s.available !== false;
       
       // Migrate old 'sharable' boolean
       if (typeof s.sharable === 'boolean') {
-        // Old specials defaulted to sharable
+        // Respect old data: old specials defaulted to sharable
         s.sharableWith = { type: s.sharable ? 'all' : 'not_sharable' };
         delete s.sharable;
+      } else {
+        // NEW default for new items is 'not_sharable'
+        s.sharableWith = s.sharableWith || { type: 'not_sharable' }; 
       }
-      
-      // Ensure object exists and has a type
-      // NEW: Default to not_sharable
-      s.sharableWith = s.sharableWith || { type: 'not_sharable' }; 
       
       // THIS IS THE FIX: Ensure the arrays always exist
       s.sharableWith.divisions = s.sharableWith.divisions || [];
