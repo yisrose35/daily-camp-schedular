@@ -57,17 +57,29 @@ function init() {
 
   // 2. Load the data for the *current* day
   const dailyData = window.loadCurrentDailyData?.() || {};
+  
   // Load new field availability, fall back to old "fields" list for one-time migration
   currentOverrides.fieldAvailability = dailyData.fieldAvailability || {};
-  if (Object.keys(currentOverrides.fieldAvailability).length === 0 && dailyData.overrides?.fields?.length > 0) {
+  
+  // Check for old "overrides" structure
+  if (dailyData.overrides && dailyData.overrides.fields && dailyData.overrides.fields.length > 0 && Object.keys(currentOverrides.fieldAvailability).length === 0) {
+    console.log("Daily Overrides: Migrating old 'fields' overrides...");
     // One-time migration from old "unavailable" list
     dailyData.overrides.fields.forEach(fieldName => {
       currentOverrides.fieldAvailability[fieldName] = {
-        mode: "unavailable",
+        mode: "unavailable", // Old list only marked items as unavailable
         exceptions: []
       };
     });
+    // Save the new structure immediately
+    window.saveCurrentDailyData("fieldAvailability", currentOverrides.fieldAvailability);
+    
+    // Clear the old, now-migrated data
+    const newOverrides = dailyData.overrides;
+    delete newOverrides.fields;
+    window.saveCurrentDailyData("overrides", newOverrides);
   }
+  
   currentOverrides.leagues = dailyData.overrides?.leagues || [];
   currentTrips = dailyData.trips || [];
 
@@ -171,7 +183,7 @@ function renderDailyAvailabilityControls(item, onSave) {
 }
 
 /**
-* Renders the "Unavailable Fields & Specials" checklist
+* Renders the "Field & Special Activity Time Overrides" section
 */
 function renderFieldsOverride() {
   const wrapper = document.createElement('div');
@@ -237,7 +249,9 @@ function renderFieldsOverride() {
       globalEl.style.margin = "5px 0 0 0";
       itemWrapper.appendChild(globalEl);
 
-      const controls = renderDailyAvailabilityControls(overrideData, saveAndRerender);
+      const controls = renderDailyAvailabilityControls(overrideData, () => {
+         window.saveCurrentDailyData("fieldAvailability", currentOverrides.fieldAvailability);
+      });
       itemWrapper.appendChild(controls);
 
     } else {
@@ -248,7 +262,7 @@ function renderFieldsOverride() {
         // Create a default override based on the global rule
         currentOverrides.fieldAvailability[itemName] = {
           mode: item.availabilityMode || "available",
-          exceptions: item.availabilityExceptions || []
+          exceptions: JSON.parse(JSON.stringify(item.availabilityExceptions || [])) // Deep copy
         };
         saveAndRerender();
       };
