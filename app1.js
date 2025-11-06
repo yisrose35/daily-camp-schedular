@@ -93,11 +93,7 @@ function parseTimeToMinutes(str) {
 }
 
 /**
- * UPDATED: Renders the new "Available / Unavailable" SLIDER toggle
- * @param {object} item - The field or special activity object
- * @param {function} onSave - The function to call to save all data
- * @param {function} onRerender - The function to call to rerender this section
- * @returns {HTMLElement}
+ * Renders the "Available / Unavailable" time-based controls
  */
 function renderAvailabilityControls(item, onSave, onRerender) {
   const container = document.createElement("div");
@@ -201,14 +197,12 @@ function renderAvailabilityControls(item, onSave, onRerender) {
   const addContainer = document.createElement("div");
   addContainer.style.marginTop = "6px";
   const timeInput = document.createElement("input");
-  // UPDATED Placeholder
   timeInput.placeholder = "e.g., 9:00am-10:30am";
   timeInput.style.marginRight = "5px";
 
   const addBtn = document.createElement("button");
   addBtn.textContent = "Add Time";
   
-  // UPDATED Validation Logic
   addBtn.onclick = () => {
     const val = timeInput.value.trim();
     const parts = val.split('-');
@@ -239,6 +233,131 @@ function renderAvailabilityControls(item, onSave, onRerender) {
 
   return container;
 }
+
+/**
+ * NEW: Renders the advanced "Sharable With" controls
+ */
+function renderSharableControls(item, onSave, onRerender) {
+  const container = document.createElement("div");
+  container.style.marginTop = "10px";
+  
+  const rules = item.sharableWith || { type: 'not_sharable' };
+
+  // --- 1. Radio Buttons ---
+  const radioGroup = document.createElement("div");
+  radioGroup.style.display = "flex";
+  radioGroup.style.gap = "15px";
+  
+  const types = [
+    { id: 'not_sharable', label: 'Not Sharable' },
+    { id: 'all', label: 'Sharable with All' },
+    { id: 'custom', label: 'Sharable with Specific...' }
+  ];
+
+  types.forEach(typeInfo => {
+    const label = document.createElement("label");
+    label.style.cursor = "pointer";
+    label.style.display = "flex";
+    label.style.alignItems = "center";
+    label.style.gap = "4px";
+    
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = `sharable-${item.name}`;
+    radio.value = typeInfo.id;
+    radio.checked = rules.type === typeInfo.id;
+    
+    radio.onchange = () => {
+      if (radio.checked) {
+        rules.type = typeInfo.id;
+        if (typeInfo.id === 'custom') {
+          rules.divisions = rules.divisions || [];
+          rules.bunks = rules.bunks || [];
+        }
+        onSave();
+        onRerender(); // Re-render to show/hide the custom panel
+      }
+    };
+    
+    label.appendChild(radio);
+    label.appendChild(document.createTextNode(typeInfo.label));
+    radioGroup.appendChild(label);
+  });
+  container.appendChild(radioGroup);
+
+  // --- 2. Custom Panel (if "Specific" is checked) ---
+  if (rules.type === 'custom') {
+    const customPanel = document.createElement("div");
+    customPanel.style.paddingLeft = "20px";
+    customPanel.style.marginTop = "10px";
+    
+    // Get all bunks for the picker
+    const allBunks = [];
+    (window.availableDivisions || []).forEach(div => {
+      (window.divisions[div]?.bunks || []).forEach(bunk => {
+        allBunks.push(bunk);
+      });
+    });
+
+    // --- Division Picker ---
+    customPanel.appendChild(document.createTextNode("Allowed Divisions:"));
+    const divChipBox = createChipPicker(window.availableDivisions || [], rules.divisions, onSave);
+    customPanel.appendChild(divChipBox);
+    
+    // --- Bunk Picker ---
+    const bunkLabel = document.createElement("div");
+    bunkLabel.textContent = "Allowed Bunks:";
+    bunkLabel.style.marginTop = "10px";
+    customPanel.appendChild(bunkLabel);
+    const bunkChipBox = createChipPicker(allBunks, rules.bunks, onSave);
+    customPanel.appendChild(bunkChipBox);
+
+    container.appendChild(customPanel);
+  }
+
+  return container;
+}
+
+/**
+ * NEW: Helper for renderSharableControls to create chip pickers
+ */
+function createChipPicker(allItems, selectedItems, onSave) {
+  const chipBox = document.createElement("div");
+  chipBox.style.display = "flex";
+  chipBox.style.flexWrap = "wrap";
+  chipBox.style.gap = "5px";
+  chipBox.style.marginTop = "5px";
+  
+  allItems.forEach(name => {
+    const chip = document.createElement("span");
+    chip.textContent = name;
+    chip.style.padding = "4px 8px";
+    chip.style.borderRadius = "12px";
+    chip.style.cursor = "pointer";
+    chip.style.border = "1px solid #ccc";
+    
+    const isActive = selectedItems.includes(name);
+    chip.style.backgroundColor = isActive ? "#007BFF" : "#f0f0f0";
+    chip.style.color = isActive ? "white" : "black";
+    
+    chip.onclick = () => {
+      const idx = selectedItems.indexOf(name);
+      if (idx > -1) {
+        selectedItems.splice(idx, 1);
+      } else {
+        selectedItems.push(name);
+      }
+      onSave();
+      // We don't re-render the whole component, just this chip
+      chip.style.backgroundColor = !isActive ? "#007BFF" : "#f0f0f0";
+      chip.style.color = !isActive ? "white" : "black";
+    };
+    chipBox.appendChild(chip);
+  });
+  
+  return chipBox;
+}
+
 // --- END OF NEW/UPDATED HELPER FUNCTIONS ---
 
 
@@ -452,7 +571,7 @@ function addField() {
       name: n, 
       activities: [], 
       available: true,
-      sharable: false, // <-- FIXED
+      sharableWith: { type: 'not_sharable' }, // <-- FIXED: Default to not sharable
       availabilityMode: 'available',
       availabilityExceptions: []
     });
@@ -476,7 +595,7 @@ function renderFields() {
     makeEditable(t, newName => { f.name = newName; saveData(); renderFields(); });
     w.appendChild(t);
 
-    // --- START: Re-add toggles ---
+    // --- START: Re-add "Available" toggle ---
     const controls = document.createElement("div");
     controls.style.display = "flex";
     controls.style.gap = "20px";
@@ -493,21 +612,11 @@ function renderFields() {
     const availWrap = document.createElement("label"); availWrap.style.display="flex"; availWrap.style.alignItems="center"; availWrap.style.gap="5px"; availWrap.style.cursor="pointer";
     availWrap.appendChild(tog); availWrap.appendChild(togLabel);
     controls.appendChild(availWrap);
-
-    // 2. Sharable Toggle
-    const togS = document.createElement("label"); togS.className = "switch";
-    togS.title = "Sharable";
-    const cbS = document.createElement("input"); cbS.type = "checkbox"; cbS.checked = f.sharable;
-    cbS.onchange = () => { f.sharable = cbS.checked; saveData(); }; // No re-render needed
-    const slS = document.createElement("span"); slS.className = "slider";
-    togS.appendChild(cbS); togS.appendChild(slS);
-    const togLabelS = document.createElement("span"); togLabelS.textContent = "Sharable";
-    const shareWrap = document.createElement("label"); shareWrap.style.display="flex"; shareWrap.style.alignItems="center"; shareWrap.style.gap="5px"; shareWrap.style.cursor="pointer";
-    shareWrap.appendChild(togS); shareWrap.appendChild(togLabelS);
-    controls.appendChild(shareWrap);
+    
+    // (The simple "Sharable" toggle is now replaced by renderSharableControls below)
 
     w.appendChild(controls);
-    // --- END: Re-add toggles ---
+    // --- END: Re-add "Available" toggle ---
     
     const bw = document.createElement("div"); bw.style.marginTop = "8px";
     commonActivities.forEach(act => {
@@ -535,6 +644,11 @@ function renderFields() {
       w.appendChild(p);
     }
     
+    // --- (NEW) Sharable Controls ---
+    const sharableControls = renderSharableControls(f, saveData, renderFields);
+    w.appendChild(sharableControls);
+    // --- END NEW ---
+
     // --- (NEW) Availability Controls ---
     const availabilityControls = renderAvailabilityControls(f, saveData, renderFields);
     w.appendChild(availabilityControls);
@@ -552,7 +666,7 @@ function addSpecial() {
     specialActivities.push({ 
       name: n, 
       available: true,
-      sharable: true, // <-- FIXED (Specials default to sharable)
+      sharableWith: { type: 'all' }, // <-- FIXED: Specials default to sharable with all
       availabilityMode: 'available',
       availabilityExceptions: []
     });
@@ -577,7 +691,7 @@ function renderSpecials() {
     makeEditable(t, newName => { s.name = newName; saveData(); renderSpecials(); });
     w.appendChild(t);
 
-    // --- START: Re-add toggles ---
+    // --- START: Re-add "Available" toggle ---
     const controls = document.createElement("div");
     controls.style.display = "flex";
     controls.style.gap = "20px";
@@ -595,20 +709,15 @@ function renderSpecials() {
     availWrap.appendChild(tog); availWrap.appendChild(togLabel);
     controls.appendChild(availWrap);
 
-    // 2. Sharable Toggle
-    const togS = document.createElement("label"); togS.className = "switch";
-    togS.title = "Sharable";
-    const cbS = document.createElement("input"); cbS.type = "checkbox"; cbS.checked = s.sharable;
-    cbS.onchange = () => { s.sharable = cbS.checked; saveData(); }; // No re-render needed
-    const slS = document.createElement("span"); slS.className = "slider";
-    togS.appendChild(cbS); togS.appendChild(slS);
-    const togLabelS = document.createElement("span"); togLabelS.textContent = "Sharable";
-    const shareWrap = document.createElement("label"); shareWrap.style.display="flex"; shareWrap.style.alignItems="center"; shareWrap.style.gap="5px"; shareWrap.style.cursor="pointer";
-    shareWrap.appendChild(togS); shareWrap.appendChild(togLabelS);
-    controls.appendChild(shareWrap);
+    // (The simple "Sharable" toggle is now replaced by renderSharableControls below)
 
     w.appendChild(controls);
-    // --- END: Re-add toggles ---
+    // --- END: Re-add "Available" toggle ---
+
+    // --- (NEW) Sharable Controls ---
+    const sharableControls = renderSharableControls(s, saveData, renderSpecials);
+    w.appendChild(sharableControls);
+    // --- END NEW ---
 
     // --- (NEW) Availability Controls ---
     const availabilityControls = renderAvailabilityControls(s, saveData, renderSpecials);
@@ -661,7 +770,7 @@ function generateTimes() {
 // -------------------- Local Storage (UPDATED) --------------------
 function saveData() {
   // This now saves to the *Global Settings* object
-  // NEW properties (availabilityMode, etc.) are saved automatically
+  // NEW properties (availabilityMode, sharableWith) are saved automatically
   // because they are part of the 'fields' and 'specialActivities' objects.
   const data = { bunks, divisions, availableDivisions, selectedDivision, fields, specialActivities, timeTemplates };
   window.saveGlobalSettings?.("app1", data);
@@ -688,16 +797,29 @@ function loadData() {
     specialActivities = data.specialActivities || [];
     timeTemplates = data.timeTemplates || [];
     
-    // --- NEW: Ensure new properties exist on loaded data ---
+    // --- NEW: Data Migration and Property Initialization ---
     fields.forEach(f => {
       f.available = f.available !== false; // default true
-      f.sharable = f.sharable === true; // <-- FIXED (default false)
+      // Migrate old 'sharable' boolean to new 'sharableWith' object
+      if (typeof f.sharable === 'boolean') {
+        f.sharableWith = { type: f.sharable ? 'all' : 'not_sharable' };
+        delete f.sharable; // Remove old property
+      } else {
+        f.sharableWith = f.sharableWith || { type: 'not_sharable' }; // Default
+      }
       f.availabilityMode = f.availabilityMode || 'available';
       f.availabilityExceptions = f.availabilityExceptions || [];
     });
     specialActivities.forEach(s => {
       s.available = s.available !== false; // default true
-      s.sharable = s.sharable !== false; // <-- FIXED (default true)
+      // Migrate old 'sharable' boolean to new 'sharableWith' object
+      if (typeof s.sharable === 'boolean') {
+        s.sharableWith = { type: s.sharable ? 'all' : 'not_sharable' };
+        delete s.sharable; // Remove old property
+      } else {
+        // Specials default to 'all'
+        s.sharableWith = s.sharableWith || { type: 'all' }; 
+      }
       s.availabilityMode = s.availabilityMode || 'available';
       s.availabilityExceptions = s.availabilityExceptions || [];
     });
