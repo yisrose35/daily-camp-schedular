@@ -578,6 +578,10 @@ function applyTemplatesToDivisions() {
 }
 
 // -------------------- Fields / Specials --------------------
+
+//
+// ===== THIS IS THE FIRST FIXED FUNCTION =====
+//
 function addField() {
   const i = document.getElementById("fieldInput");
   const n = i.value.trim();
@@ -668,6 +672,9 @@ function renderFields() {
   });
 }
 
+//
+// ===== THIS IS THE SECOND FIXED FUNCTION =====
+//
 function addSpecial() {
   const i = document.getElementById("specialInput");
   const n = i.value.trim();
