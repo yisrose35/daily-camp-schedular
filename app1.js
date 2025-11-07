@@ -249,8 +249,7 @@ onSave();
 onRerender();
 };
 const sl = document.createElement("span"); sl.className = "slider";
-tog.appendChild(cb);
-tog.appendChild(sl);
+tog.appendChild(cb); tog.appendChild(sl);
 const togLabel = document.createElement("span");
 togLabel.textContent = "Sharable";
 const shareWrap = document.createElement("label");
@@ -602,6 +601,15 @@ const cont = document.getElementById("divisionButtons"); cont.innerHTML = "";
 const colorEnabled = document.getElementById("enableColor").checked;
 availableDivisions.forEach(name => {
 const obj = divisions[name];
+
+// --- FIX 1 ---
+// Add a safety check here. If obj is undefined, skip this iteration.
+if (!obj) {
+    console.warn(`Data mismatch: Division "${name}" exists in availableDivisions but not in divisions object. Skipping.`);
+    return; 
+}
+// --- END FIX 1 ---
+
 const wrap = document.createElement("div"); wrap.className = "divisionWrapper";
 const span = document.createElement("span"); span.textContent = name; span.className = "bunk-button";
 span.style.backgroundColor = colorEnabled ? obj.color : "transparent";
@@ -870,8 +878,16 @@ function generateTimes() {
 const inc = parseInt(document.getElementById("increment").value, 10);
 applyTemplatesToDivisions();
 
-const starts = availableDivisions.map(d => parseTime(divisions[d].start)).filter(Boolean);
-const ends = availableDivisions.map(d => parseTime(divisions[d].end)).filter(Boolean);
+// --- FIX 2 ---
+// Add a safety check in the .map() to avoid crashing on undefined divisions
+const starts = availableDivisions
+    .map(d => divisions[d] ? parseTime(divisions[d].start) : null)
+    .filter(Boolean);
+const ends = availableDivisions
+    .map(d => divisions[d] ? parseTime(divisions[d].end) : null)
+    .filter(Boolean);
+// --- END FIX 2 ---
+    
 if (starts.length === 0 || ends.length === 0) { alert("Please set time templates for divisions first.");
 return; }
 
@@ -889,6 +905,8 @@ cur = nxt;
 
 divisionActiveRows = {};
 availableDivisions.forEach(div => {
+// Add safety check here too
+if (!divisions[div]) return; 
 const s = parseTime(divisions[div].start), e = parseTime(divisions[div].end);
 const rows = new Set();
 unifiedTimes.forEach((t, idx) => {
