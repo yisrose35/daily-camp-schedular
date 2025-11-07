@@ -421,7 +421,7 @@ const app1Data = globalSettings.app1 || {};
 const masterFields = app1Data.fields || [];
 const masterDivisions = app1Data.divisions || {};
 const masterAvailableDivs = app1Data.availableDivisions || [];
-const masterSpecials = appg.specialActivities || [];
+const masterSpecials = app1Data.specialActivities || []; // <-- THIS IS THE FIX
 const masterLeagues = globalSettings.leaguesByName || {};
 const dailyData = window.loadCurrentDailyData?.() || {};
 // Safely initialize the overrides object
@@ -639,7 +639,8 @@ for (const league of Object.values(specialtyLeagues)) {
             
             // 1. Check if all teams (bunks) are free
             for (const teamBunk of league.teams) {
-                if (scheduleAssignments[teamBunk]?.[currentSlot]) {
+                // Safety check for bunk not existing in schedule
+                if (!scheduleAssignments[teamBunk] || scheduleAssignments[teamBunk][currentSlot]) {
                     slotIsPossible = false;
                     break;
                 }
