@@ -116,7 +116,7 @@ continuation: k > 0
 };
 
 // Also mark this row 
-// as blocked for this bunk's division  <--- THIS IS THE FIXED LINE
+// as blocked for this bunk's division
 if (div) {
 blocked[div] = blocked[div] || new Set();
 blocked[div].add(r);
@@ -674,17 +674,31 @@ const gamesWithSports = assignSportsToMatchups(lg.name, matchups, lg.data.sports
 // availability snapshot
 const availableFieldsForSpan = {};
 allFieldNames.forEach(name => {
-let capacity = 1;
-for (let k = 0; k < spanLen; k++) {
-const slot = chosenSlot + k;
-const usage = fieldUsageBySlot[slot]?.[name] || 0;
-// NEW Check
-if (usage > 0 || window.activityBlockedSlots?.[name]?.has(slot)) {
-capacity = 0;
-break;
-}
-}
-availableFieldsForSpan[name] = capacity;
+    let capacity = 1;
+
+    // --- NEW: Check Limit Usage rule for this league's division ---
+    const fieldProps = activityProperties[name];
+    if (fieldProps && fieldProps.limitUsage && fieldProps.limitUsage.enabled) {
+        if (fieldProps.limitUsage.divisions[div] === undefined) {
+            // This league's division is NOT allowed on this field.
+            capacity = 0; 
+        }
+        // Note: If limitUsage.divisions[div] exists, it's allowed for the whole division (leagues are division-wide).
+    }
+    // --- End New Check ---
+
+    if (capacity > 0) { // Only check slots if it's not already ruled out
+        for (let k = 0; k < spanLen; k++) {
+            const slot = chosenSlot + k;
+            const usage = fieldUsageBySlot[slot]?.[name] || 0;
+            // NEW Check
+            if (usage > 0 || window.activityBlockedSlots?.[name]?.has(slot)) {
+                capacity = 0;
+                break;
+            }
+        }
+    }
+    availableFieldsForSpan[name] = capacity;
 });
 const gamesWithPossibleFields = gamesWithSports.map(game => {
 const possibleFields = (fieldsBySport[game.sport] || []).filter(fieldName => (availableFieldsForSpan[fieldName] || 0) > 0);
@@ -738,16 +752,29 @@ gamesWithSports.forEach(g => (fieldsBySport[g.sport] || []).forEach(f => candida
 evictAssignmentsOnFields(chosenSlot, spanLen, candidateFields, fieldUsageBySlot);
 
 const avail = {}; allFieldNames.forEach(name => {
-let cap = 1;
-for (let k = 0; k < spanLen; k++) {
-const slot = chosenSlot + k;
-// NEW Check
-if ((fieldUsageBySlot[slot]?.[name] || 0) > 0 || window.activityBlockedSlots?.[name]?.has(slot)) {
-cap = 0;
-break;
-}
-}
-avail[name] = cap;
+    let cap = 1;
+
+    // --- NEW: Check Limit Usage rule for this league's division ---
+    const fieldProps = activityProperties[name];
+    if (fieldProps && fieldProps.limitUsage && fieldProps.limitUsage.enabled) {
+        if (fieldProps.limitUsage.divisions[div] === undefined) {
+            // This league's division is NOT allowed on this field.
+            cap = 0; 
+        }
+    }
+    // --- End New Check ---
+
+    if (cap > 0) { // Only check slots if it's not already ruled out
+        for (let k = 0; k < spanLen; k++) {
+            const slot = chosenSlot + k;
+            // NEW Check
+            if ((fieldUsageBySlot[slot]?.[name] || 0) > 0 || window.activityBlockedSlots?.[name]?.has(slot)) {
+                cap = 0;
+                break;
+            }
+        }
+    }
+    avail[name] = cap;
 });
 const temp = {}; const finalGames = [];
 const byHardness = gamesWithSports.map(g => ({ g, poss: (fieldsBySport[g.sport] || []).filter(fn => (avail[fn] || 0) > 0) }))
