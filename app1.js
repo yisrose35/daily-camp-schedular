@@ -15,7 +15,6 @@ let activityDuration = 30;
 let unifiedTimes = []; // [{start:Date,end:Date,label:string}]
 let divisionActiveRows = {}; // { divName: Set(rowIndices) }
 
-
 const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
 let colorIndex = 0;
 const commonActivities = ["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
@@ -465,7 +464,8 @@ function addDivision() {
     window.availableDivisions = availableDivisions; // Update global
   
     divisions[name] = { bunks: [], color, start: null, end: null };
-    
+    window.divisions = divisions; // ✅ keep global in sync
+
     i.value = "";
     saveData();
     setupDivisionButtons(); 
@@ -497,7 +497,10 @@ function setupDivisionButtons() {
     if (selectedDivision === name) span.classList.add("selected");
     
     makeEditable(span, newName => {
-      divisions[newName] = divisions[name]; delete divisions[name];
+      divisions[newName] = divisions[name]; 
+      delete divisions[name];
+      window.divisions = divisions; // ✅ keep global in sync after rename
+
       availableDivisions[availableDivisions.indexOf(name)] = newName;
       window.availableDivisions = availableDivisions; // Update global
       
@@ -787,27 +790,29 @@ function saveData() {
 }
 
 //
-// ===== THIS IS THE NEWLY FIXED loadData FUNCTION =====
+// ===== NEWLY FIXED loadData FUNCTION (globals synced after finalization) =====
 //
 function loadData() {
-  // This now loads from the *GlobalSettings* object
   const data = window.loadGlobalSettings?.().app1 || {};
-  
   try {
     bunks = data.bunks || [];
     divisions = data.divisions || {};
-    
-    availableDivisions = Object.keys(divisions);
+
+    // Decide availableDivisions, then publish to window.*
+    availableDivisions = (data.availableDivisions && Array.isArray(data.availableDivisions))
+      ? data.availableDivisions.slice()
+      : Object.keys(divisions);
+
+    // ✅ Rebind globals AFTER values are finalized
+    window.divisions = divisions;
     window.availableDivisions = availableDivisions;
-    if (data.availableDivisions) availableDivisions = data.availableDivisions; 
 
     selectedDivision = data.selectedDivision || null;
     fields = data.fields || [];
     specialActivities = data.specialActivities || [];
     timeTemplates = data.timeTemplates || [];
     
-    // --- START: FIX ---
-    // This logic now ensures all properties are correctly initialized.
+    // Normalize fields
     fields.forEach(f => {
       f.available = f.available !== false; // default true
       
@@ -817,10 +822,8 @@ function loadData() {
         delete f.sharable; 
       }
       
-      // Ensure object exists and has a type
+      // Ensure object exists and has arrays
       f.sharableWith = f.sharableWith || { type: 'not_sharable' };
-      
-      // THIS IS THE FIX: Ensure the arrays always exist
       f.sharableWith.divisions = f.sharableWith.divisions || [];
       f.sharableWith.bunks = f.sharableWith.bunks || [];
 
@@ -828,27 +831,23 @@ function loadData() {
       f.availabilityExceptions = f.availabilityExceptions || [];
     });
     
+    // Normalize specials
     specialActivities.forEach(s => {
       s.available = s.available !== false;
       
-      // Migrate old 'sharable' boolean
       if (typeof s.sharable === 'boolean') {
-        // Respect old data: old specials defaulted to sharable
         s.sharableWith = { type: s.sharable ? 'all' : 'not_sharable' };
         delete s.sharable;
       } else {
-        // NEW default for new items is 'not_sharable'
         s.sharableWith = s.sharableWith || { type: 'not_sharable' }; 
       }
       
-      // THIS IS THE FIX: Ensure the arrays always exist
       s.sharableWith.divisions = s.sharableWith.divisions || [];
       s.sharableWith.bunks = s.sharableWith.bunks || [];
 
       s.availabilityMode = s.availabilityMode || 'available';
       s.availabilityExceptions = s.availabilityExceptions || [];
     });
-    // --- END: FIX ---
     
   } catch (e) { console.error("Error loading data:", e); }
 }
