@@ -278,7 +278,7 @@ let evicted = false;
 const bunksHere = divisions[div]?.bunks || [];
 for (const b of bunksHere) {
 const e = window.scheduleAssignments[b]?.[slot];
-if (!e || e._fixed || e._h2h) continue;
+if (!e || e._fixed || e._h2h || e._specialty) continue; // <-- Do not evict specialty
 if (fieldLabel(e.field) !== fieldName) continue;
 // Walk to the start of that occupant's span and clear its continuation range
 let k = slot;
