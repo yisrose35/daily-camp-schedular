@@ -421,7 +421,7 @@ const app1Data = globalSettings.app1 || {};
 const masterFields = app1Data.fields || [];
 const masterDivisions = app1Data.divisions || {};
 const masterAvailableDivs = app1Data.availableDivisions || [];
-const masterSpecials = app1Data.specialActivities || [];
+const masterSpecials = appg.specialActivities || [];
 const masterLeagues = globalSettings.leaguesByName || {};
 const dailyData = window.loadCurrentDailyData?.() || {};
 // Safely initialize the overrides object
@@ -460,7 +460,10 @@ availableDivisions.forEach(dv => { (divisions[dv]?.bunks || []).forEach(bk => wi
 scheduleAssignments = {};
 availableDivisions.forEach((d) => (divisions[d]?.bunks || []).forEach((b) => (scheduleAssignments[b] = new Array(window.unifiedTimes.length))));
 window.scheduleAssignments = scheduleAssignments;
-// Place fixed blocks (trips AND fixed activities)
+
+// ========================================================
+// ===== Pass 1. PLACE FIXED BLOCKS (TRIPS, LUNCH) =====
+// ========================================================
 // This MUST run after divisions, bunks, and scheduleAssignments are initialized
 const blockedRowsByDiv = prePlaceFixedActivities();
 // NEW: Compute activity availability *after* divisions are set
@@ -607,7 +610,125 @@ leagueTeamSportHistory[game.teams[1]] = game.sport;
 });
 const takenLeagueSlots = new Set();
 
-// --- Leagues FIRST: Smart placement + eviction rescue ---
+// ========================================================
+// ===== Pass 1.5: SPECIALTY LEAGUES (NEW) =====
+// ========================================================
+const specialtyLeagues = globalSettings.specialtyLeagues || {};
+
+for (const league of Object.values(specialtyLeagues)) {
+    if (!league.enabled || !league.sport || !league.fields?.length || !league.teams?.length) {
+        continue;
+    }
+
+    const matchups = window.getLeagueMatchups?.(league.name, league.teams) || [];
+    if (matchups.length === 0) continue;
+
+    let chosenSlot = -1;
+    
+    // Find the first slot where all teams and all fields are free
+    for (let s = 0; s < window.unifiedTimes.length; s++) {
+        let slotIsPossible = true;
+        
+        // Check span for all teams and fields
+        for (let k = 0; k < spanLen; k++) {
+            const currentSlot = s + k;
+            if (currentSlot >= window.unifiedTimes.length) {
+                slotIsPossible = false;
+                break;
+            }
+            
+            // 1. Check if all teams (bunks) are free
+            for (const teamBunk of league.teams) {
+                if (scheduleAssignments[teamBunk]?.[currentSlot]) {
+                    slotIsPossible = false;
+                    break;
+                }
+            }
+            if (!slotIsPossible) break;
+
+            // 2. Check if all fields are free (usage=0 and not time-blocked)
+            for (const fieldName of league.fields) {
+                if ((fieldUsageBySlot[currentSlot]?.[fieldName] || 0) > 0 || window.activityBlockedSlots?.[fieldName]?.has(currentSlot)) {
+                    slotIsPossible = false;
+                    break;
+                }
+            }
+            if (!slotIsPossible) break;
+        }
+
+        if (slotIsPossible) {
+            chosenSlot = s;
+            break; // Found a valid slot
+        }
+    }
+
+    if (chosenSlot === -1) {
+        console.warn(`Could not find a free slot for Specialty League: "${league.name}"`);
+        continue;
+    }
+
+    // --- We found a slot! Now book it. ---
+    console.log(`Booking Specialty League "${league.name}" at slot ${chosenSlot}`);
+
+    // Calculate game distribution
+    const numGames = matchups.length;
+    const numFields = league.fields.length;
+    const gamesPerField = Math.ceil(numGames / numFields);
+
+    for (let i = 0; i < numGames; i++) {
+        const [teamA, teamB] = matchups[i];
+        
+        // Assign field based on game index
+        const fieldIndex = Math.floor(i / gamesPerField) % numFields;
+        const fieldName = league.fields[fieldIndex];
+
+        // Mark sport as used today for both teams
+        window.todayActivityUsed[teamA]?.add(league.sport);
+        window.todayActivityUsed[teamB]?.add(league.sport);
+
+        // Stamp the grid for the full span
+        for (let k = 0; k < spanLen; k++) {
+            const slot = chosenSlot + k;
+            const cont = k > 0;
+
+            const entryA = { 
+                field: fieldName, 
+                sport: league.sport, 
+                continuation: cont, 
+                _specialty: true, 
+                vs: teamB, 
+                leagueName: league.name 
+            };
+            const entryB = { 
+                field: fieldName, 
+                sport: league.sport, 
+                continuation: cont, 
+                _specialty: true, 
+                vs: teamA, 
+                leagueName: league.name 
+            };
+            
+            scheduleAssignments[teamA][slot] = entryA;
+            scheduleAssignments[teamB][slot] = entryB;
+            
+            // Add to takenLeagueSlots to block divisional leagues
+            takenLeagueSlots.add(slot); 
+        }
+    }
+
+    // Exclusively lock all fields for the full span
+    for (const fieldName of league.fields) {
+        for (let k = 0; k < spanLen; k++) {
+            const slot = chosenSlot + k;
+            fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
+            fieldUsageBySlot[slot][fieldName] = 2; // Exclusive lock
+        }
+    }
+}
+
+// ========================================================
+// ===== Pass 2: REGULAR LEAGUES (Division-based) =====
+// ========================================================
 function evictAssignmentsOnFields(slotStart, span, targetFields, fus) {
 const unified = window.unifiedTimes ||
 [];
@@ -618,7 +739,7 @@ const bunks = (window.divisions?.[dv]?.bunks) ||
 [];
 for (const b of bunks) {
 const e = window.scheduleAssignments?.[b]?.[slot];
-if (!e || e._fixed || e._h2h) continue;
+if (!e || e._fixed || e._h2h || e._specialty) continue; // <-- Do not evict specialty
 const f = fieldLabel(e.field);
 if (!f || !targetFields.has(f)) continue;
 // walk to start of its span
@@ -1013,7 +1134,10 @@ if (!isBusy) {
                     const bunksHere = divs[dv]?.bunks || [];
                     for (const b2 of bunksHere) {
                         const e2 = window.scheduleAssignments[b2]?.[currentSlot];
-                        if (e2 && !e2._fixed && !e2._h2h && fieldLabel(e2.field) === pickedField) { occupyingDivision = window.bunkToDivision?.[b2] || dv; break; }
+                        if (e2 && !e2._fixed && !e2._h2h && !e2._specialty && fieldLabel(e2.field) === pickedField) { 
+                            occupyingDivision = window.bunkToDivision?.[b2] || dv; 
+                            break; 
+                        }
                     }
                     if (occupyingDivision) break;
                 }
