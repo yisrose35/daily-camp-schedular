@@ -1179,18 +1179,18 @@ return [canFitThisPick, spanForThisPick];
 }
 
 function assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory) {
-const pickedField = fieldLabel(pick.field);
-const activityName = getActivityName(pick);
-for (let k = 0; k < spanLen; k++) {
-const currentSlot = s + k;
-window.scheduleAssignments[bunk][currentSlot] = { field: pickedField, sport: pick.sport, continuation: (k > 0) };
-if (pickedField && (window.allSchedulableNames || []).includes(pickedField)) {
-fieldUsageBySlot[currentSlot] = fieldUsageBySlot[currentSlot] || {};
-fieldUsageBySlot[currentSlot][pickedField] = (fieldUsageBySlot[currentSlot][pickedField] || 0) + 1;
-}
-}
-generalActivityHistory[bunk].add(activityName);
-return spanForThisPick;
+    const pickedField = fieldLabel(pick.field);
+    const activityName = getActivityName(pick);
+    for (let k = 0; k < spanForThisPick; k++) { // <-- THIS IS THE FIX
+        const currentSlot = s + k;
+        window.scheduleAssignments[bunk][currentSlot] = { field: pickedField, sport: pick.sport, continuation: (k > 0) };
+        if (pickedField && (window.allSchedulableNames || []).includes(pickedField)) {
+            fieldUsageBySlot[currentSlot] = fieldUsageBySlot[currentSlot] || {};
+            fieldUsageBySlot[currentSlot][pickedField] = (fieldUsageBySlot[currentSlot][pickedField] || 0) + 1;
+        }
+    }
+    generalActivityHistory[bunk].add(activityName);
+    return spanForThisPick;
 }
 
 // ===== Exports =====
