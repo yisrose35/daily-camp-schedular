@@ -116,7 +116,7 @@ continuation: k > 0
 };
 
 // Also mark this row 
-as blocked for this bunk's division
+// as blocked for this bunk's division  <--- THIS IS THE FIXED LINE
 if (div) {
 blocked[div] = blocked[div] || new Set();
 blocked[div].add(r);
@@ -1020,3 +1020,7 @@ fieldUsageBySlot[currentSlot][pickedField] = (fieldUsageBySlot[currentSlot][pick
 generalActivityHistory[bunk].add(activityName);
 return spanForThisPick;
 }
+
+// ===== Exports =====
+// This function MUST be exported to the window
+window.assignFieldsToBunks = assignFieldsToBunks;
