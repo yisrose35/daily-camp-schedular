@@ -421,7 +421,7 @@ const app1Data = globalSettings.app1 || {};
 const masterFields = app1Data.fields || [];
 const masterDivisions = app1Data.divisions || {};
 const masterAvailableDivs = app1Data.availableDivisions || [];
-const masterSpecials = app1Data.specialActivities || []; // <-- THIS IS THE FIX
+const masterSpecials = app1Data.specialActivities || [];
 const masterLeagues = globalSettings.leaguesByName || {};
 const dailyData = window.loadCurrentDailyData?.() || {};
 // Safely initialize the overrides object
@@ -642,6 +642,17 @@ for (const league of Object.values(specialtyLeagues)) {
             
             // 1. Check if all bunks *within the league's divisions* are free
             for (const divName of leagueDivisions) {
+                
+                // --- THIS IS THE FIX ---
+                // CHECK A: Is this division active at this time?
+                const isActive = window.divisionActiveRows?.[divName]?.has(currentSlot) ?? true;
+                if (!isActive) {
+                    slotIsPossible = false;
+                    break;
+                }
+                // --- END FIX ---
+
+                // CHECK B: Are all bunks in this division free?
                 for (const bunk of (divisions[divName]?.bunks || [])) {
                     // Safety check for bunk not existing in schedule
                     if (!scheduleAssignments[bunk] || scheduleAssignments[bunk][currentSlot]) {
@@ -1179,18 +1190,18 @@ return [canFitThisPick, spanForThisPick];
 }
 
 function assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory) {
-    const pickedField = fieldLabel(pick.field);
-    const activityName = getActivityName(pick);
-    for (let k = 0; k < spanForThisPick; k++) { // <-- THIS IS THE FIX
-        const currentSlot = s + k;
-        window.scheduleAssignments[bunk][currentSlot] = { field: pickedField, sport: pick.sport, continuation: (k > 0) };
-        if (pickedField && (window.allSchedulableNames || []).includes(pickedField)) {
-            fieldUsageBySlot[currentSlot] = fieldUsageBySlot[currentSlot] || {};
-            fieldUsageBySlot[currentSlot][pickedField] = (fieldUsageBySlot[currentSlot][pickedField] || 0) + 1;
-        }
-    }
-    generalActivityHistory[bunk].add(activityName);
-    return spanForThisPick;
+const pickedField = fieldLabel(pick.field);
+const activityName = getActivityName(pick);
+for (let k = 0; k < spanForThisPick; k++) {
+const currentSlot = s + k;
+window.scheduleAssignments[bunk][currentSlot] = { field: pickedField, sport: pick.sport, continuation: (k > 0) };
+if (pickedField && (window.allSchedulableNames || []).includes(pickedField)) {
+fieldUsageBySlot[currentSlot] = fieldUsageBySlot[currentSlot] || {};
+fieldUsageBySlot[currentSlot][pickedField] = (fieldUsageBySlot[currentSlot][pickedField] || 0) + 1;
+}
+}
+generalActivityHistory[bunk].add(activityName);
+return spanForThisPick;
 }
 
 // ===== Exports =====
