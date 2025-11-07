@@ -14,7 +14,6 @@
         <input type="date" id="calendar-date-picker" style="font-size: 1.1em; padding: 5px;">
     </div>
 
-    <!-- TABS: Removed "Daily Fixed" tab -->
     <div class="tabs">
         <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button>
         <button class="tab-button" onclick="showTab('schedule')">Daily Schedule</button>
@@ -35,16 +34,19 @@
         <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable Colors</label>
         <div id="divisionButtons" style="margin-top:8px;"></div>
         
-        <!-- NEW: Container for division-specific rules (from app1.js) -->
         <div id="divisionRulesContainer" style="margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
             <p style="color: #666;">Select a division to set its activity rules.</p>
         </div>
 
-        <!-- NEW: Container for Schedule Periods (from app1.js) -->
-        <h3>Schedule Periods</h3>
+        <h3>Schedule Period Names</h3>
+        <p style="font-size: 0.9em; color: #555;">Define the *names* of your periods (e.g., "1st Activity"). Times are set per-division.</p>
         <div id="schedulePeriodsContainer"></div>
 
-        <!-- OLD TIME UI (Increments, Duration, Templates, Generate) has been removed -->
+        <hr style="margin: 20px 0;">
+        <button id="generateScheduleBtn" style="background: #28a745; color: white; padding: 12px 20px; font-size: 1.2em; border: none; border-radius: 5px; cursor: pointer;">
+            Generate/Update Today's Schedule
+        </button>
+        <hr style="margin: 20px 0;">
 
         <h3>Add Fields / Courts</h3>
         <input id="fieldInput" placeholder="Enter field/court name (e.g., Court 1)">
@@ -103,8 +105,6 @@
         <div id="specialtyLeaguesContainer"></div>
     </div>
 
-    <!-- TAB CONTENT: Removed "fixed-activities" div -->
-
     <div id="daily-overrides" class="tab-content">
         <div id="daily-overrides-content">
         </div>
@@ -124,7 +124,6 @@
             } else if (id === 'specialty-leagues') {
                 window.initSpecialtyLeagues?.();
             }
-            // Removed 'fixed-activities' else-if
         }
 
         document.addEventListener("DOMContentLoaded", boot);
@@ -151,32 +150,40 @@
                 console.warn("Leagues.js init not found.");
             }
 
-            // 4. Init Fixed Activities (REMOVED)
-            // No longer calling DailyActivities.init()
-
-            // 5. Init Schedule System (loads today's schedule)
+            // 4. Init Schedule System (loads today's schedule)
             if (window.initScheduleSystem) {
                 window.initScheduleSystem();
             } else {
                 console.warn("initScheduleSystem not found.");
             }
 
-            // 6. Init Specialty Leagues (loads data, renders tab)
+            // 5. Init Specialty Leagues (loads data, renders tab)
             if (window.initSpecialtyLeagues) {
                 window.initSpecialtyLeagues();
             } else {
                 console.warn("initSpecialtyLeagues not found.");
             }
             
-            // 7. Generate schedule (This was the old "Generate" button)
-            // We must call this AFTER all other inits.
-            if (window.assignFieldsToBunks) {
-                window.assignFieldsToBunks();
+            // 6. NEW: Hook up Generate Button
+            const genBtn = document.getElementById('generateScheduleBtn');
+            if (genBtn) {
+                genBtn.onclick = () => {
+                    console.log("Generating schedule...");
+                    if (window.assignFieldsToBunks) {
+                        window.assignFieldsToBunks();
+                    } else {
+                        console.error("assignFieldsToBunks not found!");
+                    }
+                };
+            } else {
+                console.error("Generate Schedule Button not found!");
             }
+            
+            // 7. REMOVED auto-generation
+            // window.assignFieldsToBunks();
         }
     </script>
 
-    <!-- SCRIPT TAGS: Removed daily_activities.js -->
     <script src="calendar.js" defer></script>
     <script src="daily_overrides.js" defer></script>
     <script src="app1.js" defer></script>
