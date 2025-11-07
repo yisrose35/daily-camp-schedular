@@ -624,7 +624,7 @@ for (const league of Object.values(specialtyLeagues)) {
     const leagueFields = league.fields;
     const leagueSport = league.sport;
 
-    const matchups = window.getLeagueMatchups?.(league.name, league.teams) || [];
+    const matchups = window.getLeagueMatchups?.(league.name, league.teams, [leagueSport], leagueTeamSportHistory) || [];
     if (matchups.length === 0) continue;
 
     let chosenSlot = -1;
@@ -643,7 +643,8 @@ for (const league of Object.values(specialtyLeagues)) {
             // 1. Check if all bunks *within the league's divisions* are free
             for (const divName of leagueDivisions) {
                 for (const bunk of (divisions[divName]?.bunks || [])) {
-                    if (scheduleAssignments[bunk]?.[currentSlot]) {
+                    // Safety check for bunk not existing in schedule
+                    if (!scheduleAssignments[bunk] || scheduleAssignments[bunk][currentSlot]) {
                         slotIsPossible = false;
                         break;
                     }
@@ -690,14 +691,16 @@ for (const league of Object.values(specialtyLeagues)) {
     const gamesWithFields = matchups.map((match, i) => {
         const fieldIndex = Math.floor(i / gamesPerField) % numFields;
         const fieldName = leagueFields[fieldIndex];
-        return { teams: match, sport: leagueSport, field: fieldName };
+        return { teams: match.teams, sport: leagueSport, field: fieldName };
     });
 
     // Mark sport as used today for all bunks in the divisions
     // (This is a simplification; we'll rely on the grid block)
     leagueDivisions.forEach(divName => {
         (divisions[divName]?.bunks || []).forEach(bunk => {
-            window.todayActivityUsed[bunk]?.add(leagueSport);
+            if (window.todayActivityUsed[bunk]) {
+                window.todayActivityUsed[bunk].add(leagueSport);
+            }
         });
     });
 
@@ -802,7 +805,7 @@ let placedLeague = false;
 for (const chosenSlot of candidates) {
 const teams = (lg.data.teams || []).map((t) => String(t).trim()).filter(Boolean);
 if (teams.length < 2) break;
-const matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
+const matchups = window.getLeagueMatchups?.(lg.name, teams, lg.data.sports, leagueTeamSportHistory) || [];
 if (!matchups.length) break;
 const gamesWithSports = assignSportsToMatchups(lg.name, matchups, lg.data.sports, leagueTeamSportHistory);
 
@@ -879,7 +882,7 @@ if (!placedLeague) {
 for (const chosenSlot of candidates) {
 const teams = (lg.data.teams || []).map((t) => String(t).trim()).filter(Boolean);
 if (teams.length < 2) break;
-const matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
+const matchups = window.getLeagueMatchups?.(lg.name, teams, lg.data.sports, leagueTeamSportHistory) || [];
 if (!matchups.length) break;
 const gamesWithSports = assignSportsToMatchups(lg.name, matchups, lg.data.sports, leagueTeamSportHistory);
 const candidateFields = new Set();
@@ -1002,7 +1005,7 @@ window.fillRemainingWithForcedH2HPlus?.(window.availableDivisions || [], window.
 window.fillRemainingWithDoublingAggressive?.(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
 window.fillRemainingWithFallbackSpecials?.(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
 // ===== NEW: Absolute failsafe (no placeholders) =====
-window.fillAbsolutelyAllCellsNoPlaceholders?.(window.availableDivsections || [], window.divisions || {}, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount);
+window.fillAbsolutelyAllCellsNoPlaceholders?.(window.availableDivisions || [], window.divisions || {}, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount);
 
 updateTable();
 saveSchedule();
@@ -1178,7 +1181,7 @@ return [canFitThisPick, spanForThisPick];
 function assignActivity(bunk, s, spanForThisPick, pick, fieldUsageBySlot, generalActivityHistory) {
 const pickedField = fieldLabel(pick.field);
 const activityName = getActivityName(pick);
-for (let k = 0; k < spanForThisPick; k++) {
+for (let k = 0; k < spanLen; k++) {
 const currentSlot = s + k;
 window.scheduleAssignments[bunk][currentSlot] = { field: pickedField, sport: pick.sport, continuation: (k > 0) };
 if (pickedField && (window.allSchedulableNames || []).includes(pickedField)) {
