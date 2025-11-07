@@ -421,7 +421,7 @@ const app1Data = globalSettings.app1 || {};
 const masterFields = app1Data.fields || [];
 const masterDivisions = app1Data.divisions || {};
 const masterAvailableDivs = app1Data.availableDivisions || [];
-const masterSpecials = app1Data.specialActivities || [];
+const masterSpecials = app1Data.specialActivities || []; // <-- THIS WAS THE `appg` TYPO
 const masterLeagues = globalSettings.leaguesByName || {};
 const dailyData = window.loadCurrentDailyData?.() || {};
 // Safely initialize the overrides object
@@ -624,8 +624,13 @@ for (const league of Object.values(specialtyLeagues)) {
     const leagueFields = league.fields;
     const leagueSport = league.sport;
 
-    const matchups = window.getLeagueMatchups?.(league.name, league.teams, [leagueSport], leagueTeamSportHistory) || [];
-    if (matchups.length === 0) continue;
+    // --- FIX: Call getLeagueMatchups first, THEN assignSportsToMatchups ---
+    const raw_matchups = window.getLeagueMatchups?.(league.name, league.teams) || [];
+    if (raw_matchups.length === 0) continue;
+    
+    // Now matchups is [{ teams: ["A", "B"], sport: "SportName" }, ...]
+    const matchups = assignSportsToMatchups(league.name, raw_matchups, [leagueSport], leagueTeamSportHistory);
+    // --- END FIX ---
 
     let chosenSlot = -1;
     
@@ -699,11 +704,13 @@ for (const league of Object.values(specialtyLeagues)) {
     const numFields = leagueFields.length;
     const gamesPerField = Math.ceil(numGames / numFields);
     
-    const gamesWithFields = matchups.map((match, i) => {
+    // --- FIX: Use the 'game' object from matchups array ---
+    const gamesWithFields = matchups.map((game, i) => {
         const fieldIndex = Math.floor(i / gamesPerField) % numFields;
         const fieldName = leagueFields[fieldIndex];
-        return { teams: match.teams, sport: leagueSport, field: fieldName };
+        return { teams: game.teams, sport: game.sport, field: fieldName };
     });
+    // --- END FIX ---
 
     // Mark sport as used today for all bunks in the divisions
     // (This is a simplification; we'll rely on the grid block)
@@ -768,7 +775,7 @@ if (!f || !targetFields.has(f)) continue;
 let k = slot;
 while (k > 0 && window.scheduleAssignments[b][k-1] && window.scheduleAssignments[b][k-1].continuation) k--;
 // clear forward
-while (k < unified.length && window.scheduleAssignments[b][k] && (k===slot || window.scheduleAssignments[b][k].continuation)) {
+while (k < unifiedTimes.length && window.scheduleAssignments[b][k] && (k===slot || window.scheduleAssignments[b][k].continuation)) {
 const rem = window.scheduleAssignments[b][k];
 const rf = fieldLabel(rem.field);
 window.scheduleAssignments[b][k] = undefined;
@@ -816,9 +823,11 @@ let placedLeague = false;
 for (const chosenSlot of candidates) {
 const teams = (lg.data.teams || []).map((t) => String(t).trim()).filter(Boolean);
 if (teams.length < 2) break;
-const matchups = window.getLeagueMatchups?.(lg.name, teams, lg.data.sports, leagueTeamSportHistory) || [];
-if (!matchups.length) break;
-const gamesWithSports = assignSportsToMatchups(lg.name, matchups, lg.data.sports, leagueTeamSportHistory);
+// --- FIX: Pass correct parameters to getLeagueMatchups ---
+const raw_matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
+if (raw_matchups.length === 0) break;
+const gamesWithSports = assignSportsToMatchups(lg.name, raw_matchups, lg.data.sports, leagueTeamSportHistory);
+// --- END FIX ---
 
 // availability snapshot
 const availableFieldsForSpan = {};
@@ -893,9 +902,11 @@ if (!placedLeague) {
 for (const chosenSlot of candidates) {
 const teams = (lg.data.teams || []).map((t) => String(t).trim()).filter(Boolean);
 if (teams.length < 2) break;
-const matchups = window.getLeagueMatchups?.(lg.name, teams, lg.data.sports, leagueTeamSportHistory) || [];
-if (!matchups.length) break;
-const gamesWithSports = assignSportsToMatchups(lg.name, matchups, lg.data.sports, leagueTeamSportHistory);
+// --- FIX: Pass correct parameters to getLeagueMatchups ---
+const raw_matchups = window.getLeagueMatchups?.(lg.name, teams) || [];
+if (raw_matchups.length === 0) break;
+const gamesWithSports = assignSportsToMatchups(lg.name, raw_matchups, lg.data.sports, leagueTeamSportHistory);
+// --- END FIX ---
 const candidateFields = new Set();
 gamesWithSports.forEach(g => (fieldsBySport[g.sport] || []).forEach(f => candidateFields.add(f)));
 evictAssignmentsOnFields(chosenSlot, spanLen, candidateFields, fieldUsageBySlot);
