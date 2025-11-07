@@ -3,7 +3,7 @@
 // no-placeholders failsafe that guarantees every cell is filled.
 // NOTE: These functions assume helpers like fieldLabel() and getActivityName()
 // exist globally (defined in scheduler_logic_core.js).
-// That's fine because  <-- THIS IS THE FIX (added //)
+// That's fine because
 // lookups happen at *call time*, not at definition time.
 // --- Aggressive Pass 2.5 (enhanced): recruit partners + multiple passes ---
 window.fillRemainingWithForcedH2HPlus = function (
