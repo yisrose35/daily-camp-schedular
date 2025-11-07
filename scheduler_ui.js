@@ -1,15 +1,14 @@
 // -------------------- scheduler_ui.js --------------------
 // UI-only: rendering, save/load, init, and window exports.
 //
-// REFACTORED FOR "SCHEDULE PERIODS"
-// - updateTable() is completely rewritten.
-// - It now iterates over window.schedulePeriods (from app1) to build rows.
-// - It reads division rules to find/display 1 or 2+ activities in a single cell.
+// REFACTORED FOR "GRID" (Rowspan-Based)
+// - updateTable() is rewritten to iterate the 30-min unifiedTimes.
+// - It creates one <tr> per 30-min slot.
+// - It uses 'continuation' checks to calculate `rowspan`
+//   to visually group blocks of 60, 90, etc. minutes.
 // -----------------------------------------------------------------
 
-// ===== HELPERS (Copied from core) =====
-// (These are needed for the rendering logic)
-
+// ===== HELPERS =====
 function parseTimeToMinutes(str) {
     if (!str || typeof str !== "string") return null;
     let s = str.trim().toLowerCase();
@@ -35,69 +34,21 @@ function fieldLabel(f) {
     return "";
 }
 
-/**
- * NEW: Helper to find the first unifiedTimes slot index for a given period.
- */
-function findFirstSlotForPeriod(period, unifiedTimes) {
-    if (!unifiedTimes || unifiedTimes.length === 0) return -1;
-    const periodStartMin = parseTimeToMinutes(period.start);
-    
-    for (let i = 0; i < unifiedTimes.length; i++) {
-        const slotStartMin = unifiedTimes[i].start.getHours() * 60 + unifiedTimes[i].start.getMinutes();
-        if (slotStartMin === periodStartMin) {
-            return i;
-        }
-        // Fallback for first period
-        if (slotStartMin >= periodStartMin && i === 0) {
-            return 0;
-        }
-    }
-    // Fallback if no exact match (e.g., 9:00 period, 9:05 slot)
-    for (let i = 0; i < unifiedTimes.length; i++) {
-        const slotStartMin = unifiedTimes[i].start.getHours() * 60 + unifiedTimes[i].start.getMinutes();
-        if (slotStartMin >= periodStartMin) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-/**
- * NEW: Helper to calculate the slot count and span for a division in a period.
- */
-function getPeriodMetrics(period, divRule) {
-    const startMin = parseTimeToMinutes(period.start);
-    const endMin = parseTimeToMinutes(period.end);
-    const totalDuration = endMin - startMin;
-    const totalSlots = Math.floor(totalDuration / 30); // Assumes 30-min increments
-    
-    const numActivities = parseInt(divRule, 10);
-    const spanLen = Math.max(1, Math.floor(totalSlots / numActivities));
-    
-    return { numActivities, spanLen, totalSlots };
-}
-
-
-// ===== NEW: updateTable (Period-Based) =====
+// ===== NEW: updateTable (Grid-Based) =====
 function updateTable() {
     const container = document.getElementById("scheduleTable");
     if (!container) return;
-    container.innerHTML = ""; // Clear old table
+    container.innerHTML = "";
 
-    // Load all necessary data from globals
-    const schedulePeriods = window.schedulePeriods || [];
     const availableDivisions = window.availableDivisions || [];
     const divisions = window.divisions || {};
     const unifiedTimes = window.unifiedTimes || [];
     const scheduleAssignments = window.scheduleAssignments || {};
     const leagueAssignments = window.leagueAssignments || {};
+    const divisionActiveRows = window.divisionActiveRows || {};
 
-    if (schedulePeriods.length === 0) {
-        container.innerHTML = "<p>No Schedule Periods defined. Please add periods in the Setup tab.</p>";
-        return;
-    }
-    if (availableDivisions.length === 0) {
-        container.innerHTML = "<p>No divisions defined. Please add divisions in the Setup tab.</p>";
+    if (unifiedTimes.length === 0) {
+        container.innerHTML = "<p>No schedule times found. Generate a schedule in the Setup tab.</p>";
         return;
     }
 
@@ -109,18 +60,13 @@ function updateTable() {
     const thTime = document.createElement("th");
     thTime.textContent = "Time";
     tr1.appendChild(thTime);
-
     availableDivisions.forEach((div) => {
-        const divData = divisions[div];
-        const bunksInDiv = divData?.bunks || [];
-        if (bunksInDiv.length > 0) {
-            const th = document.createElement("th");
-            th.colSpan = bunksInDiv.length;
-            th.textContent = div;
-            th.style.background = divData?.color || "#333";
-            th.style.color = "#fff";
-            tr1.appendChild(th);
-        }
+        const th = document.createElement("th");
+        th.colSpan = (divisions[div]?.bunks || []).length;
+        th.textContent = div;
+        th.style.background = divisions[div]?.color || "#333";
+        th.style.color = "#fff";
+        tr1.appendChild(th);
     });
     thead.appendChild(tr1);
 
@@ -138,123 +84,120 @@ function updateTable() {
     thead.appendChild(tr2);
     table.appendChild(thead);
 
-    // --- 2. Build Body (Period-Based) ---
+    // --- 2. Build Body (Grid-Based) ---
     const tbody = document.createElement("tbody");
 
-    // Keep track of rowspans for leagues/fixed
-    const rowSpanTrack = {}; // { bunkName: { slots: 0, td: null } }
-
-    for (const period of schedulePeriods) {
+    for (let i = 0; i < unifiedTimes.length; i++) {
         const tr = document.createElement("tr");
         
-        // --- Time Cell ---
         const tdTime = document.createElement("td");
-        tdTime.style.fontWeight = "bold";
-        tdTime.innerHTML = `${period.name}<br><span style="font-size:0.85em; font-weight:normal;">${period.start} - ${period.end}</span>`;
+        tdTime.textContent = unifiedTimes[i].label;
         tr.appendChild(tdTime);
         
-        // Find the metrics for this period
-        const periodStartSlot = findFirstSlotForPeriod(period, unifiedTimes);
-
-        // --- Bunk Cells ---
-        for (const div of availableDivisions) {
-            const divData = divisions[div];
-            const bunks = divData?.bunks || [];
+        availableDivisions.forEach((div) => {
+            const bunks = divisions[div]?.bunks || [];
             
-            // Get division rule for this period
-            const divRule = divData?.periodRules?.[period.id] || "1";
-            const { numActivities, spanLen } = getPeriodMetrics(period, divRule);
+            // Check if this slot is active for this division
+            const isDivActive = divisionActiveRows[div]?.has(i) || false;
 
-            for (const bunk of bunks) {
-                // Check if this cell is already covered by a rowspan
-                if (rowSpanTrack[bunk] && rowSpanTrack[bunk].slots > 0) {
-                    rowSpanTrack[bunk].slots--;
-                    // If it's the last slot, clear the tracker
-                    if (rowSpanTrack[bunk].slots === 0) {
-                        rowSpanTrack[bunk] = null;
+            bunks.forEach((b) => {
+                const entry = scheduleAssignments[b]?.[i];
+                const league = leagueAssignments[div]?.[i];
+
+                if (!isDivActive && !entry && !league) {
+                    // This slot is INACTIVE for this division
+                    // Check if previous slot was also inactive
+                    const prevInactive = i > 0 && !(divisionActiveRows[div]?.has(i-1) || false);
+                    if (prevInactive) {
+                        // This cell is part of a rowspan, skip rendering
+                        return;
+                    } else {
+                        // This is the START of an inactive block
+                        let span = 1;
+                        for (let j = i + 1; j < unifiedTimes.length; j++) {
+                            if (!(divisionActiveRows[div]?.has(j) || false)) {
+                                span++;
+                            } else {
+                                break;
+                            }
+                        }
+                        const td = document.createElement("td");
+                        td.rowSpan = span;
+                        td.className = "grey-cell";
+                        td.style.background = "#ddd";
+                        tr.appendChild(td);
                     }
-                    continue; // Skip rendering this <td>
+                    return; // Done with this bunk
                 }
 
-                const td = document.createElement("td");
-                td.style.verticalAlign = "top";
+                // This slot IS active
                 
-                let entry = null;
-                if (periodStartSlot !== -1) {
-                     entry = scheduleAssignments[bunk]?.[periodStartSlot];
-                }
-
-                // Check for league (which overrides everything)
-                const league = leagueAssignments[div]?.[periodStartSlot];
-
-                if (league && !league.isContinuation) {
-                    // --- 1. LEAGUE ---
+                if (league) {
+                    if (league.isContinuation) return; // Skip
+                    let span = 1;
+                    for (let j = i + 1; j < unifiedTimes.length; j++) {
+                        if (leagueAssignments[div]?.[j]?.isContinuation) span++;
+                        else break;
+                    }
+                    const td = document.createElement("td");
                     td.colSpan = bunks.length;
-                    
-                    // Calculate rowspan for league
-                    let leagueSpan = 1;
-                    const { totalSlots: leagueTotalSlots } = getPeriodMetrics(period, "1"); // Assume league takes full period
-                    
-                    // Note: This logic assumes leagues align perfectly with periods.
-                    // A more robust league rowspan would check unifiedTimes.
-                    
-                    td.rowSpan = 1; // Simplification: 1 period = 1 row
-                    td.style.background = divData?.color || "#4CAF50";
+                    td.rowSpan = span;
+                    td.style.background = divisions[div]?.color || "#4CAF50";
                     td.style.color = "#fff";
                     td.style.fontWeight = "600";
-                    
+                    td.style.verticalAlign = "top";
                     const list = league.games
                         .map(g => `${g.teams[0]} vs ${g.teams[1]} (${g.sport}) @ ${g.field || '?'}`)
                         .join("<br> • ");
                     td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;">${league.leagueName}</span></div>`;
-
                     tr.appendChild(td);
                     
-                    // Skip the rest of the bunks in this division
-                    break; // Exit bunk loop, move to next division
-                
-                } else if (entry && entry._fixed && !entry.continuation) {
-                    // --- 2. FIXED ACTIVITY (e.g., Lunch) ---
-                    td.textContent = fieldLabel(entry.field);
-                    td.style.background = "#f1f1f1";
-                    td.style.fontWeight = "600";
-                    tr.appendChild(td);
-
-                } else if (entry && !entry.continuitation) {
-                    // --- 3. GENERAL/H2H ACTIVITIES ---
-                    const activitiesInCell = [];
-                    for (let i = 0; i < numActivities; i++) {
-                        const slotToFind = periodStartSlot + (i * spanLen);
-                        const subEntry = scheduleAssignments[bunk]?.[slotToFind];
-
-                        if (subEntry) {
-                            if (subEntry._h2h) {
-                                activitiesInCell.push(`<strong>${subEntry.sport} vs ${subEntry.vs}</strong><br><span style="font-size:0.9em;">@ ${fieldLabel(subEntry.field)}</span>`);
-                            } else {
-                                let text = fieldLabel(subEntry.field);
-                                if (subEntry.sport) {
-                                    text += ` – ${subEntry.sport}`;
-                                }
-                                activitiesInCell.push(text);
-                            }
-                        } else {
-                            activitiesInCell.push(`<span style="color:#c0392b;">(Empty)</span>`);
-                        }
-                    }
-                    td.innerHTML = activitiesInCell.join('<hr style="margin:2px 0; border-top: 1px dashed #ccc;">');
-                    tr.appendChild(td);
-                
-                } else {
-                    // --- 4. EMPTY CELL ---
-                    // Only render if it's not a continuation
-                    if (!entry) {
-                         tr.appendChild(td);
-                    }
+                    // Break bunk loop, but first mark other bunks as "covered"
+                    // (This is tricky, skipping for now, relying on colspan)
                 }
-            }
-        }
+                
+                if (league) {
+                    // Stop processing this division's bunks for this row
+                    // This break is crucial for the colspan to work
+                    break;
+                }
+
+                if (entry) {
+                    if (entry.continuation) return; // Skip
+                    let span = 1;
+                    for (let j = i + 1; j < unifiedTimes.length; j++) {
+                        if (scheduleAssignments[b]?.[j]?.continuation) span++;
+                        else break;
+                    }
+                    const td = document.createElement("td");
+                    td.rowSpan = span;
+                    td.style.verticalAlign = "top";
+
+                    if (entry._h2h) {
+                        td.textContent = `${entry.sport} @ ${fieldLabel(entry.field)} vs ${entry.vs}`;
+                        td.style.background = "#e8f4ff";
+                        td.style.fontWeight = "bold";
+                    } else if (entry._fixed) {
+                        td.textContent = fieldLabel(entry.field);
+                        td.style.background = "#f1f1f1";
+                        td.style.fontWeight = "600";
+                    } else if (entry.sport) {
+                        td.textContent = `${fieldLabel(entry.field)} – ${entry.sport}`;
+                    } else {
+                        td.textContent = fieldLabel(entry.field);
+                    }
+                    tr.appendChild(td);
+                }
+
+                if (!entry && !league) {
+                    // Genuinely empty slot
+                    const td = document.createElement("td");
+                    tr.appendChild(td);
+                }
+            }); // end bunks loop
+        }); // end divisions loop
         tbody.appendChild(tr);
-    } // end period loop
+    } // end unifiedTimes loop
 
     table.appendChild(tbody);
     container.appendChild(table);
@@ -262,8 +205,7 @@ function updateTable() {
 
 
 // ===== Save/Load/Init =====
-// (These functions are unchanged, but they call the new updateTable)
-
+// (Unchanged)
 function saveSchedule() {
     try {
         window.saveCurrentDailyData?.("scheduleAssignments", window.scheduleAssignments);
@@ -283,15 +225,17 @@ function reconcileOrRenderSaved() {
         window.scheduleAssignments = {};
         window.leagueAssignments = {};
     }
-    updateTable(); // This now calls the NEW period-based renderer
+    // We must generate the time grid FIRST
+    if (window.generateUnifiedTimesAndMasks) {
+         window.generateUnifiedTimesAndMasks();
+    }
+    updateTable(); 
 }
 
 function initScheduleSystem() {
     try {
-        // Ensure globals exist
         window.scheduleAssignments = window.scheduleAssignments || {};
         window.leagueAssignments = window.leagueAssignments || {};
-        // Render whatever is saved for the selected calendar day
         reconcileOrRenderSaved();
     } catch (e) {
         console.error("Init error:", e);
@@ -302,3 +246,5 @@ function initScheduleSystem() {
 // ===== Exports =====
 window.updateTable = window.updateTable || updateTable;
 window.initScheduleSystem = window.initScheduleSystem || initScheduleSystem;
+// NEW: Expose this for reconcile to use
+window.generateUnifiedTimesAndMasks = window.generateUnifiedTimesAndMasks || generateUnifiedTimesAndMasks;
