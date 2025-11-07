@@ -1,7 +1,7 @@
 // -------------------- specialty_leagues.js --------------------
 // Manages the "Specialty Leagues" tab
-// These leagues are bunk-based (teams are bunks) and use exclusive fields.
-// (UPDATED to use calendar.js save/load)
+// These leagues are division-based (for scheduling) but use custom team names.
+// They get exclusive field rights.
 
 (function() {
     'use strict';
@@ -11,7 +11,6 @@
     // Data from app1
     let allFields = [];
     let allDivisions = [];
-    let allBunksByDivision = {};
     let fieldsBySport = {};
 
     /**
@@ -24,17 +23,10 @@
 
         // 2. Load data from app1
         allFields = window.getFields?.() || [];
-        const divisionsData = window.getDivisions?.() || {};
         allDivisions = window.availableDivisions || [];
         
         // 3. Process data for our UI
-        allBunksByDivision = {};
         fieldsBySport = {};
-
-        allDivisions.forEach(divName => {
-            allBunksByDivision[divName] = divisionsData[divName]?.bunks || [];
-        });
-
         allFields.forEach(f => {
             (f.activities || []).forEach(sport => {
                 fieldsBySport[sport] = fieldsBySport[sport] || [];
@@ -164,10 +156,8 @@
             content.appendChild(renderFieldPicker(league));
         }
         
-        // --- 4. Team Picker (shows *after* divisions are chosen) ---
-        if (league.divisions.length > 0) {
-            content.appendChild(renderTeamPicker(league));
-        }
+        // --- 4. Team Picker ---
+        content.appendChild(renderTeamPicker(league));
 
         section.appendChild(content);
         return section;
@@ -183,10 +173,10 @@
             const chip = createChip(divName, league.divisions.includes(divName));
             chip.onclick = () => {
                 toggleArrayItem(league.divisions, divName);
-                // When divisions change, we must reset teams
-                league.teams = []; 
                 saveData();
-                initSpecialtyLeagues(); // Re-render
+                // Just update chip, no full re-render
+                chip.style.backgroundColor = league.divisions.includes(divName) ? "#007BFF" : "#f0f0f0";
+                chip.style.color = league.divisions.includes(divName) ? "white" : "black";
             };
             chipBox.appendChild(chip);
         });
@@ -239,7 +229,7 @@
             chip.onclick = () => {
                 toggleArrayItem(league.fields, fieldName);
                 saveData();
-                // Just update the chip, no need to re-render everything
+                // Just update the chip
                 chip.style.backgroundColor = league.fields.includes(fieldName) ? "#007BFF" : "#f0f0f0";
                 chip.style.color = league.fields.includes(fieldName) ? "white" : "black";
             };
@@ -253,33 +243,31 @@
         const wrapper = document.createElement("div");
         wrapper.style.marginTop = "15px";
         
-        wrapper.innerHTML = `<label style="font-weight: 600; display:block; margin-bottom: 6px;">4. Select Teams (Bunks):</label>`;
-        
-        // Get all bunks from selected divisions
-        const availableBunks = league.divisions.flatMap(divName => allBunksByDivision[divName] || []).sort();
+        wrapper.innerHTML = `<label style="font-weight: 600; display:block; margin-bottom: 6px;">4. Add Teams:</label>`;
 
-        if (availableBunks.length === 0) {
-            wrapper.innerHTML += `<p class="muted">No bunks found in the selected division(s).</p>`;
-            return wrapper;
-        }
-
-        // --- Add Bunk Dropdown ---
+        // --- Add Team Input ---
         const addWrapper = document.createElement("div");
-        let options = `<option value="">-- Select a bunk to add --</option>`;
-        availableBunks.filter(b => !league.teams.includes(b)).forEach(bunkName => {
-            options += `<option value="${bunkName}">${bunkName}</option>`;
-        });
-        addWrapper.innerHTML = `<select>${options}</select>`;
-        
-        addWrapper.querySelector("select").onchange = (e) => {
-            const bunkName = e.target.value;
-            if (bunkName) {
-                league.teams.push(bunkName);
+        const teamInput = document.createElement("input");
+        teamInput.type = "text";
+        teamInput.placeholder = "Enter team name";
+        const addBtn = document.createElement("button");
+        addBtn.textContent = "Add Team";
+        addBtn.style.marginLeft = "8px";
+
+        addBtn.onclick = () => {
+            const teamName = teamInput.value.trim();
+            if (teamName && !league.teams.includes(teamName)) {
+                league.teams.push(teamName);
                 league.teams.sort();
                 saveData();
-                initSpecialtyLeagues(); // Re-render
+                initSpecialtyLeagues(); // Re-render this tab
             }
+            teamInput.value = "";
         };
+        teamInput.onkeypress = (e) => { if (e.key === "Enter") addBtn.click(); };
+
+        addWrapper.appendChild(teamInput);
+        addWrapper.appendChild(addBtn);
         wrapper.appendChild(addWrapper);
 
         // --- Team List ---
@@ -288,13 +276,13 @@
         chipBox.style.marginTop = "8px";
         
         if (league.teams.length === 0) {
-            chipBox.innerHTML = `<span class="muted" style="font-size:0.9em;">No teams selected.</span>`;
+            chipBox.innerHTML = `<span class="muted" style="font-size:0.9em;">No teams added yet.</span>`;
         }
         
-        league.teams.forEach(bunkName => {
-            const chip = createChip(`${bunkName} ✖`, true, "#5bc0de"); // Light blue
+        league.teams.forEach(teamName => {
+            const chip = createChip(`${teamName} ✖`, true, "#5bc0de"); // Light blue
             chip.onclick = () => {
-                toggleArrayItem(league.teams, bunkName);
+                toggleArrayItem(league.teams, teamName);
                 saveData();
                 initSpecialtyLeagues(); // Re-render
             };
@@ -303,6 +291,7 @@
         wrapper.appendChild(chipBox);
         return wrapper;
     }
+
 
     // --- UI Helpers ---
     function createChip(name, isActive, activeColor = "#007BFF") {
