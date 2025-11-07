@@ -212,9 +212,15 @@ const td = document.createElement("td");
 td.rowSpan = span;
 td.style.verticalAlign = "top";
 
-if (entry._h2h) {
+// --- UPDATED RENDER LOGIC ---
+if (entry._specialty) { // <-- NEW
+    td.textContent = `${entry.sport} vs ${entry.vs}`;
+    td.title = `${entry.leagueName} @ ${entry.field}`;
+    td.style.background = "#fff3cd"; // Yellow for specialty
+    td.style.fontWeight = "bold";
+} else if (entry._h2h) {
 td.textContent = `${entry.sport} ${entry.field} vs ${entry.vs}`;
-td.style.background = "#e8f4ff";
+td.style.background = "#e8f4ff"; // Blue for H2H
 td.style.fontWeight = "bold";
 } else if (entry._fixed) {
 td.textContent = fieldLabel(entry.field);
@@ -227,6 +233,8 @@ td.textContent = `${fieldLabel(entry.field)} – ${entry.sport}`;
 } else {
 td.textContent = fieldLabel(entry.field);
 }
+// --- END UPDATED RENDER LOGIC ---
+
 tr.appendChild(td);
 });
 });
@@ -276,9 +284,8 @@ updateTable();
 }
 
 // ===== Exports =====
-// window.assignFieldsToBunks = window.assignFieldsToBunks || assignFieldsToBunks; // <-- REMOVED
 window.updateTable = window.updateTable || updateTable;
 window.initScheduleSystem = window.initScheduleSystem || initScheduleSystem;
 // If calendar.js changes the date, it should call initScheduleSystem() or
-// directly call assignFieldsToBRows(B)unks() after times are generated.
+// directly call assignFieldsToBunks() after times are generated.
 // End of file.
