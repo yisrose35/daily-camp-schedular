@@ -515,8 +515,8 @@ window._lastFieldsBySportCache = fieldsBySport;
 // Global list of schedulable names (fields + specials)
 window.allSchedulableNames = allFieldNames.concat(availSpecials.map(s => s.name));
 const allActivities = [
-"...availFields.flatMap((f) => (f.activities || []).map((act) => ({ type: "field", field: f, sport: act }))),"
-"...availSpecials.map((sa) => ({ type: "special", field: sa, sport: null }))"
+    ...availFields.flatMap((f) => (f.activities || []).map((act) => ({ type: "field", field: f, sport: act }))),
+    ...availSpecials.map((sa) => ({ type: "special", field: sa, sport: null }))
 ];
 const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
 
