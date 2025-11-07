@@ -146,7 +146,16 @@ return;
 
 // Fixed
 const firstBunk = bunks.length > 0 ? bunks[0] : null;
-const fixedEntry = firstBunk ? window.scheduleAssignments[firstBunk]?.[i] : null;
+// Safety check for bunk not existing
+if (!firstBunk || !window.scheduleAssignments[firstBunk]) {
+    // This division has no bunks, render empty cells
+    for (let j = 0; j < bunks.length; j++) {
+        tr.appendChild(document.createElement("td"));
+    }
+    return;
+}
+
+const fixedEntry = window.scheduleAssignments[firstBunk]?.[i];
 if (fixedEntry && fixedEntry._fixed && !fixedEntry.continuation) {
 let span = 1;
 for (let j = i + 1; j < unifiedTimes.length; j++) {
@@ -164,7 +173,7 @@ tr.appendChild(td);
 return;
 }
 
-// League
+// League (Regular or Specialty)
 if (league) {
 if (!league.isContinuation) {
 let span = 1;
@@ -175,8 +184,15 @@ else break;
 const td = document.createElement("td");
 td.colSpan = bunks.length;
 td.rowSpan = span;
-td.style.background = divisions[div]?.color || "#4CAF50";
-td.style.color = "#fff";
+// --- NEW: Style specialty leagues differently ---
+if (league._specialty) {
+    td.style.background = "#fff3cd"; // Yellow
+    td.style.color = "#664d03";
+    td.style.border = "1px solid #ffe69c";
+} else {
+    td.style.background = divisions[div]?.color || "#4CAF50";
+    td.style.color = "#fff";
+}
 td.style.fontWeight = "600";
 td.style.verticalAlign = "top";
 
@@ -186,7 +202,7 @@ const gameField = g.field ? `@ ${g.field}` : "@ No Field";
 return `${g.teams[0]} vs ${g.teams[1]} (${g.sport}) ${gameField}`;
 })
 .join("<br> • ");
-td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;">${league.leagueName}</span></div>`;
+td.innerHTML = `<div class="league-pill" style="font-size:0.9em;">${list}<br><span style="font-size:0.9em; opacity: 0.8;">${league.leagueName}</span></div>`;
 tr.appendChild(td);
 }
 return;
@@ -194,6 +210,12 @@ return;
 
 // General / H2H
 bunks.forEach((b) => {
+// Safety check for bunk not existing
+if (!window.scheduleAssignments[b]) {
+    tr.appendChild(document.createElement("td"));
+    return;
+}
+    
 const entry = window.scheduleAssignments[b]?.[i];
 if (!entry) {
 const td = document.createElement("td");
@@ -212,15 +234,9 @@ const td = document.createElement("td");
 td.rowSpan = span;
 td.style.verticalAlign = "top";
 
-// --- UPDATED RENDER LOGIC ---
-if (entry._specialty) { // <-- NEW
-    td.textContent = `${entry.sport} vs ${entry.vs}`;
-    td.title = `${entry.leagueName} @ ${entry.field}`;
-    td.style.background = "#fff3cd"; // Yellow for specialty
-    td.style.fontWeight = "bold";
-} else if (entry._h2h) {
+if (entry._h2h) {
 td.textContent = `${entry.sport} ${entry.field} vs ${entry.vs}`;
-td.style.background = "#e8f4ff"; // Blue for H2H
+td.style.background = "#e8f4ff";
 td.style.fontWeight = "bold";
 } else if (entry._fixed) {
 td.textContent = fieldLabel(entry.field);
@@ -233,8 +249,6 @@ td.textContent = `${fieldLabel(entry.field)} – ${entry.sport}`;
 } else {
 td.textContent = fieldLabel(entry.field);
 }
-// --- END UPDATED RENDER LOGIC ---
-
 tr.appendChild(td);
 });
 });
