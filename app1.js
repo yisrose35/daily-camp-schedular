@@ -66,9 +66,399 @@ function parseTimeToMinutes(str) {
     return hh * 60 + mm;
 }
 
-// ... (All other helpers: renderAvailabilityControls, renderSharableControls, etc. remain unchanged) ...
-// (I am omitting them for brevity, but they are still here)
-// ...
+// -------------------- NEW/UPDATED HELPER FUNCTIONS --------------------
+// (These helpers are for Fields/Specials, they are unchanged but necessary)
+
+/**
+* Renders the "Available / Unavailable" time-based controls
+*/
+function renderAvailabilityControls(item, onSave, onRerender) {
+    const container = document.createElement("div");
+    container.style.marginTop = "10px";
+    container.style.paddingLeft = "15px";
+    container.style.borderLeft = "3px solid #eee";
+
+    // --- 1. Mode Toggle (Available / Unavailable) ---
+    const modeLabel = document.createElement("label");
+    modeLabel.style.display = "flex";
+    modeLabel.style.alignItems = "center";
+    modeLabel.style.gap = "10px";
+    modeLabel.style.cursor = "pointer";
+
+    const textAvailable = document.createElement("span");
+    textAvailable.textContent = "Available";
+    const toggleTrack = document.createElement("span");
+    Object.assign(toggleTrack.style, {
+        "width": "44px",
+        "height": "24px",
+        "borderRadius": "99px",
+        "position": "relative",
+        "display": "inline-block",
+        "border": "1px solid #ccc",
+        "backgroundColor": item.availabilityMode === 'available' ? '#22c55e' : '#d1d5db',
+        "transition": "background-color 0.2s"
+    });
+    const toggleKnob = document.createElement("span");
+    Object.assign(toggleKnob.style, {
+        "width": "20px",
+        "height": "20px",
+        "borderRadius": "50%",
+        "backgroundColor": "white",
+        "position": "absolute",
+        "top": "1px",
+        "left": item.availabilityMode === 'available' ? '21px' : '1px',
+        "transition": "left 0.2s"
+    });
+    toggleTrack.appendChild(toggleKnob);
+
+    const textUnavailable = document.createElement("span");
+    textUnavailable.textContent = "Unavailable";
+
+    textAvailable.style.fontWeight = item.availabilityMode === 'available' ? 'bold' : 'normal';
+    textUnavailable.style.fontWeight = item.availabilityMode === 'unavailable' ? 'bold' : 'normal';
+    
+    modeLabel.onclick = () => {
+        item.availabilityMode = (item.availabilityMode === 'available') ? 'unavailable' : 'available';
+        onSave();
+        onRerender(); // Re-render to update styles
+    };
+
+    modeLabel.appendChild(textAvailable);
+    modeLabel.appendChild(toggleTrack);
+    modeLabel.appendChild(textUnavailable);
+    container.appendChild(modeLabel);
+
+    // --- 2. "Except for..." Text ---
+    const exceptLabel = document.createElement("span");
+    exceptLabel.textContent = " except for:";
+    exceptLabel.style.fontWeight = "500";
+    container.appendChild(exceptLabel);
+
+    // --- 3. Exception Time List ---
+    const exceptionList = document.createElement("div");
+    exceptionList.style.display = "flex";
+    exceptionList.style.flexWrap = "wrap";
+    exceptionList.style.gap = "6px";
+    exceptionList.style.marginTop = "6px";
+
+    item.availabilityExceptions = item.availabilityExceptions || [];
+    item.availabilityExceptions.forEach((timeStr, index) => {
+        const pill = document.createElement("span");
+        pill.textContent = `${timeStr} ✖`;
+        pill.style.background = "#ddd";
+        pill.style.padding = "4px 8px";
+        pill.style.borderRadius = "12px";
+        pill.style.cursor = "pointer";
+        pill.onclick = () => {
+            item.availabilityExceptions.splice(index, 1);
+            onSave();
+            onRerender();
+        };
+        exceptionList.appendChild(pill);
+    });
+    container.appendChild(exceptionList);
+
+    // --- 4. Add New Exception Input ---
+    const addContainer = document.createElement("div");
+    addContainer.style.marginTop = "6px";
+    const timeInput = document.createElement("input");
+    timeInput.placeholder = "e.g., 9:00am-10:30am";
+    timeInput.style.marginRight = "5px";
+
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "Add Time";
+    addBtn.onclick = () => {
+        const val = timeInput.value.trim();
+        const parts = val.split('-');
+        if (parts.length === 2) {
+            const startMin = parseTimeToMinutes(parts[0]);
+            const endMin = parseTimeToMinutes(parts[1]);
+            if (startMin != null && endMin != null && endMin > startMin) {
+                item.availabilityExceptions.push(val);
+                timeInput.value = "";
+                onSave();
+                onRerender();
+            } else {
+                console.error("Invalid time range. Use format '9:00am-10:30am'. Ensure end time is after start time.");
+            }
+        } else {
+            console.error("Invalid format. Must be a range separated by a hyphen (e.g., '9:00am-10:30am').");
+        }
+    };
+    timeInput.onkeypress = (e) => { if (e.key === "Enter") addBtn.click(); };
+
+    addContainer.appendChild(timeInput);
+    addContainer.appendChild(addBtn);
+    container.appendChild(addContainer);
+
+    return container;
+}
+
+/**
+* Renders the advanced "Sharable With" controls (Divisions only)
+*/
+function renderSharableControls(item, onSave, onRerender) {
+    const container = document.createElement("div");
+    container.style.marginTop = "10px";
+    const rules = item.sharableWith || { type: 'not_sharable' };
+    const isSharable = rules.type !== 'not_sharable';
+
+    // --- 1. Master "Sharable" Toggle ---
+    const tog = document.createElement("label");
+    tog.className = "switch";
+    tog.title = "Toggle Sharable";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = isSharable;
+    cb.onchange = () => {
+        if (cb.checked) {
+            rules.type = 'all';
+        } else {
+            rules.type = 'not_sharable';
+        }
+        rules.divisions = []; // Clear custom rules
+        onSave();
+        onRerender();
+    };
+    const sl = document.createElement("span"); sl.className = "slider";
+    tog.appendChild(cb); tog.appendChild(sl);
+    const togLabel = document.createElement("span");
+    togLabel.textContent = "Sharable";
+    const shareWrap = document.createElement("label");
+    shareWrap.style.display="flex";
+    shareWrap.style.alignItems="center";
+    shareWrap.style.gap="5px";
+    shareWrap.style.cursor="pointer";
+    shareWrap.appendChild(tog);
+    shareWrap.appendChild(togLabel);
+    container.appendChild(shareWrap);
+
+    // --- 2. Custom Panel (if "Sharable" is ON) ---
+    if (isSharable) {
+        const customPanel = document.createElement("div");
+        customPanel.style.paddingLeft = "20px";
+        customPanel.style.marginTop = "10px";
+
+        // --- Division Picker ---
+        const divLabel = document.createElement("div");
+        divLabel.textContent = "Limit to Divisions (if none selected, sharable with all):";
+        customPanel.appendChild(divLabel);
+        const onDivToggle = () => {
+            rules.type = (rules.divisions.length > 0) ? 'custom' : 'all';
+            onSave();
+            onRerender();
+        };
+        const divChipBox = createChipPicker(window.availableDivisions || [], rules.divisions, onDivToggle);
+        customPanel.appendChild(divChipBox);
+
+        container.appendChild(customPanel);
+    }
+    return container;
+}
+
+/**
+* Helper for renderSharableControls to create chip pickers
+*/
+function createChipPicker(allItems, selectedItems, onToggle) {
+    const chipBox = document.createElement("div");
+    chipBox.style.display = "flex";
+    chipBox.style.flexWrap = "wrap";
+    chipBox.style.gap = "5px";
+    chipBox.style.marginTop = "5px";
+
+    allItems.forEach(name => {
+        const chip = document.createElement("span");
+        chip.textContent = name;
+        chip.style.padding = "4px 8px";
+        chip.style.borderRadius = "12px";
+        chip.style.cursor = "pointer";
+        chip.style.border = "1px solid #ccc";
+
+        const isActive = selectedItems.includes(name);
+        chip.style.backgroundColor = isActive ? "#007BFF" : "#f0f0f0";
+        chip.style.color = isActive ? "white" : "black";
+
+        chip.onclick = () => {
+            const idx = selectedItems.indexOf(name);
+            if (idx > -1) {
+                selectedItems.splice(idx, 1);
+            } else {
+                selectedItems.push(name);
+            }
+            onToggle();
+        };
+        chipBox.appendChild(chip);
+    });
+    return chipBox;
+}
+
+/**
+* Renders the advanced "Limit Usage" controls (Divisions/Bunks)
+*/
+function renderLimitUsageControls(item, onSave, onRerender) {
+    const container = document.createElement("div");
+    container.style.marginTop = "10px";
+    container.style.paddingTop = "10px";
+    container.style.borderTop = "1px solid #eee";
+
+    if (!item.limitUsage) {
+        item.limitUsage = { enabled: false, divisions: {} };
+    }
+    const rules = item.limitUsage;
+
+    // --- 1. Master "Limit Usage" Toggle ---
+    const modeLabel = document.createElement("label");
+    modeLabel.style.display = "flex";
+    modeLabel.style.alignItems = "center";
+    modeLabel.style.gap = "10px";
+    modeLabel.style.cursor = "pointer";
+
+    const textAll = document.createElement("span");
+    textAll.textContent = "All";
+
+    const toggleTrack = document.createElement("span");
+    Object.assign(toggleTrack.style, {
+        "width": "44px",
+        "height": "24px",
+        "borderRadius": "99px",
+        "position": "relative",
+        "display": "inline-block",
+        "border": "1px solid #ccc",
+        "backgroundColor": rules.enabled ? '#d1d5db' : '#22c55e', // Grey for "Limit", Green for "All"
+        "transition": "background-color 0.2s"
+    });
+
+    const toggleKnob = document.createElement("span");
+    Object.assign(toggleKnob.style, {
+        "width": "20px",
+        "height": "20px",
+        "borderRadius": "50%",
+        "backgroundColor": "white",
+        "position": "absolute",
+        "top": "1px",
+        "left": rules.enabled ? '21px' : '1px', // Right for "Limit", Left for "All"
+        "transition": "left 0.2s"
+    });
+    toggleTrack.appendChild(toggleKnob);
+
+    const textLimit = document.createElement("span");
+    textLimit.textContent = "Limit";
+
+    textAll.style.fontWeight = rules.enabled ? 'normal' : 'bold';
+    textLimit.style.fontWeight = rules.enabled ? 'bold' : 'normal';
+
+    modeLabel.onclick = () => {
+        rules.enabled = !rules.enabled;
+        onSave();
+        onRerender(); // Re-render to show/hide the panel
+    };
+
+    modeLabel.appendChild(textAll);
+    modeLabel.appendChild(toggleTrack);
+    modeLabel.appendChild(textLimit);
+    container.appendChild(modeLabel);
+
+    // --- 2. Custom Panel (if "Limit" is ON) ---
+    if (rules.enabled) {
+        const customPanel = document.createElement("div");
+        customPanel.style.paddingLeft = "20px";
+        customPanel.style.marginTop = "10px";
+        customPanel.style.borderLeft = "3px solid #eee";
+
+        const divLabel = document.createElement("div");
+        divLabel.textContent = "Limit to specific divisions and/or bunks:";
+        divLabel.style.fontWeight = "500";
+        customPanel.appendChild(divLabel);
+
+        const allDivisions = window.availableDivisions || [];
+
+        if (allDivisions.length === 0) {
+            customPanel.innerHTML += `<p class="muted">No divisions found. Add divisions in Setup.</p>`;
+        }
+
+        allDivisions.forEach(divName => {
+            const divWrapper = document.createElement("div");
+            divWrapper.style.marginTop = "8px";
+
+            // --- Division Chip ---
+            const divChip = createLimitChip(divName, divName in rules.divisions);
+            divChip.onclick = () => {
+                if (divName in rules.divisions) {
+                    delete rules.divisions[divName]; // Deselect
+                } else {
+                    rules.divisions[divName] = []; // Select (with "all bunks" default)
+                }
+                onSave();
+                onRerender();
+            };
+            divWrapper.appendChild(divChip);
+
+            // --- Bunk List (if division is selected) ---
+            if (divName in rules.divisions) {
+                const bunkList = document.createElement("div");
+                bunkList.style.display = "flex";
+                bunkList.style.flexWrap = "wrap";
+                bunkList.style.gap = "5px";
+                bunkList.style.marginTop = "5px";
+                bunkList.style.paddingLeft = "25px";
+
+                const bunksInDiv = (window.divisions[divName]?.bunks || []);
+
+                if (bunksInDiv.length === 0) {
+                    bunkList.innerHTML = `<span class="muted" style="font-size: 0.9em;">No bunks in this division.</span>`;
+                }
+
+                const selectedBunks = rules.divisions[divName] || [];
+
+                bunksInDiv.forEach(bunkName => {
+                    const bunkChip = createLimitChip(bunkName, selectedBunks.includes(bunkName), false);
+                    bunkChip.onclick = () => {
+                        const bunkIdx = selectedBunks.indexOf(bunkName);
+                        if (bunkIdx > -1) {
+                            selectedBunks.splice(bunkIdx, 1); // Deselect bunk
+                        } else {
+                            selectedBunks.push(bunkName); // Select bunk
+                        }
+                        onSave();
+                        onRerender();
+                    };
+                    bunkList.appendChild(bunkChip);
+                });
+                divWrapper.appendChild(bunkList);
+            }
+            customPanel.appendChild(divWrapper);
+        });
+        container.appendChild(customPanel);
+    }
+
+    return container;
+}
+
+/**
+* Helper for renderLimitUsageControls to create chips
+*/
+function createLimitChip(name, isActive, isDivision = true) {
+    const chip = document.createElement("span");
+    chip.textContent = name;
+    chip.style.padding = "4px 8px";
+    chip.style.borderRadius = "12px";
+    chip.style.cursor = "pointer";
+    chip.style.border = "1px solid #ccc";
+    chip.style.fontSize = isDivision ? "0.95em" : "0.9em";
+
+    const activeBG = isDivision ? "#007BFF" : "#5bc0de";
+    const activeColor = "white";
+    const inactiveBG = isDivision ? "#f0f0f0" : "#f9f9f9";
+    const inactiveColor = "black";
+
+    chip.style.backgroundColor = isActive ? activeBG : inactiveBG;
+    chip.style.color = isActive ? activeColor : inactiveColor;
+    chip.style.borderColor = isActive ? activeBG : (isDivision ? "#ccc" : "#ddd");
+
+    return chip;
+}
+// --- END OF FIELD/SPECIAL HELPER FUNCTIONS ---
+
 
 // -------------------- Bunks --------------------
 // (Unchanged)
@@ -90,7 +480,7 @@ function addBunk() {
 }
 document.getElementById("addBunkBtn").onclick = addBunk;
 document.getElementById("bunkInput").addEventListener("keyup", e => { if (e.key === "Enter") addBunk(); });
-// (updateUnassigned and its makeEditable logic are unchanged)
+
 function updateUnassigned() {
     const c = document.getElementById("unassignedBunks");
     c.innerHTML = "";
@@ -138,7 +528,7 @@ function updateUnassigned() {
 }
 
 // -------------------- Divisions --------------------
-// (Slightly modified)
+// (Modified to call renderDivisionRules)
 function addDivision() {
     const i = document.getElementById("divisionInput");
     if (i.value.trim() === "") return;
@@ -164,7 +554,6 @@ function addDivision() {
 document.getElementById("addDivisionBtn").onclick = addDivision;
 document.getElementById("divisionInput").addEventListener("keyup", e => { if (e.key === "Enter") addDivision(); });
 
-// (setupDivisionButtons is modified to call new renderDivisionRules)
 function setupDivisionButtons() {
     const cont = document.getElementById("divisionButtons"); cont.innerHTML = "";
     const colorEnabled = document.getElementById("enableColor").checked;
@@ -220,6 +609,7 @@ function setupDivisionButtons() {
         cont.appendChild(wrap);
     });
     
+    // Render rules for the initially selected division (if any)
     renderDivisionRules();
 }
 document.getElementById("enableColor").addEventListener("change", setupDivisionButtons);
@@ -227,8 +617,9 @@ document.getElementById("enableColor").addEventListener("change", setupDivisionB
 // -------------------- NEW: Schedule Periods (Names Only) --------------------
 function addSchedulePeriod() {
     const nameInput = document.getElementById("periodNameInput");
+    if (!nameInput) return; // Guard
+    
     const name = nameInput.value.trim();
-
     if (!name) {
         console.error("Please enter a period name.");
         return;
@@ -238,7 +629,6 @@ function addSchedulePeriod() {
         id: uid(),
         name: name
     });
-
     nameInput.value = "";
     
     saveData();
@@ -259,6 +649,9 @@ function renderSchedulePeriods() {
     `;
 
     document.getElementById("addPeriodBtn").onclick = addSchedulePeriod;
+    document.getElementById("periodNameInput").onkeyup = (e) => {
+        if (e.key === "Enter") addSchedulePeriod();
+    };
 
     const listContainer = document.getElementById("schedulePeriodsList");
     listContainer.innerHTML = "";
@@ -324,7 +717,7 @@ function renderSchedulePeriods() {
 function renderDivisionRules() {
     const container = document.getElementById("divisionRulesContainer");
     if (!container) {
-        console.error("Missing #divisionRulesContainer in index.html");
+        // This container is defined in index.html
         return;
     }
 
@@ -356,10 +749,11 @@ function renderDivisionRules() {
         el.style.padding = "8px";
         el.style.border = "1px solid #eee";
         el.style.marginBottom = "5px";
+        el.style.borderRadius = "4px";
 
         el.innerHTML = `
             <strong style="display: block; margin-bottom: 5px;">${period.name}</strong>
-            <div style="display: flex; gap: 8px; align-items: center;">
+            <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
                 <label>Start:</label>
                 <input type="text" placeholder="e.g., 9:00 AM" value="${rule.start}" class="rule-input" data-period-id="${period.id}" data-field="start">
                 <label>End:</label>
@@ -384,7 +778,10 @@ function renderDivisionRules() {
     container.querySelectorAll(".rule-input, .rule-select").forEach(el => {
         const eventType = el.tagName === 'SELECT' ? 'change' : 'input';
         
-        el.addEventListener(eventType, (e) => {
+        // Use 'input' for text fields for immediate feedback
+        const saveEvent = el.tagName === 'SELECT' ? 'change' : 'input';
+
+        el.addEventListener(saveEvent, (e) => {
             const periodId = e.target.getAttribute("data-period-id");
             const field = e.target.getAttribute("data-field");
             
@@ -394,15 +791,165 @@ function renderDivisionRules() {
             }
             
             div.periodRules[periodId][field] = e.target.value;
+            // Use a debounce if this gets slow, but for now, save on every keystroke
             saveData();
         });
     });
 }
 
 // -------------------- Fields / Specials --------------------
-// (Unchanged)
-// (Omitting addField, renderFields, addSpecial, renderSpecials for brevity)
-// ...
+// (These functions are unchanged)
+
+function addField() {
+    const i = document.getElementById("fieldInput");
+    if (!i) return;
+    const n = i.value.trim();
+    if (n) {
+        fields.push({
+            name: n,
+            activities: [],
+            available: true,
+            sharableWith: { type: 'not_sharable', divisions: [] },
+            limitUsage: { enabled: false, divisions: {} },
+            availabilityMode: 'available',
+            availabilityExceptions: []
+        });
+        i.value = "";
+        saveData();
+        renderFields();
+    }
+}
+
+function renderFields() {
+    const c = document.getElementById("fieldList"); 
+    if (!c) return;
+    c.innerHTML = "";
+    fields.forEach(f => {
+        const w = document.createElement("div"); w.className = "fieldWrapper"; if (!f.available) w.classList.add("unavailable");
+        const t = document.createElement("span"); t.className = "fieldTitle"; t.textContent = f.name;
+        makeEditable(t, newName => { f.name = newName; saveData(); renderFields(); });
+        w.appendChild(t);
+
+        const controls = document.createElement("div");
+        controls.style.display = "flex";
+        controls.style.gap = "20px";
+        controls.style.margin = "8px 0";
+
+        // 1. Available Toggle
+        const tog = document.createElement("label"); tog.className = "switch";
+        tog.title = "Available (Master)";
+        const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = f.available;
+        cb.onchange = () => { f.available = cb.checked; saveData(); renderFields(); };
+        const sl = document.createElement("span"); sl.className = "slider";
+        tog.appendChild(cb); tog.appendChild(sl);
+        const togLabel = document.createElement("span"); togLabel.textContent = "Available";
+        const availWrap = document.createElement("label"); availWrap.style.display="flex"; availWrap.style.alignItems="center"; availWrap.style.gap="5px"; availWrap.style.cursor="pointer";
+        availWrap.appendChild(tog); availWrap.appendChild(togLabel);
+        controls.appendChild(availWrap);
+        w.appendChild(controls);
+
+        const bw = document.createElement("div"); bw.style.marginTop = "8px";
+        commonActivities.forEach(act => {
+            const b = document.createElement("button"); b.textContent = act; b.className = "activity-button";
+            if (f.activities.includes(act)) b.classList.add("active");
+            b.onclick = () => {
+                if (f.activities.includes(act)) f.activities = f.activities.filter(a => a !== act);
+                else f.activities.push(act);
+                saveData(); renderFields();
+            };
+            bw.appendChild(b);
+        });
+        w.appendChild(bw);
+        const other = document.createElement("input");
+        other.placeholder = "Other activity";
+        other.onkeyup = e => {
+            if (e.key === "Enter" && other.value.trim()) {
+                const v = other.value.trim();
+                if (!f.activities.includes(v)) f.activities.push(v);
+                other.value = "";
+                saveData(); renderFields();
+            }
+        };
+        w.appendChild(other);
+        if (f.activities.length > 0) {
+            const p = document.createElement("p"); p.style.marginTop = "6px";
+            p.textContent = "Activities: " + f.activities.join(", ");
+            w.appendChild(p);
+        }
+
+        const sharableControls = renderSharableControls(f, saveData, renderFields);
+        w.appendChild(sharableControls);
+        const limitControls = renderLimitUsageControls(f, saveData, renderFields);
+        w.appendChild(limitControls);
+        const availabilityControls = renderAvailabilityControls(f, saveData, renderFields);
+        availabilityControls.style.marginTop = "10px";
+        availabilityControls.style.paddingTop = "10px";
+        availabilityControls.style.borderTop = "1px solid #eee";
+        w.appendChild(availabilityControls);
+        c.appendChild(w);
+    });
+}
+
+function addSpecial() {
+    const i = document.getElementById("specialInput");
+    if (!i) return;
+    const n = i.value.trim();
+    if (n) {
+        specialActivities.push({
+            name: n,
+            available: true,
+            sharableWith: { type: 'not_sharable', divisions: [] },
+            limitUsage: { enabled: false, divisions: {} },
+            availabilityMode: 'available',
+            availabilityExceptions: []
+        });
+        i.value = "";
+        saveData();
+        renderSpecials();
+    }
+}
+
+function renderSpecials() {
+    const c = document.getElementById("specialList");
+    if (!c) return;
+    c.innerHTML = "";
+    specialActivities.forEach(s => {
+        const w = document.createElement("div"); w.className = "fieldWrapper"; if (!s.available) w.classList.add("unavailable");
+        const t = document.createElement("span"); t.className = "fieldTitle"; t.textContent = s.name;
+        makeEditable(t, newName => { s.name = newName; saveData(); renderSpecials(); });
+        w.appendChild(t);
+
+        const controls = document.createElement("div");
+        controls.style.display = "flex";
+        controls.style.gap = "20px";
+        controls.style.margin = "8px 0";
+
+        // 1. Available Toggle
+        const tog = document.createElement("label"); tog.className = "switch";
+        tog.title = "Available (Master)";
+        const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = s.available;
+        cb.onchange = () => { s.available = cb.checked; saveData(); renderSpecials(); };
+        const sl = document.createElement("span"); sl.className = "slider";
+        tog.appendChild(cb); tog.appendChild(sl);
+        const togLabel = document.createElement("span");
+        togLabel.textContent = "Available";
+        const availWrap = document.createElement("label"); availWrap.style.display="flex"; availWrap.style.alignItems="center"; availWrap.style.gap="5px"; availWrap.style.cursor="pointer";
+        availWrap.appendChild(tog); availWrap.appendChild(togLabel);
+        controls.appendChild(availWrap);
+        w.appendChild(controls);
+
+        const sharableControls = renderSharableControls(s, saveData, renderSpecials);
+        w.appendChild(sharableControls);
+        const limitControls = renderLimitUsageControls(s, saveData, renderSpecials);
+        w.appendChild(limitControls);
+        const availabilityControls = renderAvailabilityControls(s, saveData, renderSpecials);
+        availabilityControls.style.marginTop = "10px";
+        availabilityControls.style.paddingTop = "10px";
+        availabilityControls.style.borderTop = "1p_x solid #eee";
+        w.appendChild(availabilityControls);
+        c.appendChild(w);
+    });
+}
 
 // -------------------- Local Storage (UPDATED) --------------------
 function saveData() {
@@ -428,11 +975,9 @@ function loadData() {
             ? data.availableDivisions.slice()
             : Object.keys(divisions);
         
-        // NEW: Ensure new periodRules property is correct
         availableDivisions.forEach(divName => {
             if (divisions[divName]) {
                 divisions[divName].periodRules = divisions[divName].periodRules || {};
-                // Add migration logic if old format exists
             }
         });
             
@@ -442,27 +987,59 @@ function loadData() {
         fields = data.fields || [];
         specialActivities = data.specialActivities || [];
         
-        // NEW: Load schedule periods
         schedulePeriods = data.schedulePeriods || [];
         window.schedulePeriods = schedulePeriods; 
 
-        // (Normalize fields/specials logic is unchanged, omitting for brevity)
-        // ...
+        // Normalize fields
+        fields.forEach(f => {
+            f.available = f.available !== false;
+            f.sharableWith = f.sharableWith || { type: 'not_sharable' };
+            f.sharableWith.divisions = f.sharableWith.divisions || [];
+            f.availabilityMode = f.availabilityMode || 'available';
+            f.availabilityExceptions = f.availabilityExceptions || [];
+            f.limitUsage = f.limitUsage || { enabled: false, divisions: {} };
+        });
+        // Normalize specials
+        specialActivities.forEach(s => {
+            s.available = s.available !== false;
+            s.sharableWith = s.sharableWith || { type: 'not_sharable' };
+            s.sharableWith.divisions = s.sharableWith.divisions || [];
+            s.availabilityMode = s.availabilityMode || 'available';
+            s.availabilityExceptions = s.availabilityExceptions || [];
+            s.limitUsage = s.limitUsage || { enabled: false, divisions: {} };
+        });
         
     } catch (e) { console.error("Error loading data:", e); }
 }
 
 // -------------------- Init --------------------
 function initApp1() {
-    // This function no longer needs setupNewTimeUI()
-    // because index.html has been manually updated.
+    // Hookup field/special buttons
+    const addFieldBtn = document.getElementById("addFieldBtn");
+    if (addFieldBtn) addFieldBtn.onclick = addField;
+    const fieldInput = document.getElementById("fieldInput");
+    if (fieldInput) fieldInput.addEventListener("keyup", e => { if (e.key === "Enter") addField(); });
 
+    const addSpecialBtn = document.getElementById("addSpecialBtn");
+    if (addSpecialBtn) addSpecialBtn.onclick = addSpecial;
+    const specialInput = document.getElementById("specialInput");
+    if (specialInput) specialInput.addEventListener("keyup", e => { if (e.key === "Enter") addSpecial(); });
+
+    // Load all data
     loadData();
+    
+    // Render all UI components
     updateUnassigned();
     setupDivisionButtons();
-    // renderFields(); // renderFields/Specials/Periods are called by loadData/setupDivButtons
-    // renderSpecials();
+    
+    // ----- THIS IS THE FIX -----
+    // Call renderers for fields and specials
+    renderFields();
+    renderSpecials();
+    // ---------------------------
+    
     renderSchedulePeriods();
+    // renderDivisionRules() is called by setupDivisionButtons
 }
 window.initApp1 = initApp1;
 
