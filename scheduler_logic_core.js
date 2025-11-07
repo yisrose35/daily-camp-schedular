@@ -616,20 +616,23 @@ const takenLeagueSlots = new Set();
 const specialtyLeagues = globalSettings.specialtyLeagues || {};
 
 for (const league of Object.values(specialtyLeagues)) {
-    if (!league.enabled || !league.sport || !league.fields?.length || !league.teams?.length) {
+    if (!league.enabled || !league.sport || !league.fields?.length || !league.teams?.length || !league.divisions?.length) {
         continue;
     }
+    
+    const leagueDivisions = league.divisions;
+    const leagueFields = league.fields;
+    const leagueSport = league.sport;
 
     const matchups = window.getLeagueMatchups?.(league.name, league.teams) || [];
     if (matchups.length === 0) continue;
 
     let chosenSlot = -1;
     
-    // Find the first slot where all teams and all fields are free
+    // Find the first slot where all associated divisions AND all selected fields are free
     for (let s = 0; s < window.unifiedTimes.length; s++) {
         let slotIsPossible = true;
         
-        // Check span for all teams and fields
         for (let k = 0; k < spanLen; k++) {
             const currentSlot = s + k;
             if (currentSlot >= window.unifiedTimes.length) {
@@ -637,24 +640,32 @@ for (const league of Object.values(specialtyLeagues)) {
                 break;
             }
             
-            // 1. Check if all teams (bunks) are free
-            for (const teamBunk of league.teams) {
-                // Safety check for bunk not existing in schedule
-                if (!scheduleAssignments[teamBunk] || scheduleAssignments[teamBunk][currentSlot]) {
-                    slotIsPossible = false;
-                    break;
+            // 1. Check if all bunks *within the league's divisions* are free
+            for (const divName of leagueDivisions) {
+                for (const bunk of (divisions[divName]?.bunks || [])) {
+                    if (scheduleAssignments[bunk]?.[currentSlot]) {
+                        slotIsPossible = false;
+                        break;
+                    }
                 }
+                if (!slotIsPossible) break;
             }
             if (!slotIsPossible) break;
 
-            // 2. Check if all fields are free (usage=0 and not time-blocked)
-            for (const fieldName of league.fields) {
+            // 2. Check if all *league fields* are free (exclusive lock)
+            for (const fieldName of leagueFields) {
                 if ((fieldUsageBySlot[currentSlot]?.[fieldName] || 0) > 0 || window.activityBlockedSlots?.[fieldName]?.has(currentSlot)) {
                     slotIsPossible = false;
                     break;
                 }
             }
             if (!slotIsPossible) break;
+
+            // 3. Check if slot is already taken by another league
+            if (takenLeagueSlots.has(currentSlot)) {
+                slotIsPossible = false;
+                break;
+            }
         }
 
         if (slotIsPossible) {
@@ -673,52 +684,47 @@ for (const league of Object.values(specialtyLeagues)) {
 
     // Calculate game distribution
     const numGames = matchups.length;
-    const numFields = league.fields.length;
+    const numFields = leagueFields.length;
     const gamesPerField = Math.ceil(numGames / numFields);
-
-    for (let i = 0; i < numGames; i++) {
-        const [teamA, teamB] = matchups[i];
-        
-        // Assign field based on game index
+    
+    const gamesWithFields = matchups.map((match, i) => {
         const fieldIndex = Math.floor(i / gamesPerField) % numFields;
-        const fieldName = league.fields[fieldIndex];
+        const fieldName = leagueFields[fieldIndex];
+        return { teams: match, sport: leagueSport, field: fieldName };
+    });
 
-        // Mark sport as used today for both teams
-        window.todayActivityUsed[teamA]?.add(league.sport);
-        window.todayActivityUsed[teamB]?.add(league.sport);
+    // Mark sport as used today for all bunks in the divisions
+    // (This is a simplification; we'll rely on the grid block)
+    leagueDivisions.forEach(divName => {
+        (divisions[divName]?.bunks || []).forEach(bunk => {
+            window.todayActivityUsed[bunk]?.add(leagueSport);
+        });
+    });
 
-        // Stamp the grid for the full span
+    // Stamp the league entry for all associated divisions
+    for (const divName of leagueDivisions) {
+        window.leagueAssignments[divName] = window.leagueAssignments[divName] || {};
+        const leagueData = { 
+            games: gamesWithFields, 
+            leagueName: league.name, 
+            isContinuation: false, 
+            _specialty: true // Flag for UI
+        };
+        const leagueContinuation = { 
+            leagueName: league.name, 
+            isContinuation: true, 
+            _specialty: true 
+        };
+        
         for (let k = 0; k < spanLen; k++) {
             const slot = chosenSlot + k;
-            const cont = k > 0;
-
-            const entryA = { 
-                field: fieldName, 
-                sport: league.sport, 
-                continuation: cont, 
-                _specialty: true, 
-                vs: teamB, 
-                leagueName: league.name 
-            };
-            const entryB = { 
-                field: fieldName, 
-                sport: league.sport, 
-                continuation: cont, 
-                _specialty: true, 
-                vs: teamA, 
-                leagueName: league.name 
-            };
-            
-            scheduleAssignments[teamA][slot] = entryA;
-            scheduleAssignments[teamB][slot] = entryB;
-            
-            // Add to takenLeagueSlots to block divisional leagues
-            takenLeagueSlots.add(slot); 
+            window.leagueAssignments[divName][slot] = (k === 0) ? leagueData : leagueContinuation;
+            takenLeagueSlots.add(slot);
         }
     }
 
     // Exclusively lock all fields for the full span
-    for (const fieldName of league.fields) {
+    for (const fieldName of leagueFields) {
         for (let k = 0; k < spanLen; k++) {
             const slot = chosenSlot + k;
             fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
@@ -726,6 +732,7 @@ for (const league of Object.values(specialtyLeagues)) {
         }
     }
 }
+
 
 // ========================================================
 // ===== Pass 2: REGULAR LEAGUES (Division-based) =====
@@ -775,7 +782,13 @@ for (let k = 0; k < spanLen; k++) {
 const slot = s + k;
 if (slot >= window.unifiedTimes.length) return false;
 let busy = false;
-for (const bunk of bunksInDiv) { if (scheduleAssignments[bunk]?.[slot]) { busy = true; break; } }
+for (const bunk of bunksInDiv) { 
+    // Safety check for bunk not existing
+    if (!scheduleAssignments[bunk] || scheduleAssignments[bunk][slot]) { 
+        busy = true; 
+        break; 
+    } 
+}
 if (busy) return false;
 if (takenLeagueSlots.has(slot)) return false;
 }
@@ -945,6 +958,9 @@ true;
 const allBunksInDiv = divisions[div]?.bunks || [];
 
 for (const bunk of allBunksInDiv) {
+// Safety check for bunk not existing
+if (!scheduleAssignments[bunk]) continue; 
+
 for (let s = 0; s < window.unifiedTimes.length; s++) {
 if (scheduleAssignments[bunk][s]) continue;
 if (window.leagueAssignments?.[div]?.[s]) continue;
@@ -981,11 +997,12 @@ if (assignedSpan > 0) { s += (assignedSpan - 1);
 }
 
 // ===== Post-passes (defined in scheduler_logic_fillers.js) =====
-fillRemainingWithForcedH2HPlus(window.availableDivisions || [], window.divisions || {}, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount);
-fillRemainingWithDoublingAggressive(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
-fillRemainingWithFallbackSpecials(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
+// FIX: Call these functions on the window object
+window.fillRemainingWithForcedH2HPlus?.(window.availableDivisions || [], window.divisions || {}, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount);
+window.fillRemainingWithDoublingAggressive?.(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
+window.fillRemainingWithFallbackSpecials?.(window.availableDivisions || [], window.divisions || {}, spanLen, fieldUsageBySlot, activityProperties);
 // ===== NEW: Absolute failsafe (no placeholders) =====
-fillAbsolutelyAllCellsNoPlaceholders(window.availableDivisions || [], window.divisions || {}, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount);
+window.fillAbsolutelyAllCellsNoPlaceholders?.(window.availableDivsections || [], window.divisions || {}, spanLen, h2hActivities, fieldUsageBySlot, activityProperties, h2hHistory, h2hGameCount);
 
 updateTable();
 saveSchedule();
@@ -1084,7 +1101,7 @@ isBusy = true;
 }
 
 // Check bunk/league/division blocks
-if (!isBusy && (window.scheduleAssignments[bunk][currentSlot] || window.leagueAssignments?.[div]?.[currentSlot] || !isActive(currentSlot))) {
+if (!isBusy && (scheduleAssignments[bunk][currentSlot] || window.leagueAssignments?.[div]?.[currentSlot] || !isActive(currentSlot))) {
 isBusy = true;
 }
 
