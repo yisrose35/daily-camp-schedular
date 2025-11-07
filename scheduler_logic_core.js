@@ -447,7 +447,7 @@ for (const divName of availableDivisions) {
 if (!masterDivisions[divName]) continue;
 divisions[divName] = JSON.parse(JSON.stringify(masterDivisions[divName]));
 // We also no longer filter bunks here.
-Trips handle this.
+// Trips handle this.
 }
 window.availableDivisions = availableDivisions;
 window.divisions = divisions;
