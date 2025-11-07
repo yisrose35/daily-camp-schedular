@@ -118,7 +118,7 @@ function renderAvailabilityControls(item, onSave, onRerender) {
     position: "relative",
     display: "inline-block",
     border: "1px solid #ccc",
-    backgroundColor: item.availabilityMode === 'available' ? '#22c55e' : '#d1d5db', // green or grey
+    backgroundColor: item.availabilityMode === 'available' ? '#22c55e' : '#d1d5db',
     transition: "background-color 0.2s"
   });
 
@@ -130,7 +130,7 @@ function renderAvailabilityControls(item, onSave, onRerender) {
     backgroundColor: "white",
     position: "absolute",
     top: "1px",
-    left: item.availabilityMode === 'available' ? '21px' : '1px', // right or left
+    left: item.availabilityMode === 'available' ? '21px' : '1px',
     transition: "left 0.2s"
   });
   
@@ -146,13 +146,10 @@ function renderAvailabilityControls(item, onSave, onRerender) {
   // Use onclick on the label to toggle state
   modeLabel.onclick = () => {
     item.availabilityMode = (item.availabilityMode === 'available') ? 'unavailable' : 'available';
-    
-    // Update styles
     toggleTrack.style.backgroundColor = item.availabilityMode === 'available' ? '#22c55e' : '#d1d5db';
     toggleKnob.style.left = item.availabilityMode === 'available' ? '21px' : '1px';
     textAvailable.style.fontWeight = item.availabilityMode === 'available' ? 'bold' : 'normal';
     textUnavailable.style.fontWeight = item.availabilityMode === 'unavailable' ? 'bold' : 'normal';
-    
     onSave();
   };
 
@@ -160,7 +157,6 @@ function renderAvailabilityControls(item, onSave, onRerender) {
   modeLabel.appendChild(toggleTrack);
   modeLabel.appendChild(textUnavailable);
   container.appendChild(modeLabel);
-
 
   // --- 2. "Except for..." Text ---
   const exceptLabel = document.createElement("span");
@@ -186,7 +182,7 @@ function renderAvailabilityControls(item, onSave, onRerender) {
     pill.onclick = () => {
       item.availabilityExceptions.splice(index, 1);
       onSave();
-      onRerender(); // Re-render to reflect change
+      onRerender();
     };
     exceptionList.appendChild(pill);
   });
@@ -208,19 +204,15 @@ function renderAvailabilityControls(item, onSave, onRerender) {
     if (parts.length === 2) {
       const startMin = parseTimeToMinutes(parts[0]);
       const endMin = parseTimeToMinutes(parts[1]);
-      
       if (startMin != null && endMin != null && endMin > startMin) {
-        // Valid! Push the original, user-formatted string
         item.availabilityExceptions.push(val);
         timeInput.value = "";
         onSave();
-        onRerender(); // Re-render to reflect change
+        onRerender();
       } else {
-        // Invalid time or range
         alert("Invalid time range. Use format '9:00am-10:30am'. Ensure end time is after start time.");
       }
     } else {
-      // Invalid format
       alert("Invalid format. Must be a range separated by a hyphen (e.g., '9:00am-10:30am').");
     }
   };
@@ -234,7 +226,7 @@ function renderAvailabilityControls(item, onSave, onRerender) {
 }
 
 /**
- * NEW: Renders the advanced "Sharable With" controls
+ * NEW: Renders the advanced "Sharable With" controls (Divisions only)
  */
 function renderSharableControls(item, onSave, onRerender) {
   const container = document.createElement("div");
@@ -257,7 +249,6 @@ function renderSharableControls(item, onSave, onRerender) {
       rules.type = 'not_sharable';
     }
     rules.divisions = []; // Clear custom rules
-    rules.bunks = [];     // Clear custom rules
     onSave();
     onRerender();
   };
@@ -287,46 +278,13 @@ function renderSharableControls(item, onSave, onRerender) {
     customPanel.appendChild(divLabel);
     
     const onDivToggle = () => {
-      // Logic: If divisions are selected, it's custom. If not, it's 'all'.
-      if (rules.divisions.length > 0) {
-        rules.type = 'custom';
-      } else {
-        rules.type = 'all';
-      }
-      rules.bunks = []; // Any division change resets the bunk selection
+      rules.type = (rules.divisions.length > 0) ? 'custom' : 'all';
       onSave();
-      onRerender(); // Re-render to show/hide the bunks panel
+      onRerender();
     };
     
     const divChipBox = createChipPicker(window.availableDivisions || [], rules.divisions, onDivToggle);
     customPanel.appendChild(divChipBox);
-    
-    // --- Bunk Picker (if divisions are selected) ---
-    if (rules.type === 'custom' && rules.divisions.length > 0) {
-      const bunkLabel = document.createElement("div");
-      bunkLabel.textContent = "Limit to Bunks (overrides division selection):";
-      bunkLabel.style.marginTop = "10px";
-      customPanel.appendChild(bunkLabel);
-      
-      // Get bunks *only* from selected divisions
-      const bunksFromSelectedDivs = [];
-      rules.divisions.forEach(divName => {
-        (window.divisions[divName]?.bunks || []).forEach(bunk => {
-          bunksFromSelectedDivs.push(bunk);
-        });
-      });
-      
-      const onBunkToggle = () => {
-        // Logic: Bunk selection is always 'custom'.
-        // The scheduler will see 'bunks' has items and will ignore 'divisions'.
-        rules.type = 'custom';
-        onSave();
-        onRerender(); // Just to re-render the chips
-      };
-
-      const bunkChipBox = createChipPicker(bunksFromSelectedDivs, rules.bunks, onBunkToggle);
-      customPanel.appendChild(bunkChipBox);
-    }
 
     container.appendChild(customPanel);
   }
@@ -335,7 +293,7 @@ function renderSharableControls(item, onSave, onRerender) {
 }
 
 /**
- * NEW: Helper for renderSharableControls to create chip pickers
+ * Helper for renderSharableControls to create chip pickers
  */
 function createChipPicker(allItems, selectedItems, onToggle) {
   const chipBox = document.createElement("div");
@@ -352,9 +310,7 @@ function createChipPicker(allItems, selectedItems, onToggle) {
     chip.style.cursor = "pointer";
     chip.style.border = "1px solid #ccc";
     
-    // `selectedItems` is guaranteed to be an array by `loadData`
     const isActive = selectedItems.includes(name); 
-    
     chip.style.backgroundColor = isActive ? "#007BFF" : "#f0f0f0";
     chip.style.color = isActive ? "white" : "black";
     
@@ -365,7 +321,7 @@ function createChipPicker(allItems, selectedItems, onToggle) {
       } else {
         selectedItems.push(name);
       }
-      onToggle(); // Call the specific toggle logic
+      onToggle();
     };
     chipBox.appendChild(chip);
   });
@@ -437,11 +393,9 @@ function updateUnassigned() {
         if (i !== -1) d.bunks[i] = newName;
       }
       
-      // We must also update scheduleAssignments IF it's loaded for a day
       if (window.scheduleAssignments && window.scheduleAssignments[b]) {
         window.scheduleAssignments[newName] = window.scheduleAssignments[b];
         delete window.scheduleAssignments[b];
-        // Note: This only affects the *loaded* day. We need to save it.
         window.saveCurrentDailyData?.("scheduleAssignments", window.scheduleAssignments);
       }
       saveData();
@@ -464,7 +418,7 @@ function addDivision() {
     window.availableDivisions = availableDivisions; // Update global
   
     divisions[name] = { bunks: [], color, start: null, end: null };
-    window.divisions = divisions; // ✅ keep global in sync
+    window.divisions = divisions; // keep global in sync
 
     i.value = "";
     saveData();
@@ -493,13 +447,12 @@ function setupDivisionButtons() {
         span.classList.add("selected"); 
         saveData(); // Save selectedDivision
     };
-    // Re-select if it was selected
     if (selectedDivision === name) span.classList.add("selected");
     
     makeEditable(span, newName => {
       divisions[newName] = divisions[name]; 
       delete divisions[name];
-      window.divisions = divisions; // ✅ keep global in sync after rename
+      window.divisions = divisions; // keep global in sync after rename
 
       availableDivisions[availableDivisions.indexOf(name)] = newName;
       window.availableDivisions = availableDivisions; // Update global
@@ -582,23 +535,19 @@ function applyTemplatesToDivisions() {
 
 // -------------------- Fields / Specials --------------------
 
-//
-// ===== THIS IS THE FIRST FIXED FUNCTION =====
-//
 function addField() {
   const i = document.getElementById("fieldInput");
   const n = i.value.trim();
   if (n) {
-    // --- UPDATED: New items now have the full sharableWith object ---
+    // Default sharableWith: divisions only
     fields.push({ 
       name: n, 
       activities: [], 
       available: true,
-      sharableWith: { type: 'not_sharable', divisions: [], bunks: [] }, // <-- FIXED
+      sharableWith: { type: 'not_sharable', divisions: [] },
       availabilityMode: 'available',
       availabilityExceptions: []
     });
-    // --- END UPDATE ---
     i.value = "";
     saveData();
     renderFields();
@@ -661,36 +610,30 @@ function renderFields() {
       w.appendChild(p);
     }
     
-    // --- (NEW) Sharable Controls ---
+    // --- Sharable Controls (Divisions only) ---
     const sharableControls = renderSharableControls(f, saveData, renderFields);
     w.appendChild(sharableControls);
-    // --- END NEW ---
 
-    // --- (NEW) Availability Controls ---
+    // --- Availability Controls ---
     const availabilityControls = renderAvailabilityControls(f, saveData, renderFields);
     w.appendChild(availabilityControls);
-    // --- END NEW ---
 
     c.appendChild(w);
   });
 }
 
-//
-// ===== THIS IS THE SECOND FIXED FUNCTION =====
-//
 function addSpecial() {
   const i = document.getElementById("specialInput");
   const n = i.value.trim();
   if (n) {
-    // --- UPDATED: New items now have the full sharableWith object and default to not_sharable ---
+    // Default sharableWith: divisions only
     specialActivities.push({ 
       name: n, 
       available: true,
-      sharableWith: { type: 'not_sharable', divisions: [], bunks: [] }, // <-- FIXED
+      sharableWith: { type: 'not_sharable', divisions: [] },
       availabilityMode: 'available',
       availabilityExceptions: []
     });
-    // --- END UPDATE ---
     i.value = "";
     saveData();
     renderSpecials();
@@ -727,15 +670,13 @@ function renderSpecials() {
 
     w.appendChild(controls);
 
-    // --- (NEW) Sharable Controls ---
+    // --- Sharable Controls (Divisions only) ---
     const sharableControls = renderSharableControls(s, saveData, renderSpecials);
     w.appendChild(sharableControls);
-    // --- END NEW ---
 
-    // --- (NEW) Availability Controls ---
+    // --- Availability Controls ---
     const availabilityControls = renderAvailabilityControls(s, saveData, renderSpecials);
     w.appendChild(availabilityControls);
-    // --- END NEW ---
     
     c.appendChild(w);
   });
@@ -782,15 +723,12 @@ function generateTimes() {
 
 // -------------------- Local Storage (UPDATED) --------------------
 function saveData() {
-  // This now saves to the *Global Settings* object
-  // NEW properties (availabilityMode, sharableWith) are saved automatically
-  // because they are part of the 'fields' and 'specialActivities' objects.
   const data = { bunks, divisions, availableDivisions, selectedDivision, fields, specialActivities, timeTemplates };
   window.saveGlobalSettings?.("app1", data);
 }
 
 //
-// ===== NEWLY FIXED loadData FUNCTION (globals synced after finalization) =====
+// ===== loadData FUNCTION (globals synced after finalization) =====
 //
 function loadData() {
   const data = window.loadGlobalSettings?.().app1 || {};
@@ -798,12 +736,11 @@ function loadData() {
     bunks = data.bunks || [];
     divisions = data.divisions || {};
 
-    // Decide availableDivisions, then publish to window.*
     availableDivisions = (data.availableDivisions && Array.isArray(data.availableDivisions))
       ? data.availableDivisions.slice()
       : Object.keys(divisions);
 
-    // ✅ Rebind globals AFTER values are finalized
+    // Rebind globals AFTER values are finalized
     window.divisions = divisions;
     window.availableDivisions = availableDivisions;
 
@@ -814,19 +751,14 @@ function loadData() {
     
     // Normalize fields
     fields.forEach(f => {
-      f.available = f.available !== false; // default true
-      
-      // Migrate old 'sharable' boolean
+      f.available = f.available !== false;
       if (typeof f.sharable === 'boolean') {
         f.sharableWith = { type: f.sharable ? 'all' : 'not_sharable' };
         delete f.sharable; 
       }
-      
-      // Ensure object exists and has arrays
       f.sharableWith = f.sharableWith || { type: 'not_sharable' };
+      // divisions only
       f.sharableWith.divisions = f.sharableWith.divisions || [];
-      f.sharableWith.bunks = f.sharableWith.bunks || [];
-
       f.availabilityMode = f.availabilityMode || 'available';
       f.availabilityExceptions = f.availabilityExceptions || [];
     });
@@ -834,17 +766,14 @@ function loadData() {
     // Normalize specials
     specialActivities.forEach(s => {
       s.available = s.available !== false;
-      
       if (typeof s.sharable === 'boolean') {
         s.sharableWith = { type: s.sharable ? 'all' : 'not_sharable' };
         delete s.sharable;
       } else {
         s.sharableWith = s.sharableWith || { type: 'not_sharable' }; 
       }
-      
+      // divisions only
       s.sharableWith.divisions = s.sharableWith.divisions || [];
-      s.sharableWith.bunks = s.sharableWith.bunks || [];
-
       s.availabilityMode = s.availabilityMode || 'available';
       s.availabilityExceptions = s.availabilityExceptions || [];
     });
@@ -860,14 +789,11 @@ function loadData() {
 // ===== START OF FIX =====
 // =============================================
 function initApp1() {
-  // This code was moved from the global scope (line 32) to inside initApp1()
-  // to ensure the DOM is ready before it runs.
   const activityDurationSelect = document.getElementById("activityDuration");
   if (activityDurationSelect) {
       activityDurationSelect.onchange = function() {
         activityDuration = parseInt(this.value, 10);
       };
-      // Also set the initial value
       activityDuration = parseInt(activityDurationSelect.value, 10);
   } else {
     console.error("Could not find #activityDuration element");
