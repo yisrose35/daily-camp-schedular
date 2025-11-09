@@ -52,7 +52,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     
     if (!manualSkeleton || manualSkeleton.length === 0) {
         console.warn("Optimizer: No skeleton to run.");
-        // We still need to save an empty schedule
     }
     
     const { 
@@ -115,10 +114,9 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const startMin = parseTimeToMinutes(item.startTime);
         const endMin = parseTimeToMinutes(item.endTime);
         const slots = findSlotsForRange(startMin, endMin);
-        
+
         if (item.type === 'pinned') {
             // This is a "Pinned" event like Lunch or Snacks.
-            // Place it directly on the schedule.
             slots.forEach((slotIndex, idx) => {
                 bunks.forEach(bunk => {
                     if (!window.scheduleAssignments[bunk][slotIndex]) {
@@ -133,12 +131,11 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             });
         } else if (item.type === 'slot') {
             // This is a "Schedulable Slot"
-            // Add it to our "To-Do" list
             bunks.forEach(bunk => {
                 schedulableSlots.push({
                     divName: item.division,
                     bunk: bunk,
-                    event: item.event, // e.g., "General Activity", "League Game"
+                    event: item.event, // e.g., "General Activity Slot", "League Game"
                     startTime: startMin,
                     endTime: endMin,
                     slots: slots
