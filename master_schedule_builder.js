@@ -3,11 +3,13 @@
 // This file creates the new "Master Scheduler" drag-and-drop UI
 //
 // UPDATED:
-// - The grid is now a "sightseeer" as requested.
-// - Replaced <table> with a CSS <div> grid.
-// - Event tiles are rendered with 'position: absolute'.
-// - 'top' and 'height' are calculated based on exact minute-by-minute times,
-//   allowing events to "flow" (e.g., 11:00-11:20 and 11:20-12:00).
+// - **NEW TILES (User Request):**
+//   - Renamed 'General Activity Slot' to 'Activity' (the hybrid tile).
+//   - Added 'Sports' tile (sports-only).
+//   - 'Special Activity' tile remains (special-only).
+//   - Added 'Snacks' as a pinned event tile (like Lunch).
+// - Updated `ondrop` logic to create the correct "event" string
+//   for each tile ('General Activity Slot', 'Sports Slot', 'Special Activity').
 // =================================================================
 
 (function() {
@@ -22,13 +24,16 @@ const PIXELS_PER_MINUTE = 2; // Each minute is 2px high
 const INCREMENT_MINS = 30; // The "sightseeer" grid resolution
 
 // The types of activities you can drag
+// UPDATED: Added 'Sports' and 'Snacks'
 const TILES = [
-    { type: 'slot', name: 'General Activity Slot', style: 'background: #e0f7fa; border: 1px solid #007bff;' },
+    { type: 'activity', name: 'Activity', style: 'background: #e0f7fa; border: 1px solid #007bff;' }, // Hybrid
+    { type: 'sports', name: 'Sports', style: 'background: #dcedc8; border: 1px solid #689f38;' }, // Sports-only
+    { type: 'special', name: 'Special Activity', style: 'background: #e8f5e9; border: 1px solid #43a047;' }, // Special-only
     { type: 'league', name: 'League Game', style: 'background: #d1c4e9; border: 1px solid #5e35b1;' },
     { type: 'specialty_league', name: 'Specialty League', style: 'background: #fff8e1; border: 1px solid #f9a825;' },
-    { type: 'special', name: 'Special Activity', style: 'background: #e8f5e9; border: 1px solid #43a047;' },
     { type: 'swim', name: 'Swim', style: 'background: #bbdefb; border: 1px solid #1976d2;' },
     { type: 'lunch', name: 'Lunch', style: 'background: #fbe9e7; border: 1px solid #d84315;' },
+    { type: 'snacks', name: 'Snacks', style: 'background: #fff9c4; border: 1px solid #fbc02d;' }, // NEW TILE
     { type: 'custom', name: 'Custom Pinned Event', style: 'background: #eee; border: 1px solid #616161;' }
 ];
 
@@ -105,7 +110,6 @@ function renderPalette() {
 
 /**
  * Renders the main schedule grid
- * NEW: Uses CSS Grid for layout
  */
 function renderGrid() {
     const divisions = window.divisions || {};
@@ -206,25 +210,39 @@ function addDropListeners(selector) {
             const tileData = JSON.parse(e.dataTransfer.getData('application/json'));
             const divName = cell.dataset.div;
             
-            // NEW: Calculate drop time based on mouse Y position
             const rect = cell.getBoundingClientRect();
-            const scrollTop = grid.scrollTop; // Get scroll position
+            const scrollTop = grid.scrollTop; 
             const y = e.clientY - rect.top + scrollTop;
             const droppedMin = Math.round(y / PIXELS_PER_MINUTE / 15) * 15; // Snap to 15 mins
             const earliestMin = parseInt(cell.dataset.startMin, 10);
             const defaultStartTime = minutesToTime(earliestMin + droppedMin);
             
-            // --- This is the PROMPT logic you requested ---
+            // --- UPDATED Drop Logic ---
             let eventType = 'slot';
             let eventName = tileData.name;
-            
-            if (tileData.type === 'slot') {
+
+            if (tileData.type === 'activity') {
+                // This is the "Activity" (hybrid) tile.
                 eventName = 'General Activity Slot';
                 eventType = 'slot';
-            } else if (tileData.type === 'league' || tileData.type === 'specialty_league' || tileData.type === 'special' || tileData.type === 'swim') {
+            
+            } else if (tileData.type === 'sports') {
+                // This is the "Sports" (sports-only) tile.
+                eventName = 'Sports Slot'; // New event name for the optimizer
+                eventType = 'slot';
+                
+            } else if (tileData.type === 'special') {
+                // This is the "Special Activity" (special-only) tile.
+                eventName = 'Special Activity'; // Optimizer already knows this
+                eventType = 'slot';
+
+            } else if (tileData.type === 'league' || tileData.type === 'specialty_league' || tileData.type === 'swim') {
+                // These are other specific 'slot' types
                 eventType = 'slot';
                 eventName = tileData.name; 
-            } else if (tileData.type === 'lunch' || tileData.type === 'custom') {
+            
+            } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'custom') {
+                // These are 'pinned' types that just block off time.
                 eventType = 'pinned';
                 
                 if (tileData.type === 'custom') {
@@ -237,7 +255,8 @@ function addDropListeners(selector) {
                         eventType = 'pinned';
                     }
                 } else {
-                    eventName = tileData.name; // "Lunch"
+                    // This will now correctly handle "Lunch" and "Snacks"
+                    eventName = tileData.name;
                 }
             }
 
@@ -251,7 +270,7 @@ function addDropListeners(selector) {
             const newEvent = {
                 id: `evt_${Math.random().toString(36).slice(2, 9)}`,
                 type: eventType,
-                event: eventName,
+                event: eventName, // 'General Activity Slot', 'Sports Slot', 'Special Activity', 'Snacks', etc.
                 division: divName,
                 startTime: startTime,
                 endTime: endTime
@@ -268,10 +287,24 @@ function addDropListeners(selector) {
  * Renders a single event tile
  */
 function renderEventTile(event, top, height) {
-    const tile = TILES.find(t => t.name === event.event) || TILES.find(t => t.type === 'custom');
+    // Find the tile that matches the *event name*
+    let tile = TILES.find(t => t.name === event.event);
+    
+    // Fallback logic for optimizer-filled slots
+    if (!tile) {
+        if (event.event === 'General Activity Slot') {
+            tile = TILES.find(t => t.type === 'activity');
+        } else if (event.event === 'Sports Slot') {
+            tile = TILES.find(t => t.type === 'sports');
+        } else if (event.event === 'Special Activity') {
+            tile = TILES.find(t => t.type === 'special');
+        } else {
+            tile = TILES.find(t => t.type === 'custom'); // Default fallback
+        }
+    }
+    
     const style = tile ? tile.style : 'background: #eee; border: 1px solid #616161;';
     
-    // THIS IS THE FIX: The div is now absolutely positioned
     return `
         <div class="grid-event" 
              data-event-id="${event.id}" 
