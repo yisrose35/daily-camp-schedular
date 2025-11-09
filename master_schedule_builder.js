@@ -1,16 +1,13 @@
 // =================================================================
 // master_schedule_builder.js
 // This file creates the new "Master Scheduler" drag-and-drop UI
-// to visually build the "Skeleton" for the day.
 //
 // UPDATED:
-// - Swapped grid axis: Time is now Y-axis (rows), Divisions are X-axis (columns).
-// - Removed the "Staggered View" toggle.
-// - *** CRITICAL FIX ***
-//   - Dropping a "League Game" or "Special Activity" tile now
-//     correctly creates a schedulable 'slot' (not 'pinned').
-//   - This tells the optimizer to run the *real* scheduling logic
-//     for those activities.
+// - The grid is now a "sightseeer" as requested.
+// - Replaced <table> with a CSS <div> grid.
+// - Event tiles are rendered with 'position: absolute'.
+// - 'top' and 'height' are calculated based on exact minute-by-minute times,
+//   allowing events to "flow" (e.g., 11:00-11:20 and 11:20-12:00).
 // =================================================================
 
 (function() {
@@ -21,6 +18,8 @@ let palette = null;
 let grid = null;
 
 let dailySkeleton = []; // This will be the "skeleton" we build
+const PIXELS_PER_MINUTE = 2; // Each minute is 2px high
+const INCREMENT_MINS = 30; // The "sightseeer" grid resolution
 
 // The types of activities you can drag
 const TILES = [
@@ -55,7 +54,7 @@ function init() {
                 Run Optimizer & Create Schedule
             </button>
         </div>
-        <div id="scheduler-grid" style="overflow-x: auto;">
+        <div id="scheduler-grid" style="overflow-x: auto; border: 1px solid #999;">
             </div>
     `;
     
@@ -106,7 +105,7 @@ function renderPalette() {
 
 /**
  * Renders the main schedule grid
- * NEW: Time on Y-axis, Divisions on X-axis
+ * NEW: Uses CSS Grid for layout
  */
 function renderGrid() {
     const divisions = window.divisions || {};
@@ -125,42 +124,61 @@ function renderGrid() {
         });
     } catch (e) { console.error("Error calculating times", e); }
     
-    // Create the HTML for the grid
-    let table = '<table class="master-schedule-grid" style="border-collapse: collapse; width: 100%;">';
-    
-    // Header Row (Divisions)
-    table += '<thead><tr><th style="border: 1px solid #999; padding: 8px;">Time</th>';
-    availableDivisions.forEach(divName => {
-        table += `<th style="min-width: 150px; border: 1px solid #999; padding: 8px;">${divName}</th>`;
-    });
-    table += '</tr></thead>';
-    
-    // Body Rows (One per 30-min slot)
-    table += '<tbody>';
-    for (let min = earliestMin; min < latestMin; min += 30) {
-        table += `<tr><td style="font-weight: 600; vertical-align: top; border: 1px solid #999; padding: 8px;">${minutesToTime(min)}</td>`;
-        
-        availableDivisions.forEach(divName => {
-            const divTimeline = divisions[divName]?.timeline;
-            const divStart = parseTimeToMinutes(divTimeline.start);
-            const divEnd = parseTimeToMinutes(divTimeline.end);
+    const totalMinutes = latestMin - earliestMin;
+    const totalHeight = totalMinutes * PIXELS_PER_MINUTE;
 
-            // Check if this slot is outside the division's time
-            if (min < divStart || min >= divEnd) {
-                table += `<td class="grid-cell-disabled" style="background: #333; border: 1px solid #999;"></td>`;
-            } else {
-                table += `<td class="grid-cell" data-div="${divName}" data-time-min="${min}" style="height: 50px; border: 1px dashed #ccc; padding: 2px; vertical-align: top;">`;
-                // Find events that START in this cell
-                dailySkeleton.filter(ev => ev.division === divName && parseTimeToMinutes(ev.startTime) === min)
-                             .forEach(ev => table += renderEventTile(ev));
-                table += `</td>`;
-            }
-        });
-        table += '</tr>';
-    }
-    table += '</tbody></table>';
+    // Create the HTML for the grid
+    let gridHtml = `<div style="display: grid; grid-template-columns: 60px repeat(${availableDivisions.length}, 1fr); position: relative;">`;
     
-    grid.innerHTML = table;
+    // --- Header Row (Divisions) ---
+    gridHtml += `<div style="grid-row: 1; position: sticky; top: 0; background: #fff; z-index: 10; border-bottom: 1px solid #999; padding: 8px;">Time</div>`;
+    availableDivisions.forEach((divName, i) => {
+        gridHtml += `<div style="grid-row: 1; grid-column: ${i + 2}; position: sticky; top: 0; background: ${divisions[divName]?.color || '#333'}; color: #fff; z-index: 10; border-bottom: 1px solid #999; padding: 8px; text-align: center;">${divName}</div>`;
+    });
+
+    // --- Time Column (Sightseeer) ---
+    gridHtml += `<div style="grid-row: 2; grid-column: 1; height: ${totalHeight}px; position: relative; background: #f9f9f9; border-right: 1px solid #ccc;">`;
+    for (let min = earliestMin; min < latestMin; min += INCREMENT_MINS) {
+        const top = (min - earliestMin) * PIXELS_PER_MINUTE;
+        gridHtml += `<div style="position: absolute; top: ${top}px; left: 0; width: 100%; height: ${INCREMENT_MINS * PIXELS_PER_MINUTE}px; border-bottom: 1px dashed #ddd; box-sizing: border-box; font-size: 10px; padding: 2px; color: #777;">
+            ${minutesToTime(min)}
+        </div>`;
+    }
+    gridHtml += `</div>`;
+    
+    // --- Division Columns (Dropzones) ---
+    availableDivisions.forEach((divName, i) => {
+        const divTimeline = divisions[divName]?.timeline;
+        const divStart = parseTimeToMinutes(divTimeline.start);
+        const divEnd = parseTimeToMinutes(divTimeline.end);
+        
+        gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
+
+        // Render "Out of Bounds" (disabled) areas
+        if (divStart > earliestMin) {
+            gridHtml += `<div style="position: absolute; top: 0; height: ${(divStart - earliestMin) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
+        }
+        if (divEnd < latestMin) {
+            gridHtml += `<div style="position: absolute; top: ${(divEnd - earliestMin) * PIXELS_PER_MINUTE}px; height: ${(latestMin - divEnd) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
+        }
+
+        // Render *events* for this division
+        dailySkeleton.filter(ev => ev.division === divName).forEach(event => {
+            const startMin = parseTimeToMinutes(event.startTime);
+            const endMin = parseTimeToMinutes(event.endTime);
+            if (startMin == null || endMin == null) return;
+
+            const top = (startMin - earliestMin) * PIXELS_PER_MINUTE;
+            const height = (endMin - startMin) * PIXELS_PER_MINUTE;
+
+            gridHtml += renderEventTile(event, top, height);
+        });
+
+        gridHtml += `</div>`;
+    });
+
+    gridHtml += `</div>`;
+    grid.innerHTML = gridHtml;
     
     // --- Add Drop Zone Listeners ---
     addDropListeners('.grid-cell');
@@ -187,30 +205,32 @@ function addDropListeners(selector) {
             
             const tileData = JSON.parse(e.dataTransfer.getData('application/json'));
             const divName = cell.dataset.div;
-            const defaultStartTime = minutesToTime(parseInt(cell.dataset.timeMin, 10));
+            
+            // NEW: Calculate drop time based on mouse Y position
+            const rect = cell.getBoundingClientRect();
+            const scrollTop = grid.scrollTop; // Get scroll position
+            const y = e.clientY - rect.top + scrollTop;
+            const droppedMin = Math.round(y / PIXELS_PER_MINUTE / 15) * 15; // Snap to 15 mins
+            const earliestMin = parseInt(cell.dataset.startMin, 10);
+            const defaultStartTime = minutesToTime(earliestMin + droppedMin);
             
             // --- This is the PROMPT logic you requested ---
-            // ===== START OF CRITICAL FIX =====
-            
-            let eventType = 'slot'; // Default to a schedulable slot
-            let eventName = tileData.name; // e.g., "League Game", "General Activity Slot"
+            let eventType = 'slot';
+            let eventName = tileData.name;
             
             if (tileData.type === 'slot') {
                 eventName = 'General Activity Slot';
                 eventType = 'slot';
             } else if (tileData.type === 'league' || tileData.type === 'specialty_league' || tileData.type === 'special' || tileData.type === 'swim') {
-                // These are all *schedulable* slots that the optimizer needs to fill
                 eventType = 'slot';
                 eventName = tileData.name; 
             } else if (tileData.type === 'lunch' || tileData.type === 'custom') {
-                // These are *pinned* events. The optimizer will not touch them.
                 eventType = 'pinned';
                 
                 if (tileData.type === 'custom') {
                     eventName = prompt("Enter the name for this custom event (e.g., 'Snacks'):");
-                    if (!eventName) return; // User cancelled
+                    if (!eventName) return;
                     
-                    // Ask if it's a slot or a pinned event
                     if (confirm("Does this event require scheduling (like 'General Activity')?\n\n- OK = Yes (it's a 'Slot' to be filled)\n- Cancel = No (it's a 'Pinned' event like 'Snacks')")) {
                         eventType = 'slot';
                     } else {
@@ -220,19 +240,18 @@ function addDropListeners(selector) {
                     eventName = tileData.name; // "Lunch"
                 }
             }
-            // ===== END OF CRITICAL FIX =====
 
 
             const startTime = prompt(`Add "${eventName}" for ${divName}?\n\nEnter Start Time:`, defaultStartTime);
-            if (!startTime) return; // User cancelled
+            if (!startTime) return;
             
             const endTime = prompt(`Enter End Time:`);
             if (!endTime) return;
             
             const newEvent = {
                 id: `evt_${Math.random().toString(36).slice(2, 9)}`,
-                type: eventType, // This is now correctly 'slot' for Leagues
-                event: eventName, // This is now correctly 'League Game'
+                type: eventType,
+                event: eventName,
                 division: divName,
                 startTime: startTime,
                 endTime: endTime
@@ -248,12 +267,26 @@ function addDropListeners(selector) {
 /**
  * Renders a single event tile
  */
-function renderEventTile(event) {
+function renderEventTile(event, top, height) {
     const tile = TILES.find(t => t.name === event.event) || TILES.find(t => t.type === 'custom');
     const style = tile ? tile.style : 'background: #eee; border: 1px solid #616161;';
     
+    // THIS IS THE FIX: The div is now absolutely positioned
     return `
-        <div class="grid-event" data-event-id="${event.id}" style="${style}; padding: 5px; border-radius: 4px; text-align: center; margin: 2px; font-size: 0.9em;">
+        <div class="grid-event" 
+             data-event-id="${event.id}" 
+             style="${style}; 
+                    padding: 2px 5px; 
+                    border-radius: 4px; 
+                    text-align: center; 
+                    margin: 0 1px;
+                    font-size: 0.9em;
+                    position: absolute;
+                    top: ${top}px;
+                    height: ${height}px;
+                    width: calc(100% - 4px); /* Full width minus margins */
+                    box-sizing: border-box;
+                    overflow: hidden;">
             <strong>${event.event}</strong>
             <div style="font-size: 0.85em;">${event.startTime} - ${event.endTime}</div>
         </div>
