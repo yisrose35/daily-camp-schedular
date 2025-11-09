@@ -3,8 +3,9 @@
 //
 // UPDATED:
 // - updateTable() now checks for the "View Toggle"
-// - Added renderFixedBlockView() for the "Agudah" style
-// - Added renderStaggeredView() for the "YKLI" style (this is the old updateTable)
+// - Added renderFixedBlockView() for the "Block" style
+// - Added renderStaggeredView() for the "Staggard" style
+// - Fixed reconcileOrRenderSaved to load 'unifiedTimes' from save
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -321,6 +322,9 @@ function saveSchedule() {
     }
 }
 
+// ===== START OF FIX =====
+// Updated this function to remove the call to the non-existent
+// generateUnifiedTimesAndMasks() and to correctly load unifiedTimes.
 function reconcileOrRenderSaved() {
     try {
         const data = window.loadCurrentDailyData?.() || {};
@@ -335,8 +339,11 @@ function reconcileOrRenderSaved() {
         window.unifiedTimes = [];
     }
     
+    // The grid (window.unifiedTimes) will be empty on first page load,
+    // or loaded from save.
     updateTable(); // This will now call the correct renderer
 }
+// ===== END OF FIX =====
 
 function initScheduleSystem() {
     try {
