@@ -100,7 +100,8 @@ function updateTable() {
             // Check if this slot is active for this division
             const isDivActive = divisionActiveRows[div]?.has(i) || false;
 
-            bunks.forEach((b) => {
+            // ===== START OF FIX 1: Replaced forEach with for...of =====
+            for (const b of bunks) {
                 const entry = scheduleAssignments[b]?.[i];
                 const league = leagueAssignments[div]?.[i];
 
@@ -110,7 +111,7 @@ function updateTable() {
                     const prevInactive = i > 0 && !(divisionActiveRows[div]?.has(i-1) || false);
                     if (prevInactive) {
                         // This cell is part of a rowspan, skip rendering
-                        return;
+                        continue; // FIX: Was 'return'
                     } else {
                         // This is the START of an inactive block
                         let span = 1;
@@ -127,13 +128,13 @@ function updateTable() {
                         td.style.background = "#ddd";
                         tr.appendChild(td);
                     }
-                    return; // Done with this bunk
+                    continue; // FIX: Was 'return' (Done with this bunk)
                 }
 
                 // This slot IS active
                 
                 if (league) {
-                    if (league.isContinuation) return; // Skip
+                    if (league.isContinuation) continue; // FIX: Was 'return' (Skip)
                     let span = 1;
                     for (let j = i + 1; j < unifiedTimes.length; j++) {
                         if (leagueAssignments[div]?.[j]?.isContinuation) span++;
@@ -159,11 +160,11 @@ function updateTable() {
                 if (league) {
                     // Stop processing this division's bunks for this row
                     // This break is crucial for the colspan to work
-                    break;
+                    break; // FIX: This is now a LEGAL break
                 }
 
                 if (entry) {
-                    if (entry.continuation) return; // Skip
+                    if (entry.continuation) continue; // FIX: Was 'return' (Skip)
                     let span = 1;
                     for (let j = i + 1; j < unifiedTimes.length; j++) {
                         if (scheduleAssignments[b]?.[j]?.continuation) span++;
@@ -194,7 +195,7 @@ function updateTable() {
                     const td = document.createElement("td");
                     tr.appendChild(td);
                 }
-            }); // end bunks loop
+            } // ===== END OF FIX 1: end bunks loop =====
         }); // end divisions loop
         tbody.appendChild(tr);
     } // end unifiedTimes loop
@@ -248,3 +249,5 @@ window.updateTable = window.updateTable || updateTable;
 window.initScheduleSystem = window.initScheduleSystem || initScheduleSystem;
 // NEW: Expose this for reconcile to use
 window.generateUnifiedTimesAndMasks = window.generateUnifiedTimesAndMasks || generateUnifiedTimesAndMasks;
+// ===== FIX 2: Expose saveSchedule =====
+window.saveSchedule = window.saveSchedule || saveSchedule;
