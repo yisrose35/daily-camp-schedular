@@ -2,9 +2,10 @@
 // UI-only: rendering, save/load, init, and window exports.
 //
 // UPDATED:
-// - Flipped the logic in updateTable() to match user's request.
-//   - UNCHECKED (default) = "Fixed Block" (Agudah)
-//   - CHECKED (opt-in) = "Staggered" (YKLI)
+// - updateTable() now checks for the "View Toggle"
+// - Added renderFixedBlockView() for the "Agudah" style
+// - Added renderStaggeredView() for the "YKLI" style
+// - Fixed reconcileOrRenderSaved to load 'unifiedTimes' from save
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -82,11 +83,13 @@ function renderStaggeredView(container) {
     const tr1 = document.createElement("tr");
     availableDivisions.forEach((div) => {
         const bunkCount = (divisions[div]?.bunks || []).length;
+        if (bunkCount === 0) return;
         const th = document.createElement("th");
         th.colSpan = bunkCount * 2; // Each bunk gets a Time + Activity column
         th.textContent = div;
         th.style.background = divisions[div]?.color || "#333";
         th.style.color = "#fff";
+        th.style.border = "1px solid #999";
         tr1.appendChild(th);
     });
     thead.appendChild(tr1);
@@ -97,6 +100,7 @@ function renderStaggeredView(container) {
             const thBunk = document.createElement("th");
             thBunk.textContent = b;
             thBunk.colSpan = 2;
+            thBunk.style.border = "1px solid #999";
             tr2.appendChild(thBunk);
         });
     });
@@ -108,11 +112,13 @@ function renderStaggeredView(container) {
             const thTime = document.createElement("th");
             thTime.textContent = "Time";
             thTime.style.minWidth = "80px";
+            thTime.style.border = "1px solid #999";
             tr3.appendChild(thTime);
             
             const thActivity = document.createElement("th");
             thActivity.textContent = "Activity";
             thActivity.style.minWidth = "120px";
+            thActivity.style.border = "1px solid #999";
             tr3.appendChild(thActivity);
         });
     });
@@ -140,7 +146,9 @@ function renderStaggeredView(container) {
                     }
                     
                     const startTime = unifiedTimes[i].start;
-                    const endTime = unifiedTimes[i + span - 1].end;
+                    // Handle edge case where event is at the very end
+                    const endTime = (i + span - 1 < unifiedTimes.length) ? unifiedTimes[i + span - 1].end : unifiedTimes[unifiedTimes.length - 1].end;
+
                     
                     currentEvent = {
                         ...entry,
@@ -152,7 +160,10 @@ function renderStaggeredView(container) {
             });
             // Add empty slots
             if (eventsByBunk[bunk].length === 0) {
-                 eventsByBunk[bunk].push({ startTimeLabel: "Full Day", _fixed: true, field: { name: "Free" } });
+                 const timeline = divisions[div]?.timeline;
+                 if (timeline) {
+                    eventsByBunk[bunk].push({ startTimeLabel: `${timeline.start} - ${timeline.end}`, _fixed: true, field: { name: "Free" } });
+                 }
             }
             if (eventsByBunk[bunk].length > maxEvents) {
                 maxEvents = eventsByBunk[bunk].length;
@@ -175,6 +186,8 @@ function renderStaggeredView(container) {
                     tdTime.textContent = event.startTimeLabel;
                     tdTime.style.border = "1px solid #ccc";
                     tdActivity.style.border = "1px solid #ccc";
+                    tdActivity.style.verticalAlign = "top";
+                    tdTime.style.verticalAlign = "top";
 
                     if (event._h2h) {
                         tdActivity.textContent = `${event.sport} @ ${fieldLabel(event.field)}`;
