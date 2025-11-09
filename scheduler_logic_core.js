@@ -648,16 +648,13 @@ function assignFieldsToBunks() {
                 const rule = divisions[div].periodRules[period.id];
                 if (!rule) continue;
 
-                // Find the very first slot of this period for this division
-                const periodStartSlotArr = findRowsForRange(rule.start, rule.end);
-                if (!periodStartSlotArr || periodStartSlotArr.length === 0) continue;
-                const periodStartSlot = periodStartSlotArr[0];
-                
-                // Check if this slot `s` is the *start* of a sub-activity.
-                if ((s - periodStartSlot) % spanLen !== 0) {
-                    continue; // This is the middle of an activity block, not a start
-                }
-                // ----- END NEW DYNAMIC SPAN LOGIC -----
+                // ----- START OF FIX 1: Removed strict block-start check -----
+                // The old logic prevented filling partial blocks.
+                // By removing it, we allow `tryGeneralActivity` to be
+                // called for any open slot. The `canActivityFit` function
+                // is already smart enough to only fill the *available*
+                // number of slots (e.g., 1 slot, even if spanLen is 2).
+                // ----- END OF FIX 1 -----
 
                 let assignedSpan = 0;
 
