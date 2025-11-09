@@ -760,11 +760,12 @@ function renderDivisionRules() {
                 <input type="text" placeholder="e.g., 10:30 AM" value="${rule.end}" class="rule-input" data-period-id="${period.id}" data-field="end">
                 <label>Split into:</label>
                 <select class="rule-select" data-period-id="${period.id}" data-field="rule">
+                    <option value="fixed">Fixed Block (e.g., Lunch)</option>
                     <option value="1">1 Activity</option>
                     <option value="2">2 Activities</option>
                     <option value="3">3 Activities</option>
                     <option value="4">4 Activities</option>
-                </select>
+                    </select>
             </div>
         `;
         
