@@ -192,6 +192,7 @@ function saveSchedule() {
     try {
         window.saveCurrentDailyData?.("scheduleAssignments", window.scheduleAssignments);
         window.saveCurrentDailyData?.("leagueAssignments", window.leagueAssignments);
+        window.saveCurrentDailyData?.("unifiedTimes", window.unifiedTimes); // Save the grid!
     } catch (e) {
         console.error("Save schedule failed:", e);
     }
@@ -199,7 +200,7 @@ function saveSchedule() {
 
 // ===== START OF FIX =====
 // Updated this function to remove the call to the non-existent
-// generateUnifiedTimesAndMasks()
+// generateUnifiedTimesAndMasks() and to correctly load unifiedTimes.
 function reconcileOrRenderSaved() {
     try {
         const data = window.loadCurrentDailyData?.() || {};
