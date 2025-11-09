@@ -16,7 +16,10 @@
 
     <div class="tabs">
         <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button>
-        <button class="tab-button" onclick="showTab('schedule')">Daily Schedule</button>
+        <button class="tab-button" onclick="showTab('master-scheduler'); window.initMasterScheduler?.();">
+            🗓️ Master Scheduler (Build)
+        </button>
+        <button class="tab-button" onclick="showTab('schedule')">Daily Schedule (View)</button>
         <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
         <button class="tab-button" onclick="showTab('specialty-leagues'); window.initSpecialtyLeagues?.();">🏆 Specialty Leagues</button>
         <button class="tab-button" onclick="showTab('daily-overrides'); window.initDailyOverrides?.();">Daily Overrides</button>
@@ -35,21 +38,16 @@
         <div id="divisionButtons" style="margin-top:8px;"></div>
         
         <h3 style="margin-top: 25px; border-top: 2px solid #007BFF; padding-top: 15px;">
-            Division Skeletons
+            Division Timelines
         </h3>
         <p style="font-size: 0.9em; color: #555;">
-            Select a division above to build its daily "Skeleton." 
-            This replaces the old block system.
+            Select a division above to set its daily Start and End time.
+            This is required for the "Master Scheduler".
         </p>
-        <div id="divisionSkeletonEditor" style="margin-top: 10px;">
-            <p style="color: #666;">Select a division to set its "Skeleton" and "Shopping List."</p>
+        <div id="divisionTimelineEditor" style="margin-top: 10px;">
+            <p style="color: #666;">Select a division to set its timeline.</p>
         </div>
         <hr style="margin: 20px 0;">
-        <button id="generateScheduleBtn" style="background: #28a745; color: white; padding: 12px 20px; font-size: 1.2em; border: none; border-radius: 5px; cursor: pointer;">
-            Generate/Update Today's Schedule
-        </button>
-        <hr style="margin: 20px 0;">
-
         <h3>Add Fields / Courts</h3>
         <input id="fieldInput" placeholder="Enter field/court name (e.g., Court 1)">
         <button id="addFieldBtn">Add Field/Court</button>
@@ -61,7 +59,7 @@
         <div id="specialList"></div>
 
         <hr style="margin: 20px 0;">
-
+        
         <h3>Clear Schedules</h3>
         <p>Use these buttons to clear saved schedule data.
         Your Setup (bunks, fields, etc.) will NOT be affected.</p>
@@ -92,8 +90,13 @@
 
     </div> 
     
+    <div id="master-scheduler" class="tab-content">
+        <div id="master-scheduler-content">
+            </div>
+    </div>
     <div id="schedule" class="tab-content">
-        <h3>Daily Schedule</h3>
+        <h3>Daily Schedule (View)</h3>
+        <p>This tab shows the final, "filled-in" schedule. To build or edit the day's layout, use the "Master Scheduler" tab.</p>
         <div id="scheduleTable"></div>
     </div>
 
@@ -125,6 +128,8 @@
                 window.initLeaguesTab?.();
             } else if (id === 'specialty-leagues') {
                 window.initSpecialtyLeagues?.();
+            } else if (id === 'master-scheduler') { // Init your new tab
+                window.initMasterScheduler?.();
             }
         }
 
@@ -166,23 +171,7 @@
                 console.warn("initSpecialtyLeagues not found.");
             }
             
-            // 6. NEW: Hook up Generate Button
-            const genBtn = document.getElementById('generateScheduleBtn');
-            if (genBtn) {
-                genBtn.onclick = () => {
-                    console.log("Generating schedule...");
-                    if (window.generateScheduleFromSkeletons) { // <-- NEW FUNCTION NAME
-                        window.generateScheduleFromSkeletons();
-                    } else {
-                        console.error("generateScheduleFromSkeletons not found!");
-                    }
-                };
-            } else {
-                console.error("Generate Schedule Button not found!");
-            }
-            
-            // 7. REMOVED auto-generation
-            // window.assignFieldsToBunks();
+            // 6. "Generate" button is now on the Master Scheduler tab.
         }
     </script>
 
@@ -194,6 +183,7 @@
 
     <script src="specialty_leagues.js" defer></script> 
 
+    <script src="master_schedule_builder.js" defer></script>
     <script src="scheduler_logic_core.js" defer></script>
     <script src="scheduler_logic_fillers.js" defer></script>
     <script src="scheduler_ui.js" defer></script>
