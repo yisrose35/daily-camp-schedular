@@ -15,9 +15,8 @@
 //   - This allows `getLeagueMatchups` to use custom team names
 //     (e.g., "Mets") and the scheduler will find the
 //     corresponding bunk (e.g., "B1") to place the game.
-// - *** DEBUGGING LOGS ADDED ***
-//   - Added console.log statements to Pass 3 to trace the
-//     league scheduling process.
+// - *** BUG FIX ***
+//   - Fixed `f..name` syntax error in `loadAndFilterData`.
 // -----------------------------------------------------------------
 
 (function() {
@@ -468,12 +467,10 @@ function loadAndFilterData() {
     const globalSettings = window.loadGlobalSettings?.() || {};
     const app1Data = globalSettings.app1 || {};
     
-    // --- THIS IS THE FIX ---
     const masterFields = app1Data.fields || [];
     const masterDivisions = app1Data.divisions || {};
     const masterAvailableDivs = app1Data.availableDivisions || [];
     const masterSpecials = app1Data.specialActivities || [];
-    // --- END THE FIX ---
     
     const masterLeagues = globalSettings.leaguesByName || {};
     
@@ -518,7 +515,9 @@ function loadAndFilterData() {
     const fieldsBySport = {};
     const allFieldNames = [];
     availFields.forEach(f => {
-        allFieldNames.push(f..name);
+        // --- THIS WAS THE BUG ---
+        allFieldNames.push(f.name);
+        // --- END BUG FIX ---
         if (Array.isArray(f.activities)) {
             f.activities.forEach(sport => {
                 fieldsBySport[sport] = fieldsBySport[sport] || [];
