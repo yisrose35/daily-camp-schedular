@@ -115,7 +115,7 @@ function renderStaggeredView(container) {
                 const entry = scheduleAssignments[b]?.[i];
                 const league = leagueAssignments[div]?.[i]; // Keep for old data
 
-                if (league) { 
+                if (league) { // Handle legacy league data
                     if (league.isContinuation) continue;
                     let span = 1;
                     for (let j = i + 1; j < unifiedTimes.length; j++) {
@@ -148,8 +148,9 @@ function renderStaggeredView(container) {
                     td.rowSpan = span;
                     td.style.verticalAlign = "top";
 
+                    // THIS IS THE FIX: It now correctly renders the H2H data from leagues
                     if (entry._h2h) {
-                        td.textContent = `${entry.sport} @ ${fieldLabel(entry.field)} vs ${entry.vs}`;
+                        td.textContent = `${entry.sport} @ ${fieldLabel(entry.field)}`;
                         td.style.background = "#e8f4ff";
                         td.style.fontWeight = "bold";
                     } else if (entry._fixed) {
@@ -268,7 +269,10 @@ function renderFixedBlockView(container) {
             }
             
             if (entry) {
-                if (entry._fixed) {
+                if (entry._h2h) { // Handle Leagues/H2H
+                     td.textContent = `${entry.sport} @ ${fieldLabel(entry.field)}`;
+                     td.style.background = "#e8f4ff";
+                } else if (entry._fixed) {
                      td.textContent = fieldLabel(entry.field);
                      td.style.background = "#f1f1f1";
                 } else if (entry.sport) {
