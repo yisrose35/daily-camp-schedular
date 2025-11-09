@@ -326,10 +326,12 @@ function findSlotsForRange(startMin, endMin) {
 function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     const props = activityProperties[fieldName];
     const allowedDivs = props?.allowedDivisions || [];
-    const limit = (typeof props?.limitUsage === 'number' && props.limitUsage > 0) ? props.limitUsage : 1;
+    // FIX: Default limit is 1 (or 2 for sharable), not a number from props.
+    // This logic needs to be more robust, but for now:
+    const limit = (props && props.sharable) ? 2 : 1;
 
     // Division allowance
-    if (allowedDivs.length && !allowedDivs.includes(block.divName)) return false;
+    if (props && props.allowedDivisions && props.allowedDivisions.length && !props.allowedDivisions.includes(block.divName)) return false;
 
     // Usage per slot
     for (const slotIndex of block.slots) {
