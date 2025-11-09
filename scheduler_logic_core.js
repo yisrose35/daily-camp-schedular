@@ -4,18 +4,13 @@
 // fills in the "slot" types.
 //
 // UPDATED:
-// - *** CRITICAL FIX (v2) ***
-//   - Pass 3 (League Scheduling) has been completely rewritten.
-//   - It NO LONGER maps Bunks to Teams. This was the source
-//     of the "CRITICAL FAIL" error.
-//   - It now schedules games for the *League Teams* directly.
-//   - It finds fields for those team matchups.
-//   - It then distributes this game information across all
-//     bunks in the division, allowing the UI to
-//     de-duplicate and display the full list.
-//   - This correctly handles cases where Bunk Count != Team Count.
-// - Added new helper `markFieldUsage` to support this.
-// - `fillBlock` is modified to not double-count field usage.
+// - *** CRITICAL FIX (v3) ***
+//   - Fixed the "blockBase is not defined" ReferenceError.
+//   - The `blockBase` variable was incorrectly scoped inside the
+//     `matchups.forEach` loop.
+//   - It has been moved up to be scoped to the parent
+//     `leagueGroups.forEach` loop, making it accessible to
+//     both the game scheduling and bunk-filling loops.
 // -----------------------------------------------------------------
 
 (function() {
@@ -226,6 +221,12 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const scheduledGames = []; // This will hold the {pick} objects
         let gameIndex = 0;
 
+        // ===== START OF FIX =====
+        // Define `blockBase` *once* per group, so it's in scope for
+        // both the `matchups` loop and the `allBunksInGroup` loop.
+        const blockBase = { slots: group.slots, divName: group.divName };
+        // ===== END OF FIX =====
+
         for (const [teamA, teamB] of matchups) {
             // Skip BYEs
             if (teamA === "BYE" || teamB === "BYE") continue;
@@ -243,7 +244,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
             // Find an available field
             let fieldName = null;
-            const blockBase = { slots: group.slots, divName: group.divName };
+            // `blockBase` is already defined (see FIX)
             
             for (const f of possibleFields) {
                 if (canBlockFit(blockBase, f, activityProperties, fieldUsageBySlot)) {
@@ -290,7 +291,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                 pickToAssign = { field: "Leagues", sport: null, _h2h: true };
             }
             
-            // Fill the block for this bunk. Pass `true` for isLeagueFill.
+            // Fill the block for this bunk. `blockBase` is now in scope.
             fillBlock({ ...blockBase, bunk: bunk }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
         });
     });
