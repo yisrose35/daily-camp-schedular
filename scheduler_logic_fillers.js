@@ -1,4 +1,3 @@
-
 // -------------------- scheduler_logic_fillers.js --------------------
 // This file is now a "helper library" for the Optimizer.
 // It provides functions to find the *best* activity for a given slot.
@@ -26,7 +25,6 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     
     const props = activityProperties[fieldName];
     // FIX: Default limit is 1 (or 2 for sharable), not a number from props.
-    // This logic needs to be more robust, but for now:
     const limit = (props && props.sharable) ? 2 : 1;
 
     // Division allowance
