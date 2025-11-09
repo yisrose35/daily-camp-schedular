@@ -11,6 +11,15 @@
 //   - Now shows one "Time" column per division, not per bunk.
 //   - Builds the event list from the `manualSkeleton` to show
 //     custom time blocks (e.g., "11:00-11:20", "11:20-12:00").
+//   - *** LEAGUE DISPLAY FIX ***
+//   - Detects "League Game" blocks from the skeleton.
+//   - Renders a single merged `<td>` that spans all bunks.
+//   - Scans all bunks to find unique matchups and lists them.
+// - `renderFixedBlockView` (NEW UPDATE):
+//   - *** LEAGUE DISPLAY FIX ***
+//   - Detects if a block is a league game for a division.
+//   - Scans all bunks to find unique matchups and lists them
+//     in the single division cell.
 // - parseTimeToMinutes (BUG FIX):
 //   - Fixed `Cannot access 's' before initialization` error.
 // -----------------------------------------------------------------
@@ -166,6 +175,7 @@ function renderStaggeredView(container) {
                     label: `${item.startTime} - ${item.endTime}`,
                     startMin: parseTimeToMinutes(item.startTime),
                     endMin: parseTimeToMinutes(item.endTime),
+                    event: item.event // <-- Pass the event type!
                 });
             }
         });
@@ -203,43 +213,81 @@ function renderStaggeredView(container) {
             }
             tr.appendChild(tdTime);
 
-            // --- 2. Add the ACTIVITY cells for each BUNK ---
-            bunks.forEach(bunk => {
-                const tdActivity = document.createElement("td");
-                let entry = null;
+            // --- 2. Add ACTIVITY cells (Merged or Individual) ---
+            if (eventBlock && eventBlock.event === 'League Game') {
+                // === LEAGUE GAME: MERGED CELL ===
+                const tdLeague = document.createElement("td");
+                tdLeague.colSpan = bunks.length;
+                tdLeague.style.verticalAlign = "top";
+                tdLeague.style.textAlign = "left";
+                tdLeague.style.padding = "5px 8px";
+                tdLeague.style.background = "#e8f5e9"; // Light green
+                
+                let games = new Map(); // Key: fullMatchupLabel, Value: fieldName
+                const slots = findSlotsForRange(eventBlock.startMin, eventBlock.endMin);
 
-                if (eventBlock) {
-                    // Find the activity for this bunk at this block's time
-                    // We look at the *first slot* that matches the block's start time
-                    const slots = findSlotsForRange(eventBlock.startMin, eventBlock.endMin);
-                    if (slots.length > 0) {
-                        entry = scheduleAssignments[bunk]?.[slots[0]];
-                    }
+                if (slots.length > 0) {
+                    bunks.forEach(bunk => {
+                        const entry = scheduleAssignments[bunk]?.[slots[0]];
+                        // Check for the full sport string (from logic_core fix)
+                        if (entry && entry._h2h && entry.sport) {
+                            games.set(entry.sport, fieldLabel(entry.field)); // De-duplicates by matchup string
+                        }
+                    });
                 }
                 
-                if (entry) {
-                    tdActivity.style.border = "1px solid #ccc";
-                    tdActivity.style.verticalAlign = "top";
-
-                    if (entry._h2h) {
-                        tdActivity.textContent = `${entry.sport} @ ${fieldLabel(entry.field)}`;
-                        tdActivity.style.background = "#e8f4ff";
-                        tdActivity.style.fontWeight = "bold";
-                    } else if (entry._fixed) {
-                        tdActivity.textContent = fieldLabel(entry.field);
-                        tdActivity.style.background = "#f1f1f1";
-                    } else if (entry.sport) {
-                        tdActivity.textContent = `${fieldLabel(entry.field)} – ${entry.sport}`;
-                    } else {
-                        tdActivity.textContent = fieldLabel(entry.field);
-                    }
-                } else {
-                    // No event for this bunk (or no eventBlock for this division)
-                    tdActivity.className = "grey-cell";
-                    tdActivity.style.border = "1px solid #ccc";
+                let html = '<ul style="margin: 0; padding-left: 18px;">';
+                if (games.size === 0) {
+                    html = '<p class="muted" style="margin:0; padding: 4px;">No matchups scheduled.</p>';
                 }
-                tr.appendChild(tdActivity);
-            });
+                games.forEach((field, matchup) => {
+                    html += `<li>${matchup} @ ${field}</li>`; // e.g., "Mets vs Yankees (Basketball) @ Gym A"
+                });
+                if (games.size > 0) { html += '</ul>'; }
+                
+                tdLeague.innerHTML = html;
+                tr.appendChild(tdLeague);
+
+            } else {
+                // === REGULAR GAME: INDIVIDUAL CELLS ===
+                bunks.forEach(bunk => {
+                    const tdActivity = document.createElement("td");
+                    let entry = null;
+
+                    if (eventBlock) {
+                        // Find the activity for this bunk at this block's time
+                        // We look at the *first slot* that matches the block's start time
+                        const slots = findSlotsForRange(eventBlock.startMin, eventBlock.endMin);
+                        if (slots.length > 0) {
+                            entry = scheduleAssignments[bunk]?.[slots[0]];
+                        }
+                    }
+                    
+                    if (entry) {
+                        tdActivity.style.border = "1px solid #ccc";
+                        tdActivity.style.verticalAlign = "top";
+
+                        if (entry._h2h) {
+                            // This will now show the full matchup string
+                            tdActivity.textContent = `${entry.sport} @ ${fieldLabel(entry.field)}`;
+                            tdActivity.style.background = "#e8f4ff";
+                            tdActivity.style.fontWeight = "bold";
+                        } else if (entry._fixed) {
+                            tdActivity.textContent = fieldLabel(entry.field);
+                            tdActivity.style.background = "#f1f1f1";
+                        } else if (entry.sport) {
+                            tdActivity.textContent = `${fieldLabel(entry.field)} – ${entry.sport}`;
+                        } else {
+                            tdActivity.textContent = fieldLabel(entry.field);
+                        }
+                    } else {
+                        // No event for this bunk (or no eventBlock for this division)
+                        tdActivity.className = "grey-cell";
+                        tdActivity.style.border = "1px solid #ccc";
+                    }
+                    tr.appendChild(tdActivity);
+                });
+            }
         });
         tbody.appendChild(tr);
     } 
@@ -269,7 +317,8 @@ function renderFixedBlockView(container) {
         if (!blocks.find(b => b.label === label)) {
             blocks.push({
                 label: label,
-                startMin: parseTimeToMinutes(item.startTime)
+                startMin: parseTimeToMinutes(item.startTime),
+                endMin: parseTimeToMinutes(item.endTime) // Need end time too
             });
         }
     });
@@ -316,18 +365,48 @@ function renderFixedBlockView(container) {
             // Find what the *first bunk* of this division is doing
             const firstBunk = bunks[0];
             let entry = null;
+            let slots = [];
             if (firstBunk) {
-                 const slots = findSlotsForRange(parseTimeToMinutes(block.label.split(' - ')[0]), parseTimeToMinutes(block.label.split(' - ')[1]));
+                 slots = findSlotsForRange(block.startMin, block.endMin);
                  if (slots.length > 0) {
                      entry = scheduleAssignments[firstBunk]?.[slots[0]];
                  }
             }
             
-            if (entry) {
-                if (entry._h2h) { // Handle Leagues/H2H
-                     td.textContent = `${entry.sport} @ ${fieldLabel(entry.field)}`;
-                     td.style.background = "#e8f4ff";
-                } else if (entry._fixed) {
+            // === START OF LEAGUE DISPLAY FIX ===
+            if (entry && entry._h2h) {
+                // It's a league game. Scan all bunks to build the list.
+                td.style.verticalAlign = "top";
+                td.style.textAlign = "left";
+                td.style.padding = "5px 8px";
+                td.style.background = "#e8f5e9"; // Light green
+                
+                let games = new Map(); // Key: fullMatchupLabel, Value: fieldName
+                
+                if (slots.length > 0) {
+                    bunks.forEach(bunk => {
+                        const bunkEntry = scheduleAssignments[bunk]?.[slots[0]];
+                        if (bunkEntry && bunkEntry._h2h && bunkEntry.sport) {
+                            games.set(bunkEntry.sport, fieldLabel(bunkEntry.field));
+                        }
+                    });
+                }
+                
+                let html = '<ul style="margin: 0; padding-left: 18px;">';
+                if (games.size === 0) {
+                    html = '<p class="muted" style="margin:0; padding: 4px;">No matchups scheduled.</p>';
+                }
+                games.forEach((field, matchup) => {
+                    html += `<li>${matchup} @ ${field}</li>`;
+                });
+                if (games.size > 0) { html += '</ul>'; }
+                
+                td.innerHTML = html;
+            // === END OF LEAGUE DISPLAY FIX ===
+
+            } else if (entry) {
+                // Regular activity, use the old logic
+                if (entry._fixed) {
                      td.textContent = fieldLabel(entry.field);
                      td.style.background = "#f1f1f1";
                 } else if (entry.sport) {
