@@ -420,7 +420,42 @@ function assignFieldsToBunks() {
     // Pre-place fixed activities (like Trips)
     prePlaceFixedActivities();
 
+    // ===== 4b. NEW: PRE-PLACE "FIXED" BLOCKS (e.g., Lunch) =====
+    // This runs after Trips (from prePlaceFixedActivities) but before leagues/activities.
+    (availableDivisions || []).forEach(div => {
+        const divRules = divisions[div]?.periodRules || {};
+        const bunks = divisions[div]?.bunks || [];
+        
+        for (const periodId in divRules) {
+            const rule = divRules[periodId];
+            if (rule.rule === 'fixed') {
+                // This is a "Fixed Block" period
+                const periodName = (window.schedulePeriods.find(p => p.id === periodId) || {}).name || 'Fixed';
+                const slots = findRowsForRange(rule.start, rule.end);
+                
+                if (slots.length > 0) {
+                    bunks.forEach(bunk => {
+                        slots.forEach((slot, idx) => {
+                            if (!scheduleAssignments[bunk][slot]) { // Don't overwrite Trips
+                                scheduleAssignments[bunk][slot] = { 
+                                    field: { name: periodName }, 
+                                    sport: null, 
+                                    continuation: (idx > 0), 
+                                    _fixed: true 
+                                };
+                            }
+                        });
+                    });
+                }
+            }
+        }
+    });
+    // ===== END OF 4b =====
+
+
+    // ===== 4c. INIT FIELD USAGE (Moved Here) =====
     // fieldUsageBySlot = { slot: { FieldName: usageCount } }
+    // This now correctly sees fixed blocks (_fixed: true)
     const fieldUsageBySlot = {};
     (availableDivisions || []).forEach(div => {
         (divisions[div]?.bunks || []).forEach(bunk => {
@@ -428,6 +463,8 @@ function assignFieldsToBunks() {
                 scheduleAssignments[bunk].forEach((entry, slot) => {
                     if (entry && entry._fixed && entry.field) {
                         const fieldName = fieldLabel(entry.field);
+                        // IMPORTANT: Only count fields that are actual, schedulable fields.
+                        // This will ignore "Lunch" (which is correct).
                         if (window.allSchedulableNames.includes(fieldName)) {
                             fieldUsageBySlot[slot] = fieldUsageBySlot[slot] || {};
                             fieldUsageBySlot[slot][fieldName] = 2; // Fixed activities get exclusive lock
@@ -437,6 +474,7 @@ function assignFieldsToBunks() {
             }
         });
     });
+    // --- END OF MOVED LOGIC ---
 
     // Histories
     const generalActivityHistory = {}; // { bunk: Set(activityName) }
