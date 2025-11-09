@@ -2,32 +2,25 @@
 // UI-only: rendering, save/load, init, and window exports.
 //
 // UPDATED:
-// - *** CRITICAL FIX ***
-//   - `reconcileOrRenderSaved` now "re-hydrates" date strings
-//     from localStorage back into real Date objects.
-//   - This fixes the "slot.start.getHours is not a function" crash.
-// - updateTable() correctly switches between "Fixed" and "Staggered"
-// - `renderStaggeredView` (NEW UPDATE):
-//   - Now shows one "Time" column per division, not per bunk.
-//   - Builds the event list from the `manualSkeleton` to show
-//     custom time blocks (e.g., "11:00-11:20", "11:20-12:00").
-//   - *** LEAGUE DISPLAY FIX ***
-//   - Detects "League Game" blocks from the skeleton.
-//   - Renders a single merged `<td>` that spans all bunks.
-//   - Scans all bunks to find unique matchups and lists them.
-// - `renderFixedBlockView` (NEW UPDATE):
-//   - *** LEAGUE DISPLAY FIX ***
-//   - Detects if a block is a league game for a division.
-//   - Scans all bunks to find unique matchups and lists them
-//     in the single division cell.
-// - parseTimeToMinutes (BUG FIX):
-//   - Fixed `Cannot access 's' before initialization` error.
+// - *** CRITICAL FIX (Split Activity) ***
+//   - `renderFixedBlockView` and `renderStaggeredView` have
+//     been completely rewritten.
+//   - They NO LONGER build time rows from the `manualSkeleton`.
+//   - They now iterate over the `window.unifiedTimes` (30-min grid),
+//     which is the *actual output* of the optimizer.
+//   - This is the only way to correctly display "Split Activity"
+//     blocks as two separate, distinct time rows (e.g.,
+//     12:00-12:30 and 12:30-1:00).
+// - **Cell Merging (Rowspan):**
+//   - Both renderers now correctly calculate `rowspan` for
+//     multi-slot activities (like "Lunch") by checking the
+//     `continuation` flag on schedule entries.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
 function parseTimeToMinutes(str) {
     if (!str || typeof str !== "string") return null;
-    let s = str.trim().toLowerCase(); // <-- THIS IS THE FIX
+    let s = str.trim().toLowerCase();
     let mer = null;
     if (s.endsWith("am") || s.endsWith("pm")) {
         mer = s.endsWith("am") ? "am" : "pm";
@@ -51,7 +44,6 @@ function fieldLabel(f) {
 }
 function fmtTime(d) {
     if (!d) return "";
-    // Check if it's a string, convert it to Date
     if (typeof d === 'string') {
         d = new Date(d);
     }
@@ -59,32 +51,15 @@ function fmtTime(d) {
     return `${h}:${m} ${ap}`;
 }
 
-// Helper to find slots (needed by both Fixed and Staggered views)
-function findSlotsForRange(startMin, endMin) {
-    const slots = [];
-    if (!window.unifiedTimes) return slots;
-    
-    for (let i = 0; i < window.unifiedTimes.length; i++) {
-        const slot = window.unifiedTimes[i];
-        // FIX: Ensure slot.start is a Date object before calling getHours
-        const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-        
-        if (slotStart >= startMin && slotStart < endMin) {
-            slots.push(i);
-        }
-    }
-    return slots;
-}
+// (findSlotsForRange is no longer needed by the new renderers)
 
 // ===== NEW: Main updateTable function =====
-// This function now just decides *which* renderer to use.
 function updateTable() {
     const container = document.getElementById("scheduleTable");
     if (!container) return;
     
     const toggle = document.getElementById("schedule-view-toggle");
     
-    // Flipped logic: Unchecked (default) is Fixed, Checked is Staggered
     if (toggle && toggle.checked) {
         renderStaggeredView(container);
     } else {
@@ -93,13 +68,54 @@ function updateTable() {
 }
 
 /**
+ * NEW: Helper function to get the schedule entry for a slot.
+ */
+function getEntry(bunk, slotIndex) {
+    const assignments = window.scheduleAssignments || {};
+    if (assignments[bunk] && assignments[bunk][slotIndex]) {
+        return assignments[bunk][slotIndex];
+    }
+    return null; // Return null if empty
+}
+
+/**
+ * NEW: Helper to calculate rowspan for a given bunk/slot.
+ */
+function calculateRowspan(bunk, slotIndex) {
+    let rowspan = 1;
+    const firstEntry = getEntry(bunk, slotIndex);
+    if (!firstEntry) return 1;
+
+    for (let i = slotIndex + 1; i < window.unifiedTimes.length; i++) {
+        const nextEntry = getEntry(bunk, i);
+        if (nextEntry && nextEntry.continuation && nextEntry.field === firstEntry.field) {
+            rowspan++;
+        } else {
+            break;
+        }
+    }
+    return rowspan;
+}
+
+/**
+ * NEW: Helper to format a schedule entry into text.
+ */
+function formatEntry(entry) {
+    if (!entry) return "";
+    if (entry._h2h) {
+        return `${entry.sport} @ ${fieldLabel(entry.field)}`;
+    } else if (entry._fixed) {
+        return fieldLabel(entry.field);
+    } else if (entry.sport) {
+        return `${fieldLabel(entry.field)} – ${entry.sport}`;
+    } else {
+        return fieldLabel(entry.field);
+    }
+}
+
+/**
  * Renders the "Staggered" (YKLI) view
- * This shows one column per bunk, with individual event rows.
- *
- * UPDATED:
- * - Header now shows one "Time" column per *division*.
- * - Body rows are built from the `manualSkeleton` for each division,
- * not from the `unifiedTimes` grid.
+ * REWRITTEN to iterate `unifiedTimes` and support `rowspan`.
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -107,12 +123,9 @@ function renderStaggeredView(container) {
     const availableDivisions = window.availableDivisions || [];
     const divisions = window.divisions || {};
     const scheduleAssignments = window.scheduleAssignments || {};
+    const unifiedTimes = window.unifiedTimes || [];
 
-    // Load the manual skeleton to get the *actual* time blocks
-    const dailyData = window.loadCurrentDailyData?.() || {};
-    const manualSkeleton = dailyData.manualSkeleton || [];
-    
-    if (manualSkeleton.length === 0) {
+    if (unifiedTimes.length === 0) {
         container.innerHTML = "<p>No schedule built for this day. Go to the 'Master Scheduler' tab to build one.</p>";
         return;
     }
@@ -131,7 +144,6 @@ function renderStaggeredView(container) {
         const bunkCount = bunks.length;
         if (bunkCount === 0) return;
 
-        // Row 1: Division Name
         const thDiv = document.createElement("th");
         thDiv.colSpan = 1 + bunkCount; // 1 for Time, N for bunks
         thDiv.textContent = div;
@@ -140,14 +152,12 @@ function renderStaggeredView(container) {
         thDiv.style.border = "1px solid #999";
         tr1.appendChild(thDiv);
 
-        // Row 2: "Time" column for this division
         const thTime = document.createElement("th");
         thTime.textContent = "Time";
         thTime.style.minWidth = "100px";
         thTime.style.border = "1px solid #999";
         tr2.appendChild(thTime);
         
-        // Row 2: Bunk Names
         bunks.forEach((b) => {
             const thBunk = document.createElement("th");
             thBunk.textContent = b;
@@ -160,136 +170,71 @@ function renderStaggeredView(container) {
     thead.appendChild(tr2);
     table.appendChild(thead);
 
-    // --- 2. Build Body (Event-based) ---
+    // --- 2. Build Body (Slot-based) ---
     const tbody = document.createElement("tbody");
-    
-    // Find all unique, sorted blocks *per division*
-    const blocksByDivision = {};
-    let maxEvents = 0; // The max number of blocks in *any* division
-    
-    availableDivisions.forEach(div => {
-        const divBlocks = [];
-        manualSkeleton.forEach(item => {
-            if (item.division === div) {
-                divBlocks.push({
-                    label: `${item.startTime} - ${item.endTime}`,
-                    startMin: parseTimeToMinutes(item.startTime),
-                    endMin: parseTimeToMinutes(item.endTime),
-                    event: item.event // <-- Pass the event type!
-                });
-            }
-        });
-        
-        // Sort and Deduplicate
-        divBlocks.sort((a,b) => a.startMin - b.startMin);
-        blocksByDivision[div] = divBlocks.filter((block, index, self) =>
-            index === self.findIndex((t) => (t.label === block.label))
-        );
-        
-        if (blocksByDivision[div].length > maxEvents) {
-            maxEvents = blocksByDivision[div].length;
-        }
-    });
 
-    // Now render the rows, one for each "event index"
-    for (let i = 0; i < maxEvents; i++) {
+    for (let i = 0; i < unifiedTimes.length; i++) {
+        const slot = unifiedTimes[i];
         const tr = document.createElement("tr");
         
-        availableDivisions.forEach(div => {
+        availableDivisions.forEach((div, divIndex) => {
             const bunks = divisions[div]?.bunks || [];
-            const blocks = blocksByDivision[div] || [];
-            const eventBlock = blocks[i]; // Get the i-th event block for this division
             
-            // --- 1. Add the TIME cell for this division ---
-            const tdTime = document.createElement("td");
-            if (eventBlock) {
-                tdTime.textContent = eventBlock.label;
-                tdTime.style.border = "1px solid #ccc";
-                tdTime.style.verticalAlign = "top";
-            } else {
-                // This division has fewer events than maxEvents
-                tdTime.className = "grey-cell";
-                tdTime.style.border = "1px solid #ccc";
+            // --- 1. Add the TIME cell (only for the first division) ---
+            if (divIndex === 0) {
+                // Check the *first bunk of the first division* for continuation
+                const firstBunk = divisions[availableDivisions[0]]?.bunks?.[0];
+                const entry = getEntry(firstBunk, i);
+                
+                if (entry && entry.continuation) {
+                    // This row is a continuation, don't render the time cell
+                } else {
+                    const rowspan = calculateRowspan(firstBunk, i);
+                    const tdTime = document.createElement("td");
+                    tdTime.textContent = slot.label;
+                    tdTime.style.border = "1px solid #ccc";
+                    tdTime.style.verticalAlign = "top";
+                    if (rowspan > 1) tdTime.rowSpan = rowspan;
+                    tr.appendChild(tdTime);
+                }
             }
-            tr.appendChild(tdTime);
 
-            // --- 2. Add ACTIVITY cells (Merged or Individual) ---
-            if (eventBlock && eventBlock.event === 'League Game') {
-                // === LEAGUE GAME: MERGED CELL ===
-                const tdLeague = document.createElement("td");
-                tdLeague.colSpan = bunks.length;
-                tdLeague.style.verticalAlign = "top";
-                tdLeague.style.textAlign = "left";
-                tdLeague.style.padding = "5px 8px";
-                tdLeague.style.background = "#e8f5e9"; // Light green
+            // --- 2. Add ACTIVITY cells for each BUNK ---
+            bunks.forEach(bunk => {
+                const entry = getEntry(bunk, i);
                 
-                let games = new Map(); // Key: fullMatchupLabel, Value: fieldName
-                const slots = findSlotsForRange(eventBlock.startMin, eventBlock.endMin);
-
-                if (slots.length > 0) {
-                    bunks.forEach(bunk => {
-                        const entry = scheduleAssignments[bunk]?.[slots[0]];
-                        // Check for the full sport string (from logic_core fix)
-                        if (entry && entry._h2h && entry.sport) {
-                            games.set(entry.sport, fieldLabel(entry.field)); // De-duplicates by matchup string
-                        }
-                    });
-                }
-                
-                let html = '<ul style="margin: 0; padding-left: 18px;">';
-                if (games.size === 0) {
-                    html = '<p class="muted" style="margin:0; padding: 4px;">No matchups scheduled.</p>';
-                }
-                games.forEach((field, matchup) => {
-                    html += `<li>${matchup} @ ${field}</li>`; // e.g., "Mets vs Yankees (Basketball) @ Gym A"
-                });
-                if (games.size > 0) { html += '</ul>'; }
-                
-                tdLeague.innerHTML = html;
-                tr.appendChild(tdLeague);
-
-            } else {
-                // === REGULAR GAME: INDIVIDUAL CELLS ===
-                bunks.forEach(bunk => {
+                if (entry && entry.continuation) {
+                    // This bunk is continuing its previous activity.
+                    // Do not render a <td>, its previous row handles it.
+                } else {
+                    // This is a new activity, render a cell.
+                    const rowspan = calculateRowspan(bunk, i);
                     const tdActivity = document.createElement("td");
-                    let entry = null;
-
-                    if (eventBlock) {
-                        // Find the activity for this bunk at this block's time
-                        // We look at the *first slot* that matches the block's start time
-                        const slots = findSlotsForRange(eventBlock.startMin, eventBlock.endMin);
-                        if (slots.length > 0) {
-                            entry = scheduleAssignments[bunk]?.[slots[0]];
-                        }
-                    }
+                    if (rowspan > 1) tdActivity.rowSpan = rowspan;
                     
-                    if (entry) {
-                        tdActivity.style.border = "1px solid #ccc";
-                        tdActivity.style.verticalAlign = "top";
+                    tdActivity.style.border = "1px solid #ccc";
+                    tdActivity.style.verticalAlign = "top";
 
+                    if (entry) {
+                        tdActivity.textContent = formatEntry(entry);
                         if (entry._h2h) {
-                            // This will now show the full matchup string
-                            tdActivity.textContent = `${entry.sport} @ ${fieldLabel(entry.field)}`;
                             tdActivity.style.background = "#e8f4ff";
                             tdActivity.style.fontWeight = "bold";
                         } else if (entry._fixed) {
-                            tdActivity.textContent = fieldLabel(entry.field);
                             tdActivity.style.background = "#f1f1f1";
-                        } else if (entry.sport) {
-                            tdActivity.textContent = `${fieldLabel(entry.field)} – ${entry.sport}`;
-                        } else {
-                            tdActivity.textContent = fieldLabel(entry.field);
                         }
                     } else {
-                        // No event for this bunk (or no eventBlock for this division)
                         tdActivity.className = "grey-cell";
-                        tdActivity.style.border = "1px solid #ccc";
                     }
                     tr.appendChild(tdActivity);
-                });
-            }
+                }
+            });
         });
-        tbody.appendChild(tr);
+        
+        // Only append the row if it has children (i.e., wasn't *just* continuation)
+        if (tr.children.length > 0) {
+            tbody.appendChild(tr);
+        }
     } 
 
     table.appendChild(tbody);
@@ -299,6 +244,7 @@ function renderStaggeredView(container) {
 
 /**
  * Renders the "Fixed Block" (Agudah) view
+ * REWRITTEN to iterate `unifiedTimes` and support `rowspan`.
  */
 function renderFixedBlockView(container) {
     container.innerHTML = "";
@@ -306,25 +252,9 @@ function renderFixedBlockView(container) {
     const availableDivisions = window.availableDivisions || [];
     const divisions = window.divisions || {};
     const scheduleAssignments = window.scheduleAssignments || {};
+    const unifiedTimes = window.unifiedTimes || [];
     
-    // 1. Find all unique time blocks from the manual skeleton
-    const dailyData = window.loadCurrentDailyData?.() || {};
-    const manualSkeleton = dailyData.manualSkeleton || [];
-    
-    const blocks = [];
-    manualSkeleton.forEach(item => {
-        const label = `${item.startTime} - ${item.endTime}`;
-        if (!blocks.find(b => b.label === label)) {
-            blocks.push({
-                label: label,
-                startMin: parseTimeToMinutes(item.startTime),
-                endMin: parseTimeToMinutes(item.endTime) // Need end time too
-            });
-        }
-    });
-    blocks.sort((a,b) => a.startMin - b.startMin);
-    
-    if (blocks.length === 0) {
+    if (unifiedTimes.length === 0) {
         container.innerHTML = "<p>No schedule built for this day. Go to the 'Master Scheduler' tab to build one.</p>";
         return;
     }
@@ -347,72 +277,76 @@ function renderFixedBlockView(container) {
     thead.appendChild(tr1);
     table.appendChild(thead);
     
-    // --- 2. Build Body ---
+    // --- 2. Build Body (Slot-based) ---
     const tbody = document.createElement("tbody");
     
-    blocks.forEach(block => {
+    for (let i = 0; i < unifiedTimes.length; i++) {
+        const slot = unifiedTimes[i];
+        
+        // Check the first division's first bunk for continuation
+        const firstBunk = divisions[availableDivisions[0]]?.bunks?.[0];
+        const firstEntry = getEntry(firstBunk, i);
+        
+        if (firstEntry && firstEntry.continuation) {
+            // This entire row is a continuation from a previous row.
+            // We assume all divisions started their activities at the same time.
+            // This simplifies the view, which is the point of "Fixed Block".
+            continue;
+        }
+
+        // This is a new row
         const tr = document.createElement("tr");
         
+        // Calculate rowspan based on the first bunk
+        const rowspan = calculateRowspan(firstBunk, i);
+        
         const tdTime = document.createElement("td");
-        tdTime.textContent = block.label;
+        tdTime.textContent = slot.label;
+        if (rowspan > 1) {
+            // If it's a multi-slot block, adjust the label
+            const endSlot = unifiedTimes[i + rowspan - 1];
+            tdTime.textContent = `${fmtTime(slot.start)} - ${fmtTime(endSlot.end)}`;
+            tdTime.rowSpan = rowspan;
+        }
         tr.appendChild(tdTime);
         
         availableDivisions.forEach(div => {
             const bunks = divisions[div]?.bunks || [];
             const td = document.createElement("td");
             td.style.verticalAlign = "top";
+            if (rowspan > 1) td.rowSpan = rowspan;
             
-            // Find what the *first bunk* of this division is doing
-            const firstBunk = bunks[0];
-            let entry = null;
-            let slots = [];
-            if (firstBunk) {
-                 slots = findSlotsForRange(block.startMin, block.endMin);
-                 if (slots.length > 0) {
-                     entry = scheduleAssignments[firstBunk]?.[slots[0]];
-                 }
-            }
+            const entry = getEntry(bunks[0], i); // Get entry for *this* div's first bunk
             
-            // === START OF LEAGUE DISPLAY FIX ===
             if (entry && entry._h2h) {
                 // It's a league game. Scan all bunks to build the list.
-                td.style.verticalAlign = "top";
                 td.style.textAlign = "left";
                 td.style.padding = "5px 8px";
-                td.style.background = "#e8f5e9"; // Light green
+                td.style.background = "#e8f5e9";
                 
-                let games = new Map(); // Key: fullMatchupLabel, Value: fieldName
-                
-                if (slots.length > 0) {
-                    bunks.forEach(bunk => {
-                        const bunkEntry = scheduleAssignments[bunk]?.[slots[0]];
-                        if (bunkEntry && bunkEntry._h2h && bunkEntry.sport) {
-                            games.set(bunkEntry.sport, fieldLabel(bunkEntry.field));
-                        }
-                    });
-                }
+                let games = new Map();
+                bunks.forEach(bunk => {
+                    const bunkEntry = getEntry(bunk, i);
+                    if (bunkEntry && bunkEntry._h2h && bunkEntry.sport) {
+                        games.set(bunkEntry.sport, fieldLabel(bunkEntry.field));
+                    }
+                });
                 
                 let html = '<ul style="margin: 0; padding-left: 18px;">';
                 if (games.size === 0) {
-                    html = '<p class="muted" style="margin:0; padding: 4px;">No matchups scheduled.</p>';
+                    html = '<p class="muted" style="margin:0; padding: 4px;">Leagues</p>';
                 }
                 games.forEach((field, matchup) => {
                     html += `<li>${matchup} @ ${field}</li>`;
                 });
                 if (games.size > 0) { html += '</ul>'; }
-                
                 td.innerHTML = html;
-            // === END OF LEAGUE DISPLAY FIX ===
-
+            
             } else if (entry) {
-                // Regular activity, use the old logic
+                // Regular activity
+                td.textContent = formatEntry(entry);
                 if (entry._fixed) {
-                     td.textContent = fieldLabel(entry.field);
                      td.style.background = "#f1f1f1";
-                } else if (entry.sport) {
-                    td.textContent = `${fieldLabel(entry.field)} – ${entry.sport}`;
-                } else {
-                    td.textContent = fieldLabel(entry.field);
                 }
             } else {
                 td.className = "grey-cell";
@@ -420,7 +354,7 @@ function renderFixedBlockView(container) {
             tr.appendChild(td);
         });
         tbody.appendChild(tr);
-    });
+    }
     
     table.appendChild(tbody);
     container.appendChild(table);
@@ -432,9 +366,9 @@ function saveSchedule() {
     try {
         window.saveCurrentDailyData?.("scheduleAssignments", window.scheduleAssignments);
         window.saveCurrentDailyData?.("leagueAssignments", window.leagueAssignments);
-        window.saveCurrentDailyData?.("unifiedTimes", window.unifiedTimes); // Save the grid!
+        window.saveCurrentDailyData?.("unifiedTimes", window.unifiedTimes);
     } catch (e) {
-        console.error("Save schedule failed:", e);
+        // save failed
     }
 }
 
@@ -444,18 +378,14 @@ function reconcileOrRenderSaved() {
         window.scheduleAssignments = data.scheduleAssignments || {};
         window.leagueAssignments = data.leagueAssignments || {};
         
-        // ===== START OF CRITICAL FIX =====
-        // Re-hydrate date strings from JSON back into Date objects
         const savedTimes = data.unifiedTimes || [];
         window.unifiedTimes = savedTimes.map(slot => ({
             ...slot,
             start: new Date(slot.start),
             end: new Date(slot.end)
         }));
-        // ===== END OF CRITICAL FIX =====
 
     } catch (e) {
-        console.error("Reconcile saved failed:", e);
         window.scheduleAssignments = {};
         window.leagueAssignments = {};
         window.unifiedTimes = [];
@@ -470,7 +400,6 @@ function initScheduleSystem() {
         window.leagueAssignments = window.leagueAssignments || {};
         reconcileOrRenderSaved();
         
-        // Add listener for the new toggle
         const toggle = document.getElementById("schedule-view-toggle");
         if (toggle) {
             toggle.onchange = () => {
@@ -479,7 +408,6 @@ function initScheduleSystem() {
         }
         
     } catch (e) {
-        console.error("Init error:", e);
         updateTable();
     }
 }
