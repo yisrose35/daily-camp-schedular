@@ -109,6 +109,7 @@
                 Uncheck for "Fixed Block" View (like Camp Agudah)
             </p>
         </div>
+
         <p>This tab shows the final, "filled-in" schedule. To build or edit the day's layout, use the "Master Scheduler" tab.</p>
         <div id="scheduleTable"></div>
     </div>
@@ -156,7 +157,7 @@
                 console.error("Fatal: calendar.js init not found.");
             }
 
-            // 2. Init App1 (loads bunks, divisions, fields, PERIODS)
+            // 2. Init App1 (loads bunks, divisions, fields)
             if (window.initApp1) {
                 window.initApp1();
             } else {
@@ -183,8 +184,6 @@
             } else {
                 console.warn("initSpecialtyLeagues not found.");
             }
-            
-            // 6. "Generate" button is now on the Master Scheduler tab.
         }
     </script>
 
