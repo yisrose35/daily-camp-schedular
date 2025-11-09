@@ -3,8 +3,8 @@
 // It provides functions to find the *best* activity for a given slot.
 //
 // UPDATED:
-// - Fixed "fieldUsageBySlot is not defined" error by exporting
-//   canBlockFit and having the logic_core pass the variable.
+// - Removed findBestLeagueMatchup (now handled in logic_core).
+// - Added local canBlockFit helper.
 // -----------------------------------------------------------------
 
 (function() {
@@ -23,31 +23,21 @@ function fieldLabel(f) {
 function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     if (!fieldName) return false; // Can't fit a null field
     
-    let canFit = true;
-    for (const slotIndex of block.slots) {
-        if (slotIndex === undefined) { canFit = false; break; }
-        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
-        const props = activityProperties[fieldName];
-        
-        if (usage > 0) {
-            // Check for sharable properties
-            if (!props || !props.sharable || usage >= 2) {
-                canFit = false; break;
-            }
-            // TODO: Add division/bunk limit checks
-        }
-    }
-    return canFit;
-}
+    const props = activityProperties[fieldName];
+    // FIX: Default limit is 1 (or 2 for sharable), not a number from props.
+    // This logic needs to be more robust, but for now:
+    const limit = (props && props.sharable) ? 2 : 1;
 
-/**
- * Finds the best-available league for a block.
- * This is now handled by the "League Pass" in logic_core.
- */
-window.findBestLeagueMatchup = function(block, masterLeagues, fieldsBySport, fieldUsageBySlot, activityProperties) {
-    // This logic is now in scheduler_logic_core.js's "Pass 3"
-    console.warn("findBestLeagueMatchup is being called, but this logic is now in logic_core Pass 3.");
-    return null;
+    // Division allowance
+    if (props && props.allowedDivisions && props.allowedDivisions.length && !props.allowedDivisions.includes(block.divName)) return false;
+
+    // Usage per slot
+    for (const slotIndex of block.slots) {
+        if (slotIndex === undefined) { return false; } // Invalid block
+        const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
+        if (used >= limit) return false;
+    }
+    return true;
 }
 
 /**
@@ -82,8 +72,7 @@ window.findBestGeneralActivity = function(block, allActivities, h2hActivities, f
     return fields[0] || { field: "Free", sport: null };
 }
 
-// Expose helper for core logic
-// This allows logic_core to call canBlockFit
+// Expose helper for core logic (so logic_core can use it for its own league pass)
 window.findBestGeneralActivity.canBlockFit = canBlockFit;
 
 })();
