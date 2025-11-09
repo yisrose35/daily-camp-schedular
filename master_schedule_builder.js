@@ -4,13 +4,10 @@
 // to visually build the "Skeleton" for the day.
 //
 // UPDATED:
-// - Swapped grid axis: Time is now Y-axis (rows), Divisions are X-axis (columns).
-// - Removed the "Staggered View" toggle.
-// - *** CRITICAL FIX ***
-//   - Dropping a "League Game" or "Special Activity" tile now
-//     correctly creates a schedulable 'slot' (not 'pinned').
-//   - This tells the optimizer to run the *real* scheduling logic
-//     for those activities.
+// - The grid is now a "sightseeer" as requested.
+// - Event tiles are rendered with 'position: absolute'.
+// - 'top' and 'height' are calculated based on exact start/end times,
+//   allowing events to flow (e.g., 11:00-11:20 and 11:20-12:00).
 // =================================================================
 
 (function() {
@@ -21,6 +18,7 @@ let palette = null;
 let grid = null;
 
 let dailySkeleton = []; // This will be the "skeleton" we build
+const CELL_HEIGHT_PX = 40; // The height of one 30-minute slot
 
 // The types of activities you can drag
 const TILES = [
@@ -126,7 +124,7 @@ function renderGrid() {
     } catch (e) { console.error("Error calculating times", e); }
     
     // Create the HTML for the grid
-    let table = '<table class="master-schedule-grid" style="border-collapse: collapse; width: 100%;">';
+    let table = '<table class="master-schedule-grid" style="border-collapse: collapse; width: 100%; position: relative;">';
     
     // Header Row (Divisions)
     table += '<thead><tr><th style="border: 1px solid #999; padding: 8px;">Time</th>';
@@ -138,7 +136,7 @@ function renderGrid() {
     // Body Rows (One per 30-min slot)
     table += '<tbody>';
     for (let min = earliestMin; min < latestMin; min += 30) {
-        table += `<tr><td style="font-weight: 600; vertical-align: top; border: 1px solid #999; padding: 8px;">${minutesToTime(min)}</td>`;
+        table += `<tr><td style="font-weight: 600; vertical-align: top; border: 1px solid #999; padding: 8px; height: ${CELL_HEIGHT_PX}px;">${minutesToTime(min)}</td>`;
         
         availableDivisions.forEach(divName => {
             const divTimeline = divisions[divName]?.timeline;
@@ -149,10 +147,12 @@ function renderGrid() {
             if (min < divStart || min >= divEnd) {
                 table += `<td class="grid-cell-disabled" style="background: #333; border: 1px solid #999;"></td>`;
             } else {
-                table += `<td class="grid-cell" data-div="${divName}" data-time-min="${min}" style="height: 50px; border: 1px dashed #ccc; padding: 2px; vertical-align: top;">`;
-                // Find events that START in this cell
-                dailySkeleton.filter(ev => ev.division === divName && parseTimeToMinutes(ev.startTime) === min)
-                             .forEach(ev => table += renderEventTile(ev));
+                // THIS IS THE FIX: The cell is now a 'position: relative' dropzone
+                table += `<td class="grid-cell" data-div="${divName}" data-time-min="${min}" style="position: relative; height: ${CELL_HEIGHT_PX}px; border: 1px dashed #ccc; padding: 0; vertical-align: top;">`;
+                
+                // We no longer render tiles here. We render them *after*
+                // the table is built, using absolute positioning.
+                
                 table += `</td>`;
             }
         });
@@ -162,6 +162,30 @@ function renderGrid() {
     
     grid.innerHTML = table;
     
+    // --- NEW: Render events with absolute positioning ---
+    const gridCells = grid.querySelectorAll('.grid-cell');
+    
+    dailySkeleton.forEach(event => {
+        const startMin = parseTimeToMinutes(event.startTime);
+        const endMin = parseTimeToMinutes(event.endTime);
+        const durationMin = endMin - startMin;
+        
+        // Find the cell this event *starts* in
+        const cellStartMin = Math.floor(startMin / 30) * 30;
+        
+        const cell = grid.querySelector(`.grid-cell[data-div="${event.division}"][data-time-min="${cellStartMin}"]`);
+        
+        if (cell) {
+            // Calculate pixel position and height
+            const startOffsetMin = startMin - cellStartMin;
+            const topPercent = (startOffsetMin / 30) * 100;
+            const heightPercent = (durationMin / 30) * 100;
+            
+            const eventTile = renderEventTile(event, topPercent, heightPercent);
+            cell.innerHTML += eventTile;
+        }
+    });
+
     // --- Add Drop Zone Listeners ---
     addDropListeners('.grid-cell');
 }
@@ -190,27 +214,22 @@ function addDropListeners(selector) {
             const defaultStartTime = minutesToTime(parseInt(cell.dataset.timeMin, 10));
             
             // --- This is the PROMPT logic you requested ---
-            // ===== START OF CRITICAL FIX =====
-            
-            let eventType = 'slot'; // Default to a schedulable slot
-            let eventName = tileData.name; // e.g., "League Game", "General Activity Slot"
+            let eventType = 'slot';
+            let eventName = tileData.name;
             
             if (tileData.type === 'slot') {
                 eventName = 'General Activity Slot';
                 eventType = 'slot';
             } else if (tileData.type === 'league' || tileData.type === 'specialty_league' || tileData.type === 'special' || tileData.type === 'swim') {
-                // These are all *schedulable* slots that the optimizer needs to fill
                 eventType = 'slot';
                 eventName = tileData.name; 
             } else if (tileData.type === 'lunch' || tileData.type === 'custom') {
-                // These are *pinned* events. The optimizer will not touch them.
                 eventType = 'pinned';
                 
                 if (tileData.type === 'custom') {
                     eventName = prompt("Enter the name for this custom event (e.g., 'Snacks'):");
-                    if (!eventName) return; // User cancelled
+                    if (!eventName) return;
                     
-                    // Ask if it's a slot or a pinned event
                     if (confirm("Does this event require scheduling (like 'General Activity')?\n\n- OK = Yes (it's a 'Slot' to be filled)\n- Cancel = No (it's a 'Pinned' event like 'Snacks')")) {
                         eventType = 'slot';
                     } else {
@@ -220,19 +239,18 @@ function addDropListeners(selector) {
                     eventName = tileData.name; // "Lunch"
                 }
             }
-            // ===== END OF CRITICAL FIX =====
 
 
             const startTime = prompt(`Add "${eventName}" for ${divName}?\n\nEnter Start Time:`, defaultStartTime);
-            if (!startTime) return; // User cancelled
+            if (!startTime) return;
             
             const endTime = prompt(`Enter End Time:`);
             if (!endTime) return;
             
             const newEvent = {
                 id: `evt_${Math.random().toString(36).slice(2, 9)}`,
-                type: eventType, // This is now correctly 'slot' for Leagues
-                event: eventName, // This is now correctly 'League Game'
+                type: eventType,
+                event: eventName,
                 division: divName,
                 startTime: startTime,
                 endTime: endTime
@@ -246,14 +264,28 @@ function addDropListeners(selector) {
 }
 
 /**
- * Renders a single event tile
+ * Renders a single event tile (for staggered view)
  */
-function renderEventTile(event) {
+function renderEventTile(event, topPercent, heightPercent) {
     const tile = TILES.find(t => t.name === event.event) || TILES.find(t => t.type === 'custom');
     const style = tile ? tile.style : 'background: #eee; border: 1px solid #616161;';
     
+    // THIS IS THE FIX: The div is now absolutely positioned
     return `
-        <div class="grid-event" data-event-id="${event.id}" style="${style}; padding: 5px; border-radius: 4px; text-align: center; margin: 2px; font-size: 0.9em;">
+        <div class="grid-event" 
+             data-event-id="${event.id}" 
+             style="${style}; 
+                    padding: 2px 5px; 
+                    border-radius: 4px; 
+                    text-align: center; 
+                    margin: 0 1px;
+                    font-size: 0.9em;
+                    position: absolute;
+                    top: ${topPercent}%;
+                    height: ${heightPercent}%;
+                    width: calc(100% - 4px); /* Full width minus margins */
+                    box-sizing: border-box;
+                    overflow: hidden;">
             <strong>${event.event}</strong>
             <div style="font-size: 0.85em;">${event.startTime} - ${event.endTime}</div>
         </div>
