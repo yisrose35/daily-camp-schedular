@@ -19,6 +19,11 @@
 //   - Fixed bug where `divLeague.name` was `undefined`.
 //   - The code now finds the league's name (the key) from the
 //     `masterLeagues` map, not a property on the league object.
+// - *** UI DISPLAY FIX ***
+//   - `pickA` and `pickB` (league game entries) now store the
+//     *full matchup string* (e.g., "Team A vs Team B (Sport)")
+//     in the `sport` property. This allows the UI to
+//     display the full game list for a division.
 // -----------------------------------------------------------------
 
 (function() {
@@ -314,12 +319,16 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
                 // Place both sides
                 const blockBase = { slots: group.slots, divName: group.divName };
+                
+                // === START OF UI DISPLAY FIX ===
                 // Get the original team names for the label
                 const teamA = bunkToTeam[bunkA] || bunkA;
                 const teamB = bunkToTeam[bunkB] || bunkB;
+                const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`; // e.g., "Mets vs Yankees (Basketball)"
                 
-                const pickA = { field: fieldName, sport: `${sport} vs ${teamB}`, _h2h: true, vs: teamB };
-                const pickB = { field: fieldName, sport: `${sport} vs ${teamA}`, _h2h: true, vs: teamA };
+                const pickA = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: teamB };
+                const pickB = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: teamA };
+                // === END OF UI DISPLAY FIX ===
 
                 fillBlock({ ...blockBase, bunk: bunkA }, pickA, fieldUsageBySlot, yesterdayHistory);
                 fillBlock({ ...blockBase, bunk: bunkB }, pickB, fieldUsageBySlot, yesterdayHistory);
