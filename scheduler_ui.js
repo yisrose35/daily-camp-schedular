@@ -2,10 +2,10 @@
 // UI-only: rendering, save/load, init, and window exports.
 //
 // UPDATED:
-// - updateTable() now checks for the "View Toggle"
-// - Added renderFixedBlockView() for the "Agudah" style
-// - Added renderStaggeredView() for the "YKLI" style
-// - Fixed reconcileOrRenderSaved to load 'unifiedTimes' from save
+// - renderStaggeredView() (the "YKLI" view) is rewritten
+//   to use 'position: absolute' just like the builder.
+// - This allows events with custom times (11:20) to
+//   "flow" correctly.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -51,23 +51,25 @@ function updateTable() {
 
 /**
  * Renders the "Staggered" (YKLI) view
- * This is the original updateTable function
+ * This is now rewritten to use absolute positioning.
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
 
     const availableDivisions = window.availableDivisions || [];
     const divisions = window.divisions || {};
-    const unifiedTimes = window.unifiedTimes || [];
+    const unifiedTimes = window.unifiedTimes || []; // The 30-min grid
     const scheduleAssignments = window.scheduleAssignments || {};
-    const leagueAssignments = window.leagueAssignments || {}; // Kept for legacy data
     
     if (unifiedTimes.length === 0) {
         container.innerHTML = "<p>No schedule built for this day. Go to the 'Master Scheduler' tab to build one.</p>";
         return;
     }
+    
+    const CELL_HEIGHT_PX = 60; // Taller cells for the view
 
     const table = document.createElement("table");
+    table.style.borderCollapse = "collapse";
 
     // --- 1. Build Header ---
     const thead = document.createElement("thead");
@@ -101,91 +103,114 @@ function renderStaggeredView(container) {
 
     // --- 2. Build Body (Grid-Based) ---
     const tbody = document.createElement("tbody");
+    
+    // This map will hold all the *real* events, not just grid slots
+    const eventsByBunk = {};
+    availableDivisions.forEach(div => {
+        (divisions[div]?.bunks || []).forEach(bunk => {
+            eventsByBunk[bunk] = [];
+            let currentEvent = null;
+            (scheduleAssignments[bunk] || []).forEach((entry, i) => {
+                if (entry && !entry.continuation) {
+                    // This is the start of an event
+                    let span = 1;
+                    for (let j = i + 1; j < unifiedTimes.length; j++) {
+                        if (scheduleAssignments[bunk]?.[j]?.continuation) span++;
+                        else break;
+                    }
+                    
+                    const startTime = unifiedTimes[i].start;
+                    const endTime = unifiedTimes[i + span - 1].end;
+                    
+                    currentEvent = {
+                        ...entry,
+                        startTime: startTime,
+                        endTime: endTime,
+                        startMin: startTime.getHours() * 60 + startTime.getMinutes(),
+                        endMin: endTime.getHours() * 60 + endTime.getMinutes()
+                    };
+                    eventsByBunk[bunk].push(currentEvent);
+                }
+            });
+        });
+    });
 
+    // Now render the "sightseeer" grid
     for (let i = 0; i < unifiedTimes.length; i++) {
         const tr = document.createElement("tr");
         
         const tdTime = document.createElement("td");
         tdTime.textContent = unifiedTimes[i].label;
+        tdTime.style.height = `${CELL_HEIGHT_PX}px`;
+        tdTime.style.border = "1px solid #ccc";
+        tdTime.style.padding = "4px";
         tr.appendChild(tdTime);
+        
+        const cellStartMin = unifiedTimes[i].start.getHours() * 60 + unifiedTimes[i].start.getMinutes();
         
         availableDivisions.forEach((div) => {
             const bunks = divisions[div]?.bunks || [];
             
             for (const b of bunks) {
-                const entry = scheduleAssignments[b]?.[i];
-                const league = leagueAssignments[div]?.[i]; // Keep for old data
+                // The cell is a relative container
+                const td = document.createElement("td");
+                td.style.position = "relative";
+                td.style.height = `${CELL_HEIGHT_PX}px`;
+                td.style.border = "1px solid #ccc";
+                td.style.padding = "0";
 
-                if (league) { // Handle legacy league data
-                    if (league.isContinuation) continue;
-                    let span = 1;
-                    for (let j = i + 1; j < unifiedTimes.length; j++) {
-                        if (leagueAssignments[div]?.[j]?.isContinuation) span++;
-                        else break;
-                    }
-                    const td = document.createElement("td");
-                    td.colSpan = bunks.length;
-                    td.rowSpan = span;
-                    td.style.background = divisions[div]?.color || "#4CAF50";
-                    td.style.color = "#fff";
-                    td.style.fontWeight = "600";
-                    td.style.verticalAlign = "top";
-                    const list = (league.games || [])
-                        .map(g => `${g.teams[0]} vs ${g.teams[1]} (${g.sport}) @ ${g.field || '?'}`)
-                        .join("<br> • ");
-                    td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;">${league.leagueName}</span></div>`;
-                    tr.appendChild(td);
-                    break;
-                }
+                // Find all events that *start* in this cell
+                const eventsInThisCell = eventsByBunk[b].filter(ev => 
+                    ev.startMin >= cellStartMin && ev.startMin < (cellStartMin + 30)
+                );
                 
-                if (entry) {
-                    if (entry.continuation) continue; // This slot is covered by a previous rowspan
-                    let span = 1;
-                    for (let j = i + 1; j < unifiedTimes.length; j++) {
-                        if (scheduleAssignments[b]?.[j]?.continuation) span++;
-                        else break;
-                    }
-                    const td = document.createElement("td");
-                    td.rowSpan = span;
-                    td.style.verticalAlign = "top";
+                eventsInThisCell.forEach(event => {
+                    const startOffsetMin = event.startMin - cellStartMin;
+                    const durationMin = event.endMin - event.startMin;
+                    
+                    const topPercent = (startOffsetMin / 30) * 100;
+                    const heightPercent = (durationMin / 30) * 100;
 
-                    // THIS IS THE FIX: It now correctly renders the H2H data from leagues
-                    if (entry._h2h) {
-                        td.textContent = `${entry.sport} @ ${fieldLabel(entry.field)}`;
-                        td.style.background = "#e8f4ff";
-                        td.style.fontWeight = "bold";
-                    } else if (entry._fixed) {
-                        td.textContent = fieldLabel(entry.field);
-                        td.style.background = "#f1f1f1";
-                        td.style.fontWeight = "600";
-                    } else if (entry.sport) {
-                        td.textContent = `${fieldLabel(entry.field)} – ${entry.sport}`;
+                    let content = "";
+                    if (event._h2h) {
+                        content = `${event.sport} @ ${fieldLabel(event.field)}`;
+                    } else if (event._fixed) {
+                        content = fieldLabel(event.field);
+                    } else if (event.sport) {
+                        content = `${fieldLabel(event.field)} – ${event.sport}`;
                     } else {
-                        td.textContent = fieldLabel(entry.field);
+                        content = fieldLabel(event.field);
                     }
-                    tr.appendChild(td);
-                }
-
-                if (!entry && !league) {
-                    const prevLeague = tr.querySelector('td[colspan]');
-                    if (prevLeague) continue;
                     
-                    const prevEmpty = i > 0 && !scheduleAssignments[b]?.[i-1] && !leagueAssignments[div]?.[i-1];
-                    if(prevEmpty) continue;
+                    const eventDiv = document.createElement('div');
+                    eventDiv.style.position = 'absolute';
+                    eventDiv.style.top = `${topPercent}%`;
+                    eventDiv.style.height = `${heightPercent}%`;
+                    eventDiv.style.width = 'calc(100% - 4px)';
+                    eventDiv.style.left = '2px';
+                    eventDiv.style.padding = '2px 4px';
+                    eventDiv.style.borderRadius = '4px';
+                    eventDiv.style.boxSizing = 'border-box';
+                    eventDiv.style.overflow = 'hidden';
+                    eventDiv.style.fontSize = '0.9em';
                     
-                    let span = 1;
-                    for (let j = i + 1; j < unifiedTimes.length; j++) {
-                        if (!scheduleAssignments[b]?.[j] && !leagueAssignments[div]?.[j]) {
-                            span++;
-                        } else {
-                            break;
-                        }
+                    if (event._h2h) {
+                        eventDiv.style.background = "#e8f4ff";
+                        eventDiv.style.border = "1px solid #b3d4ff";
+                        eventDiv.style.fontWeight = "bold";
+                    } else if (event._fixed) {
+                        eventDiv.style.background = "#f1f1f1";
+                        eventDiv.style.border = "1px solid #ddd";
+                    } else {
+                         eventDiv.style.background = "#fff";
+                         eventDiv.style.border = "1px solid #ccc";
                     }
-                    const td = document.createElement("td");
-                    td.rowSpan = span;
-                    td.className = "grey-cell"; // Use this class for empty
-                    tr.appendChild(td);
-                }
+                    
+                    eventDiv.textContent = content;
+                    td.appendChild(eventDiv);
+                });
+                
+                tr.appendChild(td);
             } // end bunks loop
         }); // end divisions loop
         tbody.appendChild(tr);
