@@ -2,10 +2,10 @@
 // UI-only: rendering, save/load, init, and window exports.
 //
 // UPDATED:
-// - updateTable() now checks for the "View Toggle"
-// - Added renderFixedBlockView() for the "Agudah" style
-// - Added renderStaggeredView() for the "YKLI" style
-// - Fixed reconcileOrRenderSaved to load 'unifiedTimes' from save
+// - renderStaggeredView() (the "YKLI" view) is rewritten
+//   to use 'position: absolute' just like the builder.
+// - This allows events with custom times (11:20) to
+//   "flow" correctly.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -47,45 +47,50 @@ function updateTable() {
     
     const toggle = document.getElementById("schedule-view-toggle");
     
-    // ===== START OF FIX: Flipped the logic =====
+    // Flipped logic: Unchecked (default) is Fixed, Checked is Staggered
     if (toggle && toggle.checked) {
-        // CHECKED = "Staggered" (YKLI) view
         renderStaggeredView(container);
     } else {
-        // UNCHECKED (default) = "Fixed Block" (Agudah) view
         renderFixedBlockView(container);
     }
-    // ===== END OF FIX =====
 }
 
 /**
  * Renders the "Staggered" (YKLI) view
- * This shows one column per bunk, with individual event rows.
+ * This is now rewritten to use absolute positioning.
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
 
     const availableDivisions = window.availableDivisions || [];
     const divisions = window.divisions || {};
+    const unifiedTimes = window.unifiedTimes || []; // The 30-min grid
     const scheduleAssignments = window.scheduleAssignments || {};
-    const unifiedTimes = window.unifiedTimes || [];
     
     if (unifiedTimes.length === 0) {
         container.innerHTML = "<p>No schedule built for this day. Go to the 'Master Scheduler' tab to build one.</p>";
         return;
     }
+    
+    const PIXELS_PER_MINUTE = 2;
+    const INCREMENT_MINS = 30;
+    const CELL_HEIGHT_PX = INCREMENT_MINS * PIXELS_PER_MINUTE; // 60px
 
     const table = document.createElement("table");
     table.style.borderCollapse = "collapse";
+    table.style.width = "100%";
 
     // --- 1. Build Header ---
     const thead = document.createElement("thead");
     const tr1 = document.createElement("tr");
+    const thTime = document.createElement("th");
+    thTime.textContent = "Time";
+    thTime.style.border = "1px solid #999";
+    thTime.style.padding = "8px";
+    tr1.appendChild(thTime);
     availableDivisions.forEach((div) => {
-        const bunkCount = (divisions[div]?.bunks || []).length;
-        if (bunkCount === 0) return;
         const th = document.createElement("th");
-        th.colSpan = bunkCount * 2; // Each bunk gets a Time + Activity column
+        th.colSpan = (divisions[div]?.bunks || []).length;
         th.textContent = div;
         th.style.background = divisions[div]?.color || "#333";
         th.style.color = "#fff";
@@ -95,42 +100,29 @@ function renderStaggeredView(container) {
     thead.appendChild(tr1);
 
     const tr2 = document.createElement("tr");
+    const bunkTh = document.createElement("th");
+    bunkTh.textContent = "Bunk";
+    bunkTh.style.border = "1px solid #999";
+    bunkTh.style.padding = "8px";
+    tr2.appendChild(bunkTh);
     availableDivisions.forEach((div) => {
         (divisions[div]?.bunks || []).forEach((b) => {
-            const thBunk = document.createElement("th");
-            thBunk.textContent = b;
-            thBunk.colSpan = 2;
-            thBunk.style.border = "1px solid #999";
-            tr2.appendChild(thBunk);
+            const th = document.createElement("th");
+            th.textContent = b;
+            th.style.border = "1px solid #999";
+            th.style.padding = "8px";
+            tr2.appendChild(th);
         });
     });
     thead.appendChild(tr2);
-
-    const tr3 = document.createElement("tr");
-    availableDivisions.forEach((div) => {
-        (divisions[div]?.bunks || []).forEach((b) => {
-            const thTime = document.createElement("th");
-            thTime.textContent = "Time";
-            thTime.style.minWidth = "80px";
-            thTime.style.border = "1px solid #999";
-            tr3.appendChild(thTime);
-            
-            const thActivity = document.createElement("th");
-            thActivity.textContent = "Activity";
-            thActivity.style.minWidth = "120px";
-            thActivity.style.border = "1px solid #999";
-            tr3.appendChild(thActivity);
-        });
-    });
-    thead.appendChild(tr3);
     table.appendChild(thead);
 
-    // --- 2. Build Body (Event-based) ---
+    // --- 2. Build Body (Grid-Based) ---
     const tbody = document.createElement("tbody");
     
-    // First, process all assignments into "real" events
+    // This map will hold all the *real* events, not just grid slots
     const eventsByBunk = {};
-    let maxEvents = 0;
+    const earliestMin = unifiedTimes[0].start.getHours() * 60 + unifiedTimes[0].start.getMinutes();
     
     availableDivisions.forEach(div => {
         (divisions[div]?.bunks || []).forEach(bunk => {
@@ -146,75 +138,101 @@ function renderStaggeredView(container) {
                     }
                     
                     const startTime = unifiedTimes[i].start;
-                    // Handle edge case where event is at the very end
                     const endTime = (i + span - 1 < unifiedTimes.length) ? unifiedTimes[i + span - 1].end : unifiedTimes[unifiedTimes.length - 1].end;
-
+                    
+                    const startMin = startTime.getHours() * 60 + startTime.getMinutes();
+                    const endMin = endTime.getHours() * 60 + endTime.getMinutes();
                     
                     currentEvent = {
                         ...entry,
                         startTimeLabel: `${fmtTime(startTime)} - ${fmtTime(endTime)}`,
-                        startMin: startTime.getHours() * 60 + startTime.getMinutes()
+                        top: (startMin - earliestMin) * PIXELS_PER_MINUTE,
+                        height: (endMin - startMin) * PIXELS_PER_MINUTE
                     };
                     eventsByBunk[bunk].push(currentEvent);
                 }
             });
-            // Add empty slots
-            if (eventsByBunk[bunk].length === 0) {
-                 const timeline = divisions[div]?.timeline;
-                 if (timeline) {
-                    eventsByBunk[bunk].push({ startTimeLabel: `${timeline.start} - ${timeline.end}`, _fixed: true, field: { name: "Free" } });
-                 }
-            }
-            if (eventsByBunk[bunk].length > maxEvents) {
-                maxEvents = eventsByBunk[bunk].length;
-            }
         });
     });
 
-    // Now render the rows
-    for (let i = 0; i < maxEvents; i++) {
-        const tr = document.createElement("tr");
-        
-        availableDivisions.forEach(div => {
-            (divisions[div]?.bunks || []).forEach(bunk => {
-                const event = eventsByBunk[bunk][i];
-                
-                const tdTime = document.createElement("td");
-                const tdActivity = document.createElement("td");
-                
-                if (event) {
-                    tdTime.textContent = event.startTimeLabel;
-                    tdTime.style.border = "1px solid #ccc";
-                    tdActivity.style.border = "1px solid #ccc";
-                    tdActivity.style.verticalAlign = "top";
-                    tdTime.style.verticalAlign = "top";
+    // Now render the "sightseeer" grid
+    const totalMinutes = (unifiedTimes.length * 30);
+    const totalHeight = totalMinutes * PIXELS_PER_MINUTE;
+    
+    // We need one master row for the *entire* schedule body
+    const trBody = document.createElement("tr");
+    
+    // The Time Column
+    const tdTimeCol = document.createElement("td");
+    tdTimeCol.style.position = "relative";
+    tdTimeCol.style.height = `${totalHeight}px`;
+    tdTimeCol.style.border = "1px solid #ccc";
+    for (let i = 0; i < unifiedTimes.length; i++) {
+        const top = (i * 30) * PIXELS_PER_MINUTE;
+        const line = document.createElement('div');
+        line.style.cssText = `position: absolute; top: ${top}px; left: 0; width: 100%; height: ${CELL_HEIGHT_PX}px; border-bottom: 1px dashed #ddd; box-sizing: border-box; font-size: 10px; padding: 2px; color: #777;`;
+        line.textContent = unifiedTimes[i].label.split(' - ')[0]; // Just show start time
+        tdTimeCol.appendChild(line);
+    }
+    trBody.appendChild(tdTimeCol);
+    
+    // The Bunk Columns
+    availableDivisions.forEach((div) => {
+        (divisions[div]?.bunks || []).forEach((b) => {
+            const td = document.createElement("td");
+            td.style.position = "relative";
+            td.style.height = `${totalHeight}px`;
+            td.style.border = "1px solid #ccc";
+            td.style.padding = "0";
 
-                    if (event._h2h) {
-                        tdActivity.textContent = `${event.sport} @ ${fieldLabel(event.field)}`;
-                        tdActivity.style.background = "#e8f4ff";
-                        tdActivity.style.fontWeight = "bold";
-                    } else if (event._fixed) {
-                        tdActivity.textContent = fieldLabel(event.field);
-                        tdActivity.style.background = "#f1f1f1";
-                    } else if (event.sport) {
-                        tdActivity.textContent = `${fieldLabel(event.field)} – ${event.sport}`;
-                    } else {
-                        tdActivity.textContent = fieldLabel(event.field);
-                    }
+            // Render all events for this bunk
+            (eventsByBunk[b] || []).forEach(event => {
+                let content = "";
+                if (event._h2h) {
+                    content = `${event.sport} @ ${fieldLabel(event.field)}`;
+                } else if (event._fixed) {
+                    content = fieldLabel(event.field);
+                } else if (event.sport) {
+                    content = `${fieldLabel(event.field)} – ${event.sport}`;
                 } else {
-                    // Empty cell for this bunk
-                    tdTime.className = "grey-cell";
-                    tdActivity.className = "grey-cell";
-                    tdTime.style.border = "1px solid #ccc";
-                    tdActivity.style.border = "1px solid #ccc";
+                    content = fieldLabel(event.field);
                 }
-                tr.appendChild(tdTime);
-                tr.appendChild(tdActivity);
+                
+                const eventDiv = document.createElement('div');
+                eventDiv.style.cssText = `
+                    position: absolute;
+                    top: ${event.top}px;
+                    height: ${event.height}px;
+                    width: calc(100% - 4px);
+                    left: 2px;
+                    padding: 2px 4px;
+                    border-radius: 4px;
+                    box-sizing: border-box;
+                    overflow: hidden;
+                    font-size: 0.9em;
+                `;
+                
+                if (event._h2h) {
+                    eventDiv.style.background = "#e8f4ff";
+                    eventDiv.style.border = "1px solid #b3d4ff";
+                    eventDiv.style.fontWeight = "bold";
+                } else if (event._fixed) {
+                    eventDiv.style.background = "#f1f1f1";
+                    eventDiv.style.border = "1px solid #ddd";
+                } else {
+                     eventDiv.style.background = "#fff";
+                     eventDiv.style.border = "1px solid #ccc";
+                }
+                
+                eventDiv.textContent = content;
+                td.appendChild(eventDiv);
             });
+            
+            trBody.appendChild(td);
         });
-        tbody.appendChild(tr);
-    } 
+    });
 
+    tbody.appendChild(trBody);
     table.appendChild(tbody);
     container.appendChild(table);
 }
