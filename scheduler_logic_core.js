@@ -4,26 +4,18 @@
 // fills in the "slot" types.
 //
 // UPDATED:
-// - *** CRITICAL FIX ***
-//   - Pass 2 now correctly applies the skeleton to *every bunk*
-//     in the division, not just the division itself.
-//   - This is the fix for "division schedule vs. bunk schedule".
-// - *** NEW LEAGUE LOGIC (PASS 3) ***
-//   - No longer requires Bunk Names and Team Names to be identical.
-//   - Now maps bunks-to-teams based on their list order
-//     (e.g., Bunk 1 -> Team 1, Bunk 2 -> Team 2).
-//   - This allows `getLeagueMatchups` to use custom team names
-//     (e.g., "Mets") and the scheduler will find the
-//     corresponding bunk (e.g., "B1") to place the game.
-// - *** BUG FIX ***
-//   - Fixed bug where `divLeague.name` was `undefined`.
-//   - The code now finds the league's name (the key) from the
-//     `masterLeagues` map, not a property on the league object.
-// - *** UI DISPLAY FIX ***
-//   - `pickA` and `pickB` (league game entries) now store the
-//     *full matchup string* (e.g., "Team A vs Team B (Sport)")
-//     in the `sport` property. This allows the UI to
-//     display the full game list for a division.
+// - *** CRITICAL FIX (v2) ***
+//   - Pass 3 (League Scheduling) has been completely rewritten.
+//   - It NO LONGER maps Bunks to Teams. This was the source
+//     of the "CRITICAL FAIL" error.
+//   - It now schedules games for the *League Teams* directly.
+//   - It finds fields for those team matchups.
+//   - It then distributes this game information across all
+//     bunks in the division, allowing the UI to
+//     de-duplicate and display the full list.
+//   - This correctly handles cases where Bunk Count != Team Count.
+// - Added new helper `markFieldUsage` to support this.
+// - `fillBlock` is modified to not double-count field usage.
 // -----------------------------------------------------------------
 
 (function() {
@@ -141,7 +133,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const endMin = parseTimeToMinutes(item.endTime);
         const slots = findSlotsForRange(startMin, endMin);
 
-        // ===== START OF CRITICAL FIX =====
         // Apply this skeleton item to *every bunk* in the division.
         bunks.forEach(bunk => {
             if (item.type === 'pinned') {
@@ -169,11 +160,10 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                 });
             }
         });
-        // ===== END OF CRITICAL FIX =====
     });
     console.log(`Pass 2: Placed all 'Pinned' events. Ready to fill ${schedulableSlotBlocks.length} bunk-slots.`);
 
-    // ===== PASS 3: NEW "League Pass" (ACTUAL FIELD/TIME PLACEMENT) =====
+    // ===== PASS 3: NEW "League Pass" (REWRITTEN) =====
     console.log("--- Starting Pass 3: League Scheduling ---");
 
     const leagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'League Game');
@@ -198,16 +188,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     Object.values(leagueGroups).forEach(group => {
         console.log(`Processing League Group: ${group.divName} at ${group.startTime}`);
         
-        // Get *all* bunks in this division (from Setup)
-        const divBunks = divisions[group.divName]?.bunks || [];
-        if (divBunks.length < 2) {
-            console.warn(`[FAIL] Division ${group.divName} has < 2 bunks in Setup. Skipping.`);
-            return;
-        }
-        console.log(`Found ${divBunks.length} bunks for ${group.divName}:`, divBunks);
-
-        // --- START OF FIX ---
-        // Find the [name, leagueObj] pair
+        // Find the matching league in Setup
         const leagueEntry = Object.entries(masterLeagues).find(([name, l]) => l.enabled && l.divisions.includes(group.divName));
         
         if (!leagueEntry) {
@@ -215,10 +196,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             return;
         }
         
-        const divLeagueName = leagueEntry[0]; // The Name (e.g., "4th Grade League")
-        const divLeague = leagueEntry[1];      // The Object (e.g., {enabled: ...})
-        // --- END OF FIX ---
-
+        const divLeagueName = leagueEntry[0];
+        const divLeague = leagueEntry[1];
         console.log(`Found matching league: "${divLeagueName}"`);
 
         // Get *all* custom teams for this league
@@ -228,117 +207,92 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             return;
         }
         console.log(`Found ${leagueTeams.length} teams for "${divLeagueName}":`, leagueTeams);
-
-        // *** NEW LOGIC: Create Bunk-to-Team and Team-to-Bunk maps ***
-        // Assumes a 1-to-1 mapping based on array order.
-        const bunkToTeam = {};
-        const teamToBunk = {};
-        for (let i = 0; i < Math.min(divBunks.length, leagueTeams.length); i++) {
-            bunkToTeam[divBunks[i]] = leagueTeams[i];
-            teamToBunk[leagueTeams[i]] = divBunks[i];
-        }
-        console.log("Bunk-to-Team Map:", bunkToTeam);
-        console.log("Team-to-Bunk Map:", teamToBunk);
         
-        // Sports rotation (e.g., Basketball, Hockey, etc.)
+        // Get sports
         const sports = Array.isArray(divLeague.sports) && divLeague.sports.length ? divLeague.sports : ["League"];
         console.log(`Using sports:`, sports);
 
-        // Today's matchups:
         // Get today's matchups using CUSTOM TEAM NAMES
         let matchups = [];
         if (typeof window.getLeagueMatchups === 'function') {
-            // Pass the correct league name
             matchups = window.getLeagueMatchups(divLeagueName, leagueTeams) || []; // e.g., [["Mets", "Yankees"]]
             console.log(`Got ${matchups.length} matchups from getLeagueMatchups:`, matchups);
         } else {
-            // Fallback: just pair the teams
             matchups = pairRoundRobin(leagueTeams);
             console.log(`getLeagueMatchups not found. Using simple pairing:`, matchups);
         }
 
-        // *** NEW LOGIC: Translate matchups to bunks ***
-        const bunkMatchups = matchups.map(([teamA, teamB]) => {
-            return [teamToBunk[teamA], teamToBunk[teamB]]; // e.g., [["B1", "B2"]]
-        }).filter(([bunkA, bunkB]) => bunkA && bunkB); // Filter out any failed mappings
-        console.log(`Translated to ${bunkMatchups.length} bunk matchups:`, bunkMatchups);
-        if (matchups.length > 0 && bunkMatchups.length === 0) {
-            console.error(`[CRITICAL FAIL] Had ${matchups.length} team matchups, but 0 bunk matchups. Check Team-to-Bunk mapping!`);
-        }
-
-        // Remove any duplicates and ensure teams are available (not yet placed in this wave)
-        const scheduledBunks = new Set();
-        const availableBunks = group.bunks; // The Set of bunks free at this time
+        const allBunksInGroup = Array.from(group.bunks);
+        const scheduledGames = []; // This will hold the {pick} objects
         let gameIndex = 0;
 
-        for (const [bunkA, bunkB] of bunkMatchups) {
-            console.log(`Attempting to schedule: ${bunkA} vs ${bunkB}`);
+        for (const [teamA, teamB] of matchups) {
+            // Skip BYEs
+            if (teamA === "BYE" || teamB === "BYE") continue;
+
+            console.log(`Attempting to schedule: ${teamA} vs ${teamB}`);
             
-            // Check if both bunks are available for THIS time slot AND haven't been scheduled yet
-            if (availableBunks.has(bunkA) && availableBunks.has(bunkB) &&
-                !scheduledBunks.has(bunkA) && !scheduledBunks.has(bunkB)) {
+            // Pick sport rotating through list
+            const sport = sports[gameIndex % sports.length];
+            gameIndex++;
+            console.log(`Selected sport: ${sport}`);
 
-                console.log(`Bunks ${bunkA} and ${bunkB} are available.`);
-                // Pick sport rotating through list
-                const sport = sports[gameIndex % sports.length];
-                gameIndex++;
-                console.log(`Selected sport: ${sport}`);
+            // Allowed fields for this sport
+            const possibleFields = fieldsBySport[sport] || [];
+            console.log(`Possible fields for "${sport}":`, possibleFields);
 
-                // Allowed fields for this sport
-                const possibleFields = fieldsBySport[sport] || [];
-                console.log(`Possible fields for "${sport}":`, possibleFields);
-                if (possibleFields.length === 0) {
-                     console.warn(`[FAIL] No fields found in 'Setup' for sport "${sport}". Trying any field...`);
+            // Find an available field
+            let fieldName = null;
+            const blockBase = { slots: group.slots, divName: group.divName };
+            
+            for (const f of possibleFields) {
+                if (canBlockFit(blockBase, f, activityProperties, fieldUsageBySlot)) {
+                    fieldName = f;
+                    break;
                 }
-
-                // Find a field that can fit across all slots of this block for both teams
-                let fieldName = null;
-                for (const f of possibleFields) {
-                    if (canBlockFit({ slots: group.slots, divName: group.divName }, f, activityProperties, fieldUsageBySlot)) {
+            }
+            if (!fieldName) {
+                console.log(`No specific sports field available. Trying fallback fields...`);
+                for (const f of window.allSchedulableNames) {
+                    if (canBlockFit(blockBase, f, activityProperties, fieldUsageBySlot)) {
                         fieldName = f;
                         break;
                     }
                 }
-                if (!fieldName) {
-                    console.log(`No specific sports field available. Trying fallback fields...`);
-                    // Try any general field (fallback)
-                    for (const f of window.allSchedulableNames) {
-                        if (canBlockFit({ slots: group.slots, divName: group.divName }, f, activityProperties, fieldUsageBySlot)) {
-                            fieldName = f;
-                            break;
-                        }
-                    }
-                }
-                
-                if (!fieldName) {
-                    console.warn(`[FAIL] No field available for ${group.divName} league game: ${bunkA} vs ${bunkB}. All fields are full or unavailable.`);
-                    continue; // Skip this matchup
-                }
-                
-                console.log(`[SUCCESS] Placing ${bunkA} vs ${bunkB} on field "${fieldName}"`);
-
-                // Place both sides
-                const blockBase = { slots: group.slots, divName: group.divName };
-                
-                // === START OF UI DISPLAY FIX ===
-                // Get the original team names for the label
-                const teamA = bunkToTeam[bunkA] || bunkA;
-                const teamB = bunkToTeam[bunkB] || bunkB;
-                const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`; // e.g., "Mets vs Yankees (Basketball)"
-                
-                const pickA = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: teamB };
-                const pickB = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: teamA };
-                // === END OF UI DISPLAY FIX ===
-
-                fillBlock({ ...blockBase, bunk: bunkA }, pickA, fieldUsageBySlot, yesterdayHistory);
-                fillBlock({ ...blockBase, bunk: bunkB }, pickB, fieldUsageBySlot, yesterdayHistory);
-
-                scheduledBunks.add(bunkA);
-                scheduledBunks.add(bunkB);
-            } else {
-                console.log(`Skipping ${bunkA} vs ${bunkB}. Reason: One or both bunks not in this time slot, or already scheduled.`);
             }
+            
+            // Create the game "pick" object
+            const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
+            let pick;
+            
+            if (fieldName) {
+                console.log(`[SUCCESS] Placing ${teamA} vs ${teamB} on field "${fieldName}"`);
+                pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null };
+                // Manually mark field usage *once* per game
+                markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
+            } else {
+                console.warn(`[FAIL] No field available for ${teamA} vs ${teamB}.`);
+                pick = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null };
+            }
+            scheduledGames.push(pick);
         }
+
+        // --- Now, distribute the scheduled games across all bunks ---
+        console.log(`Distributing ${scheduledGames.length} games across ${allBunksInGroup.length} bunks.`);
+        
+        allBunksInGroup.forEach((bunk, bunkIndex) => {
+            let pickToAssign;
+            if (scheduledGames.length > 0) {
+                // Assign a different game to each bunk, looping if needed
+                pickToAssign = scheduledGames[bunkIndex % scheduledGames.length];
+            } else {
+                // No games (e.g., all BYEs or no teams), just fill with "Leagues"
+                pickToAssign = { field: "Leagues", sport: null, _h2h: true };
+            }
+            
+            // Fill the block for this bunk. Pass `true` for isLeagueFill.
+            fillBlock({ ...blockBase, bunk: bunk }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
+        });
     });
     console.log("--- Finished Pass 3: League Scheduling ---");
 
@@ -358,10 +312,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         let pick = null;
 
         // --- 4a. Check the *type* of slot ---
-        
-        // NOTE: "Specialty League" tile is not handled yet.
-        // You would need to add: else if (block.event === 'Specialty League') { ... }
-        
         if (block.event === 'Special Activity') {
             pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties);
         } else if (block.event === 'Swim') {
@@ -376,10 +326,10 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
         // --- 4c. Place the chosen activity ---
         if (pick) {
-            fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory);
+            fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, false); // false for isLeagueFill
         } else {
             // Failsafe: just put "Free"
-            fillBlock(block, { field: "Free", sport: null }, fieldUsageBySlot, yesterdayHistory);
+            fillBlock(block, { field: "Free", sport: null }, fieldUsageBySlot, yesterdayHistory, false);
         }
     }
     console.log("--- Finished Pass 4 ---");
@@ -411,6 +361,24 @@ function findSlotsForRange(startMin, endMin) {
 }
 
 /**
+ * NEW HELPER: Manually marks field usage for a block.
+ * This is used in Pass 3 so we can schedule all games *before*
+ * writing them to the bunks.
+ */
+function markFieldUsage(block, fieldName, fieldUsageBySlot) {
+    if (!fieldName || fieldName === "No Field" || !window.allSchedulableNames.includes(fieldName)) {
+        return;
+    }
+    
+    for (const slotIndex of block.slots) {
+        if (slotIndex === undefined) continue;
+        fieldUsageBySlot[slotIndex] = fieldUsageBySlot[slotIndex] || {};
+        fieldUsageBySlot[slotIndex][fieldName] = (fieldUsageBySlot[slotIndex][fieldName] || 0) + 1;
+    }
+}
+
+
+/**
  * Check whether a block (set of slots) can be placed on a field, respecting:
  * - Field usage limits per slot (limitUsage)
  * - Allowed divisions for that field/special
@@ -418,8 +386,6 @@ function findSlotsForRange(startMin, endMin) {
 function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     if (!fieldName) return false;
     const props = activityProperties[fieldName];
-    // FIX: Default limit is 1 (or 2 for sharable), not a number from props.
-    // This logic needs to be more robust, but for now:
     const limit = (props && props.sharable) ? 2 : 1;
 
     // Division allowance
@@ -434,7 +400,12 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     return true;
 }
 
-function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory) {
+/**
+ * MODIFIED: Added `isLeagueFill` flag.
+ * If `isLeagueFill` is true, it skips marking field usage
+ * (because it was already marked manually in Pass 3).
+ */
+function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill = false) {
     const fieldName = fieldLabel(pick.field);
     const sport = pick.sport;
     
@@ -452,7 +423,8 @@ function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory) {
                 vs: pick.vs || null
             };
             
-            if (fieldName && window.allSchedulableNames.includes(fieldName)) {
+            // Only mark usage if it's a real field AND not a league fill
+            if (!isLeagueFill && fieldName && window.allSchedulableNames.includes(fieldName)) {
                 fieldUsageBySlot[slotIndex] = fieldUsageBySlot[slotIndex] || {};
                 fieldUsageBySlot[slotIndex][fieldName] = (fieldUsageBySlot[slotIndex][fieldName] || 0) + 1;
             }
