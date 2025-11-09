@@ -4,11 +4,13 @@
 // fills in the "slot" types.
 //
 // UPDATED:
+// - *** CRITICAL FIX ***
+//   - Pass 2 now correctly applies the skeleton to *every bunk*
+//     in the division, not just the division itself.
+//   - This is the fix for "division schedule vs. bunk schedule".
 // - Added a dedicated "League Pass" (Pass 3) to handle
 //   league matchups *before* other activities.
 // - This pass correctly pairs teams and places them on fields/time slots.
-// - Fixed "fieldUsageBySlot is not defined" error.
-// - Removed dependency on window.findBestGeneralActivity.canBlockFit by adding a local canBlockFit.
 // -----------------------------------------------------------------
 
 (function() {
@@ -126,10 +128,12 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const endMin = parseTimeToMinutes(item.endTime);
         const slots = findSlotsForRange(startMin, endMin);
 
-        if (item.type === 'pinned') {
-            // This is a "Pinned" event like Lunch or Snacks.
-            slots.forEach((slotIndex, idx) => {
-                bunks.forEach(bunk => {
+        // ===== START OF CRITICAL FIX =====
+        // Apply this skeleton item to *every bunk* in the division.
+        bunks.forEach(bunk => {
+            if (item.type === 'pinned') {
+                // This is a "Pinned" event like Lunch or Snacks.
+                slots.forEach((slotIndex, idx) => {
                     if (!window.scheduleAssignments[bunk][slotIndex]) {
                         window.scheduleAssignments[bunk][slotIndex] = {
                             field: { name: item.event },
@@ -139,10 +143,9 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                         };
                     }
                 });
-            });
-        } else if (item.type === 'slot') {
-            // This is a "Schedulable Slot"
-            bunks.forEach(bunk => {
+            } else if (item.type === 'slot') {
+                // This is a "Schedulable Slot"
+                // Add it to our "To-Do" list *for this specific bunk*.
                 schedulableSlotBlocks.push({
                     divName: item.division,
                     bunk: bunk,
@@ -151,8 +154,9 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                     endTime: endMin,
                     slots: slots
                 });
-            });
-        }
+            }
+        });
+        // ===== END OF CRITICAL FIX =====
     });
     console.log(`Pass 2: Placed all 'Pinned' events. Ready to fill ${schedulableSlotBlocks.length} bunk-slots.`);
 
