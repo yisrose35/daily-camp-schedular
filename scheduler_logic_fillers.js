@@ -1,6 +1,10 @@
 // -------------------- scheduler_logic_fillers.js --------------------
 // This file is now a "helper library" for the Optimizer.
 // It provides functions to find the *best* activity for a given slot.
+//
+// UPDATED:
+// - Fixed "fieldUsageBySlot is not defined" error by passing it
+//   to all helper functions.
 // -----------------------------------------------------------------
 
 (function() {
@@ -26,6 +30,7 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
         const props = activityProperties[fieldName];
         
         if (usage > 0) {
+            // Check for sharable properties
             if (!props || !props.sharable || usage >= 2) {
                 canFit = false; break;
             }
@@ -37,70 +42,13 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
 
 /**
  * Finds the best-available league for a block.
- * THIS IS THE REAL IMPLEMENTATION YOU REQUESTED.
+ * This is now handled by the "League Pass" in logic_core.
+ * This function can be a simple placeholder or removed.
  */
 window.findBestLeagueMatchup = function(block, masterLeagues, fieldsBySport, fieldUsageBySlot, activityProperties) {
-    // 1. Find the league for this division
-    const divLeague = Object.values(masterLeagues).find(l => l.enabled && l.divisions.includes(block.divName));
-    if (!divLeague) return null;
-
-    // 2. Get its sports
-    const sports = divLeague.sports || [];
-    if (sports.length === 0) return null;
-    
-    // 3. Get the matchups for today using league_scheduling.js
-    const teams = (divLeague.teams || []).map(t => String(t).trim()).filter(Boolean);
-    if (teams.length < 2) return null;
-    
-    // We call getLeagueMatchups to get *this* division's games for the day
-    if (typeof window.getLeagueMatchups !== 'function') {
-        console.error("league_scheduling.js is not loaded or getLeagueMatchups is not defined.");
-        return null;
-    }
-    const matchups = window.getLeagueMatchups(divLeague.name, teams) || [];
-    if (!matchups.length) return null;
-
-    // 4. Find the *specific game* this bunk is in
-    let myGame = null;
-    let myOpponent = null;
-    for (const match of matchups) {
-        if (match[0] === block.bunk) {
-            myGame = match;
-            myOpponent = match[1];
-            break;
-        }
-        if (match[1] === block.bunk) {
-            myGame = match;
-            myOpponent = match[0];
-            break;
-        }
-    }
-    
-    // If this bunk isn't in a game (e.g., odd number of teams), they can't play a league
-    if (!myGame) return null;
-    
-    // TODO: We need to assign sports to matchups *before* this.
-    // This is a logic flaw. We need a global way to assign sports.
-    // For now, we'll just pick the *first* sport from the list.
-    const sport = sports[0]; 
-    
-    // 5. Find an available field for that sport
-    const possibleFields = fieldsBySport[sport] || [];
-    for (const fieldName of possibleFields) {
-        // 6. Check if field is free
-        if (canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot)) {
-            // 7. If yes, return a "pick" object
-            return { 
-                field: fieldName, 
-                sport: `${sport} vs ${myOpponent}`,
-                _h2h: true, // Mark it like an H2H
-                vs: myOpponent
-            }; 
-        }
-    }
-    
-    console.warn(`No field available for ${block.bunk} to play ${sport} vs ${myOpponent}`);
-    return null; // No available league fields
+    // This logic is now in scheduler_logic_core.js's "Pass 3"
+    console.warn("findBestLeagueMatchup is being called, but this logic is now in logic_core Pass 3.");
+    return null;
 }
 
 /**
@@ -134,5 +82,9 @@ window.findBestGeneralActivity = function(block, allActivities, h2hActivities, f
     // Failsafe
     return fields[0] || { field: "Free", sport: null };
 }
+
+// Expose helper for core logic
+// This allows logic_core to call canBlockFit
+window.findBestGeneralActivity.canBlockFit = canBlockFit;
 
 })();
