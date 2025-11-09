@@ -16,7 +16,9 @@
 //     (e.g., "Mets") and the scheduler will find the
 //     corresponding bunk (e.g., "B1") to place the game.
 // - *** BUG FIX ***
-//   - Fixed `f..name` syntax error in `loadAndFilterData`.
+//   - Fixed bug where `divLeague.name` was `undefined`.
+//   - The code now finds the league's name (the key) from the
+//     `masterLeagues` map, not a property on the league object.
 // -----------------------------------------------------------------
 
 (function() {
@@ -199,21 +201,28 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         }
         console.log(`Found ${divBunks.length} bunks for ${group.divName}:`, divBunks);
 
-        // Find the league for this division
-        const divLeague = Object.values(masterLeagues).find(l => l.enabled && l.divisions.includes(group.divName));
-        if (!divLeague) {
+        // --- START OF FIX ---
+        // Find the [name, leagueObj] pair
+        const leagueEntry = Object.entries(masterLeagues).find(([name, l]) => l.enabled && l.divisions.includes(group.divName));
+        
+        if (!leagueEntry) {
             console.warn(`[FAIL] No *enabled* league found in 'Leagues' tab for division ${group.divName}. Skipping.`);
             return;
         }
-        console.log(`Found matching league: "${divLeague.name}"`);
+        
+        const divLeagueName = leagueEntry[0]; // The Name (e.g., "4th Grade League")
+        const divLeague = leagueEntry[1];      // The Object (e.g., {enabled: ...})
+        // --- END OF FIX ---
+
+        console.log(`Found matching league: "${divLeagueName}"`);
 
         // Get *all* custom teams for this league
         const leagueTeams = (divLeague.teams || []).map(t => String(t).trim()).filter(Boolean);
         if (leagueTeams.length === 0) {
-            console.warn(`[FAIL] League "${divLeague.name}" has no teams added. Skipping.`);
+            console.warn(`[FAIL] League "${divLeagueName}" has no teams added. Skipping.`);
             return;
         }
-        console.log(`Found ${leagueTeams.length} teams for "${divLeague.name}":`, leagueTeams);
+        console.log(`Found ${leagueTeams.length} teams for "${divLeagueName}":`, leagueTeams);
 
         // *** NEW LOGIC: Create Bunk-to-Team and Team-to-Bunk maps ***
         // Assumes a 1-to-1 mapping based on array order.
@@ -234,7 +243,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         // Get today's matchups using CUSTOM TEAM NAMES
         let matchups = [];
         if (typeof window.getLeagueMatchups === 'function') {
-            matchups = window.getLeagueMatchups(divLeague.name, leagueTeams) || []; // e.g., [["Mets", "Yankees"]]
+            // Pass the correct league name
+            matchups = window.getLeagueMatchups(divLeagueName, leagueTeams) || []; // e.g., [["Mets", "Yankees"]]
             console.log(`Got ${matchups.length} matchups from getLeagueMatchups:`, matchups);
         } else {
             // Fallback: just pair the teams
@@ -515,9 +525,7 @@ function loadAndFilterData() {
     const fieldsBySport = {};
     const allFieldNames = [];
     availFields.forEach(f => {
-        // --- THIS WAS THE BUG ---
         allFieldNames.push(f.name);
-        // --- END BUG FIX ---
         if (Array.isArray(f.activities)) {
             f.activities.forEach(sport => {
                 fieldsBySport[sport] = fieldsBySport[sport] || [];
