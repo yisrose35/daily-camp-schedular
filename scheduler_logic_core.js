@@ -1,6 +1,5 @@
 // -------------------- scheduler_logic_core.js --------------------
 // COMPLETE REWRITE FOR "SKELETON" MODEL
-// This file replaces the old "Matrix" logic.
 // -----------------------------------------------------------------
 
 // ===== CONFIG =====
@@ -74,10 +73,14 @@ window.generateScheduleFromSkeletons = function() {
     availableDivisions.forEach(divName => {
         const timeline = divisionSkeletons[divName]?.timeline;
         if (timeline) {
-            earliestMin = Math.min(earliestMin, parseTimeToMinutes(timeline.start) || 540);
-            latestMin = Math.max(latestMin, parseTimeToMinutes(timeline.end) || 960);
+            earliestMin = Math.min(earliestMin, parseTimeToMinutes(timeline.start) || 540); // 540 = 9:00 AM
+            latestMin = Math.max(latestMin, parseTimeToMinutes(timeline.end) || 960); // 960 = 4:00 PM
         }
     });
+
+    // Failsafe if no divisions are set
+    if (earliestMin === Infinity) earliestMin = 540;
+    if (latestMin === -Infinity) latestMin = 960;
 
     const baseDate = new Date(1970, 0, 1, 0, 0, 0); 
     let currentMin = earliestMin;
@@ -92,7 +95,15 @@ window.generateScheduleFromSkeletons = function() {
         });
         currentMin = nextMin;
     }
+
+    // ===== START OF FIX for 'start' error =====
+    if (window.unifiedTimes.length === 0) {
+        console.warn("No time slots generated. Check division Start/End times.");
+        updateTable(); // Show an empty table
+        return;
+    }
     console.log(`Generated ${window.unifiedTimes.length} time slots from ${fmtTime(window.unifiedTimes[0].start)} to ${fmtTime(window.unifiedTimes[window.unifiedTimes.length-1].end)}`);
+    // ===== END OF FIX =====
 
     // Initialize all bunks with empty arrays for the new grid
     availableDivisions.forEach(divName => {
@@ -102,11 +113,9 @@ window.generateScheduleFromSkeletons = function() {
     });
 
     // ===== PASS 2: Place "Pinned" Events (e.g., Lunch, Trips) =====
-    // This creates the "concrete" parts of the skeleton.
     
     // 2a. Place Daily Overrides (Trips) - HIGHEST PRIORITY
-    // (This function would need to be in daily_overrides.js, but we'll
-    // simulate its effect here for now)
+    // TODO: Implement window.DailyOverrides.prePlaceTrips()
     // window.DailyOverrides?.prePlaceTrips?.(); 
 
     // 2b. Place "Pinned" Skeleton Events
@@ -188,6 +197,8 @@ window.generateScheduleFromSkeletons = function() {
                 currentGapSlots.push(item);
             } else if (item.type === 'pinned' && item.startTime) {
                 const pinnedStart = parseTimeToMinutes(item.startTime);
+                if (pinnedStart == null) return;
+                
                 // We found a pin, so process the gap before it
                 gapGroups.push({
                     gap: { start: lastPinnedEnd, end: pinnedStart },
@@ -216,14 +227,18 @@ window.generateScheduleFromSkeletons = function() {
             if (numSlots === 0 || gapDuration <= 0) return;
 
             // Calculate duration, rounding to the nearest INCREMENT
-            const avgDuration = Math.round((gapDuration / numSlots) / INCREMENT_MINS) * INCREMENT_MINS;
+            // Fix: ensure avgDuration is at least one INCREMENT_MINS
+            let avgDuration = Math.max(INCREMENT_MINS, Math.round((gapDuration / numSlots) / INCREMENT_MINS) * INCREMENT_MINS);
             if (avgDuration === 0) return;
 
             let currentSlotStart = gapStart;
 
             for (let i = 0; i < numSlots; i++) {
                 // Ensure the last slot fills the remaining time
-                const duration = (i === numSlots - 1) ? (gapEnd - currentSlotStart) : avgDuration;
+                let duration = (i === numSlots - 1) ? (gapEnd - currentSlotStart) : avgDuration;
+                // Ensure duration is positive
+                if (duration <= 0) continue;
+
                 const slotStartMin = currentSlotStart;
                 const slotEndMin = currentSlotStart + duration;
                 
@@ -270,9 +285,7 @@ window.generateScheduleFromSkeletons = function() {
         let filled = false;
 
         // --- 4a. Try to fill with high-priority "Leagues" ---
-        // This is the FIX for your "put leagues at 9:00 AM" problem
         if (needs.leagues > 0) {
-            // Find a league that fits
             const league = findAvailableLeague(block, masterLeagues, fieldsBySport, fieldUsageBySlot);
             if (league) {
                 fillBlock(block, league, fieldUsageBySlot, yesterdayHistory);
@@ -283,7 +296,7 @@ window.generateScheduleFromSkeletons = function() {
         
         // --- 4b. Try to fill with "Specials" ---
         if (!filled && needs.specials > 0) {
-            const special = findAvailableSpecial(block, allActivities, fieldUsageBySlot);
+            const special = findAvailableSpecial(block, allActivities, fieldUsageBySlot, yesterdayHistory);
             if (special) {
                 fillBlock(block, special, fieldUsageBySlot, yesterdayHistory);
                 needs.specials--;
@@ -293,8 +306,7 @@ window.generateScheduleFromSkeletons = function() {
 
         // --- 4c. Fill with "General Activity" ---
         if (!filled) {
-            // This is where the H2H, "freshness," and regular filler logic goes
-            const pick = findAvailableGeneral(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory);
+            const pick = findAvailableGeneral(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties);
             if (pick) {
                 fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory);
                 filled = true;
@@ -324,7 +336,8 @@ function findSlotsForRange(startMin, endMin) {
         const slotEnd = slot.end.getHours() * 60 + slot.end.getMinutes();
         
         // Check for overlap, but only if the slot is *mostly* within the range
-        if (Math.max(startMin, slotStart) < Math.min(endMin, slotEnd)) {
+        // A slot is "in" if its start time is in the range
+        if (slotStart >= startMin && slotStart < endMin) {
             slots.push(i);
         }
     }
@@ -335,16 +348,22 @@ function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory) {
     const fieldName = fieldLabel(pick.field);
     const sport = pick.sport;
     
-    // Check for collisions
-    for (const slotIndex of block.slots) {
-        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
-        if (usage >= 2) { // or check sharable properties
-             // This field is full, can't place it
-             // In a real app, we'd return false and try another pick
-        }
-    }
-
+    // In a real implementation, collision check would happen *before* calling fillBlock
+    // For now, we just place it.
+    
     block.slots.forEach((slotIndex, idx) => {
+        // Failsafe: check if slotIndex is valid
+        if (slotIndex === undefined || slotIndex >= window.unifiedTimes.length) {
+             console.error("Invalid slotIndex in fillBlock", slotIndex, block);
+             return;
+        }
+        
+        // Check if bunk array exists
+        if (!window.scheduleAssignments[block.bunk]) {
+            console.error("Missing schedule array for bunk", block.bunk);
+            return;
+        }
+
         if (!window.scheduleAssignments[block.bunk][slotIndex]) {
             window.scheduleAssignments[block.bunk][slotIndex] = {
                 field: fieldName,
@@ -366,48 +385,69 @@ function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory) {
     // TODO: Update yesterdayHistory
 }
 
-// --- Placeholder "Finder" functions for the Optimizer ---
-// (These need to be built out with real "freshness" and conflict logic)
+// --- Optimizer "Finder" functions ---
+
+function canBlockFit(block, fieldName, activityProperties) {
+    let canFit = true;
+    for (const slotIndex of block.slots) {
+        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
+        const props = activityProperties[fieldName];
+        
+        if (usage > 0) {
+            if (!props || !props.sharable || usage >= 2) {
+                canFit = false; break;
+            }
+            // TODO: Add division/bunk limit checks
+        }
+    }
+    return canFit;
+}
 
 function findAvailableLeague(block, masterLeagues, fieldsBySport, fieldUsageBySlot) {
     // 1. Find the league for this division
-    // 2. Get its sport
-    // 3. Find available fields for that sport
-    // 4. Check if field is free in *all* slots in block.slots
-    // 5. If yes, return a "pick" object: { field: "Court 1", sport: "Leagues" }
-    return null; // Placeholder
-}
+    const divLeague = Object.values(masterLeagues).find(l => l.enabled && l.divisions.includes(block.divName));
+    if (!divLeague) return null;
 
-function findAvailableSpecial(block, allActivities, fieldUsageBySlot) {
-    const specials = allActivities.filter(a => a.type === 'special');
-    for (const pick of specials) {
-        const fieldName = fieldLabel(pick.field);
-        let canFit = true;
-        for (const slotIndex of block.slots) {
-            const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
-            if (usage >= 2) { // or check sharable
-                canFit = false; break;
+    // 2. Get its sports
+    const sports = divLeague.sports || [];
+    if (sports.length === 0) return null;
+    
+    // 3. Find available fields for those sports
+    for (const sport of sports) {
+        const possibleFields = fieldsBySport[sport] || [];
+        for (const fieldName of possibleFields) {
+            // 4. Check if field is free
+            if (canBlockFit(block, fieldName, {})) {
+                // 5. If yes, return a "pick" object
+                return { field: fieldName, sport: sport }; 
             }
         }
-        if (canFit) return pick;
+    }
+    return null; // No available league fields
+}
+
+function findAvailableSpecial(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties) {
+    const specials = allActivities.filter(a => a.type === 'special');
+    // TODO: Use yesterdayHistory to pick a "fresh" one
+    for (const pick of specials.sort(() => 0.5 - Math.random())) {
+        if (canBlockFit(block, fieldLabel(pick.field), activityProperties)) {
+            return pick;
+        }
     }
     return null;
 }
 
-function findAvailableGeneral(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory) {
-    // This is where the H2H logic, "freshness" check, etc., would go.
-    // For now, just pick a random field activity.
+function findAvailableGeneral(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties) {
+    // This is where the H2H, "freshness" check, etc., would go.
+    
+    // TODO: 1. Attempt H2H
+    
+    // 2. Attempt "fresh" general activity
     const fields = allActivities.filter(a => a.type === 'field');
     for (const pick of fields.sort(() => 0.5 - Math.random())) {
-         const fieldName = fieldLabel(pick.field);
-        let canFit = true;
-        for (const slotIndex of block.slots) {
-            const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
-            if (usage >= 2) {
-                canFit = false; break;
-            }
+         if (canBlockFit(block, fieldLabel(pick.field), activityProperties)) {
+            return pick;
         }
-        if (canFit) return pick;
     }
     // Failsafe
     return fields[0] || { field: "Free", sport: null };
