@@ -1,25 +1,18 @@
 // -------------------- scheduler_logic_core.js --------------------
 // This file is now the "OPTIMIZER"
-// It reads the "manualSkeleton" built by the user and
-// fills in the "slot" types.
 //
 // UPDATED:
-// - *** CRITICAL FIX (v3) ***
-//   - Fixed the "blockBase is not defined" ReferenceError.
-//   - The `blockBase` variable was incorrectly scoped inside the
-//     `matchups.forEach` loop.
-//   - It has been moved up to be scoped to the parent
-//     `leagueGroups.forEach` loop, making it accessible to
-//     both the game scheduling and bunk-filling loops.
+// - Pass 4 (Fill remaining slots) now recognizes the
+//   new 'Sports Slot' event from the Master Scheduler.
+// - It calls the new `findBestSportActivity` filler function
+//   for that specific slot type.
 // -----------------------------------------------------------------
 
 (function() {
 'use strict';
 
-// ===== CONFIG =====
-const INCREMENT_MINS = 30; // The base grid resolution
-
-// ===== Helpers =====
+// ... (Helper functions: parseTimeToMinutes, fieldLabel, fmtTime) ...
+// (These are unchanged)
 function parseTimeToMinutes(str) {
     if (!str || typeof str !== "string") return null;
     let s = str.trim().toLowerCase();
@@ -50,6 +43,7 @@ function fmtTime(d) {
     return `${h}:${m} ${ap}`;
 }
 
+
 /**
  * Main entry point, called by the "Run Optimizer" button
  */
@@ -77,6 +71,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     let fieldUsageBySlot = {}; // { 0: { "Court 1": 1, "Court 2": 2}, 1: ... }
     
     // ===== PASS 1: Generate Master Time Grid =====
+    // ... (Unchanged) ...
     let earliestMin = 540; // 9:00 AM
     let latestMin = 960; // 4:00 PM
     availableDivisions.forEach(divName => {
@@ -115,7 +110,9 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         });
     });
 
+
     // ===== PASS 2: Place all "Pinned" Events from the Skeleton =====
+    // ... (Unchanged) ...
     const schedulableSlotBlocks = []; // The "slots" we need to fill
     
     manualSkeleton.forEach(item => {
@@ -148,7 +145,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                 schedulableSlotBlocks.push({
                     divName: item.division,
                     bunk: bunk,
-                    event: item.event, // e.g., "General Activity Slot", "League Game"
+                    event: item.event, // e.g., "General Activity Slot", "League Game", "Sports Slot"
                     startTime: startMin,
                     endTime: endMin,
                     slots: slots
@@ -158,7 +155,9 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     });
     console.log(`Pass 2: Placed all 'Pinned' events. Ready to fill ${schedulableSlotBlocks.length} bunk-slots.`);
 
+
     // ===== PASS 3: NEW "League Pass" (REWRITTEN) =====
+    // ... (Unchanged from your last working version) ...
     console.log("--- Starting Pass 3: League Scheduling ---");
 
     const leagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'League Game');
@@ -220,31 +219,22 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const allBunksInGroup = Array.from(group.bunks);
         const scheduledGames = []; // This will hold the {pick} objects
         let gameIndex = 0;
-
-        // ===== START OF FIX =====
-        // Define `blockBase` *once* per group, so it's in scope for
-        // both the `matchups` loop and the `allBunksInGroup` loop.
+        
         const blockBase = { slots: group.slots, divName: group.divName };
-        // ===== END OF FIX =====
 
         for (const [teamA, teamB] of matchups) {
-            // Skip BYEs
             if (teamA === "BYE" || teamB === "BYE") continue;
 
             console.log(`Attempting to schedule: ${teamA} vs ${teamB}`);
             
-            // Pick sport rotating through list
             const sport = sports[gameIndex % sports.length];
             gameIndex++;
             console.log(`Selected sport: ${sport}`);
 
-            // Allowed fields for this sport
             const possibleFields = fieldsBySport[sport] || [];
             console.log(`Possible fields for "${sport}":`, possibleFields);
 
-            // Find an available field
             let fieldName = null;
-            // `blockBase` is already defined (see FIX)
             
             for (const f of possibleFields) {
                 if (canBlockFit(blockBase, f, activityProperties, fieldUsageBySlot)) {
@@ -262,14 +252,12 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                 }
             }
             
-            // Create the game "pick" object
             const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
             let pick;
             
             if (fieldName) {
                 console.log(`[SUCCESS] Placing ${teamA} vs ${teamB} on field "${fieldName}"`);
                 pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null };
-                // Manually mark field usage *once* per game
                 markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
             } else {
                 console.warn(`[FAIL] No field available for ${teamA} vs ${teamB}.`);
@@ -278,24 +266,21 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             scheduledGames.push(pick);
         }
 
-        // --- Now, distribute the scheduled games across all bunks ---
         console.log(`Distributing ${scheduledGames.length} games across ${allBunksInGroup.length} bunks.`);
         
         allBunksInGroup.forEach((bunk, bunkIndex) => {
             let pickToAssign;
             if (scheduledGames.length > 0) {
-                // Assign a different game to each bunk, looping if needed
                 pickToAssign = scheduledGames[bunkIndex % scheduledGames.length];
             } else {
-                // No games (e.g., all BYEs or no teams), just fill with "Leagues"
                 pickToAssign = { field: "Leagues", sport: null, _h2h: true };
             }
             
-            // Fill the block for this bunk. `blockBase` is now in scope.
             fillBlock({ ...blockBase, bunk: bunk }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
         });
     });
     console.log("--- Finished Pass 3: League Scheduling ---");
+
 
     // ===== PASS 4: Fill remaining Schedulable Slots =====
     console.log("--- Starting Pass 4: Fill remaining slots ---");
@@ -313,21 +298,30 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         let pick = null;
 
         // --- 4a. Check the *type* of slot ---
+        // (This logic is UPDATED)
+        
         if (block.event === 'Special Activity') {
+            // This is from the "Special Activity" tile (special-only)
             pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties);
+        
+        } else if (block.event === 'Sports Slot') {
+            // This is from the "Sports" tile (sports-only)
+            pick = window.findBestSportActivity?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties);
+
         } else if (block.event === 'Swim') {
             pick = { field: "Swim", sport: null }; // Simple pick
         }
         
         // --- 4b. Fill with "General Activity" ---
         if (!pick) {
-            // Default to General Activity
+            // This will catch 'General Activity Slot' (from the "Activity" hybrid tile)
+            // and any other unhandled 'slot' types.
             pick = window.findBestGeneralActivity?.(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties);
         }
 
         // --- 4c. Place the chosen activity ---
         if (pick) {
-            fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, false); // false for isLeagueFill
+            fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, false);
         } else {
             // Failsafe: just put "Free"
             fillBlock(block, { field: "Free", sport: null }, fieldUsageBySlot, yesterdayHistory, false);
@@ -344,7 +338,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 }
 
 // --- Helper functions for Pass 3 & 4 ---
-
+// ... (findSlotsForRange, markFieldUsage, canBlockFit, fillBlock, pairRoundRobin) ...
+// (These are unchanged from your last working version)
 function findSlotsForRange(startMin, endMin) {
     const slots = [];
     if (!window.unifiedTimes) return slots;
@@ -360,12 +355,6 @@ function findSlotsForRange(startMin, endMin) {
     }
     return slots;
 }
-
-/**
- * NEW HELPER: Manually marks field usage for a block.
- * This is used in Pass 3 so we can schedule all games *before*
- * writing them to the bunks.
- */
 function markFieldUsage(block, fieldName, fieldUsageBySlot) {
     if (!fieldName || fieldName === "No Field" || !window.allSchedulableNames.includes(fieldName)) {
         return;
@@ -377,13 +366,6 @@ function markFieldUsage(block, fieldName, fieldUsageBySlot) {
         fieldUsageBySlot[slotIndex][fieldName] = (fieldUsageBySlot[slotIndex][fieldName] || 0) + 1;
     }
 }
-
-
-/**
- * Check whether a block (set of slots) can be placed on a field, respecting:
- * - Field usage limits per slot (limitUsage)
- * - Allowed divisions for that field/special
- */
 function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     if (!fieldName) return false;
     const props = activityProperties[fieldName];
@@ -400,12 +382,6 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     }
     return true;
 }
-
-/**
- * MODIFIED: Added `isLeagueFill` flag.
- * If `isLeagueFill` is true, it skips marking field usage
- * (because it was already marked manually in Pass 3).
- */
 function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill = false) {
     const fieldName = fieldLabel(pick.field);
     const sport = pick.sport;
@@ -432,11 +408,6 @@ function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill
         }
     });
 }
-
-/**
- * Simple pairing for an in-wave round-robin:
- * If odd, last team BYE. Returns array of [A,B] pairs without duplicates.
- */
 function pairRoundRobin(teamList) {
     const arr = teamList.map(String);
     if (arr.length < 2) return [];
@@ -455,6 +426,9 @@ function pairRoundRobin(teamList) {
     return firstRoundPairs;
 }
 
+
+// ... (loadAndFilterData) ...
+// (Unchanged)
 function loadAndFilterData() {
     const globalSettings = window.loadGlobalSettings?.() || {};
     const app1Data = globalSettings.app1 || {};
