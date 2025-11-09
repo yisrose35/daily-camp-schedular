@@ -389,7 +389,6 @@ function getSkeletonItemHTML(item, index) {
 }
 
 // -------------------- Fields / Specials (Restored) --------------------
-// (These helpers are for Fields/Specials, they are unchanged but necessary)
 
 /**
 * Renders the "Available / Unavailable" time-based controls
