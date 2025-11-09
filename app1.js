@@ -1,10 +1,7 @@
 // -------------------- State --------------------
 let bunks = [];
-let divisions = {}; // { divName:{ bunks:[], color } }
-
-// NEW SKELETON STATE
-// This replaces schedulePeriods and periodRules
-let divisionSkeletons = {}; // { divName: { timeline: {start, end}, skeleton: [], shoppingList: {} } }
+let divisions = {}; // { divName:{ bunks:[], color, timeline: {start, end} } }
+// divisionSkeletons is GONE.
 
 let availableDivisions = [];
 let selectedDivision = null;
@@ -20,7 +17,7 @@ window.divisions = divisions;
 window.availableDivisions = availableDivisions;
 window.fields = fields;
 window.specialActivities = specialActivities;
-window.divisionSkeletons = divisionSkeletons; // Expose new skeleton state
+// window.divisionSkeletons is GONE.
 
 // -------------------- Helpers --------------------
 function makeEditable(el, save) {
@@ -140,21 +137,21 @@ function addDivision() {
         availableDivisions.push(name);
         window.availableDivisions = availableDivisions; // Update global
 
-        divisions[name] = { bunks: [], color };
-        divisionSkeletons[name] = { 
-            timeline: { start: "9:00 AM", end: "4:00 PM" },
-            skeleton: [], // { id, type: 'slot' | 'pinned', event: 'Lunch', startTime, duration }
-            shoppingList: { leagues: 1, specials: 1 }
+        // NEW: Simplified division object
+        divisions[name] = { 
+            bunks: [], 
+            color,
+            timeline: { start: "9:00 AM", end: "4:00 PM" } // Add timeline
         };
+        
         window.divisions = divisions; // keep global in sync
-        window.divisionSkeletons = divisionSkeletons;
 
         i.value = "";
         saveData();
         setupDivisionButtons();
         window.initLeaguesTab?.(); 
         window.updateTable?.();
-        renderDivisionSkeletonEditor(); // NEW
+        renderDivisionTimelineEditor(); // NEW
     }
 }
 document.getElementById("addDivisionBtn").onclick = addDivision;
@@ -181,8 +178,8 @@ function setupDivisionButtons() {
             span.classList.add("selected");
             saveData(); // Save selectedDivision
             
-            // NEW: Render skeleton editor for the selected division
-            renderDivisionSkeletonEditor();
+            // NEW: Render timeline editor for the selected division
+            renderDivisionTimelineEditor();
         };
         if (selectedDivision === name) span.classList.add("selected");
 
@@ -191,10 +188,6 @@ function setupDivisionButtons() {
             delete divisions[name];
             window.divisions = divisions; 
             
-            divisionSkeletons[newName] = divisionSkeletons[name];
-            delete divisionSkeletons[name];
-            window.divisionSkeletons = divisionSkeletons;
-
             availableDivisions[availableDivisions.indexOf(name)] = newName;
             window.availableDivisions = availableDivisions;
 
@@ -202,7 +195,7 @@ function setupDivisionButtons() {
             saveData();
             setupDivisionButtons();
             window.initLeaguesTab?.();
-            renderDivisionSkeletonEditor(); // NEW
+            renderDivisionTimelineEditor(); // NEW
             window.updateTable?.();
         });
         wrap.appendChild(span);
@@ -219,86 +212,43 @@ function setupDivisionButtons() {
     });
     
     // Render rules for the initially selected division (if any)
-    renderDivisionSkeletonEditor();
+    renderDivisionTimelineEditor();
 }
 document.getElementById("enableColor").addEventListener("change", setupDivisionButtons);
 
-// -------------------- NEW: Division Skeleton Editor --------------------
-function renderDivisionSkeletonEditor() {
-    const container = document.getElementById("divisionSkeletonEditor");
+// -------------------- (REPLACED) NEW: Division Timeline Editor --------------------
+// This function replaces renderDivisionSkeletonEditor
+function renderDivisionTimelineEditor() {
+    const container = document.getElementById("divisionTimelineEditor");
     if (!container) return;
 
     if (!selectedDivision) {
-        container.innerHTML = `<p style="color: #666;">Select a division to set its "Skeleton" and "Shopping List."</p>`;
+        container.innerHTML = `<p style="color: #666;">Select a division to set its timeline.</p>`;
         return;
     }
 
-    const data = divisionSkeletons[selectedDivision];
+    const data = divisions[selectedDivision];
     if (!data) {
-        container.innerHTML = `<p style="color: #c00;">Error: Could not find skeleton data for ${selectedDivision}.</p>`;
+        container.innerHTML = `<p style="color: #c00;">Error: Could not find data for ${selectedDivision}.</p>`;
         return;
     }
     
     // Ensure data structure is initialized
     data.timeline = data.timeline || { start: "9:00 AM", end: "4:00 PM" };
-    data.skeleton = data.skeleton || [];
-    data.shoppingList = data.shoppingList || { leagues: 1, specials: 1 };
 
     container.innerHTML = `
         <div style="border: 1px solid #ddd; border-radius: 8px; padding: 15px;">
-            <h4 style="margin-top: 0; margin-bottom: 15px;">Settings for ${selectedDivision}</h4>
+            <h4 style="margin-top: 0; margin-bottom: 15px;">Timeline for ${selectedDivision}</h4>
             
-            <div style="margin-bottom: 15px;">
-                <label>Start Time:</label>
-                <input type="text" value="${data.timeline.start}" data-key="timeline.start" class="skel-input">
-                <label style="margin-left: 10px;">End Time:</label>
-                <input type="text" value="${data.timeline.end}" data-key="timeline.end" class="skel-input">
-            </div>
-
-            <div style="margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #eee;">
-                <h5 style="margin-top: 0; margin-bottom: 10px;">Daily "Shopping List" (What to fit in)</h5>
-                <label>Leagues:</label>
-                <input type="number" value="${data.shoppingList.leagues}" data-key="shoppingList.leagues" class="skel-input" style="width: 50px;">
-                <label style="margin-left: 10px;">Specials:</label>
-                <input type="number" value="${data.shoppingList.specials}" data-key="shoppingList.specials" class="skel-input" style="width: 50px;">
-                <p style="font-size: 0.85em; color: #666; margin-top: 5px;">
-                    'General Activities' will automatically fill the rest.
-                </p>
-            </div>
-
-            <h5 style="margin-top: 0; margin-bottom: 10px;">Day "Skeleton" (The order of events)</h5>
-            <div id="skeleton-list-container"></div>
-            <div id="skeleton-add-buttons" style="margin-top: 10px; display: flex; gap: 10px;">
-                <button id="add-slot-btn" style="background: #007BFF; color: white;">+ Add Activity Slot</button>
-                <button id="add-pinned-btn">+ Add Pinned Event (e.g., Lunch)</button>
-            </div>
+            <label>Start Time:</label>
+            <input type="text" value="${data.timeline.start}" data-key="timeline.start" class="timeline-input">
+            <label style="margin-left: 10px;">End Time:</label>
+            <input type="text" value="${data.timeline.end}" data-key="timeline.end" class="timeline-input">
         </div>
     `;
 
-    // --- Render the Skeleton List ---
-    const listContainer = container.querySelector("#skeleton-list-container");
-    
-    data.skeleton.forEach((item, index) => {
-        const el = document.createElement("div");
-        el.className = "fieldWrapper";
-        el.style.display = "flex";
-        el.style.alignItems = "center";
-        el.style.gap = "10px";
-        el.innerHTML = `
-            <span style="font-weight: bold; min-width: 20px;">${index + 1}.</span>
-            ${getSkeletonItemHTML(item, index)}
-            <div style="display: flex; flex-direction: column;">
-                <button class="skel-move-btn" data-index="${index}" data-dir="-1" ${index === 0 ? 'disabled' : ''}>↑</button>
-                <button class="skel-move-btn" data-index="${index}" data-dir="1" ${index === data.skeleton.length - 1 ? 'disabled' : ''}>↓</button>
-            </div>
-        `;
-        listContainer.appendChild(el);
-    });
-
     // --- Add Event Listeners ---
-    
-    // For simple text/number inputs
-    container.querySelectorAll('.skel-input').forEach(input => {
+    container.querySelectorAll('.timeline-input').forEach(input => {
         input.onchange = (e) => {
             const keys = e.target.getAttribute('data-key').split('.');
             if (keys.length === 2) {
@@ -309,83 +259,6 @@ function renderDivisionSkeletonEditor() {
             saveData();
         };
     });
-
-    // For skeleton list inputs
-    listContainer.querySelectorAll('.skel-item-input').forEach(input => {
-        input.onchange = (e) => {
-            const index = parseInt(e.target.getAttribute('data-index'), 10);
-            const key = e.target.getAttribute('data-key');
-            data.skeleton[index][key] = e.target.value;
-            saveData();
-        };
-    });
-
-    // For skeleton item deletion
-    listContainer.querySelectorAll('.skel-delete-btn').forEach(btn => {
-        btn.onclick = (e) => {
-            const index = parseInt(e.target.getAttribute('data-index'), 10);
-            data.skeleton.splice(index, 1);
-            saveData();
-            renderDivisionSkeletonEditor(); // Re-render the whole editor
-        };
-    });
-    
-    // For skeleton item move
-    listContainer.querySelectorAll('.skel-move-btn').forEach(btn => {
-        btn.onclick = (e) => {
-            const index = parseInt(e.target.getAttribute('data-index'), 10);
-            const dir = parseInt(e.target.getAttribute('data-dir'), 10);
-            const newIndex = index + dir;
-            if (newIndex >= 0 && newIndex < data.skeleton.length) {
-                // Swap
-                [data.skeleton[index], data.skeleton[newIndex]] = [data.skeleton[newIndex], data.skeleton[index]];
-                saveData();
-                renderDivisionSkeletonEditor();
-            }
-        };
-    });
-    
-    // For Add buttons
-    container.querySelector("#add-slot-btn").onclick = () => {
-        data.skeleton.push({ id: uid(), type: 'slot' });
-        saveData();
-        renderDivisionSkeletonEditor();
-    };
-    container.querySelector("#add-pinned-btn").onclick = () => {
-        data.skeleton.push({ id: uid(), type: 'pinned', event: 'Lunch', startTime: '', duration: '30' });
-        saveData();
-        renderDivisionSkeletonEditor();
-    };
-}
-
-function getSkeletonItemHTML(item, index) {
-    if (item.type === 'slot') {
-        return `
-            <div style="flex-grow: 1; padding: 10px; background: #e8f4ff; border-radius: 4px;">
-                <strong>Schedulable Activity Slot</strong>
-                <em style="font-size: 0.9em; margin-left: 10px;">(Optimizer will fill this)</em>
-            </div>
-            <button class="skel-delete-btn" data-index="${index}" style="background: #c0392b; color: white;">✖</button>
-        `;
-    }
-    
-    if (item.type === 'pinned') {
-        return `
-            <div style="flex-grow: 1; padding: 10px; background: #f8f8f8; border: 1px solid #ddd; border-radius: 4px;">
-                <select class="skel-item-input" data-index="${index}" data-key="event">
-                    <option value="Lunch" ${item.event === 'Lunch' ? 'selected' : ''}>Lunch</option>
-                    <option value="Swim" ${item.event === 'Swim' ? 'selected' : ''}>Swim</option>
-                    <option value="Other" ${item.event === 'Other' ? 'selected' : ''}>Other</option>
-                </select>
-                <label style="margin-left: 10px;">Duration (mins):</label>
-                <input type="number" class="skel-item-input" data-index="${index}" data-key="duration" value="${item.duration}" style="width: 50px;">
-                <label style="margin-left: 10px;">Start Time (Optional):</label>
-                <input type="text" class="skel-item-input" data-index="${index}" data-key="startTime" value="${item.startTime}" placeholder="e.g., 12:00 PM">
-            </div>
-            <button class="skel-delete-btn" data-index="${index}" data-key="delete" style="background: #c0392b; color: white;">✖</button>
-        `;
-    }
-    return '';
 }
 
 // -------------------- Fields / Specials (Restored) --------------------
@@ -937,12 +810,11 @@ function saveData() {
     const data = { 
         bunks, 
         divisions, 
-        divisionSkeletons, // NEW: Save skeleton data
+        // divisionSkeletons is GONE
         availableDivisions, 
         selectedDivision, 
         fields, 
         specialActivities, 
-        // (schedulePeriods is removed)
     };
     window.saveGlobalSettings?.("app1", data);
 }
@@ -957,43 +829,20 @@ function loadData() {
             ? data.availableDivisions.slice()
             : Object.keys(divisions);
         
-        // NEW: Load skeleton data
-        divisionSkeletons = data.divisionSkeletons || {};
-        
-        // One-time migration from OLD system
-        if (Object.keys(divisionSkeletons).length === 0 && (availableDivisions.length > 0 && data.divisions[availableDivisions[0]] && 'periodRules' in data.divisions[availableDivisions[0]])) {
-            console.warn("Migrating old block system to new Skeleton system...");
-            availableDivisions.forEach(divName => {
-                const oldRules = divisions[divName]?.periodRules || {};
-                divisionSkeletons[divName] = {
-                    timeline: { start: "9:00 AM", end: "4:00 PM" },
-                    skeleton: [],
-                    shoppingList: { leagues: 1, specials: 1 }
-                };
+        // NEW: Ensure timeline exists on all divisions
+        availableDivisions.forEach(divName => {
+            if (divisions[divName]) {
+                divisions[divName].timeline = divisions[divName].timeline || { start: "9:00 AM", end: "4:00 PM" };
                 
-                (data.schedulePeriods || []).forEach(period => {
-                    const rule = oldRules[period.id];
-                    if (rule) {
-                        if (rule.rule === 'fixed') {
-                            divisionSkeletons[divName].skeleton.push({
-                                id: uid(), type: 'pinned', event: period.name,
-                                startTime: rule.start, duration: '30' // Placeholder
-                            });
-                        } else {
-                            const numSlots = parseInt(rule.rule, 10) || 1;
-                            for (let i = 0; i < numSlots; i++) {
-                                divisionSkeletons[divName].skeleton.push({ id: uid(), type: 'slot' });
-                            }
-                        }
-                    }
-                });
-            });
-            // We don't auto-save here, but it will save on the next user action
-        }
+                // One-time migration from old "divisionSkeletons"
+                if (data.divisionSkeletons && data.divisionSkeletons[divName]) {
+                    divisions[divName].timeline = data.divisionSkeletons[divName].timeline;
+                }
+            }
+        });
         
         window.divisions = divisions;
         window.availableDivisions = availableDivisions;
-        window.divisionSkeletons = divisionSkeletons;
         selectedDivision = data.selectedDivision || null;
         fields = data.fields || [];
         specialActivities = data.specialActivities || [];
@@ -1042,7 +891,7 @@ function initApp1() {
     renderFields();
     renderSpecials();
     
-    // renderDivisionSkeletonEditor() is called by setupDivisionButtons
+    // renderDivisionTimelineEditor() is called by setupDivisionButtons
 }
 window.initApp1 = initApp1;
 
