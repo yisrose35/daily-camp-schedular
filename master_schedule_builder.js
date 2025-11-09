@@ -5,7 +5,12 @@
 //
 // UPDATED:
 // - Swapped grid axis: Time is now Y-axis (rows), Divisions are X-axis (columns).
-// - Removed the "Staggered View" toggle. This tab is now always in the "Fixed Grid" layout.
+// - Removed the "Staggered View" toggle.
+// - *** CRITICAL FIX ***
+//   - Dropping a "League Game" or "Special Activity" tile now
+//     correctly creates a schedulable 'slot' (not 'pinned').
+//   - This tells the optimizer to run the *real* scheduling logic
+//     for those activities.
 // =================================================================
 
 (function() {
@@ -185,24 +190,38 @@ function addDropListeners(selector) {
             const defaultStartTime = minutesToTime(parseInt(cell.dataset.timeMin, 10));
             
             // --- This is the PROMPT logic you requested ---
-            let isSchedulable = tileData.type === 'slot';
-            let eventName = tileData.name;
+            // ===== START OF CRITICAL FIX =====
             
-            if (tileData.type === 'custom') {
-                eventName = prompt("Enter the name for this custom event (e.g., 'Snacks'):");
-                if (!eventName) return; // User cancelled
+            let eventType = 'slot'; // Default to a schedulable slot
+            let eventName = tileData.name; // e.g., "League Game", "General Activity Slot"
+            
+            if (tileData.type === 'slot') {
+                eventName = 'General Activity Slot';
+                eventType = 'slot';
+            } else if (tileData.type === 'league' || tileData.type === 'specialty_league' || tileData.type === 'special' || tileData.type === 'swim') {
+                // These are all *schedulable* slots that the optimizer needs to fill
+                eventType = 'slot';
+                eventName = tileData.name; 
+            } else if (tileData.type === 'lunch' || tileData.type === 'custom') {
+                // These are *pinned* events. The optimizer will not touch them.
+                eventType = 'pinned';
                 
-                if (confirm("Does this event require scheduling (like 'General Activity')?\n\n- OK = Yes (it's a 'Slot' to be filled)\n- Cancel = No (it's a 'Pinned' event like 'Snacks')")) {
-                    isSchedulable = true;
+                if (tileData.type === 'custom') {
+                    eventName = prompt("Enter the name for this custom event (e.g., 'Snacks'):");
+                    if (!eventName) return; // User cancelled
+                    
+                    // Ask if it's a slot or a pinned event
+                    if (confirm("Does this event require scheduling (like 'General Activity')?\n\n- OK = Yes (it's a 'Slot' to be filled)\n- Cancel = No (it's a 'Pinned' event like 'Snacks')")) {
+                        eventType = 'slot';
+                    } else {
+                        eventType = 'pinned';
+                    }
                 } else {
-                    isSchedulable = false;
+                    eventName = tileData.name; // "Lunch"
                 }
-            } else if (tileData.type !== 'slot') {
-                 isSchedulable = false; // Leagues, Swim, Lunch are Pinned
-                 eventName = tileData.name; // Use the tile name
-            } else {
-                eventName = 'General Activity Slot'; // 'slot' becomes 'General Activity'
             }
+            // ===== END OF CRITICAL FIX =====
+
 
             const startTime = prompt(`Add "${eventName}" for ${divName}?\n\nEnter Start Time:`, defaultStartTime);
             if (!startTime) return; // User cancelled
@@ -212,8 +231,8 @@ function addDropListeners(selector) {
             
             const newEvent = {
                 id: `evt_${Math.random().toString(36).slice(2, 9)}`,
-                type: isSchedulable ? 'slot' : 'pinned',
-                event: eventName,
+                type: eventType, // This is now correctly 'slot' for Leagues
+                event: eventName, // This is now correctly 'League Game'
                 division: divName,
                 startTime: startTime,
                 endTime: endTime
@@ -227,7 +246,7 @@ function addDropListeners(selector) {
 }
 
 /**
- * Renders a single event tile (for staggered view)
+ * Renders a single event tile
  */
 function renderEventTile(event) {
     const tile = TILES.find(t => t.name === event.event) || TILES.find(t => t.type === 'custom');
