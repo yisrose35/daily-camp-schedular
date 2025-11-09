@@ -6,8 +6,9 @@
 // UPDATED:
 // - Added a dedicated "League Pass" (Pass 3) to handle
 //   league matchups *before* other activities.
-// - This pass correctly calls league_scheduling.js
+// - This pass correctly pairs teams and places them on fields/time slots.
 // - Fixed "fieldUsageBySlot is not defined" error.
+// - Removed dependency on window.findBestGeneralActivity.canBlockFit by adding a local canBlockFit.
 // -----------------------------------------------------------------
 
 (function() {
@@ -155,13 +156,17 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     });
     console.log(`Pass 2: Placed all 'Pinned' events. Ready to fill ${schedulableSlotBlocks.length} bunk-slots.`);
 
-    // ===== PASS 3: NEW "League Pass" =====
-    // Find and place all league games *first*.
-    
+    // ===== PASS 3: NEW "League Pass" (ACTUAL FIELD/TIME PLACEMENT) =====
+    // Strategy:
+    // 1) Group league blocks by division+start (so we schedule simultaneous league waves).
+    // 2) For each group, pair bunks into matchups (use window.getLeagueMatchups if present; else round-robin).
+    // 3) For each matchup, find an available field (by sport) that can fit in all its slots.
+    // 4) Place both sides (A and B) onto the same field/time cells. Update fieldUsageBySlot.
+
     const leagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'League Game');
     const remainingBlocks = schedulableSlotBlocks.filter(b => b.event !== 'League Game');
     
-    // Group league blocks by division and time
+    // Group league blocks by division and group time window (use startTime as the grouping key)
     const leagueGroups = {};
     leagueBlocks.forEach(block => {
         const key = `${block.divName}-${block.startTime}`;
@@ -176,95 +181,82 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         leagueGroups[key].bunks.add(block.bunk);
     });
 
-    // Process each league group
     Object.values(leagueGroups).forEach(group => {
-        const bunksToSchedule = Array.from(group.bunks);
-        const block = { slots: group.slots, divName: group.divName }; // A representative block
-        
-        // 1. Find the league for this division
+        const bunksSet = Array.from(group.bunks);
+        if (bunksSet.length < 2) return; // nothing to schedule
+
+        // Find the league for this division (enabled + includes division)
         const divLeague = Object.values(masterLeagues).find(l => l.enabled && l.divisions.includes(group.divName));
         if (!divLeague) return;
-        
-        // 2. Get the matchups for today
+
+        // Sports rotation (e.g., Basketball, Hockey, etc.)
+        const sports = Array.isArray(divLeague.sports) && divLeague.sports.length ? divLeague.sports : ["League"];
+
+        // Today's matchups:
+        // If window.getLeagueMatchups is provided, use it; else create fair pairs within this group.
+        // Expect matchups as array of [teamA, teamB] strings.
+        let matchups = [];
         const teams = (divLeague.teams || []).map(t => String(t).trim()).filter(Boolean);
-        if (teams.length < 2 || typeof window.getLeagueMatchups !== 'function') return;
-        
-        const matchups = window.getLeagueMatchups(divLeague.name, teams) || [];
-        const sports = divLeague.sports || ["League"];
 
-        // 3. Find games for the bunks in this group
+        if (typeof window.getLeagueMatchups === 'function') {
+            // Use global matchups, then filter to pairs where both teams are in this time group
+            const allMatchups = window.getLeagueMatchups(divLeague.name, teams) || [];
+            const groupSet = new Set(bunksSet.map(String));
+            matchups = allMatchups.filter(([a,b]) => groupSet.has(String(a)) && groupSet.has(String(b)));
+        } else {
+            // No global matcher: build a simple in-group round-robin for the wave
+            matchups = pairRoundRobin(bunksSet); // returns [[A,B], [C,D], ...]
+        }
+
+        // Remove any duplicates and ensure teams are available (not yet placed in this wave)
+        const scheduledTeams = new Set();
         let gameIndex = 0;
-        while (bunksToSchedule.length >= 2) {
-            const bunkA = bunksToSchedule.shift(); // Get the first bunk
-            
-            // Find their opponent *in this group*
-            let opponentBunk = null;
-            let opponentIndex = -1;
-            let myGame = null;
 
-            for (const match of matchups) {
-                if (match[0] === bunkA) {
-                    opponentIndex = bunksToSchedule.indexOf(match[1]);
-                    if (opponentIndex > -1) {
-                        opponentBunk = bunksToSchedule.splice(opponentIndex, 1)[0];
-                        myGame = match;
-                        break;
-                    }
-                }
-                if (match[1] === bunkA) {
-                     opponentIndex = bunksToSchedule.indexOf(match[0]);
-                     if (opponentIndex > -1) {
-                        opponentBunk = bunksToSchedule.splice(opponentIndex, 1)[0];
-                        myGame = match;
-                        break;
-                    }
-                }
-            }
-            
-            if (!myGame || !opponentBunk) {
-                // This bunk has no opponent in this slot, or is on a BYE
-                continue; 
-            }
-            
-            // 4. We have a pair! [bunkA, opponentBunk]. Find them a field.
+        for (const [A, B] of matchups) {
+            if (scheduledTeams.has(A) || scheduledTeams.has(B)) continue; // already paired this wave
+
+            // Pick sport rotating through list
             const sport = sports[gameIndex % sports.length];
             gameIndex++;
+
+            // Allowed fields for this sport
             const possibleFields = fieldsBySport[sport] || [];
-            
+
+            // Find a field that can fit across all slots of this block for both teams
             let fieldName = null;
             for (const f of possibleFields) {
-                // **FIX:** Pass fieldUsageBySlot to the helper
-                if (window.findBestGeneralActivity.canBlockFit(block, f, activityProperties, fieldUsageBySlot)) {
+                if (canBlockFit({ slots: group.slots, divName: group.divName }, f, activityProperties, fieldUsageBySlot)) {
                     fieldName = f;
                     break;
                 }
             }
-            
             if (!fieldName) {
-                console.warn(`No field available for ${bunkA} vs ${opponentBunk}`);
-                fieldName = "FIELD?"; // Assign a placeholder
+                // Try any general field (fallback)
+                for (const f of window.allSchedulableNames) {
+                    if (canBlockFit({ slots: group.slots, divName: group.divName }, f, activityProperties, fieldUsageBySlot)) {
+                        fieldName = f;
+                        break;
+                    }
+                }
+            }
+            if (!fieldName) {
+                console.warn(`No field available for ${group.divName} league game: ${A} vs ${B}`);
+                continue;
             }
 
-            // 5. Place the game for *both* bunks
-            const pick = {
-                field: fieldName,
-                sport: `${sport} vs ${opponentBunk}`,
-                _h2h: true,
-                vs: opponentBunk
-            };
-            const pickOpponent = {
-                field: fieldName,
-                sport: `${sport} vs ${bunkA}`,
-                _h2h: true,
-                vs: bunkA
-            };
-            
-            fillBlock({ ...block, bunk: bunkA }, pick, fieldUsageBySlot, yesterdayHistory);
-            fillBlock({ ...block, bunk: opponentBunk }, pickOpponent, fieldUsageBySlot, yesterdayHistory);
+            // Place both sides
+            const blockBase = { slots: group.slots, divName: group.divName };
+            const pickA = { field: fieldName, sport: `${sport} vs ${B}`, _h2h: true, vs: B };
+            const pickB = { field: fieldName, sport: `${sport} vs ${A}`, _h2h: true, vs: A };
+
+            fillBlock({ ...blockBase, bunk: A }, pickA, fieldUsageBySlot, yesterdayHistory);
+            fillBlock({ ...blockBase, bunk: B }, pickB, fieldUsageBySlot, yesterdayHistory);
+
+            scheduledTeams.add(A);
+            scheduledTeams.add(B);
         }
     });
-    console.log("Pass 3: Placed all 'League Game' events.");
-
+    console.log("Pass 3: Placed all 'League Game' events with concrete fields & times.");
 
     // ===== PASS 4: Fill remaining Schedulable Slots =====
     
@@ -326,6 +318,27 @@ function findSlotsForRange(startMin, endMin) {
     return slots;
 }
 
+/**
+ * Check whether a block (set of slots) can be placed on a field, respecting:
+ * - Field usage limits per slot (limitUsage)
+ * - Allowed divisions for that field/special
+ */
+function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
+    const props = activityProperties[fieldName];
+    const allowedDivs = props?.allowedDivisions || [];
+    const limit = (typeof props?.limitUsage === 'number' && props.limitUsage > 0) ? props.limitUsage : 1;
+
+    // Division allowance
+    if (allowedDivs.length && !allowedDivs.includes(block.divName)) return false;
+
+    // Usage per slot
+    for (const slotIndex of block.slots) {
+        const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
+        if (used >= limit) return false;
+    }
+    return true;
+}
+
 function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory) {
     const fieldName = fieldLabel(pick.field);
     const sport = pick.sport;
@@ -350,6 +363,28 @@ function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory) {
             }
         }
     });
+}
+
+/**
+ * Simple pairing for an in-wave round-robin:
+ * If odd, last team BYE. Returns array of [A,B] pairs without duplicates.
+ */
+function pairRoundRobin(teamList) {
+    const arr = teamList.map(String);
+    if (arr.length < 2) return [];
+    if (arr.length % 2 === 1) arr.push("BYE");
+
+    const n = arr.length;
+    const half = n / 2;
+    const rounds = [];
+
+    // One round is enough for a single wave; but to remain stable, use first round
+    const firstRoundPairs = [];
+    for (let i = 0; i < half; i++) {
+        const A = arr[i], B = arr[n - 1 - i];
+        if (A !== "BYE" && B !== "BYE") firstRoundPairs.push([A, B]);
+    }
+    return firstRoundPairs;
 }
 
 function loadAndFilterData() {
