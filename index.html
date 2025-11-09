@@ -47,7 +47,9 @@
         <div id="divisionTimelineEditor" style="margin-top: 10px;">
             <p style="color: #666;">Select a division to set its timeline.</p>
         </div>
+
         <hr style="margin: 20px 0;">
+
         <h3>Add Fields / Courts</h3>
         <input id="fieldInput" placeholder="Enter field/court name (e.g., Court 1)">
         <button id="addFieldBtn">Add Field/Court</button>
@@ -94,16 +96,17 @@
         <div id="master-scheduler-content">
             </div>
     </div>
+    
     <div id="schedule" class="tab-content">
         <h3>Daily Schedule (View)</h3>
 
         <div style="padding: 8px; background: #f4f4f4; border-radius: 5px; margin-bottom: 15px;">
             <label>
                 <input type="checkbox" id="schedule-view-toggle">
-                Use "Fixed Block" View (like Camp Agudah)
+                Use "Staggered" View (like YKLI)
             </label>
             <p style="font-size: 0.85em; margin: 5px 0 0 0; color: #555;">
-                Uncheck for "Staggered" View (like YKLI)
+                Uncheck for "Fixed Block" View (like Camp Agudah)
             </p>
         </div>
         <p>This tab shows the final, "filled-in" schedule. To build or edit the day's layout, use the "Master Scheduler" tab.</p>
@@ -194,6 +197,7 @@
     <script src="specialty_leagues.js" defer></script> 
 
     <script src="master_schedule_builder.js" defer></script>
+    
     <script src="scheduler_logic_core.js" defer></script>
     <script src="scheduler_logic_fillers.js" defer></script>
     <script src="scheduler_ui.js" defer></script>
