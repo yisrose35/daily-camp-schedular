@@ -45,7 +45,7 @@ function updateTable() {
     const unifiedTimes = window.unifiedTimes || [];
     const scheduleAssignments = window.scheduleAssignments || {};
     const leagueAssignments = window.leagueAssignments || {};
-    const divisionActiveRows = window.divisionActiveRows || {};
+    const divisionActiveRows = window.divisionActiveRows || {}; // This is no longer used, but harmless
 
     if (unifiedTimes.length === 0) {
         container.innerHTML = "<p>No schedule times found. Generate a schedule in the Setup tab.</p>";
@@ -97,44 +97,16 @@ function updateTable() {
         availableDivisions.forEach((div) => {
             const bunks = divisions[div]?.bunks || [];
             
-            // Check if this slot is active for this division
-            const isDivActive = divisionActiveRows[div]?.has(i) || false;
+            // The new "Skeleton" logic means a slot is either
+            // assigned, or it's empty. The old "divisionActiveRows"
+            // is no longer the source of truth.
 
-            // ===== START OF FIX 1: Replaced forEach with for...of =====
             for (const b of bunks) {
                 const entry = scheduleAssignments[b]?.[i];
-                const league = leagueAssignments[div]?.[i];
+                const league = leagueAssignments[div]?.[i]; // Keep for old data
 
-                if (!isDivActive && !entry && !league) {
-                    // This slot is INACTIVE for this division
-                    // Check if previous slot was also inactive
-                    const prevInactive = i > 0 && !(divisionActiveRows[div]?.has(i-1) || false);
-                    if (prevInactive) {
-                        // This cell is part of a rowspan, skip rendering
-                        continue; // FIX: Was 'return'
-                    } else {
-                        // This is the START of an inactive block
-                        let span = 1;
-                        for (let j = i + 1; j < unifiedTimes.length; j++) {
-                            if (!(divisionActiveRows[div]?.has(j) || false)) {
-                                span++;
-                            } else {
-                                break;
-                            }
-                        }
-                        const td = document.createElement("td");
-                        td.rowSpan = span;
-                        td.className = "grey-cell";
-                        td.style.background = "#ddd";
-                        tr.appendChild(td);
-                    }
-                    continue; // FIX: Was 'return' (Done with this bunk)
-                }
-
-                // This slot IS active
-                
                 if (league) {
-                    if (league.isContinuation) continue; // FIX: Was 'return' (Skip)
+                    if (league.isContinuation) continue;
                     let span = 1;
                     for (let j = i + 1; j < unifiedTimes.length; j++) {
                         if (leagueAssignments[div]?.[j]?.isContinuation) span++;
@@ -153,18 +125,12 @@ function updateTable() {
                     td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;">${league.leagueName}</span></div>`;
                     tr.appendChild(td);
                     
-                    // Break bunk loop, but first mark other bunks as "covered"
-                    // (This is tricky, skipping for now, relying on colspan)
+                    // Break bunk loop, this slot is for the whole division
+                    break;
                 }
                 
-                if (league) {
-                    // Stop processing this division's bunks for this row
-                    // This break is crucial for the colspan to work
-                    break; // FIX: This is now a LEGAL break
-                }
-
                 if (entry) {
-                    if (entry.continuation) continue; // FIX: Was 'return' (Skip)
+                    if (entry.continuation) continue; // This slot is covered by a previous rowspan
                     let span = 1;
                     for (let j = i + 1; j < unifiedTimes.length; j++) {
                         if (scheduleAssignments[b]?.[j]?.continuation) span++;
@@ -191,11 +157,39 @@ function updateTable() {
                 }
 
                 if (!entry && !league) {
-                    // Genuinely empty slot
+                    // This slot is genuinely empty for this bunk
+                    
+                    // Check if a *previous* slot in this row was a league
+                    // This is a failsafe in case the `break` above fails
+                    const prevLeague = tr.querySelector('td[colspan]');
+                    if (prevLeague) {
+                        // This bunk is covered by the league's colspan
+                        continue;
+                    }
+                    
+                    // This slot is truly empty.
+                    // Check if the previous slot (i-1) was also empty to create a rowspan
+                    const prevEmpty = i > 0 && !scheduleAssignments[b]?.[i-1] && !leagueAssignments[div]?.[i-1];
+                    if(prevEmpty) {
+                         // This cell is part of a rowspan, skip rendering
+                        continue;
+                    }
+                    
+                    // This is the START of an empty block
+                    let span = 1;
+                    for (let j = i + 1; j < unifiedTimes.length; j++) {
+                        if (!scheduleAssignments[b]?.[j] && !leagueAssignments[div]?.[j]) {
+                            span++;
+                        } else {
+                            break;
+                        }
+                    }
                     const td = document.createElement("td");
+                    td.rowSpan = span;
+                    td.className = "grey-cell"; // Use this class for empty
                     tr.appendChild(td);
                 }
-            } // ===== END OF FIX 1: end bunks loop =====
+            } // end bunks loop
         }); // end divisions loop
         tbody.appendChild(tr);
     } // end unifiedTimes loop
@@ -216,6 +210,9 @@ function saveSchedule() {
     }
 }
 
+// ===== START OF FIX 3 =====
+// Updated this function to remove the call to the non-existent
+// generateUnifiedTimesAndMasks()
 function reconcileOrRenderSaved() {
     try {
         const data = window.loadCurrentDailyData?.() || {};
@@ -226,12 +223,19 @@ function reconcileOrRenderSaved() {
         window.scheduleAssignments = {};
         window.leagueAssignments = {};
     }
-    // We must generate the time grid FIRST
-    if (window.generateUnifiedTimesAndMasks) {
-         window.generateUnifiedTimesAndMasks();
-    }
+    
+    // We can't generate the time grid here anymore.
+    // The grid (window.unifiedTimes) will be empty on page load,
+    // and will be populated *only* when the user clicks "Generate".
+    // updateTable() is smart enough to handle an empty unifiedTimes.
+    
+    // if (window.generateUnifiedTimesAndMasks) {
+    //      window.generateUnifiedTimesAndMasks();
+    // }
+    
     updateTable(); 
 }
+// ===== END OF FIX 3 =====
 
 function initScheduleSystem() {
     try {
@@ -248,6 +252,6 @@ function initScheduleSystem() {
 window.updateTable = window.updateTable || updateTable;
 window.initScheduleSystem = window.initScheduleSystem || initScheduleSystem;
 // NEW: Expose this for reconcile to use
-window.generateUnifiedTimesAndMasks = window.generateUnifiedTimesAndMasks || generateUnifiedTimesAndMasks;
+// window.generateUnifiedTimesAndMasks = window.generateUnifiedTimesAndMasks || generateUnifiedTimesAndMasks; // This is now removed
 // ===== FIX 2: Expose saveSchedule =====
 window.saveSchedule = window.saveSchedule || saveSchedule;
