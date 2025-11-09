@@ -1,10 +1,19 @@
 // -------------------- scheduler_logic_core.js --------------------
 // This file is now the "OPTIMIZER"
-// It reads the "manualSkeleton" built by the user and
-// fills in the "slot" types.
+//
+// UPDATED:
+// - **NEW LOGIC (Pass 2):**
+//   - Added an `else if (item.type === 'split')` block.
+//   - This logic reads the `subEvents` array created by
+//     the Master Scheduler.
+//   - It splits the division's bunks into two halves.
+//   - It splits the time block's slots into two halves.
+//   - It correctly assigns the activities to the swapped groups
+//     (e.g., Half 1 gets Swim, Half 2 gets Activity, then they swap).
+//   - It 'pins' fixed activities (like Swim) directly and adds
+//     schedulable slots (like Activity) to the Pass 4 list.
 //
 // (Production Version: All console logs removed)
-//
 // -----------------------------------------------------------------
 
 (function() {
@@ -28,8 +37,8 @@ function parseTimeToMinutes(str) {
     const mm = parseInt(m[2], 10);
     if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
     if (mer) {
-        if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
-        else if (mer === "pm") hh += 12; // 1pm -> 13
+        if (hh === 12) hh = mer === "am" ? 0 : 12;
+        else if (mer === "pm") hh += 12;
     }
     return hh * 60 + mm;
 }
@@ -49,12 +58,12 @@ function fmtTime(d) {
  * Main entry point, called by the "Run Optimizer" button
  */
 window.runSkeletonOptimizer = function(manualSkeleton) {
-    window.scheduleAssignments = {}; // { bunk: [ {entry}, {entry} ... ] }
-    window.leagueAssignments = {}; // Clear this
-    window.unifiedTimes = []; // The 30-min grid
+    window.scheduleAssignments = {}; 
+    window.leagueAssignments = {}; 
+    window.unifiedTimes = []; 
     
     if (!manualSkeleton || manualSkeleton.length === 0) {
-        // No skeleton to run.
+        // No skeleton
     }
     
     const { 
@@ -68,11 +77,11 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         yesterdayHistory
     } = loadAndFilterData();
     
-    let fieldUsageBySlot = {}; // { 0: { "Court 1": 1, "Court 2": 2}, 1: ... }
+    let fieldUsageBySlot = {}; 
     
     // ===== PASS 1: Generate Master Time Grid =====
-    let earliestMin = 540; // 9:00 AM
-    let latestMin = 960; // 4:00 PM
+    let earliestMin = 540; 
+    let latestMin = 960; 
     availableDivisions.forEach(divName => {
         const timeline = divisions[divName]?.timeline;
         if (timeline) {
@@ -100,7 +109,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         return false;
     }
 
-    // Initialize all bunks with empty arrays for the new grid
     availableDivisions.forEach(divName => {
         (divisions[divName]?.bunks || []).forEach(bunk => {
             window.scheduleAssignments[bunk] = new Array(window.unifiedTimes.length);
@@ -109,22 +117,24 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
 
     // ===== PASS 2: Place all "Pinned" Events from the Skeleton =====
-    const schedulableSlotBlocks = []; // The "slots" we need to fill
+    const schedulableSlotBlocks = []; 
     
     manualSkeleton.forEach(item => {
-        const bunks = divisions[item.division]?.bunks || [];
-        if (!bunks) {
+        const allBunks = divisions[item.division]?.bunks || [];
+        if (!allBunks || allBunks.length === 0) {
             return;
         }
         const startMin = parseTimeToMinutes(item.startTime);
         const endMin = parseTimeToMinutes(item.endTime);
-        const slots = findSlotsForRange(startMin, endMin);
+        const allSlots = findSlotsForRange(startMin, endMin);
+        if (allSlots.length === 0) {
+            return;
+        }
 
-        // Apply this skeleton item to *every bunk* in the division.
-        bunks.forEach(bunk => {
-            if (item.type === 'pinned') {
-                // This is a "Pinned" event like Lunch or Snacks.
-                slots.forEach((slotIndex, idx) => {
+        if (item.type === 'pinned') {
+            // This is a "Pinned" event like Lunch or Snacks.
+            allBunks.forEach(bunk => {
+                allSlots.forEach((slotIndex, idx) => {
                     if (!window.scheduleAssignments[bunk][slotIndex]) {
                         window.scheduleAssignments[bunk][slotIndex] = {
                             field: { name: item.event },
@@ -134,19 +144,81 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                         };
                     }
                 });
-            } else if (item.type === 'slot') {
-                // This is a "Schedulable Slot"
-                // Add it to our "To-Do" list *for this specific bunk*.
+            });
+        
+        // --- NEW LOGIC FOR SPLIT BLOCKS ---
+        } else if (item.type === 'split') {
+            if (!item.subEvents || item.subEvents.length < 2) return; // Malformed
+            
+            const event1 = item.subEvents[0]; // e.g., { type: 'pinned', event: 'Swim' }
+            const event2 = item.subEvents[1]; // e.g., { type: 'slot', event: 'General Activity Slot' }
+
+            // 1. Split Bunks
+            const splitIndex = Math.ceil(allBunks.length / 2);
+            const bunksHalf1 = allBunks.slice(0, splitIndex);
+            const bunksHalf2 = allBunks.slice(splitIndex);
+            
+            // 2. Split Slots
+            const slotSplitIndex = Math.ceil(allSlots.length / 2);
+            const slotsHalf1 = allSlots.slice(0, slotSplitIndex);
+            const slotsHalf2 = allSlots.slice(slotSplitIndex);
+
+            // 3. Create the 4 assignment groups
+            // Group A: Bunks 1-5, Time 11:00-11:30 -> Event 1 (Swim)
+            // Group B: Bunks 6-10, Time 11:00-11:30 -> Event 2 (Activity)
+            // Group C: Bunks 1-5, Time 11:30-12:00 -> Event 2 (Activity)
+            // Group D: Bunks 6-10, Time 11:30-12:00 -> Event 1 (Swim)
+            
+            const groups = [
+                { bunks: bunksHalf1, slots: slotsHalf1, eventDef: event1 },
+                { bunks: bunksHalf2, slots: slotsHalf1, eventDef: event2 },
+                { bunks: bunksHalf1, slots: slotsHalf2, eventDef: event2 },
+                { bunks: bunksHalf2, slots: slotsHalf2, eventDef: event1 }
+            ];
+
+            groups.forEach(group => {
+                if (group.slots.length === 0) return; // Skip if no time
+                
+                group.bunks.forEach(bunk => {
+                    if (group.eventDef.type === 'pinned') {
+                        // This is "Swim" or "Lunch". Pin it directly.
+                        group.slots.forEach((slotIndex, idx) => {
+                             if (!window.scheduleAssignments[bunk][slotIndex]) {
+                                window.scheduleAssignments[bunk][slotIndex] = {
+                                    field: { name: group.eventDef.event },
+                                    sport: null,
+                                    continuation: (idx > 0),
+                                    _fixed: true
+                                };
+                            }
+                        });
+                    } else if (group.eventDef.type === 'slot') {
+                        // This is "Activity". Add to Pass 4 to-do list.
+                        schedulableSlotBlocks.push({
+                            divName: item.division,
+                            bunk: bunk,
+                            event: group.eventDef.event, // e.g., "General Activity Slot"
+                            startTime: startMin, // Note: these times are just for grouping, not exact
+                            endTime: endMin,
+                            slots: group.slots
+                        });
+                    }
+                });
+            });
+
+        } else if (item.type === 'slot') {
+            // This is a standard Schedulable Slot.
+            allBunks.forEach(bunk => {
                 schedulableSlotBlocks.push({
                     divName: item.division,
                     bunk: bunk,
                     event: item.event, // e.g., "General Activity Slot", "League Game", "Sports Slot"
                     startTime: startMin,
                     endTime: endMin,
-                    slots: slots
+                    slots: allSlots
                 });
-            }
-        });
+            });
+        }
     });
 
 
@@ -154,7 +226,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     const leagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'League Game');
     const remainingBlocks = schedulableSlotBlocks.filter(b => b.event !== 'League Game');
     
-    // Group league blocks by division and group time window (use startTime as the grouping key)
     const leagueGroups = {};
     leagueBlocks.forEach(block => {
         const key = `${block.divName}-${block.startTime}`;
@@ -163,7 +234,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                 divName: block.divName,
                 startTime: block.startTime,
                 slots: block.slots,
-                bunks: new Set() // This will be the set of *available* bunks
+                bunks: new Set() 
             };
         }
         leagueGroups[key].bunks.add(block.bunk);
@@ -171,51 +242,39 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
     Object.values(leagueGroups).forEach(group => {
         
-        // Find the matching league in Setup
         const leagueEntry = Object.entries(masterLeagues).find(([name, l]) => l.enabled && l.divisions.includes(group.divName));
         
-        if (!leagueEntry) {
-            return;
-        }
+        if (!leagueEntry) return;
         
         const divLeagueName = leagueEntry[0];
         const divLeague = leagueEntry[1];
-
-        // Get *all* custom teams for this league
-        const leagueTeams = (divLeague.teams || []).map(t => String(t).trim()).filter(Boolean);
-        if (leagueTeams.length === 0) {
-            return;
-        }
         
-        // Get sports
+        const leagueTeams = (divLeague.teams || []).map(t => String(t).trim()).filter(Boolean);
+        if (leagueTeams.length === 0) return;
+        
         const sports = Array.isArray(divLeague.sports) && divLeague.sports.length ? divLeague.sports : ["League"];
 
-        // Get today's matchups using CUSTOM TEAM NAMES
         let matchups = [];
         if (typeof window.getLeagueMatchups === 'function') {
-            matchups = window.getLeagueMatchups(divLeagueName, leagueTeams) || []; // e.g., [["Mets", "Yankees"]]
+            matchups = window.getLeagueMatchups(divLeagueName, leagueTeams) || [];
         } else {
             matchups = pairRoundRobin(leagueTeams);
         }
 
         const allBunksInGroup = Array.from(group.bunks);
-        const scheduledGames = []; // This will hold the {pick} objects
+        const scheduledGames = []; 
         let gameIndex = 0;
         
         const blockBase = { slots: group.slots, divName: group.divName };
 
         for (const [teamA, teamB] of matchups) {
-            // Skip BYEs
             if (teamA === "BYE" || teamB === "BYE") continue;
             
-            // Pick sport rotating through list
             const sport = sports[gameIndex % sports.length];
             gameIndex++;
 
-            // Allowed fields for this sport
             const possibleFields = fieldsBySport[sport] || [];
 
-            // Find an available field
             let fieldName = null;
             
             for (const f of possibleFields) {
@@ -233,32 +292,26 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                 }
             }
             
-            // Create the game "pick" object
             const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
             let pick;
             
             if (fieldName) {
                 pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null };
-                // Manually mark field usage *once* per game
                 markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
             } else {
                 pick = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null };
             }
             scheduledGames.push(pick);
         }
-
-        // --- Now, distribute the scheduled games across all bunks ---
+        
         allBunksInGroup.forEach((bunk, bunkIndex) => {
             let pickToAssign;
             if (scheduledGames.length > 0) {
-                // Assign a different game to each bunk, looping if needed
                 pickToAssign = scheduledGames[bunkIndex % scheduledGames.length];
             } else {
-                // No games (e.g., all BYEs or no teams), just fill with "Leagues"
                 pickToAssign = { field: "Leagues", sport: null, _h2h: true };
             }
             
-            // Fill the block for this bunk.
             fillBlock({ ...blockBase, bunk: bunk }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
         });
     });
@@ -266,52 +319,41 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
     // ===== PASS 4: Fill remaining Schedulable Slots =====
     
-    // Sort all blocks by start time to process the day chronologically
     remainingBlocks.sort((a, b) => a.startTime - b.startTime);
 
     for (const block of remainingBlocks) {
-        // Skip if this block has already been filled (e.g., by a League H2H)
         if (block.slots.length === 0 || window.scheduleAssignments[block.bunk][block.slots[0]]) {
             continue;
         }
         
         let pick = null;
-
-        // --- 4a. Check the *type* of slot ---
         
         if (block.event === 'Special Activity') {
-            // This is from the "Special Activity" tile (special-only)
             pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties);
         
         } else if (block.event === 'Sports Slot') {
-            // This is from the "Sports" tile (sports-only)
             pick = window.findBestSportActivity?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties);
 
         } else if (block.event === 'Swim') {
-            pick = { field: "Swim", sport: null }; // Simple pick
+            pick = { field: "Swim", sport: null }; 
         }
         
-        // --- 4b. Fill with "General Activity" ---
         if (!pick) {
-            // This will catch 'General Activity Slot' (from the "Activity" hybrid tile)
-            // and any other unhandled 'slot' types.
             pick = window.findBestGeneralActivity?.(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties);
         }
 
-        // --- 4c. Place the chosen activity ---
         if (pick) {
             fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, false);
         } else {
-            // Failsafe: just put "Free"
             fillBlock(block, { field: "Free", sport: null }, fieldUsageBySlot, yesterdayHistory, false);
         }
     }
     
     // ===== PASS 5: Save unifiedTimes and Update the UI =====
-    window.saveCurrentDailyData?.("unifiedTimes", window.unifiedTimes); // Save the generated grid!
+    window.saveCurrentDailyData?.("unifiedTimes", window.unifiedTimes); 
     window.updateTable?.();
-    window.saveSchedule?.(); // This function is in scheduler_ui.js
-    return true; // Success
+    window.saveSchedule?.(); 
+    return true; 
 }
 
 // --- Helper functions for Pass 3 & 4 ---
@@ -323,7 +365,6 @@ function findSlotsForRange(startMin, endMin) {
         const slot = window.unifiedTimes[i];
         const slotStart = slot.start.getHours() * 60 + slot.start.getMinutes();
         
-        // A slot is "in" if its start time is in the range
         if (slotStart >= startMin && slotStart < endMin) {
             slots.push(i);
         }
@@ -346,12 +387,10 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     const props = activityProperties[fieldName];
     const limit = (props && props.sharable) ? 2 : 1;
 
-    // Division allowance
     if (props && props.allowedDivisions && props.allowedDivisions.length && !props.allowedDivisions.includes(block.divName)) return false;
 
-    // Usage per slot
     for (const slotIndex of block.slots) {
-        if (slotIndex === undefined) return false; // Invalid slot
+        if (slotIndex === undefined) return false; 
         const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
         if (used >= limit) return false;
     }
@@ -375,7 +414,6 @@ function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill
                 vs: pick.vs || null
             };
             
-            // Only mark usage if it's a real field AND not a league fill
             if (!isLeagueFill && fieldName && window.allSchedulableNames.includes(fieldName)) {
                 fieldUsageBySlot[slotIndex] = fieldUsageBySlot[slotIndex] || {};
                 fieldUsageBySlot[slotIndex][fieldName] = (fieldUsageBySlot[slotIndex][fieldName] || 0) + 1;
@@ -392,7 +430,6 @@ function pairRoundRobin(teamList) {
     const half = n / 2;
     const rounds = [];
 
-    // One round is enough for a single wave; but to remain stable, use first round
     const firstRoundPairs = [];
     for (let i = 0; i < half; i++) {
         const A = arr[i], B = arr[n - 1 - i];
@@ -421,7 +458,6 @@ function loadAndFilterData() {
         leagues: loadedOverrides.leagues || []
     };
 
-    // Filter all data based on overrides
     const availFields = masterFields.filter(f => f.available && !overrides.fields.includes(f.name));
     const availSpecials = masterSpecials.filter(s => s.available && !overrides.fields.includes(s.name));
     const availableDivisions = masterAvailableDivs.filter(divName => !overrides.bunks.includes(divName));
@@ -433,7 +469,6 @@ function loadAndFilterData() {
         divisions[divName].bunks = (divisions[divName].bunks || []).filter(bunkName => !overrides.bunks.includes(bunkName));
     }
     
-    // Build activity properties map
     const activityProperties = {};
     availFields.forEach(f => {
          activityProperties[f.name] = {
@@ -450,7 +485,6 @@ function loadAndFilterData() {
         };
     });
 
-    // Build field-sport inventory
     const fieldsBySport = {};
     const allFieldNames = [];
     availFields.forEach(f => {
@@ -470,7 +504,6 @@ function loadAndFilterData() {
     ];
     const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
     
-    // Load Yesterday's History (for "freshness")
     const yesterdayData = window.loadPreviousDailyData?.() || {};
     const yesterdayHistory = {
         schedule: yesterdayData.scheduleAssignments || {},
