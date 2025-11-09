@@ -2,6 +2,12 @@
 // This file is now the "OPTIMIZER"
 // It reads the "manualSkeleton" built by the user and
 // fills in the "slot" types.
+//
+// UPDATED:
+// - Added a dedicated "League Pass" (Pass 3) to handle
+//   league matchups *before* other activities.
+// - This pass correctly calls league_scheduling.js
+// - Fixed "fieldUsageBySlot is not defined" error.
 // -----------------------------------------------------------------
 
 (function() {
@@ -107,10 +113,14 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     });
 
     // ===== PASS 2: Place all "Pinned" Events from the Skeleton =====
-    const schedulableSlots = []; // The "slots" we need to fill
+    const schedulableSlotBlocks = []; // The "slots" we need to fill
     
     manualSkeleton.forEach(item => {
         const bunks = divisions[item.division]?.bunks || [];
+        if (!bunks) {
+            console.warn(`Division "${item.division}" in skeleton not found in setup.`);
+            return;
+        }
         const startMin = parseTimeToMinutes(item.startTime);
         const endMin = parseTimeToMinutes(item.endTime);
         const slots = findSlotsForRange(startMin, endMin);
@@ -132,7 +142,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         } else if (item.type === 'slot') {
             // This is a "Schedulable Slot"
             bunks.forEach(bunk => {
-                schedulableSlots.push({
+                schedulableSlotBlocks.push({
                     divName: item.division,
                     bunk: bunk,
                     event: item.event, // e.g., "General Activity Slot", "League Game"
@@ -143,35 +153,143 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             });
         }
     });
-    console.log(`Pass 2: Placed all 'Pinned' events. Ready to fill ${schedulableSlots.length} slots.`);
+    console.log(`Pass 2: Placed all 'Pinned' events. Ready to fill ${schedulableSlotBlocks.length} bunk-slots.`);
 
-    // ===== PASS 3: Optimize & Fill Schedulable Slots =====
+    // ===== PASS 3: NEW "League Pass" =====
+    // Find and place all league games *first*.
+    
+    const leagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'League Game');
+    const remainingBlocks = schedulableSlotBlocks.filter(b => b.event !== 'League Game');
+    
+    // Group league blocks by division and time
+    const leagueGroups = {};
+    leagueBlocks.forEach(block => {
+        const key = `${block.divName}-${block.startTime}`;
+        if (!leagueGroups[key]) {
+            leagueGroups[key] = {
+                divName: block.divName,
+                startTime: block.startTime,
+                slots: block.slots,
+                bunks: new Set()
+            };
+        }
+        leagueGroups[key].bunks.add(block.bunk);
+    });
+
+    // Process each league group
+    Object.values(leagueGroups).forEach(group => {
+        const bunksToSchedule = Array.from(group.bunks);
+        const block = { slots: group.slots, divName: group.divName }; // A representative block
+        
+        // 1. Find the league for this division
+        const divLeague = Object.values(masterLeagues).find(l => l.enabled && l.divisions.includes(group.divName));
+        if (!divLeague) return;
+        
+        // 2. Get the matchups for today
+        const teams = (divLeague.teams || []).map(t => String(t).trim()).filter(Boolean);
+        if (teams.length < 2 || typeof window.getLeagueMatchups !== 'function') return;
+        
+        const matchups = window.getLeagueMatchups(divLeague.name, teams) || [];
+        const sports = divLeague.sports || ["League"];
+
+        // 3. Find games for the bunks in this group
+        let gameIndex = 0;
+        while (bunksToSchedule.length >= 2) {
+            const bunkA = bunksToSchedule.shift(); // Get the first bunk
+            
+            // Find their opponent *in this group*
+            let opponentBunk = null;
+            let opponentIndex = -1;
+            let myGame = null;
+
+            for (const match of matchups) {
+                if (match[0] === bunkA) {
+                    opponentIndex = bunksToSchedule.indexOf(match[1]);
+                    if (opponentIndex > -1) {
+                        opponentBunk = bunksToSchedule.splice(opponentIndex, 1)[0];
+                        myGame = match;
+                        break;
+                    }
+                }
+                if (match[1] === bunkA) {
+                     opponentIndex = bunksToSchedule.indexOf(match[0]);
+                     if (opponentIndex > -1) {
+                        opponentBunk = bunksToSchedule.splice(opponentIndex, 1)[0];
+                        myGame = match;
+                        break;
+                    }
+                }
+            }
+            
+            if (!myGame || !opponentBunk) {
+                // This bunk has no opponent in this slot, or is on a BYE
+                continue; 
+            }
+            
+            // 4. We have a pair! [bunkA, opponentBunk]. Find them a field.
+            const sport = sports[gameIndex % sports.length];
+            gameIndex++;
+            const possibleFields = fieldsBySport[sport] || [];
+            
+            let fieldName = null;
+            for (const f of possibleFields) {
+                if (window.findBestGeneralActivity.canBlockFit(block, f, activityProperties, fieldUsageBySlot)) {
+                    fieldName = f;
+                    break;
+                }
+            }
+            
+            if (!fieldName) {
+                console.warn(`No field available for ${bunkA} vs ${opponentBunk}`);
+                fieldName = "FIELD?"; // Assign a placeholder
+            }
+
+            // 5. Place the game for *both* bunks
+            const pick = {
+                field: fieldName,
+                sport: `${sport} vs ${opponentBunk}`,
+                _h2h: true,
+                vs: opponentBunk
+            };
+            const pickOpponent = {
+                field: fieldName,
+                sport: `${sport} vs ${bunkA}`,
+                _h2h: true,
+                vs: bunkA
+            };
+            
+            fillBlock({ ...block, bunk: bunkA }, pick, fieldUsageBySlot, yesterdayHistory);
+            fillBlock({ ...block, bunk: opponentBunk }, pickOpponent, fieldUsageBySlot, yesterdayHistory);
+        }
+    });
+    console.log("Pass 3: Placed all 'League Game' events.");
+
+
+    // ===== PASS 4: Fill remaining Schedulable Slots =====
     
     // Sort all blocks by start time to process the day chronologically
-    schedulableSlots.sort((a, b) => a.startTime - b.startTime);
+    remainingBlocks.sort((a, b) => a.startTime - b.startTime);
 
-    for (const block of schedulableSlots) {
-        // Skip if this block has already been filled (e.g., by H2H)
+    for (const block of remainingBlocks) {
+        // Skip if this block has already been filled (e.g., by a League H2H)
         if (block.slots.length === 0 || window.scheduleAssignments[block.bunk][block.slots[0]]) continue;
         
         let pick = null;
 
-        // --- 3a. Check the *type* of slot ---
-        if (block.event === 'League Game') {
-            pick = window.findBestLeagueMatchup?.(block, masterLeagues, fieldsBySport, fieldUsageBySlot, activityProperties);
-        } else if (block.event === 'Special Activity') {
+        // --- 4a. Check the *type* of slot ---
+        if (block.event === 'Special Activity') {
             pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties);
         } else if (block.event === 'Swim') {
             pick = { field: "Swim", sport: null }; // Simple pick
         }
         
-        // --- 3b. Fill with "General Activity" ---
+        // --- 4b. Fill with "General Activity" ---
         if (!pick) {
             // Default to General Activity
             pick = window.findBestGeneralActivity?.(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties);
         }
 
-        // --- 3c. Place the chosen activity ---
+        // --- 4c. Place the chosen activity ---
         if (pick) {
             fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory);
         } else {
@@ -179,9 +297,9 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             fillBlock(block, { field: "Free", sport: null }, fieldUsageBySlot, yesterdayHistory);
         }
     }
-    console.log("Pass 3: Optimized and filled all schedulable slots.");
+    console.log("Pass 4: Optimized and filled all remaining slots.");
     
-    // ===== PASS 4: Save unifiedTimes and Update the UI =====
+    // ===== PASS 5: Save unifiedTimes and Update the UI =====
     window.saveCurrentDailyData?.("unifiedTimes", window.unifiedTimes); // Save the generated grid!
     window.updateTable?.();
     window.saveSchedule?.(); // This function is in scheduler_ui.js
