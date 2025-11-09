@@ -3,13 +3,17 @@
 // This file creates the new "Master Scheduler" drag-and-drop UI
 //
 // UPDATED:
-// - **NEW TILES (User Request):**
-//   - Renamed 'General Activity Slot' to 'Activity' (the hybrid tile).
-//   - Added 'Sports' tile (sports-only).
-//   - 'Special Activity' tile remains (special-only).
-//   - Added 'Snacks' as a pinned event tile (like Lunch).
-// - Updated `ondrop` logic to create the correct "event" string
-//   for each tile ('General Activity Slot', 'Sports Slot', 'Special Activity').
+// - **NEW TILE (User Request):**
+//   - Added 'Split Activity' tile.
+// - **NEW `ondrop` LOGIC:**
+//   - When 'Split Activity' is dropped, it prompts for Start, End,
+//     Event 1, and Event 2.
+//   - A helper function `mapEventNameForOptimizer` translates
+//     user input ("Swim", "Activity", "Sports") into the
+//     correct instruction ('pinned' or 'slot') for the optimizer.
+// - **NEW SKELETON TYPE:**
+//   - Creates a new `{ type: 'split', ... }` item in the
+//     `dailySkeleton` for the optimizer to process.
 // =================================================================
 
 (function() {
@@ -24,33 +28,59 @@ const PIXELS_PER_MINUTE = 2; // Each minute is 2px high
 const INCREMENT_MINS = 30; // The "sightseeer" grid resolution
 
 // The types of activities you can drag
-// UPDATED: Added 'Sports' and 'Snacks'
+// UPDATED: Added 'Split Activity'
 const TILES = [
     { type: 'activity', name: 'Activity', style: 'background: #e0f7fa; border: 1px solid #007bff;' }, // Hybrid
     { type: 'sports', name: 'Sports', style: 'background: #dcedc8; border: 1px solid #689f38;' }, // Sports-only
     { type: 'special', name: 'Special Activity', style: 'background: #e8f5e9; border: 1px solid #43a047;' }, // Special-only
+    { type: 'split', name: 'Split Activity', style: 'background: #fff3e0; border: 1px solid #f57c00;' }, // NEW TILE
     { type: 'league', name: 'League Game', style: 'background: #d1c4e9; border: 1px solid #5e35b1;' },
     { type: 'specialty_league', name: 'Specialty League', style: 'background: #fff8e1; border: 1px solid #f9a825;' },
     { type: 'swim', name: 'Swim', style: 'background: #bbdefb; border: 1px solid #1976d2;' },
     { type: 'lunch', name: 'Lunch', style: 'background: #fbe9e7; border: 1px solid #d84315;' },
-    { type: 'snacks', name: 'Snacks', style: 'background: #fff9c4; border: 1px solid #fbc02d;' }, // NEW TILE
+    { type: 'snacks', name: 'Snacks', style: 'background: #fff9c4; border: 1px solid #fbc02d;' },
     { type: 'custom', name: 'Custom Pinned Event', style: 'background: #eee; border: 1px solid #616161;' }
 ];
+
+/**
+ * NEW Helper: Translates user-friendly names from prompts
+ * into the correct event type and name for the optimizer.
+ */
+function mapEventNameForOptimizer(name) {
+    if (!name) name = "Free";
+    const lowerName = name.toLowerCase().trim();
+
+    // 1. Check for Schedulable Slot types
+    if (lowerName === 'activity') {
+        return { type: 'slot', event: 'General Activity Slot' };
+    }
+    if (lowerName === 'sports') {
+        return { type: 'slot', event: 'Sports Slot' };
+    }
+    if (lowerName === 'special activity' || lowerName === 'special') {
+        return { type: 'slot', event: 'Special Activity' };
+    }
+    
+    // 2. Check for Pinned types
+    // These are specific activities that don't need filling
+    if (lowerName === 'swim' || lowerName === 'lunch' || lowerName === 'snacks') {
+        return { type: 'pinned', event: name };
+    }
+    
+    // 3. Default: Assume it's a Custom Pinned Event
+    return { type: 'pinned', event: name };
+}
+
 
 /**
  * Main entry point. Called by index.html tab click.
  */
 function init() {
     container = document.getElementById("master-scheduler-content");
-    if (!container) {
-        console.error("Master Scheduler: Could not find container #master-scheduler-content");
-        return;
-    }
+    if (!container) return;
 
-    // Load the skeleton for the current day
     loadDailySkeleton();
     
-    // Build the UI
     container.innerHTML = `
         <div id="scheduler-palette" style="padding: 10px; background: #f4f4f4; border-radius: 8px; margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px;">
             </div>
@@ -66,13 +96,9 @@ function init() {
     palette = document.getElementById("scheduler-palette");
     grid = document.getElementById("scheduler-grid");
 
-    // 1. Render the draggable tiles
     renderPalette();
-    
-    // 2. Render the schedule grid
     renderGrid();
     
-    // 3. Hook up controls
     document.getElementById("run-optimizer-btn").onclick = () => {
         runOptimizer();
     };
@@ -126,12 +152,11 @@ function renderGrid() {
                 latestMin = Math.max(latestMin, parseTimeToMinutes(timeline.end) || 960);
             }
         });
-    } catch (e) { console.error("Error calculating times", e); }
+    } catch (e) { /* ignore */ }
     
     const totalMinutes = latestMin - earliestMin;
     const totalHeight = totalMinutes * PIXELS_PER_MINUTE;
 
-    // Create the HTML for the grid
     let gridHtml = `<div style="display: grid; grid-template-columns: 60px repeat(${availableDivisions.length}, 1fr); position: relative;">`;
     
     // --- Header Row (Divisions) ---
@@ -158,7 +183,6 @@ function renderGrid() {
         
         gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
 
-        // Render "Out of Bounds" (disabled) areas
         if (divStart > earliestMin) {
             gridHtml += `<div style="position: absolute; top: 0; height: ${(divStart - earliestMin) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
         }
@@ -166,7 +190,6 @@ function renderGrid() {
             gridHtml += `<div style="position: absolute; top: ${(divEnd - earliestMin) * PIXELS_PER_MINUTE}px; height: ${(latestMin - divEnd) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
         }
 
-        // Render *events* for this division
         dailySkeleton.filter(ev => ev.division === divName).forEach(event => {
             const startMin = parseTimeToMinutes(event.startTime);
             const endMin = parseTimeToMinutes(event.endTime);
@@ -184,7 +207,6 @@ function renderGrid() {
     gridHtml += `</div>`;
     grid.innerHTML = gridHtml;
     
-    // --- Add Drop Zone Listeners ---
     addDropListeners('.grid-cell');
 }
 
@@ -213,36 +235,58 @@ function addDropListeners(selector) {
             const rect = cell.getBoundingClientRect();
             const scrollTop = grid.scrollTop; 
             const y = e.clientY - rect.top + scrollTop;
-            const droppedMin = Math.round(y / PIXELS_PER_MINUTE / 15) * 15; // Snap to 15 mins
+            const droppedMin = Math.round(y / PIXELS_PER_MINUTE / 15) * 15;
             const earliestMin = parseInt(cell.dataset.startMin, 10);
             const defaultStartTime = minutesToTime(earliestMin + droppedMin);
             
             // --- UPDATED Drop Logic ---
             let eventType = 'slot';
             let eventName = tileData.name;
+            let newEvent = null; // We'll define this inside the if/else
 
             if (tileData.type === 'activity') {
-                // This is the "Activity" (hybrid) tile.
                 eventName = 'General Activity Slot';
                 eventType = 'slot';
             
             } else if (tileData.type === 'sports') {
-                // This is the "Sports" (sports-only) tile.
-                eventName = 'Sports Slot'; // New event name for the optimizer
+                eventName = 'Sports Slot';
                 eventType = 'slot';
                 
             } else if (tileData.type === 'special') {
-                // This is the "Special Activity" (special-only) tile.
-                eventName = 'Special Activity'; // Optimizer already knows this
+                eventName = 'Special Activity';
                 eventType = 'slot';
 
             } else if (tileData.type === 'league' || tileData.type === 'specialty_league' || tileData.type === 'swim') {
-                // These are other specific 'slot' types
                 eventType = 'slot';
                 eventName = tileData.name; 
             
+            // --- NEW LOGIC FOR SPLIT TILE ---
+            } else if (tileData.type === 'split') {
+                const startTime = prompt(`Enter Start Time for the *full* block:`, defaultStartTime);
+                if (!startTime) return;
+                const endTime = prompt(`Enter End Time for the *full* block:`);
+                if (!endTime) return;
+
+                const eventName1 = prompt("Enter name for FIRST activity (e.g., Swim, Sports, Activity):");
+                if (!eventName1) return;
+                const eventName2 = prompt("Enter name for SECOND activity (e.g., Activity, Sports):");
+                if (!eventName2) return;
+
+                // Map names to optimizer instructions
+                const event1 = mapEventNameForOptimizer(eventName1);
+                const event2 = mapEventNameForOptimizer(eventName2);
+
+                newEvent = {
+                    id: `evt_${Math.random().toString(36).slice(2, 9)}`,
+                    type: 'split', // The new type for the optimizer
+                    event: `${eventName1} / ${eventName2}`, // Display name
+                    division: divName,
+                    startTime: startTime,
+                    endTime: endTime,
+                    subEvents: [ event1, event2 ] // The optimizer will read this
+                };
+
             } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'custom') {
-                // These are 'pinned' types that just block off time.
                 eventType = 'pinned';
                 
                 if (tileData.type === 'custom') {
@@ -255,26 +299,27 @@ function addDropListeners(selector) {
                         eventType = 'pinned';
                     }
                 } else {
-                    // This will now correctly handle "Lunch" and "Snacks"
                     eventName = tileData.name;
                 }
             }
 
-
-            const startTime = prompt(`Add "${eventName}" for ${divName}?\n\nEnter Start Time:`, defaultStartTime);
-            if (!startTime) return;
-            
-            const endTime = prompt(`Enter End Time:`);
-            if (!endTime) return;
-            
-            const newEvent = {
-                id: `evt_${Math.random().toString(36).slice(2, 9)}`,
-                type: eventType,
-                event: eventName, // 'General Activity Slot', 'Sports Slot', 'Special Activity', 'Snacks', etc.
-                division: divName,
-                startTime: startTime,
-                endTime: endTime
-            };
+            // --- Create the event object (if not already created by 'split') ---
+            if (!newEvent) {
+                const startTime = prompt(`Add "${eventName}" for ${divName}?\n\nEnter Start Time:`, defaultStartTime);
+                if (!startTime) return;
+                
+                const endTime = prompt(`Enter End Time:`);
+                if (!endTime) return;
+                
+                newEvent = {
+                    id: `evt_${Math.random().toString(36).slice(2, 9)}`,
+                    type: eventType,
+                    event: eventName,
+                    division: divName,
+                    startTime: startTime,
+                    endTime: endTime
+                };
+            }
             
             dailySkeleton.push(newEvent);
             saveDailySkeleton();
@@ -287,12 +332,12 @@ function addDropListeners(selector) {
  * Renders a single event tile
  */
 function renderEventTile(event, top, height) {
-    // Find the tile that matches the *event name*
     let tile = TILES.find(t => t.name === event.event);
     
-    // Fallback logic for optimizer-filled slots
     if (!tile) {
-        if (event.event === 'General Activity Slot') {
+        if (event.type === 'split') {
+            tile = TILES.find(t => t.type === 'split');
+        } else if (event.event === 'General Activity Slot') {
             tile = TILES.find(t => t.type === 'activity');
         } else if (event.event === 'Sports Slot') {
             tile = TILES.find(t => t.type === 'sports');
@@ -326,26 +371,18 @@ function renderEventTile(event, top, height) {
     `;
 }
 
-/**
- * Runs the optimizer in the core logic file
- */
 function runOptimizer() {
     if (!window.runSkeletonOptimizer) {
         alert("Error: 'runSkeletonOptimizer' function not found. Is scheduler_logic_core.js loaded?");
         return;
     }
     
-    console.log("Running optimizer with this skeleton:", dailySkeleton);
-    
-    // Save the skeleton first
     saveDailySkeleton();
     
-    // Call the "brain"
     const success = window.runSkeletonOptimizer(dailySkeleton);
     
     if (success) {
         alert("Schedule Generated Successfully!");
-        // Switch to the "View" tab
         showTab('schedule');
     } else {
         alert("Error during schedule generation. Check console for details.");
@@ -377,8 +414,8 @@ function parseTimeToMinutes(str) {
   const mm = parseInt(m[2], 10);
   if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
   if (mer) {
-    if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
-    else if (mer === "pm") hh += 12; // 1pm -> 13
+    if (hh === 12) hh = mer === "am" ? 0 : 12;
+    else if (mer === "pm") hh += 12;
   }
   return hh * 60 + mm;
 }
