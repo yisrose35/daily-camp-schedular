@@ -233,6 +233,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             
             let fieldName = null;
             for (const f of possibleFields) {
+                // **FIX:** Pass fieldUsageBySlot to the helper
                 if (window.findBestGeneralActivity.canBlockFit(block, f, activityProperties, fieldUsageBySlot)) {
                     fieldName = f;
                     break;
