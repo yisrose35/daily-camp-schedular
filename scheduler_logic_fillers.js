@@ -3,8 +3,8 @@
 // It provides functions to find the *best* activity for a given slot.
 //
 // UPDATED:
-// - Fixed "fieldUsageBySlot is not defined" error by passing it
-//   to all helper functions.
+// - Fixed "fieldUsageBySlot is not defined" error by exporting
+//   canBlockFit and having the logic_core pass the variable.
 // -----------------------------------------------------------------
 
 (function() {
@@ -43,7 +43,6 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
 /**
  * Finds the best-available league for a block.
  * This is now handled by the "League Pass" in logic_core.
- * This function can be a simple placeholder or removed.
  */
 window.findBestLeagueMatchup = function(block, masterLeagues, fieldsBySport, fieldUsageBySlot, activityProperties) {
     // This logic is now in scheduler_logic_core.js's "Pass 3"
