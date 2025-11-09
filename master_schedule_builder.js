@@ -3,17 +3,15 @@
 // This file creates the new "Master Scheduler" drag-and-drop UI
 //
 // UPDATED:
-// - **NEW TILE (User Request):**
-//   - Added 'Split Activity' tile.
-// - **NEW `ondrop` LOGIC:**
-//   - When 'Split Activity' is dropped, it prompts for Start, End,
-//     Event 1, and Event 2.
-//   - A helper function `mapEventNameForOptimizer` translates
-//     user input ("Swim", "Activity", "Sports") into the
-//     correct instruction ('pinned' or 'slot') for the optimizer.
-// - **NEW SKELETON TYPE:**
-//   - Creates a new `{ type: 'split', ... }` item in the
-//     `dailySkeleton` for the optimizer to process.
+// - **NEW (User Request): Click to Remove**
+//   - `renderEventTile`: Now adds a `cursor: pointer` and `title`
+//     to indicate tiles are clickable.
+//   - `renderGrid`: Now calls a new function `addRemoveListeners`
+//     after the grid is rendered.
+//   - `addRemoveListeners` (New): This function attaches an `onclick`
+//     handler to all `.grid-event` tiles. Clicking a tile
+//     confirms, removes the event from `dailySkeleton`, saves,
+//     and re-renders the grid.
 // =================================================================
 
 (function() {
@@ -27,13 +25,11 @@ let dailySkeleton = []; // This will be the "skeleton" we build
 const PIXELS_PER_MINUTE = 2; // Each minute is 2px high
 const INCREMENT_MINS = 30; // The "sightseeer" grid resolution
 
-// The types of activities you can drag
-// UPDATED: Added 'Split Activity'
 const TILES = [
     { type: 'activity', name: 'Activity', style: 'background: #e0f7fa; border: 1px solid #007bff;' }, // Hybrid
     { type: 'sports', name: 'Sports', style: 'background: #dcedc8; border: 1px solid #689f38;' }, // Sports-only
     { type: 'special', name: 'Special Activity', style: 'background: #e8f5e9; border: 1px solid #43a047;' }, // Special-only
-    { type: 'split', name: 'Split Activity', style: 'background: #fff3e0; border: 1px solid #f57c00;' }, // NEW TILE
+    { type: 'split', name: 'Split Activity', style: 'background: #fff3e0; border: 1px solid #f57c00;' },
     { type: 'league', name: 'League Game', style: 'background: #d1c4e9; border: 1px solid #5e35b1;' },
     { type: 'specialty_league', name: 'Specialty League', style: 'background: #fff8e1; border: 1px solid #f9a825;' },
     { type: 'swim', name: 'Swim', style: 'background: #bbdefb; border: 1px solid #1976d2;' },
@@ -43,14 +39,13 @@ const TILES = [
 ];
 
 /**
- * NEW Helper: Translates user-friendly names from prompts
+ * Helper: Translates user-friendly names from prompts
  * into the correct event type and name for the optimizer.
  */
 function mapEventNameForOptimizer(name) {
     if (!name) name = "Free";
     const lowerName = name.toLowerCase().trim();
 
-    // 1. Check for Schedulable Slot types
     if (lowerName === 'activity') {
         return { type: 'slot', event: 'General Activity Slot' };
     }
@@ -61,13 +56,10 @@ function mapEventNameForOptimizer(name) {
         return { type: 'slot', event: 'Special Activity' };
     }
     
-    // 2. Check for Pinned types
-    // These are specific activities that don't need filling
     if (lowerName === 'swim' || lowerName === 'lunch' || lowerName === 'snacks') {
         return { type: 'pinned', event: name };
     }
     
-    // 3. Default: Assume it's a Custom Pinned Event
     return { type: 'pinned', event: name };
 }
 
@@ -159,13 +151,11 @@ function renderGrid() {
 
     let gridHtml = `<div style="display: grid; grid-template-columns: 60px repeat(${availableDivisions.length}, 1fr); position: relative;">`;
     
-    // --- Header Row (Divisions) ---
     gridHtml += `<div style="grid-row: 1; position: sticky; top: 0; background: #fff; z-index: 10; border-bottom: 1px solid #999; padding: 8px;">Time</div>`;
     availableDivisions.forEach((divName, i) => {
         gridHtml += `<div style="grid-row: 1; grid-column: ${i + 2}; position: sticky; top: 0; background: ${divisions[divName]?.color || '#333'}; color: #fff; z-index: 10; border-bottom: 1px solid #999; padding: 8px; text-align: center;">${divName}</div>`;
     });
 
-    // --- Time Column (Sightseeer) ---
     gridHtml += `<div style="grid-row: 2; grid-column: 1; height: ${totalHeight}px; position: relative; background: #f9f9f9; border-right: 1px solid #ccc;">`;
     for (let min = earliestMin; min < latestMin; min += INCREMENT_MINS) {
         const top = (min - earliestMin) * PIXELS_PER_MINUTE;
@@ -175,7 +165,6 @@ function renderGrid() {
     }
     gridHtml += `</div>`;
     
-    // --- Division Columns (Dropzones) ---
     availableDivisions.forEach((divName, i) => {
         const divTimeline = divisions[divName]?.timeline;
         const divStart = parseTimeToMinutes(divTimeline.start);
@@ -207,7 +196,9 @@ function renderGrid() {
     gridHtml += `</div>`;
     grid.innerHTML = gridHtml;
     
+    // --- Add Listeners ---
     addDropListeners('.grid-cell');
+    addRemoveListeners('.grid-event'); // NEW
 }
 
 /**
@@ -218,11 +209,11 @@ function addDropListeners(selector) {
         cell.ondragover = (e) => {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'copy';
-            cell.style.backgroundColor = '#e0ffe0'; // Highlight
+            cell.style.backgroundColor = '#e0ffe0';
         };
         
         cell.ondragleave = () => {
-            cell.style.backgroundColor = ''; // Remove highlight
+            cell.style.backgroundColor = '';
         };
         
         cell.ondrop = (e) => {
@@ -239,10 +230,9 @@ function addDropListeners(selector) {
             const earliestMin = parseInt(cell.dataset.startMin, 10);
             const defaultStartTime = minutesToTime(earliestMin + droppedMin);
             
-            // --- UPDATED Drop Logic ---
             let eventType = 'slot';
             let eventName = tileData.name;
-            let newEvent = null; // We'll define this inside the if/else
+            let newEvent = null; 
 
             if (tileData.type === 'activity') {
                 eventName = 'General Activity Slot';
@@ -260,7 +250,6 @@ function addDropListeners(selector) {
                 eventType = 'slot';
                 eventName = tileData.name; 
             
-            // --- NEW LOGIC FOR SPLIT TILE ---
             } else if (tileData.type === 'split') {
                 const startTime = prompt(`Enter Start Time for the *full* block:`, defaultStartTime);
                 if (!startTime) return;
@@ -272,18 +261,17 @@ function addDropListeners(selector) {
                 const eventName2 = prompt("Enter name for SECOND activity (e.g., Activity, Sports):");
                 if (!eventName2) return;
 
-                // Map names to optimizer instructions
                 const event1 = mapEventNameForOptimizer(eventName1);
                 const event2 = mapEventNameForOptimizer(eventName2);
 
                 newEvent = {
                     id: `evt_${Math.random().toString(36).slice(2, 9)}`,
-                    type: 'split', // The new type for the optimizer
-                    event: `${eventName1} / ${eventName2}`, // Display name
+                    type: 'split',
+                    event: `${eventName1} / ${eventName2}`,
                     division: divName,
                     startTime: startTime,
                     endTime: endTime,
-                    subEvents: [ event1, event2 ] // The optimizer will read this
+                    subEvents: [ event1, event2 ]
                 };
 
             } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'custom') {
@@ -303,7 +291,6 @@ function addDropListeners(selector) {
                 }
             }
 
-            // --- Create the event object (if not already created by 'split') ---
             if (!newEvent) {
                 const startTime = prompt(`Add "${eventName}" for ${divName}?\n\nEnter Start Time:`, defaultStartTime);
                 if (!startTime) return;
@@ -323,10 +310,40 @@ function addDropListeners(selector) {
             
             dailySkeleton.push(newEvent);
             saveDailySkeleton();
-            renderGrid(); // Re-render to show the new tile
+            renderGrid(); 
         };
     });
 }
+
+/**
+ * NEW: Helper to add click-to-remove listeners
+ */
+function addRemoveListeners(selector) {
+    grid.querySelectorAll(selector).forEach(tile => {
+        tile.onclick = (e) => {
+            e.stopPropagation(); // Prevent triggering drop listener if it overlaps
+            
+            const eventId = tile.dataset.eventId;
+            if (!eventId) return;
+
+            // Find the event name for the confirmation
+            const event = dailySkeleton.find(ev => ev.id === eventId);
+            const eventName = event ? event.event : 'this event';
+
+            if (confirm(`Are you sure you want to remove "${eventName}"?`)) {
+                // Filter the skeleton array to remove the item
+                dailySkeleton = dailySkeleton.filter(ev => ev.id !== eventId);
+                
+                // Save the updated skeleton
+                saveDailySkeleton();
+                
+                // Re-render the grid to show the change
+                renderGrid();
+            }
+        };
+    });
+}
+
 
 /**
  * Renders a single event tile
@@ -350,9 +367,11 @@ function renderEventTile(event, top, height) {
     
     const style = tile ? tile.style : 'background: #eee; border: 1px solid #616161;';
     
+    // UPDATED: Added cursor: pointer and title
     return `
         <div class="grid-event" 
              data-event-id="${event.id}" 
+             title="Click to remove this event"
              style="${style}; 
                     padding: 2px 5px; 
                     border-radius: 4px; 
@@ -362,9 +381,10 @@ function renderEventTile(event, top, height) {
                     position: absolute;
                     top: ${top}px;
                     height: ${height}px;
-                    width: calc(100% - 4px); /* Full width minus margins */
+                    width: calc(100% - 4px);
                     box-sizing: border-box;
-                    overflow: hidden;">
+                    overflow: hidden;
+                    cursor: pointer;">
             <strong>${event.event}</strong>
             <div style="font-size: 0.85em;">${event.startTime} - ${event.endTime}</div>
         </div>
