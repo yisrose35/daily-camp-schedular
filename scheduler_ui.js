@@ -1,7 +1,10 @@
 // -------------------- scheduler_ui.js --------------------
 // UI-only: rendering, save/load, init, and window exports.
 //
-// REFACTORED FOR "GRID" (Rowspan-Based)
+// UPDATED:
+// - updateTable() now checks for the "View Toggle"
+// - Added renderFixedBlockView() for the "Agudah" style
+// - Added renderStaggeredView() for the "YKLI" style (this is the old updateTable)
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -30,10 +33,26 @@ function fieldLabel(f) {
     return "";
 }
 
-// ===== NEW: updateTable (Grid-Based) =====
+// ===== NEW: Main updateTable function =====
+// This function now just decides *which* renderer to use.
 function updateTable() {
     const container = document.getElementById("scheduleTable");
     if (!container) return;
+    
+    const toggle = document.getElementById("schedule-view-toggle");
+    
+    if (toggle && toggle.checked) {
+        renderFixedBlockView(container);
+    } else {
+        renderStaggeredView(container);
+    }
+}
+
+/**
+ * Renders the "Staggered" (YKLI) view
+ * This is the original updateTable function
+ */
+function renderStaggeredView(container) {
     container.innerHTML = "";
 
     const availableDivisions = window.availableDivisions || [];
@@ -96,7 +115,7 @@ function updateTable() {
                 const entry = scheduleAssignments[b]?.[i];
                 const league = leagueAssignments[div]?.[i]; // Keep for old data
 
-                if (league) { // Handle legacy league data
+                if (league) { 
                     if (league.isContinuation) continue;
                     let span = 1;
                     for (let j = i + 1; j < unifiedTimes.length; j++) {
@@ -110,13 +129,11 @@ function updateTable() {
                     td.style.color = "#fff";
                     td.style.fontWeight = "600";
                     td.style.verticalAlign = "top";
-                    const list = league.games
+                    const list = (league.games || [])
                         .map(g => `${g.teams[0]} vs ${g.teams[1]} (${g.sport}) @ ${g.field || '?'}`)
                         .join("<br> • ");
                     td.innerHTML = `<div class="league-pill">${list}<br><span style="font-size:0.85em;">${league.leagueName}</span></div>`;
                     tr.appendChild(td);
-                    
-                    // Break bunk loop, this slot is for the whole division
                     break;
                 }
                 
@@ -148,17 +165,11 @@ function updateTable() {
                 }
 
                 if (!entry && !league) {
-                    // This slot is genuinely empty for this bunk
-                    
                     const prevLeague = tr.querySelector('td[colspan]');
-                    if (prevLeague) {
-                        continue;
-                    }
+                    if (prevLeague) continue;
                     
                     const prevEmpty = i > 0 && !scheduleAssignments[b]?.[i-1] && !leagueAssignments[div]?.[i-1];
-                    if(prevEmpty) {
-                        continue;
-                    }
+                    if(prevEmpty) continue;
                     
                     let span = 1;
                     for (let j = i + 1; j < unifiedTimes.length; j++) {
@@ -182,6 +193,117 @@ function updateTable() {
     container.appendChild(table);
 }
 
+/**
+ * Renders the "Fixed Block" (Agudah) view
+ */
+function renderFixedBlockView(container) {
+    container.innerHTML = "";
+    
+    const availableDivisions = window.availableDivisions || [];
+    const divisions = window.divisions || {};
+    const scheduleAssignments = window.scheduleAssignments || {};
+    
+    // 1. Find all unique time blocks from the manual skeleton
+    const dailyData = window.loadCurrentDailyData?.() || {};
+    const manualSkeleton = dailyData.manualSkeleton || [];
+    
+    const blocks = [];
+    manualSkeleton.forEach(item => {
+        const label = `${item.startTime} - ${item.endTime}`;
+        if (!blocks.find(b => b.label === label)) {
+            blocks.push({
+                label: label,
+                startMin: parseTimeToMinutes(item.startTime)
+            });
+        }
+    });
+    blocks.sort((a,b) => a.startMin - b.startMin);
+    
+    if (blocks.length === 0) {
+        container.innerHTML = "<p>No schedule built for this day. Go to the 'Master Scheduler' tab to build one.</p>";
+        return;
+    }
+
+    const table = document.createElement("table");
+    
+    // --- 1. Build Header ---
+    const thead = document.createElement("thead");
+    const tr1 = document.createElement("tr");
+    const thTime = document.createElement("th");
+    thTime.textContent = "Time";
+    tr1.appendChild(thTime);
+    availableDivisions.forEach((div) => {
+        const th = document.createElement("th");
+        th.textContent = div;
+        th.style.background = divisions[div]?.color || "#333";
+        th.style.color = "#fff";
+        tr1.appendChild(th);
+    });
+    thead.appendChild(tr1);
+    table.appendChild(thead);
+    
+    // --- 2. Build Body ---
+    const tbody = document.createElement("tbody");
+    
+    blocks.forEach(block => {
+        const tr = document.createElement("tr");
+        
+        const tdTime = document.createElement("td");
+        tdTime.textContent = block.label;
+        tr.appendChild(tdTime);
+        
+        availableDivisions.forEach(div => {
+            const bunks = divisions[div]?.bunks || [];
+            const td = document.createElement("td");
+            td.style.verticalAlign = "top";
+            
+            // Find what the *first bunk* of this division is doing
+            const firstBunk = bunks[0];
+            let entry = null;
+            if (firstBunk) {
+                 const slots = findSlotsForRange(parseTimeToMinutes(block.label.split(' - ')[0]), parseTimeToMinutes(block.label.split(' - ')[1]));
+                 if (slots.length > 0) {
+                     entry = scheduleAssignments[firstBunk]?.[slots[0]];
+                 }
+            }
+            
+            if (entry) {
+                if (entry._fixed) {
+                     td.textContent = fieldLabel(entry.field);
+                     td.style.background = "#f1f1f1";
+                } else if (entry.sport) {
+                    td.textContent = `${fieldLabel(entry.field)} – ${entry.sport}`;
+                } else {
+                    td.textContent = fieldLabel(entry.field);
+                }
+            } else {
+                td.className = "grey-cell";
+            }
+            tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+    });
+    
+    table.appendChild(tbody);
+    container.appendChild(table);
+}
+
+// Helper to find slots (needed by Fixed Block view)
+function findSlotsForRange(startMin, endMin) {
+    const slots = [];
+    if (!window.unifiedTimes) return slots;
+    
+    for (let i = 0; i < window.unifiedTimes.length; i++) {
+        const slot = window.unifiedTimes[i];
+        const slotStart = slot.start.getHours() * 60 + slot.start.getMinutes();
+        
+        if (slotStart >= startMin && slotStart < endMin) {
+            slots.push(i);
+        }
+    }
+    return slots;
+}
+
 
 // ===== Save/Load/Init =====
 
@@ -195,9 +317,6 @@ function saveSchedule() {
     }
 }
 
-// ===== START OF FIX =====
-// Updated this function to remove the call to the non-existent
-// generateUnifiedTimesAndMasks() and to correctly load unifiedTimes.
 function reconcileOrRenderSaved() {
     try {
         const data = window.loadCurrentDailyData?.() || {};
@@ -212,18 +331,23 @@ function reconcileOrRenderSaved() {
         window.unifiedTimes = [];
     }
     
-    // The grid (window.unifiedTimes) will be empty on first page load,
-    // or loaded from save.
-    // updateTable() is smart enough to handle an empty unifiedTimes.
-    updateTable(); 
+    updateTable(); // This will now call the correct renderer
 }
-// ===== END OF FIX =====
 
 function initScheduleSystem() {
     try {
         window.scheduleAssignments = window.scheduleAssignments || {};
         window.leagueAssignments = window.leagueAssignments || {};
         reconcileOrRenderSaved();
+        
+        // Add listener for the new toggle
+        const toggle = document.getElementById("schedule-view-toggle");
+        if (toggle) {
+            toggle.onchange = () => {
+                updateTable();
+            };
+        }
+        
     } catch (e) {
         console.error("Init error:", e);
         updateTable();
