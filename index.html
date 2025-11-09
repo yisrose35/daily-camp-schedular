@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -35,14 +34,16 @@
         <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable Colors</label>
         <div id="divisionButtons" style="margin-top:8px;"></div>
         
-        <div id="divisionRulesContainer" style="margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
-            <p style="color: #666;">Select a division to set its activity rules.</p>
+        <h3 style="margin-top: 25px; border-top: 2px solid #007BFF; padding-top: 15px;">
+            Division Skeletons
+        </h3>
+        <p style="font-size: 0.9em; color: #555;">
+            Select a division above to build its daily "Skeleton." 
+            This replaces the old block system.
+        </p>
+        <div id="divisionSkeletonEditor" style="margin-top: 10px;">
+            <p style="color: #666;">Select a division to set its "Skeleton" and "Shopping List."</p>
         </div>
-
-        <h3>Schedule Period Names</h3>
-        <p style="font-size: 0.9em; color: #555;">Define the *names* of your periods (e.g., "1st Activity"). Times are set per-division.</p>
-        <div id="schedulePeriodsContainer"></div>
-
         <hr style="margin: 20px 0;">
         <button id="generateScheduleBtn" style="background: #28a745; color: white; padding: 12px 20px; font-size: 1.2em; border: none; border-radius: 5px; cursor: pointer;">
             Generate/Update Today's Schedule
@@ -170,10 +171,10 @@
             if (genBtn) {
                 genBtn.onclick = () => {
                     console.log("Generating schedule...");
-                    if (window.assignFieldsToBunks) {
-                        window.assignFieldsToBunks();
+                    if (window.generateScheduleFromSkeletons) { // <-- NEW FUNCTION NAME
+                        window.generateScheduleFromSkeletons();
                     } else {
-                        console.error("assignFieldsToBunks not found!");
+                        console.error("generateScheduleFromSkeletons not found!");
                     }
                 };
             } else {
