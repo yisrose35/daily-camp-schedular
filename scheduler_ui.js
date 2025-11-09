@@ -2,10 +2,9 @@
 // UI-only: rendering, save/load, init, and window exports.
 //
 // UPDATED:
-// - renderStaggeredView() (the "YKLI" view) is rewritten
-//   to use 'position: absolute' just like the builder.
-// - This allows events with custom times (11:20) to
-//   "flow" correctly.
+// - Flipped the logic in updateTable() to match user's request.
+//   - UNCHECKED (default) = "Fixed Block" (Agudah)
+//   - CHECKED (opt-in) = "Staggered" (YKLI)
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -33,6 +32,11 @@ function fieldLabel(f) {
     if (f && typeof f === "object" && typeof f.name === "string") return f.name;
     return "";
 }
+function fmtTime(d) {
+    if (!d) return "";
+    let h = d.getHours(), m = d.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12;
+    return `${h}:${m} ${ap}`;
+}
 
 // ===== NEW: Main updateTable function =====
 // This function now just decides *which* renderer to use.
@@ -42,31 +46,33 @@ function updateTable() {
     
     const toggle = document.getElementById("schedule-view-toggle");
     
+    // ===== START OF FIX: Flipped the logic =====
     if (toggle && toggle.checked) {
-        renderFixedBlockView(container);
-    } else {
+        // CHECKED = "Staggered" (YKLI) view
         renderStaggeredView(container);
+    } else {
+        // UNCHECKED (default) = "Fixed Block" (Agudah) view
+        renderFixedBlockView(container);
     }
+    // ===== END OF FIX =====
 }
 
 /**
  * Renders the "Staggered" (YKLI) view
- * This is now rewritten to use absolute positioning.
+ * This shows one column per bunk, with individual event rows.
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
 
     const availableDivisions = window.availableDivisions || [];
     const divisions = window.divisions || {};
-    const unifiedTimes = window.unifiedTimes || []; // The 30-min grid
     const scheduleAssignments = window.scheduleAssignments || {};
+    const unifiedTimes = window.unifiedTimes || [];
     
     if (unifiedTimes.length === 0) {
         container.innerHTML = "<p>No schedule built for this day. Go to the 'Master Scheduler' tab to build one.</p>";
         return;
     }
-    
-    const CELL_HEIGHT_PX = 60; // Taller cells for the view
 
     const table = document.createElement("table");
     table.style.borderCollapse = "collapse";
@@ -74,12 +80,10 @@ function renderStaggeredView(container) {
     // --- 1. Build Header ---
     const thead = document.createElement("thead");
     const tr1 = document.createElement("tr");
-    const thTime = document.createElement("th");
-    thTime.textContent = "Time";
-    tr1.appendChild(thTime);
     availableDivisions.forEach((div) => {
+        const bunkCount = (divisions[div]?.bunks || []).length;
         const th = document.createElement("th");
-        th.colSpan = (divisions[div]?.bunks || []).length;
+        th.colSpan = bunkCount * 2; // Each bunk gets a Time + Activity column
         th.textContent = div;
         th.style.background = divisions[div]?.color || "#333";
         th.style.color = "#fff";
@@ -88,24 +92,40 @@ function renderStaggeredView(container) {
     thead.appendChild(tr1);
 
     const tr2 = document.createElement("tr");
-    const bunkTh = document.createElement("th");
-    bunkTh.textContent = "Bunk";
-    tr2.appendChild(bunkTh);
     availableDivisions.forEach((div) => {
         (divisions[div]?.bunks || []).forEach((b) => {
-            const th = document.createElement("th");
-            th.textContent = b;
-            tr2.appendChild(th);
+            const thBunk = document.createElement("th");
+            thBunk.textContent = b;
+            thBunk.colSpan = 2;
+            tr2.appendChild(thBunk);
         });
     });
     thead.appendChild(tr2);
+
+    const tr3 = document.createElement("tr");
+    availableDivisions.forEach((div) => {
+        (divisions[div]?.bunks || []).forEach((b) => {
+            const thTime = document.createElement("th");
+            thTime.textContent = "Time";
+            thTime.style.minWidth = "80px";
+            tr3.appendChild(thTime);
+            
+            const thActivity = document.createElement("th");
+            thActivity.textContent = "Activity";
+            thActivity.style.minWidth = "120px";
+            tr3.appendChild(thActivity);
+        });
+    });
+    thead.appendChild(tr3);
     table.appendChild(thead);
 
-    // --- 2. Build Body (Grid-Based) ---
+    // --- 2. Build Body (Event-based) ---
     const tbody = document.createElement("tbody");
     
-    // This map will hold all the *real* events, not just grid slots
+    // First, process all assignments into "real" events
     const eventsByBunk = {};
+    let maxEvents = 0;
+    
     availableDivisions.forEach(div => {
         (divisions[div]?.bunks || []).forEach(bunk => {
             eventsByBunk[bunk] = [];
@@ -124,97 +144,63 @@ function renderStaggeredView(container) {
                     
                     currentEvent = {
                         ...entry,
-                        startTime: startTime,
-                        endTime: endTime,
-                        startMin: startTime.getHours() * 60 + startTime.getMinutes(),
-                        endMin: endTime.getHours() * 60 + endTime.getMinutes()
+                        startTimeLabel: `${fmtTime(startTime)} - ${fmtTime(endTime)}`,
+                        startMin: startTime.getHours() * 60 + startTime.getMinutes()
                     };
                     eventsByBunk[bunk].push(currentEvent);
                 }
             });
+            // Add empty slots
+            if (eventsByBunk[bunk].length === 0) {
+                 eventsByBunk[bunk].push({ startTimeLabel: "Full Day", _fixed: true, field: { name: "Free" } });
+            }
+            if (eventsByBunk[bunk].length > maxEvents) {
+                maxEvents = eventsByBunk[bunk].length;
+            }
         });
     });
 
-    // Now render the "sightseeer" grid
-    for (let i = 0; i < unifiedTimes.length; i++) {
+    // Now render the rows
+    for (let i = 0; i < maxEvents; i++) {
         const tr = document.createElement("tr");
         
-        const tdTime = document.createElement("td");
-        tdTime.textContent = unifiedTimes[i].label;
-        tdTime.style.height = `${CELL_HEIGHT_PX}px`;
-        tdTime.style.border = "1px solid #ccc";
-        tdTime.style.padding = "4px";
-        tr.appendChild(tdTime);
-        
-        const cellStartMin = unifiedTimes[i].start.getHours() * 60 + unifiedTimes[i].start.getMinutes();
-        
-        availableDivisions.forEach((div) => {
-            const bunks = divisions[div]?.bunks || [];
-            
-            for (const b of bunks) {
-                // The cell is a relative container
-                const td = document.createElement("td");
-                td.style.position = "relative";
-                td.style.height = `${CELL_HEIGHT_PX}px`;
-                td.style.border = "1px solid #ccc";
-                td.style.padding = "0";
-
-                // Find all events that *start* in this cell
-                const eventsInThisCell = eventsByBunk[b].filter(ev => 
-                    ev.startMin >= cellStartMin && ev.startMin < (cellStartMin + 30)
-                );
+        availableDivisions.forEach(div => {
+            (divisions[div]?.bunks || []).forEach(bunk => {
+                const event = eventsByBunk[bunk][i];
                 
-                eventsInThisCell.forEach(event => {
-                    const startOffsetMin = event.startMin - cellStartMin;
-                    const durationMin = event.endMin - event.startMin;
-                    
-                    const topPercent = (startOffsetMin / 30) * 100;
-                    const heightPercent = (durationMin / 30) * 100;
+                const tdTime = document.createElement("td");
+                const tdActivity = document.createElement("td");
+                
+                if (event) {
+                    tdTime.textContent = event.startTimeLabel;
+                    tdTime.style.border = "1px solid #ccc";
+                    tdActivity.style.border = "1px solid #ccc";
 
-                    let content = "";
                     if (event._h2h) {
-                        content = `${event.sport} @ ${fieldLabel(event.field)}`;
+                        tdActivity.textContent = `${event.sport} @ ${fieldLabel(event.field)}`;
+                        tdActivity.style.background = "#e8f4ff";
+                        tdActivity.style.fontWeight = "bold";
                     } else if (event._fixed) {
-                        content = fieldLabel(event.field);
+                        tdActivity.textContent = fieldLabel(event.field);
+                        tdActivity.style.background = "#f1f1f1";
                     } else if (event.sport) {
-                        content = `${fieldLabel(event.field)} – ${event.sport}`;
+                        tdActivity.textContent = `${fieldLabel(event.field)} – ${event.sport}`;
                     } else {
-                        content = fieldLabel(event.field);
+                        tdActivity.textContent = fieldLabel(event.field);
                     }
-                    
-                    const eventDiv = document.createElement('div');
-                    eventDiv.style.position = 'absolute';
-                    eventDiv.style.top = `${topPercent}%`;
-                    eventDiv.style.height = `${heightPercent}%`;
-                    eventDiv.style.width = 'calc(100% - 4px)';
-                    eventDiv.style.left = '2px';
-                    eventDiv.style.padding = '2px 4px';
-                    eventDiv.style.borderRadius = '4px';
-                    eventDiv.style.boxSizing = 'border-box';
-                    eventDiv.style.overflow = 'hidden';
-                    eventDiv.style.fontSize = '0.9em';
-                    
-                    if (event._h2h) {
-                        eventDiv.style.background = "#e8f4ff";
-                        eventDiv.style.border = "1px solid #b3d4ff";
-                        eventDiv.style.fontWeight = "bold";
-                    } else if (event._fixed) {
-                        eventDiv.style.background = "#f1f1f1";
-                        eventDiv.style.border = "1px solid #ddd";
-                    } else {
-                         eventDiv.style.background = "#fff";
-                         eventDiv.style.border = "1px solid #ccc";
-                    }
-                    
-                    eventDiv.textContent = content;
-                    td.appendChild(eventDiv);
-                });
-                
-                tr.appendChild(td);
-            } // end bunks loop
-        }); // end divisions loop
+                } else {
+                    // Empty cell for this bunk
+                    tdTime.className = "grey-cell";
+                    tdActivity.className = "grey-cell";
+                    tdTime.style.border = "1px solid #ccc";
+                    tdActivity.style.border = "1px solid #ccc";
+                }
+                tr.appendChild(tdTime);
+                tr.appendChild(tdActivity);
+            });
+        });
         tbody.appendChild(tr);
-    } // end unifiedTimes loop
+    } 
 
     table.appendChild(tbody);
     container.appendChild(table);
