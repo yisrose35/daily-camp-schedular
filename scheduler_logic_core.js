@@ -570,7 +570,10 @@ function assignFieldsToBunks() {
                 const slot = s + k;
                 if (slot >= window.unifiedTimes.length) return false;
                 let busy = false;
-                for (const bunk of bunksInDiv) { if (scheduleAssignments[bunk]?.[slot]) { busy = true; break; } }
+                for (const bunk of bunksInDiv) { 
+                    // This check now correctly finds "Lunch" blocks
+                    if (scheduleAssignments[bunk]?.[slot]) { busy = true; break; } 
+                }
                 if (busy) return false;
                 if (takenLeagueSlots.has(slot)) return false;
             }
@@ -679,12 +682,17 @@ function assignFieldsToBunks() {
                 if (!isActive(s)) continue; // Not an active slot for this div
 
                 // ----- NEW DYNAMIC SPAN LOGIC -----
-                const period = getPeriodForSlot(s, div); // Pass division!
+               const period = getPeriodForSlot(s, div); // Pass division!
                 if (!period) continue; // Slot is not in a schedulable period
                 
-                const spanLen = divisionSpanLens[div]?.[period.id] || 1;
+                // --- NEW: Check if this is a schedulable period ---
                 const rule = divisions[div].periodRules[period.id];
-                if (!rule) continue;
+                if (!rule || rule.rule === 'fixed') {
+                    // This is a fixed block (like Lunch), so skip scheduling
+                    continue; 
+                }
+                
+                const spanLen = divisionSpanLens[div]?.[period.id] || 1;
 
                 // ----- START OF FIX 1: Removed strict block-start check -----
                 // The old logic prevented filling partial blocks.
