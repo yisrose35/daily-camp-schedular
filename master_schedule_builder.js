@@ -2,6 +2,10 @@
 // master_schedule_builder.js
 // This file creates the new "Master Scheduler" drag-and-drop UI
 // to visually build the "Skeleton" for the day.
+//
+// UPDATED:
+// - Swapped grid axis: Time is now Y-axis (rows), Divisions are X-axis (columns).
+// - Removed the "Staggered View" toggle. This tab is now always in the "Fixed Grid" layout.
 // =================================================================
 
 (function() {
@@ -12,7 +16,6 @@ let palette = null;
 let grid = null;
 
 let dailySkeleton = []; // This will be the "skeleton" we build
-let viewMode = 'staggered'; // 'staggered' or 'fixed'
 
 // The types of activities you can drag
 const TILES = [
@@ -42,13 +45,7 @@ function init() {
     container.innerHTML = `
         <div id="scheduler-palette" style="padding: 10px; background: #f4f4f4; border-radius: 8px; margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px;">
             </div>
-        <div id="scheduler-controls" style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
-            <div>
-                <label>
-                    <input type="checkbox" id="timeline-toggle" ${viewMode === 'staggered' ? 'checked' : ''}>
-                    Show Staggered Timelines (like your YKLI image)
-                </label>
-            </div>
+        <div id="scheduler-controls" style="margin-bottom: 15px; display: flex; justify-content: flex-end; align-items: center;">
             <button id="run-optimizer-btn" style="background: #28a745; color: white; padding: 12px 20px; font-size: 1.2em; border: none; border-radius: 5px; cursor: pointer;">
                 Run Optimizer & Create Schedule
             </button>
@@ -67,11 +64,6 @@ function init() {
     renderGrid();
     
     // 3. Hook up controls
-    document.getElementById("timeline-toggle").onchange = (e) => {
-        viewMode = e.target.checked ? 'staggered' : 'fixed';
-        renderGrid(); // Re-render the grid in the new mode
-    };
-    
     document.getElementById("run-optimizer-btn").onclick = () => {
         runOptimizer();
     };
@@ -109,6 +101,7 @@ function renderPalette() {
 
 /**
  * Renders the main schedule grid
+ * NEW: Time on Y-axis, Divisions on X-axis
  */
 function renderGrid() {
     const divisions = window.divisions || {};
@@ -130,58 +123,42 @@ function renderGrid() {
     // Create the HTML for the grid
     let table = '<table class="master-schedule-grid" style="border-collapse: collapse; width: 100%;">';
     
-    // Header Row (Times) - Only for "fixed" mode
-    if (viewMode === 'fixed') {
-        table += '<thead><tr><th style="border: 1px solid #999; padding: 8px;">Division</th>';
-        for (let min = earliestMin; min < latestMin; min += 30) {
-            table += `<th style="min-width: 100px; border: 1px solid #999; padding: 8px;">${minutesToTime(min)}</th>`;
-        }
-        table += '</tr></thead>';
-    } else {
-         table += '<thead><tr><th style="border: 1px solid #999; padding: 8px;">Division</th><th style="border: 1px solid #999; padding: 8px;">Timeline</th></tr></thead>';
-    }
-
-    // Body Rows (One per Division)
-    table += '<tbody>';
+    // Header Row (Divisions)
+    table += '<thead><tr><th style="border: 1px solid #999; padding: 8px;">Time</th>';
     availableDivisions.forEach(divName => {
-        const divTimeline = divisions[divName]?.timeline;
-        const divStart = parseTimeToMinutes(divTimeline.start);
-        const divEnd = parseTimeToMinutes(divTimeline.end);
-        
-        table += `<tr><td style="font-weight: 600; vertical-align: top; border: 1px solid #999; padding: 8px;">${divName}</td>`;
-        
-        if (viewMode === 'fixed') {
-            // "Fixed" mode - one cell per 30-min slot
-            for (let min = earliestMin; min < latestMin; min += 30) {
-                // Check if this slot is outside the division's time
-                if (min < divStart || min >= divEnd) {
-                    table += `<td class="grid-cell-disabled" style="background: #333; border: 1px solid #999;"></td>`;
-                } else {
-                    table += `<td class="grid-cell" data-div="${divName}" data-time-min="${min}" style="height: 50px; border: 1px dashed #ccc; padding: 2px; vertical-align: top;">`;
-                    // Find events that START in this cell
-                    dailySkeleton.filter(ev => ev.division === divName && parseTimeToMinutes(ev.startTime) === min)
-                                 .forEach(ev => table += renderEventTile(ev));
-                    table += `</td>`;
-                }
-            }
-        } else {
-            // "Staggered" mode - one single dropzone
-            table += `<td class="grid-cell-staggered" data-div="${divName}" style="min-height: 80px; border: 1px dashed #ccc; padding: 5px; vertical-align: top; display: flex; flex-wrap: wrap; gap: 5px;">`;
-            // Find all events for this division, sorted by time
-            dailySkeleton.filter(ev => ev.division === divName)
-                         .sort((a,b) => parseTimeToMinutes(a.startTime) - parseTimeToMinutes(b.startTime))
-                         .forEach(ev => table += renderEventTile(ev));
-            table += `</td>`;
-        }
-        
-        table += '</tr>';
+        table += `<th style="min-width: 150px; border: 1px solid #999; padding: 8px;">${divName}</th>`;
     });
+    table += '</tr></thead>';
+    
+    // Body Rows (One per 30-min slot)
+    table += '<tbody>';
+    for (let min = earliestMin; min < latestMin; min += 30) {
+        table += `<tr><td style="font-weight: 600; vertical-align: top; border: 1px solid #999; padding: 8px;">${minutesToTime(min)}</td>`;
+        
+        availableDivisions.forEach(divName => {
+            const divTimeline = divisions[divName]?.timeline;
+            const divStart = parseTimeToMinutes(divTimeline.start);
+            const divEnd = parseTimeToMinutes(divTimeline.end);
+
+            // Check if this slot is outside the division's time
+            if (min < divStart || min >= divEnd) {
+                table += `<td class="grid-cell-disabled" style="background: #333; border: 1px solid #999;"></td>`;
+            } else {
+                table += `<td class="grid-cell" data-div="${divName}" data-time-min="${min}" style="height: 50px; border: 1px dashed #ccc; padding: 2px; vertical-align: top;">`;
+                // Find events that START in this cell
+                dailySkeleton.filter(ev => ev.division === divName && parseTimeToMinutes(ev.startTime) === min)
+                             .forEach(ev => table += renderEventTile(ev));
+                table += `</td>`;
+            }
+        });
+        table += '</tr>';
+    }
     table += '</tbody></table>';
     
     grid.innerHTML = table;
     
     // --- Add Drop Zone Listeners ---
-    addDropListeners(viewMode === 'fixed' ? '.grid-cell' : '.grid-cell-staggered');
+    addDropListeners('.grid-cell');
 }
 
 /**
@@ -205,7 +182,7 @@ function addDropListeners(selector) {
             
             const tileData = JSON.parse(e.dataTransfer.getData('application/json'));
             const divName = cell.dataset.div;
-            const defaultStartTime = cell.dataset.timeMin ? minutesToTime(parseInt(cell.dataset.timeMin, 10)) : '';
+            const defaultStartTime = minutesToTime(parseInt(cell.dataset.timeMin, 10));
             
             // --- This is the PROMPT logic you requested ---
             let isSchedulable = tileData.type === 'slot';
@@ -224,7 +201,7 @@ function addDropListeners(selector) {
                  isSchedulable = false; // Leagues, Swim, Lunch are Pinned
                  eventName = tileData.name; // Use the tile name
             } else {
-                eventName = 'General Activity'; // 'slot' becomes 'General Activity'
+                eventName = 'General Activity Slot'; // 'slot' becomes 'General Activity'
             }
 
             const startTime = prompt(`Add "${eventName}" for ${divName}?\n\nEnter Start Time:`, defaultStartTime);
@@ -257,7 +234,7 @@ function renderEventTile(event) {
     const style = tile ? tile.style : 'background: #eee; border: 1px solid #616161;';
     
     return `
-        <div class="grid-event" data-event-id="${event.id}" style="${style}; padding: 5px; border-radius: 4px; text-align: center; margin: 2px;">
+        <div class="grid-event" data-event-id="${event.id}" style="${style}; padding: 5px; border-radius: 4px; text-align: center; margin: 2px; font-size: 0.9em;">
             <strong>${event.event}</strong>
             <div style="font-size: 0.85em;">${event.startTime} - ${event.endTime}</div>
         </div>
