@@ -3,8 +3,12 @@
 // It provides functions to find the *best* activity for a given slot.
 //
 // UPDATED:
-// - Removed findBestLeagueMatchup (now handled in logic_core).
-// - Added local canBlockFit helper.
+// - Added `findBestSportActivity` (for 'Sports Slot') which
+//   *only* searches 'field' (sports) activities.
+// - `findBestSpecial` (for 'Special Activity') now *only*
+//   searches 'special' activities.
+// - `findBestGeneralActivity` (for 'General Activity Slot')
+//   is the hybrid function that searches *both* fields and specials.
 // -----------------------------------------------------------------
 
 (function() {
@@ -24,7 +28,6 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     if (!fieldName) return false; // Can't fit a null field
     
     const props = activityProperties[fieldName];
-    // FIX: Default limit is 1 (or 2 for sharable), not a number from props.
     const limit = (props && props.sharable) ? 2 : 1;
 
     // Division allowance
@@ -40,35 +43,56 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
 }
 
 /**
- * Finds the best-available special activity for a block.
+ * Finds the best-available special activity (special-only).
+ * Called by "Special Activity" tile.
  */
 window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties) {
     const specials = allActivities.filter(a => a.type === 'special');
+    
     // TODO: Use yesterdayHistory to pick a "fresh" one
     for (const pick of specials.sort(() => 0.5 - Math.random())) {
         if (canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)) {
             return pick;
         }
     }
-    return null;
+    return null; // Fails if no special is available
 }
 
 /**
- * Finds the best-available general activity (H2H or regular) for a block.
+ * NEW: Finds the best-available sport activity (sports-only).
+ * Called by "Sports" tile.
+ */
+window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties) {
+    const sports = allActivities.filter(a => a.type === 'field');
+    
+    // TODO: Use yesterdayHistory to pick a "fresh" one
+    for (const pick of sports.sort(() => 0.5 - Math.random())) {
+        if (canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)) {
+            return pick;
+        }
+    }
+    return null; // Fails if no sport is available
+}
+
+
+/**
+ * Finds the best-available general activity (hybrid: sports OR special).
+ * Called by "Activity" tile.
  */
 window.findBestGeneralActivity = function(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties) {
     
-    // TODO: 1. Attempt H2H
+    // TODO: 1. Attempt H2H (This is not implemented yet)
     
-    // 2. Attempt "fresh" general activity
-    const fields = allActivities.filter(a => a.type === 'field');
-    for (const pick of fields.sort(() => 0.5 - Math.random())) {
+    // 2. Attempt "fresh" general OR special activity
+    // No filter needed, `allActivities` contains both types
+    for (const pick of allActivities.sort(() => 0.5 - Math.random())) {
          if (canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)) {
             return pick;
         }
     }
+    
     // Failsafe
-    return fields[0] || { field: "Free", sport: null };
+    return { field: "Free", sport: null };
 }
 
 // Expose helper for core logic (so logic_core can use it for its own league pass)
