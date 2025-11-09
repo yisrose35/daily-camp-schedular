@@ -1,4 +1,3 @@
-
 // -------------------- scheduler_ui.js --------------------
 // UI-only: rendering, save/load, init, and window exports.
 //
@@ -44,7 +43,7 @@ function updateTable() {
     const leagueAssignments = window.leagueAssignments || {}; // Kept for legacy data
     
     if (unifiedTimes.length === 0) {
-        container.innerHTML = "<p>No schedule times found. Generate a schedule in the Setup tab.</p>";
+        container.innerHTML = "<p>No schedule built for this day. Go to the 'Master Scheduler' tab to build one.</p>";
         return;
     }
 
@@ -97,7 +96,7 @@ function updateTable() {
                 const entry = scheduleAssignments[b]?.[i];
                 const league = leagueAssignments[div]?.[i]; // Keep for old data
 
-                if (league) {
+                if (league) { // Handle legacy league data
                     if (league.isContinuation) continue;
                     let span = 1;
                     for (let j = i + 1; j < unifiedTimes.length; j++) {
@@ -151,19 +150,16 @@ function updateTable() {
                 if (!entry && !league) {
                     // This slot is genuinely empty for this bunk
                     
-                    // Check if a *previous* slot in this row was a league
                     const prevLeague = tr.querySelector('td[colspan]');
                     if (prevLeague) {
                         continue;
                     }
                     
-                    // Check if the previous slot (i-1) was also empty to create a rowspan
                     const prevEmpty = i > 0 && !scheduleAssignments[b]?.[i-1] && !leagueAssignments[div]?.[i-1];
                     if(prevEmpty) {
                         continue;
                     }
                     
-                    // This is the START of an empty block
                     let span = 1;
                     for (let j = i + 1; j < unifiedTimes.length; j++) {
                         if (!scheduleAssignments[b]?.[j] && !leagueAssignments[div]?.[j]) {
