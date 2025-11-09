@@ -11,12 +11,14 @@
 //   - Now shows one "Time" column per division, not per bunk.
 //   - Builds the event list from the `manualSkeleton` to show
 //     custom time blocks (e.g., "11:00-11:20", "11:20-12:00").
+// - parseTimeToMinutes (BUG FIX):
+//   - Fixed `Cannot access 's' before initialization` error.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
 function parseTimeToMinutes(str) {
     if (!str || typeof str !== "string") return null;
-    let s = s.trim().toLowerCase();
+    let s = str.trim().toLowerCase(); // <-- THIS IS THE FIX
     let mer = null;
     if (s.endsWith("am") || s.endsWith("pm")) {
         mer = s.endsWith("am") ? "am" : "pm";
