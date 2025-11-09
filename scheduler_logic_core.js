@@ -15,6 +15,8 @@
 //   - This allows `getLeagueMatchups` to use custom team names
 //     (e.g., "Mets") and the scheduler will find the
 //     corresponding bunk (e.g., "B1") to place the game.
+// - *** BUG FIX ***
+//   - Fixed `app_1 is not defined` crash in `loadAndFilterData`.
 // -----------------------------------------------------------------
 
 (function() {
@@ -226,7 +228,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             matchups = pairRoundRobin(leagueTeams);
         }
 
-        // *** NEW LOGIC: Translate matchups to bunks ***
+        // *** NEW LOGLOGIC: Translate matchups to bunks ***
         const bunkMatchups = matchups.map(([teamA, teamB]) => {
             return [teamToBunk[teamA], teamToBunk[teamB]]; // e.g., [["B1", "B2"]]
         }).filter(([bunkA, bunkB]) => bunkA && bunkB); // Filter out any failed mappings
@@ -429,10 +431,14 @@ function pairRoundRobin(teamList) {
 function loadAndFilterData() {
     const globalSettings = window.loadGlobalSettings?.() || {};
     const app1Data = globalSettings.app1 || {};
+    
+    // --- THIS IS THE FIX ---
     const masterFields = app1Data.fields || [];
-    const masterDivisions = app_1.divisions || {};
-    const masterAvailableDivs = app_1.availableDivisions || [];
-    const masterSpecials = app_1.specialActivities || [];
+    const masterDivisions = app1Data.divisions || {};
+    const masterAvailableDivs = app1Data.availableDivisions || [];
+    const masterSpecials = app1Data.specialActivities || [];
+    // --- END THE FIX ---
+    
     const masterLeagues = globalSettings.leaguesByName || {};
     
     const dailyData = window.loadCurrentDailyData?.() || {};
