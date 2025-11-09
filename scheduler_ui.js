@@ -2,10 +2,6 @@
 // UI-only: rendering, save/load, init, and window exports.
 //
 // REFACTORED FOR "GRID" (Rowspan-Based)
-// - updateTable() is rewritten to iterate the 30-min unifiedTimes.
-// - It creates one <tr> per 30-min slot.
-// - It uses 'continuation' checks to calculate `rowspan`
-//   to visually group blocks of 60, 90, etc. minutes.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -44,9 +40,8 @@ function updateTable() {
     const divisions = window.divisions || {};
     const unifiedTimes = window.unifiedTimes || [];
     const scheduleAssignments = window.scheduleAssignments || {};
-    const leagueAssignments = window.leagueAssignments || {};
-    const divisionActiveRows = window.divisionActiveRows || {}; // This is no longer used, but harmless
-
+    const leagueAssignments = window.leagueAssignments || {}; // Kept for legacy data
+    
     if (unifiedTimes.length === 0) {
         container.innerHTML = "<p>No schedule times found. Generate a schedule in the Setup tab.</p>";
         return;
@@ -97,10 +92,6 @@ function updateTable() {
         availableDivisions.forEach((div) => {
             const bunks = divisions[div]?.bunks || [];
             
-            // The new "Skeleton" logic means a slot is either
-            // assigned, or it's empty. The old "divisionActiveRows"
-            // is no longer the source of truth.
-
             for (const b of bunks) {
                 const entry = scheduleAssignments[b]?.[i];
                 const league = leagueAssignments[div]?.[i]; // Keep for old data
@@ -160,18 +151,14 @@ function updateTable() {
                     // This slot is genuinely empty for this bunk
                     
                     // Check if a *previous* slot in this row was a league
-                    // This is a failsafe in case the `break` above fails
                     const prevLeague = tr.querySelector('td[colspan]');
                     if (prevLeague) {
-                        // This bunk is covered by the league's colspan
                         continue;
                     }
                     
-                    // This slot is truly empty.
                     // Check if the previous slot (i-1) was also empty to create a rowspan
                     const prevEmpty = i > 0 && !scheduleAssignments[b]?.[i-1] && !leagueAssignments[div]?.[i-1];
                     if(prevEmpty) {
-                         // This cell is part of a rowspan, skip rendering
                         continue;
                     }
                     
@@ -200,7 +187,7 @@ function updateTable() {
 
 
 // ===== Save/Load/Init =====
-// (Unchanged)
+
 function saveSchedule() {
     try {
         window.saveCurrentDailyData?.("scheduleAssignments", window.scheduleAssignments);
@@ -210,7 +197,7 @@ function saveSchedule() {
     }
 }
 
-// ===== START OF FIX 3 =====
+// ===== START OF FIX =====
 // Updated this function to remove the call to the non-existent
 // generateUnifiedTimesAndMasks()
 function reconcileOrRenderSaved() {
@@ -218,24 +205,21 @@ function reconcileOrRenderSaved() {
         const data = window.loadCurrentDailyData?.() || {};
         window.scheduleAssignments = data.scheduleAssignments || {};
         window.leagueAssignments = data.leagueAssignments || {};
+        // We also must load window.unifiedTimes if it was saved!
+        window.unifiedTimes = data.unifiedTimes || []; 
     } catch (e) {
         console.error("Reconcile saved failed:", e);
         window.scheduleAssignments = {};
         window.leagueAssignments = {};
+        window.unifiedTimes = [];
     }
     
-    // We can't generate the time grid here anymore.
-    // The grid (window.unifiedTimes) will be empty on page load,
-    // and will be populated *only* when the user clicks "Generate".
+    // The grid (window.unifiedTimes) will be empty on first page load,
+    // or loaded from save.
     // updateTable() is smart enough to handle an empty unifiedTimes.
-    
-    // if (window.generateUnifiedTimesAndMasks) {
-    //      window.generateUnifiedTimesAndMasks();
-    // }
-    
     updateTable(); 
 }
-// ===== END OF FIX 3 =====
+// ===== END OF FIX =====
 
 function initScheduleSystem() {
     try {
@@ -251,7 +235,4 @@ function initScheduleSystem() {
 // ===== Exports =====
 window.updateTable = window.updateTable || updateTable;
 window.initScheduleSystem = window.initScheduleSystem || initScheduleSystem;
-// NEW: Expose this for reconcile to use
-// window.generateUnifiedTimesAndMasks = window.generateUnifiedTimesAndMasks || generateUnifiedTimesAndMasks; // This is now removed
-// ===== FIX 2: Expose saveSchedule =====
 window.saveSchedule = window.saveSchedule || saveSchedule;
