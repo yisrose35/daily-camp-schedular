@@ -7,12 +7,16 @@
 //     from localStorage back into real Date objects.
 //   - This fixes the "slot.start.getHours is not a function" crash.
 // - updateTable() correctly switches between "Fixed" and "Staggered"
+// - `renderStaggeredView` (NEW UPDATE):
+//   - Now shows one "Time" column per division, not per bunk.
+//   - Builds the event list from the `manualSkeleton` to show
+//     custom time blocks (e.g., "11:00-11:20", "11:20-12:00").
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
 function parseTimeToMinutes(str) {
     if (!str || typeof str !== "string") return null;
-    let s = str.trim().toLowerCase();
+    let s = s.trim().toLowerCase();
     let mer = null;
     if (s.endsWith("am") || s.endsWith("pm")) {
         mer = s.endsWith("am") ? "am" : "pm";
@@ -44,6 +48,23 @@ function fmtTime(d) {
     return `${h}:${m} ${ap}`;
 }
 
+// Helper to find slots (needed by both Fixed and Staggered views)
+function findSlotsForRange(startMin, endMin) {
+    const slots = [];
+    if (!window.unifiedTimes) return slots;
+    
+    for (let i = 0; i < window.unifiedTimes.length; i++) {
+        const slot = window.unifiedTimes[i];
+        // FIX: Ensure slot.start is a Date object before calling getHours
+        const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+        
+        if (slotStart >= startMin && slotStart < endMin) {
+            slots.push(i);
+        }
+    }
+    return slots;
+}
+
 // ===== NEW: Main updateTable function =====
 // This function now just decides *which* renderer to use.
 function updateTable() {
@@ -63,6 +84,11 @@ function updateTable() {
 /**
  * Renders the "Staggered" (YKLI) view
  * This shows one column per bunk, with individual event rows.
+ *
+ * UPDATED:
+ * - Header now shows one "Time" column per *division*.
+ * - Body rows are built from the `manualSkeleton` for each division,
+ * not from the `unifiedTimes` grid.
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -70,9 +96,12 @@ function renderStaggeredView(container) {
     const availableDivisions = window.availableDivisions || [];
     const divisions = window.divisions || {};
     const scheduleAssignments = window.scheduleAssignments || {};
-    const unifiedTimes = window.unifiedTimes || [];
+
+    // Load the manual skeleton to get the *actual* time blocks
+    const dailyData = window.loadCurrentDailyData?.() || {};
+    const manualSkeleton = dailyData.manualSkeleton || [];
     
-    if (unifiedTimes.length === 0) {
+    if (manualSkeleton.length === 0) {
         container.innerHTML = "<p>No schedule built for this day. Go to the 'Master Scheduler' tab to build one.</p>";
         return;
     }
@@ -83,134 +112,130 @@ function renderStaggeredView(container) {
 
     // --- 1. Build Header ---
     const thead = document.createElement("thead");
-    const tr1 = document.createElement("tr");
-    availableDivisions.forEach((div) => {
-        const bunkCount = (divisions[div]?.bunks || []).length;
-        if (bunkCount === 0) return;
-        const th = document.createElement("th");
-        th.colSpan = bunkCount * 2; // Each bunk gets a Time + Activity column
-        th.textContent = div;
-        th.style.background = divisions[div]?.color || "#333";
-        th.style.color = "#fff";
-        th.style.border = "1px solid #999";
-        tr1.appendChild(th);
-    });
-    thead.appendChild(tr1);
+    const tr1 = document.createElement("tr"); // Division names
+    const tr2 = document.createElement("tr"); // Column titles (Time, Bunk 1, Bunk 2...)
 
-    const tr2 = document.createElement("tr");
     availableDivisions.forEach((div) => {
-        (divisions[div]?.bunks || []).forEach((b) => {
+        const bunks = divisions[div]?.bunks || [];
+        const bunkCount = bunks.length;
+        if (bunkCount === 0) return;
+
+        // Row 1: Division Name
+        const thDiv = document.createElement("th");
+        thDiv.colSpan = 1 + bunkCount; // 1 for Time, N for bunks
+        thDiv.textContent = div;
+        thDiv.style.background = divisions[div]?.color || "#333";
+        thDiv.style.color = "#fff";
+        thDiv.style.border = "1px solid #999";
+        tr1.appendChild(thDiv);
+
+        // Row 2: "Time" column for this division
+        const thTime = document.createElement("th");
+        thTime.textContent = "Time";
+        thTime.style.minWidth = "100px";
+        thTime.style.border = "1px solid #999";
+        tr2.appendChild(thTime);
+        
+        // Row 2: Bunk Names
+        bunks.forEach((b) => {
             const thBunk = document.createElement("th");
             thBunk.textContent = b;
-            thBunk.colSpan = 2;
             thBunk.style.border = "1px solid #999";
+            thBunk.style.minWidth = "120px";
             tr2.appendChild(thBunk);
         });
     });
+    thead.appendChild(tr1);
     thead.appendChild(tr2);
-
-    const tr3 = document.createElement("tr");
-    availableDivisions.forEach((div) => {
-        (divisions[div]?.bunks || []).forEach((b) => {
-            const thTime = document.createElement("th");
-            thTime.textContent = "Time";
-            thTime.style.minWidth = "80px";
-            thTime.style.border = "1px solid #999";
-            tr3.appendChild(thTime);
-            
-            const thActivity = document.createElement("th");
-            thActivity.textContent = "Activity";
-            thActivity.style.minWidth = "120px";
-            thActivity.style.border = "1px solid #999";
-            tr3.appendChild(thActivity);
-        });
-    });
-    thead.appendChild(tr3);
     table.appendChild(thead);
 
     // --- 2. Build Body (Event-based) ---
     const tbody = document.createElement("tbody");
     
-    // First, process all assignments into "real" events
-    const eventsByBunk = {};
-    let maxEvents = 0;
+    // Find all unique, sorted blocks *per division*
+    const blocksByDivision = {};
+    let maxEvents = 0; // The max number of blocks in *any* division
     
     availableDivisions.forEach(div => {
-        (divisions[div]?.bunks || []).forEach(bunk => {
-            eventsByBunk[bunk] = [];
-            let currentEvent = null;
-            (scheduleAssignments[bunk] || []).forEach((entry, i) => {
-                if (entry && !entry.continuation) {
-                    // This is the start of an event
-                    let span = 1;
-                    for (let j = i + 1; j < unifiedTimes.length; j++) {
-                        if (scheduleAssignments[bunk]?.[j]?.continuation) span++;
-                        else break;
-                    }
-                    
-                    // FIX: Ensure start/end are Date objects
-                    const startTime = new Date(unifiedTimes[i].start);
-                    const endTime = (i + span - 1 < unifiedTimes.length) ? new Date(unifiedTimes[i + span - 1].end) : new Date(unifiedTimes[unifiedTimes.length - 1].end);
-                    
-                    currentEvent = {
-                        ...entry,
-                        startTimeLabel: `${fmtTime(startTime)} - ${fmtTime(endTime)}`,
-                        startMin: startTime.getHours() * 60 + startTime.getMinutes()
-                    };
-                    eventsByBunk[bunk].push(currentEvent);
-                }
-            });
-            // Add empty slots
-            if (eventsByBunk[bunk].length === 0) {
-                 const timeline = divisions[div]?.timeline;
-                 if (timeline) {
-                    eventsByBunk[bunk].push({ startTimeLabel: `${timeline.start} - ${timeline.end}`, _fixed: true, field: { name: "Free" } });
-                 }
-            }
-            if (eventsByBunk[bunk].length > maxEvents) {
-                maxEvents = eventsByBunk[bunk].length;
+        const divBlocks = [];
+        manualSkeleton.forEach(item => {
+            if (item.division === div) {
+                divBlocks.push({
+                    label: `${item.startTime} - ${item.endTime}`,
+                    startMin: parseTimeToMinutes(item.startTime),
+                    endMin: parseTimeToMinutes(item.endTime),
+                });
             }
         });
+        
+        // Sort and Deduplicate
+        divBlocks.sort((a,b) => a.startMin - b.startMin);
+        blocksByDivision[div] = divBlocks.filter((block, index, self) =>
+            index === self.findIndex((t) => (t.label === block.label))
+        );
+        
+        if (blocksByDivision[div].length > maxEvents) {
+            maxEvents = blocksByDivision[div].length;
+        }
     });
 
-    // Now render the rows
+    // Now render the rows, one for each "event index"
     for (let i = 0; i < maxEvents; i++) {
         const tr = document.createElement("tr");
         
         availableDivisions.forEach(div => {
-            (divisions[div]?.bunks || []).forEach(bunk => {
-                const event = eventsByBunk[bunk][i];
-                
-                const tdTime = document.createElement("td");
+            const bunks = divisions[div]?.bunks || [];
+            const blocks = blocksByDivision[div] || [];
+            const eventBlock = blocks[i]; // Get the i-th event block for this division
+            
+            // --- 1. Add the TIME cell for this division ---
+            const tdTime = document.createElement("td");
+            if (eventBlock) {
+                tdTime.textContent = eventBlock.label;
+                tdTime.style.border = "1px solid #ccc";
+                tdTime.style.verticalAlign = "top";
+            } else {
+                // This division has fewer events than maxEvents
+                tdTime.className = "grey-cell";
+                tdTime.style.border = "1px solid #ccc";
+            }
+            tr.appendChild(tdTime);
+
+            // --- 2. Add the ACTIVITY cells for each BUNK ---
+            bunks.forEach(bunk => {
                 const tdActivity = document.createElement("td");
+                let entry = null;
+
+                if (eventBlock) {
+                    // Find the activity for this bunk at this block's time
+                    // We look at the *first slot* that matches the block's start time
+                    const slots = findSlotsForRange(eventBlock.startMin, eventBlock.endMin);
+                    if (slots.length > 0) {
+                        entry = scheduleAssignments[bunk]?.[slots[0]];
+                    }
+                }
                 
-                if (event) {
-                    tdTime.textContent = event.startTimeLabel;
-                    tdTime.style.border = "1px solid #ccc";
+                if (entry) {
                     tdActivity.style.border = "1px solid #ccc";
                     tdActivity.style.verticalAlign = "top";
-                    tdTime.style.verticalAlign = "top";
 
-                    if (event._h2h) {
-                        tdActivity.textContent = `${event.sport} @ ${fieldLabel(event.field)}`;
+                    if (entry._h2h) {
+                        tdActivity.textContent = `${entry.sport} @ ${fieldLabel(entry.field)}`;
                         tdActivity.style.background = "#e8f4ff";
                         tdActivity.style.fontWeight = "bold";
-                    } else if (event._fixed) {
-                        tdActivity.textContent = fieldLabel(event.field);
+                    } else if (entry._fixed) {
+                        tdActivity.textContent = fieldLabel(entry.field);
                         tdActivity.style.background = "#f1f1f1";
-                    } else if (event.sport) {
-                        tdActivity.textContent = `${fieldLabel(event.field)} – ${event.sport}`;
+                    } else if (entry.sport) {
+                        tdActivity.textContent = `${fieldLabel(entry.field)} – ${entry.sport}`;
                     } else {
-                        tdActivity.textContent = fieldLabel(event.field);
+                        tdActivity.textContent = fieldLabel(entry.field);
                     }
                 } else {
-                    // Empty cell for this bunk
-                    tdTime.className = "grey-cell";
+                    // No event for this bunk (or no eventBlock for this division)
                     tdActivity.className = "grey-cell";
-                    tdTime.style.border = "1px solid #ccc";
                     tdActivity.style.border = "1px solid #ccc";
                 }
-                tr.appendChild(tdTime);
                 tr.appendChild(tdActivity);
             });
         });
@@ -220,6 +245,7 @@ function renderStaggeredView(container) {
     table.appendChild(tbody);
     container.appendChild(table);
 }
+
 
 /**
  * Renders the "Fixed Block" (Agudah) view
@@ -318,24 +344,6 @@ function renderFixedBlockView(container) {
     table.appendChild(tbody);
     container.appendChild(table);
 }
-
-// Helper to find slots (needed by Fixed Block view)
-function findSlotsForRange(startMin, endMin) {
-    const slots = [];
-    if (!window.unifiedTimes) return slots;
-    
-    for (let i = 0; i < window.unifiedTimes.length; i++) {
-        const slot = window.unifiedTimes[i];
-        // FIX: Ensure slot.start is a Date object before calling getHours
-        const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-        
-        if (slotStart >= startMin && slotStart < endMin) {
-            slots.push(i);
-        }
-    }
-    return slots;
-}
-
 
 // ===== Save/Load/Init =====
 
