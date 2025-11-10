@@ -2,12 +2,18 @@
 // daily_overrides.js
 // This file creates the UI for the "Daily Overrides" tab.
 //
-// UPDATED (User Fix):
-// - `loadDailySkeleton`: This function's logic is now correct.
-//   It loads the `dailyData.manualSkeleton` first.
-//   If that is empty, it loads a *deep copy* of the
-//   `app1.defaultSkeleton`, which prevents the bug
-//   where editing the override accidentally edited the default.
+// UPDATED:
+// - **NEW: Trips Modify Skeleton**
+//   - Moved the "Daily Trips" section to be directly under the skeleton editor.
+//   - Removed "individual bunk" selection from the trip form to align
+//     with the division-based skeleton.
+//   - The "Add Trip" button now directly modifies the `dailyOverrideSkeleton`:
+//     1. It removes any existing blocks for the selected divisions
+//        that conflict with the trip's time.
+//     2. It adds a new 'pinned' trip block to the skeleton.
+//     3. It saves the skeleton and re-renders the grid immediately.
+//   - Removed the old `currentTrips` array and `renderTripsList` function,
+//     as the skeleton is now the single source of truth.
 // =================================================================
 
 (function() {
@@ -16,16 +22,16 @@
 let container = null;
 let masterSettings = {};
 let currentOverrides = {
-  fieldAvailability: {}, // NEW
+  fieldAvailability: {},
   leagues: []
 };
-let currentTrips = [];
+// let currentTrips = []; // No longer needed
 
 // --- Helper containers ---
-let skeletonContainer = null; // <-- NEW
+let skeletonContainer = null;
 let fieldOverridesContainer = null;
 let tripsFormContainer = null;
-let tripsListContainer = null;
+// let tripsListContainer = null; // No longer needed
 let leaguesContainer = null;
 
 // =================================================================
@@ -308,11 +314,18 @@ function renderEventTile(event, top, height) {
     }
     const style = tile ? tile.style : 'background: #eee; border: 1px solid #616161;';
     
+    // --- NEW: Add a different style for pinned 'Trip' events ---
+    let tripStyle = '';
+    if (event.type === 'pinned' && tile.type === 'custom') {
+        // This is likely a trip. Give it a distinct style.
+        tripStyle = 'background: #455a64; color: white; border: 1px solid #000;';
+    }
+
     return `
         <div class="grid-event" 
              data-event-id="${event.id}" 
              title="Click to remove this event"
-             style="${style}; padding: 2px 5px; border-radius: 4px; text-align: center; 
+             style="${tripStyle || style}; padding: 2px 5px; border-radius: 4px; text-align: center; 
                     margin: 0 1px; font-size: 0.9em; position: absolute;
                     top: ${top}px; height: ${height}px; width: calc(100% - 4px);
                     box-sizing: border-box; overflow: hidden; cursor: pointer;">
@@ -424,6 +437,8 @@ function init() {
   }
 
   console.log("Daily Overrides: Initializing for", window.currentScheduleDate);
+  
+  // --- UPDATED: Re-ordered layout ---
   container.innerHTML = `
     <h2>Overrides & Trips for ${window.currentScheduleDate}</h2>
     
@@ -437,26 +452,27 @@ function init() {
           </div>
     </div>
     
+    <div class="override-section" id="daily-trips-section">
+      <h3>Daily Trips (Adds to Skeleton)</h3>
+      <div id="trips-form-container">
+          </div>
+    </div>
+
     <div class="override-section" id="field-overrides-container">
       <h3>Field & Special Activity Time Overrides</h3>
-    </div>
-    
-    <div class="override-section">
-      <h3>Daily Trips</h3>
-      <div id="trips-form-container"></div>
-      <div id="trips-list-container"></div>
     </div>
     
     <div class="override-section" id="league-overrides-container">
       <h3>Disabled Leagues</h3>
     </div>
   `;
+  // --- END OF LAYOUT UPDATE ---
 
-  // Get references to the new containers
-  skeletonContainer = document.getElementById("override-scheduler-content"); // <-- NEW
+  // Get references to the containers
+  skeletonContainer = document.getElementById("override-scheduler-content");
   fieldOverridesContainer = document.getElementById("field-overrides-container");
   tripsFormContainer = document.getElementById("trips-form-container");
-  tripsListContainer = document.getElementById("trips-list-container");
+  // tripsListContainer = document.getElementById("trips-list-container"); // No longer needed
   leaguesContainer = document.getElementById("league-overrides-container");
 
 
@@ -468,36 +484,31 @@ function init() {
   // 2. Load the data for the *current* day
   const dailyData = window.loadCurrentDailyData?.() || {};
   
-  // Load new field availability, fall back to old "fields" list for one-time migration
   currentOverrides.fieldAvailability = dailyData.fieldAvailability || {};
   
   // Check for old "overrides" structure
   if (dailyData.overrides && dailyData.overrides.fields && dailyData.overrides.fields.length > 0 && Object.keys(currentOverrides.fieldAvailability).length === 0) {
     console.log("Daily Overrides: Migrating old 'fields' overrides...");
-    // One-time migration from old "unavailable" list
     dailyData.overrides.fields.forEach(fieldName => {
       currentOverrides.fieldAvailability[fieldName] = {
-        mode: "unavailable", // Old list only marked items as unavailable
+        mode: "unavailable",
         exceptions: []
       };
     });
-    // Save the new structure immediately
     window.saveCurrentDailyData("fieldAvailability", currentOverrides.fieldAvailability);
-    
-    // Clear the old, now-migrated data
     const newOverrides = dailyData.overrides;
     delete newOverrides.fields;
     window.saveCurrentDailyData("overrides", newOverrides);
   }
   
   currentOverrides.leagues = dailyData.overrides?.leagues || [];
-  currentTrips = dailyData.trips || [];
+  // currentTrips = dailyData.trips || []; // No longer needed
 
   // 3. Render ALL UI sections
-  initDailySkeletonUI(); // <-- NEW: Render the skeleton editor
+  initDailySkeletonUI(); // Render the skeleton editor
+  renderTripsForm();     // Render the trip form
+  // renderTripsList();  // No longer needed
   renderFieldsOverride();
-  renderTripsForm();
-  renderTripsList();
   renderLeaguesOverride();
 }
 
@@ -644,7 +655,6 @@ function renderDailyAvailabilityControls(item, onSave) {
 
 /**
 * Renders the "Field & Special Activity Time Overrides" section
-* NEW: This function now renders in-place and does not cause a page jump.
 */
 function renderFieldsOverride() {
   // Clear only its own container
@@ -766,7 +776,9 @@ function renderFieldsOverride() {
 }
 
 /**
- * NEW: Renders *only* the "Daily Trips" form
+ * UPDATED: Renders the "Daily Trips" form
+ * - Removed individual bunk picker
+ * - "Add Trip" button now modifies the skeleton directly
  */
 function renderTripsForm() {
   tripsFormContainer.innerHTML = ""; // Clear only the form container
@@ -786,7 +798,7 @@ function renderTripsForm() {
 <label for="tripEnd" style="display: inline-block; font-weight: 600;">End Time:</label>
 <input id="tripEnd" placeholder="e.g., 2:00pm" style="margin-right: 8px;">
 
-<p style="margin-top: 15px; font-weight: 600;">Select Divisions:</p>
+<p style="margin-top: 15px; font-weight: 600;">Select Divisions (Trip will apply to all bunks in the division):</p>
 `;
 
   const divisions = masterSettings.app1.divisions || {};
@@ -805,36 +817,17 @@ function renderTripsForm() {
 
   form.appendChild(divisionChipBox);
 
-  // 2. Add a separator
-  const bunkHeader = document.createElement('p');
-  bunkHeader.textContent = 'Or Select Individual Bunks:';
-  bunkHeader.style.marginTop = '15px';
-  bunkHeader.style.fontWeight = '600';
-  form.appendChild(bunkHeader);
-
-  // 3. Create Bunk Chip Box
-  const bunkChipBox = document.createElement('div');
-  bunkChipBox.className = 'chips';
-
-  availableDivisions.forEach(divName => {
-    const bunkList = divisions[divName]?.bunks || [];
-    bunkList.forEach(bunkName => {
-      const chip = createChip(bunkName, '#007BFF', false); // false = isBunk
-      bunkChipBox.appendChild(chip);
-    });
-  });
-
-  form.appendChild(bunkChipBox);
-
+  // 2. Add Button
   const addBtn = document.createElement('button');
-  addBtn.textContent = 'Add Trip';
+  addBtn.textContent = 'Add Trip to Skeleton';
   addBtn.className = 'bunk-button';
   addBtn.style.background = '#007BFF';
   addBtn.style.color = 'white';
   addBtn.style.marginTop = '15px';
 
+  // --- NEW OnClick Logic ---
   addBtn.onclick = () => {
-    console.log("Daily Overrides: 'Add Trip' button clicked.");
+    console.log("Daily Overrides: 'Add Trip to Skeleton' button clicked.");
 
     const nameEl = form.querySelector('#tripName');
     const startEl = form.querySelector('#tripStart');
@@ -849,35 +842,67 @@ function renderTripsForm() {
     const start = startEl.value;
     const end = endEl.value;
 
-    const selectedDivChips = Array.from(divisionChipBox.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
-    const selectedBunkChips = Array.from(bunkChipBox.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
-
-    const selectedTargets = [...selectedDivChips, ...selectedBunkChips];
-
-    console.log("Daily Overrides: Trip Data:", { name, start, end, selectedTargets });
+    const selectedDivisions = Array.from(divisionChipBox.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
 
     if (!name || !start || !end) {
       alert('Please enter a name, start time, and end time for the trip.');
       return;
     }
-    if (selectedTargets.length === 0) {
-      alert('Please select at least one division or bunk for the trip.');
+    if (selectedDivisions.length === 0) {
+      alert('Please select at least one division for the trip.');
       return;
     }
 
-    currentTrips.push({
-      id: Math.random().toString(36).slice(2,9),
-      name,
-      start,
-      end,
-      targets: selectedTargets
-    });
+    // --- 1. Get trip time range ---
+    const tripStartMin = parseTimeToMinutes(start);
+    const tripEndMin = parseTimeToMinutes(end);
+    if (tripStartMin == null || tripEndMin == null || tripEndMin <= tripStartMin) {
+        alert('Invalid time range. Please use formats like "9:00am" and ensure end is after start.');
+        return;
+    }
 
-    console.log("Daily Overrides: Saving trips...", currentTrips);
-    window.saveCurrentDailyData("trips", currentTrips);
+    // --- 2. Remove conflicting blocks from skeleton ---
+    loadDailySkeleton(); // Ensure we have the latest
     
-    // --- FIX: Re-render ONLY the list and clear the form ---
-    renderTripsList();
+    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(item => {
+        // Keep if division is not affected
+        if (!selectedDivisions.includes(item.division)) {
+            return true; 
+        }
+        
+        // It's an affected division. Check for time overlap.
+        const itemStartMin = parseTimeToMinutes(item.startTime);
+        const itemEndMin = parseTimeToMinutes(item.endTime);
+        if (itemStartMin == null || itemEndMin == null) {
+            return true; // Keep malformed items
+        }
+
+        // Overlap check: (StartA < EndB) and (EndA > StartB)
+        const overlaps = (itemStartMin < tripEndMin) && (itemEndMin > tripStartMin);
+        
+        return !overlaps; // Keep if it *doesn't* overlap
+    });
+    
+    // --- 3. Add new trip blocks ---
+    selectedDivisions.forEach(divName => {
+         dailyOverrideSkeleton.push({
+            id: `evt_${Math.random().toString(36).slice(2, 9)}`,
+            type: 'pinned',
+            event: name, // Trip Name
+            division: divName,
+            startTime: start,
+            endTime: end
+         });
+    });
+    
+    // --- 4. Save, Re-render, and Clear ---
+    saveDailySkeleton(); // Saves `dailyOverrideSkeleton` to current day
+    
+    // Re-render the grid
+    const gridContainer = skeletonContainer.querySelector('#daily-skeleton-grid');
+    if (gridContainer) {
+        renderGrid(gridContainer);
+    }
     
     // Clear form
     nameEl.value = "";
@@ -886,51 +911,17 @@ function renderTripsForm() {
     form.querySelectorAll('.bunk-button.selected').forEach(chip => {
         chip.click(); // This will toggle the class and style
     });
-    // --- END FIX ---
   };
+  // --- END of NEW OnClick Logic ---
 
   form.appendChild(addBtn);
   tripsFormContainer.appendChild(form);
 }
 
 /**
- * NEW: Renders *only* the list of current trips
+ * renderTripsList() is no longer needed.
  */
-function renderTripsList() {
-  tripsListContainer.innerHTML = ""; // Clear only the list container
-
-  const listHeader = document.createElement('h4');
-  listHeader.textContent = 'Scheduled Trips for This Day:';
-  listHeader.style.marginTop = '20px';
-  tripsListContainer.appendChild(listHeader);
-
-  if (currentTrips.length === 0) {
-    tripsListContainer.innerHTML += '<p class="muted">No trips scheduled for this day.</p>';
-  }
-
-  currentTrips.forEach(trip => {
-    const item = document.createElement('div');
-    item.className = 'item';
-    item.innerHTML = `
-  <div style="flex-grow:1;">
-    <div><strong>${trip.name}</strong></div>
-    <div class="muted" style="font-size: 0.9em;">${trip.start} - ${trip.end}</div>
-    <div class="muted" style="font-size: 0.8em; padding-left: 10px;">
-      &hookrightarrow; Applies to: ${trip.targets.join(', ')}
-    </div>
-  </div>
-  <button data-id="${trip.id}" style="padding: 6px 10px; border-radius:4px; cursor:pointer; background: #c0392b; color: white;">Remove</button>
-  `;
-
-    item.querySelector('button').onclick = () => {
-      console.log("Daily Overrides: Removing trip", trip.id);
-      currentTrips = currentTrips.filter(t => t.id !== trip.id);
-      window.saveCurrentDailyData("trips", currentTrips);
-      renderTripsList(); // Re-render only this list
-    };
-    tripsListContainer.appendChild(item);
-  });
-}
+// function renderTripsList() { ... }
 
 
 /**
