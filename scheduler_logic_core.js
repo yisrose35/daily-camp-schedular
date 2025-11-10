@@ -2,16 +2,14 @@
 // This file is now the "OPTIMIZER"
 //
 // UPDATED:
-// - **NEW LOGIC (Pass 2):**
-//   - Added an `else if (item.type === 'split')` block.
-//   - This logic reads the `subEvents` array created by
-//     the Master Scheduler.
-//   - It splits the division's bunks into two halves.
-//   - It splits the time block's slots into two halves.
-//   - It correctly assigns the activities to the swapped groups
-//     (e.g., Half 1 gets Swim, Half 2 gets Activity, then they swap).
-//   - It 'pins' fixed activities (like Swim) directly and adds
-//     schedulable slots (like Activity) to the Pass 4 list.
+// - *** CRITICAL FIX (Start Time Bug) ***
+//   - Pass 1 (Generate Master Time Grid) no longer scans all
+//     divisions for the earliest time.
+//   - It now calculates `earliestMin` and `latestMin` based
+//     ONLY on the time blocks present in the `manualSkeleton`.
+//   - This prevents the grid from generating empty rows
+//     (e.g., 9am-11am) when the day's schedule only
+//     starts at 11am.
 //
 // (Production Version: All console logs removed)
 // -----------------------------------------------------------------
@@ -37,8 +35,8 @@ function parseTimeToMinutes(str) {
     const mm = parseInt(m[2], 10);
     if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
     if (mer) {
-        if (hh === 12) hh = mer === "am" ? 0 : 12;
-        else if (mer === "pm") hh += 12;
+        if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
+        else if (mer === "pm") hh += 12; // 1pm -> 13
     }
     return hh * 60 + mm;
 }
@@ -63,7 +61,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     window.unifiedTimes = []; 
     
     if (!manualSkeleton || manualSkeleton.length === 0) {
-        // No skeleton
+        return false; // No skeleton, nothing to do
     }
     
     const { 
@@ -80,15 +78,28 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     let fieldUsageBySlot = {}; 
     
     // ===== PASS 1: Generate Master Time Grid =====
-    let earliestMin = 540; 
-    let latestMin = 960; 
-    availableDivisions.forEach(divName => {
-        const timeline = divisions[divName]?.timeline;
-        if (timeline) {
-            earliestMin = Math.min(earliestMin, parseTimeToMinutes(timeline.start) || 540);
-            latestMin = Math.max(latestMin, parseTimeToMinutes(timeline.end) || 960);
+    // *** START OF FIX ***
+    // Calculate time range based *only* on the skeleton, not all divisions.
+    let earliestMin = 1440; // (24 * 60)
+    let latestMin = 0;
+
+    manualSkeleton.forEach(item => {
+        const start = parseTimeToMinutes(item.startTime);
+        const end = parseTimeToMinutes(item.endTime);
+        if (start != null && start < earliestMin) {
+            earliestMin = start;
+        }
+        if (end != null && end > latestMin) {
+            latestMin = end;
         }
     });
+
+    // Failsafe if skeleton was empty or had invalid times
+    if (earliestMin === 1440 || latestMin === 0) {
+        earliestMin = 540; // 9:00 AM
+        latestMin = 960; // 4:00 PM
+    }
+    // *** END OF FIX ***
 
     const baseDate = new Date(1970, 0, 1, 0, 0, 0); 
     let currentMin = earliestMin;
@@ -109,6 +120,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         return false;
     }
 
+    // Initialize all bunks with empty arrays for the new grid
     availableDivisions.forEach(divName => {
         (divisions[divName]?.bunks || []).forEach(bunk => {
             window.scheduleAssignments[bunk] = new Array(window.unifiedTimes.length);
@@ -132,7 +144,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         }
 
         if (item.type === 'pinned') {
-            // This is a "Pinned" event like Lunch or Snacks.
             allBunks.forEach(bunk => {
                 allSlots.forEach((slotIndex, idx) => {
                     if (!window.scheduleAssignments[bunk][slotIndex]) {
@@ -146,28 +157,19 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                 });
             });
         
-        // --- NEW LOGIC FOR SPLIT BLOCKS ---
         } else if (item.type === 'split') {
-            if (!item.subEvents || item.subEvents.length < 2) return; // Malformed
+            if (!item.subEvents || item.subEvents.length < 2) return; 
             
-            const event1 = item.subEvents[0]; // e.g., { type: 'pinned', event: 'Swim' }
-            const event2 = item.subEvents[1]; // e.g., { type: 'slot', event: 'General Activity Slot' }
+            const event1 = item.subEvents[0]; 
+            const event2 = item.subEvents[1]; 
 
-            // 1. Split Bunks
             const splitIndex = Math.ceil(allBunks.length / 2);
             const bunksHalf1 = allBunks.slice(0, splitIndex);
             const bunksHalf2 = allBunks.slice(splitIndex);
             
-            // 2. Split Slots
             const slotSplitIndex = Math.ceil(allSlots.length / 2);
             const slotsHalf1 = allSlots.slice(0, slotSplitIndex);
             const slotsHalf2 = allSlots.slice(slotSplitIndex);
-
-            // 3. Create the 4 assignment groups
-            // Group A: Bunks 1-5, Time 11:00-11:30 -> Event 1 (Swim)
-            // Group B: Bunks 6-10, Time 11:00-11:30 -> Event 2 (Activity)
-            // Group C: Bunks 1-5, Time 11:30-12:00 -> Event 2 (Activity)
-            // Group D: Bunks 6-10, Time 11:30-12:00 -> Event 1 (Swim)
             
             const groups = [
                 { bunks: bunksHalf1, slots: slotsHalf1, eventDef: event1 },
@@ -177,11 +179,10 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             ];
 
             groups.forEach(group => {
-                if (group.slots.length === 0) return; // Skip if no time
+                if (group.slots.length === 0) return; 
                 
                 group.bunks.forEach(bunk => {
                     if (group.eventDef.type === 'pinned') {
-                        // This is "Swim" or "Lunch". Pin it directly.
                         group.slots.forEach((slotIndex, idx) => {
                              if (!window.scheduleAssignments[bunk][slotIndex]) {
                                 window.scheduleAssignments[bunk][slotIndex] = {
@@ -193,12 +194,11 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                             }
                         });
                     } else if (group.eventDef.type === 'slot') {
-                        // This is "Activity". Add to Pass 4 to-do list.
                         schedulableSlotBlocks.push({
                             divName: item.division,
                             bunk: bunk,
-                            event: group.eventDef.event, // e.g., "General Activity Slot"
-                            startTime: startMin, // Note: these times are just for grouping, not exact
+                            event: group.eventDef.event, 
+                            startTime: startMin, 
                             endTime: endMin,
                             slots: group.slots
                         });
@@ -207,12 +207,11 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             });
 
         } else if (item.type === 'slot') {
-            // This is a standard Schedulable Slot.
             allBunks.forEach(bunk => {
                 schedulableSlotBlocks.push({
                     divName: item.division,
                     bunk: bunk,
-                    event: item.event, // e.g., "General Activity Slot", "League Game", "Sports Slot"
+                    event: item.event, 
                     startTime: startMin,
                     endTime: endMin,
                     slots: allSlots
@@ -363,7 +362,7 @@ function findSlotsForRange(startMin, endMin) {
     
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
-        const slotStart = slot.start.getHours() * 60 + slot.start.getMinutes();
+        const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
         
         if (slotStart >= startMin && slotStart < endMin) {
             slots.push(i);
@@ -479,7 +478,7 @@ function loadAndFilterData() {
     });
     availSpecials.forEach(s => {
          activityProperties[s.name] = {
-            sharable: s.sharableWith?.type === 'all' || s.sharableWith?.type === 'custom',
+            sharable: s.sharableWith?.type === 'all' || f.sharableWith?.type === 'custom',
             allowedDivisions: (s.sharableWith?.divisions?.length > 0) ? s.sharableWith.divisions : availableDivisions,
             limitUsage: s.limitUsage
         };
