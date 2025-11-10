@@ -2,8 +2,19 @@
 // daily_overrides.js
 // This file creates the UI for the "Daily Overrides" tab.
 //
-// NEW: Fixed page-jump bug on field override add/remove.
-// NEW: Fixed "Add Trip" functionality and split render functions.
+// UPDATED:
+// - **NEW: Daily Skeleton Editor**
+//   - Added a new section to `init()` to host the skeleton editor.
+//   - Copied all UI rendering logic from `master_schedule_builder.js`
+//     (e.g., `renderGrid`, `renderPalette`, `addDropListeners`)
+//     into this file.
+//   - This new UI loads the *day-specific* `manualSkeleton`.
+//   - All edits (add/remove) are saved *only* to the current day
+//     using `saveDailySkeleton()`.
+//   - This allows overriding the default skeleton for a single day
+//     *before* running the optimizer.
+//
+// (Other existing override functions remain unchanged below)
 // =================================================================
 
 (function() {
@@ -18,10 +29,367 @@ let currentOverrides = {
 let currentTrips = [];
 
 // --- Helper containers ---
+let skeletonContainer = null; // <-- NEW
 let fieldOverridesContainer = null;
 let tripsFormContainer = null;
 let tripsListContainer = null;
 let leaguesContainer = null;
+
+// =================================================================
+// ===== START: SKELETON EDITOR LOGIC (Copied from master_schedule_builder.js) =====
+// =================================================================
+
+let dailyOverrideSkeleton = []; // This file's copy of the skeleton
+const PIXELS_PER_MINUTE = 2;
+const INCREMENT_MINS = 30;
+
+const TILES = [
+    { type: 'activity', name: 'Activity', style: 'background: #e0f7fa; border: 1px solid #007bff;' },
+    { type: 'sports', name: 'Sports', style: 'background: #dcedc8; border: 1px solid #689f38;' },
+    { type: 'special', name: 'Special Activity', style: 'background: #e8f5e9; border: 1px solid #43a047;' },
+    { type: 'split', name: 'Split Activity', style: 'background: #fff3e0; border: 1px solid #f57c00;' },
+    { type: 'league', name: 'League Game', style: 'background: #d1c4e9; border: 1px solid #5e35b1;' },
+    { type: 'specialty_league', name: 'Specialty League', style: 'background: #fff8e1; border: 1px solid #f9a825;' },
+    { type: 'swim', name: 'Swim', style: 'background: #bbdefb; border: 1px solid #1976d2;' },
+    { type: 'lunch', name: 'Lunch', style: 'background: #fbe9e7; border: 1px solid #d84315;' },
+    { type: 'snacks', name: 'Snacks', style: 'background: #fff9c4; border: 1px solid #fbc02d;' },
+    { type: 'custom', name: 'Custom Pinned Event', style: 'background: #eee; border: 1px solid #616161;' }
+];
+
+/**
+ * Helper: Translates user-friendly names from prompts
+ * into the correct event type and name for the optimizer.
+ */
+function mapEventNameForOptimizer(name) {
+    if (!name) name = "Free";
+    const lowerName = name.toLowerCase().trim();
+
+    if (lowerName === 'activity') {
+        return { type: 'slot', event: 'General Activity Slot' };
+    }
+    if (lowerName === 'sports') {
+        return { type: 'slot', event: 'Sports Slot' };
+    }
+    if (lowerName === 'special activity' || lowerName === 'special') {
+        return { type: 'slot', event: 'Special Activity' };
+    }
+    if (lowerName === 'swim' || lowerName === 'lunch' || lowerName === 'snacks') {
+        return { type: 'pinned', event: name };
+    }
+    return { type: 'pinned', event: name };
+}
+
+/**
+ * Renders the draggable tiles
+ */
+function renderPalette(paletteContainer) {
+    paletteContainer.innerHTML = '<span style="font-weight: 600; align-self: center;">Drag to add:</span>';
+    TILES.forEach(tile => {
+        const el = document.createElement('div');
+        el.className = 'grid-tile-draggable';
+        el.textContent = tile.name;
+        el.style.cssText = tile.style;
+        el.style.padding = '8px 12px';
+        el.style.borderRadius = '5px';
+        el.style.cursor = 'grab';
+        
+        el.draggable = true;
+        
+        el.ondragstart = (e) => {
+            e.dataTransfer.setData('application/json', JSON.stringify(tile));
+            e.dataTransfer.effectAllowed = 'copy';
+            el.style.cursor = 'grabbing';
+        };
+        
+        el.ondragend = () => {
+            el.style.cursor = 'grab';
+        };
+        
+        paletteContainer.appendChild(el);
+    });
+}
+
+/**
+ * Renders the main schedule grid
+ */
+function renderGrid(gridContainer) {
+    const divisions = window.divisions || {};
+    const availableDivisions = window.availableDivisions || [];
+    
+    let earliestMin = 1440; 
+    let latestMin = 0;
+
+    if (dailyOverrideSkeleton.length > 0) {
+        dailyOverrideSkeleton.forEach(item => {
+            const start = parseTimeToMinutes(item.startTime);
+            const end = parseTimeToMinutes(item.endTime);
+            if (start != null && start < earliestMin) earliestMin = start;
+            if (end != null && end > latestMin) latestMin = end;
+        });
+    } else {
+        earliestMin = 540; // 9:00 AM
+        latestMin = 960; // 4:00 PM
+    }
+    
+    const totalMinutes = latestMin - earliestMin;
+    const totalHeight = totalMinutes * PIXELS_PER_MINUTE;
+
+    let gridHtml = `<div style="display: grid; grid-template-columns: 60px repeat(${availableDivisions.length}, 1fr); position: relative;">`;
+    
+    gridHtml += `<div style="grid-row: 1; position: sticky; top: 0; background: #fff; z-index: 10; border-bottom: 1px solid #999; padding: 8px;">Time</div>`;
+    availableDivisions.forEach((divName, i) => {
+        gridHtml += `<div style="grid-row: 1; grid-column: ${i + 2}; position: sticky; top: 0; background: ${divisions[divName]?.color || '#333'}; color: #fff; z-index: 10; border-bottom: 1px solid #999; padding: 8px; text-align: center;">${divName}</div>`;
+    });
+
+    gridHtml += `<div style="grid-row: 2; grid-column: 1; height: ${totalHeight}px; position: relative; background: #f9f9f9; border-right: 1px solid #ccc;">`;
+    for (let min = earliestMin; min < latestMin; min += INCREMENT_MINS) {
+        const top = (min - earliestMin) * PIXELS_PER_MINUTE;
+        gridHtml += `<div style="position: absolute; top: ${top}px; left: 0; width: 100%; height: ${INCREMENT_MINS * PIXELS_PER_MINUTE}px; border-bottom: 1px dashed #ddd; box-sizing: border-box; font-size: 10px; padding: 2px; color: #777;">
+            ${minutesToTime(min)}
+        </div>`;
+    }
+    gridHtml += `</div>`;
+    
+    availableDivisions.forEach((divName, i) => {
+        const divTimeline = divisions[divName]?.timeline;
+        const divStart = parseTimeToMinutes(divTimeline?.start);
+        const divEnd = parseTimeToMinutes(divTimeline?.end);
+        
+        gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
+
+        if (divStart && divStart > earliestMin) {
+            gridHtml += `<div style="position: absolute; top: 0; height: ${(divStart - earliestMin) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
+        }
+        if (divEnd && divEnd < latestMin) {
+            gridHtml += `<div style="position: absolute; top: ${(divEnd - earliestMin) * PIXELS_PER_MINUTE}px; height: ${(latestMin - divEnd) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
+        }
+
+        dailyOverrideSkeleton.filter(ev => ev.division === divName).forEach(event => {
+            const startMin = parseTimeToMinutes(event.startTime);
+            const endMin = parseTimeToMinutes(event.endTime);
+            if (startMin == null || endMin == null) return;
+
+            const top = (startMin - earliestMin) * PIXELS_PER_MINUTE;
+            const height = (endMin - startMin) * PIXELS_PER_MINUTE;
+
+            gridHtml += renderEventTile(event, top, height);
+        });
+
+        gridHtml += `</div>`;
+    });
+
+    gridHtml += `</div>`;
+    gridContainer.innerHTML = gridHtml;
+    
+    // Add Listeners
+    addDropListeners(gridContainer);
+    addRemoveListeners(gridContainer);
+}
+
+/**
+ * Helper to add all the drag/drop event listeners
+ */
+function addDropListeners(gridContainer) {
+    gridContainer.querySelectorAll('.grid-cell').forEach(cell => {
+        cell.ondragover = (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            cell.style.backgroundColor = '#e0ffe0';
+        };
+        
+        cell.ondragleave = () => {
+            cell.style.backgroundColor = '';
+        };
+        
+        cell.ondrop = (e) => {
+            e.preventDefault();
+            cell.style.backgroundColor = '';
+            
+            const tileData = JSON.parse(e.dataTransfer.getData('application/json'));
+            const divName = cell.dataset.div;
+            
+            const rect = cell.getBoundingClientRect();
+            // Find the correct scroll container
+            const scrollTop = cell.closest('#daily-skeleton-grid')?.scrollTop || 0; 
+            const y = e.clientY - rect.top + scrollTop;
+            
+            const droppedMin = Math.round(y / PIXELS_PER_MINUTE / 15) * 15;
+            const earliestMin = parseInt(cell.dataset.startMin, 10);
+            const defaultStartTime = minutesToTime(earliestMin + droppedMin);
+            
+            let eventType = 'slot';
+            let eventName = tileData.name;
+            let newEvent = null; 
+
+            if (tileData.type === 'activity') eventName = 'General Activity Slot';
+            else if (tileData.type === 'sports') eventName = 'Sports Slot';
+            else if (tileData.type === 'special') eventName = 'Special Activity';
+            else if (tileData.type === 'league' || tileData.type === 'specialty_league' || tileData.type === 'swim') eventName = tileData.name; 
+            
+            if (tileData.type === 'split') {
+                const startTime = prompt(`Enter Start Time for the *full* block:`, defaultStartTime);
+                if (!startTime) return;
+                const endTime = prompt(`Enter End Time for the *full* block:`);
+                if (!endTime) return;
+                const eventName1 = prompt("Enter name for FIRST activity (e.g., Swim, Sports):");
+                if (!eventName1) return;
+                const eventName2 = prompt("Enter name for SECOND activity (e.g., Activity, Sports):");
+                if (!eventName2) return;
+                const event1 = mapEventNameForOptimizer(eventName1);
+                const event2 = mapEventNameForOptimizer(eventName2);
+                newEvent = {
+                    id: `evt_${Math.random().toString(36).slice(2, 9)}`,
+                    type: 'split',
+                    event: `${eventName1} / ${eventName2}`,
+                    division: divName,
+                    startTime: startTime,
+                    endTime: endTime,
+                    subEvents: [ event1, event2 ]
+                };
+            } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'custom') {
+                eventType = 'pinned';
+                if (tileData.type === 'custom') {
+                    eventName = prompt("Enter the name for this custom event (e.g., 'Snacks'):");
+                    if (!eventName) return;
+                    if (confirm("Is this a 'Slot' to be filled (OK) or a 'Pinned' event (Cancel)?")) {
+                        eventType = 'slot';
+                    }
+                } else {
+                    eventName = tileData.name;
+                }
+            }
+
+            if (!newEvent) {
+                const startTime = prompt(`Add "${eventName}" for ${divName}?\nEnter Start Time:`, defaultStartTime);
+                if (!startTime) return;
+                const endTime = prompt(`Enter End Time:`);
+                if (!endTime) return;
+                newEvent = {
+                    id: `evt_${Math.random().toString(36).slice(2, 9)}`,
+                    type: eventType,
+                    event: eventName,
+                    division: divName,
+                    startTime: startTime,
+                    endTime: endTime
+                };
+            }
+            
+            dailyOverrideSkeleton.push(newEvent);
+            saveDailySkeleton(); // Save to this day's data
+            renderGrid(gridContainer); // Re-render this UI
+        };
+    });
+}
+
+/**
+ * Helper to add click-to-remove listeners
+ */
+function addRemoveListeners(gridContainer) {
+    gridContainer.querySelectorAll('.grid-event').forEach(tile => {
+        tile.onclick = (e) => {
+            e.stopPropagation(); 
+            const eventId = tile.dataset.eventId;
+            if (!eventId) return;
+            const event = dailyOverrideSkeleton.find(ev => ev.id === eventId);
+            if (confirm(`Remove "${event?.event || 'this event'}"?`)) {
+                dailyOverrideSkeleton = dailyOverrideSkeleton.filter(ev => ev.id !== eventId);
+                saveDailySkeleton(); // Save to this day's data
+                renderGrid(gridContainer); // Re-render this UI
+            }
+        };
+    });
+}
+
+
+/**
+ * Renders a single event tile
+ */
+function renderEventTile(event, top, height) {
+    let tile = TILES.find(t => t.name === event.event);
+    if (!tile) {
+        if (event.type === 'split') tile = TILES.find(t => t.type === 'split');
+        else if (event.event === 'General Activity Slot') tile = TILES.find(t => t.type === 'activity');
+        else if (event.event === 'Sports Slot') tile = TILES.find(t => t.type === 'sports');
+        else if (event.event === 'Special Activity') tile = TILES.find(t => t.type === 'special');
+        else tile = TILES.find(t => t.type === 'custom');
+    }
+    const style = tile ? tile.style : 'background: #eee; border: 1px solid #616161;';
+    
+    return `
+        <div class="grid-event" 
+             data-event-id="${event.id}" 
+             title="Click to remove this event"
+             style="${style}; padding: 2px 5px; border-radius: 4px; text-align: center; 
+                    margin: 0 1px; font-size: 0.9em; position: absolute;
+                    top: ${top}px; height: ${height}px; width: calc(100% - 4px);
+                    box-sizing: border-box; overflow: hidden; cursor: pointer;">
+            <strong>${event.event}</strong>
+            <div style="font-size: 0.85em;">${event.startTime} - ${event.endTime}</div>
+        </div>
+    `;
+}
+
+/**
+ * Loads the skeleton for the *current day*, falling back to the default.
+ * (This is the same logic as in master_schedule_builder.js)
+ */
+function loadDailySkeleton() {
+    const dailyData = window.loadCurrentDailyData?.() || {};
+    if (dailyData.manualSkeleton && dailyData.manualSkeleton.length > 0) {
+        dailyOverrideSkeleton = dailyData.manualSkeleton;
+    } else {
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const app1Data = globalSettings.app1 || {};
+        dailyOverrideSkeleton = app1Data.defaultSkeleton || [];
+    }
+}
+/**
+ * Saves the skeleton *only* to the current day's "manualSkeleton" key.
+ * (This is the same logic as in master_schedule_builder.js)
+ */
+function saveDailySkeleton() {
+    window.saveCurrentDailyData?.("manualSkeleton", dailyOverrideSkeleton);
+}
+
+/**
+ * Helper to convert 24h minutes to 12h time string
+ */
+function minutesToTime(min) {
+    const hh = Math.floor(min / 60);
+    const mm = min % 60;
+    const h = hh % 12 === 0 ? 12 : hh % 12;
+    const m = String(mm).padStart(2, '0');
+    const ampm = hh < 12 ? 'am' : 'pm';
+    return `${h}:${m}${ampm}`;
+}
+
+/**
+ * Main entry point for the SKELETON UI on *this* tab
+ */
+function initDailySkeletonUI() {
+    skeletonContainer = document.getElementById("override-scheduler-content");
+    if (!skeletonContainer) return;
+    
+    loadDailySkeleton();
+    
+    skeletonContainer.innerHTML = `
+        <div id="daily-skeleton-palette" style="padding: 10px; background: #f4f4f4; border-radius: 8px; margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px;">
+        </div>
+        <div id="daily-skeleton-grid" style="overflow-x: auto; border: 1px solid #999; max-height: 600px; overflow-y: auto;">
+        </div>
+    `;
+    
+    const palette = document.getElementById("daily-skeleton-palette");
+    const grid = document.getElementById("daily-skeleton-grid");
+
+    renderPalette(palette);
+    renderGrid(grid);
+}
+
+// =================================================================
+// ===== END: SKELETON EDITOR LOGIC =====
+// =================================================================
+
 
 /**
  * This is a copy of the helper from scheduler_logic_core.js
@@ -61,6 +429,16 @@ function init() {
   container.innerHTML = `
     <h2>Overrides & Trips for ${window.currentScheduleDate}</h2>
     
+    <div class="override-section" id="daily-skeleton-editor-section">
+      <h3>Daily Skeleton Override</h3>
+      <p style="font-size: 0.9em; color: #555;">
+        Modify the schedule layout for <strong>this day only</strong>.
+        Changes here will not affect your default schedule template.
+      </p>
+      <div id="override-scheduler-content">
+          </div>
+    </div>
+    
     <div class="override-section" id="field-overrides-container">
       <h3>Field & Special Activity Time Overrides</h3>
     </div>
@@ -77,6 +455,7 @@ function init() {
   `;
 
   // Get references to the new containers
+  skeletonContainer = document.getElementById("override-scheduler-content"); // <-- NEW
   fieldOverridesContainer = document.getElementById("field-overrides-container");
   tripsFormContainer = document.getElementById("trips-form-container");
   tripsListContainer = document.getElementById("trips-list-container");
@@ -116,7 +495,8 @@ function init() {
   currentOverrides.leagues = dailyData.overrides?.leagues || [];
   currentTrips = dailyData.trips || [];
 
-  // 3. Render the UI sections
+  // 3. Render ALL UI sections
+  initDailySkeletonUI(); // <-- NEW: Render the skeleton editor
   renderFieldsOverride();
   renderTripsForm();
   renderTripsList();
