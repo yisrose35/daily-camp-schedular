@@ -9,9 +9,14 @@
 //   - `renderGrid`: Now calls a new function `addRemoveListeners`
 //     after the grid is rendered.
 //   - `addRemoveListeners` (New): This function attaches an `onclick`
-//     handler to all `.grid-event` tiles. Clicking a tile
-//     confirms, removes the event from `dailySkeleton`, saves,
-//     and re-renders the grid.
+//     handler to all `.grid-event` tiles.
+// - *** CRITICAL FIX (Start Time Bug) ***
+//   - `renderGrid` no longer scans all divisions for the
+//     earliest time.
+//   - It now calculates `earliestMin` and `latestMin` based
+//     ONLY on the time blocks present in the `dailySkeleton`,
+//     just like the optimizer.
+//   - This prevents the grid from *displaying* empty rows.
 // =================================================================
 
 (function() {
@@ -133,18 +138,28 @@ function renderGrid() {
     const divisions = window.divisions || {};
     const availableDivisions = window.availableDivisions || [];
     
-    let earliestMin = 540; // 9:00 AM
-    let latestMin = 960; // 4:00 PM
-    
-    try {
-        availableDivisions.forEach(divName => {
-            const timeline = divisions[divName]?.timeline;
-            if (timeline) {
-                earliestMin = Math.min(earliestMin, parseTimeToMinutes(timeline.start) || 540);
-                latestMin = Math.max(latestMin, parseTimeToMinutes(timeline.end) || 960);
+    // *** START OF FIX ***
+    // Calculate time range based *only* on the skeleton.
+    let earliestMin = 1440; // (24 * 60)
+    let latestMin = 0;
+
+    if (dailySkeleton.length > 0) {
+        dailySkeleton.forEach(item => {
+            const start = parseTimeToMinutes(item.startTime);
+            const end = parseTimeToMinutes(item.endTime);
+            if (start != null && start < earliestMin) {
+                earliestMin = start;
+            }
+            if (end != null && end > latestMin) {
+                latestMin = end;
             }
         });
-    } catch (e) { /* ignore */ }
+    } else {
+        // Failsafe if skeleton is empty
+        earliestMin = 540; // 9:00 AM
+        latestMin = 960; // 4:00 PM
+    }
+    // *** END OF FIX ***
     
     const totalMinutes = latestMin - earliestMin;
     const totalHeight = totalMinutes * PIXELS_PER_MINUTE;
@@ -167,15 +182,17 @@ function renderGrid() {
     
     availableDivisions.forEach((divName, i) => {
         const divTimeline = divisions[divName]?.timeline;
-        const divStart = parseTimeToMinutes(divTimeline.start);
-        const divEnd = parseTimeToMinutes(divTimeline.end);
+        const divStart = parseTimeToMinutes(divTimeline?.start);
+        const divEnd = parseTimeToMinutes(divTimeline?.end);
         
         gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
 
-        if (divStart > earliestMin) {
+        // Render "Out of Bounds" (disabled) areas
+        // Only render if the division's timeline is *within* the grid's range
+        if (divStart && divStart > earliestMin) {
             gridHtml += `<div style="position: absolute; top: 0; height: ${(divStart - earliestMin) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
         }
-        if (divEnd < latestMin) {
+        if (divEnd && divEnd < latestMin) {
             gridHtml += `<div style="position: absolute; top: ${(divEnd - earliestMin) * PIXELS_PER_MINUTE}px; height: ${(latestMin - divEnd) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
         }
 
@@ -198,7 +215,7 @@ function renderGrid() {
     
     // --- Add Listeners ---
     addDropListeners('.grid-cell');
-    addRemoveListeners('.grid-event'); // NEW
+    addRemoveListeners('.grid-event');
 }
 
 /**
@@ -321,23 +338,17 @@ function addDropListeners(selector) {
 function addRemoveListeners(selector) {
     grid.querySelectorAll(selector).forEach(tile => {
         tile.onclick = (e) => {
-            e.stopPropagation(); // Prevent triggering drop listener if it overlaps
+            e.stopPropagation(); 
             
             const eventId = tile.dataset.eventId;
             if (!eventId) return;
 
-            // Find the event name for the confirmation
             const event = dailySkeleton.find(ev => ev.id === eventId);
             const eventName = event ? event.event : 'this event';
 
             if (confirm(`Are you sure you want to remove "${eventName}"?`)) {
-                // Filter the skeleton array to remove the item
                 dailySkeleton = dailySkeleton.filter(ev => ev.id !== eventId);
-                
-                // Save the updated skeleton
                 saveDailySkeleton();
-                
-                // Re-render the grid to show the change
                 renderGrid();
             }
         };
@@ -367,7 +378,6 @@ function renderEventTile(event, top, height) {
     
     const style = tile ? tile.style : 'background: #eee; border: 1px solid #616161;';
     
-    // UPDATED: Added cursor: pointer and title
     return `
         <div class="grid-event" 
              data-event-id="${event.id}" 
@@ -399,13 +409,19 @@ function runOptimizer() {
     
     saveDailySkeleton();
     
+    // Check if skeleton is empty *before* running
+    if (dailySkeleton.length === 0) {
+        alert("Skeleton is empty. Please add blocks to the schedule before running the optimizer.");
+        return;
+    }
+    
     const success = window.runSkeletonOptimizer(dailySkeleton);
     
     if (success) {
         alert("Schedule Generated Successfully!");
         showTab('schedule');
     } else {
-        alert("Error during schedule generation. Check console for details.");
+        alert("Error during schedule generation. Check console for details (or skeleton may be empty).");
     }
 }
 
