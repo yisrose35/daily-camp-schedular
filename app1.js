@@ -2,15 +2,11 @@
 // app1.js
 //
 // UPDATED:
-// - **REMOVED** `renderDivisionTimelineEditor` function.
-// - **RESTORED** the `timeline` property to the `divisions`
-//   object so the master scheduler can read it for visual guides.
-// - **NEW** Added `globalStartTime` and `globalEndTime` variables.
-// - `loadData` now loads these new global times.
-// - `saveData` now saves these new global times.
-// - **UPDATED** `initApp1` to use a new "Update" button for
-//   global times, removed 'onchange', and added validation
-//   and grid-refresh logic.
+// - **REMOVED** all references to the `division.timeline` property
+//   from `addDivision`, `saveData`, and `loadData`. It is no
+//   longer needed.
+// - All logic for "Global Camp Times" and the "Update" button
+//   remains intact.
 // =================================================================
 
 (function() {
@@ -18,14 +14,14 @@
 
 // -------------------- State --------------------
 let bunks = [];
-let divisions = {}; // { divName:{ bunks:[], color, timeline: {start, end} } }
+let divisions = {}; // { divName:{ bunks:[], color } }
 
 let availableDivisions = [];
 let selectedDivision = null;
 
-// NEW: Global time settings
-let globalStartTime = "9:00 AM";
-let globalEndTime = "4:00 PM";
+// NEW: Global time settings default to empty
+let globalStartTime = "";
+let globalEndTime = "";
 
 const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
 let colorIndex = 0;
@@ -153,8 +149,8 @@ function addDivision() {
 
         divisions[name] = { 
             bunks: [], 
-            color,
-            timeline: { start: "9:00 AM", end: "4:00 PM" } // Default timeline
+            color
+            // --- REMOVED timeline property ---
         };
         
         window.divisions = divisions; // keep global in sync
@@ -260,24 +256,15 @@ function loadData() {
             ? data.availableDivisions.slice()
             : Object.keys(divisions);
         
-        // Ensure timeline data exists, even for old saved data
-        availableDivisions.forEach(divName => {
-            if (divisions[divName]) {
-                divisions[divName].timeline = divisions[divName].timeline || { start: "9:00 AM", end: "4:00 PM" };
-                
-                if (data.divisionSkeletons && data.divisionSkeletons[divName]) {
-                    divisions[divName].timeline = data.divisionSkeletons[divName].timeline;
-                }
-            }
-        });
+        // --- REMOVED all timeline loading logic ---
         
         window.divisions = divisions;
         window.availableDivisions = availableDivisions;
         selectedDivision = data.selectedDivision || null;
         
-        // NEW: Load global times
-        globalStartTime = data.globalStartTime || "9:00 AM";
-        globalEndTime = data.globalEndTime || "4:00 PM";
+        // NEW: Load global times, defaulting to empty strings
+        globalStartTime = data.globalStartTime || "";
+        globalEndTime = data.globalEndTime || "";
         
     } catch (e) { console.error("Error loading data:", e); }
 }
@@ -304,6 +291,7 @@ function initApp1() {
     const globalEndInput = document.getElementById("globalEndTime");
     const updateTimeBtn = document.getElementById("updateGlobalTimeBtn");
     
+    // Set the .value to the loaded data. If it's "", the placeholder will show.
     if (globalStartInput) globalStartInput.value = globalStartTime;
     if (globalEndInput) globalEndInput.value = globalEndTime;
 
