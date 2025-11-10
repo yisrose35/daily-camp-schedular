@@ -2,6 +2,8 @@
 // app1.js
 //
 // UPDATED:
+// - **CRITICAL FIX**: Fixed a syntax error in `renderTimeRulesUI`
+//   on the `removeBtn.onclick` handler.
 // - Replaced the confusing `renderAvailabilityControls` with a new
 //   `renderTimeRulesUI` function.
 // - This new UI allows adding multiple, specific time rules
@@ -317,11 +319,14 @@ function renderTimeRulesUI(item, onSave, onRerender) {
         removeBtn.style.border = "none";
         removeBtn.style.background = "transparent";
         removeBtn.style.cursor = "pointer";
-        removeBtn.onclick = ().DS> {
+        
+        // --- THIS IS THE FIX ---
+        removeBtn.onclick = () => {
             item.timeRules.splice(index, 1);
             onSave();
             onRerender();
         };
+        // --- END OF FIX ---
         
         ruleEl.appendChild(ruleType);
         ruleEl.appendChild(ruleText);
@@ -940,3 +945,5 @@ window.initApp1 = initApp1;
 window.getDivisions = () => divisions;
 window.getFields = () => fields;
 window.getSpecials = () => specialActivities;
+
+}
