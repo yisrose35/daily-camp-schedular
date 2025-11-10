@@ -47,12 +47,20 @@
             Set the earliest start and latest end time for the camp day.
             This will define the size of the schedule grid.
         </p>
-        <div style="margin-top: 10px;">
-            <label for="globalStartTime" style="font-weight: 600;">Earliest Start Time:</label>
-            <input type="text" id="globalStartTime" placeholder="e.g., 9:00 AM">
+        <div style="margin-top: 10px; display: flex; align-items: center; gap: 10px;">
+            <div>
+                <label for="globalStartTime" style="font-weight: 600; display: block; margin-bottom: 3px;">Earliest Start Time:</label>
+                <input type="text" id="globalStartTime" placeholder="e.g., 9:00 AM">
+            </div>
             
-            <label for="globalEndTime" style="font-weight: 600; margin-left: 20px;">Latest End Time:</label>
-            <input type="text" id="globalEndTime" placeholder="e.g., 4:00 PM">
+            <div>
+                <label for="globalEndTime" style="font-weight: 600; display: block; margin-bottom: 3px;">Latest End Time:</label>
+                <input type="text" id="globalEndTime" placeholder="e.g., 4:30 PM">
+            </div>
+            
+            <button id="updateGlobalTimeBtn" style="align-self: flex-end; padding: 8px 12px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer;">
+                Update Grid Times
+            </button>
         </div>
         <hr style="margin: 20px 0;">
         
