@@ -1,7 +1,12 @@
-// -------------------- specialty_leagues.js --------------------
-// Manages the "Specialty Leagues" tab
-// These leagues are division-based (for scheduling) but use custom team names.
-// They get exclusive field rights.
+// =================================================================
+// specialty_leagues.js
+//
+// UPDATED:
+// - `loadData`: Changed `window.getFields()` (which was removed
+//   from app1.js) to `window.loadGlobalSettings().app1.fields`.
+// - `loadData`: Also updated to get special activities from
+//   `app1.specialActivities` for future use (if needed).
+// =================================================================
 
 (function() {
     'use strict';
@@ -17,16 +22,22 @@
      * Loads all data from global settings
      */
     function loadData() {
-        // 1. Load our own data
         const globalSettings = window.loadGlobalSettings?.() || {};
+        const app1Data = globalSettings.app1 || {};
+
+        // 1. Load our own data
         specialtyLeagues = globalSettings.specialtyLeagues || {};
 
         // 2. Load data from app1
-        allFields = window.getFields?.() || [];
-        allDivisions = window.availableDivisions || [];
+        // --- UPDATED THESE LINES ---
+        allFields = app1Data.fields || []; 
+        // We get special activities too, in case they are ever used
+        const allSpecialActivities = app1Data.specialActivities || [];
+        allDivisions = app1Data.availableDivisions || [];
         
         // 3. Process data for our UI
         fieldsBySport = {};
+        // Only fields (not specials) can have sports
         allFields.forEach(f => {
             (f.activities || []).forEach(sport => {
                 fieldsBySport[sport] = fieldsBySport[sport] || [];
@@ -218,7 +229,7 @@
         wrapper.innerHTML = `<label style="font-weight: 600; display:block; margin-bottom: 6px;">3. Select Fields (Exclusive Lock):</label>`;
         
         if (availableFields.length === 0) {
-            wrapper.innerHTML += `<p class="muted">No fields are set up for "${league.sport}" in the Setup tab.</p>`;
+            wrapper.innerHTML += `<p class="muted">No fields are set up for "${league.sport}" in the Fields tab.</p>`;
             return wrapper;
         }
 
