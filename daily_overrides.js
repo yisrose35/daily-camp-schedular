@@ -8,6 +8,7 @@
 //   grid's time range.
 // - **RESTORED** `division.timeline` logic in the skeleton
 //   editor's `renderGrid` function to show grayed-out areas.
+// - **CRITICAL FIX:** Added the missing `})();` at the end of the file.
 // =================================================================
 
 (function() {
@@ -404,4 +405,538 @@ function init() {
               
               <h4 style="margin-top: 15px;">Leagues</h4>
               <div id="override-leagues-list" class="master-list"></div>
+              
+              <h4 style="margin-top: 15px;">Specialty Leagues</h4>
+              <div id="override-specialty-leagues-list" class="master-list"></div>
+          </div>
+
+          <div style="flex: 2; min-width: 400px; position: sticky; top: 20px;">
+              <h4>Details</h4>
+              <div id="override-detail-pane" class="detail-pane">
+                  <p class="muted">Select an item from the left to edit its daily override.</p>
+              </div>
+          </div>
+      </div>
+    </div>
+    
+    <style>
+        .master-list .list-item {
+            padding: 10px 8px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin-bottom: 3px;
+            cursor: pointer;
+            background: #fff;
+            font-size: 0.95em;
+        }
+        .master-list .list-item:hover {
+            background: #f9f9f9;
+        }
+        .master-list .list-item.selected {
+            background: #e7f3ff;
+            border-color: #007bff;
+            font-weight: 600;
+        }
+        .detail-pane {
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 20px;
+            background: #fdfdfd;
+            min-height: 300px;
+        }
+    </style>
+  `;
+
+  // Get references to the containers
+  skeletonContainer = document.getElementById("override-scheduler-content");
+  tripsFormContainer = document.getElementById("trips-form-container");
   
+  // --- NEW UI Elements ---
+  overrideFieldsListEl = document.getElementById("override-fields-list");
+  overrideSpecialsListEl = document.getElementById("override-specials-list");
+  overrideLeaguesListEl = document.getElementById("override-leagues-list");
+  overrideSpecialtyLeaguesListEl = document.getElementById("override-specialty-leagues-list");
+  overrideDetailPaneEl = document.getElementById("override-detail-pane");
+
+
+  // 1. Load Master "Setup" Data
+  masterSettings.global = window.loadGlobalSettings?.() || {};
+  masterSettings.app1 = masterSettings.global.app1 || {};
+  masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
+  masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
+
+  // 2. Load the data for the *current* day
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  
+  currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
+  
+  // --- One-time migration from old system ---
+  if (dailyData.fieldAvailability) {
+    console.log("Daily Overrides: Migrating old 'fieldAvailability' overrides...");
+    const oldRules = dailyData.fieldAvailability || {};
+    Object.keys(oldRules).forEach(fieldName => {
+        const rule = oldRules[fieldName];
+        const newRules = [];
+        const type = rule.mode === 'available' ? 'Unavailable' : 'Available';
+        (rule.exceptions || []).forEach(rangeStr => {
+             const parts = rangeStr.split('-');
+             if(parts.length === 2) {
+                newRules.push({ type: type, start: parts[0], end: parts[1] });
+             }
+        });
+        if (newRules.length > 0) {
+            currentOverrides.dailyFieldAvailability[fieldName] = newRules;
+        }
+    });
+    window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+  }
+  // --- End Migration ---
+  
+  currentOverrides.leagues = (dailyData.overrides || {}).leagues || [];
+  currentOverrides.disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
+
+  // 3. Render ALL UI sections
+  initDailySkeletonUI(); // Render the skeleton editor
+  renderTripsForm();     // Render the trip form
+  
+  // --- NEW Render Calls ---
+  renderOverrideMasterLists();
+  renderOverrideDetailPane();
+}
+
+
+// --- START OF NEW TIME RULE UI ---
+/**
+ * Renders the new, simplified "Time Rules" UI for DAILY overrides.
+ * This is a *helper function* for the new Detail Pane.
+ */
+function renderTimeRulesUI(itemName, globalRules, dailyRules, onSave) {
+    const container = document.createElement("div");
+    
+    // --- 1. Show Global Rules (Read-only) ---
+    const globalContainer = document.createElement("div");
+    globalContainer.innerHTML = `<strong style="font-size: 0.9em;">Global Rules (from Setup):</strong>`;
+    if (globalRules.length === 0) {
+        globalContainer.innerHTML += `<p class="muted" style="margin: 0; font-size: 0.9em;">Available all day</p>`;
+    }
+    globalRules.forEach(rule => {
+        const ruleEl = document.createElement("div");
+        ruleEl.style.margin = "2px 0";
+        ruleEl.style.fontSize = "0.9em";
+        ruleEl.innerHTML = `&bull; <span style="color: ${rule.type === 'Available' ? 'green' : 'red'}; text-transform: capitalize;">${rule.type}</span> from ${rule.start} to ${rule.end}`;
+        globalContainer.appendChild(ruleEl);
+    });
+    container.appendChild(globalContainer);
+
+    // --- 2. Show Daily Rules (Editable) ---
+    const dailyContainer = document.createElement("div");
+    dailyContainer.style.marginTop = "10px";
+    dailyContainer.innerHTML = `<strong style="font-size: 0.9em;">Daily Override Rules (replaces global rules):</strong>`;
+    
+    const ruleList = document.createElement("div");
+    if (dailyRules.length === 0) {
+        ruleList.innerHTML = `<p class="muted" style="margin: 0; font-size: 0.9em;">No daily rules. Using global rules.</p>`;
+    }
+
+    dailyRules.forEach((rule, index) => {
+        const ruleEl = document.createElement("div");
+        ruleEl.style.margin = "2px 0";
+        ruleEl.style.padding = "4px";
+        ruleEl.style.background = "#fff8e1";
+        ruleEl.style.borderRadius = "4px";
+        
+        const ruleType = document.createElement("strong");
+        ruleType.textContent = rule.type;
+        ruleType.style.color = rule.type === 'Available' ? 'green' : 'red';
+        ruleType.style.textTransform = "capitalize";
+        
+        const ruleText = document.createElement("span");
+        ruleText.textContent = ` from ${rule.start} to ${rule.end}`;
+        
+        const removeBtn = document.createElement("button");
+        removeBtn.textContent = "✖";
+        removeBtn.style.marginLeft = "8px";
+        removeBtn.style.border = "none";
+        removeBtn.style.background = "transparent";
+        removeBtn.style.cursor = "pointer";
+        removeBtn.onclick = () => {
+            dailyRules.splice(index, 1);
+            onSave();
+        };
+        
+        ruleEl.appendChild(ruleType);
+        ruleEl.appendChild(ruleText);
+        ruleEl.appendChild(removeBtn);
+        ruleList.appendChild(ruleEl);
+    });
+    dailyContainer.appendChild(ruleList);
+    container.appendChild(dailyContainer);
+
+    // --- 3. Add New Rule Form ---
+    const addContainer = document.createElement("div");
+    addContainer.style.marginTop = "10px";
+    
+    const typeSelect = document.createElement("select");
+    typeSelect.innerHTML = `
+        <option value="Available">Available</option>
+        <option value="Unavailable">Unavailable</option>
+    `;
+    
+    const startInput = document.createElement("input");
+    startInput.placeholder = "e.g., 9:00am";
+    startInput.style.width = "100px";
+    startInput.style.marginLeft = "5px";
+
+    const toLabel = document.createElement("span");
+    toLabel.textContent = " to ";
+    toLabel.style.margin = "0 5px";
+
+    const endInput = document.createElement("input");
+    endInput.placeholder = "e.g., 10:30am";
+    endInput.style.width = "100px";
+
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "Add Daily Rule";
+    addBtn.style.marginLeft = "8px";
+    
+    addBtn.onclick = () => {
+        const type = typeSelect.value;
+        const start = startInput.value;
+        const end = endInput.value;
+        
+        if (!start || !end) { alert("Please enter a start and end time."); return; }
+        if (parseTimeToMinutes(start) == null || parseTimeToMinutes(end) == null) {
+            alert("Invalid time format. Use '9:00am' or '2:30pm'."); return;
+        }
+        if (parseTimeToMinutes(start) >= parseTimeToMinutes(end)) {
+            alert("End time must be after start time."); return;
+        }
+
+        dailyRules.push({ type, start, end });
+        onSave();
+    };
+
+    addContainer.appendChild(typeSelect);
+    addContainer.appendChild(startInput);
+    addContainer.appendChild(toLabel);
+    addContainer.appendChild(endInput);
+    addContainer.appendChild(addBtn);
+    container.appendChild(addContainer);
+
+    return container;
+}
+// --- END OF NEW TIME RULE UI ---
+
+
+/**
+ * UPDATED: Renders the "Daily Trips" form
+ */
+function renderTripsForm() {
+  tripsFormContainer.innerHTML = ""; // Clear only the form container
+
+  const form = document.createElement('div');
+  form.style.border = '1px solid #ccc';
+  form.style.padding = '15px';
+  form.style.borderRadius = '8px';
+
+  form.innerHTML = `
+<label for="tripName" style="display: block; margin-bottom: 5px; font-weight: 600;">Trip Name:</label>
+<input type="text" id="tripName" placeholder="e.g., Museum Trip" style="width: 250px;">
+
+<label for="tripStart" style="display: inline-block; margin-top: 10px; font-weight: 600;">Start Time:</label>
+<input id="tripStart" placeholder="e.g., 9:00am" style="margin-right: 8px;">
+
+<label for="tripEnd" style="display: inline-block; font-weight: 600;">End Time:</label>
+<input id="tripEnd" placeholder="e.g., 2:00pm" style="margin-right: 8px;">
+
+<p style="margin-top: 15px; font-weight: 600;">Select Divisions (Trip will apply to all bunks in the division):</p>
+`;
+
+  const divisions = masterSettings.app1.divisions || {};
+  const availableDivisions = masterSettings.app1.availableDivisions || [];
+
+  // 1. Create Division Chip Box
+  const divisionChipBox = document.createElement('div');
+  divisionChipBox.className = 'chips';
+  divisionChipBox.style.marginBottom = '5px';
+
+  availableDivisions.forEach(divName => {
+    const divColor = divisions[divName]?.color || '#333';
+    const chip = createChip(divName, divColor, true); // true = isDivision
+    divisionChipBox.appendChild(chip);
+  });
+
+  form.appendChild(divisionChipBox);
+
+  // 2. Add Button
+  const addBtn = document.createElement('button');
+  addBtn.textContent = 'Add Trip to Skeleton';
+  addBtn.className = 'bunk-button';
+  addBtn.style.background = '#007BFF';
+  addBtn.style.color = 'white';
+  addBtn.style.marginTop = '15px';
+
+  // --- OnClick Logic ---
+  addBtn.onclick = () => {
+    const nameEl = form.querySelector('#tripName');
+    const startEl = form.querySelector('#tripStart');
+    const endEl = form.querySelector('#tripEnd');
+    if (!nameEl || !startEl || !endEl) return;
+
+    const name = nameEl.value.trim();
+    const start = startEl.value;
+    const end = endEl.value;
+    const selectedDivisions = Array.from(divisionChipBox.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
+
+    if (!name || !start || !end) {
+      alert('Please enter a name, start time, and end time for the trip.');
+      return;
+    }
+    if (selectedDivisions.length === 0) {
+      alert('Please select at least one division for the trip.');
+      return;
+    }
+
+    const tripStartMin = parseTimeToMinutes(start);
+    const tripEndMin = parseTimeToMinutes(end);
+    if (tripStartMin == null || tripEndMin == null || tripEndMin <= tripStartMin) {
+        alert('Invalid time range. Please use formats like "9:00am" and ensure end is after start.');
+        return;
+    }
+
+    loadDailySkeleton(); // Ensure we have the latest
+    
+    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(item => {
+        if (!selectedDivisions.includes(item.division)) return true; 
+        const itemStartMin = parseTimeToMinutes(item.startTime);
+        const itemEndMin = parseTimeToMinutes(item.endTime);
+        if (itemStartMin == null || itemEndMin == null) return true;
+        const overlaps = (itemStartMin < tripEndMin) && (itemEndMin > tripStartMin);
+        return !overlaps;
+    });
+    
+    selectedDivisions.forEach(divName => {
+         dailyOverrideSkeleton.push({
+            id: `evt_${Math.random().toString(36).slice(2, 9)}`,
+            type: 'pinned',
+            event: name, // Trip Name
+            division: divName,
+            startTime: start,
+            endTime: end
+         });
+    });
+    
+    saveDailySkeleton(); // Saves `dailyOverrideSkeleton` to current day
+    
+    const gridContainer = skeletonContainer.querySelector('#daily-skeleton-grid');
+    if (gridContainer) renderGrid(gridContainer);
+    
+    nameEl.value = ""; startEl.value = ""; endEl.value = "";
+    form.querySelectorAll('.bunk-button.selected').forEach(chip => chip.click());
+  };
+
+  form.appendChild(addBtn);
+  tripsFormContainer.appendChild(form);
+}
+
+
+// =================================================================
+// ===== START: NEW MASTER/DETAIL UI FUNCTIONS =====
+// =================================================================
+
+/**
+ * Renders all four lists in the left-hand column
+ */
+function renderOverrideMasterLists() {
+    // Clear all lists
+    overrideFieldsListEl.innerHTML = "";
+    overrideSpecialsListEl.innerHTML = "";
+    overrideLeaguesListEl.innerHTML = "";
+    overrideSpecialtyLeaguesListEl.innerHTML = "";
+
+    // --- 1. Fields ---
+    const fields = masterSettings.app1.fields || [];
+    if (fields.length === 0) {
+        overrideFieldsListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No fields found in Setup.</p>`;
+    }
+    fields.forEach(item => {
+        overrideFieldsListEl.appendChild(createOverrideMasterListItem('field', item.name));
+    });
+
+    // --- 2. Special Activities ---
+    const specials = masterSettings.app1.specialActivities || [];
+    if (specials.length === 0) {
+        overrideSpecialsListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No special activities found in Setup.</p>`;
+    }
+    specials.forEach(item => {
+        overrideSpecialsListEl.appendChild(createOverrideMasterListItem('special', item.name));
+    });
+
+    // --- 3. Leagues ---
+    const leagues = masterSettings.leaguesByName || {};
+    const leagueNames = Object.keys(leagues);
+    if (leagueNames.length === 0) {
+        overrideLeaguesListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No leagues found in Setup.</p>`;
+    }
+    leagueNames.forEach(name => {
+        overrideLeaguesListEl.appendChild(createOverrideMasterListItem('league', name));
+    });
+
+    // --- 4. Specialty Leagues ---
+    const specialtyLeagues = masterSettings.specialtyLeagues || {};
+    const specialtyLeagueNames = Object.values(specialtyLeagues).map(l => l.name).sort();
+    if (specialtyLeagueNames.length === 0) {
+        overrideSpecialtyLeaguesListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No specialty leagues found in Setup.</p>`;
+    }
+    specialtyLeagueNames.forEach(name => {
+        overrideSpecialtyLeaguesListEl.appendChild(createOverrideMasterListItem('specialty_league', name));
+    });
+}
+
+/**
+ * Creates a single clickable item for the left-hand master lists
+ */
+function createOverrideMasterListItem(type, name) {
+    const el = document.createElement('div');
+    el.className = 'list-item';
+    const id = `${type}-${name}`;
+    if (id === selectedOverrideId) {
+        el.classList.add('selected');
+    }
+    
+    el.textContent = name;
+    el.onclick = () => {
+        selectedOverrideId = id;
+        renderOverrideMasterLists(); // Re-render lists to update selection
+        renderOverrideDetailPane(); // Re-render detail pane
+    };
+    return el;
+}
+
+/**
+ * Renders the correct editor in the right-hand pane
+ * based on the `selectedOverrideId`
+ */
+function renderOverrideDetailPane() {
+    if (!selectedOverrideId) {
+        overrideDetailPaneEl.innerHTML = `<p class="muted">Select an item from the left to edit its daily override.</p>`;
+        return;
+    }
+    
+    overrideDetailPaneEl.innerHTML = ""; // Clear
+    const [type, name] = selectedOverrideId.split(/-(.+)/); // Splits on first dash
+
+    // --- 1. Handle Fields and Special Activities (Time Rules) ---
+    if (type === 'field' || type === 'special') {
+        const item = (type === 'field') 
+            ? (masterSettings.app1.fields || []).find(f => f.name === name)
+            : (masterSettings.app1.specialActivities || []).find(s => s.name === name);
+            
+        if (!item) {
+            overrideDetailPaneEl.innerHTML = `<p style="color: red;">Error: Could not find item.</p>`;
+            return;
+        }
+
+        const globalRules = item.timeRules || [];
+        if (!currentOverrides.dailyFieldAvailability[name]) {
+            currentOverrides.dailyFieldAvailability[name] = [];
+        }
+        const dailyRules = currentOverrides.dailyFieldAvailability[name];
+
+        // Define the save function for this item
+        const onSave = () => {
+            currentOverrides.dailyFieldAvailability[name] = dailyRules;
+            window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+            renderOverrideDetailPane(); // Re-render this pane
+        };
+
+        overrideDetailPaneEl.appendChild(
+            renderTimeRulesUI(name, globalRules, dailyRules, onSave)
+        );
+    }
+    
+    // --- 2. Handle Regular Leagues (Disable Toggle) ---
+    else if (type === 'league') {
+        const isChecked = currentOverrides.leagues.includes(name);
+        const el = createCheckbox(`Disable "${name}" for today`, isChecked);
+        
+        el.checkbox.onchange = () => {
+          if (el.checkbox.checked) {
+            if (!currentOverrides.leagues.includes(name)) currentOverrides.leagues.push(name);
+          } else {
+            currentOverrides.leagues = currentOverrides.leagues.filter(l => l !== name);
+          }
+          
+          const dailyData = window.loadCurrentDailyData?.() || {};
+          const fullOverrides = dailyData.overrides || {};
+          fullOverrides.leagues = currentOverrides.leagues;
+          window.saveCurrentDailyData("overrides", fullOverrides);
+        };
+        overrideDetailPaneEl.appendChild(el.wrapper);
+    }
+    
+    // --- 3. Handle Specialty Leagues (Disable Toggle) ---
+    else if (type === 'specialty_league') {
+        const isChecked = currentOverrides.disabledSpecialtyLeagues.includes(name);
+        const el = createCheckbox(`Disable "${name}" for today`, isChecked);
+        
+        el.checkbox.onchange = () => {
+          if (el.checkbox.checked) {
+            if (!currentOverrides.disabledSpecialtyLeagues.includes(name)) {
+                currentOverrides.disabledSpecialtyLeagues.push(name);
+            }
+          } else {
+            currentOverrides.disabledSpecialtyLeagues = currentOverrides.disabledSpecialtyLeagues.filter(l => l !== name);
+          }
+          window.saveCurrentDailyData("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
+        };
+        overrideDetailPaneEl.appendChild(el.wrapper);
+    }
+}
+
+// =================================================================
+// ===== END: NEW MASTER/DETAIL UI FUNCTIONS =====
+// =================================================================
+
+
+/**
+* Helper to create a standardized checkbox UI element
+*/
+function createCheckbox(name, isChecked) {
+  const wrapper = document.createElement('label');
+  wrapper.className = 'override-checkbox';
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = isChecked;
+  const text = document.createElement('span');
+  text.textContent = name;
+  wrapper.appendChild(checkbox);
+  wrapper.appendChild(text);
+  return { wrapper, checkbox };
+}
+
+/**
+* Helper to create a bunk/division chip
+*/
+function createChip(name, color = '#007BFF', isDivision = false) {
+  const el = document.createElement('span');
+  el.className = 'bunk-button';
+  el.textContent = name;
+  el.dataset.value = name;
+  const defaultBorder = isDivision ? color : '#ccc';
+  el.style.borderColor = defaultBorder;
+  el.style.backgroundColor = 'white';
+  el.style.color = 'black';
+  el.addEventListener('click', () => {
+    const isSelected = el.classList.toggle('selected');
+    el.style.backgroundColor = isSelected ? color : 'white';
+    el.style.color = isSelected ? 'white' : 'black';
+    el.style.borderColor = isSelected ? color : defaultBorder;
+  });
+  return el;
+}
+
+// Expose the init function to the global window
+window.initDailyOverrides = init;
+
+})();
