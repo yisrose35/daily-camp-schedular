@@ -2,14 +2,13 @@
 // app1.js
 //
 // UPDATED:
-// - **CRITICAL FIX**: Fixed a syntax error in `renderTimeRulesUI`
-//   on the `removeBtn.onclick` handler.
-// - Replaced the confusing `renderAvailabilityControls` with a new
-//   `renderTimeRulesUI` function.
-// - This new UI allows adding multiple, specific time rules
-//   (e.g., "Available 9-11", "Unavailable 11-12") instead of
-//   a confusing toggle-and-exception system.
-// - This new UI is now used for both "Fields" and "Specials".
+// - **CRITICAL FIX (User Bug)**: Re-added the event listeners
+//   for "Add Bunk", "Bunk Input", "Add Division", and "Division Input"
+//   inside the `initApp1` function. This fixes the bug where
+//   you could not add new bunks or divisions.
+// - **CRITICAL FIX (Syntax Error)**: Fixed a syntax error in
+//   `renderTimeRulesUI` on the `removeBtn.onclick` handler.
+// - (Previous updates to Time Rules UI remain)
 // =================================================================
 
 // -------------------- State --------------------
@@ -91,8 +90,8 @@ function addBunk() {
     updateUnassigned();
     window.updateTable?.();
 }
-document.getElementById("addBunkBtn").onclick = addBunk;
-document.getElementById("bunkInput").addEventListener("keyup", e => { if (e.key === "Enter") addBunk(); });
+// --- Button hookups are now in initApp1() ---
+
 
 function updateUnassigned() {
     const c = document.getElementById("unassignedBunks");
@@ -168,8 +167,7 @@ function addDivision() {
         renderDivisionTimelineEditor(); // NEW
     }
 }
-document.getElementById("addDivisionBtn").onclick = addDivision;
-document.getElementById("divisionInput").addEventListener("keyup", e => { if (e.key === "Enter") addDivision(); });
+// --- Button hookups are now in initApp1() ---
 
 function setupDivisionButtons() {
     const cont = document.getElementById("divisionButtons"); cont.innerHTML = "";
@@ -915,7 +913,23 @@ function loadData() {
 }
 
 // -------------------- Init --------------------
+/**
+ * --- UPDATED: initApp1 ---
+ * Restored the missing event listeners.
+ */
 function initApp1() {
+    // --- RESTORED BUNK LISTENERS ---
+    const addBunkBtn = document.getElementById("addBunkBtn");
+    if (addBunkBtn) addBunkBtn.onclick = addBunk;
+    const bunkInput = document.getElementById("bunkInput");
+    if (bunkInput) bunkInput.addEventListener("keyup", e => { if (e.key === "Enter") addBunk(); });
+    
+    // --- RESTORED DIVISION LISTENERS ---
+    const addDivisionBtn = document.getElementById("addDivisionBtn");
+    if (addDivisionBtn) addDivisionBtn.onclick = addDivision;
+    const divisionInput = document.getElementById("divisionInput");
+    if (divisionInput) divisionInput.addEventListener("keyup", e => { if (e.key === "Enter") addDivision(); });
+
     // Hookup field/special buttons
     const addFieldBtn = document.getElementById("addFieldBtn");
     if (addFieldBtn) addFieldBtn.onclick = addField;
