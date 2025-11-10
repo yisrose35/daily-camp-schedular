@@ -2,19 +2,17 @@
 // This file is now the "OPTIMIZER"
 //
 // UPDATED:
+// - *** CRITICAL FIX (Daily Overrides) ***
+//   - `loadAndFilterData` has been rewritten to load and
+//     process the new `dailyFieldAvailability` object.
+//   - It now merges global rules (from app1) with daily
+//     override rules to create a final, resolved set of
+//     `activityProperties` for the current day.
+//   - Added `isTimeAvailable` helper function.
+//   - `canBlockFit` (for League Pass) is now upgraded to
+//     check time-based availability rules for every slot.
 // - *** CRITICAL FIX (ReferenceError) ***
-//   - Fixed a typo in `loadAndFilterData` (line 495).
-//   - `allActivities.filter(a => a.type === 'field' && f.sport)`
-//     has been corrected to:
-//   - `allActivities.filter(a => a.type === 'field' && a.sport)`
-// - *** NEW: Specialty League Pass ***
-//   - `loadAndFilterData` now loads `masterSpecialtyLeagues`.
-//   - `runSkeletonOptimizer` now separates "Specialty League" blocks.
-//   - Added "Pass 3.5" to process specialty leagues using their
-//     own teams, sport, and exclusive fields.
-//   - Implements "N games per field" assignment logic.
-//
-// (Production Version: All console logs removed)
+//   - (Previous fix... )
 // -----------------------------------------------------------------
 
 (function() {
@@ -67,10 +65,11 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         return false; 
     }
     
+    // --- START OF FIX: Load new time-based properties ---
     const { 
         divisions, 
         availableDivisions,
-        activityProperties,
+        activityProperties, // This now contains resolved time rules
         allActivities,
         h2hActivities,
         fieldsBySport,
@@ -78,6 +77,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         masterSpecialtyLeagues, // <-- NEW
         yesterdayHistory
     } = loadAndFilterData();
+    // --- END OF FIX ---
     
     let fieldUsageBySlot = {}; 
     
@@ -278,6 +278,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
             let fieldName = null;
             
+            // --- FIX: `activityProperties` is now passed to canBlockFit ---
             for (const f of possibleFields) {
                 if (canBlockFit(blockBase, f, activityProperties, fieldUsageBySlot)) {
                     fieldName = f;
@@ -360,16 +361,12 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const scheduledGames = []; 
         const blockBase = { slots: group.slots, divName: group.divName };
         
-        // This calculates how many games to put on each field
-        // e.g., 5 matchups, 3 fields -> ceil(5/3) = 2 games per field
         const gamesPerField = Math.ceil(matchups.length / leagueFields.length);
 
         for (let i = 0; i < matchups.length; i++) {
             const [teamA, teamB] = matchups[i];
             if (teamA === "BYE" || teamB === "BYE") continue;
 
-            // This assigns matchups to fields based on your example
-            // e.g., games 0, 1 -> field 0. games 2, 3 -> field 1. game 4 -> field 2
             const fieldIndex = Math.floor(i / gamesPerField);
             const fieldName = leagueFields[fieldIndex % leagueFields.length]; // Modulo for safety
             
@@ -378,8 +375,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             
             if (fieldName) {
                 pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null };
-                // Mark field as used. Assumes field is set as "sharable" in Setup
-                // to allow multiple games (e.g., "1v2, 3v4 - f1")
                 markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
             } else {
                 pick = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null };
@@ -387,7 +382,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             scheduledGames.push(pick);
         }
         
-        // Assign the generated games to the bunks
         allBunksInGroup.forEach((bunk, bunkIndex) => {
             let pickToAssign;
             if (scheduledGames.length > 0) {
@@ -466,20 +460,76 @@ function markFieldUsage(block, fieldName, fieldUsageBySlot) {
         fieldUsageBySlot[slotIndex][fieldName] = (fieldUsageBySlot[slotIndex][fieldName] || 0) + 1;
     }
 }
+
+// --- START OF NEW HELPER ---
+/**
+ * NEW: Checks if a field is available for a specific time slot,
+ * respecting the daily override rules.
+ */
+function isTimeAvailable(slotIndex, fieldProps) {
+    if (!window.unifiedTimes || !window.unifiedTimes[slotIndex]) return false; // Slot doesn't exist
+    
+    const slot = window.unifiedTimes[slotIndex];
+    // Get time in minutes from midnight
+    const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+    const slotEnd = new Date(slot.end).getHours() * 60 + new Date(slot.end).getMinutes();
+
+    const mode = fieldProps.availabilityMode; // 'available' or 'unavailable'
+    const exceptions = fieldProps.availabilityExceptions || []; // [{start, end}, ...]
+
+    let isExcepted = false;
+    for (const ex of exceptions) {
+        if (ex && ex.start != null && ex.end != null) {
+            // Check for overlap: (StartA < EndB) and (EndA > StartB)
+            if (slotStart < ex.end && slotEnd > ex.start) {
+                isExcepted = true;
+                break;
+            }
+        }
+    }
+    
+    if (mode === 'available') {
+        return !isExcepted; // Available, *unless* it's in an exception
+    } else { // mode === 'unavailable'
+        return isExcepted; // Unavailable, *unless* it's in an exception
+    }
+}
+// --- END OF NEW HELPER ---
+
+
+// --- START OF UPDATED FUNCTION ---
+/**
+ * UPDATED: This function now checks time-based availability.
+ */
 function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     if (!fieldName) return false;
     const props = activityProperties[fieldName];
+    if (!props) {
+        console.warn(`No properties found for field: ${fieldName}`);
+        return false;
+    }
     const limit = (props && props.sharable) ? 2 : 1;
 
+    // Check 1: Division allowance
     if (props && props.allowedDivisions && props.allowedDivisions.length && !props.allowedDivisions.includes(block.divName)) return false;
 
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) return false; 
+        
+        // Check 2: Usage per slot
         const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
         if (used >= limit) return false;
+        
+        // Check 3: NEW: Time-based availability
+        if (!isTimeAvailable(slotIndex, props)) {
+            return false; // This slot is blocked by an override
+        }
     }
     return true;
 }
+// --- END OF UPDATED FUNCTION ---
+
+
 function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill = false) {
     const fieldName = fieldLabel(pick.field);
     const sport = pick.sport;
@@ -523,6 +573,10 @@ function pairRoundRobin(teamList) {
 }
 
 
+// --- START OF UPDATED FUNCTION ---
+/**
+ * UPDATED: This function is rewritten to process daily overrides.
+ */
 function loadAndFilterData() {
     const globalSettings = window.loadGlobalSettings?.() || {};
     const app1Data = globalSettings.app1 || {};
@@ -536,15 +590,18 @@ function loadAndFilterData() {
     const masterSpecialtyLeagues = globalSettings.specialtyLeagues || {}; // <-- NEW
     
     const dailyData = window.loadCurrentDailyData?.() || {};
+    
+    // --- NEW: Load daily availability rules ---
+    const dailyFieldAvailability = dailyData.fieldAvailability || {};
+    
+    // --- OLD: Load bunk/league overrides ---
     const loadedOverrides = dailyData.overrides || {};
     const overrides = {
-        fields: loadedOverrides.fields || [],
+        // 'fields' key is no longer used here
         bunks: loadedOverrides.bunks || [],
         leagues: loadedOverrides.leagues || []
     };
 
-    const availFields = masterFields.filter(f => f.available && !overrides.fields.includes(f.name));
-    const availSpecials = masterSpecials.filter(s => s.available && !overrides.fields.includes(s.name));
     const availableDivisions = masterAvailableDivs.filter(divName => !overrides.bunks.includes(divName));
 
     const divisions = {};
@@ -554,26 +611,68 @@ function loadAndFilterData() {
         divisions[divName].bunks = (divisions[divName].bunks || []).filter(bunkName => !overrides.bunks.includes(bunkName));
     }
     
+    // --- NEW: Helper to parse exception strings ---
+    function parseExceptionString(str) {
+        const parts = String(str).split('-');
+        if (parts.length !== 2) return null;
+        const start = parseTimeToMinutes(parts[0]);
+        const end = parseTimeToMinutes(parts[1]);
+        if (start == null || end == null) return null;
+        return { start, end };
+    }
+    
+    // --- NEW: Build final, resolved properties for all activities ---
     const activityProperties = {};
-    availFields.forEach(f => {
-         activityProperties[f.name] = {
+    const allMasterActivities = masterFields.concat(masterSpecials);
+    const availableActivityNames = [];
+
+    allMasterActivities.forEach(f => {
+        // Check for a daily override
+        const dailyRule = dailyFieldAvailability[f.name];
+        
+        let finalMode, finalExceptions;
+        
+        if (dailyRule) {
+            // A daily override exists! Use it.
+            finalMode = dailyRule.mode;
+            finalExceptions = (dailyRule.exceptions || []).map(parseExceptionString).filter(Boolean);
+        } else {
+            // No daily override. Use the global rule.
+            finalMode = f.availabilityMode || 'available';
+            finalExceptions = (f.availabilityExceptions || []).map(parseExceptionString).filter(Boolean);
+        }
+        
+        // Check the master "available" toggle (from app1.js)
+        if (!f.available) {
+            finalMode = 'unavailable';
+            finalExceptions = []; // Master toggle overrides all
+        }
+
+        activityProperties[f.name] = {
             sharable: f.sharableWith?.type === 'all' || f.sharableWith?.type === 'custom',
             allowedDivisions: (f.sharableWith?.divisions?.length > 0) ? f.sharableWith.divisions : availableDivisions,
-            limitUsage: f.limitUsage
+            limitUsage: f.limitUsage,
+            // --- NEW FINAL RULES ---
+            availabilityMode: finalMode,
+            availabilityExceptions: finalExceptions
         };
-    });
-    availSpecials.forEach(s => {
-         activityProperties[s.name] = {
-            sharable: s.sharableWith?.type === 'all' || s.sharableWith?.type === 'custom',
-            allowedDivisions: (s.sharableWith?.divisions?.length > 0) ? s.sharableWith.divisions : availableDivisions,
-            limitUsage: s.limitUsage
-        };
+
+        // Determine if this field is available *at all* today
+        if (finalMode === 'available' || (finalMode === 'unavailable' && finalExceptions.length > 0)) {
+            availableActivityNames.push(f.name);
+        }
     });
 
+    // This is the master list of all fields/specials that can be scheduled
+    window.allSchedulableNames = availableActivityNames;
+
+    // Filter the master lists down to only available ones
+    const availFields = masterFields.filter(f => availableActivityNames.includes(f.name));
+    const availSpecials = masterSpecials.filter(s => availableActivityNames.includes(s.name));
+    // --- END OF NEW PROPERTY BUILDER ---
+
     const fieldsBySport = {};
-    const allFieldNames = [];
     availFields.forEach(f => {
-        allFieldNames.push(f.name);
         if (Array.isArray(f.activities)) {
             f.activities.forEach(sport => {
                 fieldsBySport[sport] = fieldsBySport[sport] || [];
@@ -581,7 +680,6 @@ function loadAndFilterData() {
             });
         }
     });
-    window.allSchedulableNames = allFieldNames.concat(availSpecials.map(s => s.name));
 
     const allActivities = [
         ...availFields.flatMap((f) => (f.activities || []).map((act) => ({ type: "field", field: f.name, sport: act }))),
@@ -602,14 +700,15 @@ function loadAndFilterData() {
     return {
         divisions,
         availableDivisions,
-        activityProperties,
+        activityProperties, // This is now the resolved, final list
         allActivities,
         h2hActivities,
         fieldsBySport,
         masterLeagues,
-        masterSpecialtyLeagues, // <-- NEW
+        masterSpecialtyLeagues,
         yesterdayHistory
     };
 }
+// --- END OF UPDATED FUNCTION ---
 
 })();
