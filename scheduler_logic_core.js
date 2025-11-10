@@ -7,6 +7,12 @@
 //   - `allActivities.filter(a => a.type === 'field' && f.sport)`
 //     has been corrected to:
 //   - `allActivities.filter(a => a.type === 'field' && a.sport)`
+// - *** NEW: Specialty League Pass ***
+//   - `loadAndFilterData` now loads `masterSpecialtyLeagues`.
+//   - `runSkeletonOptimizer` now separates "Specialty League" blocks.
+//   - Added "Pass 3.5" to process specialty leagues using their
+//     own teams, sport, and exclusive fields.
+//   - Implements "N games per field" assignment logic.
 //
 // (Production Version: All console logs removed)
 // -----------------------------------------------------------------
@@ -69,6 +75,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         h2hActivities,
         fieldsBySport,
         masterLeagues,
+        masterSpecialtyLeagues, // <-- NEW
         yesterdayHistory
     } = loadAndFilterData();
     
@@ -215,7 +222,10 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
     // ===== PASS 3: NEW "League Pass" (REWRITTEN) =====
     const leagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'League Game');
-    const remainingBlocks = schedulableSlotBlocks.filter(b => b.event !== 'League Game');
+    // --- NEW: Separate Specialty Leagues ---
+    const specialtyLeagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'Specialty League');
+    const remainingBlocks = schedulableSlotBlocks.filter(b => b.event !== 'League Game' && b.event !== 'Specialty League');
+    // --- END NEW ---
     
     const leagueGroups = {};
     leagueBlocks.forEach(block => {
@@ -301,6 +311,89 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                 pickToAssign = scheduledGames[bunkIndex % scheduledGames.length];
             } else {
                 pickToAssign = { field: "Leagues", sport: null, _h2h: true };
+            }
+            
+            fillBlock({ ...blockBase, bunk: bunk }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
+        });
+    });
+
+    // ===== PASS 3.5: NEW "Specialty League Pass" =====
+    
+    const specialtyLeagueGroups = {};
+    specialtyLeagueBlocks.forEach(block => {
+        const key = `${block.divName}-${block.startTime}`;
+        if (!specialtyLeagueGroups[key]) {
+            specialtyLeagueGroups[key] = {
+                divName: block.divName,
+                startTime: block.startTime,
+                slots: block.slots,
+                bunks: new Set() 
+            };
+        }
+        specialtyLeagueGroups[key].bunks.add(block.bunk);
+    });
+
+    Object.values(specialtyLeagueGroups).forEach(group => {
+        
+        // Find the specialty league for this division
+        const leagueEntry = Object.values(masterSpecialtyLeagues).find(l => l.enabled && l.divisions.includes(group.divName));
+        
+        if (!leagueEntry) return; // No specialty league found for this division
+
+        const sport = leagueEntry.sport;
+        const leagueFields = leagueEntry.fields || [];
+        const leagueTeams = (leagueEntry.teams || []).map(t => String(t).trim()).filter(Boolean);
+
+        if (!sport || leagueFields.length === 0 || leagueTeams.length < 2) {
+            return; // Not configured correctly
+        }
+
+        let matchups = [];
+        if (typeof window.getLeagueMatchups === 'function') {
+            // Use the league's *name* as the unique key for round robin state
+            matchups = window.getLeagueMatchups(leagueEntry.name, leagueTeams) || [];
+        } else {
+            matchups = pairRoundRobin(leagueTeams); // Failsafe
+        }
+
+        const allBunksInGroup = Array.from(group.bunks);
+        const scheduledGames = []; 
+        const blockBase = { slots: group.slots, divName: group.divName };
+        
+        // This calculates how many games to put on each field
+        // e.g., 5 matchups, 3 fields -> ceil(5/3) = 2 games per field
+        const gamesPerField = Math.ceil(matchups.length / leagueFields.length);
+
+        for (let i = 0; i < matchups.length; i++) {
+            const [teamA, teamB] = matchups[i];
+            if (teamA === "BYE" || teamB === "BYE") continue;
+
+            // This assigns matchups to fields based on your example
+            // e.g., games 0, 1 -> field 0. games 2, 3 -> field 1. game 4 -> field 2
+            const fieldIndex = Math.floor(i / gamesPerField);
+            const fieldName = leagueFields[fieldIndex % leagueFields.length]; // Modulo for safety
+            
+            const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
+            let pick;
+            
+            if (fieldName) {
+                pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null };
+                // Mark field as used. Assumes field is set as "sharable" in Setup
+                // to allow multiple games (e.g., "1v2, 3v4 - f1")
+                markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
+            } else {
+                pick = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null };
+            }
+            scheduledGames.push(pick);
+        }
+        
+        // Assign the generated games to the bunks
+        allBunksInGroup.forEach((bunk, bunkIndex) => {
+            let pickToAssign;
+            if (scheduledGames.length > 0) {
+                pickToAssign = scheduledGames[bunkIndex % scheduledGames.length];
+            } else {
+                pickToAssign = { field: "Specialty League", sport: null, _h2h: true };
             }
             
             fillBlock({ ...blockBase, bunk: bunk }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
@@ -440,6 +533,7 @@ function loadAndFilterData() {
     const masterSpecials = app1Data.specialActivities || [];
     
     const masterLeagues = globalSettings.leaguesByName || {};
+    const masterSpecialtyLeagues = globalSettings.specialtyLeagues || {}; // <-- NEW
     
     const dailyData = window.loadCurrentDailyData?.() || {};
     const loadedOverrides = dailyData.overrides || {};
@@ -513,6 +607,7 @@ function loadAndFilterData() {
         h2hActivities,
         fieldsBySport,
         masterLeagues,
+        masterSpecialtyLeagues, // <-- NEW
         yesterdayHistory
     };
 }
