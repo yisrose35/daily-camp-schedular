@@ -8,6 +8,7 @@
 // - **NEW:** `renderGrid` now reads `globalStartTime` and `globalEndTime`
 //   from the global settings (set in app1.js) to determine the
 //   grid's time range.
+// - **CRITICAL FIX:** Added the missing `})();` at the end of the file.
 // =================================================================
 
 (function() {
@@ -480,4 +481,80 @@ function runOptimizer() {
     // If no daily skeleton, load the default
     if (!skeletonToRun || skeletonToRun.length === 0) {
          const globalSettings = window.loadGlobalSettings?.() || {};
-         
+         const app1Data = globalSettings.app1 || {};
+         // Deep copy the default skeleton
+         skeletonToRun = JSON.parse(JSON.stringify(app1Data.defaultSkeleton || []));
+         skeletonSource = "the default template";
+    }
+    
+    if (skeletonToRun.length === 0) {
+        alert("Skeleton is empty. Please add blocks to the schedule before running the optimizer.");
+        return;
+    }
+
+    // --- THIS IS THE FIX ---
+    // Save the chosen skeleton (either default or override)
+    // to this day's data so the Staggered View can find it.
+    console.log(`Running optimizer with skeleton from: ${skeletonSource}`);
+    window.saveCurrentDailyData?.("manualSkeleton", skeletonToRun);
+    // --- END OF FIX ---
+    
+    const success = window.runSkeletonOptimizer(skeletonToRun);
+    
+    if (success) {
+        alert("Schedule Generated Successfully!");
+        // Use window.showTab, not just showTab, for safety
+        window.showTab?.('schedule');
+    } else {
+        alert("Error during schedule generation. Check console for details (or skeleton may be empty).");
+    }
+}
+
+// --- Save/Load Skeleton ---
+
+/**
+ * --- UPDATED: loadDailySkeleton ---
+ * This function now *only* loads the global "defaultSkeleton".
+ */
+function loadDailySkeleton() {
+    const globalSettings = window.loadGlobalSettings?.() || {};
+    const app1Data = globalSettings.app1 || {};
+    // Must deep-copy so that in-memory edits don't affect the saved default
+    dailySkeleton = JSON.parse(JSON.stringify(app1Data.defaultSkeleton || []));
+}
+
+// --- Helper Functions ---
+function parseTimeToMinutes(str) {
+  if (!str || typeof str !== "string") return null;
+  let s = str.trim().toLowerCase();
+  let mer = null;
+  if (s.endsWith("am") || s.endsWith("pm")) {
+    mer = s.endsWith("am") ? "am" : "pm";
+    s = s.replace(/am|pm/g, "").trim();
+  }
+  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+  if (!m) return null;
+  let hh = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
+  if (mer) {
+    if (hh === 12) hh = mer === "am" ? 0 : 12;
+    else if (mer === "pm") hh += 12;
+  }
+  return hh * 60 + mm;
+}
+
+function minutesToTime(min) {
+    const hh = Math.floor(min / 60);
+    const mm = min % 60;
+    const h = hh % 12 === 0 ? 12 : hh % 12;
+    const m = String(mm).padStart(2, '0');
+    const ampm = hh < 12 ? 'am' : 'pm';
+    return `${h}:${m}${ampm}`;
+}
+
+
+// Expose the init function to the global window
+window.initMasterScheduler = init;
+
+})();
