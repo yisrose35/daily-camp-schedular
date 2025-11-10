@@ -15,7 +15,10 @@
     </div>
 
     <div class="tabs">
-        <button class="tab-button active" onclick="showTab('setup')">Setup & Configuration</button>
+        <button class="tab-button active" onclick="showTab('setup')">Setup (Bunks/Divisions)</button>
+        <button class="tab-button" onclick="showTab('fields'); window.initFieldsTab?.();">Fields</button>
+        <button class="tab-button" onclick="showTab('special_activities'); window.initSpecialActivitiesTab?.();">Special Activities</button>
+        
         <button class="tab-button" onclick="showTab('master-scheduler'); window.initMasterScheduler?.();">
             🗓️ Master Scheduler (Build)
         </button>
@@ -49,18 +52,6 @@
         </div>
 
         <hr style="margin: 20px 0;">
-
-        <h3>Add Fields / Courts</h3>
-        <input id="fieldInput" placeholder="Enter field/court name (e.g., Court 1)">
-        <button id="addFieldBtn">Add Field/Court</button>
-        <div id="fieldList"></div>
-
-        <h3>Add Special Activities</h3>
-        <input id="specialInput" placeholder="Enter special activity (e.g., Canteen)">
-        <button id="addSpecialBtn">Add Special</button>
-        <div id="specialList"></div>
-
-        <hr style="margin: 20px 0;">
         
         <h3>Clear Schedules</h3>
         <p>Use these buttons to clear saved schedule data.
@@ -92,6 +83,11 @@
 
     </div> 
     
+    <div id="fields" class="tab-content">
+        </div>
+    <div id="special_activities" class="tab-content">
+        </div>
+    
     <div id="master-scheduler" class="tab-content">
         <div id="master-scheduler-content">
             </div>
@@ -99,7 +95,6 @@
     
     <div id="schedule" class="tab-content">
         <h3>Daily Schedule (View)</h3>
-
         <p>This tab shows the final, "filled-in" schedule. To build or edit the day's layout, use the "Master Scheduler" tab.</p>
         <div id="scheduleTable"></div>
     </div>
@@ -132,8 +127,12 @@
                 window.initLeaguesTab?.();
             } else if (id === 'specialty-leagues') {
                 window.initSpecialtyLeagues?.();
-            } else if (id === 'master-scheduler') { // Init your new tab
+            } else if (id === 'master-scheduler') {
                 window.initMasterScheduler?.();
+            } else if (id === 'fields') { // Init new tab
+                window.initFieldsTab?.();
+            } else if (id === 'special_activities') { // Init new tab
+                window.initSpecialActivitiesTab?.();
             }
         }
 
@@ -147,7 +146,7 @@
                 console.error("Fatal: calendar.js init not found.");
             }
 
-            // 2. Init App1 (loads bunks, divisions, fields)
+            // 2. Init App1 (loads bunks, divisions)
             if (window.initApp1) {
                 window.initApp1();
             } else {
@@ -174,12 +173,20 @@
             } else {
                 console.warn("initSpecialtyLeagues not found.");
             }
+            
+            // 6. Init new tabs (they will load their own data)
+            // No need to call them here, they are called by showTab
+            // when the user clicks the tab. This saves load time.
         }
     </script>
 
     <script src="calendar.js" defer></script>
     <script src="daily_overrides.js" defer></script>
     <script src="app1.js" defer></script>
+    
+    <script src="fields.js" defer></script>
+    <script src="special_activities.js" defer></script>
+    
     <script src="leagues.js" defer></script>
     <script src="league_scheduling.js" defer></script>
 
