@@ -3,12 +3,12 @@
 // This file creates the UI for the "Daily Overrides" tab.
 //
 // UPDATED:
-// - **NEW:** `renderGrid` now reads `globalStartTime` and `globalEndTime`
-//   from the global settings (set in app1.js) to determine the
-//   grid's time range.
-// - **RESTORED** `division.timeline` logic in the skeleton
-//   editor's `renderGrid` function to show grayed-out areas.
-// - **CRITICAL FIX:** Added the missing `})();` at the end of the file.
+// - **REMOVED** all logic related to `division.timeline` from
+//   `renderGrid`. The grid will no longer render grayed-out areas
+//   for individual divisions.
+// - `renderGrid` now reads `globalStartTime` and `globalEndTime`
+//   to determine the grid's time range.
+// - **CRITICAL FIX:** Ensured the file ends with `})();`.
 // =================================================================
 
 (function() {
@@ -150,6 +150,7 @@ function renderGrid(gridContainer) {
     // --- NEW: Load global times from app1 settings ---
     const globalSettings = window.loadGlobalSettings?.() || {};
     const app1Data = globalSettings.app1 || {};
+    // Use fallback defaults if values are empty strings
     const globalStart = app1Data.globalStartTime || "9:00 AM";
     const globalEnd = app1Data.globalEndTime || "4:00 PM";
     
@@ -177,20 +178,11 @@ function renderGrid(gridContainer) {
     }
     gridHtml += `</div>`;
     availableDivisions.forEach((divName, i) => {
-        // --- RESTORED ---
-        const divTimeline = divisions[divName]?.timeline;
-        const divStart = parseTimeToMinutes(divTimeline?.start);
-        const divEnd = parseTimeToMinutes(divTimeline?.end);
+        // --- REMOVED timeline, divStart, divEnd logic ---
         
         gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
         
-        // --- RESTORED ---
-        if (divStart && divStart > earliestMin) {
-            gridHtml += `<div style="position: absolute; top: 0; height: ${(divStart - earliestMin) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
-        }
-        if (divEnd && divEnd < latestMin) {
-            gridHtml += `<div style="position: absolute; top: ${(divEnd - earliestMin) * PIXELS_PER_MINUTE}px; height: ${(latestMin - divEnd) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
-        }
+        // --- REMOVED grayed-out area 'if' blocks ---
         
         dailyOverrideSkeleton.filter(ev => ev.division === divName).forEach(event => {
             const startMin = parseTimeToMinutes(event.startTime);
