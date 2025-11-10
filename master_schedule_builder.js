@@ -2,18 +2,13 @@
 // master_schedule_builder.js
 // This file creates the new "Master Scheduler" drag-and-drop UI
 //
-// UPDATED:
-// - **NEW (User Request): Save as Default**
-//   - `init`: Added a "Save as Default Schedule" button.
-//   - `init`: Added an onclick handler for the new button
-//     that saves `dailySkeleton` to `globalSettings.app1.defaultSkeleton`.
-//   - `loadDailySkeleton` (Rewritten): Now checks for a day-specific
-//     `manualSkeleton` first. If not found, it loads the
-//     `app1.defaultSkeleton` as the starting point.
-// - **NEW (User Request): Click to Remove**
-//   - ... (existing functionality)
-// - *** CRITICAL FIX (Start Time Bug) ***
-//   - ... (existing functionality)
+// UPDATED (User Fix):
+// - `loadDailySkeleton` (Rewritten): Now *only* loads the
+//   `app1.defaultSkeleton`. It no longer checks for a daily schedule.
+// - `saveDailySkeleton` (Removed): This function was removed.
+// - `addDropListeners` / `addRemoveListeners`: No longer call
+//   `saveDailySkeleton`. Changes are in-memory only until
+//   "Save as Default" is clicked.
 // =================================================================
 
 (function() {
@@ -96,18 +91,15 @@ function init() {
     renderPalette();
     renderGrid();
     
-    // --- NEW BUTTON ONCLICK LISTENER ---
     document.getElementById("save-default-skeleton-btn").onclick = () => {
         if (confirm("Save this layout as the default for all new days?\n\nThis will overwrite any existing default.")) {
             try {
-                // Load all global settings, get the app1 part
                 const globalSettings = window.loadGlobalSettings?.() || {};
                 const app1Data = globalSettings.app1 || {};
                 
-                // Add the current skeleton as the new "defaultSkeleton"
+                // Save the current IN-MEMORY skeleton as the new default
                 app1Data.defaultSkeleton = dailySkeleton; 
                 
-                // Save the modified app1 data back to global settings
                 window.saveGlobalSettings?.("app1", app1Data);
                 alert("Default schedule saved!");
             } catch (e) {
@@ -159,8 +151,6 @@ function renderGrid() {
     const divisions = window.divisions || {};
     const availableDivisions = window.availableDivisions || [];
     
-    // *** START OF FIX ***
-    // Calculate time range based *only* on the skeleton.
     let earliestMin = 1440; // (24 * 60)
     let latestMin = 0;
 
@@ -180,7 +170,6 @@ function renderGrid() {
         earliestMin = 540; // 9:00 AM
         latestMin = 960; // 4:00 PM
     }
-    // *** END OF FIX ***
     
     const totalMinutes = latestMin - earliestMin;
     const totalHeight = totalMinutes * PIXELS_PER_MINUTE;
@@ -208,8 +197,6 @@ function renderGrid() {
         
         gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
 
-        // Render "Out of Bounds" (disabled) areas
-        // Only render if the division's timeline is *within* the grid's range
         if (divStart && divStart > earliestMin) {
             gridHtml += `<div style="position: absolute; top: 0; height: ${(divStart - earliestMin) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
         }
@@ -347,7 +334,7 @@ function addDropListeners(selector) {
             }
             
             dailySkeleton.push(newEvent);
-            saveDailySkeleton();
+            // DO NOT SAVE - RENDER ONLY
             renderGrid(); 
         };
     });
@@ -369,7 +356,7 @@ function addRemoveListeners(selector) {
 
             if (confirm(`Are you sure you want to remove "${eventName}"?`)) {
                 dailySkeleton = dailySkeleton.filter(ev => ev.id !== eventId);
-                saveDailySkeleton();
+                // DO NOT SAVE - RENDER ONLY
                 renderGrid();
             }
         };
@@ -428,15 +415,27 @@ function runOptimizer() {
         return;
     }
     
-    saveDailySkeleton();
+    // --- THIS FUNCTION NO LONGER SAVES ---
+    // The optimizer will run on whatever skeleton is loaded
+    // in the (separate) Daily Overrides tab.
     
-    // Check if skeleton is empty *before* running
-    if (dailySkeleton.length === 0) {
+    // We must load the *current day's* skeleton to run the optimizer
+    const dailyData = window.loadCurrentDailyData?.() || {};
+    let skeletonToRun = dailyData.manualSkeleton;
+    
+    // If no daily skeleton, load the default
+    if (!skeletonToRun || skeletonToRun.length === 0) {
+         const globalSettings = window.loadGlobalSettings?.() || {};
+         const app1Data = globalSettings.app1 || {};
+         skeletonToRun = app1Data.defaultSkeleton || [];
+    }
+    
+    if (skeletonToRun.length === 0) {
         alert("Skeleton is empty. Please add blocks to the schedule before running the optimizer.");
         return;
     }
     
-    const success = window.runSkeletonOptimizer(dailySkeleton);
+    const success = window.runSkeletonOptimizer(skeletonToRun);
     
     if (success) {
         alert("Schedule Generated Successfully!");
@@ -450,32 +449,14 @@ function runOptimizer() {
 
 /**
  * --- UPDATED: loadDailySkeleton ---
- * This function now loads the day-specific skeleton if it exists.
- * If it doesn't, it falls back to the global "defaultSkeleton".
+ * This function now *only* loads the global "defaultSkeleton".
  */
 function loadDailySkeleton() {
-    const dailyData = window.loadCurrentDailyData?.() || {};
-    
-    // Check if a schedule is already saved for *this specific day*
-    if (dailyData.manualSkeleton && dailyData.manualSkeleton.length > 0) {
-        dailySkeleton = dailyData.manualSkeleton;
-    } else {
-        // If not, load the *global default* skeleton
-        const globalSettings = window.loadGlobalSettings?.() || {};
-        const app1Data = globalSettings.app1 || {};
-        dailySkeleton = app1Data.defaultSkeleton || [];
-    }
+    const globalSettings = window.loadGlobalSettings?.() || {};
+    const app1Data = globalSettings.app1 || {};
+    // Must deep-copy so that in-memory edits don't affect the saved default
+    dailySkeleton = JSON.parse(JSON.stringify(app1Data.defaultSkeleton || []));
 }
-
-/**
- * --- UNCHANGED: saveDailySkeleton ---
- * This function correctly saves the *current* in-memory skeleton
- * to the *current day's* data, which is the desired override behavior.
- */
-function saveDailySkeleton() {
-    window.saveCurrentDailyData?.("manualSkeleton", dailySkeleton);
-}
-
 
 // --- Helper Functions ---
 function parseTimeToMinutes(str) {
