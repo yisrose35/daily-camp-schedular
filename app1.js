@@ -2,16 +2,18 @@
 // app1.js
 //
 // UPDATED:
-// - **CRITICAL FIX (Syntax Error)**: Fixed the `Unexpected token '}'`
-//   error by adding the correct `})();` at the very end of the file.
-// - (Previous fixes for "Add Bunk/Division" buttons and
-//   new Time Rules UI are included).
+// - **CRITICAL FIX (Syntax Error)**: Added the correct IIFE opener
+//   at the top to match the existing `})();` at the end.
+// - Guarded the `enableColor` event listener to avoid null crashes.
+// - Keeps previous fixes for "Add Bunk/Division" and Time Rules UI.
 // =================================================================
+
+;(function () {
+'use strict';
 
 // -------------------- State --------------------
 let bunks = [];
 let divisions = {}; // { divName:{ bunks:[], color, timeline: {start, end} } }
-// divisionSkeletons is GONE.
 
 let availableDivisions = [];
 let selectedDivision = null;
@@ -27,7 +29,6 @@ window.divisions = divisions;
 window.availableDivisions = availableDivisions;
 window.fields = fields;
 window.specialActivities = specialActivities;
-// window.divisionSkeletons is GONE.
 
 // -------------------- Helpers --------------------
 function makeEditable(el, save) {
@@ -73,7 +74,7 @@ function parseTimeToMinutes(str) {
 // -------------------- Bunks (Restored) --------------------
 function addBunk() {
     const i = document.getElementById("bunkInput");
-    const name = i.value.trim();
+    const name = (i?.value || "").trim();
     if (!name) return;
     const exists = bunks.some(b => b.toLowerCase() === name.toLowerCase());
     if (exists) {
@@ -87,11 +88,10 @@ function addBunk() {
     updateUnassigned();
     window.updateTable?.();
 }
-// --- Button hookups are now in initApp1() ---
-
 
 function updateUnassigned() {
     const c = document.getElementById("unassignedBunks");
+    if (!c) return;
     c.innerHTML = "";
     bunks.forEach(b => {
         const span = document.createElement("span");
@@ -139,8 +139,9 @@ function updateUnassigned() {
 // -------------------- Divisions --------------------
 function addDivision() {
     const i = document.getElementById("divisionInput");
-    if (i.value.trim() === "") return;
-    const name = i.value.trim();
+    const name = (i?.value || "").trim();
+    if (name === "") return;
+
     if (!availableDivisions.includes(name)) {
         const color = defaultColors[colorIndex % defaultColors.length]; colorIndex++;
 
@@ -156,7 +157,7 @@ function addDivision() {
         
         window.divisions = divisions; // keep global in sync
 
-        i.value = "";
+        if (i) i.value = "";
         saveData();
         setupDivisionButtons();
         window.initLeaguesTab?.(); 
@@ -164,11 +165,14 @@ function addDivision() {
         renderDivisionTimelineEditor(); // NEW
     }
 }
-// --- Button hookups are now in initApp1() ---
 
 function setupDivisionButtons() {
-    const cont = document.getElementById("divisionButtons"); cont.innerHTML = "";
-    const colorEnabled = document.getElementById("enableColor").checked;
+    const cont = document.getElementById("divisionButtons");
+    if (!cont) return;
+    cont.innerHTML = "";
+
+    const colorEnabled = !!document.getElementById("enableColor")?.checked;
+
     availableDivisions.forEach(name => {
         const obj = divisions[name];
 
@@ -223,7 +227,10 @@ function setupDivisionButtons() {
     // Render rules for the initially selected division (if any)
     renderDivisionTimelineEditor();
 }
-document.getElementById("enableColor").addEventListener("change", setupDivisionButtons);
+
+// Guard the enableColor listener (prevents crash if element doesn't exist yet)
+const enableColorEl = document.getElementById("enableColor");
+if (enableColorEl) enableColorEl.addEventListener("change", setupDivisionButtons);
 
 // -------------------- (REPLACED) NEW: Division Timeline Editor --------------------
 // This function replaces renderDivisionSkeletonEditor
@@ -515,26 +522,26 @@ function renderLimitUsageControls(item, onSave, onRerender) {
 
     const toggleTrack = document.createElement("span");
     Object.assign(toggleTrack.style, {
-        "width": "44px",
-        "height": "24px",
-        "borderRadius": "99px",
-        "position": "relative",
-        "display": "inline-block",
-        "border": "1px solid #ccc",
-        "backgroundColor": rules.enabled ? '#d1d5db' : '#22c55e', // Grey for "Limit", Green for "All"
-        "transition": "background-color 0.2s"
+        width: "44px",
+        height: "24px",
+        borderRadius: "99px",
+        position: "relative",
+        display: "inline-block",
+        border: "1px solid #ccc",
+        backgroundColor: rules.enabled ? '#d1d5db' : '#22c55e', // Grey for "Limit", Green for "All"
+        transition: "background-color 0.2s"
     });
 
     const toggleKnob = document.createElement("span");
     Object.assign(toggleKnob.style, {
-        "width": "20px",
-        "height": "20px",
-        "borderRadius": "50%",
-        "backgroundColor": "white",
-        "position": "absolute",
-        "top": "1px",
-        "left": rules.enabled ? '21px' : '1px', // Right for "Limit", Left for "All"
-        "transition": "left 0.2s"
+        width: "20px",
+        height: "20px",
+        borderRadius: "50%",
+        backgroundColor: "white",
+        position: "absolute",
+        top: "1px",
+        left: rules.enabled ? '21px' : '1px', // Right for "Limit", Left for "All"
+        transition: "left 0.2s"
     });
     toggleTrack.appendChild(toggleKnob);
 
@@ -667,8 +674,6 @@ function addField() {
             sharableWith: { type: 'not_sharable', divisions: [] },
             limitUsage: { enabled: false, divisions: {} },
             timeRules: [] // <-- NEW
-            // availabilityMode is GONE
-            // availabilityExceptions is GONE
         });
         i.value = "";
         saveData();
@@ -819,7 +824,6 @@ function saveData() {
     const data = { 
         bunks, 
         divisions, 
-        // divisionSkeletons is GONE
         availableDivisions, 
         selectedDivision, 
         fields, 
@@ -893,7 +897,7 @@ function loadData() {
                     s.available = false;
                 }
                 if (s.availabilityExceptions && s.availabilityExceptions.length > 0) {
-                     const type = s.availabilityMode === 'available' ? 'Unavailable' : 'Available';
+                    const type = s.availabilityMode === 'available' ? 'Unavailable' : 'Available';
                     s.availabilityExceptions.forEach(rangeStr => {
                         const parts = rangeStr.split('-');
                         if(parts.length === 2) {
@@ -950,7 +954,6 @@ function initApp1() {
     // renderDivisionTimelineEditor() is called by setupDivisionButtons
 }
 window.initApp1 = initApp1;
-
 
 // Expose internal objects
 window.getDivisions = () => divisions;
