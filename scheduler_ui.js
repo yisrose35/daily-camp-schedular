@@ -3,18 +3,14 @@
 //
 // UPDATED:
 // - *** CRITICAL FIX (Split Activity) ***
-//   - `renderFixedBlockView` and `renderStaggeredView` have
-//     been completely rewritten.
-//   - They NO LONGER build time rows from the `manualSkeleton`.
-//   - They now iterate over the `window.unifiedTimes` (30-min grid),
-//     which is the *actual output* of the optimizer.
-//   - This is the only way to correctly display "Split Activity"
-//     blocks as two separate, distinct time rows (e.g.,
-//     12:00-12:30 and 12:30-1:00).
-// - **Cell Merging (Rowspan):**
-//   - Both renderers now correctly calculate `rowspan` for
-//     multi-slot activities (like "Lunch") by checking the
-//     `continuation` flag on schedule entries.
+//   - `renderFixedBlockView` has been rewritten to fix the
+//     "blank row" bug.
+//   - It no longer assumes all divisions have the same rowspan.
+//   - It now calculates rowspan *per-division* by checking
+//     continuation for each division's first bunk.
+//   - This allows it to correctly render split activities
+//     (e.g., one 1-hour block next to two 30-min blocks)
+//     without creating blank rows.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -81,6 +77,7 @@ function getEntry(bunk, slotIndex) {
  */
 function calculateRowspan(bunk, slotIndex) {
     let rowspan = 1;
+    if (!bunk) return 1; // Failsafe
     const firstEntry = getEntry(bunk, slotIndex);
     if (!firstEntry) return 1;
 
@@ -180,7 +177,6 @@ function renderStaggeredView(container) {
             
             // --- 1. Add the TIME cell (only for the first division) ---
             if (divIndex === 0) {
-                // Check the *first bunk of the first division* for continuation
                 const firstBunk = divisions[availableDivisions[0]]?.bunks?.[0];
                 const entry = getEntry(firstBunk, i);
                 
@@ -192,7 +188,11 @@ function renderStaggeredView(container) {
                     tdTime.textContent = slot.label;
                     tdTime.style.border = "1px solid #ccc";
                     tdTime.style.verticalAlign = "top";
-                    if (rowspan > 1) tdTime.rowSpan = rowspan;
+                    if (rowspan > 1) {
+                         const endSlot = unifiedTimes[i + rowspan - 1];
+                         tdTime.textContent = `${fmtTime(slot.start)} - ${fmtTime(endSlot.end)}`;
+                         tdTime.rowSpan = rowspan;
+                    }
                     tr.appendChild(tdTime);
                 }
             }
@@ -202,10 +202,9 @@ function renderStaggeredView(container) {
                 const entry = getEntry(bunk, i);
                 
                 if (entry && entry.continuation) {
-                    // This bunk is continuing its previous activity.
-                    // Do not render a <td>, its previous row handles it.
+                    // This bunk is continuing. Do not render a <td>.
                 } else {
-                    // This is a new activity, render a cell.
+                    // This is a new activity. Render a cell.
                     const rowspan = calculateRowspan(bunk, i);
                     const tdActivity = document.createElement("td");
                     if (rowspan > 1) tdActivity.rowSpan = rowspan;
@@ -229,7 +228,6 @@ function renderStaggeredView(container) {
             });
         });
         
-        // Only append the row if it has children (i.e., wasn't *just* continuation)
         if (tr.children.length > 0) {
             tbody.appendChild(tr);
         }
@@ -242,7 +240,8 @@ function renderStaggeredView(container) {
 
 /**
  * Renders the "Fixed Block" (Agudah) view
- * REWRITTEN to iterate `unifiedTimes` and support `rowspan`.
+ * REWRITTEN to iterate `unifiedTimes` and support `rowspan`
+ * PER-DIVISION to fix the "Split Activity" bug.
  */
 function renderFixedBlockView(container) {
     container.innerHTML = "";
@@ -280,81 +279,90 @@ function renderFixedBlockView(container) {
     
     for (let i = 0; i < unifiedTimes.length; i++) {
         const slot = unifiedTimes[i];
-        
-        // Check the first division's first bunk for continuation
+        const tr = document.createElement("tr");
+
+        // --- 1. Add Time Cell ---
+        // Check continuation *only for the first bunk of the first division*
+        // This determines if we draw the time cell or not.
         const firstBunk = divisions[availableDivisions[0]]?.bunks?.[0];
         const firstEntry = getEntry(firstBunk, i);
         
         if (firstEntry && firstEntry.continuation) {
-            // This entire row is a continuation from a previous row.
-            // We assume all divisions started their activities at the same time.
-            // This simplifies the view, which is the point of "Fixed Block".
-            continue;
+            // This row is a continuation *for the time column*.
+            // We skip rendering the <td>, the row will be built by the divisions.
+        } else {
+            // This is a new row, so render the time cell.
+            const rowspan = calculateRowspan(firstBunk, i);
+            const tdTime = document.createElement("td");
+            tdTime.textContent = slot.label;
+            if (rowspan > 1) {
+                const endSlot = unifiedTimes[i + rowspan - 1];
+                tdTime.textContent = `${fmtTime(slot.start)} - ${fmtTime(endSlot.end)}`;
+                tdTime.rowSpan = rowspan;
+            }
+            tdTime.style.border = "1px solid #ccc";
+            tdTime.style.verticalAlign = "top";
+            tr.appendChild(tdTime);
         }
 
-        // This is a new row
-        const tr = document.createElement("tr");
-        
-        // Calculate rowspan based on the first bunk
-        const rowspan = calculateRowspan(firstBunk, i);
-        
-        const tdTime = document.createElement("td");
-        tdTime.textContent = slot.label;
-        if (rowspan > 1) {
-            // If it's a multi-slot block, adjust the label
-            const endSlot = unifiedTimes[i + rowspan - 1];
-            tdTime.textContent = `${fmtTime(slot.start)} - ${fmtTime(endSlot.end)}`;
-            tdTime.rowSpan = rowspan;
-        }
-        tdTime.style.border = "1px solid #ccc"; // Ensure border
-        tdTime.style.verticalAlign = "top"; // Ensure alignment
-        tr.appendChild(tdTime);
-        
+        // --- 2. Add Division Cells ---
         availableDivisions.forEach(div => {
             const bunks = divisions[div]?.bunks || [];
-            const td = document.createElement("td");
-            td.style.verticalAlign = "top";
-            if (rowspan > 1) td.rowSpan = rowspan;
-            
-            const entry = getEntry(bunks[0], i); // Get entry for *this* div's first bunk
-            
-            if (entry && entry._h2h) {
-                // It's a league game. Scan all bunks to build the list.
-                td.style.textAlign = "left";
-                td.style.padding = "5px 8px";
-                td.style.background = "#e8f5e9";
-                
-                let games = new Map();
-                bunks.forEach(bunk => {
-                    const bunkEntry = getEntry(bunk, i);
-                    if (bunkEntry && bunkEntry._h2h && bunkEntry.sport) {
-                        games.set(bunkEntry.sport, fieldLabel(bunkEntry.field));
-                    }
-                });
-                
-                let html = '<ul style="margin: 0; padding-left: 18px;">';
-                if (games.size === 0) {
-                    html = '<p class="muted" style="margin:0; padding: 4px;">Leagues</p>';
-                }
-                games.forEach((field, matchup) => {
-                    html += `<li>${matchup} @ ${field}</li>`;
-                });
-                if (games.size > 0) { html += '</ul>'; }
-                td.innerHTML = html;
-            
-            } else if (entry) {
-                // Regular activity
-                td.textContent = formatEntry(entry);
-                if (entry._fixed) {
-                     td.style.background = "#f1f1f1";
-                }
+            const firstBunkForThisDiv = bunks[0];
+            const entry = getEntry(firstBunkForThisDiv, i);
+
+            if (entry && entry.continuation) {
+                // This division is continuing. Its previous <td> has a rowspan.
+                // Do not render a new <td>.
             } else {
-                td.className = "grey-cell";
+                // This is a new block for this division. Render a <td>.
+                const rowspan = calculateRowspan(firstBunkForThisDiv, i);
+                const td = document.createElement("td");
+                td.style.verticalAlign = "top";
+                if (rowspan > 1) td.rowSpan = rowspan;
+                
+                if (entry && entry._h2h) {
+                    // It's a league game. Scan all bunks to build the list.
+                    td.style.textAlign = "left";
+                    td.style.padding = "5px 8px";
+                    td.style.background = "#e8f5e9";
+                    
+                    let games = new Map();
+                    bunks.forEach(bunk => {
+                        const bunkEntry = getEntry(bunk, i);
+                        if (bunkEntry && bunkEntry._h2h && bunkEntry.sport) {
+                            games.set(bunkEntry.sport, fieldLabel(bunkEntry.field));
+                        }
+                    });
+                    
+                    let html = '<ul style="margin: 0; padding-left: 18px;">';
+                    if (games.size === 0) {
+                        html = '<p class="muted" style="margin:0; padding: 4px;">Leagues</p>';
+                    }
+                    games.forEach((field, matchup) => {
+                        html += `<li>${matchup} @ ${field}</li>`;
+                    });
+                    if (games.size > 0) { html += '</ul>'; }
+                    td.innerHTML = html;
+                
+                } else if (entry) {
+                    // Regular activity
+                    td.textContent = formatEntry(entry);
+                    if (entry._fixed) {
+                         td.style.background = "#f1f1f1";
+                    }
+                } else {
+                    td.className = "grey-cell";
+                }
+                td.style.border = "1px solid #ccc";
+                tr.appendChild(td);
             }
-            td.style.border = "1px solid #ccc"; // Ensure border
-            tr.appendChild(td);
         });
-        tbody.appendChild(tr);
+
+        // Only append the row if it has children
+        if (tr.children.length > 0) {
+            tbody.appendChild(tr);
+        }
     }
     
     table.appendChild(tbody);
