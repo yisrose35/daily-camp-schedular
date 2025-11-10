@@ -3,20 +3,17 @@
 // This file creates the new "Master Scheduler" drag-and-drop UI
 //
 // UPDATED:
+// - **NEW (User Request): Save as Default**
+//   - `init`: Added a "Save as Default Schedule" button.
+//   - `init`: Added an onclick handler for the new button
+//     that saves `dailySkeleton` to `globalSettings.app1.defaultSkeleton`.
+//   - `loadDailySkeleton` (Rewritten): Now checks for a day-specific
+//     `manualSkeleton` first. If not found, it loads the
+//     `app1.defaultSkeleton` as the starting point.
 // - **NEW (User Request): Click to Remove**
-//   - `renderEventTile`: Now adds a `cursor: pointer` and `title`
-//     to indicate tiles are clickable.
-//   - `renderGrid`: Now calls a new function `addRemoveListeners`
-//     after the grid is rendered.
-//   - `addRemoveListeners` (New): This function attaches an `onclick`
-//     handler to all `.grid-event` tiles.
+//   - ... (existing functionality)
 // - *** CRITICAL FIX (Start Time Bug) ***
-//   - `renderGrid` no longer scans all divisions for the
-//     earliest time.
-//   - It now calculates `earliestMin` and `latestMin` based
-//     ONLY on the time blocks present in the `dailySkeleton`,
-//     just like the optimizer.
-//   - This prevents the grid from *displaying* empty rows.
+//   - ... (existing functionality)
 // =================================================================
 
 (function() {
@@ -82,6 +79,9 @@ function init() {
         <div id="scheduler-palette" style="padding: 10px; background: #f4f4f4; border-radius: 8px; margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px;">
             </div>
         <div id="scheduler-controls" style="margin-bottom: 15px; display: flex; justify-content: flex-end; align-items: center;">
+            <button id="save-default-skeleton-btn" style="background: #007bff; color: white; padding: 12px 20px; font-size: 1.2em; border: none; border-radius: 5px; cursor: pointer; margin-right: 10px;">
+                Save as Default Schedule
+            </button>
             <button id="run-optimizer-btn" style="background: #28a745; color: white; padding: 12px 20px; font-size: 1.2em; border: none; border-radius: 5px; cursor: pointer;">
                 Run Optimizer & Create Schedule
             </button>
@@ -95,6 +95,27 @@ function init() {
 
     renderPalette();
     renderGrid();
+    
+    // --- NEW BUTTON ONCLICK LISTENER ---
+    document.getElementById("save-default-skeleton-btn").onclick = () => {
+        if (confirm("Save this layout as the default for all new days?\n\nThis will overwrite any existing default.")) {
+            try {
+                // Load all global settings, get the app1 part
+                const globalSettings = window.loadGlobalSettings?.() || {};
+                const app1Data = globalSettings.app1 || {};
+                
+                // Add the current skeleton as the new "defaultSkeleton"
+                app1Data.defaultSkeleton = dailySkeleton; 
+                
+                // Save the modified app1 data back to global settings
+                window.saveGlobalSettings?.("app1", app1Data);
+                alert("Default schedule saved!");
+            } catch (e) {
+                console.error("Failed to save default skeleton:", e);
+                alert("Error saving default schedule. See console for details.");
+            }
+        }
+    };
     
     document.getElementById("run-optimizer-btn").onclick = () => {
         runOptimizer();
@@ -426,10 +447,31 @@ function runOptimizer() {
 }
 
 // --- Save/Load Skeleton ---
+
+/**
+ * --- UPDATED: loadDailySkeleton ---
+ * This function now loads the day-specific skeleton if it exists.
+ * If it doesn't, it falls back to the global "defaultSkeleton".
+ */
 function loadDailySkeleton() {
     const dailyData = window.loadCurrentDailyData?.() || {};
-    dailySkeleton = dailyData.manualSkeleton || [];
+    
+    // Check if a schedule is already saved for *this specific day*
+    if (dailyData.manualSkeleton && dailyData.manualSkeleton.length > 0) {
+        dailySkeleton = dailyData.manualSkeleton;
+    } else {
+        // If not, load the *global default* skeleton
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const app1Data = globalSettings.app1 || {};
+        dailySkeleton = app1Data.defaultSkeleton || [];
+    }
 }
+
+/**
+ * --- UNCHANGED: saveDailySkeleton ---
+ * This function correctly saves the *current* in-memory skeleton
+ * to the *current day's* data, which is the desired override behavior.
+ */
 function saveDailySkeleton() {
     window.saveCurrentDailyData?.("manualSkeleton", dailySkeleton);
 }
