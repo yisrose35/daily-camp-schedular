@@ -4,10 +4,9 @@
 //
 // UPDATED:
 // - *** CRITICAL FIX (Daily Overrides) ***
-//   - Added `isTimeAvailable` helper function.
-//   - `canBlockFit` (for Slot Pass) is now upgraded to
-//     check time-based availability rules for every slot.
-// - Added `findBestSportActivity` (for 'Sports Slot')
+//   - Added `isTimeAvailable` (NEW) which implements the new,
+//     correct availability logic (e.g., "Available 11-2").
+//   - `canBlockFit` now calls `isTimeAvailable` for every slot.
 // -----------------------------------------------------------------
 
 (function() {
@@ -20,43 +19,64 @@ function fieldLabel(f) {
     return "";
 }
 
-// --- START OF NEW HELPER ---
+// --- START OF NEW TIME LOGIC ---
 /**
  * NEW: Checks if a field is available for a specific time slot,
- * respecting the daily override rules.
+ * respecting the new timeRules array.
  */
 function isTimeAvailable(slotIndex, fieldProps) {
-    if (!window.unifiedTimes || !window.unifiedTimes[slotIndex]) return false; // Slot doesn't exist
+    if (!window.unifiedTimes || !window.unifiedTimes[slotIndex]) return false;
     
     const slot = window.unifiedTimes[slotIndex];
-    // Get time in minutes from midnight
-    const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-    const slotEnd = new Date(slot.end).getHours() * 60 + new Date(slot.end).getMinutes();
+    const slotStartMin = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+    // Use INCREMENT_MINS to avoid 2:59:59 issues
+    const slotEndMin = slotStartMin + (window.INCREMENT_MINS || 30); 
+    
+    const rules = fieldProps.timeRules || [];
+    
+    // 1. If no rules, field is available (respecting master toggle).
+    if (rules.length === 0) {
+        return fieldProps.available; // `available` is the master toggle from app1
+    }
+    
+    // 2. Check if master toggle is off.
+    if (!fieldProps.available) {
+        return false;
+    }
 
-    const mode = fieldProps.availabilityMode; // 'available' or 'unavailable'
-    const exceptions = fieldProps.availabilityExceptions || []; // [{start, end}, ...]
+    // 3. Determine default state based on rules
+    // If *any* "Available" rule exists, the default becomes "Unavailable"
+    const hasAvailableRules = rules.some(r => r.type === 'Available');
+    let isAvailable = !hasAvailableRules;
 
-    let isExcepted = false;
-    for (const ex of exceptions) {
-        if (ex && ex.start != null && ex.end != null) {
-            // Check for overlap: (StartA < EndB) and (EndA > StartB)
-            if (slotStart < ex.end && slotEnd > ex.start) {
-                isExcepted = true;
-                break;
+    // 4. Check "Available" rules first
+    for (const rule of rules) {
+        if (rule.type === 'Available') {
+            // Slot must be *fully contained* within an available block
+            if (slotStartMin >= rule.startMin && slotEndMin <= rule.endMin) {
+                isAvailable = true;
+                break; // Found a matching "Available" rule
+            }
+        }
+    }
+
+    // 5. Check "Unavailable" rules (they override "Available" rules)
+    for (const rule of rules) {
+        if (rule.type === 'Unavailable') {
+            // Slot just needs to *overlap* with an unavailable block
+            // Overlap check: (StartA < EndB) and (EndA > StartB)
+            if (slotStartMin < rule.endMin && slotEndMin > rule.startMin) {
+                isAvailable = false;
+                break; // Found a conflicting "Unavailable" rule
             }
         }
     }
     
-    if (mode === 'available') {
-        return !isExcepted; // Available, *unless* it's in an exception
-    } else { // mode === 'unavailable'
-        return isExcepted; // Unavailable, *unless* it's in an exception
-    }
+    return isAvailable;
 }
-// --- END OF NEW HELPER ---
+// --- END OF NEW TIME LOGIC ---
 
 
-// --- START OF UPDATED FUNCTION ---
 /**
  * Checks if a given field is available for all slots in a block.
  * UPDATED: This function now checks time-based availability.
