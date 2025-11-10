@@ -13,6 +13,12 @@
 //   - This function's logic is *preserved* from the previous
 //     fix. It iterates `unifiedTimes` and handles rowspans
 //     per-division to correctly show split activities.
+// - *** SPLIT ACTIVITY FIX (Staggered View) ***
+//   - Added `findSlotsForRange` helper.
+//   - `renderStaggeredView` now checks for `eventBlock.type === 'split'`.
+//   - It compares the activity from the first half of the block
+//     with the activity from the second half and displays both
+//     if they are different.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -130,9 +136,28 @@ function findFirstSlotForTime(startMin) {
 }
 
 /**
+ * NEW Helper: Finds all 30-min slot indices within a time range.
+ */
+function findSlotsForRange(startMin, endMin) {
+    const slots = [];
+    if (!window.unifiedTimes) return slots;
+    
+    for (let i = 0; i < window.unifiedTimes.length; i++) {
+        const slot = window.unifiedTimes[i];
+        const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+        
+        // Find any slot that *starts* within the block
+        if (slotStart >= startMin && slotStart < endMin) {
+            slots.push(i);
+        }
+    }
+    return slots;
+}
+
+
+/**
  * Renders the "Staggered" (YKLI) view
- * REWRITTEN to build rows from `manualSkeleton` and
- * create a "Time" column *per division*.
+ * REWRITTEN to correctly show both halves of a "Split Activity"
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -141,7 +166,6 @@ function renderStaggeredView(container) {
     const divisions = window.divisions || {};
     const scheduleAssignments = window.scheduleAssignments || {};
 
-    // Load the manual skeleton to get the *actual* time blocks
     const dailyData = window.loadCurrentDailyData?.() || {};
     const manualSkeleton = dailyData.manualSkeleton || [];
     
@@ -193,7 +217,6 @@ function renderStaggeredView(container) {
     // --- 2. Build Body (Event-based) ---
     const tbody = document.createElement("tbody");
     
-    // Find all unique, sorted blocks *per division* from the SKELETON
     const blocksByDivision = {};
     let maxEvents = 0; 
     
@@ -205,7 +228,8 @@ function renderStaggeredView(container) {
                     label: `${item.startTime} - ${item.endTime}`,
                     startMin: parseTimeToMinutes(item.startTime),
                     endMin: parseTimeToMinutes(item.endTime),
-                    event: item.event // e.g., "League Game"
+                    event: item.event,
+                    type: item.type // Store the event type (e.g., 'split')
                 });
             }
         });
@@ -220,14 +244,13 @@ function renderStaggeredView(container) {
         }
     });
 
-    // Now render the rows, one for each "event index"
     for (let i = 0; i < maxEvents; i++) {
         const tr = document.createElement("tr");
         
         availableDivisions.forEach(div => {
             const bunks = divisions[div]?.bunks || [];
             const blocks = blocksByDivision[div] || [];
-            const eventBlock = blocks[i]; // Get the i-th event block for this division
+            const eventBlock = blocks[i]; 
             
             // --- 1. Add the TIME cell for this division ---
             const tdTime = document.createElement("td");
@@ -241,8 +264,6 @@ function renderStaggeredView(container) {
             tr.appendChild(tdTime);
 
             // --- 2. Add ACTIVITY cells (Merged or Individual) ---
-            const firstSlotIndex = eventBlock ? findFirstSlotForTime(eventBlock.startMin) : -1;
-            
             if (eventBlock && eventBlock.event === 'League Game') {
                 // === LEAGUE GAME: MERGED CELL ===
                 const tdLeague = document.createElement("td");
@@ -252,6 +273,7 @@ function renderStaggeredView(container) {
                 tdLeague.style.padding = "5px 8px";
                 tdLeague.style.background = "#e8f5e9";
                 
+                const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
                 let games = new Map();
                 if (firstSlotIndex !== -1) {
                     bunks.forEach(bunk => {
@@ -275,22 +297,52 @@ function renderStaggeredView(container) {
                 tr.appendChild(tdLeague);
 
             } else {
-                // === REGULAR GAME: INDIVIDUAL CELLS ===
+                // === REGULAR GAME / SPLIT GAME: INDIVIDUAL CELLS ===
                 bunks.forEach(bunk => {
                     const tdActivity = document.createElement("td");
-                    const entry = getEntry(bunk, firstSlotIndex);
-                    
                     tdActivity.style.border = "1px solid #ccc";
                     tdActivity.style.verticalAlign = "top";
+                    
+                    if (eventBlock) {
+                        const allSlots = findSlotsForRange(eventBlock.startMin, eventBlock.endMin);
+                        const firstSlotIndex = allSlots[0];
+                        const entry1 = getEntry(bunk, firstSlotIndex);
+                        
+                        // --- START OF FIX ---
+                        if (eventBlock.type === 'split' && allSlots.length > 1) {
+                            const slotSplitIndex = Math.ceil(allSlots.length / 2);
+                            const secondHalfSlotIndex = allSlots[slotSplitIndex];
+                            const entry2 = getEntry(bunk, secondHalfSlotIndex);
+                            
+                            const entry1Text = formatEntry(entry1);
+                            const entry2Text = formatEntry(entry2);
 
-                    if (entry) {
-                        tdActivity.textContent = formatEntry(entry);
-                        if (entry._h2h) {
-                            tdActivity.style.background = "#e8f4ff";
-                            tdActivity.style.fontWeight = "bold";
-                        } else if (entry._fixed) {
-                            tdActivity.style.background = "#f1f1f1";
+                            if (entry1Text !== entry2Text) {
+                                // Only show split if they are different
+                                tdActivity.innerHTML = `
+                                    <div style="padding: 4px; border-bottom: 1px dashed #999;">${entry1Text}</div>
+                                    <div style="padding: 4px;">${entry2Text}</div>
+                                `;
+                            } else {
+                                // Both halves are the same
+                                tdActivity.textContent = entry1Text;
+                            }
+
+                        } else if (entry1) {
+                            // This is a normal, non-split block
+                            tdActivity.textContent = formatEntry(entry1);
                         }
+                        // --- END OF FIX ---
+                        
+                        if (entry1) {
+                            if (entry1._h2h) {
+                                tdActivity.style.background = "#e8f4ff";
+                                tdActivity.style.fontWeight = "bold";
+                            } else if (entry1._fixed) {
+                                tdActivity.style.background = "#f1f1f1";
+                            }
+                        }
+                    
                     } else {
                         tdActivity.className = "grey-cell";
                     }
