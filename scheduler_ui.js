@@ -13,12 +13,13 @@
 //   - This function's logic is *preserved* from the previous
 //     fix. It iterates `unifiedTimes` and handles rowspans
 //     per-division to correctly show split activities.
-// - *** SPLIT ACTIVITY FIX (Staggered View) ***
-//   - Added `findSlotsForRange` helper.
-//   - `renderStaggeredView` now checks for `eventBlock.type === 'split'`.
-//   - It compares the activity from the first half of the block
-//     with the activity from the second half and displays both
-//     if they are different.
+// - *** SPLIT ACTIVITY ROW FIX (Staggered View) ***
+//   - Added `minutesToTimeLabel` helper.
+//   - `renderStaggeredView` now "flattens" any 'split' blocks
+//     (e.g., 12:20-2:00) into two separate "half-blocks"
+//     (12:20-1:10 and 1:10-2:00) *before* rendering.
+//   - This creates two separate table rows, each with its
+//     own time label and the correct corresponding activity.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -56,6 +57,18 @@ function fmtTime(d) {
     let h = d.getHours(), m = d.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12;
     return `${h}:${m} ${ap}`;
 }
+/**
+ * NEW Helper: Converts minutes (e.g., 740) to a 12-hour string (e.g., "12:20 PM")
+ */
+function minutesToTimeLabel(min) {
+    if (min == null) return "";
+    let h = Math.floor(min / 60);
+    const m = (min % 60).toString().padStart(2, '0');
+    const ap = h >= 12 ? "PM" : "AM";
+    h = h % 12 || 12;
+    return `${h}:${m} ${ap}`;
+}
+
 
 // ===== NEW: Main updateTable function =====
 function updateTable() {
@@ -137,6 +150,7 @@ function findFirstSlotForTime(startMin) {
 
 /**
  * NEW Helper: Finds all 30-min slot indices within a time range.
+ * (Used by renderFixedBlockView, but not Staggered)
  */
 function findSlotsForRange(startMin, endMin) {
     const slots = [];
@@ -157,7 +171,7 @@ function findSlotsForRange(startMin, endMin) {
 
 /**
  * Renders the "Staggered" (YKLI) view
- * REWRITTEN to correctly show both halves of a "Split Activity"
+ * REWRITTEN to "flatten" split blocks into two rows.
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -217,9 +231,8 @@ function renderStaggeredView(container) {
     // --- 2. Build Body (Event-based) ---
     const tbody = document.createElement("tbody");
     
+    // Find all unique, sorted blocks *per division* from the SKELETON
     const blocksByDivision = {};
-    let maxEvents = 0; 
-    
     availableDivisions.forEach(div => {
         const divBlocks = [];
         manualSkeleton.forEach(item => {
@@ -229,35 +242,76 @@ function renderStaggeredView(container) {
                     startMin: parseTimeToMinutes(item.startTime),
                     endMin: parseTimeToMinutes(item.endTime),
                     event: item.event,
-                    type: item.type // Store the event type (e.g., 'split')
+                    type: item.type 
                 });
             }
         });
-        
         divBlocks.sort((a,b) => a.startMin - b.startMin);
         blocksByDivision[div] = divBlocks.filter((block, index, self) =>
             index === self.findIndex((t) => (t.label === block.label))
         );
-        
-        if (blocksByDivision[div].length > maxEvents) {
-            maxEvents = blocksByDivision[div].length;
-        }
     });
 
+    // --- NEW LOGIC: "Flatten" split blocks into two half-blocks ---
+    const splitBlocksByDivision = {};
+    let maxEvents = 0;
+
+    availableDivisions.forEach(div => {
+        const flattenedBlocks = [];
+        const originalBlocks = blocksByDivision[div] || [];
+
+        originalBlocks.forEach(block => {
+            if (block.type === 'split' && block.startMin != null && block.endMin != null) {
+                // Calculate midpoint, rounding to nearest minute
+                const midMin = Math.round(block.startMin + (block.endMin - block.startMin) / 2);
+                
+                // First half
+                flattenedBlocks.push({
+                    ...block,
+                    label: `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(midMin)}`,
+                    startMin: block.startMin,
+                    endMin: midMin,
+                    splitPart: 1 // Mark as first half
+                });
+                // Second half
+                flattenedBlocks.push({
+                    ...block,
+                    label: `${minutesToTimeLabel(midMin)} - ${minutesToTimeLabel(block.endMin)}`,
+                    startMin: midMin,
+                    endMin: block.endMin,
+                    splitPart: 2 // Mark as second half
+                });
+            } else {
+                // Not a split block, add as is
+                flattenedBlocks.push(block);
+            }
+        });
+        
+        splitBlocksByDivision[div] = flattenedBlocks;
+        if (flattenedBlocks.length > maxEvents) {
+            maxEvents = flattenedBlocks.length;
+        }
+    });
+    // --- END OF NEW LOGIC ---
+
+
+    // Now render the rows, one for each "event index"
     for (let i = 0; i < maxEvents; i++) {
         const tr = document.createElement("tr");
         
         availableDivisions.forEach(div => {
             const bunks = divisions[div]?.bunks || [];
-            const blocks = blocksByDivision[div] || [];
-            const eventBlock = blocks[i]; 
+            // Use the NEW splitBlocksByDivision object
+            const blocks = splitBlocksByDivision[div] || []; 
+            const eventBlock = blocks[i]; // Get the i-th event block for this division
             
             // --- 1. Add the TIME cell for this division ---
             const tdTime = document.createElement("td");
             tdTime.style.border = "1px solid #ccc";
             tdTime.style.verticalAlign = "top";
             if (eventBlock) {
-                tdTime.textContent = eventBlock.label;
+                // The label is now pre-formatted (e.g., "12:20pm - 1:10pm")
+                tdTime.textContent = eventBlock.label; 
             } else {
                 tdTime.className = "grey-cell";
             }
@@ -304,44 +358,25 @@ function renderStaggeredView(container) {
                     tdActivity.style.verticalAlign = "top";
                     
                     if (eventBlock) {
-                        const allSlots = findSlotsForRange(eventBlock.startMin, eventBlock.endMin);
-                        const firstSlotIndex = allSlots[0];
-                        const entry1 = getEntry(bunk, firstSlotIndex);
+                        // --- START OF MODIFIED FIX ---
+                        // We just need to find the activity for the *start time*
+                        // of this specific block (which is now a half-block).
+                        // The optimizer already assigned the correct activity
+                        // to the slot index corresponding to this start time.
                         
-                        // --- START OF FIX ---
-                        if (eventBlock.type === 'split' && allSlots.length > 1) {
-                            const slotSplitIndex = Math.ceil(allSlots.length / 2);
-                            const secondHalfSlotIndex = allSlots[slotSplitIndex];
-                            const entry2 = getEntry(bunk, secondHalfSlotIndex);
-                            
-                            const entry1Text = formatEntry(entry1);
-                            const entry2Text = formatEntry(entry2);
+                        const slotIndex = findFirstSlotForTime(eventBlock.startMin);
+                        const entry = getEntry(bunk, slotIndex);
 
-                            if (entry1Text !== entry2Text) {
-                                // Only show split if they are different
-                                tdActivity.innerHTML = `
-                                    <div style="padding: 4px; border-bottom: 1px dashed #999;">${entry1Text}</div>
-                                    <div style="padding: 4px;">${entry2Text}</div>
-                                `;
-                            } else {
-                                // Both halves are the same
-                                tdActivity.textContent = entry1Text;
-                            }
-
-                        } else if (entry1) {
-                            // This is a normal, non-split block
-                            tdActivity.textContent = formatEntry(entry1);
-                        }
-                        // --- END OF FIX ---
-                        
-                        if (entry1) {
-                            if (entry1._h2h) {
+                        if (entry) {
+                            tdActivity.textContent = formatEntry(entry);
+                            if (entry._h2h) {
                                 tdActivity.style.background = "#e8f4ff";
                                 tdActivity.style.fontWeight = "bold";
-                            } else if (entry1._fixed) {
+                            } else if (entry._fixed) {
                                 tdActivity.style.background = "#f1f1f1";
                             }
                         }
+                        // --- END OF MODIFIED FIX ---
                     
                     } else {
                         tdActivity.className = "grey-cell";
