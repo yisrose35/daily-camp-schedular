@@ -2,13 +2,14 @@
 // master_schedule_builder.js
 // This file creates the new "Master Scheduler" drag-and-drop UI
 //
-// UPDATED (User Fix):
-// - `loadDailySkeleton` (Rewritten): Now *only* loads the
-//   `app1.defaultSkeleton`. It no longer checks for a daily schedule.
-// - `saveDailySkeleton` (Removed): This function was removed.
-// - `addDropListeners` / `addRemoveListeners`: No longer call
-//   `saveDailySkeleton`. Changes are in-memory only until
-//   "Save as Default" is clicked.
+// UPDATED (User Bug Fix):
+// - `runOptimizer`: This function now *saves* the skeleton it's
+//   about to use (either the daily override or the default)
+//   to the current day's `manualSkeleton` key *before* running.
+// - This ensures the "Staggered View" (which reads from
+//   `manualSkeleton`) can find the correct schedule data.
+//
+// (Previous updates remain unchanged)
 // =================================================================
 
 (function() {
@@ -409,37 +410,47 @@ function renderEventTile(event, top, height) {
     `;
 }
 
+/**
+ * --- THIS IS THE UPDATED/FIXED FUNCTION ---
+ */
 function runOptimizer() {
     if (!window.runSkeletonOptimizer) {
         alert("Error: 'runSkeletonOptimizer' function not found. Is scheduler_logic_core.js loaded?");
         return;
     }
     
-    // --- THIS FUNCTION NO LONGER SAVES ---
-    // The optimizer will run on whatever skeleton is loaded
-    // in the (separate) Daily Overrides tab.
-    
     // We must load the *current day's* skeleton to run the optimizer
     const dailyData = window.loadCurrentDailyData?.() || {};
     let skeletonToRun = dailyData.manualSkeleton;
+    let skeletonSource = "this day's override";
     
     // If no daily skeleton, load the default
     if (!skeletonToRun || skeletonToRun.length === 0) {
          const globalSettings = window.loadGlobalSettings?.() || {};
          const app1Data = globalSettings.app1 || {};
-         skeletonToRun = app1Data.defaultSkeleton || [];
+         // Deep copy the default skeleton
+         skeletonToRun = JSON.parse(JSON.stringify(app1Data.defaultSkeleton || []));
+         skeletonSource = "the default template";
     }
     
     if (skeletonToRun.length === 0) {
         alert("Skeleton is empty. Please add blocks to the schedule before running the optimizer.");
         return;
     }
+
+    // --- THIS IS THE FIX ---
+    // Save the chosen skeleton (either default or override)
+    // to this day's data so the Staggered View can find it.
+    console.log(`Running optimizer with skeleton from: ${skeletonSource}`);
+    window.saveCurrentDailyData?.("manualSkeleton", skeletonToRun);
+    // --- END OF FIX ---
     
     const success = window.runSkeletonOptimizer(skeletonToRun);
     
     if (success) {
         alert("Schedule Generated Successfully!");
-        showTab('schedule');
+        // Use window.showTab, not just showTab, for safety
+        window.showTab?.('schedule');
     } else {
         alert("Error during schedule generation. Check console for details (or skeleton may be empty).");
     }
