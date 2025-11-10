@@ -3,12 +3,11 @@
 // It provides functions to find the *best* activity for a given slot.
 //
 // UPDATED:
-// - Added `findBestSportActivity` (for 'Sports Slot') which
-//   *only* searches 'field' (sports) activities.
-// - `findBestSpecial` (for 'Special Activity') now *only*
-//   searches 'special' activities.
-// - `findBestGeneralActivity` (for 'General Activity Slot')
-//   is the hybrid function that searches *both* fields and specials.
+// - *** CRITICAL FIX (Daily Overrides) ***
+//   - Added `isTimeAvailable` helper function.
+//   - `canBlockFit` (for Slot Pass) is now upgraded to
+//     check time-based availability rules for every slot.
+// - Added `findBestSportActivity` (for 'Sports Slot')
 // -----------------------------------------------------------------
 
 (function() {
@@ -21,26 +20,76 @@ function fieldLabel(f) {
     return "";
 }
 
+// --- START OF NEW HELPER ---
+/**
+ * NEW: Checks if a field is available for a specific time slot,
+ * respecting the daily override rules.
+ */
+function isTimeAvailable(slotIndex, fieldProps) {
+    if (!window.unifiedTimes || !window.unifiedTimes[slotIndex]) return false; // Slot doesn't exist
+    
+    const slot = window.unifiedTimes[slotIndex];
+    // Get time in minutes from midnight
+    const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+    const slotEnd = new Date(slot.end).getHours() * 60 + new Date(slot.end).getMinutes();
+
+    const mode = fieldProps.availabilityMode; // 'available' or 'unavailable'
+    const exceptions = fieldProps.availabilityExceptions || []; // [{start, end}, ...]
+
+    let isExcepted = false;
+    for (const ex of exceptions) {
+        if (ex && ex.start != null && ex.end != null) {
+            // Check for overlap: (StartA < EndB) and (EndA > StartB)
+            if (slotStart < ex.end && slotEnd > ex.start) {
+                isExcepted = true;
+                break;
+            }
+        }
+    }
+    
+    if (mode === 'available') {
+        return !isExcepted; // Available, *unless* it's in an exception
+    } else { // mode === 'unavailable'
+        return isExcepted; // Unavailable, *unless* it's in an exception
+    }
+}
+// --- END OF NEW HELPER ---
+
+
+// --- START OF UPDATED FUNCTION ---
 /**
  * Checks if a given field is available for all slots in a block.
+ * UPDATED: This function now checks time-based availability.
  */
 function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     if (!fieldName) return false; // Can't fit a null field
     
     const props = activityProperties[fieldName];
+    if (!props) {
+        console.warn(`Fillers: No properties found for field: ${fieldName}`);
+        return false;
+    }
     const limit = (props && props.sharable) ? 2 : 1;
 
-    // Division allowance
+    // Check 1: Division allowance
     if (props && props.allowedDivisions && props.allowedDivisions.length && !props.allowedDivisions.includes(block.divName)) return false;
 
-    // Usage per slot
+    // Check 2: Usage per slot
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) { return false; } // Invalid block
+        
+        // Check 2a: Usage limit
         const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
         if (used >= limit) return false;
+        
+        // Check 2b: NEW: Time-based availability
+        if (!isTimeAvailable(slotIndex, props)) {
+            return false; // This slot is blocked by an override
+        }
     }
     return true;
 }
+// --- END OF UPDATED FUNCTION ---
 
 /**
  * Finds the best-available special activity (special-only).
