@@ -3,21 +3,14 @@
 // This file creates the UI for the "Daily Overrides" tab.
 //
 // UPDATED:
-// - **Major UI Refactor**:
-//   - Kept the "Daily Skeleton Override" and "Daily Trips" sections at the top.
-//   - Replaced the old, long list of overrides with a new
-//     two-column (master-detail) layout.
-// - **New Master List (Left Column)**:
-//   - Added `renderOverrideMasterLists()` to display four lists:
-//     Fields, Special Activities, Leagues, and Specialty Leagues.
-// - **New Detail Pane (Right Column)**:
-//   - Added `renderOverrideDetailPane()` to show the correct
-//     editor for the selected item.
-//   - If Field/Special is clicked, it shows the `renderTimeRulesUI`.
-//   - If League/Specialty League is clicked, it shows a
-//     simple "Disable for Today" toggle.
-// - Kept all existing helper functions (Skeleton, Trips, TimeRules)
-//   and re-used them in the new UI.
+// - **NEW (User Request): Tile Explanations**
+//   - Added a `description` property to every object in the
+//     `TILES` array (inside the SKELETON EDITOR LOGIC section).
+//   - `renderPalette`: Added an `el.onclick` listener to each
+//     tile that shows this description in an alert popup.
+//
+// (All other functionality, including the new 2-column override
+// UI, remains unchanged)
 // =================================================================
 
 (function() {
@@ -43,23 +36,77 @@ let overrideSpecialtyLeaguesListEl = null;
 let overrideDetailPaneEl = null;
 
 // =================================================================
-// ===== START: SKELETON EDITOR LOGIC (Unchanged) =====
+// ===== START: SKELETON EDITOR LOGIC =====
 // =================================================================
+
 let dailyOverrideSkeleton = []; 
 const PIXELS_PER_MINUTE = 2;
 const INCREMENT_MINS = 30;
+
+// --- UPDATED TILES array with descriptions ---
 const TILES = [
-    { type: 'activity', name: 'Activity', style: 'background: #e0f7fa; border: 1px solid #007bff;' },
-    { type: 'sports', name: 'Sports', style: 'background: #dcedc8; border: 1px solid #689f38;' },
-    { type: 'special', name: 'Special Activity', style: 'background: #e8f5e9; border: 1px solid #43a047;' },
-    { type: 'split', name: 'Split Activity', style: 'background: #fff3e0; border: 1px solid #f57c00;' },
-    { type: 'league', name: 'League Game', style: 'background: #d1c4e9; border: 1px solid #5e35b1;' },
-    { type: 'specialty_league', name: 'Specialty League', style: 'background: #fff8e1; border: 1px solid #f9a825;' },
-    { type: 'swim', name: 'Swim', style: 'background: #bbdefb; border: 1px solid #1976d2;' },
-    { type: 'lunch', name: 'Lunch', style: 'background: #fbe9e7; border: 1px solid #d84315;' },
-    { type: 'snacks', name: 'Snacks', style: 'background: #fff9c4; border: 1px solid #fbc02d;' },
-    { type: 'custom', name: 'Custom Pinned Event', style: 'background: #eee; border: 1px solid #616161;' }
+    { 
+        type: 'activity', 
+        name: 'Activity', 
+        style: 'background: #e0f7fa; border: 1px solid #007bff;',
+        description: "A flexible slot. The optimizer will fill this with the best available Sport OR Special Activity based on availability and rotation."
+    },
+    { 
+        type: 'sports', 
+        name: 'Sports', 
+        style: 'background: #dcedc8; border: 1px solid #689f38;',
+        description: "A dedicated sports slot. The optimizer will fill this *only* with a Sport (e.g., Basketball, Soccer) from your 'Fields' list."
+    },
+    { 
+        type: 'special', 
+        name: 'Special Activity', 
+        style: 'background: #e8f5e9; border: 1px solid #43a047;',
+        description: "A dedicated special slot. The optimizer will fill this *only* with a Special Activity (e.g., Canteen, Arts & Crafts) from your 'Special Activities' list."
+    },
+    { 
+        type: 'split', 
+        name: 'Split Activity', 
+        style: 'background: #fff3e0; border: 1px solid #f57c00;',
+        description: "Creates a block that is split in two. You will be asked to name two different activities (e.g., Swim / Activity). The division will be split, and they will switch activities halfway through the block."
+    },
+    { 
+        type: 'league', 
+        name: 'League Game', 
+        style: 'background: #d1c4e9; border: 1px solid #5e35b1;',
+        description: "A dedicated slot for a regular League Game. The optimizer will automatically create matchups from your 'Leagues' tab (e.g., Team A vs. Team B) and find a field for them."
+    },
+    { 
+        type: 'specialty_league', 
+        name: 'Specialty League', 
+        style: 'background: #fff8e1; border: 1px solid #f9a825;',
+        description: "A dedicated slot for a Specialty League. The optimizer will create matchups from your custom teams (e.g., Blue vs. Gold) and assign them to their exclusive fields."
+    },
+    { 
+        type: 'swim', 
+        name: 'Swim', 
+        style: 'background: #bbdefb; border: 1px solid #1976d2;',
+        description: "A 'pinned' event. The optimizer will block out this time for 'Swim' and will not schedule anything else here. This is a simple block and does not use the optimizer."
+    },
+    { 
+        type: 'lunch', 
+        name: 'Lunch', 
+        style: 'background: #fbe9e7; border: 1px solid #d84315;',
+        description: "A 'pinned' event. The optimizer will block out this time for 'Lunch' and will not schedule anything else here. This is a simple block and does not use the optimizer."
+    },
+    { 
+        type: 'snacks', 
+        name: 'Snacks', 
+        style: 'background: #fff9c4; border: 1px solid #fbc02d;',
+        description: "A 'pinned' event. The optimizer will block out this time for 'Snacks' and will not schedule anything else here. This is a simple block and does not use the optimizer."
+    },
+    { 
+        type: 'custom', 
+        name: 'Custom Pinned Event', 
+        style: 'background: #eee; border: 1px solid #616161;',
+        description: "A 'pinned' event. You will be asked to give it a custom name (e.g., 'Assembly' or 'Trip'). The optimizer will block out this time and will not schedule anything else here."
+    }
 ];
+
 function mapEventNameForOptimizer(name) {
     if (!name) name = "Free";
     const lowerName = name.toLowerCase().trim();
@@ -69,6 +116,10 @@ function mapEventNameForOptimizer(name) {
     if (lowerName === 'swim' || lowerName === 'lunch' || lowerName === 'snacks') return { type: 'pinned', event: name };
     return { type: 'pinned', event: name };
 }
+
+/**
+ * Renders the draggable tiles
+ */
 function renderPalette(paletteContainer) {
     paletteContainer.innerHTML = '<span style="font-weight: 600; align-self: center;">Drag to add:</span>';
     TILES.forEach(tile => {
@@ -79,6 +130,10 @@ function renderPalette(paletteContainer) {
         el.style.padding = '8px 12px';
         el.style.borderRadius = '5px';
         el.style.cursor = 'grab';
+
+        // --- NEW CLICK LISTENER ---
+        el.onclick = () => alert(tile.description);
+        
         el.draggable = true;
         el.ondragstart = (e) => {
             e.dataTransfer.setData('application/json', JSON.stringify(tile));
@@ -89,6 +144,7 @@ function renderPalette(paletteContainer) {
         paletteContainer.appendChild(el);
     });
 }
+
 function renderGrid(gridContainer) {
     const divisions = window.divisions || {};
     const availableDivisions = window.availableDivisions || [];
