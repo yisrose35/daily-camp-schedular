@@ -2,13 +2,10 @@
 // app1.js
 //
 // UPDATED:
-// - **CRITICAL FIX (User Bug)**: Re-added the event listeners
-//   for "Add Bunk", "Bunk Input", "Add Division", and "Division Input"
-//   inside the `initApp1` function. This fixes the bug where
-//   you could not add new bunks or divisions.
-// - **CRITICAL FIX (Syntax Error)**: Fixed a syntax error in
-//   `renderTimeRulesUI` on the `removeBtn.onclick` handler.
-// - (Previous updates to Time Rules UI remain)
+// - **CRITICAL FIX (Syntax Error)**: Fixed the `Unexpected token '}'`
+//   error by adding the correct `})();` at the very end of the file.
+// - (Previous fixes for "Add Bunk/Division" buttons and
+//   new Time Rules UI are included).
 // =================================================================
 
 // -------------------- State --------------------
@@ -960,4 +957,4 @@ window.getDivisions = () => divisions;
 window.getFields = () => fields;
 window.getSpecials = () => specialActivities;
 
-}
+})();
