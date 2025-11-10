@@ -2,19 +2,12 @@
 // daily_overrides.js
 // This file creates the UI for the "Daily Overrides" tab.
 //
-// UPDATED:
-// - **NEW: Daily Skeleton Editor**
-//   - Added a new section to `init()` to host the skeleton editor.
-//   - Copied all UI rendering logic from `master_schedule_builder.js`
-//     (e.g., `renderGrid`, `renderPalette`, `addDropListeners`)
-//     into this file.
-//   - This new UI loads the *day-specific* `manualSkeleton`.
-//   - All edits (add/remove) are saved *only* to the current day
-//     using `saveDailySkeleton()`.
-//   - This allows overriding the default skeleton for a single day
-//     *before* running the optimizer.
-//
-// (Other existing override functions remain unchanged below)
+// UPDATED (User Fix):
+// - `loadDailySkeleton`: This function's logic is now correct.
+//   It loads the `dailyData.manualSkeleton` first.
+//   If that is empty, it loads a *deep copy* of the
+//   `app1.defaultSkeleton`, which prevents the bug
+//   where editing the override accidentally edited the default.
 // =================================================================
 
 (function() {
@@ -330,22 +323,27 @@ function renderEventTile(event, top, height) {
 }
 
 /**
- * Loads the skeleton for the *current day*, falling back to the default.
- * (This is the same logic as in master_schedule_builder.js)
+ * --- UPDATED: loadDailySkeleton (FIXED) ---
+ * Loads the skeleton for the *current day*, falling back to a
+ * *deep copy* of the default skeleton.
  */
 function loadDailySkeleton() {
     const dailyData = window.loadCurrentDailyData?.() || {};
+    
+    // Check if a schedule is already saved for *this specific day*
     if (dailyData.manualSkeleton && dailyData.manualSkeleton.length > 0) {
         dailyOverrideSkeleton = dailyData.manualSkeleton;
     } else {
+        // If not, load the *global default* skeleton
         const globalSettings = window.loadGlobalSettings?.() || {};
         const app1Data = globalSettings.app1 || {};
-        dailyOverrideSkeleton = app1Data.defaultSkeleton || [];
+        // CRITICAL FIX: Must deep-copy the default skeleton
+        // otherwise, edits here will modify the in-memory default.
+        dailyOverrideSkeleton = JSON.parse(JSON.stringify(app1Data.defaultSkeleton || []));
     }
 }
 /**
  * Saves the skeleton *only* to the current day's "manualSkeleton" key.
- * (This is the same logic as in master_schedule_builder.js)
  */
 function saveDailySkeleton() {
     window.saveCurrentDailyData?.("manualSkeleton", dailyOverrideSkeleton);
