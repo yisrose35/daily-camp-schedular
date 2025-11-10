@@ -3,12 +3,13 @@
 // This file creates the UI for the "Daily Overrides" tab.
 //
 // UPDATED:
-// - Replaced the confusing `renderDailyAvailabilityControls` with
-//   a new `renderTimeRulesUI` (similar to app1.js).
-// - This new UI allows adding multiple, specific time rules
-//   (e.g., "Available 9-11", "Unavailable 11-12") for the
-//   *specific day* only.
-// - Logic Core will now check for these daily rules first.
+// - **NEW: Disabled Specialty Leagues**
+//   - Added `specialtyLeaguesContainer` to the UI.
+//   - Added `renderSpecialtyLeaguesOverride()` function to
+//     render a checklist of all specialty leagues.
+//   - This new list saves to `dailyData.disabledSpecialtyLeagues`.
+//   - The optimizer will now read this list.
+// - (All other functionality remains)
 // =================================================================
 
 (function() {
@@ -17,20 +18,20 @@
 let container = null;
 let masterSettings = {};
 let currentOverrides = {
-  // fieldAvailability is GONE
   dailyFieldAvailability: {}, // <-- NEW
-  leagues: []
+  leagues: [],
+  disabledSpecialtyLeagues: [] // <-- NEW
 };
-// let currentTrips = []; // No longer needed
 
 // --- Helper containers ---
 let skeletonContainer = null;
 let fieldOverridesContainer = null;
 let tripsFormContainer = null;
 let leaguesContainer = null;
+let specialtyLeaguesContainer = null; // <-- NEW
 
 // =================================================================
-// ===== START: SKELETON EDITOR LOGIC (Unchanged from previous) =====
+// ===== START: SKELETON EDITOR LOGIC (Unchanged) =====
 // =================================================================
 let dailyOverrideSkeleton = []; 
 const PIXELS_PER_MINUTE = 2;
@@ -271,8 +272,8 @@ function parseTimeToMinutes(str) {
   const mm = parseInt(m[2], 10);
   if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
   if (mer) {
-    if (hh === 12) hh = mer === "am" ? 0 : 12;
-    else if (mer === "pm") hh += 12;
+    if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
+    else if (mer === "pm") hh += 12; // 1pm -> 13
   }
   return hh * 60 + mm;
 }
@@ -313,6 +314,10 @@ function init() {
     <div class="override-section" id="league-overrides-container">
       <h3>Disabled Leagues</h3>
     </div>
+    
+    <div class="override-section" id="specialty-league-overrides-container">
+      <h3>Disabled Specialty Leagues</h3>
+    </div>
   `;
 
   // Get references to the containers
@@ -320,16 +325,17 @@ function init() {
   fieldOverridesContainer = document.getElementById("field-overrides-container");
   tripsFormContainer = document.getElementById("trips-form-container");
   leaguesContainer = document.getElementById("league-overrides-container");
+  specialtyLeaguesContainer = document.getElementById("specialty-league-overrides-container"); // <-- NEW
 
   // 1. Load Master "Setup" Data
   masterSettings.global = window.loadGlobalSettings?.() || {};
   masterSettings.app1 = masterSettings.global.app1 || {};
   masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
+  masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {}; // <-- NEW
 
   // 2. Load the data for the *current* day
   const dailyData = window.loadCurrentDailyData?.() || {};
   
-  // --- NEW: Load new daily field availability rules ---
   currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
   
   // --- One-time migration from old system ---
@@ -351,18 +357,18 @@ function init() {
         }
     });
     window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
-    // This is safe to delete now, but we'll leave it for one cycle
-    // delete dailyData.fieldAvailability; 
   }
   // --- End Migration ---
   
-  currentOverrides.leagues = dailyData.overrides?.leagues || [];
+  currentOverrides.leagues = (dailyData.overrides || {}).leagues || [];
+  currentOverrides.disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || []; // <-- NEW
 
   // 3. Render ALL UI sections
   initDailySkeletonUI(); // Render the skeleton editor
   renderTripsForm();     // Render the trip form
   renderFieldsOverride();
   renderLeaguesOverride();
+  renderSpecialtyLeaguesOverride(); // <-- NEW
 }
 
 
@@ -709,6 +715,43 @@ function renderLeaguesOverride() {
     leaguesContainer.appendChild(el.wrapper);
   });
 }
+
+// --- NEW FUNCTION ---
+/**
+* Renders the "Disabled Specialty Leagues" checklist
+*/
+function renderSpecialtyLeaguesOverride() {
+  specialtyLeaguesContainer.innerHTML = '<h3>Disabled Specialty Leagues</h3>'; // Clear only its container
+
+  const leagues = masterSettings.specialtyLeagues || {};
+  // Get names, as the key is an ID
+  const leagueNames = Object.values(leagues).map(l => l.name).sort();
+
+  if (leagueNames.length === 0) {
+    specialtyLeaguesContainer.innerHTML += '<p class="muted">No specialty leagues found in Setup.</p>';
+    return;
+  }
+
+  leagueNames.forEach(leagueName => {
+    const el = createCheckbox(leagueName, currentOverrides.disabledSpecialtyLeagues.includes(leagueName));
+    el.checkbox.onchange = () => {
+      if (el.checkbox.checked) {
+        if (!currentOverrides.disabledSpecialtyLeagues.includes(leagueName)) {
+            currentOverrides.disabledSpecialtyLeagues.push(leagueName);
+        }
+      } else {
+        currentOverrides.disabledSpecialtyLeagues = currentOverrides.disabledSpecialtyLeagues.filter(l => l !== leagueName);
+      }
+      
+      // Save to its own key
+      console.log("Daily Overrides: Saving specialty league overrides...", currentOverrides.disabledSpecialtyLeagues);
+      window.saveCurrentDailyData("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
+    };
+    specialtyLeaguesContainer.appendChild(el.wrapper);
+  });
+}
+// --- END NEW FUNCTION ---
+
 
 /**
 * Helper to create a standardized checkbox UI element
