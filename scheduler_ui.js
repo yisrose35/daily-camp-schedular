@@ -51,8 +51,6 @@ function fmtTime(d) {
     return `${h}:${m} ${ap}`;
 }
 
-// (findSlotsForRange is no longer needed by the new renderers)
-
 // ===== NEW: Main updateTable function =====
 function updateTable() {
     const container = document.getElementById("scheduleTable");
@@ -308,6 +306,8 @@ function renderFixedBlockView(container) {
             tdTime.textContent = `${fmtTime(slot.start)} - ${fmtTime(endSlot.end)}`;
             tdTime.rowSpan = rowspan;
         }
+        tdTime.style.border = "1px solid #ccc"; // Ensure border
+        tdTime.style.verticalAlign = "top"; // Ensure alignment
         tr.appendChild(tdTime);
         
         availableDivisions.forEach(div => {
@@ -351,6 +351,7 @@ function renderFixedBlockView(container) {
             } else {
                 td.className = "grey-cell";
             }
+            td.style.border = "1px solid #ccc"; // Ensure border
             tr.appendChild(td);
         });
         tbody.appendChild(tr);
