@@ -2,14 +2,15 @@
 // This file is now the "OPTIMIZER"
 //
 // UPDATED:
-// - *** CRITICAL FIX (Daily Overrides) ***
-//   - `loadAndFilterData` has been rewritten to load the new
-//     `dailyFieldAvailability` and `app1.timeRules` formats.
-//   - It now parses these rules into minutes (e.g., startMin, endMin)
-//     and saves them to `activityProperties`.
-//   - `isTimeAvailable` (NEW) implements the new, correct
-//     availability logic (e.g., "Available 11-2").
-//   - `canBlockFit` now calls `isTimeAvailable` for every slot.
+// - **CRITICAL FIX (League Overrides)**:
+//   - `loadAndFilterData` now loads `disabledLeagues` and
+//     `disabledSpecialtyLeagues` from the daily data.
+//   - (Pass 3) `runSkeletonOptimizer` now checks the
+//     `disabledLeagues` list before scheduling a regular league.
+//   - (Pass 3.5) `runSkeletonOptimizer` now checks the
+//     `disabledSpecialtyLeagues` list before scheduling a
+//     specialty league.
+// - (Previous time-rule fixes remain)
 // -----------------------------------------------------------------
 
 (function() {
@@ -17,6 +18,7 @@
 
 // ===== CONFIG =====
 const INCREMENT_MINS = 30; // The base grid resolution
+window.INCREMENT_MINS = INCREMENT_MINS; // Expose for filler.js
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
@@ -62,6 +64,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         return false; 
     }
     
+    // --- UPDATED: Load new disabledLeague lists ---
     const { 
         divisions, 
         availableDivisions,
@@ -71,7 +74,9 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         fieldsBySport,
         masterLeagues,
         masterSpecialtyLeagues,
-        yesterdayHistory
+        yesterdayHistory,
+        disabledLeagues, // <-- NEW
+        disabledSpecialtyLeagues // <-- NEW
     } = loadAndFilterData();
     
     let fieldUsageBySlot = {}; 
@@ -79,23 +84,15 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     // ===== PASS 1: Generate Master Time Grid =====
     let earliestMin = 1440; 
     let latestMin = 0;
-
     manualSkeleton.forEach(item => {
         const start = parseTimeToMinutes(item.startTime);
         const end = parseTimeToMinutes(item.endTime);
-        if (start != null && start < earliestMin) {
-            earliestMin = start;
-        }
-        if (end != null && end > latestMin) {
-            latestMin = end;
-        }
+        if (start != null && start < earliestMin) earliestMin = start;
+        if (end != null && end > latestMin) latestMin = end;
     });
-
     if (earliestMin === 1440 || latestMin === 0) {
-        earliestMin = 540; 
-        latestMin = 960; 
+        earliestMin = 540; latestMin = 960; 
     }
-
     const baseDate = new Date(1970, 0, 1, 0, 0, 0); 
     let currentMin = earliestMin;
     while (currentMin < latestMin) {
@@ -109,111 +106,70 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         });
         currentMin = nextMin;
     }
-    
     if (window.unifiedTimes.length === 0) {
         window.updateTable?.();
         return false;
     }
-
     availableDivisions.forEach(divName => {
         (divisions[divName]?.bunks || []).forEach(bunk => {
             window.scheduleAssignments[bunk] = new Array(window.unifiedTimes.length);
         });
     });
 
-
     // ===== PASS 2: Place all "Pinned" Events from the Skeleton =====
     const schedulableSlotBlocks = []; 
-    
     manualSkeleton.forEach(item => {
         const allBunks = divisions[item.division]?.bunks || [];
-        if (!allBunks || allBunks.length === 0) {
-            return;
-        }
+        if (!allBunks || allBunks.length === 0) return;
         const startMin = parseTimeToMinutes(item.startTime);
         const endMin = parseTimeToMinutes(item.endTime);
         const allSlots = findSlotsForRange(startMin, endMin);
-        if (allSlots.length === 0) {
-            return;
-        }
+        if (allSlots.length === 0) return;
 
         if (item.type === 'pinned') {
             allBunks.forEach(bunk => {
                 allSlots.forEach((slotIndex, idx) => {
                     if (!window.scheduleAssignments[bunk][slotIndex]) {
-                        window.scheduleAssignments[bunk][slotIndex] = {
-                            field: { name: item.event },
-                            sport: null,
-                            continuation: (idx > 0),
-                            _fixed: true
-                        };
+                        window.scheduleAssignments[bunk][slotIndex] = { field: { name: item.event }, sport: null, continuation: (idx > 0), _fixed: true };
                     }
                 });
             });
-        
         } else if (item.type === 'split') {
             if (!item.subEvents || item.subEvents.length < 2) return; 
-            
             const event1 = item.subEvents[0]; 
             const event2 = item.subEvents[1]; 
-
             const splitIndex = Math.ceil(allBunks.length / 2);
             const bunksHalf1 = allBunks.slice(0, splitIndex);
             const bunksHalf2 = allBunks.slice(splitIndex);
-            
             const slotSplitIndex = Math.ceil(allSlots.length / 2);
             const slotsHalf1 = allSlots.slice(0, slotSplitIndex);
             const slotsHalf2 = allSlots.slice(slotSplitIndex);
-            
             const groups = [
                 { bunks: bunksHalf1, slots: slotsHalf1, eventDef: event1 },
                 { bunks: bunksHalf2, slots: slotsHalf1, eventDef: event2 },
                 { bunks: bunksHalf1, slots: slotsHalf2, eventDef: event2 },
                 { bunks: bunksHalf2, slots: slotsHalf2, eventDef: event1 }
             ];
-
             groups.forEach(group => {
                 if (group.slots.length === 0) return; 
-                
                 group.bunks.forEach(bunk => {
                     if (group.eventDef.type === 'pinned') {
                         group.slots.forEach((slotIndex, idx) => {
                              if (!window.scheduleAssignments[bunk][slotIndex]) {
-                                window.scheduleAssignments[bunk][slotIndex] = {
-                                    field: { name: group.eventDef.event },
-                                    sport: null,
-                                    continuation: (idx > 0),
-                                    _fixed: true
-                                };
+                                window.scheduleAssignments[bunk][slotIndex] = { field: { name: group.eventDef.event }, sport: null, continuation: (idx > 0), _fixed: true };
                             }
                         });
                     } else if (group.eventDef.type === 'slot') {
-                        schedulableSlotBlocks.push({
-                            divName: item.division,
-                            bunk: bunk,
-                            event: group.eventDef.event, 
-                            startTime: startMin, 
-                            endTime: endMin,
-                            slots: group.slots
-                        });
+                        schedulableSlotBlocks.push({ divName: item.division, bunk: bunk, event: group.eventDef.event, startTime: startMin, endTime: endMin, slots: group.slots });
                     }
                 });
             });
-
         } else if (item.type === 'slot') {
             allBunks.forEach(bunk => {
-                schedulableSlotBlocks.push({
-                    divName: item.division,
-                    bunk: bunk,
-                    event: item.event, 
-                    startTime: startMin,
-                    endTime: endMin,
-                    slots: allSlots
-                });
+                schedulableSlotBlocks.push({ divName: item.division, bunk: bunk, event: item.event, startTime: startMin, endTime: endMin, slots: allSlots });
             });
         }
     });
-
 
     // ===== PASS 3: NEW "League Pass" (REWRITTEN) =====
     const leagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'League Game');
@@ -224,20 +180,22 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     leagueBlocks.forEach(block => {
         const key = `${block.divName}-${block.startTime}`;
         if (!leagueGroups[key]) {
-            leagueGroups[key] = {
-                divName: block.divName,
-                startTime: block.startTime,
-                slots: block.slots,
-                bunks: new Set() 
-            };
+            leagueGroups[key] = { divName: block.divName, startTime: block.startTime, slots: block.slots, bunks: new Set() };
         }
         leagueGroups[key].bunks.add(block.bunk);
     });
 
     Object.values(leagueGroups).forEach(group => {
         
-        const leagueEntry = Object.entries(masterLeagues).find(([name, l]) => l.enabled && l.divisions.includes(group.divName));
+        // --- UPDATED: Check disabledLeagues list ---
+        const leagueEntry = Object.entries(masterLeagues).find(([name, l]) => 
+            l.enabled && 
+            !disabledLeagues.includes(name) && // <-- THIS CHECK IS NEW
+            l.divisions.includes(group.divName)
+        );
+        
         if (!leagueEntry) return;
+        
         const divLeagueName = leagueEntry[0];
         const divLeague = leagueEntry[1];
         const leagueTeams = (divLeague.teams || []).map(t => String(t).trim()).filter(Boolean);
@@ -298,19 +256,22 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     specialtyLeagueBlocks.forEach(block => {
         const key = `${block.divName}-${block.startTime}`;
         if (!specialtyLeagueGroups[key]) {
-            specialtyLeagueGroups[key] = {
-                divName: block.divName,
-                startTime: block.startTime,
-                slots: block.slots,
-                bunks: new Set() 
-            };
+            specialtyLeagueGroups[key] = { divName: block.divName, startTime: block.startTime, slots: block.slots, bunks: new Set() };
         }
         specialtyLeagueGroups[key].bunks.add(block.bunk);
     });
 
     Object.values(specialtyLeagueGroups).forEach(group => {
-        const leagueEntry = Object.values(masterSpecialtyLeagues).find(l => l.enabled && l.divisions.includes(group.divName));
+        
+        // --- UPDATED: Check disabledSpecialtyLeagues list ---
+        const leagueEntry = Object.values(masterSpecialtyLeagues).find(l => 
+            l.enabled && 
+            !disabledSpecialtyLeagues.includes(l.name) && // <-- THIS CHECK IS NEW
+            l.divisions.includes(group.divName)
+        );
+        
         if (!leagueEntry) return; 
+
         const sport = leagueEntry.sport;
         const leagueFields = leagueEntry.fields || [];
         const leagueTeams = (leagueEntry.teams || []).map(t => String(t).trim()).filter(Boolean);
@@ -325,6 +286,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const scheduledGames = []; 
         const blockBase = { slots: group.slots, divName: group.divName };
         const gamesPerField = Math.ceil(matchups.length / leagueFields.length);
+
         for (let i = 0; i < matchups.length; i++) {
             const [teamA, teamB] = matchups[i];
             if (teamA === "BYE" || teamB === "BYE") continue;
@@ -416,7 +378,6 @@ function isTimeAvailable(slotIndex, fieldProps) {
     
     const slot = window.unifiedTimes[slotIndex];
     const slotStartMin = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-    // Use INCREMENT_MINS to avoid 2:59:59 issues
     const slotEndMin = slotStartMin + INCREMENT_MINS; 
     
     const rules = fieldProps.timeRules || [];
@@ -538,7 +499,8 @@ function pairRoundRobin(teamList) {
 
 // --- START OF UPDATED FUNCTION ---
 /**
- * UPDATED: This function is rewritten to process new `timeRules`.
+ * UPDATED: This function is rewritten to process new `timeRules`
+ * and load the new `disabled...` league lists.
  */
 function loadAndFilterData() {
     const globalSettings = window.loadGlobalSettings?.() || {};
@@ -557,11 +519,14 @@ function loadAndFilterData() {
     // --- NEW: Load daily availability rules ---
     const dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
     
-    // --- OLD: Load bunk/league overrides ---
+    // --- NEW: Load daily disabled leagues ---
     const loadedOverrides = dailyData.overrides || {};
+    const disabledLeagues = loadedOverrides.leagues || [];
+    const disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
+    
     const overrides = {
         bunks: loadedOverrides.bunks || [],
-        leagues: loadedOverrides.leagues || []
+        leagues: disabledLeagues // Pass this along
     };
 
     const availableDivisions = masterAvailableDivs.filter(divName => !overrides.bunks.includes(divName));
@@ -658,7 +623,9 @@ function loadAndFilterData() {
         fieldsBySport,
         masterLeagues,
         masterSpecialtyLeagues,
-        yesterdayHistory
+        yesterdayHistory,
+        disabledLeagues, // <-- NEW
+        disabledSpecialtyLeagues // <-- NEW
     };
 }
 // --- END OF UPDATED FUNCTION ---
