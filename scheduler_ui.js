@@ -5,9 +5,10 @@
 // - *** CRITICAL FIX (Split Activity) ***
 //   - `renderFixedBlockView` has been rewritten to fix the
 //     "blank row" bug.
-//   - It no longer assumes all divisions have the same rowspan.
-//   - It now calculates rowspan *per-division* by checking
-//     continuation for each division's first bunk.
+//   - It no longer skips the entire `<tr>` (row) if the
+//     first division is continuing.
+//   - Instead, it checks continuation *per-cell* (one for
+//     the Time column, and one for each Division).
 //   - This allows it to correctly render split activities
 //     (e.g., one 1-hour block next to two 30-min blocks)
 //     without creating blank rows.
@@ -66,10 +67,10 @@ function updateTable() {
  */
 function getEntry(bunk, slotIndex) {
     const assignments = window.scheduleAssignments || {};
-    if (assignments[bunk] && assignments[bunk][slotIndex]) {
+    if (bunk && assignments[bunk] && assignments[bunk][slotIndex]) {
         return assignments[bunk][slotIndex];
     }
-    return null; // Return null if empty
+    return null; // Return null if empty or bunk is invalid
 }
 
 /**
@@ -79,7 +80,7 @@ function calculateRowspan(bunk, slotIndex) {
     let rowspan = 1;
     if (!bunk) return 1; // Failsafe
     const firstEntry = getEntry(bunk, slotIndex);
-    if (!firstEntry) return 1;
+    if (!firstEntry || !window.unifiedTimes) return 1;
 
     for (let i = slotIndex + 1; i < window.unifiedTimes.length; i++) {
         const nextEntry = getEntry(bunk, i);
@@ -277,8 +278,12 @@ function renderFixedBlockView(container) {
     // --- 2. Build Body (Slot-based) ---
     const tbody = document.createElement("tbody");
     
+    // *** START OF BUG FIX ***
     for (let i = 0; i < unifiedTimes.length; i++) {
         const slot = unifiedTimes[i];
+        
+        // We must *always* create a <tr>.
+        // We will decide whether to add cells to it.
         const tr = document.createElement("tr");
 
         // --- 1. Add Time Cell ---
@@ -295,7 +300,7 @@ function renderFixedBlockView(container) {
             const rowspan = calculateRowspan(firstBunk, i);
             const tdTime = document.createElement("td");
             tdTime.textContent = slot.label;
-            if (rowspan > 1) {
+            if (rowspan > 1 && (i + rowspan - 1) < unifiedTimes.length) {
                 const endSlot = unifiedTimes[i + rowspan - 1];
                 tdTime.textContent = `${fmtTime(slot.start)} - ${fmtTime(endSlot.end)}`;
                 tdTime.rowSpan = rowspan;
@@ -329,7 +334,8 @@ function renderFixedBlockView(container) {
                     
                     let games = new Map();
                     bunks.forEach(bunk => {
-                        const bunkEntry = getEntry(bunk, i);
+                        // Check this slot for all bunks
+                        const bunkEntry = getEntry(bunk, i); 
                         if (bunkEntry && bunkEntry._h2h && bunkEntry.sport) {
                             games.set(bunkEntry.sport, fieldLabel(bunkEntry.field));
                         }
@@ -360,10 +366,12 @@ function renderFixedBlockView(container) {
         });
 
         // Only append the row if it has children
+        // (i.e., it wasn't a row where *every single cell* was a continuation)
         if (tr.children.length > 0) {
             tbody.appendChild(tr);
         }
     }
+    // *** END OF BUG FIX ***
     
     table.appendChild(tbody);
     container.appendChild(table);
