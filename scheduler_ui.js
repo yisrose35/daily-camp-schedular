@@ -20,6 +20,10 @@
 //     (12:20-1:10 and 1:10-2:00) *before* rendering.
 //   - This creates two separate table rows, each with its
 //     own time label and the correct corresponding activity.
+// - *** SPECIALTY LEAGUE UI FIX (Staggered View) ***
+//   - `renderStaggeredView` now merges cells for "Specialty League".
+//   - The content inside this merged cell is now grouped by field,
+//     e.g., "Game 1, Game 2 - Field A", "Game 3 - Field B".
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -171,7 +175,7 @@ function findSlotsForRange(startMin, endMin) {
 
 /**
  * Renders the "Staggered" (YKLI) view
- * REWRITTEN to "flatten" split blocks into two rows.
+ * REWRITTEN to "flatten" split blocks and correctly render leagues.
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -318,8 +322,12 @@ function renderStaggeredView(container) {
             tr.appendChild(tdTime);
 
             // --- 2. Add ACTIVITY cells (Merged or Individual) ---
-            if (eventBlock && eventBlock.event === 'League Game') {
-                // === LEAGUE GAME: MERGED CELL ===
+            
+            // --- START OF MODIFIED FIX ---
+            if (eventBlock && (eventBlock.event === 'League Game' || eventBlock.event === 'Specialty League')) {
+            // --- END OF MODIFIED FIX ---
+            
+                // === LEAGUE GAME / SPECIALTY LEAGUE: MERGED CELL ===
                 const tdLeague = document.createElement("td");
                 tdLeague.colSpan = bunks.length;
                 tdLeague.style.verticalAlign = "top";
@@ -328,26 +336,66 @@ function renderStaggeredView(container) {
                 tdLeague.style.background = "#e8f5e9";
                 
                 const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
-                let games = new Map();
-                if (firstSlotIndex !== -1) {
-                    bunks.forEach(bunk => {
-                        const entry = getEntry(bunk, firstSlotIndex);
-                        if (entry && entry._h2h && entry.sport) {
-                            games.set(entry.sport, fieldLabel(entry.field));
-                        }
+                
+                // --- START OF NEW FORMATTING LOGIC ---
+                if (eventBlock.event === 'Specialty League') {
+                    // --- NEW: Specialty League Formatting (Group by Field) ---
+                    const gamesByField = new Map();
+                    if (firstSlotIndex !== -1) {
+                        const uniqueMatchups = new Set(); // Prevent duplicates
+                        bunks.forEach(bunk => {
+                            const entry = getEntry(bunk, firstSlotIndex);
+                            if (entry && entry._h2h && entry.sport) {
+                                if (!uniqueMatchups.has(entry.sport)) {
+                                    uniqueMatchups.add(entry.sport);
+                                    const field = fieldLabel(entry.field);
+                                    if (!gamesByField.has(field)) {
+                                        gamesByField.set(field, []);
+                                    }
+                                    gamesByField.get(field).push(entry.sport);
+                                }
+                            }
+                        });
+                    }
+
+                    let html = '<div style="margin: 0; padding: 4px;">';
+                    if (gamesByField.size === 0) {
+                        html = '<p class="muted" style="margin:0; padding: 4px;">Specialty League</p>';
+                    }
+                    gamesByField.forEach((matchups, field) => {
+                        // Strip the sport name (e.g., "(Basketball)") from the end
+                        const matchupNames = matchups.map(m => m.substring(0, m.lastIndexOf('(')).trim());
+                        html += `<div style="margin-bottom: 2px;">
+                                    <strong>${matchupNames.join(', ')}</strong> - ${field}
+                                 </div>`;
                     });
+                    if (gamesByField.size > 0) { html += '</div>'; }
+                    tdLeague.innerHTML = html;
+
+                } else {
+                    // --- ORIGINAL: Regular League Formatting (List) ---
+                    let games = new Map();
+                    if (firstSlotIndex !== -1) {
+                        bunks.forEach(bunk => {
+                            const entry = getEntry(bunk, firstSlotIndex);
+                            if (entry && entry._h2h && entry.sport) {
+                                games.set(entry.sport, fieldLabel(entry.field));
+                            }
+                        });
+                    }
+                    
+                    let html = '<ul style="margin: 0; padding-left: 18px;">';
+                    if (games.size === 0) {
+                        html = '<p class="muted" style="margin:0; padding: 4px;">Leagues</p>';
+                    }
+                    games.forEach((field, matchup) => {
+                        html += `<li>${matchup} @ ${field}</li>`;
+                    });
+                    if (games.size > 0) { html += '</ul>'; }
+                    tdLeague.innerHTML = html;
                 }
-                
-                let html = '<ul style="margin: 0; padding-left: 18px;">';
-                if (games.size === 0) {
-                    html = '<p class="muted" style="margin:0; padding: 4px;">Leagues</p>';
-                }
-                games.forEach((field, matchup) => {
-                    html += `<li>${matchup} @ ${field}</li>`;
-                });
-                if (games.size > 0) { html += '</ul>'; }
-                
-                tdLeague.innerHTML = html;
+                // --- END OF NEW FORMATTING LOGIC ---
+
                 tr.appendChild(tdLeague);
 
             } else {
@@ -358,12 +406,8 @@ function renderStaggeredView(container) {
                     tdActivity.style.verticalAlign = "top";
                     
                     if (eventBlock) {
-                        // --- START OF MODIFIED FIX ---
                         // We just need to find the activity for the *start time*
                         // of this specific block (which is now a half-block).
-                        // The optimizer already assigned the correct activity
-                        // to the slot index corresponding to this start time.
-                        
                         const slotIndex = findFirstSlotForTime(eventBlock.startMin);
                         const entry = getEntry(bunk, slotIndex);
 
@@ -376,7 +420,6 @@ function renderStaggeredView(container) {
                                 tdActivity.style.background = "#f1f1f1";
                             }
                         }
-                        // --- END OF MODIFIED FIX ---
                     
                     } else {
                         tdActivity.className = "grey-cell";
