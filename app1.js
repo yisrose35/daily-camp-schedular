@@ -8,9 +8,9 @@
 // - **NEW** Added `globalStartTime` and `globalEndTime` variables.
 // - `loadData` now loads these new global times.
 // - `saveData` now saves these new global times.
-// - `initApp1` now finds and hooks up the new input fields.
-// - **CRITICAL FIX:** Removed an extra '}' at the end of the file
-//   which was causing a fatal syntax error.
+// - **UPDATED** `initApp1` to use a new "Update" button for
+//   global times, removed 'onchange', and added validation
+//   and grid-refresh logic.
 // =================================================================
 
 (function() {
@@ -299,29 +299,45 @@ function initApp1() {
     // Load all data
     loadData();
     
-    // --- NEW: GLOBAL TIME LISTENERS ---
+    // --- UPDATED: GLOBAL TIME LISTENERS ---
     const globalStartInput = document.getElementById("globalStartTime");
-    if (globalStartInput) {
-        globalStartInput.value = globalStartTime;
-        globalStartInput.onchange = (e) => {
-            globalStartTime = e.target.value;
-            saveData();
-            // If master scheduler is visible, re-init it
-            if (document.getElementById('master-scheduler')?.classList.contains('active')) {
-                window.initMasterScheduler?.();
-            }
-        };
-    }
-    
     const globalEndInput = document.getElementById("globalEndTime");
-    if (globalEndInput) {
-        globalEndInput.value = globalEndTime;
-        globalEndInput.onchange = (e) => {
-            globalEndTime = e.target.value;
+    const updateTimeBtn = document.getElementById("updateGlobalTimeBtn");
+    
+    if (globalStartInput) globalStartInput.value = globalStartTime;
+    if (globalEndInput) globalEndInput.value = globalEndTime;
+
+    if (updateTimeBtn) {
+        updateTimeBtn.onclick = () => {
+            const newStart = globalStartInput.value;
+            const newEnd = globalEndInput.value;
+            
+            // Validation
+            const startMin = parseTimeToMinutes(newStart);
+            const endMin = parseTimeToMinutes(newEnd);
+            
+            if (startMin == null || endMin == null) {
+                alert("Error: Invalid time format. Please use a format like '9:00 AM' or '2:30 PM'.");
+                return;
+            }
+            
+            if (endMin <= startMin) {
+                alert("Error: End time must be after start time.");
+                return;
+            }
+
+            // Save the valid times
+            globalStartTime = newStart;
+            globalEndTime = newEnd;
             saveData();
-            // If master scheduler is visible, re-init it
+            
+            alert("Global times updated!");
+
+            // Force re-render of the active scheduler grid
             if (document.getElementById('master-scheduler')?.classList.contains('active')) {
                 window.initMasterScheduler?.();
+            } else if (document.getElementById('daily-overrides')?.classList.contains('active')) {
+                window.initDailyOverrides?.();
             }
         };
     }
