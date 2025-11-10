@@ -3,17 +3,12 @@
 // This file creates the UI for the "Daily Overrides" tab.
 //
 // UPDATED:
-// - **NEW: Trips Modify Skeleton**
-//   - Moved the "Daily Trips" section to be directly under the skeleton editor.
-//   - Removed "individual bunk" selection from the trip form to align
-//     with the division-based skeleton.
-//   - The "Add Trip" button now directly modifies the `dailyOverrideSkeleton`:
-//     1. It removes any existing blocks for the selected divisions
-//        that conflict with the trip's time.
-//     2. It adds a new 'pinned' trip block to the skeleton.
-//     3. It saves the skeleton and re-renders the grid immediately.
-//   - Removed the old `currentTrips` array and `renderTripsList` function,
-//     as the skeleton is now the single source of truth.
+// - Replaced the confusing `renderDailyAvailabilityControls` with
+//   a new `renderTimeRulesUI` (similar to app1.js).
+// - This new UI allows adding multiple, specific time rules
+//   (e.g., "Available 9-11", "Unavailable 11-12") for the
+//   *specific day* only.
+// - Logic Core will now check for these daily rules first.
 // =================================================================
 
 (function() {
@@ -22,7 +17,8 @@
 let container = null;
 let masterSettings = {};
 let currentOverrides = {
-  fieldAvailability: {},
+  // fieldAvailability is GONE
+  dailyFieldAvailability: {}, // <-- NEW
   leagues: []
 };
 // let currentTrips = []; // No longer needed
@@ -31,17 +27,14 @@ let currentOverrides = {
 let skeletonContainer = null;
 let fieldOverridesContainer = null;
 let tripsFormContainer = null;
-// let tripsListContainer = null; // No longer needed
 let leaguesContainer = null;
 
 // =================================================================
-// ===== START: SKELETON EDITOR LOGIC (Copied from master_schedule_builder.js) =====
+// ===== START: SKELETON EDITOR LOGIC (Unchanged from previous) =====
 // =================================================================
-
-let dailyOverrideSkeleton = []; // This file's copy of the skeleton
+let dailyOverrideSkeleton = []; 
 const PIXELS_PER_MINUTE = 2;
 const INCREMENT_MINS = 30;
-
 const TILES = [
     { type: 'activity', name: 'Activity', style: 'background: #e0f7fa; border: 1px solid #007bff;' },
     { type: 'sports', name: 'Sports', style: 'background: #dcedc8; border: 1px solid #689f38;' },
@@ -54,33 +47,15 @@ const TILES = [
     { type: 'snacks', name: 'Snacks', style: 'background: #fff9c4; border: 1px solid #fbc02d;' },
     { type: 'custom', name: 'Custom Pinned Event', style: 'background: #eee; border: 1px solid #616161;' }
 ];
-
-/**
- * Helper: Translates user-friendly names from prompts
- * into the correct event type and name for the optimizer.
- */
 function mapEventNameForOptimizer(name) {
     if (!name) name = "Free";
     const lowerName = name.toLowerCase().trim();
-
-    if (lowerName === 'activity') {
-        return { type: 'slot', event: 'General Activity Slot' };
-    }
-    if (lowerName === 'sports') {
-        return { type: 'slot', event: 'Sports Slot' };
-    }
-    if (lowerName === 'special activity' || lowerName === 'special') {
-        return { type: 'slot', event: 'Special Activity' };
-    }
-    if (lowerName === 'swim' || lowerName === 'lunch' || lowerName === 'snacks') {
-        return { type: 'pinned', event: name };
-    }
+    if (lowerName === 'activity') return { type: 'slot', event: 'General Activity Slot' };
+    if (lowerName === 'sports') return { type: 'slot', event: 'Sports Slot' };
+    if (lowerName === 'special activity' || lowerName === 'special') return { type: 'slot', event: 'Special Activity' };
+    if (lowerName === 'swim' || lowerName === 'lunch' || lowerName === 'snacks') return { type: 'pinned', event: name };
     return { type: 'pinned', event: name };
 }
-
-/**
- * Renders the draggable tiles
- */
 function renderPalette(paletteContainer) {
     paletteContainer.innerHTML = '<span style="font-weight: 600; align-self: center;">Drag to add:</span>';
     TILES.forEach(tile => {
@@ -91,33 +66,21 @@ function renderPalette(paletteContainer) {
         el.style.padding = '8px 12px';
         el.style.borderRadius = '5px';
         el.style.cursor = 'grab';
-        
         el.draggable = true;
-        
         el.ondragstart = (e) => {
             e.dataTransfer.setData('application/json', JSON.stringify(tile));
             e.dataTransfer.effectAllowed = 'copy';
             el.style.cursor = 'grabbing';
         };
-        
-        el.ondragend = () => {
-            el.style.cursor = 'grab';
-        };
-        
+        el.ondragend = () => { el.style.cursor = 'grab'; };
         paletteContainer.appendChild(el);
     });
 }
-
-/**
- * Renders the main schedule grid
- */
 function renderGrid(gridContainer) {
     const divisions = window.divisions || {};
     const availableDivisions = window.availableDivisions || [];
-    
     let earliestMin = 1440; 
     let latestMin = 0;
-
     if (dailyOverrideSkeleton.length > 0) {
         dailyOverrideSkeleton.forEach(item => {
             const start = parseTimeToMinutes(item.startTime);
@@ -126,183 +89,109 @@ function renderGrid(gridContainer) {
             if (end != null && end > latestMin) latestMin = end;
         });
     } else {
-        earliestMin = 540; // 9:00 AM
-        latestMin = 960; // 4:00 PM
+        earliestMin = 540; latestMin = 960;
     }
-    
     const totalMinutes = latestMin - earliestMin;
     const totalHeight = totalMinutes * PIXELS_PER_MINUTE;
-
     let gridHtml = `<div style="display: grid; grid-template-columns: 60px repeat(${availableDivisions.length}, 1fr); position: relative;">`;
-    
     gridHtml += `<div style="grid-row: 1; position: sticky; top: 0; background: #fff; z-index: 10; border-bottom: 1px solid #999; padding: 8px;">Time</div>`;
     availableDivisions.forEach((divName, i) => {
         gridHtml += `<div style="grid-row: 1; grid-column: ${i + 2}; position: sticky; top: 0; background: ${divisions[divName]?.color || '#333'}; color: #fff; z-index: 10; border-bottom: 1px solid #999; padding: 8px; text-align: center;">${divName}</div>`;
     });
-
     gridHtml += `<div style="grid-row: 2; grid-column: 1; height: ${totalHeight}px; position: relative; background: #f9f9f9; border-right: 1px solid #ccc;">`;
     for (let min = earliestMin; min < latestMin; min += INCREMENT_MINS) {
         const top = (min - earliestMin) * PIXELS_PER_MINUTE;
-        gridHtml += `<div style="position: absolute; top: ${top}px; left: 0; width: 100%; height: ${INCREMENT_MINS * PIXELS_PER_MINUTE}px; border-bottom: 1px dashed #ddd; box-sizing: border-box; font-size: 10px; padding: 2px; color: #777;">
-            ${minutesToTime(min)}
-        </div>`;
+        gridHtml += `<div style="position: absolute; top: ${top}px; left: 0; width: 100%; height: ${INCREMENT_MINS * PIXELS_PER_MINUTE}px; border-bottom: 1px dashed #ddd; box-sizing: border-box; font-size: 10px; padding: 2px; color: #777;">${minutesToTime(min)}</div>`;
     }
     gridHtml += `</div>`;
-    
     availableDivisions.forEach((divName, i) => {
         const divTimeline = divisions[divName]?.timeline;
         const divStart = parseTimeToMinutes(divTimeline?.start);
         const divEnd = parseTimeToMinutes(divTimeline?.end);
-        
         gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
-
         if (divStart && divStart > earliestMin) {
             gridHtml += `<div style="position: absolute; top: 0; height: ${(divStart - earliestMin) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
         }
         if (divEnd && divEnd < latestMin) {
             gridHtml += `<div style="position: absolute; top: ${(divEnd - earliestMin) * PIXELS_PER_MINUTE}px; height: ${(latestMin - divEnd) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
         }
-
         dailyOverrideSkeleton.filter(ev => ev.division === divName).forEach(event => {
             const startMin = parseTimeToMinutes(event.startTime);
             const endMin = parseTimeToMinutes(event.endTime);
             if (startMin == null || endMin == null) return;
-
             const top = (startMin - earliestMin) * PIXELS_PER_MINUTE;
             const height = (endMin - startMin) * PIXELS_PER_MINUTE;
-
             gridHtml += renderEventTile(event, top, height);
         });
-
         gridHtml += `</div>`;
     });
-
     gridHtml += `</div>`;
     gridContainer.innerHTML = gridHtml;
-    
-    // Add Listeners
     addDropListeners(gridContainer);
     addRemoveListeners(gridContainer);
 }
-
-/**
- * Helper to add all the drag/drop event listeners
- */
 function addDropListeners(gridContainer) {
     gridContainer.querySelectorAll('.grid-cell').forEach(cell => {
-        cell.ondragover = (e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'copy';
-            cell.style.backgroundColor = '#e0ffe0';
-        };
-        
-        cell.ondragleave = () => {
-            cell.style.backgroundColor = '';
-        };
-        
+        cell.ondragover = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; cell.style.backgroundColor = '#e0ffe0'; };
+        cell.ondragleave = () => { cell.style.backgroundColor = ''; };
         cell.ondrop = (e) => {
             e.preventDefault();
             cell.style.backgroundColor = '';
-            
             const tileData = JSON.parse(e.dataTransfer.getData('application/json'));
             const divName = cell.dataset.div;
-            
             const rect = cell.getBoundingClientRect();
-            // Find the correct scroll container
             const scrollTop = cell.closest('#daily-skeleton-grid')?.scrollTop || 0; 
             const y = e.clientY - rect.top + scrollTop;
-            
             const droppedMin = Math.round(y / PIXELS_PER_MINUTE / 15) * 15;
             const earliestMin = parseInt(cell.dataset.startMin, 10);
             const defaultStartTime = minutesToTime(earliestMin + droppedMin);
-            
             let eventType = 'slot';
             let eventName = tileData.name;
             let newEvent = null; 
-
             if (tileData.type === 'activity') eventName = 'General Activity Slot';
             else if (tileData.type === 'sports') eventName = 'Sports Slot';
             else if (tileData.type === 'special') eventName = 'Special Activity';
             else if (tileData.type === 'league' || tileData.type === 'specialty_league' || tileData.type === 'swim') eventName = tileData.name; 
-            
             if (tileData.type === 'split') {
-                const startTime = prompt(`Enter Start Time for the *full* block:`, defaultStartTime);
-                if (!startTime) return;
-                const endTime = prompt(`Enter End Time for the *full* block:`);
-                if (!endTime) return;
-                const eventName1 = prompt("Enter name for FIRST activity (e.g., Swim, Sports):");
-                if (!eventName1) return;
-                const eventName2 = prompt("Enter name for SECOND activity (e.g., Activity, Sports):");
-                if (!eventName2) return;
+                const startTime = prompt(`Enter Start Time for the *full* block:`, defaultStartTime); if (!startTime) return;
+                const endTime = prompt(`Enter End Time for the *full* block:`); if (!endTime) return;
+                const eventName1 = prompt("Enter name for FIRST activity (e.g., Swim, Sports):"); if (!eventName1) return;
+                const eventName2 = prompt("Enter name for SECOND activity (e.g., Activity, Sports):"); if (!eventName2) return;
                 const event1 = mapEventNameForOptimizer(eventName1);
                 const event2 = mapEventNameForOptimizer(eventName2);
-                newEvent = {
-                    id: `evt_${Math.random().toString(36).slice(2, 9)}`,
-                    type: 'split',
-                    event: `${eventName1} / ${eventName2}`,
-                    division: divName,
-                    startTime: startTime,
-                    endTime: endTime,
-                    subEvents: [ event1, event2 ]
-                };
+                newEvent = { id: `evt_${Math.random().toString(36).slice(2, 9)}`, type: 'split', event: `${eventName1} / ${eventName2}`, division: divName, startTime: startTime, endTime: endTime, subEvents: [ event1, event2 ] };
             } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'custom') {
                 eventType = 'pinned';
                 if (tileData.type === 'custom') {
-                    eventName = prompt("Enter the name for this custom event (e.g., 'Snacks'):");
-                    if (!eventName) return;
-                    if (confirm("Is this a 'Slot' to be filled (OK) or a 'Pinned' event (Cancel)?")) {
-                        eventType = 'slot';
-                    }
-                } else {
-                    eventName = tileData.name;
-                }
+                    eventName = prompt("Enter the name for this custom event (e.g., 'Snacks'):"); if (!eventName) return;
+                    if (confirm("Is this a 'Slot' to be filled (OK) or a 'Pinned' event (Cancel)?")) eventType = 'slot';
+                } else { eventName = tileData.name; }
             }
-
             if (!newEvent) {
-                const startTime = prompt(`Add "${eventName}" for ${divName}?\nEnter Start Time:`, defaultStartTime);
-                if (!startTime) return;
-                const endTime = prompt(`Enter End Time:`);
-                if (!endTime) return;
-                newEvent = {
-                    id: `evt_${Math.random().toString(36).slice(2, 9)}`,
-                    type: eventType,
-                    event: eventName,
-                    division: divName,
-                    startTime: startTime,
-                    endTime: endTime
-                };
+                const startTime = prompt(`Add "${eventName}" for ${divName}?\nEnter Start Time:`, defaultStartTime); if (!startTime) return;
+                const endTime = prompt(`Enter End Time:`); if (!endTime) return;
+                newEvent = { id: `evt_${Math.random().toString(36).slice(2, 9)}`, type: eventType, event: eventName, division: divName, startTime: startTime, endTime: endTime };
             }
-            
             dailyOverrideSkeleton.push(newEvent);
-            saveDailySkeleton(); // Save to this day's data
-            renderGrid(gridContainer); // Re-render this UI
+            saveDailySkeleton(); 
+            renderGrid(gridContainer); 
         };
     });
 }
-
-/**
- * Helper to add click-to-remove listeners
- */
 function addRemoveListeners(gridContainer) {
     gridContainer.querySelectorAll('.grid-event').forEach(tile => {
         tile.onclick = (e) => {
             e.stopPropagation(); 
-            const eventId = tile.dataset.eventId;
-            if (!eventId) return;
+            const eventId = tile.dataset.eventId; if (!eventId) return;
             const event = dailyOverrideSkeleton.find(ev => ev.id === eventId);
             if (confirm(`Remove "${event?.event || 'this event'}"?`)) {
                 dailyOverrideSkeleton = dailyOverrideSkeleton.filter(ev => ev.id !== eventId);
-                saveDailySkeleton(); // Save to this day's data
-                renderGrid(gridContainer); // Re-render this UI
+                saveDailySkeleton(); 
+                renderGrid(gridContainer); 
             }
         };
     });
 }
-
-
-/**
- * Renders a single event tile
- */
 function renderEventTile(event, top, height) {
     let tile = TILES.find(t => t.name === event.event);
     if (!tile) {
@@ -313,90 +202,52 @@ function renderEventTile(event, top, height) {
         else tile = TILES.find(t => t.type === 'custom');
     }
     const style = tile ? tile.style : 'background: #eee; border: 1px solid #616161;';
-    
-    // --- NEW: Add a different style for pinned 'Trip' events ---
     let tripStyle = '';
     if (event.type === 'pinned' && tile.type === 'custom') {
-        // This is likely a trip. Give it a distinct style.
         tripStyle = 'background: #455a64; color: white; border: 1px solid #000;';
     }
-
     return `
-        <div class="grid-event" 
-             data-event-id="${event.id}" 
-             title="Click to remove this event"
+        <div class="grid-event" data-event-id="${event.id}" title="Click to remove this event"
              style="${tripStyle || style}; padding: 2px 5px; border-radius: 4px; text-align: center; 
                     margin: 0 1px; font-size: 0.9em; position: absolute;
                     top: ${top}px; height: ${height}px; width: calc(100% - 4px);
                     box-sizing: border-box; overflow: hidden; cursor: pointer;">
             <strong>${event.event}</strong>
             <div style="font-size: 0.85em;">${event.startTime} - ${event.endTime}</div>
-        </div>
-    `;
+        </div>`;
 }
-
-/**
- * --- UPDATED: loadDailySkeleton (FIXED) ---
- * Loads the skeleton for the *current day*, falling back to a
- * *deep copy* of the default skeleton.
- */
 function loadDailySkeleton() {
     const dailyData = window.loadCurrentDailyData?.() || {};
-    
-    // Check if a schedule is already saved for *this specific day*
     if (dailyData.manualSkeleton && dailyData.manualSkeleton.length > 0) {
         dailyOverrideSkeleton = dailyData.manualSkeleton;
     } else {
-        // If not, load the *global default* skeleton
         const globalSettings = window.loadGlobalSettings?.() || {};
         const app1Data = globalSettings.app1 || {};
-        // CRITICAL FIX: Must deep-copy the default skeleton
-        // otherwise, edits here will modify the in-memory default.
         dailyOverrideSkeleton = JSON.parse(JSON.stringify(app1Data.defaultSkeleton || []));
     }
 }
-/**
- * Saves the skeleton *only* to the current day's "manualSkeleton" key.
- */
 function saveDailySkeleton() {
     window.saveCurrentDailyData?.("manualSkeleton", dailyOverrideSkeleton);
 }
-
-/**
- * Helper to convert 24h minutes to 12h time string
- */
 function minutesToTime(min) {
-    const hh = Math.floor(min / 60);
-    const mm = min % 60;
+    const hh = Math.floor(min / 60); const mm = min % 60;
     const h = hh % 12 === 0 ? 12 : hh % 12;
     const m = String(mm).padStart(2, '0');
     const ampm = hh < 12 ? 'am' : 'pm';
     return `${h}:${m}${ampm}`;
 }
-
-/**
- * Main entry point for the SKELETON UI on *this* tab
- */
 function initDailySkeletonUI() {
     skeletonContainer = document.getElementById("override-scheduler-content");
     if (!skeletonContainer) return;
-    
     loadDailySkeleton();
-    
     skeletonContainer.innerHTML = `
-        <div id="daily-skeleton-palette" style="padding: 10px; background: #f4f4f4; border-radius: 8px; margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px;">
-        </div>
-        <div id="daily-skeleton-grid" style="overflow-x: auto; border: 1px solid #999; max-height: 600px; overflow-y: auto;">
-        </div>
-    `;
-    
+        <div id="daily-skeleton-palette" style="padding: 10px; background: #f4f4f4; border-radius: 8px; margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px;"></div>
+        <div id="daily-skeleton-grid" style="overflow-x: auto; border: 1px solid #999; max-height: 600px; overflow-y: auto;"></div>`;
     const palette = document.getElementById("daily-skeleton-palette");
     const grid = document.getElementById("daily-skeleton-grid");
-
     renderPalette(palette);
     renderGrid(grid);
 }
-
 // =================================================================
 // ===== END: SKELETON EDITOR LOGIC =====
 // =================================================================
@@ -420,8 +271,8 @@ function parseTimeToMinutes(str) {
   const mm = parseInt(m[2], 10);
   if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
   if (mer) {
-    if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
-    else if (mer === "pm") hh += 12; // 1pm -> 13
+    if (hh === 12) hh = mer === "am" ? 0 : 12;
+    else if (mer === "pm") hh += 12;
   }
   return hh * 60 + mm;
 }
@@ -438,7 +289,6 @@ function init() {
 
   console.log("Daily Overrides: Initializing for", window.currentScheduleDate);
   
-  // --- UPDATED: Re-ordered layout ---
   container.innerHTML = `
     <h2>Overrides & Trips for ${window.currentScheduleDate}</h2>
     
@@ -448,14 +298,12 @@ function init() {
         Modify the schedule layout for <strong>this day only</strong>.
         Changes here will not affect your default schedule template.
       </p>
-      <div id="override-scheduler-content">
-          </div>
+      <div id="override-scheduler-content"></div>
     </div>
     
     <div class="override-section" id="daily-trips-section">
       <h3>Daily Trips (Adds to Skeleton)</h3>
-      <div id="trips-form-container">
-          </div>
+      <div id="trips-form-container"></div>
     </div>
 
     <div class="override-section" id="field-overrides-container">
@@ -466,15 +314,12 @@ function init() {
       <h3>Disabled Leagues</h3>
     </div>
   `;
-  // --- END OF LAYOUT UPDATE ---
 
   // Get references to the containers
   skeletonContainer = document.getElementById("override-scheduler-content");
   fieldOverridesContainer = document.getElementById("field-overrides-container");
   tripsFormContainer = document.getElementById("trips-form-container");
-  // tripsListContainer = document.getElementById("trips-list-container"); // No longer needed
   leaguesContainer = document.getElementById("league-overrides-container");
-
 
   // 1. Load Master "Setup" Data
   masterSettings.global = window.loadGlobalSettings?.() || {};
@@ -484,180 +329,178 @@ function init() {
   // 2. Load the data for the *current* day
   const dailyData = window.loadCurrentDailyData?.() || {};
   
-  currentOverrides.fieldAvailability = dailyData.fieldAvailability || {};
+  // --- NEW: Load new daily field availability rules ---
+  currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
   
-  // Check for old "overrides" structure
-  if (dailyData.overrides && dailyData.overrides.fields && dailyData.overrides.fields.length > 0 && Object.keys(currentOverrides.fieldAvailability).length === 0) {
-    console.log("Daily Overrides: Migrating old 'fields' overrides...");
-    dailyData.overrides.fields.forEach(fieldName => {
-      currentOverrides.fieldAvailability[fieldName] = {
-        mode: "unavailable",
-        exceptions: []
-      };
+  // --- One-time migration from old system ---
+  if (dailyData.fieldAvailability) {
+    console.log("Daily Overrides: Migrating old 'fieldAvailability' overrides...");
+    const oldRules = dailyData.fieldAvailability || {};
+    Object.keys(oldRules).forEach(fieldName => {
+        const rule = oldRules[fieldName];
+        const newRules = [];
+        const type = rule.mode === 'available' ? 'Unavailable' : 'Available';
+        (rule.exceptions || []).forEach(rangeStr => {
+             const parts = rangeStr.split('-');
+             if(parts.length === 2) {
+                newRules.push({ type: type, start: parts[0], end: parts[1] });
+             }
+        });
+        if (newRules.length > 0) {
+            currentOverrides.dailyFieldAvailability[fieldName] = newRules;
+        }
     });
-    window.saveCurrentDailyData("fieldAvailability", currentOverrides.fieldAvailability);
-    const newOverrides = dailyData.overrides;
-    delete newOverrides.fields;
-    window.saveCurrentDailyData("overrides", newOverrides);
+    window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+    // This is safe to delete now, but we'll leave it for one cycle
+    // delete dailyData.fieldAvailability; 
   }
+  // --- End Migration ---
   
   currentOverrides.leagues = dailyData.overrides?.leagues || [];
-  // currentTrips = dailyData.trips || []; // No longer needed
 
   // 3. Render ALL UI sections
   initDailySkeletonUI(); // Render the skeleton editor
   renderTripsForm();     // Render the trip form
-  // renderTripsList();  // No longer needed
   renderFieldsOverride();
   renderLeaguesOverride();
 }
 
+
+// --- START OF NEW TIME RULE UI ---
 /**
- * UPDATED: Renders the new "Available / Unavailable" SLIDER toggle
+ * Renders the new, simplified "Time Rules" UI for DAILY overrides.
+ * This replaces the old `renderDailyAvailabilityControls`.
  */
-function renderDailyAvailabilityControls(item, onSave) {
-  const container = document.createElement("div");
-  container.style.marginTop = "10px";
-  container.style.paddingLeft = "15px";
-  container.style.borderLeft = "3px solid #eee";
+function renderTimeRulesUI(itemName, globalRules, dailyRules, onSave) {
+    const container = document.createElement("div");
+    container.style.marginTop = "10px";
+    container.style.paddingLeft = "15px";
+    container.style.borderLeft = "3px solid #eee";
 
-  // --- 1. Mode Toggle (Available / Unavailable) ---
-  const modeLabel = document.createElement("label");
-  modeLabel.style.display = "flex";
-  modeLabel.style.alignItems = "center";
-  modeLabel.style.gap = "10px";
-  modeLabel.style.cursor = "pointer";
-  
-  const textAvailable = document.createElement("span");
-  textAvailable.textContent = "Available";
-  
-  const toggleTrack = document.createElement("span");
-  Object.assign(toggleTrack.style, {
-    width: "44px",
-    height: "24px",
-    borderRadius: "99px",
-    position: "relative",
-    display: "inline-block",
-    border: "1px solid #ccc",
-    backgroundColor: item.mode === 'available' ? '#22c55e' : '#d1d5db', // green or grey
-    transition: "background-color 0.2s"
-  });
-
-  const toggleKnob = document.createElement("span");
-  Object.assign(toggleKnob.style, {
-    width: "20px",
-    height: "20px",
-    borderRadius: "50%",
-    backgroundColor: "white",
-    position: "absolute",
-    top: "1px",
-    left: item.mode === 'available' ? '21px' : '1px', // right or left
-    transition: "left 0.2s"
-  });
-  
-  toggleTrack.appendChild(toggleKnob);
-  
-  const textUnavailable = document.createElement("span");
-  textUnavailable.textContent = "Unavailable";
-  
-  // Set initial text style
-  textAvailable.style.fontWeight = item.mode === 'available' ? 'bold' : 'normal';
-  textUnavailable.style.fontWeight = item.mode === 'unavailable' ? 'bold' : 'normal';
-
-  // Use onclick on the label to toggle state
-  modeLabel.onclick = () => {
-    item.mode = (item.mode === 'available') ? 'unavailable' : 'available';
-    
-    // Update styles
-    toggleTrack.style.backgroundColor = item.mode === 'available' ? '#22c55e' : '#d1d5db';
-    toggleKnob.style.left = item.mode === 'available' ? '21px' : '1px';
-    textAvailable.style.fontWeight = item.mode === 'available' ? 'bold' : 'normal';
-    textUnavailable.style.fontWeight = item.mode === 'unavailable' ? 'bold' : 'normal';
-    
-    onSave();
-  };
-
-  modeLabel.appendChild(textAvailable);
-  modeLabel.appendChild(toggleTrack);
-  modeLabel.appendChild(textUnavailable);
-  container.appendChild(modeLabel);
-
-  // --- 2. "Except for..." Text ---
-  const exceptLabel = document.createElement("span");
-  exceptLabel.textContent = " except for:";
-  exceptLabel.style.fontWeight = "500";
-  container.appendChild(exceptLabel);
-
-  // --- 3. Exception Time List ---
-  const exceptionList = document.createElement("div");
-  exceptionList.style.display = "flex";
-  exceptionList.style.flexWrap = "wrap";
-  exceptionList.style.gap = "6px";
-  exceptionList.style.marginTop = "6px";
-
-  item.exceptions = item.exceptions || [];
-  item.exceptions.forEach((timeStr, index) => {
-    const pill = document.createElement("span");
-    pill.textContent = `${timeStr} ✖`;
-    pill.style.background = "#ddd";
-    pill.style.padding = "4px 8px";
-    pill.style.borderRadius = "12px";
-    pill.style.cursor = "pointer";
-    pill.onclick = () => {
-      item.exceptions.splice(index, 1);
-      onSave(); // This will just save and re-render this specific control
-    };
-    exceptionList.appendChild(pill);
-  });
-  container.appendChild(exceptionList);
-
-  // --- 4. Add New Exception Input ---
-  const addContainer = document.createElement("div");
-  addContainer.style.marginTop = "6px";
-  const timeInput = document.createElement("input");
-  // UPDATED Placeholder
-  timeInput.placeholder = "e.g., 9:00am-10:30am";
-  timeInput.style.marginRight = "5px";
-
-  const addBtn = document.createElement("button");
-  addBtn.textContent = "Add Time";
-  
-  // UPDATED Validation Logic
-  addBtn.onclick = () => {
-    const val = timeInput.value.trim();
-    const parts = val.split('-');
-    if (parts.length === 2) {
-      const startMin = parseTimeToMinutes(parts[0]);
-      const endMin = parseTimeToMinutes(parts[1]);
-      
-      if (startMin != null && endMin != null && endMin > startMin) {
-        // Valid! Push the original, user-formatted string
-        item.exceptions.push(val);
-        timeInput.value = "";
-        onSave();
-      } else {
-        // Invalid time or range
-        alert("Invalid time range. Use format '9:00am-10:30am'. Ensure end time is after start time.");
-      }
-    } else {
-      // Invalid format
-      alert("Invalid format. Must be a range separated by a hyphen (e.g., '9:00am-10:30am').");
+    // --- 1. Show Global Rules (Read-only) ---
+    const globalContainer = document.createElement("div");
+    globalContainer.innerHTML = `<strong style="font-size: 0.9em;">Global Rules (from Setup):</strong>`;
+    if (globalRules.length === 0) {
+        globalContainer.innerHTML += `<p class="muted" style="margin: 0; font-size: 0.9em;">Available all day</p>`;
     }
-  };
-  timeInput.onkeypress = (e) => { if (e.key === "Enter") addBtn.click(); };
-  
-  addContainer.appendChild(timeInput);
-  addContainer.appendChild(addBtn);
-  container.appendChild(addContainer);
+    globalRules.forEach(rule => {
+        const ruleEl = document.createElement("div");
+        ruleEl.style.margin = "2px 0";
+        ruleEl.style.fontSize = "0.9em";
+        const ruleType = document.createElement("span");
+        ruleType.textContent = rule.type;
+        ruleType.style.color = rule.type === 'Available' ? 'green' : 'red';
+        ruleType.style.textTransform = "capitalize";
+        ruleEl.innerHTML = `&bull; <span style="color: ${rule.type === 'Available' ? 'green' : 'red'}; text-transform: capitalize;">${rule.type}</span> from ${rule.start} to ${rule.end}`;
+        globalContainer.appendChild(ruleEl);
+    });
+    container.appendChild(globalContainer);
 
-  return container;
+    // --- 2. Show Daily Rules (Editable) ---
+    const dailyContainer = document.createElement("div");
+    dailyContainer.style.marginTop = "10px";
+    dailyContainer.innerHTML = `<strong style="font-size: 0.9em;">Daily Override Rules (replaces global rules):</strong>`;
+    
+    const ruleList = document.createElement("div");
+    if (dailyRules.length === 0) {
+        ruleList.innerHTML = `<p class="muted" style="margin: 0; font-size: 0.9em;">No daily rules. Using global rules.</p>`;
+    }
+
+    dailyRules.forEach((rule, index) => {
+        const ruleEl = document.createElement("div");
+        ruleEl.style.margin = "2px 0";
+        ruleEl.style.padding = "4px";
+        ruleEl.style.background = "#fff8e1";
+        ruleEl.style.borderRadius = "4px";
+        
+        const ruleType = document.createElement("strong");
+        ruleType.textContent = rule.type;
+        ruleType.style.color = rule.type === 'Available' ? 'green' : 'red';
+        ruleType.style.textTransform = "capitalize";
+        
+        const ruleText = document.createElement("span");
+        ruleText.textContent = ` from ${rule.start} to ${rule.end}`;
+        
+        const removeBtn = document.createElement("button");
+        removeBtn.textContent = "✖";
+        removeBtn.style.marginLeft = "8px";
+        removeBtn.style.border = "none";
+        removeBtn.style.background = "transparent";
+        removeBtn.style.cursor = "pointer";
+        removeBtn.onclick = () => {
+            dailyRules.splice(index, 1);
+            onSave();
+        };
+        
+        ruleEl.appendChild(ruleType);
+        ruleEl.appendChild(ruleText);
+        ruleEl.appendChild(removeBtn);
+        ruleList.appendChild(ruleEl);
+    });
+    dailyContainer.appendChild(ruleList);
+    container.appendChild(dailyContainer);
+
+    // --- 3. Add New Rule Form ---
+    const addContainer = document.createElement("div");
+    addContainer.style.marginTop = "10px";
+    
+    const typeSelect = document.createElement("select");
+    typeSelect.innerHTML = `
+        <option value="Available">Available</option>
+        <option value="Unavailable">Unavailable</option>
+    `;
+    
+    const startInput = document.createElement("input");
+    startInput.placeholder = "e.g., 9:00am";
+    startInput.style.width = "100px";
+    startInput.style.marginLeft = "5px";
+
+    const toLabel = document.createElement("span");
+    toLabel.textContent = " to ";
+    toLabel.style.margin = "0 5px";
+
+    const endInput = document.createElement("input");
+    endInput.placeholder = "e.g., 10:30am";
+    endInput.style.width = "100px";
+
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "Add Daily Rule";
+    addBtn.style.marginLeft = "8px";
+    
+    addBtn.onclick = () => {
+        const type = typeSelect.value;
+        const start = startInput.value;
+        const end = endInput.value;
+        
+        if (!start || !end) { alert("Please enter a start and end time."); return; }
+        if (parseTimeToMinutes(start) == null || parseTimeToMinutes(end) == null) {
+            alert("Invalid time format. Use '9:00am' or '2:30pm'."); return;
+        }
+        if (parseTimeToMinutes(start) >= parseTimeToMinutes(end)) {
+            alert("End time must be after start time."); return;
+        }
+
+        dailyRules.push({ type, start, end });
+        onSave();
+    };
+
+    addContainer.appendChild(typeSelect);
+    addContainer.appendChild(startInput);
+    addContainer.appendChild(toLabel);
+    addContainer.appendChild(endInput);
+    addContainer.appendChild(addBtn);
+    container.appendChild(addContainer);
+
+    return container;
 }
+// --- END OF NEW TIME RULE UI ---
+
 
 /**
 * Renders the "Field & Special Activity Time Overrides" section
+* UPDATED: This function now uses the new `renderTimeRulesUI`
 */
 function renderFieldsOverride() {
-  // Clear only its own container
   fieldOverridesContainer.innerHTML = '<h3>Field & Special Activity Time Overrides</h3>';
 
   const allFields = (masterSettings.app1.fields || []).concat(masterSettings.app1.specialActivities || []);
@@ -669,116 +512,48 @@ function renderFieldsOverride() {
 
   allFields.forEach(item => {
     const itemName = item.name;
-    let overrideData = currentOverrides.fieldAvailability[itemName];
+    
+    // Get the global rules (read-only)
+    const globalRules = item.timeRules || [];
+    
+    // Get the daily rules (editable)
+    if (!currentOverrides.dailyFieldAvailability[itemName]) {
+        currentOverrides.dailyFieldAvailability[itemName] = [];
+    }
+    const dailyRules = currentOverrides.dailyFieldAvailability[itemName];
     
     const itemWrapper = document.createElement("div");
     itemWrapper.style.padding = "10px";
     itemWrapper.style.border = "1px solid #ddd";
     itemWrapper.style.borderRadius = "5px";
     itemWrapper.style.marginBottom = "10px";
-
-    const header = document.createElement("div");
-    header.style.display = "flex";
-    header.style.justifyContent = "space-between";
-    header.style.alignItems = "center";
     
     const title = document.createElement("strong");
     title.textContent = itemName;
-    header.appendChild(title);
-    
-    // --- Create ALL controls, but hide/show them ---
-    const addBtn = document.createElement("button");
-    addBtn.textContent = "Add Daily Time Override";
-    
-    const removeBtn = document.createElement("button");
-    removeBtn.textContent = "Remove Daily Override";
-    removeBtn.style.background = "#c0392b";
-    removeBtn.style.color = "white";
-    
-    const globalEl = document.createElement("p");
-    globalEl.style.fontSize = "0.9em";
-    globalEl.style.fontStyle = "italic";
-    globalEl.style.opacity = "0.7";
-    globalEl.style.margin = "5px 0 0 0";
-    
-    const controlsPlaceholder = document.createElement("div");
-    
+    itemWrapper.appendChild(title);
+
     // Function to save data and re-render *only* this item's controls
     const saveAndRefreshControls = () => {
-      window.saveCurrentDailyData("fieldAvailability", currentOverrides.fieldAvailability);
+      window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
       // Re-render just the controls for this item
       controlsPlaceholder.innerHTML = "";
       controlsPlaceholder.appendChild(
-        renderDailyAvailabilityControls(overrideData, saveAndRefreshControls)
+        renderTimeRulesUI(itemName, globalRules, dailyRules, saveAndRefreshControls)
       );
     };
 
-    // --- Button Click Handlers ---
-    addBtn.onclick = () => {
-      // Create a default override based on the global rule
-      overrideData = {
-        mode: item.availabilityMode || "available",
-        exceptions: JSON.parse(JSON.stringify(item.availabilityExceptions || [])) // Deep copy
-      };
-      currentOverrides.fieldAvailability[itemName] = overrideData;
-      
-      window.saveCurrentDailyData("fieldAvailability", currentOverrides.fieldAvailability);
-      
-      // Show the remove button and controls
-      addBtn.style.display = "none";
-      removeBtn.style.display = "block";
-      globalEl.style.display = "block";
-      saveAndRefreshControls(); // Render controls for the first time
-    };
+    const controlsPlaceholder = document.createElement("div");
+    controlsPlaceholder.appendChild(
+         renderTimeRulesUI(itemName, globalRules, dailyRules, saveAndRefreshControls)
+    );
     
-    removeBtn.onclick = () => {
-      delete currentOverrides.fieldAvailability[itemName];
-      overrideData = null; // Clear the local reference
-      
-      window.saveCurrentDailyData("fieldAvailability", currentOverrides.fieldAvailability);
-      
-      // Show the add button and hide controls
-      addBtn.style.display = "block";
-      removeBtn.style.display = "none";
-      globalEl.style.display = "none";
-      controlsPlaceholder.innerHTML = "";
-    };
-
-    // --- Initial State ---
-    if (overrideData) {
-      // Already overridden: Show remove button and controls
-      addBtn.style.display = "none";
-      removeBtn.style.display = "block";
-      
-      const globalRule = item.availabilityMode === 'unavailable' ? 'Unavailable' : 'Available';
-      const globalExceptions = (item.availabilityExceptions || []).join(', ');
-      globalEl.textContent = `(Global Rule: ${globalRule}${globalExceptions ? ` except ${globalExceptions}` : ''})`;
-      globalEl.style.display = "block";
-      
-      controlsPlaceholder.appendChild(
-        renderDailyAvailabilityControls(overrideData, saveAndRefreshControls)
-      );
-    } else {
-      // Not overridden: Show add button, hide controls
-      addBtn.style.display = "block";
-      removeBtn.style.display = "none";
-      globalEl.style.display = "none";
-    }
-    
-    header.appendChild(addBtn);
-    header.appendChild(removeBtn);
-    itemWrapper.appendChild(header);
-    itemWrapper.appendChild(globalEl);
     itemWrapper.appendChild(controlsPlaceholder);
-    
     fieldOverridesContainer.appendChild(itemWrapper);
   });
 }
 
 /**
  * UPDATED: Renders the "Daily Trips" form
- * - Removed individual bunk picker
- * - "Add Trip" button now modifies the skeleton directly
  */
 function renderTripsForm() {
   tripsFormContainer.innerHTML = ""; // Clear only the form container
@@ -865,22 +640,12 @@ function renderTripsForm() {
     loadDailySkeleton(); // Ensure we have the latest
     
     dailyOverrideSkeleton = dailyOverrideSkeleton.filter(item => {
-        // Keep if division is not affected
-        if (!selectedDivisions.includes(item.division)) {
-            return true; 
-        }
-        
-        // It's an affected division. Check for time overlap.
+        if (!selectedDivisions.includes(item.division)) return true; 
         const itemStartMin = parseTimeToMinutes(item.startTime);
         const itemEndMin = parseTimeToMinutes(item.endTime);
-        if (itemStartMin == null || itemEndMin == null) {
-            return true; // Keep malformed items
-        }
-
-        // Overlap check: (StartA < EndB) and (EndA > StartB)
+        if (itemStartMin == null || itemEndMin == null) return true;
         const overlaps = (itemStartMin < tripEndMin) && (itemEndMin > tripStartMin);
-        
-        return !overlaps; // Keep if it *doesn't* overlap
+        return !overlaps;
     });
     
     // --- 3. Add new trip blocks ---
@@ -898,30 +663,17 @@ function renderTripsForm() {
     // --- 4. Save, Re-render, and Clear ---
     saveDailySkeleton(); // Saves `dailyOverrideSkeleton` to current day
     
-    // Re-render the grid
     const gridContainer = skeletonContainer.querySelector('#daily-skeleton-grid');
-    if (gridContainer) {
-        renderGrid(gridContainer);
-    }
+    if (gridContainer) renderGrid(gridContainer);
     
-    // Clear form
-    nameEl.value = "";
-    startEl.value = "";
-    endEl.value = "";
-    form.querySelectorAll('.bunk-button.selected').forEach(chip => {
-        chip.click(); // This will toggle the class and style
-    });
+    nameEl.value = ""; startEl.value = ""; endEl.value = "";
+    form.querySelectorAll('.bunk-button.selected').forEach(chip => chip.click());
   };
   // --- END of NEW OnClick Logic ---
 
   form.appendChild(addBtn);
   tripsFormContainer.appendChild(form);
 }
-
-/**
- * renderTripsList() is no longer needed.
- */
-// function renderTripsList() { ... }
 
 
 /**
@@ -942,14 +694,11 @@ function renderLeaguesOverride() {
     const el = createCheckbox(leagueName, currentOverrides.leagues.includes(leagueName));
     el.checkbox.onchange = () => {
       if (el.checkbox.checked) {
-        if (!currentOverrides.leagues.includes(leagueName)) {
-          currentOverrides.leagues.push(leagueName);
-        }
+        if (!currentOverrides.leagues.includes(leagueName)) currentOverrides.leagues.push(leagueName);
       } else {
         currentOverrides.leagues = currentOverrides.leagues.filter(l => l !== leagueName);
       }
       
-      // Save under the original "overrides" key for leagues
       const dailyData = window.loadCurrentDailyData?.() || {};
       const fullOverrides = dailyData.overrides || {};
       fullOverrides.leagues = currentOverrides.leagues;
@@ -967,14 +716,11 @@ function renderLeaguesOverride() {
 function createCheckbox(name, isChecked) {
   const wrapper = document.createElement('label');
   wrapper.className = 'override-checkbox';
-
   const checkbox = document.createElement('input');
   checkbox.type = 'checkbox';
   checkbox.checked = isChecked;
-
   const text = document.createElement('span');
   text.textContent = name;
-
   wrapper.appendChild(checkbox);
   wrapper.appendChild(text);
   return { wrapper, checkbox };
@@ -988,16 +734,12 @@ function createChip(name, color = '#007BFF', isDivision = false) {
   el.className = 'bunk-button';
   el.textContent = name;
   el.dataset.value = name;
-
   const defaultBorder = isDivision ? color : '#ccc';
   el.style.borderColor = defaultBorder;
-  // Make sure it renders in the "unselected" state by default
   el.style.backgroundColor = 'white';
   el.style.color = 'black';
-
   el.addEventListener('click', () => {
     const isSelected = el.classList.toggle('selected');
-    console.log("Daily Overrides: Chip clicked:", name, "Selected:", isSelected);
     el.style.backgroundColor = isSelected ? color : 'white';
     el.style.color = isSelected ? 'white' : 'black';
     el.style.borderColor = isSelected ? color : defaultBorder;
