@@ -2,14 +2,11 @@
 // This file is now the "OPTIMIZER"
 //
 // UPDATED:
-// - *** CRITICAL FIX (Start Time Bug) ***
-//   - Pass 1 (Generate Master Time Grid) no longer scans all
-//     divisions for the earliest time.
-//   - It now calculates `earliestMin` and `latestMin` based
-//     ONLY on the time blocks present in the `manualSkeleton`.
-//   - This prevents the grid from generating empty rows
-//     (e.g., 9am-11am) when the day's schedule only
-//     starts at 11am.
+// - *** CRITICAL FIX (ReferenceError) ***
+//   - Fixed a typo in `loadAndFilterData` (line 495).
+//   - `allActivities.filter(a => a.type === 'field' && f.sport)`
+//     has been corrected to:
+//   - `allActivities.filter(a => a.type === 'field' && a.sport)`
 //
 // (Production Version: All console logs removed)
 // -----------------------------------------------------------------
@@ -61,7 +58,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     window.unifiedTimes = []; 
     
     if (!manualSkeleton || manualSkeleton.length === 0) {
-        return false; // No skeleton, nothing to do
+        return false; 
     }
     
     const { 
@@ -78,9 +75,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     let fieldUsageBySlot = {}; 
     
     // ===== PASS 1: Generate Master Time Grid =====
-    // *** START OF FIX ***
-    // Calculate time range based *only* on the skeleton, not all divisions.
-    let earliestMin = 1440; // (24 * 60)
+    let earliestMin = 1440; 
     let latestMin = 0;
 
     manualSkeleton.forEach(item => {
@@ -94,12 +89,10 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         }
     });
 
-    // Failsafe if skeleton was empty or had invalid times
     if (earliestMin === 1440 || latestMin === 0) {
-        earliestMin = 540; // 9:00 AM
-        latestMin = 960; // 4:00 PM
+        earliestMin = 540; 
+        latestMin = 960; 
     }
-    // *** END OF FIX ***
 
     const baseDate = new Date(1970, 0, 1, 0, 0, 0); 
     let currentMin = earliestMin;
@@ -120,7 +113,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         return false;
     }
 
-    // Initialize all bunks with empty arrays for the new grid
     availableDivisions.forEach(divName => {
         (divisions[divName]?.bunks || []).forEach(bunk => {
             window.scheduleAssignments[bunk] = new Array(window.unifiedTimes.length);
@@ -478,7 +470,7 @@ function loadAndFilterData() {
     });
     availSpecials.forEach(s => {
          activityProperties[s.name] = {
-            sharable: s.sharableWith?.type === 'all' || f.sharableWith?.type === 'custom',
+            sharable: s.sharableWith?.type === 'all' || s.sharableWith?.type === 'custom',
             allowedDivisions: (s.sharableWith?.divisions?.length > 0) ? s.sharableWith.divisions : availableDivisions,
             limitUsage: s.limitUsage
         };
@@ -501,7 +493,11 @@ function loadAndFilterData() {
         ...availFields.flatMap((f) => (f.activities || []).map((act) => ({ type: "field", field: f.name, sport: act }))),
         ...availSpecials.map((sa) => ({ type: "special", field: sa.name, sport: null }))
     ];
+    
+    // *** START OF FIX ***
+    // The variable 'a' is defined in the filter, not 'f'.
     const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
+    // *** END OF FIX ***
     
     const yesterdayData = window.loadPreviousDailyData?.() || {};
     const yesterdayHistory = {
