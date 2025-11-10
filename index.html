@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Camp Scheduler</title>
+    <link rel="stylesheet" href="styles.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+    <h1>🏕️ Camp Scheduler</h1>
+
+    <div style="padding: 10px 15px; background: #f4f4f4; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ddd;">
+        <label for="calendar-date-picker" style="font-weight: bold; margin-right: 10px; font-size: 1.1em;">Current Schedule Date:</label>
+        <input type="date" id="calendar-date-picker" style="font-size: 1.1em; padding: 5px;">
+    </div>
+
+    <div class="tabs">
+        <button class="tab-button active" onclick="showTab('setup')">Setup (Bunks/Divisions)</button>
+        <button class="tab-button" onclick="showTab('fields'); window.initFieldsTab?.();">Fields</button>
+        <button class="tab-button" onclick="showTab('special_activities'); window.initSpecialActivitiesTab?.();">Special Activities</button>
+        
+        <button class="tab-button" onclick="showTab('master-scheduler'); window.initMasterScheduler?.();">
+            🗓️ Master Scheduler (Build)
+        </button>
+        <button class="tab-button" onclick="showTab('schedule')">Daily Schedule (View)</button>
+        <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
+        <button class="tab-button" onclick="showTab('specialty-leagues'); window.initSpecialtyLeagues?.();">🏆 Specialty Leagues</button>
+        <button class="tab-button" onclick="showTab('daily-overrides'); window.initDailyOverrides?.();">Daily Overrides</button>
+    </div>
+
+    <div id="setup" class="tab-content active">
+        <h3>Add Bunks</h3>
+        <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
+        <button id="addBunkBtn">Add Bunk</button>
+        <div id="unassignedBunks" class="bunk-container"></div>
+
+        <h3>Add Divisions</h3>
+        <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
+        <button id="addDivisionBtn">Add Division</button>
+        <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable Colors</label>
+        <div id="divisionButtons" style="margin-top:8px;"></div>
+        
+        <h3 style="margin-top: 25px; border-top: 2px solid #007BFF; padding-top: 15px;">
+            Global Camp Times
+        </h3>
+        <p style="font-size: 0.9em; color: #555;">
+            Set the earliest start and latest end time for the camp day.
+            This will define the size of the schedule grid.
+        </p>
+        <div style="margin-top: 10px;">
+            <label for="globalStartTime" style="font-weight: 600;">Earliest Start Time:</label>
+            <input type="text" id="globalStartTime" placeholder="e.g., 9:00 AM">
+            
+            <label for="globalEndTime" style="font-weight: 600; margin-left: 20px;">Latest End Time:</label>
+            <input type="text" id="globalEndTime" placeholder="e.g., 4:00 PM">
+        </div>
+        <hr style="margin: 20px 0;">
+        
+        <h3>Clear Schedules</h3>
+        <p>Use these buttons to clear saved schedule data.
+        Your Setup (bunks, fields, etc.) will NOT be affected.</p>
+
+        <button id="eraseTodayBtn"
+            style="background: #db7a00; color: #fff; padding: 8px 12px; border: none; border-radius: 4px;
+            cursor: pointer; margin-right: 8px;"
+            onclick="if(confirm('Are you sure you want to delete the schedule for today?')) window.eraseCurrentDailyData?.();">
+            Delete ONLY This Day's Schedule
+        </button>
+
+        <button id="eraseAllSchedulesBtn"
+            style="background: #c0392b;
+            color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;"
+            onclick="if(confirm('Are you sure you want to delete ALL saved schedules for ALL days? Your setup will be kept.')) window.eraseAllDailyData?.();">
+            Delete ALL Daily Schedules
+        </button>
+
+        <hr style="margin: 20px 0;">
+
+        <h3>Erase All Data</h3>
+        <p><strong>⚠️ Warning:</strong> This deletes everything.
+        It deletes all schedules AND all of your setup (bunks, divisions, fields, leagues, etc.).</p>
+
+        <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">
+            Erase All Camp Data (Reset Application)
+        </button>
+
+    </div> 
+    
+    <div id="fields" class="tab-content">
+        </div>
+    <div id="special_activities" class="tab-content">
+        </div>
+    
+    <div id="master-scheduler" class="tab-content">
+        <div id="master-scheduler-content">
+            </div>
+    </div>
+    
+    <div id="schedule" class="tab-content">
+        <h3>Daily Schedule (View)</h3>
+        <p>This tab shows the final, "filled-in" schedule. To build or edit the day's layout, use the "Master Scheduler" tab.</p>
+        <div id="scheduleTable"></div>
+    </div>
+
+    <div id="leagues" class="tab-content">
+        <h3>Leagues Setup</h3>
+        <div id="leaguesContainer"></div>
+    </div>
+
+    <div id="specialty-leagues" class="tab-content">
+        <h2>🏆 Specialty Leagues</h2>
+        <div id="specialtyLeaguesContainer"></div>
+    </div>
+
+    <div id="daily-overrides" class="tab-content">
+        <div id="daily-overrides-content">
+        </div>
+    </div>
+
+    <script>
+        function showTab(id) {
+            document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+            document.querySelector(`.tab-button[onclick^="showTab('${id}')"]`)?.classList.add('active');
+
+            if (id === 'schedule') {
+                window.updateTable?.();
+            } else if (id === 'leagues') {
+                window.initLeaguesTab?.();
+            } else if (id === 'specialty-leagues') {
+                window.initSpecialtyLeagues?.();
+            } else if (id === 'master-scheduler') {
+                window.initMasterScheduler?.();
+            } else if (id === 'fields') { // Init new tab
+                window.initFieldsTab?.();
+            } else if (id === 'special_activities') { // Init new tab
+                window.initSpecialActivitiesTab?.();
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", boot);
+
+        function boot() {
+            // 1. Init Calendar (loads date, save/load fns, migration)
+            if (window.initCalendar) {
+                window.initCalendar();
+            } else {
+                console.error("Fatal: calendar.js init not found.");
+            }
+
+            // 2. Init App1 (loads bunks, divisions)
+            if (window.initApp1) {
+                window.initApp1();
+            } else {
+                console.error("Fatal: app1.js init not found.");
+            }
+
+            // 3. Init Leagues (loads league data, renders tab)
+            if (window.initLeagues) {
+                window.initLeagues();
+            } else {
+                console.warn("Leagues.js init not found.");
+            }
+
+            // 4. Init Schedule System (loads today's schedule)
+            if (window.initScheduleSystem) {
+                window.initScheduleSystem();
+            } else {
+                console.warn("initScheduleSystem not found.");
+            }
+
+            // 5. Init Specialty Leagues (loads data, renders tab)
+            if (window.initSpecialtyLeagues) {
+                window.initSpecialtyLeagues();
+            } else {
+                console.warn("initSpecialtyLeagues not found.");
+            }
+            
+            // 6. Init new tabs (they will load their own data)
+            // No need to call them here, they are called by showTab
+            // when the user clicks the tab. This saves load time.
+        }
+    </script>
+
+    <script src="calendar.js" defer></script>
+    <script src="daily_overrides.js" defer></script>
+    <script src="app1.js" defer></script>
+    
+    <script src="fields.js" defer></script>
+    <script src="special_activities.js" defer></script>
+    
+    <script src="leagues.js" defer></script>
+    <script src="specialty_leagues.js" defer></script> 
+
+    <script src="master_schedule_builder.js" defer></script>
+    
+    <script src="scheduler_logic_core.js" defer></script>
+    <script src="scheduler_logic_fillers.js" defer></script>
+    <script src="scheduler_ui.js" defer></script>
+</body>
+</html>
