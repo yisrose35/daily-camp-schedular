@@ -1,3 +1,15 @@
+// =================================================================
+// app1.js
+//
+// UPDATED:
+// - Replaced the confusing `renderAvailabilityControls` with a new
+//   `renderTimeRulesUI` function.
+// - This new UI allows adding multiple, specific time rules
+//   (e.g., "Available 9-11", "Unavailable 11-12") instead of
+//   a confusing toggle-and-exception system.
+// - This new UI is now used for both "Fields" and "Specials".
+// =================================================================
+
 // -------------------- State --------------------
 let bunks = [];
 let divisions = {}; // { divName:{ bunks:[], color, timeline: {start, end} } }
@@ -263,130 +275,121 @@ function renderDivisionTimelineEditor() {
 
 // -------------------- Fields / Specials (Restored) --------------------
 
+// --- START OF NEW TIME RULE UI ---
 /**
-* Renders the "Available / Unavailable" time-based controls
-*/
-function renderAvailabilityControls(item, onSave, onRerender) {
+ * Renders the new, simplified "Time Rules" UI.
+ * This replaces the old `renderAvailabilityControls`.
+ */
+function renderTimeRulesUI(item, onSave, onRerender) {
     const container = document.createElement("div");
     container.style.marginTop = "10px";
     container.style.paddingLeft = "15px";
     container.style.borderLeft = "3px solid #eee";
 
-    // --- 1. Mode Toggle (Available / Unavailable) ---
-    const modeLabel = document.createElement("label");
-    modeLabel.style.display = "flex";
-    modeLabel.style.alignItems = "center";
-    modeLabel.style.gap = "10px";
-    modeLabel.style.cursor = "pointer";
+    if (!item.timeRules) {
+        item.timeRules = [];
+    }
 
-    const textAvailable = document.createElement("span");
-    textAvailable.textContent = "Available";
-    const toggleTrack = document.createElement("span");
-    Object.assign(toggleTrack.style, {
-        "width": "44px",
-        "height": "24px",
-        "borderRadius": "99px",
-        "position": "relative",
-        "display": "inline-block",
-        "border": "1px solid #ccc",
-        "backgroundColor": item.availabilityMode === 'available' ? '#22c55e' : '#d1d5db',
-        "transition": "background-color 0.2s"
-    });
-    const toggleKnob = document.createElement("span");
-    Object.assign(toggleKnob.style, {
-        "width": "20px",
-        "height": "20px",
-        "borderRadius": "50%",
-        "backgroundColor": "white",
-        "position": "absolute",
-        "top": "1px",
-        "left": item.availabilityMode === 'available' ? '21px' : '1px',
-        "transition": "left 0.2s"
-    });
-    toggleTrack.appendChild(toggleKnob);
+    // --- 1. Rule List ---
+    const ruleList = document.createElement("div");
+    if (item.timeRules.length === 0) {
+        ruleList.innerHTML = `<p class="muted" style="margin: 0;">No specific time rules. (Available all day)</p>`;
+    }
 
-    const textUnavailable = document.createElement("span");
-    textUnavailable.textContent = "Unavailable";
-
-    textAvailable.style.fontWeight = item.availabilityMode === 'available' ? 'bold' : 'normal';
-    textUnavailable.style.fontWeight = item.availabilityMode === 'unavailable' ? 'bold' : 'normal';
-    
-    modeLabel.onclick = () => {
-        item.availabilityMode = (item.availabilityMode === 'available') ? 'unavailable' : 'available';
-        onSave();
-        onRerender(); // Re-render to update styles
-    };
-
-    modeLabel.appendChild(textAvailable);
-    modeLabel.appendChild(toggleTrack);
-    modeLabel.appendChild(textUnavailable);
-    container.appendChild(modeLabel);
-
-    // --- 2. "Except for..." Text ---
-    const exceptLabel = document.createElement("span");
-    exceptLabel.textContent = " except for:";
-    exceptLabel.style.fontWeight = "500";
-    container.appendChild(exceptLabel);
-
-    // --- 3. Exception Time List ---
-    const exceptionList = document.createElement("div");
-    exceptionList.style.display = "flex";
-    exceptionList.style.flexWrap = "wrap";
-    exceptionList.style.gap = "6px";
-    exceptionList.style.marginTop = "6px";
-
-    item.availabilityExceptions = item.availabilityExceptions || [];
-    item.availabilityExceptions.forEach((timeStr, index) => {
-        const pill = document.createElement("span");
-        pill.textContent = `${timeStr} ✖`;
-        pill.style.background = "#ddd";
-        pill.style.padding = "4px 8px";
-        pill.style.borderRadius = "12px";
-        pill.style.cursor = "pointer";
-        pill.onclick = () => {
-            item.availabilityExceptions.splice(index, 1);
+    item.timeRules.forEach((rule, index) => {
+        const ruleEl = document.createElement("div");
+        ruleEl.style.margin = "2px 0";
+        ruleEl.style.padding = "4px";
+        ruleEl.style.background = "#f4f4f4";
+        ruleEl.style.borderRadius = "4px";
+        
+        const ruleType = document.createElement("strong");
+        ruleType.textContent = rule.type;
+        ruleType.style.color = rule.type === 'Available' ? 'green' : 'red';
+        ruleType.style.textTransform = "capitalize";
+        
+        const ruleText = document.createElement("span");
+        ruleText.textContent = ` from ${rule.start} to ${rule.end}`;
+        
+        const removeBtn = document.createElement("button");
+        removeBtn.textContent = "✖";
+        removeBtn.style.marginLeft = "8px";
+        removeBtn.style.border = "none";
+        removeBtn.style.background = "transparent";
+        removeBtn.style.cursor = "pointer";
+        removeBtn.onclick = ().DS> {
+            item.timeRules.splice(index, 1);
             onSave();
             onRerender();
         };
-        exceptionList.appendChild(pill);
+        
+        ruleEl.appendChild(ruleType);
+        ruleEl.appendChild(ruleText);
+        ruleEl.appendChild(removeBtn);
+        ruleList.appendChild(ruleEl);
     });
-    container.appendChild(exceptionList);
+    container.appendChild(ruleList);
 
-    // --- 4. Add New Exception Input ---
+    // --- 2. Add New Rule Form ---
     const addContainer = document.createElement("div");
-    addContainer.style.marginTop = "6px";
-    const timeInput = document.createElement("input");
-    timeInput.placeholder = "e.g., 9:00am-10:30am";
-    timeInput.style.marginRight = "5px";
+    addContainer.style.marginTop = "10px";
+    
+    const typeSelect = document.createElement("select");
+    typeSelect.innerHTML = `
+        <option value="Available">Available</option>
+        <option value="Unavailable">Unavailable</option>
+    `;
+    
+    const startInput = document.createElement("input");
+    startInput.placeholder = "e.g., 9:00am";
+    startInput.style.width = "100px";
+    startInput.style.marginLeft = "5px";
+
+    const toLabel = document.createElement("span");
+    toLabel.textContent = " to ";
+    toLabel.style.margin = "0 5px";
+
+    const endInput = document.createElement("input");
+    endInput.placeholder = "e.g., 10:30am";
+    endInput.style.width = "100px";
 
     const addBtn = document.createElement("button");
-    addBtn.textContent = "Add Time";
+    addBtn.textContent = "Add Rule";
+    addBtn.style.marginLeft = "8px";
+    
     addBtn.onclick = () => {
-        const val = timeInput.value.trim();
-        const parts = val.split('-');
-        if (parts.length === 2) {
-            const startMin = parseTimeToMinutes(parts[0]);
-            const endMin = parseTimeToMinutes(parts[1]);
-            if (startMin != null && endMin != null && endMin > startMin) {
-                item.availabilityExceptions.push(val);
-                timeInput.value = "";
-                onSave();
-                onRerender();
-            } else {
-                console.error("Invalid time range. Use format '9:00am-10:30am'. Ensure end time is after start time.");
-            }
-        } else {
-            console.error("Invalid format. Must be a range separated by a hyphen (e.g., '9:00am-10:30am').");
+        const type = typeSelect.value;
+        const start = startInput.value;
+        const end = endInput.value;
+        
+        if (!start || !end) {
+            alert("Please enter a start and end time.");
+            return;
         }
-    };
-    timeInput.onkeypress = (e) => { if (e.key === "Enter") addBtn.click(); };
+        if (parseTimeToMinutes(start) == null || parseTimeToMinutes(end) == null) {
+            alert("Invalid time format. Use '9:00am' or '2:30pm'.");
+            return;
+        }
+        if (parseTimeToMinutes(start) >= parseTimeToMinutes(end)) {
+            alert("End time must be after start time.");
+            return;
+        }
 
-    addContainer.appendChild(timeInput);
+        item.timeRules.push({ type, start, end });
+        onSave();
+        onRerender();
+    };
+
+    addContainer.appendChild(typeSelect);
+    addContainer.appendChild(startInput);
+    addContainer.appendChild(toLabel);
+    addContainer.appendChild(endInput);
     addContainer.appendChild(addBtn);
     container.appendChild(addContainer);
 
     return container;
 }
+// --- END OF NEW TIME RULE UI ---
 
 /**
 * Renders the advanced "Sharable With" controls (Divisions only)
@@ -663,8 +666,9 @@ function addField() {
             available: true,
             sharableWith: { type: 'not_sharable', divisions: [] },
             limitUsage: { enabled: false, divisions: {} },
-            availabilityMode: 'available',
-            availabilityExceptions: []
+            timeRules: [] // <-- NEW
+            // availabilityMode is GONE
+            // availabilityExceptions is GONE
         });
         i.value = "";
         saveData();
@@ -733,11 +737,14 @@ function renderFields() {
         w.appendChild(sharableControls);
         const limitControls = renderLimitUsageControls(f, saveData, renderFields);
         w.appendChild(limitControls);
-        const availabilityControls = renderAvailabilityControls(f, saveData, renderFields);
-        availabilityControls.style.marginTop = "10px";
-        availabilityControls.style.paddingTop = "10px";
-        availabilityControls.style.borderTop = "1px solid #eee";
-        w.appendChild(availabilityControls);
+        
+        // --- NEW: Use new Time Rule UI ---
+        const timeRuleControls = renderTimeRulesUI(f, saveData, renderFields);
+        timeRuleControls.style.marginTop = "10px";
+        timeRuleControls.style.paddingTop = "10px";
+        timeRuleControls.style.borderTop = "1px solid #eee";
+        w.appendChild(timeRuleControls);
+        
         c.appendChild(w);
     });
 }
@@ -752,8 +759,7 @@ function addSpecial() {
             available: true,
             sharableWith: { type: 'not_sharable', divisions: [] },
             limitUsage: { enabled: false, divisions: {} },
-            availabilityMode: 'available',
-            availabilityExceptions: []
+            timeRules: [] // <-- NEW
         });
         i.value = "";
         saveData();
@@ -794,11 +800,14 @@ function renderSpecials() {
         w.appendChild(sharableControls);
         const limitControls = renderLimitUsageControls(s, saveData, renderSpecials);
         w.appendChild(limitControls);
-        const availabilityControls = renderAvailabilityControls(s, saveData, renderSpecials);
-        availabilityControls.style.marginTop = "10px";
-        availabilityControls.style.paddingTop = "10px";
-        availabilityControls.style.borderTop = "1px solid #eee";
-        w.appendChild(availabilityControls);
+
+        // --- NEW: Use new Time Rule UI ---
+        const timeRuleControls = renderTimeRulesUI(s, saveData, renderSpecials);
+        timeRuleControls.style.marginTop = "10px";
+        timeRuleControls.style.paddingTop = "10px";
+        timeRuleControls.style.borderTop = "1px solid #eee";
+        w.appendChild(timeRuleControls);
+        
         c.appendChild(w);
     });
 }
@@ -847,23 +856,54 @@ function loadData() {
         fields = data.fields || [];
         specialActivities = data.specialActivities || [];
         
-        // Normalize fields
+        // --- NEW: Normalize fields/specials to use `timeRules` ---
         fields.forEach(f => {
             f.available = f.available !== false;
             f.sharableWith = f.sharableWith || { type: 'not_sharable' };
             f.sharableWith.divisions = f.sharableWith.divisions || [];
-            f.availabilityMode = f.availabilityMode || 'available';
-            f.availabilityExceptions = f.availabilityExceptions || [];
             f.limitUsage = f.limitUsage || { enabled: false, divisions: {} };
+            f.timeRules = f.timeRules || []; // Add new property
+            // One-time migration from old system
+            if (f.availabilityMode) {
+                if (f.availabilityMode === 'unavailable' && (!f.availabilityExceptions || f.availabilityExceptions.length === 0)) {
+                    f.available = false; // Master toggle is off
+                }
+                if (f.availabilityExceptions && f.availabilityExceptions.length > 0) {
+                    const type = f.availabilityMode === 'available' ? 'Unavailable' : 'Available';
+                    f.availabilityExceptions.forEach(rangeStr => {
+                        const parts = rangeStr.split('-');
+                        if(parts.length === 2) {
+                            f.timeRules.push({ type: type, start: parts[0], end: parts[1] });
+                        }
+                    });
+                }
+                delete f.availabilityMode;
+                delete f.availabilityExceptions;
+            }
         });
-        // Normalize specials
         specialActivities.forEach(s => {
             s.available = s.available !== false;
             s.sharableWith = s.sharableWith || { type: 'not_sharable' };
             s.sharableWith.divisions = s.sharableWith.divisions || [];
-            s.availabilityMode = s.availabilityMode || 'available';
-            s.availabilityExceptions = s.availabilityExceptions || [];
             s.limitUsage = s.limitUsage || { enabled: false, divisions: {} };
+            s.timeRules = s.timeRules || []; // Add new property
+            // One-time migration
+            if (s.availabilityMode) {
+                if (s.availabilityMode === 'unavailable' && (!s.availabilityExceptions || s.availabilityExceptions.length === 0)) {
+                    s.available = false;
+                }
+                if (s.availabilityExceptions && s.availabilityExceptions.length > 0) {
+                     const type = s.availabilityMode === 'available' ? 'Unavailable' : 'Available';
+                    s.availabilityExceptions.forEach(rangeStr => {
+                        const parts = rangeStr.split('-');
+                        if(parts.length === 2) {
+                            s.timeRules.push({ type: type, start: parts[0], end: parts[1] });
+                        }
+                    });
+                }
+                delete s.availabilityMode;
+                delete s.availabilityExceptions;
+            }
         });
         
     } catch (e) { console.error("Error loading data:", e); }
