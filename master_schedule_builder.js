@@ -3,12 +3,12 @@
 // This file creates the new "Master Scheduler" drag-and-drop UI
 //
 // UPDATED:
-// - **REMOVED** `division.timeline` logic from `renderGrid`. The grid
-//   no longer renders grayed-out areas based on division start/end times.
-// - **NEW:** `renderGrid` now reads `globalStartTime` and `globalEndTime`
-//   from the global settings (set in app1.js) to determine the
-//   grid's time range.
-// - **CRITICAL FIX:** Added the missing `})();` at the end of the file.
+// - **REMOVED** all logic related to `division.timeline` from
+//   `renderGrid`. The grid will no longer render grayed-out areas
+//   for individual divisions.
+// - `renderGrid` now reads `globalStartTime` and `globalEndTime`
+//   to determine the grid's time range.
+// - **CRITICAL FIX:** Ensured the file ends with `})();`.
 // =================================================================
 
 (function() {
@@ -208,6 +208,7 @@ function renderGrid() {
     // --- NEW: Load global times from app1 settings ---
     const globalSettings = window.loadGlobalSettings?.() || {};
     const app1Data = globalSettings.app1 || {};
+    // Use fallback defaults if values are empty strings
     const globalStart = app1Data.globalStartTime || "9:00 AM";
     const globalEnd = app1Data.globalEndTime || "4:00 PM";
     
@@ -219,8 +220,6 @@ function renderGrid() {
     if (latestMin == null) latestMin = 960; // 4:00 PM
     if (latestMin <= earliestMin) latestMin = earliestMin + 60; // Ensure at least 1 hour
     
-    // --- OLD logic removed ---
-
     const totalMinutes = latestMin - earliestMin;
     const totalHeight = totalMinutes * PIXELS_PER_MINUTE;
 
@@ -241,20 +240,11 @@ function renderGrid() {
     gridHtml += `</div>`;
     
     availableDivisions.forEach((divName, i) => {
-        // --- RESTORED: Division timeline visual guides ---
-        const divTimeline = divisions[divName]?.timeline;
-        const divStart = parseTimeToMinutes(divTimeline?.start);
-        const divEnd = parseTimeToMinutes(divTimeline?.end);
+        // --- REMOVED timeline, divStart, divEnd logic ---
         
         gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
 
-        // --- RESTORED: Grayed-out area logic ---
-        if (divStart && divStart > earliestMin) {
-            gridHtml += `<div style="position: absolute; top: 0; height: ${(divStart - earliestMin) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
-        }
-        if (divEnd && divEnd < latestMin) {
-            gridHtml += `<div style="position: absolute; top: ${(divEnd - earliestMin) * PIXELS_PER_MINUTE}px; height: ${(latestMin - divEnd) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
-        }
+        // --- REMOVED grayed-out area 'if' blocks ---
 
         dailySkeleton.filter(ev => ev.division === divName).forEach(event => {
             const startMin = parseTimeToMinutes(event.startTime);
