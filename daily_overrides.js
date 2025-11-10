@@ -9,8 +9,8 @@
 //   - `renderPalette`: Added an `el.onclick` listener to each
 //     tile that shows this description in an alert popup.
 //
-// (All other functionality, including the new 2-column override
-// UI, remains unchanged)
+// - **REMOVED** `division.timeline` logic from the skeleton
+//   editor's `renderGrid` function.
 // =================================================================
 
 (function() {
@@ -174,16 +174,12 @@ function renderGrid(gridContainer) {
     }
     gridHtml += `</div>`;
     availableDivisions.forEach((divName, i) => {
-        const divTimeline = divisions[divName]?.timeline;
-        const divStart = parseTimeToMinutes(divTimeline?.start);
-        const divEnd = parseTimeToMinutes(divTimeline?.end);
+        // --- REMOVED timeline, divStart, divEnd logic ---
+        
         gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
-        if (divStart && divStart > earliestMin) {
-            gridHtml += `<div style="position: absolute; top: 0; height: ${(divStart - earliestMin) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
-        }
-        if (divEnd && divEnd < latestMin) {
-            gridHtml += `<div style="position: absolute; top: ${(divEnd - earliestMin) * PIXELS_PER_MINUTE}px; height: ${(latestMin - divEnd) * PIXELS_PER_MINUTE}px; width: 100%; background: #333; opacity: 0.5;"></div>`;
-        }
+        
+        // --- REMOVED grayed-out area 'if' blocks ---
+        
         dailyOverrideSkeleton.filter(ev => ev.division === divName).forEach(event => {
             const startMin = parseTimeToMinutes(event.startTime);
             const endMin = parseTimeToMinutes(event.endTime);
