@@ -1,18 +1,15 @@
 // =================================================================
-// daily_overrides.js
+// daily_adjustments.js (RENAMED from daily_overrides.js)
 //
 // UPDATED:
-// - **CRITICAL FIX:** `loadDailySkeleton` has been rewritten.
-//   - It now *first* checks for a `manualSkeleton` saved
-//     to the specific day.
-//   - If one is *not* found, it falls back to loading the
-//     correct day-of-week assigned template (e.g., "Friday Short").
-// - **NEW FEATURE:** `createOverrideMasterListItem` now adds an
-//   on/off toggle to each item in the master lists.
-// - `init` now loads/saves these new disabled lists
-//   (disabledFields, disabledSpecials) to the daily `overrides` object.
-// - `renderOverrideMasterLists` now reads this new data to set
-//   the toggle state.
+// - Renamed init function to `initDailyAdjustments` and
+//   changed export to `window.initDailyAdjustments`.
+// - `init` function now searches for `daily-adjustments-content`.
+// - **NEW:** "Run Optimizer" button and its logic have been
+//   moved here from `master_schedule_builder.js`.
+// - The button is added to the top of the tab.
+// - The `runOptimizer` helper function is now part of this file
+//   and correctly uses `dailyOverrideSkeleton`.
 // =================================================================
 
 (function() {
@@ -26,8 +23,8 @@ let currentOverrides = {
   leagues: [],
   disabledSpecialtyLeagues: [],
   dailyDisabledSportsByField: {},
-  disabledFields: [],    // <-- NEW
-  disabledSpecials: [] // <-- NEW
+  disabledFields: [],
+  disabledSpecials: []
 };
 
 // --- Helper containers ---
@@ -240,7 +237,6 @@ function renderEventTile(event, top, height) {
         </div>`;
 }
 
-// --- THIS IS THE KEY FIX ---
 function loadDailySkeleton() {
     // 1. Check for a saved *daily* override first.
     const dailyData = window.loadCurrentDailyData?.() || {};
@@ -281,7 +277,6 @@ function loadDailySkeleton() {
         dailyOverrideSkeleton = [];
     }
 }
-// --- END OF FIX ---
 
 function saveDailySkeleton() {
     // This saves the skeleton *to this specific day*,
@@ -312,6 +307,35 @@ function initDailySkeletonUI() {
 // =================================================================
 
 
+// --- NEW: Helper function moved from master_schedule_builder.js ---
+function runOptimizer() {
+    if (!window.runSkeletonOptimizer) {
+        alert("Error: 'runSkeletonOptimizer' function not found. Is scheduler_logic_core.js loaded?");
+        return;
+    }
+    
+    // Use the skeleton currently in the builder
+    if (dailyOverrideSkeleton.length === 0) {
+        alert("Skeleton is empty. Please add blocks to the schedule before running the optimizer.");
+        return;
+    }
+
+    // Save this skeleton to the *current day* so the
+    // staggered view can read it.
+    console.log("Running optimizer with skeleton from Daily Adjustments...");
+    saveDailySkeleton(); // This saves dailyOverrideSkeleton to manualSkeleton
+    
+    const success = window.runSkeletonOptimizer(dailyOverrideSkeleton);
+    
+    if (success) {
+        alert("Schedule Generated Successfully!");
+        window.showTab?.('schedule');
+    } else {
+        alert("Error during schedule generation. Check console for details (or skeleton may be empty).");
+    }
+}
+
+
 /**
  * This is a copy of the helper from scheduler_logic_core.js
  * It's needed here for validation.
@@ -340,17 +364,28 @@ function parseTimeToMinutes(str) {
 * Main entry point. Called by index.html tab click or calendar.js date change.
 */
 function init() {
-  container = document.getElementById("daily-overrides-content");
+  // --- UPDATED: Look for new ID ---
+  container = document.getElementById("daily-adjustments-content");
   if (!container) {
-    console.error("Daily Overrides: Could not find container #daily-overrides-content");
+    console.error("Daily Adjustments: Could not find container #daily-adjustments-content");
     return;
   }
 
-  console.log("Daily Overrides: Initializing for", window.currentScheduleDate);
+  console.log("Daily Adjustments: Initializing for", window.currentScheduleDate);
   
-  // --- UPDATED: Removed the "Daily Sport Availability" section ---
+  // --- UPDATED: Added "Run Optimizer" button ---
   container.innerHTML = `
-    <h2>Overrides & Trips for ${window.currentScheduleDate}</h2>
+    <div style="padding: 10px 15px; background: #fff; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <h2 style="margin: 0 0 5px 0;">Daily Adjustments for ${window.currentScheduleDate}</h2>
+            <p style="margin: 0; font-size: 0.9em; color: #555;">
+                Make final changes to the day's template, adjust activities, and run the optimizer.
+            </p>
+        </div>
+        <button id="run-optimizer-btn" style="background: #28a745; color: white; padding: 12px 20px; font-size: 1.2em; border: none; border-radius: 5px; cursor: pointer; white-space: nowrap;">
+            Run Optimizer & Create Schedule
+        </button>
+    </div>
     
     <div class="override-section" id="daily-skeleton-editor-section">
       <h3>Daily Skeleton Override</h3>
@@ -387,7 +422,7 @@ function init() {
           <div style="flex: 2; min-width: 400px; position: sticky; top: 20px;">
               <h4>Details</h4>
               <div id="override-detail-pane" class="detail-pane">
-                  <p class="muted">Select an item from the left to edit its daily override.</p>
+                  <p class="muted">Select an item from the left to edit its details.</p>
               </div>
           </div>
       </div>
@@ -444,6 +479,9 @@ function init() {
         }
     </style>
   `;
+
+  // --- NEW: Hook up the optimizer button ---
+  document.getElementById("run-optimizer-btn").onclick = runOptimizer;
 
   // Get references to the containers
   skeletonContainer = document.getElementById("override-scheduler-content");
@@ -905,7 +943,7 @@ function createOverrideMasterListItem(type, name, isEnabled, onToggle) {
  */
 function renderOverrideDetailPane() {
     if (!selectedOverrideId) {
-        overrideDetailPaneEl.innerHTML = `<p class="muted">Select an item from the left to edit its daily override.</p>`;
+        overrideDetailPaneEl.innerHTML = `<p class="muted">Select an item from the left to edit its details.</p>`;
         return;
     }
     
@@ -1036,6 +1074,6 @@ function createChip(name, color = '#007BFF', isDivision = false) {
 }
 
 // Expose the init function to the global window
-window.initDailyOverrides = init;
+window.initDailyAdjustments = init;
 
 })();
