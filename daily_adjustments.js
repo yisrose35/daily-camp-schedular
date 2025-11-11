@@ -10,6 +10,7 @@
 // - The button is added to the top of the tab.
 // - The `runOptimizer` helper function is now part of this file
 //   and correctly uses `dailyOverrideSkeleton`.
+// - **NEW:** Added "Dismissal" as a pinned tile.
 // =================================================================
 
 (function() {
@@ -56,6 +57,7 @@ const TILES = [
     { type: 'swim', name: 'Swim', style: 'background: #bbdefb; border: 1px solid #1976d2;', description: "A 'pinned' event. The optimizer will block out this time for 'Swim' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
     { type: 'lunch', name: 'Lunch', style: 'background: #fbe9e7; border: 1px solid #d84315;', description: "A 'pinned' event. The optimizer will block out this time for 'Lunch' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
     { type: 'snacks', name: 'Snacks', style: 'background: #fff9c4; border: 1px solid #fbc02d;', description: "A 'pinned' event. The optimizer will block out this time for 'Snacks' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
+    { type: 'dismissal', name: 'Dismissal', style: 'background: #f44336; color: white; border: 1px solid #b71c1c;', description: "A 'pinned' event. The optimizer will block out this time for 'Dismissal' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
     { type: 'custom', name: 'Custom Pinned Event', style: 'background: #eee; border: 1px solid #616161;', description: "A 'pinned' event. You will be asked to give it a custom name (e.g., 'Assembly' or 'Trip'). The optimizer will block out this time and will not schedule anything else here." }
 ];
 
@@ -65,7 +67,7 @@ function mapEventNameForOptimizer(name) {
     if (lowerName === 'activity') return { type: 'slot', event: 'General Activity Slot' };
     if (lowerName === 'sports') return { type: 'slot', event: 'Sports Slot' };
     if (lowerName === 'special activity' || lowerName === 'special') return { type: 'slot', event: 'Special Activity' };
-    if (lowerName === 'swim' || lowerName === 'lunch' || lowerName === 'snacks') return { type: 'pinned', event: name };
+    if (lowerName === 'swim' || lowerName === 'lunch' || lowerName === 'snacks' || lowerName === 'dismissal') return { type: 'pinned', event: name };
     return { type: 'pinned', event: name };
 }
 
@@ -180,7 +182,7 @@ function addDropListeners(gridContainer) {
                 const event1 = mapEventNameForOptimizer(eventName1);
                 const event2 = mapEventNameForOptimizer(eventName2);
                 newEvent = { id: `evt_${Math.random().toString(36).slice(2, 9)}`, type: 'split', event: `${eventName1} / ${eventName2}`, division: divName, startTime: startTime, endTime: endTime, subEvents: [ event1, event2 ] };
-            } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'custom') {
+            } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'custom' || tileData.type === 'dismissal') {
                 eventType = 'pinned';
                 if (tileData.type === 'custom') {
                     eventName = prompt("Enter the name for this custom event (e.g., 'Snacks'):"); if (!eventName) return;
@@ -219,6 +221,7 @@ function renderEventTile(event, top, height) {
         else if (event.event === 'General Activity Slot') tile = TILES.find(t => t.type === 'activity');
         else if (event.event === 'Sports Slot') tile = TILES.find(t => t.type === 'sports');
         else if (event.event === 'Special Activity') tile = TILES.find(t => t.type === 'special');
+        else if (event.event === 'Dismissal') tile = TILES.find(t => t.type === 'dismissal');
         else tile = TILES.find(t => t.type === 'custom');
     }
     const style = tile ? tile.style : 'background: #eee; border: 1px solid #616161;';
