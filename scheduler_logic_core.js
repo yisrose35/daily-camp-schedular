@@ -2,11 +2,11 @@
 // This file is now the "OPTIMIZER"
 //
 // UPDATED:
-// - `loadAndFilterData` now loads the `limitUsage` property
-//   from fields/specials into `activityProperties`.
-// - `canBlockFit` now has a new check that enforces the
-//   `limitUsage` rules, checking for both division and
-//   (if applicable) specific bunk permissions.
+// - `loadAndFilterData` now loads the new `disabledSports` list
+//   from the daily overrides.
+// - It now filters `allActivities`, `h2hActivities`, and
+//   `fieldsBySport` to remove any sport that is disabled
+//   for the day. This enforces the new daily override.
 // -----------------------------------------------------------------
 
 (function() {
@@ -186,10 +186,9 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
     Object.values(leagueGroups).forEach(group => {
         
-        // --- UPDATED: Check disabledLeagues list ---
         const leagueEntry = Object.entries(masterLeagues).find(([name, l]) => 
             l.enabled && 
-            !disabledLeagues.includes(name) && // <-- THIS CHECK IS NEW
+            !disabledLeagues.includes(name) && 
             l.divisions.includes(group.divName)
         );
         
@@ -209,8 +208,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const allBunksInGroup = Array.from(group.bunks);
         const scheduledGames = []; 
         let gameIndex = 0;
-        // NOTE: The blockBase for leagues does NOT have a 'bunk' property.
-        // canBlockFit() is designed to handle this.
         const blockBase = { slots: group.slots, divName: group.divName };
 
         for (const [teamA, teamB] of matchups) {
@@ -264,10 +261,9 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
     Object.values(specialtyLeagueGroups).forEach(group => {
         
-        // --- UPDATED: Check disabledSpecialtyLeagues list ---
         const leagueEntry = Object.values(masterSpecialtyLeagues).find(l => 
             l.enabled && 
-            !disabledSpecialtyLeagues.includes(l.name) && // <-- THIS CHECK IS NEW
+            !disabledSpecialtyLeagues.includes(l.name) && 
             l.divisions.includes(group.divName)
         );
         
@@ -531,8 +527,8 @@ function pairRoundRobin(teamList) {
 
 // --- START OF UPDATED FUNCTION ---
 /**
- * UPDATED: This function is rewritten to process new `timeRules`
- * and load the new `limitUsage` lists.
+ * UPDATED: This function now loads and filters by
+ * the new `disabledSports` list.
  */
 function loadAndFilterData() {
     const globalSettings = window.loadGlobalSettings?.() || {};
@@ -542,23 +538,25 @@ function loadAndFilterData() {
     const masterDivisions = app1Data.divisions || {};
     const masterAvailableDivs = app1Data.availableDivisions || [];
     const masterSpecials = app1Data.specialActivities || [];
+    const allGlobalSports = app1Data.allSports || []; // <-- NEW
     
     const masterLeagues = globalSettings.leaguesByName || {};
     const masterSpecialtyLeagues = globalSettings.specialtyLeagues || {};
     
     const dailyData = window.loadCurrentDailyData?.() || {};
     
-    // --- NEW: Load daily availability rules ---
     const dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
     
-    // --- NEW: Load daily disabled leagues ---
-    const loadedOverrides = dailyData.overrides || {};
-    const disabledLeagues = loadedOverrides.leagues || [];
+    // --- NEW: Load daily disabled sports ---
+    const dailyOverrides = dailyData.overrides || {};
+    const disabledLeagues = dailyOverrides.leagues || [];
+    const disabledSports = dailyOverrides.sports || []; // <-- NEW LIST
     const disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
     
     const overrides = {
-        bunks: loadedOverrides.bunks || [],
-        leagues: disabledLeagues // Pass this along
+        bunks: dailyOverrides.bunks || [],
+        leagues: disabledLeagues,
+        sports: disabledSports // <-- PASS IT ALONG
     };
 
     const availableDivisions = masterAvailableDivs.filter(divName => !overrides.bunks.includes(divName));
@@ -570,7 +568,6 @@ function loadAndFilterData() {
         divisions[divName].bunks = (divisions[divName].bunks || []).filter(bunkName => !overrides.bunks.includes(bunkName));
     }
     
-    // --- NEW: Helper to parse rule strings into minutes ---
     function parseTimeRule(rule) {
         const startMin = parseTimeToMinutes(rule.start);
         const endMin = parseTimeToMinutes(rule.end);
@@ -582,37 +579,30 @@ function loadAndFilterData() {
         };
     }
     
-    // --- NEW: Build final, resolved properties for all activities ---
     const activityProperties = {};
     const allMasterActivities = masterFields.concat(masterSpecials);
     const availableActivityNames = [];
 
     allMasterActivities.forEach(f => {
         let finalRules;
-        
-        // Check for a daily override. If it exists, use it.
         const dailyRules = dailyFieldAvailability[f.name];
         
         if (dailyRules && dailyRules.length > 0) {
-            // A daily override exists! Use it.
             finalRules = dailyRules.map(parseTimeRule).filter(Boolean);
         } else {
-            // No daily override. Use the global rules.
             finalRules = (f.timeRules || []).map(parseTimeRule).filter(Boolean);
         }
 
-        // The master "available" toggle from app1.js
         const isMasterAvailable = f.available !== false; 
 
         activityProperties[f.name] = {
-            available: isMasterAvailable, // The master toggle
+            available: isMasterAvailable,
             sharable: f.sharableWith?.type === 'all' || f.sharableWith?.type === 'custom',
             allowedDivisions: (f.sharableWith?.divisions?.length > 0) ? f.sharableWith.divisions : availableDivisions,
-            limitUsage: f.limitUsage || { enabled: false, divisions: {} }, // <-- NEW
-            timeRules: finalRules // The parsed list of {type, startMin, endMin}
+            limitUsage: f.limitUsage || { enabled: false, divisions: {} },
+            timeRules: finalRules
         };
 
-        // Determine if this field is available *at all* today
         if (isMasterAvailable) {
             availableActivityNames.push(f.name);
         }
@@ -621,22 +611,30 @@ function loadAndFilterData() {
     window.allSchedulableNames = availableActivityNames;
     const availFields = masterFields.filter(f => availableActivityNames.includes(f.name));
     const availSpecials = masterSpecials.filter(s => availableActivityNames.includes(s.name));
-    // --- END OF NEW PROPERTY BUILDER ---
+    
+    // --- NEW: Filter available sports based on daily overrides ---
+    const availableSports = allGlobalSports.filter(sport => !overrides.sports.includes(sport));
 
+    // Filter fieldsBySport
     const fieldsBySport = {};
     availFields.forEach(f => {
         if (Array.isArray(f.activities)) {
             f.activities.forEach(sport => {
-                fieldsBySport[sport] = fieldsBySport[sport] || [];
-                fieldsBySport[sport].push(f.name);
+                // ONLY add sport if it's in the availableSports list
+                if (availableSports.includes(sport)) {
+                    fieldsBySport[sport] = fieldsBySport[sport] || [];
+                    fieldsBySport[sport].push(f.name);
+                }
             });
         }
     });
 
+    // Filter allActivities
     const allActivities = [
-        ...availFields.flatMap((f) => (f.activities || []).map((act) => ({ type: "field", field: f.name, sport: act }))),
+        ...availFields.flatMap((f) => (f.activities || []).map((act) => ({ type: "field", field: f.name, sport: act })))
+            .filter(a => !a.sport || availableSports.includes(a.sport)), // Filter out activities whose sport is disabled
         ...availSpecials.map((sa) => ({ type: "special", field: sa.name, sport: null }))
-    ];
+    ].filter(a => availableActivityNames.includes(a.field)); // Filter out unavailable fields/specials
     
     const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
     
@@ -649,15 +647,16 @@ function loadAndFilterData() {
     return {
         divisions,
         availableDivisions,
-        activityProperties, // This is now the resolved, final list
+        activityProperties,
         allActivities,
         h2hActivities,
         fieldsBySport,
         masterLeagues,
         masterSpecialtyLeagues,
         yesterdayHistory,
-        disabledLeagues, // <-- NEW
-        disabledSpecialtyLeagues // <-- NEW
+        disabledLeagues,
+        disabledSpecialtyLeagues,
+        disabledSports // <-- NEW
     };
 }
 // --- END OF UPDATED FUNCTION ---
