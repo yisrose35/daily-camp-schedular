@@ -1,17 +1,18 @@
 // =================================================================
 // daily_overrides.js
-// This file creates the UI for the "Daily Overrides" tab.
 //
 // UPDATED:
-// - **REMOVED** the global "Daily Sport Availability" section
-//   from the bottom of the tab.
-// - **NEW:** `renderOverrideDetailPane` for fields now also
-//   renders a list of toggles for each sport assigned to that
-//   field (from the "Fields" tab).
-// - This new list reads from and saves to a new data property:
-//   `dailyDisabledSportsByField`.
-// - The `init` function has been updated to load this new
-//   property from daily data.
+// - **CRITICAL FIX:** `loadDailySkeleton` has been rewritten.
+//   - It now *first* checks for a `manualSkeleton` saved
+//     to the specific day.
+//   - If one is *not* found, it falls back to loading the
+//     correct day-of-week assigned template (e.g., "Friday Short").
+// - **NEW FEATURE:** `createOverrideMasterListItem` now adds an
+//   on/off toggle to each item in the master lists.
+// - `init` now loads/saves these new disabled lists
+//   (disabledFields, disabledSpecials) to the daily `overrides` object.
+// - `renderOverrideMasterLists` now reads this new data to set
+//   the toggle state.
 // =================================================================
 
 (function() {
@@ -19,11 +20,14 @@
 
 let container = null;
 let masterSettings = {};
+// Add new disabled lists to the overrides object
 let currentOverrides = {
   dailyFieldAvailability: {},
   leagues: [],
   disabledSpecialtyLeagues: [],
-  dailyDisabledSportsByField: {} // <-- NEW
+  dailyDisabledSportsByField: {},
+  disabledFields: [],    // <-- NEW
+  disabledSpecials: [] // <-- NEW
 };
 
 // --- Helper containers ---
@@ -45,68 +49,17 @@ let dailyOverrideSkeleton = [];
 const PIXELS_PER_MINUTE = 2;
 const INCREMENT_MINS = 30;
 
-// --- UPDATED TILES array with descriptions ---
 const TILES = [
-    { 
-        type: 'activity', 
-        name: 'Activity', 
-        style: 'background: #e0f7fa; border: 1px solid #007bff;',
-        description: "A flexible slot. The optimizer will fill this with the best available Sport OR Special Activity based on availability and rotation."
-    },
-    { 
-        type: 'sports', 
-        name: 'Sports', 
-        style: 'background: #dcedc8; border: 1px solid #689f38;',
-        description: "A dedicated sports slot. The optimizer will fill this *only* with a Sport (e.g., Basketball, Soccer) from your 'Fields' list."
-    },
-    { 
-        type: 'special', 
-        name: 'Special Activity', 
-        style: 'background: #e8f5e9; border: 1px solid #43a047;',
-        description: "A dedicated special slot. The optimizer will fill this *only* with a Special Activity (e.g., Canteen, Arts & Crafts) from your 'Special Activities' list."
-    },
-    { 
-        type: 'split', 
-        name: 'Split Activity', 
-        style: 'background: #fff3e0; border: 1px solid #f57c00;',
-        description: "Creates a block that is split in two. You will be asked to name two different activities (e.g., Swim / Activity). The division will be split, and they will switch activities halfway through the block."
-    },
-    { 
-        type: 'league', 
-        name: 'League Game', 
-        style: 'background: #d1c4e9; border: 1px solid #5e35b1;',
-        description: "A dedicated slot for a regular League Game. The optimizer will automatically create matchups from your 'Leagues' tab (e.g., Team A vs. Team B) and find a field for them."
-    },
-    { 
-        type: 'specialty_league', 
-        name: 'Specialty League', 
-        style: 'background: #fff8e1; border: 1px solid #f9a825;',
-        description: "A dedicated slot for a Specialty League. The optimizer will create matchups from your custom teams (e.g., Blue vs. Gold) and assign them to their exclusive fields."
-    },
-    { 
-        type: 'swim', 
-        name: 'Swim', 
-        style: 'background: #bbdefb; border: 1px solid #1976d2;',
-        description: "A 'pinned' event. The optimizer will block out this time for 'Swim' and will not schedule anything else here. This is a simple block and does not use the optimizer."
-    },
-    { 
-        type: 'lunch', 
-        name: 'Lunch', 
-        style: 'background: #fbe9e7; border: 1px solid #d84315;',
-        description: "A 'pinned' event. The optimizer will block out this time for 'Lunch' and will not schedule anything else here. This is a simple block and does not use the optimizer."
-    },
-    { 
-        type: 'snacks', 
-        name: 'Snacks', 
-        style: 'background: #fff9c4; border: 1px solid #fbc02d;',
-        description: "A 'pinned' event. The optimizer will block out this time for 'Snacks' and will not schedule anything else here. This is a simple block and does not use the optimizer."
-    },
-    { 
-        type: 'custom', 
-        name: 'Custom Pinned Event', 
-        style: 'background: #eee; border: 1px solid #616161;',
-        description: "A 'pinned' event. You will be asked to give it a custom name (e.g., 'Assembly' or 'Trip'). The optimizer will block out this time and will not schedule anything else here."
-    }
+    { type: 'activity', name: 'Activity', style: 'background: #e0f7fa; border: 1px solid #007bff;', description: "A flexible slot. The optimizer will fill this with the best available Sport OR Special Activity based on availability and rotation." },
+    { type: 'sports', name: 'Sports', style: 'background: #dcedc8; border: 1px solid #689f38;', description: "A dedicated sports slot. The optimizer will fill this *only* with a Sport (e.g., Basketball, Soccer) from your 'Fields' list." },
+    { type: 'special', name: 'Special Activity', style: 'background: #e8f5e9; border: 1px solid #43a047;', description: "A dedicated special slot. The optimizer will fill this *only* with a Special Activity (e.g., Canteen, Arts & Crafts) from your 'Special Activities' list." },
+    { type: 'split', name: 'Split Activity', style: 'background: #fff3e0; border: 1px solid #f57c00;', description: "Creates a block that is split in two. You will be asked to name two different activities (e.g., Swim / Activity). The division will be split, and they will switch activities halfway through the block." },
+    { type: 'league', name: 'League Game', style: 'background: #d1c4e9; border: 1px solid #5e35b1;', description: "A dedicated slot for a regular League Game. The optimizer will automatically create matchups from your 'Leagues' tab (e.g., Team A vs. Team B) and find a field for them." },
+    { type: 'specialty_league', name: 'Specialty League', style: 'background: #fff8e1; border: 1px solid #f9a825;', description: "A dedicated slot for a Specialty League. The optimizer will create matchups from your custom teams (e.g., Blue vs. Gold) and assign them to their exclusive fields." },
+    { type: 'swim', name: 'Swim', style: 'background: #bbdefb; border: 1px solid #1976d2;', description: "A 'pinned' event. The optimizer will block out this time for 'Swim' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
+    { type: 'lunch', name: 'Lunch', style: 'background: #fbe9e7; border: 1px solid #d84315;', description: "A 'pinned' event. The optimizer will block out this time for 'Lunch' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
+    { type: 'snacks', name: 'Snacks', style: 'background: #fff9c4; border: 1px solid #fbc02d;', description: "A 'pinned' event. The optimizer will block out this time for 'Snacks' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
+    { type: 'custom', name: 'Custom Pinned Event', style: 'background: #eee; border: 1px solid #616161;', description: "A 'pinned' event. You will be asked to give it a custom name (e.g., 'Assembly' or 'Trip'). The optimizer will block out this time and will not schedule anything else here." }
 ];
 
 function mapEventNameForOptimizer(name) {
@@ -133,7 +86,6 @@ function renderPalette(paletteContainer) {
         el.style.borderRadius = '5px';
         el.style.cursor = 'grab';
 
-        // --- NEW CLICK LISTENER ---
         el.onclick = () => alert(tile.description);
         
         el.draggable = true;
@@ -151,20 +103,17 @@ function renderGrid(gridContainer) {
     const divisions = window.divisions || {};
     const availableDivisions = window.availableDivisions || [];
     
-    // --- NEW: Load global times from app1 settings ---
     const globalSettings = window.loadGlobalSettings?.() || {};
     const app1Data = globalSettings.app1 || {};
-    // Use fallback defaults if values are empty strings
     const globalStart = app1Data.globalStartTime || "9:00 AM";
     const globalEnd = app1Data.globalEndTime || "4:00 PM";
     
     let earliestMin = parseTimeToMinutes(globalStart);
     let latestMin = parseTimeToMinutes(globalEnd);
 
-    // Failsafe if times are invalid
-    if (earliestMin == null) earliestMin = 540; // 9:00 AM
-    if (latestMin == null) latestMin = 960; // 4:00 PM
-    if (latestMin <= earliestMin) latestMin = earliestMin + 60; // Ensure at least 1 hour
+    if (earliestMin == null) earliestMin = 540; 
+    if (latestMin == null) latestMin = 960; 
+    if (latestMin <= earliestMin) latestMin = earliestMin + 60; 
     
     const totalMinutes = latestMin - earliestMin;
     const totalHeight = totalMinutes * PIXELS_PER_MINUTE;
@@ -180,22 +129,17 @@ function renderGrid(gridContainer) {
     }
     gridHtml += `</div>`;
     availableDivisions.forEach((divName, i) => {
-        // --- REMOVED timeline logic ---
-        
         gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
-        
-        // --- REMOVED grayed-out area logic ---
         
         dailyOverrideSkeleton.filter(ev => ev.division === divName).forEach(event => {
             const startMin = parseTimeToMinutes(event.startTime);
             const endMin = parseTimeToMinutes(event.endTime);
             if (startMin == null || endMin == null) return;
             
-            // Clamp rendering to the grid boundaries
             const visibleStartMin = Math.max(startMin, earliestMin);
             const visibleEndMin = Math.min(endMin, latestMin);
 
-            if (visibleEndMin <= visibleStartMin) return; // Skip if not visible
+            if (visibleEndMin <= visibleStartMin) return; 
 
             const top = (visibleStartMin - earliestMin) * PIXELS_PER_MINUTE;
             const height = (visibleEndMin - visibleStartMin) * PIXELS_PER_MINUTE;
@@ -295,17 +239,53 @@ function renderEventTile(event, top, height) {
             <div style="font-size: 0.85em;">${event.startTime} - ${event.endTime}</div>
         </div>`;
 }
+
+// --- THIS IS THE KEY FIX ---
 function loadDailySkeleton() {
+    // 1. Check for a saved *daily* override first.
     const dailyData = window.loadCurrentDailyData?.() || {};
     if (dailyData.manualSkeleton && dailyData.manualSkeleton.length > 0) {
-        dailyOverrideSkeleton = dailyData.manualSkeleton;
+        // A skeleton has been saved for this specific day. Load it.
+        dailyOverrideSkeleton = JSON.parse(JSON.stringify(dailyData.manualSkeleton));
+        return; // Stop here.
+    }
+    
+    // 2. No daily override exists. Load the default template
+    //    based on the day of the week (same as master builder).
+    const assignments = window.getSkeletonAssignments?.() || {};
+    const skeletons = window.getSavedSkeletons?.() || {};
+    
+    const dateStr = window.currentScheduleDate || "";
+    const [year, month, day] = dateStr.split('-').map(Number);
+    let dayOfWeek = 0;
+    if (year && month && day) {
+        const date = new Date(year, month - 1, day);
+        dayOfWeek = date.getDay();
+    }
+    
+    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const todayName = dayNames[dayOfWeek];
+
+    let templateName = assignments[todayName]; // Try specific day
+    if (!templateName || !skeletons[templateName]) {
+        templateName = assignments["Default"]; // Fall back to Default
+    }
+    
+    let skeletonToLoad = skeletons[templateName]; 
+    
+    if (skeletonToLoad) {
+        // Deep-copy the template
+        dailyOverrideSkeleton = JSON.parse(JSON.stringify(skeletonToLoad));
     } else {
-        const globalSettings = window.loadGlobalSettings?.() || {};
-        const app1Data = globalSettings.app1 || {};
-        dailyOverrideSkeleton = JSON.parse(JSON.stringify(app1Data.defaultSkeleton || []));
+        // Final fallback
+        dailyOverrideSkeleton = [];
     }
 }
+// --- END OF FIX ---
+
 function saveDailySkeleton() {
+    // This saves the skeleton *to this specific day*,
+    // which is what we check for in loadDailySkeleton()
     window.saveCurrentDailyData?.("manualSkeleton", dailyOverrideSkeleton);
 }
 function minutesToTime(min) {
@@ -376,7 +356,7 @@ function init() {
       <h3>Daily Skeleton Override</h3>
       <p style="font-size: 0.9em; color: #555;">
         Modify the schedule layout for <strong>this day only</strong>.
-        Changes here will not affect your default schedule template.
+        Changes here will be saved for this day.
       </p>
       <div id="override-scheduler-content"></div>
     </div>
@@ -402,8 +382,7 @@ function init() {
               
               <h4 style="margin-top: 15px;">Specialty Leagues</h4>
               <div id="override-specialty-leagues-list" class="master-list"></div>
-              
-              </div>
+          </div>
 
           <div style="flex: 2; min-width: 400px; position: sticky; top: 20px;">
               <h4>Details</h4>
@@ -423,6 +402,10 @@ function init() {
             cursor: pointer;
             background: #fff;
             font-size: 0.95em;
+            /* NEW: Flex layout for toggle */
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
         .master-list .list-item:hover {
             background: #f9f9f9;
@@ -430,7 +413,13 @@ function init() {
         .master-list .list-item.selected {
             background: #e7f3ff;
             border-color: #007bff;
+        }
+        .master-list .list-item-name {
             font-weight: 600;
+            flex-grow: 1;
+        }
+        .master-list .list-item.selected .list-item-name {
+            font-weight: 700;
         }
         .detail-pane {
             border: 1px solid #ccc;
@@ -439,7 +428,6 @@ function init() {
             background: #fdfdfd;
             min-height: 300px;
         }
-        /* NEW: Styles for the sport toggle list */
         .sport-override-list {
             margin-top: 15px;
             padding-top: 15px;
@@ -461,7 +449,6 @@ function init() {
   skeletonContainer = document.getElementById("override-scheduler-content");
   tripsFormContainer = document.getElementById("trips-form-container");
   
-  // --- NEW UI Elements ---
   overrideFieldsListEl = document.getElementById("override-fields-list");
   overrideSpecialsListEl = document.getElementById("override-specials-list");
   overrideLeaguesListEl = document.getElementById("override-leagues-list");
@@ -477,11 +464,17 @@ function init() {
 
   // 2. Load the data for the *current* day
   const dailyData = window.loadCurrentDailyData?.() || {};
+  const dailyOverrides = dailyData.overrides || {}; // Get the whole overrides object
   
   currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
-  currentOverrides.leagues = (dailyData.overrides || {}).leagues || [];
+  currentOverrides.leagues = dailyOverrides.leagues || [];
   currentOverrides.disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
-  currentOverrides.dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {}; // <-- NEW
+  currentOverrides.dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {}; 
+  
+  // --- NEW: Load disabled fields/specials ---
+  currentOverrides.disabledFields = dailyOverrides.disabledFields || [];
+  currentOverrides.disabledSpecials = dailyOverrides.disabledSpecials || [];
+  
   
   // --- One-time migration from old system (can stay) ---
   if (dailyData.fieldAvailability) {
@@ -515,14 +508,9 @@ function init() {
 
 
 // --- START OF NEW TIME RULE UI ---
-/**
- * Renders the new, simplified "Time Rules" UI for DAILY overrides.
- * This is a *helper function* for the new Detail Pane.
- */
 function renderTimeRulesUI(itemName, globalRules, dailyRules, onSave) {
     const container = document.createElement("div");
     
-    // --- 1. Show Global Rules (Read-only) ---
     const globalContainer = document.createElement("div");
     globalContainer.innerHTML = `<strong style="font-size: 0.9em;">Global Rules (from Setup):</strong>`;
     if (globalRules.length === 0) {
@@ -537,7 +525,6 @@ function renderTimeRulesUI(itemName, globalRules, dailyRules, onSave) {
     });
     container.appendChild(globalContainer);
 
-    // --- 2. Show Daily Rules (Editable) ---
     const dailyContainer = document.createElement("div");
     dailyContainer.style.marginTop = "10px";
     dailyContainer.innerHTML = `<strong style="font-size: 0.9em;">Daily Override Rules (replaces global rules):</strong>`;
@@ -581,7 +568,6 @@ function renderTimeRulesUI(itemName, globalRules, dailyRules, onSave) {
     dailyContainer.appendChild(ruleList);
     container.appendChild(dailyContainer);
 
-    // --- 3. Add New Rule Form ---
     const addContainer = document.createElement("div");
     addContainer.style.marginTop = "10px";
     
@@ -638,7 +624,7 @@ function renderTimeRulesUI(itemName, globalRules, dailyRules, onSave) {
 
 
 /**
- * UPDATED: Renders the "Daily Trips" form
+ * Renders the "Daily Trips" form
  */
 function renderTripsForm() {
   tripsFormContainer.innerHTML = ""; // Clear only the form container
@@ -762,6 +748,16 @@ function renderOverrideMasterLists() {
     overrideSpecialsListEl.innerHTML = "";
     overrideLeaguesListEl.innerHTML = "";
     overrideSpecialtyLeaguesListEl.innerHTML = "";
+    
+    // --- Helper to save the main overrides object ---
+    const saveOverrides = () => {
+        const dailyData = window.loadCurrentDailyData?.() || {};
+        const fullOverrides = dailyData.overrides || {};
+        fullOverrides.leagues = currentOverrides.leagues;
+        fullOverrides.disabledFields = currentOverrides.disabledFields;
+        fullOverrides.disabledSpecials = currentOverrides.disabledSpecials;
+        window.saveCurrentDailyData("overrides", fullOverrides);
+    };
 
     // --- 1. Fields ---
     const fields = masterSettings.app1.fields || [];
@@ -769,7 +765,20 @@ function renderOverrideMasterLists() {
         overrideFieldsListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No fields found in Setup.</p>`;
     }
     fields.forEach(item => {
-        overrideFieldsListEl.appendChild(createOverrideMasterListItem('field', item.name));
+        const isDisabled = currentOverrides.disabledFields.includes(item.name);
+        const onToggle = (isEnabled) => {
+            if (isEnabled) {
+                currentOverrides.disabledFields = currentOverrides.disabledFields.filter(name => name !== item.name);
+            } else {
+                if (!currentOverrides.disabledFields.includes(item.name)) {
+                    currentOverrides.disabledFields.push(item.name);
+                }
+            }
+            saveOverrides();
+        };
+        overrideFieldsListEl.appendChild(
+            createOverrideMasterListItem('field', item.name, !isDisabled, onToggle)
+        );
     });
 
     // --- 2. Special Activities ---
@@ -778,7 +787,20 @@ function renderOverrideMasterLists() {
         overrideSpecialsListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No special activities found in Setup.</p>`;
     }
     specials.forEach(item => {
-        overrideSpecialsListEl.appendChild(createOverrideMasterListItem('special', item.name));
+        const isDisabled = currentOverrides.disabledSpecials.includes(item.name);
+        const onToggle = (isEnabled) => {
+            if (isEnabled) {
+                currentOverrides.disabledSpecials = currentOverrides.disabledSpecials.filter(name => name !== item.name);
+            } else {
+                if (!currentOverrides.disabledSpecials.includes(item.name)) {
+                    currentOverrides.disabledSpecials.push(item.name);
+                }
+            }
+            saveOverrides();
+        };
+        overrideSpecialsListEl.appendChild(
+            createOverrideMasterListItem('special', item.name, !isDisabled, onToggle)
+        );
     });
 
     // --- 3. Leagues ---
@@ -788,7 +810,20 @@ function renderOverrideMasterLists() {
         overrideLeaguesListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No leagues found in Setup.</p>`;
     }
     leagueNames.forEach(name => {
-        overrideLeaguesListEl.appendChild(createOverrideMasterListItem('league', name));
+        const isDisabled = currentOverrides.leagues.includes(name);
+        const onToggle = (isEnabled) => {
+            if (isEnabled) {
+                currentOverrides.leagues = currentOverrides.leagues.filter(l => l !== name);
+            } else {
+                if (!currentOverrides.leagues.includes(name)) {
+                    currentOverrides.leagues.push(name);
+                }
+            }
+            saveOverrides();
+        };
+        overrideLeaguesListEl.appendChild(
+            createOverrideMasterListItem('league', name, !isDisabled, onToggle)
+        );
     });
 
     // --- 4. Specialty Leagues ---
@@ -798,14 +833,27 @@ function renderOverrideMasterLists() {
         overrideSpecialtyLeaguesListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No specialty leagues found in Setup.</p>`;
     }
     specialtyLeagueNames.forEach(name => {
-        overrideSpecialtyLeaguesListEl.appendChild(createOverrideMasterListItem('specialty_league', name));
+        const isDisabled = currentOverrides.disabledSpecialtyLeagues.includes(name);
+        const onToggle = (isEnabled) => {
+            if (isEnabled) {
+                currentOverrides.disabledSpecialtyLeagues = currentOverrides.disabledSpecialtyLeagues.filter(l => l !== name);
+            } else {
+                if (!currentOverrides.disabledSpecialtyLeagues.includes(name)) {
+                    currentOverrides.disabledSpecialtyLeagues.push(name);
+                }
+            }
+            window.saveCurrentDailyData("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
+        };
+        overrideSpecialtyLeaguesListEl.appendChild(
+            createOverrideMasterListItem('specialty_league', name, !isDisabled, onToggle)
+        );
     });
 }
 
 /**
  * Creates a single clickable item for the left-hand master lists
  */
-function createOverrideMasterListItem(type, name) {
+function createOverrideMasterListItem(type, name, isEnabled, onToggle) {
     const el = document.createElement('div');
     el.className = 'list-item';
     const id = `${type}-${name}`;
@@ -813,12 +861,41 @@ function createOverrideMasterListItem(type, name) {
         el.classList.add('selected');
     }
     
-    el.textContent = name;
-    el.onclick = () => {
+    // Create name span
+    const nameEl = document.createElement('span');
+    nameEl.className = 'list-item-name';
+    nameEl.textContent = name;
+    el.appendChild(nameEl);
+    
+    // Click on name to show details
+    nameEl.onclick = () => {
         selectedOverrideId = id;
         renderOverrideMasterLists(); // Re-render lists to update selection
         renderOverrideDetailPane(); // Re-render detail pane
     };
+
+    // Create toggle
+    const tog = document.createElement("label"); 
+    tog.className = "switch";
+    tog.title = isEnabled ? "Click to disable for today" : "Click to enable for today";
+    tog.onclick = (e) => e.stopPropagation(); // Prevent selection
+    
+    const cb = document.createElement("input"); 
+    cb.type = "checkbox"; 
+    cb.checked = isEnabled;
+    cb.onchange = (e) => { 
+        e.stopPropagation();
+        onToggle(cb.checked); 
+        tog.title = cb.checked ? "Click to disable for today" : "Click to enable for today";
+    };
+    
+    const sl = document.createElement("span"); 
+    sl.className = "slider";
+    
+    tog.appendChild(cb); 
+    tog.appendChild(sl);
+    el.appendChild(tog);
+
     return el;
 }
 
@@ -907,40 +984,12 @@ function renderOverrideDetailPane() {
     
     // --- 2. Handle Regular Leagues (Disable Toggle) ---
     else if (type === 'league') {
-        const isChecked = currentOverrides.leagues.includes(name);
-        const el = createCheckbox(`Disable "${name}" for today`, isChecked);
-        
-        el.checkbox.onchange = () => {
-          if (el.checkbox.checked) {
-            if (!currentOverrides.leagues.includes(name)) currentOverrides.leagues.push(name);
-          } else {
-            currentOverrides.leagues = currentOverrides.leagues.filter(l => l !== name);
-          }
-          
-          const dailyData = window.loadCurrentDailyData?.() || {};
-          const fullOverrides = dailyData.overrides || {};
-          fullOverrides.leagues = currentOverrides.leagues;
-          window.saveCurrentDailyData("overrides", fullOverrides);
-        };
-        overrideDetailPaneEl.appendChild(el.wrapper);
+        overrideDetailPaneEl.innerHTML = `<p class="muted">Enable or disable this league for today using the toggle in the list on the left.</p>`;
     }
     
     // --- 3. Handle Specialty Leagues (Disable Toggle) ---
     else if (type === 'specialty_league') {
-        const isChecked = currentOverrides.disabledSpecialtyLeagues.includes(name);
-        const el = createCheckbox(`Disable "${name}" for today`, isChecked);
-        
-        el.checkbox.onchange = () => {
-          if (el.checkbox.checked) {
-            if (!currentOverrides.disabledSpecialtyLeagues.includes(name)) {
-                currentOverrides.disabledSpecialtyLeagues.push(name);
-            }
-          } else {
-            currentOverrides.disabledSpecialtyLeagues = currentOverrides.disabledSpecialtyLeagues.filter(l => l !== name);
-          }
-          window.saveCurrentDailyData("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
-        };
-        overrideDetailPaneEl.appendChild(el.wrapper);
+        overrideDetailPaneEl.innerHTML = `<p class="muted">Enable or disable this league for today using the toggle in the list on the left.</p>`;
     }
 }
 
