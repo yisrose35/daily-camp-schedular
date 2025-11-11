@@ -345,8 +345,8 @@ function initApp1() {
             // Force re-render of the active scheduler grid
             if (document.getElementById('master-scheduler')?.classList.contains('active')) {
                 window.initMasterScheduler?.();
-            } else if (document.getElementById('daily-overrides')?.classList.contains('active')) {
-                window.initDailyOverrides?.();
+            } else if (document.getElementById('daily-adjustments')?.classList.contains('active')) { // <-- UPDATED
+                window.initDailyAdjustments?.(); // <-- UPDATED
             }
         };
     }
