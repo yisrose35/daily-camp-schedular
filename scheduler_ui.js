@@ -6,8 +6,10 @@
 //   division was flawed and creating duplicate rows.
 // - It now has a new filter `blocksByDivision[div] = divBlocks.filter(...)`
 //   that correctly finds only *unique* blocks based on their
-//   time label (e.g., "3:20pm - 4:10pm").
+//   time label *and* event type (e.g., "League Game").
 // - This will fix the "double row" bug.
+// - `findFirstSlotForTime` has also been improved to correctly
+//   find the overlapping slot for short events like "Snacks".
 // =================================================================
 
 // ===== HELPERS =====
@@ -95,33 +97,25 @@ function formatEntry(entry) {
 }
 
 /**
+ * --- UPDATED: Fix for "Free" slots bug ---
  * Helper: Finds the *first* 30-min slot index
- * that matches the start time of a custom block.
+ * that *overlaps* with the start time of a custom block.
  */
 function findFirstSlotForTime(startMin) {
-    if (!window.unifiedTimes) return -1;
-    for (let i = 0; i < window.unifiedTimes.length; i++) {
-        const slot = window.unifiedTimes[i];
-        const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-        
-        // Find the slot that this time *falls into*
-        if (slotStart >= startMin && slotStart < startMin + INCREMENT_MINS) {
-            return i;
-        }
-    }
+    if (!window.unifiedTimes || startMin == null) return -1;
     
-    // Fallback: Find the closest slot that overlaps
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
         const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
         const slotEnd = slotStart + INCREMENT_MINS;
-        // Overlap check: (Block Start < Slot End) and (Block End > Slot Start)
+        
+        // Find the first slot that the block's start time *overlaps* with
+        // (Block Start < Slot End) and (Block End > Slot Start)
         // We assume block end is at least startMin + 1
         if (startMin < slotEnd && (startMin + 1) > slotStart) {
             return i;
         }
     }
-    
     return -1;
 }
 
@@ -207,6 +201,7 @@ function renderStaggeredView(container) {
         divBlocks.sort((a,b) => a.startMin - b.startMin);
         
         // --- THIS FILTER FIXES THE "DOUBLE ROW" BUG ---
+        // It now finds blocks that are unique by *both* time and event type.
         blocksByDivision[div] = divBlocks.filter((block, index, self) =>
             index === self.findIndex((t) => (t.label === block.label && t.event === block.event))
         );
@@ -432,4 +427,4 @@ window.updateTable = window.updateTable || updateTable;
 window.initScheduleSystem = window.initScheduleSystem || initScheduleSystem;
 window.saveSchedule = window.saveSchedule || saveSchedule;
 
-}
+})();
