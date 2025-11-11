@@ -1,20 +1,21 @@
 // =================================================================
 // special_activities.js
-// NEW FILE
-// This file manages the new "Special Activities" tab.
-// It uses a two-column (master-detail) layout.
 //
-// UPDATED:
-// - **NEW** `renderLimitUsageControls` is now
-//   `renderAllowedBunksControls` and provides a UI to select
-//   "All Divisions" or "Specific Divisions/Bunks".
-// - This new logic is saved to the `item.limitUsage` property.
+// UPDATED (CRITICAL SAVE FIX):
+// - Removed the local `specialActivities = []` variable.
+// - Removed the internal `loadData()` and `saveData()` functions.
+// - `initSpecialActivitiesTab` now gets data from
+//   `window.getGlobalSpecialActivities()`.
+// - All functions that need to save (like `addSpecial`,
+//   `renderDetailPane`, etc.) now call
+//   `window.saveGlobalSpecialActivities(specialActivities)`
+//   to safely save the data via app1.js.
 // =================================================================
 
 (function() {
 'use strict';
 
-let specialActivities = [];
+let specialActivities = []; // This will be a *reference* to the global data
 let selectedItemId = null; // e.g., "special-Canteen"
 
 let specialsListEl = null;
@@ -28,8 +29,17 @@ function initSpecialActivitiesTab() {
     const container = document.getElementById("special_activities");
     if (!container) return;
     
-    // Load the data from the 'app1' object in global settings
-    loadData();
+    // --- UPDATED: Load data from app1.js ---
+    specialActivities = window.getGlobalSpecialActivities?.() || [];
+    
+    // Ensure all fields have the new structure (still good to do)
+    specialActivities.forEach(s => {
+        s.available = s.available !== false;
+        s.timeRules = s.timeRules || [];
+        s.sharableWith = s.sharableWith || { type: 'not_sharable', divisions: [] };
+        s.limitUsage = s.limitUsage || { enabled: false, divisions: {} };
+    });
+    // --- END UPDATE ---
 
     // Create the new UI structure
     container.innerHTML = `
@@ -105,31 +115,8 @@ function initSpecialActivitiesTab() {
     renderDetailPane();
 }
 
-/**
- * Loads specials from the 'app1' object in global settings
- */
-function loadData() {
-    const app1Data = window.loadGlobalSettings?.().app1 || {};
-    specialActivities = app1Data.specialActivities || [];
-    
-    // Ensure all fields have the new structure
-    specialActivities.forEach(s => {
-        s.available = s.available !== false;
-        s.timeRules = s.timeRules || [];
-        s.sharableWith = s.sharableWith || { type: 'not_sharable', divisions: [] };
-        // Ensure limitUsage exists and has the correct shape
-        s.limitUsage = s.limitUsage || { enabled: false, divisions: {} };
-    });
-}
-
-/**
- * Saves specials back to the 'app1' object
- */
-function saveData() {
-    const app1Data = window.loadGlobalSettings?.().app1 || {};
-    app1Data.specialActivities = specialActivities;
-    window.saveGlobalSettings?.("app1", app1Data);
-}
+// --- REMOVED loadData() function ---
+// --- REMOVED saveData() function ---
 
 /**
  * Renders the left-hand list of specials
@@ -179,7 +166,7 @@ function createMasterListItem(type, item) {
     cb.onchange = (e) => { 
         e.stopPropagation();
         item.available = cb.checked; 
-        saveData(); 
+        window.saveGlobalSpecialActivities(specialActivities); // --- UPDATED ---
         renderDetailPane(); // Re-render details if this item is selected
     };
     
@@ -231,7 +218,7 @@ function renderDetailPane() {
         if (!newName.trim()) return;
         item.name = newName;
         selectedItemId = `${type}-${newName}`; // Update selected ID
-        saveData();
+        window.saveGlobalSpecialActivities(specialActivities); // --- UPDATED ---
         renderMasterLists(); // Re-render lists to show new name
     });
     
@@ -243,7 +230,7 @@ function renderDetailPane() {
         if (confirm(`Are you sure you want to delete "${item.name}"?`)) {
             specialActivities = specialActivities.filter(s => s.name !== item.name);
             selectedItemId = null;
-            saveData();
+            window.saveGlobalSpecialActivities(specialActivities); // --- UPDATED ---
             renderMasterLists();
             renderDetailPane();
         }
@@ -262,7 +249,7 @@ function renderDetailPane() {
     detailPaneEl.appendChild(masterToggle);
     
     // --- 3. Sharable, Limit, and Time Rules ---
-    const onSave = saveData;
+    const onSave = () => window.saveGlobalSpecialActivities(specialActivities); // --- UPDATED ---
     const onRerender = renderDetailPane;
     
     const sharableControls = renderSharableControls(item, onSave, onRerender);
@@ -271,7 +258,6 @@ function renderDetailPane() {
     sharableControls.style.marginTop = '15px';
     detailPaneEl.appendChild(sharableControls);
     
-    // --- UPDATED ---
     const limitControls = renderAllowedBunksControls(item, onSave, onRerender);
     detailPaneEl.appendChild(limitControls);
     
@@ -298,7 +284,7 @@ function addSpecial() {
         timeRules: []
     });
     addSpecialInput.value = "";
-    saveData();
+    window.saveGlobalSpecialActivities(specialActivities); // --- UPDATED ---
     selectedItemId = `special-${n}`; // Auto-select new item
     renderMasterLists();
     renderDetailPane();
@@ -609,19 +595,13 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
             const divChip = createLimitChip(divName, isAllowed, true);
             divChip.onclick = () => {
                 if (isAllowed) {
-                    // If it IS allowed, clicking it again will
-                    // toggle to bunk-specific mode *if* bunks exist
                     const bunksInDiv = (window.divisions[divName]?.bunks || []);
-                    if (bunksInDiv.length > 0) {
-                        // Switch to specific bunks (start with none)
+                    if (bunksInDiv.length > 0 && allowedBunks.length === 0) { 
                         rules.divisions[divName] = []; 
                     } else {
-                        // No bunks, so just disable
                         delete rules.divisions[divName];
                     }
                 } else {
-                    // If it's NOT allowed, clicking it
-                    // enables it for ALL bunks in that division
                     rules.divisions[divName] = []; // Empty array = all bunks
                 }
                 onSave();
@@ -629,8 +609,8 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
             };
             divWrapper.appendChild(divChip);
 
-            // Bunk-level chips (if in bunk-specific mode)
-            if (isAllowed && allowedBunks.length > 0) {
+            // Bunk-level chips (if in bunk-specific mode, i.e., array exists)
+            if (isAllowed) {
                 const bunkList = document.createElement("div");
                 bunkList.style.display = "flex";
                 bunkList.style.flexWrap = "wrap";
@@ -643,17 +623,19 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
                     bunkList.innerHTML = `<span class="muted" style="font-size: 0.9em;">No bunks in this division.</span>`;
                 }
 
-                // "All" button
-                const allBunksChip = createLimitChip(`All ${divName}`, false, false);
-                allBunksChip.style.backgroundColor = "#f0f0f0";
-                allBunksChip.style.color = "#007BFF";
-                allBunksChip.style.borderColor = "#007BFF";
-                allBunksChip.onclick = () => {
-                    rules.divisions[divName] = []; // Set to empty array for "all"
-                    onSave();
-                    onRerender();
-                };
-                bunkList.appendChild(allBunksChip);
+                // "All" button (only show if in bunk-specific mode)
+                if (allowedBunks.length > 0) {
+                    const allBunksChip = createLimitChip(`All ${divName}`, false, false);
+                    allBunksChip.style.backgroundColor = "#f0f0f0";
+                    allBunksChip.style.color = "#007BFF";
+                    allBunksChip.style.borderColor = "#007BFF";
+                    allBunksChip.onclick = () => {
+                        rules.divisions[divName] = []; // Set to empty array for "all"
+                        onSave();
+                        onRerender();
+                    };
+                    bunkList.appendChild(allBunksChip);
+                }
 
                 // Individual bunk chips
                 bunksInDiv.forEach(bunkName => {
