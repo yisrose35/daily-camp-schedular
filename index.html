@@ -26,6 +26,7 @@
         <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
         <button class="tab-button" onclick="showTab('specialty-leagues'); window.initSpecialtyLeagues?.();">🏆 Specialty Leagues</button>
         <button class="tab-button" onclick="showTab('daily-adjustments'); window.initDailyAdjustments?.();">Daily Adjustments</button>
+        <button class="tab-button" onclick="showTab('rotation-report'); window.initRotationReport?.();">Rotation Report</button>
     </div>
 
     <div id="setup" class="tab-content active">
@@ -124,6 +125,11 @@
         <div id="daily-adjustments-content">
         </div>
     </div>
+    
+    <div id="rotation-report" class="tab-content">
+        <div id="rotation-report-content">
+            </div>
+    </div>
 
     <script>
         function showTab(id) {
@@ -140,12 +146,14 @@
                 window.initSpecialtyLeagues?.();
             } else if (id === 'master-scheduler') {
                 window.initMasterScheduler?.();
-            } else if (id === 'fields') { // Init new tab
+            } else if (id === 'fields') {
                 window.initFieldsTab?.();
-            } else if (id === 'special_activities') { // Init new tab
+            } else if (id === 'special_activities') {
                 window.initSpecialActivitiesTab?.();
-            } else if (id === 'daily-adjustments') { // <-- UPDATED
-                window.initDailyAdjustments?.(); // <-- UPDATED
+            } else if (id === 'daily-adjustments') { 
+                window.initDailyAdjustments?.(); 
+            } else if (id === 'rotation-report') { // <-- UPDATED
+                window.initRotationReport?.(); // <-- UPDATED
             }
         }
 
@@ -186,10 +194,6 @@
             } else {
                 console.warn("initSpecialtyLeagues not found.");
             }
-            
-            // 6. Init new tabs (they will load their own data)
-            // No need to call them here, they are called by showTab
-            // when the user clicks the tab. This saves load time.
         }
     </script>
 
@@ -209,5 +213,7 @@
     <script src="scheduler_logic_core.js" defer></script>
     <script src="scheduler_logic_fillers.js" defer></script>
     <script src="scheduler_ui.js" defer></script>
+    
+    <script src="analytics.js" defer></script>
 </body>
 </html>
