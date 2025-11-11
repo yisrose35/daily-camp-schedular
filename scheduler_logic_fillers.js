@@ -3,10 +3,9 @@
 // It provides functions to find the *best* activity for a given slot.
 //
 // UPDATED:
-// - *** CRITICAL FIX (Daily Overrides) ***
-//   - Added `isTimeAvailable` (NEW) which implements the new,
-//     correct availability logic (e.g., "Available 11-2").
-//   - `canBlockFit` now calls `isTimeAvailable` for every slot.
+// - `canBlockFit` has been updated to be IDENTICAL to the new
+//   `canBlockFit` in `scheduler_logic_core.js`. It now enforces
+//   the `limitUsage` (Allowed Bunks/Divisions) rules.
 // -----------------------------------------------------------------
 
 (function() {
@@ -78,8 +77,8 @@ function isTimeAvailable(slotIndex, fieldProps) {
 
 
 /**
- * Checks if a given field is available for all slots in a block.
- * UPDATED: This function now checks time-based availability.
+ * UPDATED: This function now checks time-based availability
+ * AND the new bunk/division limits.
  */
 function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     if (!fieldName) return false; // Can't fit a null field
@@ -91,18 +90,47 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     }
     const limit = (props && props.sharable) ? 2 : 1;
 
-    // Check 1: Division allowance
+    // Check 1: Division allowance (from Sharing)
     if (props && props.allowedDivisions && props.allowedDivisions.length && !props.allowedDivisions.includes(block.divName)) return false;
 
-    // Check 2: Usage per slot
+    // --- NEW: Check 2: Bunk/Division Limit (from limitUsage) ---
+    const limitRules = props.limitUsage;
+    if (limitRules && limitRules.enabled) {
+        // "Specific" rules are on
+        if (!limitRules.divisions[block.divName]) {
+            // This entire division is NOT in the allowed list
+            return false;
+        }
+        
+        const allowedBunks = limitRules.divisions[block.divName];
+        if (allowedBunks.length > 0) {
+            // Specific bunks are listed
+            if (!block.bunk) {
+                // This block doesn't have a bunk property.
+                // This shouldn't happen for general fillers,
+                // but if it does, we'll fail closed.
+                console.warn(`canBlockFit in filler.js missing block.bunk for ${fieldName}`);
+                return false; 
+            } else if (!allowedBunks.includes(block.bunk)) {
+                // This is a specific bunk, and it's NOT in the list
+                return false;
+            }
+        }
+        // If we are here, it's either:
+        // 1. The division is in the list, and the allowedBunks array is empty (meaning "all bunks")
+        // 2. The division is in the list, and this specific bunk is in the allowedBunks array
+    }
+    // --- END OF NEW CHECK ---
+
+    // Check 3 & 4: Usage per slot & Time-based availability
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) { return false; } // Invalid block
         
-        // Check 2a: Usage limit
+        // Check 3: Usage limit
         const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
         if (used >= limit) return false;
         
-        // Check 2b: NEW: Time-based availability
+        // Check 4: NEW: Time-based availability
         if (!isTimeAvailable(slotIndex, props)) {
             return false; // This slot is blocked by an override
         }
