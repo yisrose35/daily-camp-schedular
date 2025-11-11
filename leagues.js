@@ -1,5 +1,13 @@
 // -------------------- Leagues.js --------------------
 // (UPDATED to use calendar.js save/load)
+//
+// UPDATED:
+// - `initLeaguesTab`:
+//   - Removed hard-coded `sportsList`.
+//   - Now calls `window.getAllGlobalSports()` to get the master list.
+//   - "Other sport" input now calls `window.addGlobalSport()`
+//     to register the sport globally before re-rendering the tab.
+// -----------------------------------------------------------------
 
 // Internal store keyed by LEAGUE NAME for UI/storage
 let leaguesByName = {};
@@ -232,32 +240,28 @@ function initLeaguesTab() {
     });
     section.appendChild(divContainer);
 
-    // Sports
+    // --- UPDATED: Sports Section ---
     const sportsTitle = document.createElement("p");
     sportsTitle.textContent = "League Sports:";
     sportsTitle.style.margin = "10px 0 6px";
     section.appendChild(sportsTitle);
 
     const sportsContainer = document.createElement("div");
+    sportsContainer.style.display = 'flex';
+    sportsContainer.style.flexWrap = 'wrap';
+    sportsContainer.style.gap = '5px';
 
-    // --- START OF FIX ---
-
-    // This is the list of *suggested* sports
-    const sportsList = ["Basketball", "Hockey", "Volleyball", "Soccer", "Kickball", "Punchball", "Baseball"];
+    // Get the master list of all sports
+    const allSportsToShow = window.getAllGlobalSports?.() || [];
     
-    // This is the *master list* of all sports to display:
-    // (the suggestions + any custom sports already saved to this league)
-    const allSportsToShow = Array.from(new Set([...sportsList, ...leagueData.sports]));
-    
-    // Now, loop over the master list to create the buttons
+    // Loop over the master list to create the buttons
     allSportsToShow.forEach(sport => {
       const btn = document.createElement("button");
       btn.textContent = sport;
       
-      // 'active' means it's currently in this league's sport list
       const active = leagueData.sports.includes(sport); 
       
-      btn.style.margin = "2px";
+      btn.style.margin = "0"; // Gap handles spacing
       btn.style.padding = "6px 10px";
       btn.style.borderRadius = "20px";
       btn.style.cursor = "pointer";
@@ -265,14 +269,11 @@ function initLeaguesTab() {
       btn.style.backgroundColor = active ? "#007BFF" : "white";
       btn.style.color = active ? "white" : "black";
       
-      // This toggle logic now handles BOTH adding and removing
       btn.onclick = () => {
         const idx = leagueData.sports.indexOf(sport);
         if (idx >= 0) {
-          // It's active, so REMOVE it
           leagueData.sports.splice(idx, 1);
         } else {
-          // It's inactive, so ADD it
           leagueData.sports.push(sport);
         }
         saveLeagues();
@@ -280,27 +281,32 @@ function initLeaguesTab() {
       };
       sportsContainer.appendChild(btn);
     });
+    section.appendChild(sportsContainer);
 
-    // --- END OF FIX ---
-
-    const customSportInput = document.createElement("input");
-    customSportInput.placeholder = "Other sport";
-    customSportInput.style.marginLeft = "6px";
+    // "Add new sport" input
+    const addSportWrapper = document.createElement("div");
+    addSportWrapper.style.marginTop = "8px";
     
-    // Create a shared function for adding the sport
+    const customSportInput = document.createElement("input");
+    customSportInput.placeholder = "Add new sport type";
+    customSportInput.style.marginLeft = "0";
+    
     const addCustomSport = () => {
       const val = customSportInput.value.trim();
-      if (val === "") return; // Do nothing if empty
+      if (val === "") return; 
 
-      if (leagueData.sports.includes(val)) {
-        customSportInput.value = ""; // Just clear it
-        return;
+      // 1. Register the sport globally
+      window.addGlobalSport?.(val);
+      
+      // 2. Add to this league's list
+      if (!leagueData.sports.includes(val)) {
+        leagueData.sports.push(val);
+        saveLeagues();
       }
-
-      leagueData.sports.push(val);
+      
+      // 3. Re-render the tab
       customSportInput.value = "";
-      saveLeagues();
-      initLeaguesTab(); // Re-render the whole tab to show the new button
+      initLeaguesTab(); 
     };
 
     customSportInput.onkeypress = e => {
@@ -308,16 +314,18 @@ function initLeaguesTab() {
         addCustomSport();
       }
     };
-    sportsContainer.appendChild(customSportInput);
+    addSportWrapper.appendChild(customSportInput);
 
     // Create the "Add" button
     const addCustomSportBtn = document.createElement("button");
     addCustomSportBtn.textContent = "Add";
     addCustomSportBtn.style.marginLeft = "4px";
     addCustomSportBtn.onclick = addCustomSport; // Assign the same logic
-    sportsContainer.appendChild(addCustomSportBtn);
+    addSportWrapper.appendChild(addCustomSportBtn);
+    
+    section.appendChild(addSportWrapper);
+    // --- END OF UPDATED Sports Section ---
 
-    section.appendChild(sportsContainer);
 
     // Teams
     const teamTitle = document.createElement("p");
