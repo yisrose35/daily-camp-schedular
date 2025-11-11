@@ -2,10 +2,8 @@
 // master_schedule_builder.js
 //
 // UPDATED:
-// - **MOVED** the "Run Optimizer" button and the local
-//   `runOptimizer` helper function to `daily_adjustments.js`.
-// - This file is now only responsible for building and
-//   assigning templates.
+// - **NEW TILE:** Added "Dismissal" as a new "pinned"
+//   event tile, just like "Lunch" and "Swim".
 // =================================================================
 
 (function() {
@@ -29,6 +27,8 @@ const TILES = [
     { type: 'swim', name: 'Swim', style: 'background: #bbdefb; border: 1px solid #1976d2;', description: "A 'pinned' event. The optimizer will block out this time for 'Swim' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
     { type: 'lunch', name: 'Lunch', style: 'background: #fbe9e7; border: 1px solid #d84315;', description: "A 'pinned' event. The optimizer will block out this time for 'Lunch' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
     { type: 'snacks', name: 'Snacks', style: 'background: #fff9c4; border: 1px solid #fbc02d;', description: "A 'pinned' event. The optimizer will block out this time for 'Snacks' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
+    // --- NEW TILE ADDED ---
+    { type: 'dismissal', name: 'Dismissal', style: 'background: #ffebee; border: 1px solid #c62828;', description: "A 'pinned' event. The optimizer will block out this time for 'Dismissal' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
     { type: 'custom', name: 'Custom Pinned Event', style: 'background: #eee; border: 1px solid #616161;', description: "A 'pinned' event. You will be asked to give it a custom name (e.g., 'Assembly' or 'Trip'). The optimizer will block out this time and will not schedule anything else here." }
 ];
 
@@ -38,14 +38,16 @@ function mapEventNameForOptimizer(name) {
     if (lowerName === 'activity') return { type: 'slot', event: 'General Activity Slot' };
     if (lowerName === 'sports') return { type: 'slot', event: 'Sports Slot' };
     if (lowerName === 'special activity' || lowerName === 'special') return { type: 'slot', event: 'Special Activity' };
-    if (lowerName === 'swim' || lowerName === 'lunch' || lowerName === 'snacks') return { type: 'pinned', event: name };
+    // --- NEWLY ADDED ---
+    if (lowerName === 'swim' || lowerName === 'lunch' || lowerName === 'snacks' || lowerName === 'dismissal') {
+        return { type: 'pinned', event: name };
+    }
     return { type: 'pinned', event: name };
 }
 
 
 /**
  * Main entry point. Called by index.html tab click.
- * --- UPDATED ---
  */
 function init() {
     container = document.getElementById("master-scheduler-content");
@@ -55,7 +57,6 @@ function init() {
     loadDailySkeleton();
     
     // 2. Build the main UI
-    // --- REMOVED scheduler-controls div and run-optimizer-btn ---
     container.innerHTML = `
         <div id="scheduler-template-ui" style="padding: 15px; background: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 20px;">
             </div>
@@ -242,20 +243,18 @@ function renderTemplateUI() {
     const loadSelect = document.getElementById("template-load-select");
     const saveNameInput = document.getElementById("template-save-name");
 
-    // Load button
     loadSelect.onchange = () => {
         const name = loadSelect.value;
         if (name && savedSkeletons[name]) {
             if (confirm(`Load "${name}"? This will replace the current grid.`)) {
                 loadSkeletonToBuilder(name);
-                saveNameInput.value = name; // Pre-fill name for re-saving
+                saveNameInput.value = name;
             } else {
-                loadSelect.value = ""; // Reset dropdown
+                loadSelect.value = ""; 
             }
         }
     };
     
-    // Save button
     document.getElementById("template-save-btn").onclick = () => {
         const name = saveNameInput.value.trim();
         if (!name) {
@@ -265,11 +264,10 @@ function renderTemplateUI() {
         if (confirm(`Save current schedule as "${name}"? This will overwrite any existing template with this name.`)) {
             window.saveSkeleton?.(name, dailySkeleton);
             alert("Template saved!");
-            renderTemplateUI(); // Re-render to update dropdowns
+            renderTemplateUI(); 
         }
     };
 
-    // Delete button
     document.getElementById("template-delete-btn").onclick = () => {
         const name = loadSelect.value;
         if (!name) {
@@ -279,17 +277,15 @@ function renderTemplateUI() {
         if (confirm(`Are you sure you want to permanently delete "${name}"?`)) {
             window.deleteSkeleton?.(name);
             alert("Template deleted!");
-            renderTemplateUI(); // Re-render
-            loadSkeletonToBuilder(null); // Load an empty grid
+            renderTemplateUI(); 
+            loadSkeletonToBuilder(null); 
         }
     };
 
-    // Populate day assignment dropdowns
     const assignmentSelects = uiContainer.querySelectorAll('.day-assignment select');
     assignmentSelects.forEach(select => {
         const day = select.dataset.day;
         const assignedTemplate = assignments[day] || "";
-        // Add a "None" option
         const noneOption = document.createElement('option');
         noneOption.value = "";
         noneOption.textContent = (day === "Default") ? "-- Use No Default --" : "-- Use Default --";
@@ -298,7 +294,6 @@ function renderTemplateUI() {
         select.value = assignedTemplate;
     });
 
-    // Save Assignments button
     document.getElementById("template-assign-save-btn").onclick = () => {
         const newAssignments = {};
         assignmentSelects.forEach(select => {
@@ -386,8 +381,6 @@ function renderGrid() {
     availableDivisions.forEach((divName, i) => {
         gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
         
-        // --- REMOVED Grayed-out area logic ---
-
         dailySkeleton.filter(ev => ev.division === divName).forEach(event => {
             const startMin = parseTimeToMinutes(event.startTime);
             const endMin = parseTimeToMinutes(event.endTime);
@@ -451,7 +444,23 @@ function addDropListeners(selector) {
             else if (tileData.type === 'special') eventName = 'Special Activity';
             else if (tileData.type === 'league' || tileData.type === 'specialty_league' || tileData.type === 'swim') eventName = tileData.name; 
             
-            if (tileData.type === 'split') {
+            // --- UPDATED to include 'dismissal' ---
+            if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'dismissal' || tileData.type === 'custom') {
+                eventType = 'pinned';
+                
+                if (tileData.type === 'custom') {
+                    eventName = prompt("Enter the name for this custom event (e.g., 'Snacks'):");
+                    if (!eventName) return;
+                    
+                    if (confirm("Does this event require scheduling (like 'General Activity')?\n\n- OK = Yes (it's a 'Slot' to be filled)\n- Cancel = No (it's a 'Pinned' event like 'Snacks')")) {
+                        eventType = 'slot';
+                    } else {
+                        eventType = 'pinned';
+                    }
+                } else {
+                    eventName = tileData.name;
+                }
+            } else if (tileData.type === 'split') {
                 const startTime = prompt(`Enter Start Time for the *full* block:`, defaultStartTime);
                 if (!startTime) return;
                 const endTime = prompt(`Enter End Time for the *full* block:`);
@@ -474,22 +483,6 @@ function addDropListeners(selector) {
                     endTime: endTime,
                     subEvents: [ event1, event2 ]
                 };
-
-            } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'custom') {
-                eventType = 'pinned';
-                
-                if (tileData.type === 'custom') {
-                    eventName = prompt("Enter the name for this custom event (e.g., 'Snacks'):");
-                    if (!eventName) return;
-                    
-                    if (confirm("Does this event require scheduling (like 'General Activity')?\n\n- OK = Yes (it's a 'Slot' to be filled)\n- Cancel = No (it's a 'Pinned' event like 'Snacks')")) {
-                        eventType = 'slot';
-                    } else {
-                        eventType = 'pinned';
-                    }
-                } else {
-                    eventName = tileData.name;
-                }
             }
 
             if (!newEvent) {
@@ -549,7 +542,7 @@ function renderEventTile(event, top, height) {
         else if (event.event === 'General Activity Slot') tile = TILES.find(t => t.type === 'activity');
         else if (event.event === 'Sports Slot') tile = TILES.find(t => t.type === 'sports');
         else if (event.event === 'Special Activity') tile = TILES.find(t => t.type === 'special');
-        else tile = TILES.find(t => t.type === 'custom');
+        else tile = TILES.find(t => t.type === 'custom'); 
     }
     
     const style = tile ? tile.style : 'background: #eee; border: 1px solid #616161;';
@@ -580,23 +573,14 @@ function renderEventTile(event, top, height) {
 // --- runOptimizer function REMOVED ---
 
 // --- Save/Load Skeleton ---
-
-/**
- * --- UPDATED: loadDailySkeleton ---
- * This function now loads the correct skeleton based on
- * the day of the week and assignments.
- */
 function loadDailySkeleton() {
     const assignments = window.getSkeletonAssignments?.() || {};
     const skeletons = window.getSavedSkeletons?.() || {};
     
-    // Get day of week (0=Sun, 1=Mon, ..., 6=Sat)
-    // We must parse the YYYY-MM-DD string safely
     const dateStr = window.currentScheduleDate || "";
     const [year, month, day] = dateStr.split('-').map(Number);
     let dayOfWeek = 0;
     if (year && month && day) {
-        // Note: month is 0-indexed for Date object
         const date = new Date(year, month - 1, day);
         dayOfWeek = date.getDay();
     }
@@ -604,25 +588,20 @@ function loadDailySkeleton() {
     const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     const todayName = dayNames[dayOfWeek];
 
-    let templateName = assignments[todayName]; // 1. Try to find a template for this specific day
+    let templateName = assignments[todayName]; 
     if (!templateName || !skeletons[templateName]) {
-        templateName = assignments["Default"]; // 2. Fall back to the "Default" template
+        templateName = assignments["Default"]; 
     }
     
-    let skeletonToLoad = skeletons[templateName]; // 3. Get the skeleton
+    let skeletonToLoad = skeletons[templateName]; 
     
     if (skeletonToLoad) {
-        // Deep-copy the skeleton so in-memory edits don't affect the saved template
         dailySkeleton = JSON.parse(JSON.stringify(skeletonToLoad));
     } else {
-        // 4. Final fallback: an empty skeleton
         dailySkeleton = [];
     }
 }
 
-/**
- * NEW: Loads a specific skeleton into the builder
- */
 function loadSkeletonToBuilder(name) {
     if (!name) {
         dailySkeleton = [];
@@ -635,7 +614,6 @@ function loadSkeletonToBuilder(name) {
             dailySkeleton = [];
         }
     }
-    // Re-render the grid with the newly loaded skeleton
     renderGrid();
 }
 
