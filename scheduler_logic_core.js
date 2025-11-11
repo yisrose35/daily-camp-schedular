@@ -2,15 +2,11 @@
 // This file is now the "OPTIMIZER"
 //
 // UPDATED:
-// - **CRITICAL FIX (League Overrides)**:
-//   - `loadAndFilterData` now loads `disabledLeagues` and
-//     `disabledSpecialtyLeagues` from the daily data.
-//   - (Pass 3) `runSkeletonOptimizer` now checks the
-//     `disabledLeagues` list before scheduling a regular league.
-//   - (Pass 3.5) `runSkeletonOptimizer` now checks the
-//     `disabledSpecialtyLeagues` list before scheduling a
-//     specialty league.
-// - (Previous time-rule fixes remain)
+// - `loadAndFilterData` now loads the `limitUsage` property
+//   from fields/specials into `activityProperties`.
+// - `canBlockFit` now has a new check that enforces the
+//   `limitUsage` rules, checking for both division and
+//   (if applicable) specific bunk permissions.
 // -----------------------------------------------------------------
 
 (function() {
@@ -64,35 +60,38 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         return false; 
     }
     
-    // --- UPDATED: Load new disabledLeague lists ---
     const { 
         divisions, 
         availableDivisions,
-        activityProperties, // This now contains resolved time rules
+        activityProperties, // This now contains resolved time rules & limitUsage
         allActivities,
         h2hActivities,
         fieldsBySport,
         masterLeagues,
         masterSpecialtyLeagues,
         yesterdayHistory,
-        disabledLeagues, // <-- NEW
-        disabledSpecialtyLeagues // <-- NEW
+        disabledLeagues,
+        disabledSpecialtyLeagues
     } = loadAndFilterData();
     
     let fieldUsageBySlot = {}; 
     
     // ===== PASS 1: Generate Master Time Grid =====
-    let earliestMin = 1440; 
-    let latestMin = 0;
-    manualSkeleton.forEach(item => {
-        const start = parseTimeToMinutes(item.startTime);
-        const end = parseTimeToMinutes(item.endTime);
-        if (start != null && start < earliestMin) earliestMin = start;
-        if (end != null && end > latestMin) latestMin = end;
-    });
-    if (earliestMin === 1440 || latestMin === 0) {
-        earliestMin = 540; latestMin = 960; 
-    }
+    // --- UPDATED: Load global times from app1 settings ---
+    const globalSettings = window.loadGlobalSettings?.() || {};
+    const app1Data = globalSettings.app1 || {};
+    // Use fallback defaults if values are empty strings
+    const globalStart = app1Data.globalStartTime || "9:00 AM";
+    const globalEnd = app1Data.globalEndTime || "4:00 PM";
+    
+    let earliestMin = parseTimeToMinutes(globalStart);
+    let latestMin = parseTimeToMinutes(globalEnd);
+
+    // Failsafe if times are invalid
+    if (earliestMin == null) earliestMin = 540; // 9:00 AM
+    if (latestMin == null) latestMin = 960; // 4:00 PM
+    if (latestMin <= earliestMin) latestMin = earliestMin + 60; // Ensure at least 1 hour
+
     const baseDate = new Date(1970, 0, 1, 0, 0, 0); 
     let currentMin = earliestMin;
     while (currentMin < latestMin) {
@@ -210,6 +209,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const allBunksInGroup = Array.from(group.bunks);
         const scheduledGames = []; 
         let gameIndex = 0;
+        // NOTE: The blockBase for leagues does NOT have a 'bunk' property.
+        // canBlockFit() is designed to handle this.
         const blockBase = { slots: group.slots, divName: group.divName };
 
         for (const [teamA, teamB] of matchups) {
@@ -426,7 +427,8 @@ function isTimeAvailable(slotIndex, fieldProps) {
 
 
 /**
- * UPDATED: This function now checks time-based availability.
+ * UPDATED: This function now checks time-based availability
+ * AND the new bunk/division limits.
  */
 function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     if (!fieldName) return false;
@@ -437,17 +439,47 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     }
     const limit = (props && props.sharable) ? 2 : 1;
 
-    // Check 1: Division allowance
+    // Check 1: Division allowance (from Sharing)
     if (props && props.allowedDivisions && props.allowedDivisions.length && !props.allowedDivisions.includes(block.divName)) return false;
 
+    // --- NEW: Check 2: Bunk/Division Limit (from limitUsage) ---
+    const limitRules = props.limitUsage;
+    if (limitRules && limitRules.enabled) {
+        // "Specific" rules are on
+        if (!limitRules.divisions[block.divName]) {
+            // This entire division is NOT in the allowed list
+            return false;
+        }
+        
+        const allowedBunks = limitRules.divisions[block.divName];
+        if (allowedBunks.length > 0) {
+            // Specific bunks are listed
+            if (!block.bunk) {
+                // This is a league pass (no bunk). Since the division
+                // is specified, we'll allow it at the division level.
+                // This assumes if you want a league for a division,
+                // you wouldn't restrict the field from that division.
+                // This is a reasonable assumption for league scheduling.
+            } else if (!allowedBunks.includes(block.bunk)) {
+                // This is a specific bunk, and it's NOT in the list
+                return false;
+            }
+        }
+        // If we are here, it's either:
+        // 1. The division is in the list, and the allowedBunks array is empty (meaning "all bunks")
+        // 2. The division is in the list, and this specific bunk is in the allowedBunks array
+    }
+    // --- END OF NEW CHECK ---
+
+    // Check 3 & 4: Usage per slot & Time-based availability
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) return false; 
         
-        // Check 2: Usage per slot
+        // Check 3: Usage per slot
         const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
         if (used >= limit) return false;
         
-        // Check 3: NEW: Time-based availability
+        // Check 4: Time-based availability
         if (!isTimeAvailable(slotIndex, props)) {
             return false; // This slot is blocked by an override
         }
@@ -500,7 +532,7 @@ function pairRoundRobin(teamList) {
 // --- START OF UPDATED FUNCTION ---
 /**
  * UPDATED: This function is rewritten to process new `timeRules`
- * and load the new `disabled...` league lists.
+ * and load the new `limitUsage` lists.
  */
 function loadAndFilterData() {
     const globalSettings = window.loadGlobalSettings?.() || {};
@@ -576,7 +608,7 @@ function loadAndFilterData() {
             available: isMasterAvailable, // The master toggle
             sharable: f.sharableWith?.type === 'all' || f.sharableWith?.type === 'custom',
             allowedDivisions: (f.sharableWith?.divisions?.length > 0) ? f.sharableWith.divisions : availableDivisions,
-            limitUsage: f.limitUsage,
+            limitUsage: f.limitUsage || { enabled: false, divisions: {} }, // <-- NEW
             timeRules: finalRules // The parsed list of {type, startMin, endMin}
         };
 
