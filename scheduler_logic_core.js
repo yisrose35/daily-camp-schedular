@@ -1,14 +1,13 @@
-// -------------------- scheduler_logic_core.js --------------------
+// =================================================================
+// scheduler_logic_core.js
 //
-// UPDATED (Phase 2b - League Sport Rotation):
-// - **Pass 3 (Leagues):**
-//   - Now loads `leagueSportRotationIndex` for the current league.
-//   - Assigns sports using this index instead of starting from 0.
-//   - Saves the *next* sport index back to `window.currentDailyData`
-//     for the next day to use.
-// - **Pass 3.5 (Specialty Leagues):**
-//   - Implemented the *exact same* rotation logic for specialty leagues.
-// -----------------------------------------------------------------
+// UPDATED:
+// - **CRITICAL BUG FIX:** `findSlotsForRange` was only checking
+//   if a slot *started* within a block. It's now fixed to check
+//   if a slot *overlaps* with a block (StartA < EndB && EndA > StartB).
+//   This fixes the bug where short pinned events like "Snacks"
+//   were not being placed on the grid.
+// =================================================================
 
 (function() {
 'use strict';
@@ -64,7 +63,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     const { 
         divisions, 
         availableDivisions,
-        activityProperties, // This now contains resolved time rules & limitUsage
+        activityProperties, 
         allActivities,
         h2hActivities,
         fieldsBySport,
@@ -120,7 +119,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         if (!allBunks || allBunks.length === 0) return;
         const startMin = parseTimeToMinutes(item.startTime);
         const endMin = parseTimeToMinutes(item.endTime);
-        const allSlots = findSlotsForRange(startMin, endMin);
+        const allSlots = findSlotsForRange(startMin, endMin); // <-- This now works
+        
         if (allSlots.length === 0) return;
 
         if (item.type === 'pinned') {
@@ -182,7 +182,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         leagueGroups[key].bunks.add(block.bunk);
     });
 
-    // --- NEW: Load the rotation index object for *all* leagues ---
     let leagueSportRotationIndex = window.currentDailyData?.leagueSportRotationIndex || {};
 
     Object.values(leagueGroups).forEach(group => {
@@ -212,7 +211,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const allBunksInGroup = Array.from(group.bunks);
         const scheduledGames = []; 
         
-        // --- NEW: Load the specific index for THIS league ---
         let sportIndex = leagueSportRotationIndex[divLeagueName] || 0;
         
         const blockBase = { slots: group.slots, divName: group.divName };
@@ -220,9 +218,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         for (const [teamA, teamB] of matchups) {
             if (teamA === "BYE" || teamB === "BYE") continue;
             
-            // --- NEW: Use the rotating index ---
             const sport = sports[sportIndex % sports.length];
-            sportIndex++; // Increment *after* using
+            sportIndex++; 
             
             const possibleFields = fieldsBySport[sport] || [];
             let fieldName = null;
@@ -251,7 +248,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             scheduledGames.push(pick);
         }
         
-        // --- NEW: Save the *next* starting index for this league ---
         leagueSportRotationIndex[divLeagueName] = sportIndex;
         
         allBunksInGroup.forEach((bunk, bunkIndex) => {
@@ -299,12 +295,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const scheduledGames = []; 
         const blockBase = { slots: group.slots, divName: group.divName };
         const gamesPerField = Math.ceil(matchups.length / leagueFields.length);
-
-        // --- NEW: Specialty leagues get their *own* sport rotation index ---
-        // Note: Specialty Leagues are simpler: they only have *one* sport,
-        // so we don't need to rotate. But we use the same *matchup* rotation.
-        // If you ever allow multiple sports for specialty leagues,
-        // you would add the same sportIndex logic here.
         
         for (let i = 0; i < matchups.length; i++) {
             const [teamA, teamB] = matchups[i];
@@ -358,7 +348,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     
     // ===== PASS 5: Save unifiedTimes and Update the UI =====
     
-    // --- NEW: Save the updated rotation index for next time ---
     window.saveCurrentDailyData?.("leagueSportRotationIndex", leagueSportRotationIndex);
     
     window.saveCurrentDailyData?.("unifiedTimes", window.unifiedTimes); 
@@ -368,18 +357,31 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 }
 
 // --- Helper functions for Pass 3 & 4 ---
+
+// --- CRITICAL BUG FIX ---
+/**
+ * Finds all slot indices that OVERLAP with a given time range.
+ * @param {number} startMin The start of the block (in minutes).
+ * @param {number} endMin The end of the block (in minutes).
+ */
 function findSlotsForRange(startMin, endMin) {
     const slots = [];
-    if (!window.unifiedTimes) return slots;
+    if (!window.unifiedTimes || !startMin || !endMin) return slots;
+    
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
-        const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-        if (slotStart >= startMin && slotStart < endMin) {
+        const slotStartMin = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+        const slotEndMin = slotStartMin + INCREMENT_MINS;
+        
+        // Overlap check: (StartA < EndB) and (EndA > StartB)
+        if (slotStartMin < endMin && slotEndMin > startMin) {
             slots.push(i);
         }
     }
     return slots;
 }
+// --- END BUG FIX ---
+
 function markFieldUsage(block, fieldName, fieldUsageBySlot) {
     if (!fieldName || fieldName === "No Field" || !window.allSchedulableNames.includes(fieldName)) {
         return;
@@ -636,8 +638,7 @@ function loadAndFilterData() {
     
     const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
     
-    // --- UPDATED: Load 7 days of history for the rotation ---
-    const yesterdayData = window.loadPreviousDailyData?.() || {}; // Still needed for H2H
+    const yesterdayData = window.loadPreviousDailyData?.() || {}; 
     const yesterdayHistory = {
         schedule: yesterdayData.scheduleAssignments || {},
         leagues: yesterdayData.leagueAssignments || {}
