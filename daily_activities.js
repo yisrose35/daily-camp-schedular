@@ -1,3 +1,4 @@
+
 // dailyActivities.js — Fixed Daily Activities
 // (Lunch/Mincha/Swim/etc.)
 // NEW: Added Pre- and Post-activity buffer times (e.g., "Changing" for Swim)
