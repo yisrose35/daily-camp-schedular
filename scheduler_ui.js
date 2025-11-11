@@ -1,16 +1,13 @@
-(function(){
-'use strict';
-
-// =================================================================
-// scheduler_ui.js
+// -------------------- scheduler_ui.js --------------------
+// UI-only: rendering, save/load, init, and window exports.
 //
-// UPDATED (CRITICAL BUG FIX):
-// - renderStaggeredView: fixed duplicate rows via per-division unique filter
-// - findFirstSlotForTime: robust overlap check for short events
-// - Added proper IIFE wrapper and clean exports
-// - Verified balanced braces; removed stray closing brace
-// - Ensured window.* exports are assigned unconditionally
-// =================================================================
+// UPDATED:
+// - Removed the "Fixed Block" / "Staggered" toggle logic.
+// - `updateTable` now *only* calls `renderStaggeredView`.
+// - `initScheduleSystem` no longer looks for the toggle.
+// - Deleted the entire `renderFixedBlockView` function as it
+//   is no longer used.
+// -----------------------------------------------------------------
 
 // ===== HELPERS =====
 const INCREMENT_MINS = 30; // Base optimizer grid size
@@ -34,26 +31,22 @@ function parseTimeToMinutes(str) {
     }
     return hh * 60 + mm;
 }
-
 function fieldLabel(f) {
     if (typeof f === "string") return f;
     if (f && typeof f === "object" && typeof f.name === "string") return f.name;
     return "";
 }
-
 function fmtTime(d) {
     if (!d) return "";
     if (typeof d === 'string') {
         d = new Date(d);
     }
-    let h = d.getHours();
-    const m = d.getMinutes().toString().padStart(2,"0");
-    const ap = h >= 12 ? "PM" : "AM";
-    h = h % 12 || 12;
+    let h = d.getHours(), m = d.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12;
     return `${h}:${m} ${ap}`;
 }
-
-/** Converts minutes (e.g., 740) to a 12-hour string (e.g., "12:20 PM") */
+/**
+ * NEW Helper: Converts minutes (e.g., 740) to a 12-hour string (e.g., "12:20 PM")
+ */
 function minutesToTimeLabel(min) {
     if (min == null) return "";
     let h = Math.floor(min / 60);
@@ -63,24 +56,64 @@ function minutesToTimeLabel(min) {
     return `${h}:${m} ${ap}`;
 }
 
-// ===== Main updateTable function =====
+
+// ===== NEW: Main updateTable function =====
+/**
+ * UPDATED: This function no longer checks for a toggle
+ * and *only* calls renderStaggeredView.
+ */
 function updateTable() {
     const container = document.getElementById("scheduleTable");
     if (!container) return;
+    
+    // const toggle = document.getElementById("schedule-view-toggle"); // No longer needed
+    
+    // if (toggle && toggle.checked) {
+    //     renderStaggeredView(container);
+    // } else {
+    //     renderFixedBlockView(container);
+    // }
+    
     // Always render the Staggered View
     renderStaggeredView(container);
 }
 
-/** Helper: get the schedule entry for a slot */
+/**
+ * Helper function to get the schedule entry for a slot.
+ */
 function getEntry(bunk, slotIndex) {
     const assignments = window.scheduleAssignments || {};
     if (bunk && assignments[bunk] && assignments[bunk][slotIndex]) {
         return assignments[bunk][slotIndex];
     }
-    return null;
+    return null; // Return null if empty or bunk is invalid
 }
 
-/** Helper: format a schedule entry into text */
+/**
+ * Helper to calculate rowspan for a given bunk/slot.
+ * NOTE: This is only used by the deleted renderFixedBlockView,
+ * but is kept in case it's useful for other views later.
+ */
+function calculateRowspan(bunk, slotIndex) {
+    let rowspan = 1;
+    if (!bunk) return 1; // Failsafe
+    const firstEntry = getEntry(bunk, slotIndex);
+    if (!firstEntry || !window.unifiedTimes) return 1;
+
+    for (let i = slotIndex + 1; i < window.unifiedTimes.length; i++) {
+        const nextEntry = getEntry(bunk, i);
+        if (nextEntry && nextEntry.continuation && nextEntry.field === firstEntry.field) {
+            rowspan++;
+        } else {
+            break;
+        }
+    }
+    return rowspan;
+}
+
+/**
+ * Helper to format a schedule entry into text.
+ */
 function formatEntry(entry) {
     if (!entry) return "";
     if (entry._h2h) {
@@ -95,38 +128,59 @@ function formatEntry(entry) {
 }
 
 /**
- * UPDATED: Fix for "Free" slots bug
- * Finds the *first* 30-min slot index that *overlaps* the custom block start
+ * NEW Helper: Finds the *first* 30-min slot index
+ * that matches the start time of a custom block.
  */
 function findFirstSlotForTime(startMin) {
-    if (!Array.isArray(window.unifiedTimes) || startMin == null) return -1;
+    if (!window.unifiedTimes) return -1;
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
-        const s = (slot.start instanceof Date) ? slot.start : new Date(slot.start);
-        const e = (slot.end instanceof Date) ? slot.end : new Date(slot.end);
-        const slotStart = s.getHours() * 60 + s.getMinutes();
-        const slotEnd = e.getHours() * 60 + e.getMinutes();
-        // Overlap test: (blockStart < slotEnd) && (blockStart + 1 > slotStart)
-        if (startMin < slotEnd && (startMin + 1) > slotStart) {
+        const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+        // Failsafe: find the closest one
+        if (slotStart >= startMin && slotStart < startMin + INCREMENT_MINS) {
             return i;
         }
     }
     return -1;
 }
 
-/** Renders the "Staggered" (YKLI) view */
+/**
+ * NEW Helper: Finds all 30-min slot indices within a time range.
+ * (Used by renderFixedBlockView, but not Staggered)
+ */
+function findSlotsForRange(startMin, endMin) {
+    const slots = [];
+    if (!window.unifiedTimes) return slots;
+    
+    for (let i = 0; i < window.unifiedTimes.length; i++) {
+        const slot = window.unifiedTimes[i];
+        const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+        
+        // Find any slot that *starts* within the block
+        if (slotStart >= startMin && slotStart < endMin) {
+            slots.push(i);
+        }
+    }
+    return slots;
+}
+
+
+/**
+ * Renders the "Staggered" (YKLI) view
+ * REWRITTEN to "flatten" split blocks and correctly render leagues.
+ */
 function renderStaggeredView(container) {
     container.innerHTML = "";
 
     const availableDivisions = window.availableDivisions || [];
     const divisions = window.divisions || {};
+    const scheduleAssignments = window.scheduleAssignments || {};
 
-    const dailyData = (typeof window.loadCurrentDailyData === 'function') ? (window.loadCurrentDailyData() || {}) : {};
-    // Read the same skeleton the optimizer used
+    const dailyData = window.loadCurrentDailyData?.() || {};
     const manualSkeleton = dailyData.manualSkeleton || [];
-
+    
     if (manualSkeleton.length === 0) {
-        container.innerHTML = "<p>No schedule built for this day. Go to the 'Daily Adjustments' tab to run the optimizer.</p>";
+        container.innerHTML = "<p>No schedule built for this day. Go to the 'Master Scheduler' tab to build one.</p>";
         return;
     }
 
@@ -137,7 +191,7 @@ function renderStaggeredView(container) {
     // --- 1. Build Header ---
     const thead = document.createElement("thead");
     const tr1 = document.createElement("tr"); // Division names
-    const tr2 = document.createElement("tr"); // Column titles (Time, Bunk 1...)
+    const tr2 = document.createElement("tr"); // Column titles (Time, Bunk 1, Bunk 2...)
 
     availableDivisions.forEach((div) => {
         const bunks = divisions[div]?.bunks || [];
@@ -189,13 +243,12 @@ function renderStaggeredView(container) {
             }
         });
         divBlocks.sort((a,b) => a.startMin - b.startMin);
-        // Unique by both time label and event name
         blocksByDivision[div] = divBlocks.filter((block, index, self) =>
-            index === self.findIndex((t) => (t.label === block.label && t.event === block.event))
+            index === self.findIndex((t) => (t.label === block.label))
         );
     });
 
-    // --- "Flatten" split blocks into halves ---
+    // --- NEW LOGIC: "Flatten" split blocks into two half-blocks ---
     const splitBlocksByDivision = {};
     let maxEvents = 0;
 
@@ -205,14 +258,16 @@ function renderStaggeredView(container) {
 
         originalBlocks.forEach(block => {
             if (block.type === 'split' && block.startMin != null && block.endMin != null) {
+                // Calculate midpoint, rounding to nearest minute
                 const midMin = Math.round(block.startMin + (block.endMin - block.startMin) / 2);
+                
                 // First half
                 flattenedBlocks.push({
                     ...block,
                     label: `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(midMin)}`,
                     startMin: block.startMin,
                     endMin: midMin,
-                    splitPart: 1
+                    splitPart: 1 // Mark as first half
                 });
                 // Second half
                 flattenedBlocks.push({
@@ -220,38 +275,51 @@ function renderStaggeredView(container) {
                     label: `${minutesToTimeLabel(midMin)} - ${minutesToTimeLabel(block.endMin)}`,
                     startMin: midMin,
                     endMin: block.endMin,
-                    splitPart: 2
+                    splitPart: 2 // Mark as second half
                 });
             } else {
+                // Not a split block, add as is
                 flattenedBlocks.push(block);
             }
         });
+        
         splitBlocksByDivision[div] = flattenedBlocks;
-        if (flattenedBlocks.length > maxEvents) maxEvents = flattenedBlocks.length;
+        if (flattenedBlocks.length > maxEvents) {
+            maxEvents = flattenedBlocks.length;
+        }
     });
+    // --- END OF NEW LOGIC ---
 
-    // --- Render rows, one per event index ---
+
+    // Now render the rows, one for each "event index"
     for (let i = 0; i < maxEvents; i++) {
         const tr = document.createElement("tr");
         
         availableDivisions.forEach(div => {
             const bunks = divisions[div]?.bunks || [];
+            // Use the NEW splitBlocksByDivision object
             const blocks = splitBlocksByDivision[div] || []; 
-            const eventBlock = blocks[i];
+            const eventBlock = blocks[i]; // Get the i-th event block for this division
             
-            // 1) TIME cell
+            // --- 1. Add the TIME cell for this division ---
             const tdTime = document.createElement("td");
             tdTime.style.border = "1px solid #ccc";
             tdTime.style.verticalAlign = "top";
             if (eventBlock) {
+                // The label is now pre-formatted (e.g., "12:20pm - 1:10pm")
                 tdTime.textContent = eventBlock.label; 
             } else {
                 tdTime.className = "grey-cell";
             }
             tr.appendChild(tdTime);
 
-            // 2) ACTIVITY cells (merged for leagues)
+            // --- 2. Add ACTIVITY cells (Merged or Individual) ---
+            
+            // --- START OF MODIFIED FIX ---
             if (eventBlock && (eventBlock.event === 'League Game' || eventBlock.event === 'Specialty League')) {
+            // --- END OF MODIFIED FIX ---
+            
+                // === LEAGUE GAME / SPECIALTY LEAGUE: MERGED CELL ===
                 const tdLeague = document.createElement("td");
                 tdLeague.colSpan = bunks.length;
                 tdLeague.style.verticalAlign = "top";
@@ -261,18 +329,21 @@ function renderStaggeredView(container) {
                 
                 const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
                 
+                // --- START OF NEW FORMATTING LOGIC ---
                 if (eventBlock.event === 'Specialty League') {
-                    // Group by field
+                    // --- NEW: Specialty League Formatting (Group by Field) ---
                     const gamesByField = new Map();
                     if (firstSlotIndex !== -1) {
-                        const uniqueMatchups = new Set(); 
+                        const uniqueMatchups = new Set(); // Prevent duplicates
                         bunks.forEach(bunk => {
                             const entry = getEntry(bunk, firstSlotIndex);
                             if (entry && entry._h2h && entry.sport) {
                                 if (!uniqueMatchups.has(entry.sport)) {
                                     uniqueMatchups.add(entry.sport);
                                     const field = fieldLabel(entry.field);
-                                    if (!gamesByField.has(field)) gamesByField.set(field, []);
+                                    if (!gamesByField.has(field)) {
+                                        gamesByField.set(field, []);
+                                    }
                                     gamesByField.get(field).push(entry.sport);
                                 }
                             }
@@ -284,15 +355,18 @@ function renderStaggeredView(container) {
                         html = '<p class="muted" style="margin:0; padding: 4px;">Specialty League</p>';
                     }
                     gamesByField.forEach((matchups, field) => {
+                        // Strip the sport name (e.g., "(Basketball)") from the end
                         const matchupNames = matchups.map(m => m.substring(0, m.lastIndexOf('(')).trim());
-                        html += `<div style="margin-bottom: 2px;"><strong>${matchupNames.join(', ')}</strong> - ${field}</div>`;
+                        html += `<div style="margin-bottom: 2px;">
+                                    <strong>${matchupNames.join(', ')}</strong> - ${field}
+                                 </div>`;
                     });
                     if (gamesByField.size > 0) { html += '</div>'; }
                     tdLeague.innerHTML = html;
 
                 } else {
-                    // Regular leagues (list)
-                    const games = new Map();
+                    // --- ORIGINAL: Regular League Formatting (List) ---
+                    let games = new Map();
                     if (firstSlotIndex !== -1) {
                         bunks.forEach(bunk => {
                             const entry = getEntry(bunk, firstSlotIndex);
@@ -301,26 +375,34 @@ function renderStaggeredView(container) {
                             }
                         });
                     }
+                    
                     let html = '<ul style="margin: 0; padding-left: 18px;">';
-                    if (games.size === 0) html = '<p class="muted" style="margin:0; padding: 4px;">Leagues</p>';
+                    if (games.size === 0) {
+                        html = '<p class="muted" style="margin:0; padding: 4px;">Leagues</p>';
+                    }
                     games.forEach((field, matchup) => {
                         html += `<li>${matchup} @ ${field}</li>`;
                     });
                     if (games.size > 0) { html += '</ul>'; }
                     tdLeague.innerHTML = html;
                 }
+                // --- END OF NEW FORMATTING LOGIC ---
+
                 tr.appendChild(tdLeague);
 
             } else {
-                // Regular / split games: individual bunk cells
+                // === REGULAR GAME / SPLIT GAME: INDIVIDUAL CELLS ===
                 bunks.forEach(bunk => {
                     const tdActivity = document.createElement("td");
                     tdActivity.style.border = "1px solid #ccc";
                     tdActivity.style.verticalAlign = "top";
                     
                     if (eventBlock) {
+                        // We just need to find the activity for the *start time*
+                        // of this specific block (which is now a half-block).
                         const slotIndex = findFirstSlotForTime(eventBlock.startMin);
                         const entry = getEntry(bunk, slotIndex);
+
                         if (entry) {
                             tdActivity.textContent = formatEntry(entry);
                             if (entry._h2h) {
@@ -330,6 +412,7 @@ function renderStaggeredView(container) {
                                 tdActivity.style.background = "#f1f1f1";
                             }
                         }
+                    
                     } else {
                         tdActivity.className = "grey-cell";
                     }
@@ -338,57 +421,78 @@ function renderStaggeredView(container) {
             }
         });
         tbody.appendChild(tr);
-    }
+    } 
 
     table.appendChild(tbody);
     container.appendChild(table);
 }
 
+
+/**
+ * =================================================================
+ * ===== renderFixedBlockView HAS BEEN DELETED =====================
+ * =================================================================
+ */
+// function renderFixedBlockView(container) { ... }
+// ... (The entire function is gone) ...
+
+
 // ===== Save/Load/Init =====
+
 function saveSchedule() {
     try {
-        if (typeof window.saveCurrentDailyData === 'function') {
-            window.saveCurrentDailyData("scheduleAssignments", window.scheduleAssignments);
-            window.saveCurrentDailyData("leagueAssignments", window.leagueAssignments);
-            window.saveCurrentDailyData("unifiedTimes", window.unifiedTimes);
-        }
+        window.saveCurrentDailyData?.("scheduleAssignments", window.scheduleAssignments);
+        window.saveCurrentDailyData?.("leagueAssignments", window.leagueAssignments);
+        window.saveCurrentDailyData?.("unifiedTimes", window.unifiedTimes);
     } catch (e) {
-        // no-op
+        // save failed
     }
 }
 
 function reconcileOrRenderSaved() {
     try {
-        const data = (typeof window.loadCurrentDailyData === 'function') ? (window.loadCurrentDailyData() || {}) : {};
+        const data = window.loadCurrentDailyData?.() || {};
         window.scheduleAssignments = data.scheduleAssignments || {};
         window.leagueAssignments = data.leagueAssignments || {};
+        
         const savedTimes = data.unifiedTimes || [];
         window.unifiedTimes = savedTimes.map(slot => ({
             ...slot,
-            start: (slot.start instanceof Date) ? slot.start : new Date(slot.start),
-            end: (slot.end instanceof Date) ? slot.end : new Date(slot.end)
+            start: new Date(slot.start),
+            end: new Date(slot.end)
         }));
+
     } catch (e) {
         window.scheduleAssignments = {};
         window.leagueAssignments = {};
         window.unifiedTimes = [];
     }
-    updateTable();
+    
+    updateTable(); // This will now call the correct renderer
 }
 
+/**
+ * UPDATED: This function no longer looks for the toggle.
+ */
 function initScheduleSystem() {
     try {
-        if (!window.scheduleAssignments) window.scheduleAssignments = {};
-        if (!window.leagueAssignments) window.leagueAssignments = {};
+        window.scheduleAssignments = window.scheduleAssignments || {};
+        window.leagueAssignments = window.leagueAssignments || {};
         reconcileOrRenderSaved();
+        
+        // const toggle = document.getElementById("schedule-view-toggle"); // No longer needed
+        // if (toggle) {
+        //     toggle.onchange = () => {
+        //         updateTable();
+        //     };
+        // }
+        
     } catch (e) {
         updateTable();
     }
 }
 
 // ===== Exports =====
-window.updateTable = updateTable;
-window.initScheduleSystem = initScheduleSystem;
-window.saveSchedule = saveSchedule;
-
-})();
+window.updateTable = window.updateTable || updateTable;
+window.initScheduleSystem = window.initScheduleSystem || initScheduleSystem;
+window.saveSchedule = window.saveSchedule || saveSchedule;
