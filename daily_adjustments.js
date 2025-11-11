@@ -1,15 +1,10 @@
 // =================================================================
-// daily_adjustments.js (RENAMED from daily_overrides.js)
+// daily_adjustments.js
 //
 // UPDATED:
-// - Renamed init function to `initDailyAdjustments` and
-//   changed export to `window.initDailyAdjustments`.
-// - `init` function now searches for `daily-adjustments-content`.
-// - **NEW:** "Run Optimizer" button and its logic have been
-//   moved here from `master_schedule_builder.js`.
-// - The button is added to the top of the tab.
-// - The `runOptimizer` helper function is now part of this file
-//   and correctly uses `dailyOverrideSkeleton`.
+// - **NEW TILE:** Added "Dismissal" to the `TILES` array.
+// - `addDropListeners`: Updated to handle `tileData.type === 'dismissal'`
+//   as a new pinned event, just like "Lunch" or "Snacks".
 // =================================================================
 
 (function() {
@@ -46,6 +41,7 @@ let dailyOverrideSkeleton = [];
 const PIXELS_PER_MINUTE = 2;
 const INCREMENT_MINS = 30;
 
+// --- UPDATED TILES array with descriptions ---
 const TILES = [
     { type: 'activity', name: 'Activity', style: 'background: #e0f7fa; border: 1px solid #007bff;', description: "A flexible slot. The optimizer will fill this with the best available Sport OR Special Activity based on availability and rotation." },
     { type: 'sports', name: 'Sports', style: 'background: #dcedc8; border: 1px solid #689f38;', description: "A dedicated sports slot. The optimizer will fill this *only* with a Sport (e.g., Basketball, Soccer) from your 'Fields' list." },
@@ -56,6 +52,8 @@ const TILES = [
     { type: 'swim', name: 'Swim', style: 'background: #bbdefb; border: 1px solid #1976d2;', description: "A 'pinned' event. The optimizer will block out this time for 'Swim' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
     { type: 'lunch', name: 'Lunch', style: 'background: #fbe9e7; border: 1px solid #d84315;', description: "A 'pinned' event. The optimizer will block out this time for 'Lunch' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
     { type: 'snacks', name: 'Snacks', style: 'background: #fff9c4; border: 1px solid #fbc02d;', description: "A 'pinned' event. The optimizer will block out this time for 'Snacks' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
+    // --- NEW TILE ADDED ---
+    { type: 'dismissal', name: 'Dismissal', style: 'background: #607d8b; color: white; border: 1px solid #37474f;', description: "A 'pinned' event. The optimizer will block out this time for 'Dismissal' and will not schedule anything else here." },
     { type: 'custom', name: 'Custom Pinned Event', style: 'background: #eee; border: 1px solid #616161;', description: "A 'pinned' event. You will be asked to give it a custom name (e.g., 'Assembly' or 'Trip'). The optimizer will block out this time and will not schedule anything else here." }
 ];
 
@@ -150,6 +148,7 @@ function renderGrid(gridContainer) {
     addDropListeners(gridContainer);
     addRemoveListeners(gridContainer);
 }
+
 function addDropListeners(gridContainer) {
     gridContainer.querySelectorAll('.grid-cell').forEach(cell => {
         cell.ondragover = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; cell.style.backgroundColor = '#e0ffe0'; };
@@ -180,7 +179,8 @@ function addDropListeners(gridContainer) {
                 const event1 = mapEventNameForOptimizer(eventName1);
                 const event2 = mapEventNameForOptimizer(eventName2);
                 newEvent = { id: `evt_${Math.random().toString(36).slice(2, 9)}`, type: 'split', event: `${eventName1} / ${eventName2}`, division: divName, startTime: startTime, endTime: endTime, subEvents: [ event1, event2 ] };
-            } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'custom') {
+            // --- UPDATED: Added 'dismissal' ---
+            } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'dismissal' || tileData.type === 'custom') {
                 eventType = 'pinned';
                 if (tileData.type === 'custom') {
                     eventName = prompt("Enter the name for this custom event (e.g., 'Snacks'):"); if (!eventName) return;
@@ -364,7 +364,6 @@ function parseTimeToMinutes(str) {
 * Main entry point. Called by index.html tab click or calendar.js date change.
 */
 function init() {
-  // --- UPDATED: Look for new ID ---
   container = document.getElementById("daily-adjustments-content");
   if (!container) {
     console.error("Daily Adjustments: Could not find container #daily-adjustments-content");
@@ -373,7 +372,6 @@ function init() {
 
   console.log("Daily Adjustments: Initializing for", window.currentScheduleDate);
   
-  // --- UPDATED: Added "Run Optimizer" button ---
   container.innerHTML = `
     <div style="padding: 10px 15px; background: #fff; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
         <div>
@@ -437,7 +435,6 @@ function init() {
             cursor: pointer;
             background: #fff;
             font-size: 0.95em;
-            /* NEW: Flex layout for toggle */
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -480,10 +477,8 @@ function init() {
     </style>
   `;
 
-  // --- NEW: Hook up the optimizer button ---
   document.getElementById("run-optimizer-btn").onclick = runOptimizer;
 
-  // Get references to the containers
   skeletonContainer = document.getElementById("override-scheduler-content");
   tripsFormContainer = document.getElementById("trips-form-container");
   
@@ -502,19 +497,17 @@ function init() {
 
   // 2. Load the data for the *current* day
   const dailyData = window.loadCurrentDailyData?.() || {};
-  const dailyOverrides = dailyData.overrides || {}; // Get the whole overrides object
+  const dailyOverrides = dailyData.overrides || {}; 
   
   currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
   currentOverrides.leagues = dailyOverrides.leagues || [];
   currentOverrides.disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
   currentOverrides.dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {}; 
   
-  // --- NEW: Load disabled fields/specials ---
   currentOverrides.disabledFields = dailyOverrides.disabledFields || [];
   currentOverrides.disabledSpecials = dailyOverrides.disabledSpecials || [];
   
   
-  // --- One-time migration from old system (can stay) ---
   if (dailyData.fieldAvailability) {
     console.log("Daily Overrides: Migrating old 'fieldAvailability' overrides...");
     const oldRules = dailyData.fieldAvailability || {};
@@ -534,7 +527,6 @@ function init() {
     });
     window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
   }
-  // --- End Migration ---
 
   // 3. Render ALL UI sections
   initDailySkeletonUI(); // Render the skeleton editor
