@@ -1,9 +1,9 @@
 // =================================================================
 // calendar.js
-// This is the new "brain" of the application.
 //
-// NEW: Added function to erase all daily schedule data.
-//
+// UPDATED:
+// - `onDateChanged`: Changed reference from
+//   `initDailyOverrides` to `initDailyAdjustments`.
 // =================================================================
 
 (function() {
@@ -30,8 +30,6 @@
     
     let datePicker; 
     
-    // ===== REMOVED DOMCONTENTLOADED LISTENER HERE =====
-
     /**
      * Fired when the user changes the date in the calendar.
      */
@@ -43,27 +41,27 @@
         window.currentScheduleDate = newDate;
         
         window.loadCurrentDailyData();
-        window.initScheduleSystem?.(); // Reloads schedule in app2.js
-        window.initDailyOverrides?.(); // Reloads overrides tab
+        window.initScheduleSystem?.(); // Reloads schedule
+        window.initDailyAdjustments?.(); // <-- UPDATED
+        
+        // If the master scheduler is the active tab, re-init it
+        // to load the correct skeleton for the new day.
+        if (document.getElementById('master-scheduler')?.classList.contains('active')) {
+            window.initMasterScheduler?.();
+        }
     }
 
     // --- 3. NEW GLOBAL DATA API ---
 
-    /**
-     * [GLOBAL] Loads the entire "Global Settings" object (bunks, fields, etc.)
-     */
     window.loadGlobalSettings = function() {
         try {
             const newData = localStorage.getItem(GLOBAL_SETTINGS_KEY);
             if (newData) {
                 return JSON.parse(newData);
             }
-
             console.warn("New settings key not found. Attempting to migrate old data...");
-            
             let newSettings = {};
             let didMigrate = false;
-
             const oldApp1Data = localStorage.getItem("campSchedulerData");
             if (oldApp1Data) {
                 newSettings.app1 = JSON.parse(oldApp1Data);
@@ -71,7 +69,6 @@
                 didMigrate = true;
                 console.log("Migrated old app1 data.");
             }
-
             const oldLeaguesData = localStorage.getItem("leagues");
             if (oldLeaguesData) {
                 newSettings.leaguesByName = JSON.parse(oldLeaguesData);
@@ -79,7 +76,6 @@
                 didMigrate = true;
                 console.log("Migrated old leagues data.");
             }
-
             const oldFixedData = localStorage.getItem("fixedActivities_v2") || localStorage.getItem("fixedActivities");
             if (oldFixedData) {
                 newSettings.fixedActivities = JSON.parse(oldFixedData);
@@ -88,25 +84,18 @@
                 didMigrate = true;
                 console.log("Migrated old fixed activities data.");
             }
-
             if (didMigrate) {
                 console.log("Migration successful. Saving to new global settings.", newSettings);
                 localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(newSettings));
                 return newSettings;
             }
-
             return {};
-
         } catch (e) {
             console.error("Failed to load/migrate global settings:", e);
             return {};
         }
     }
 
-
-    /**
-     * [GLOBAL] Saves one piece of the "Global Settings"
-     */
     window.saveGlobalSettings = function(key, data) {
         try {
             const settings = window.loadGlobalSettings();
@@ -117,9 +106,6 @@
         }
     }
 
-    /**
-     * [DAILY] Loads the *entire* daily data object (all dates).
-     */
     window.loadAllDailyData = function() {
         try {
             const data = localStorage.getItem(DAILY_DATA_KEY);
@@ -130,9 +116,6 @@
         }
     }
     
-    /**
-     * [DAILY] Gets the data object *for the currently selected date*.
-     */
     window.loadCurrentDailyData = function() {
         const allData = window.loadAllDailyData();
         const date = window.currentScheduleDate;
@@ -151,9 +134,6 @@
         return window.currentDailyData;
     }
 
-    /**
-     * [DAILY] (FIX 13) Gets the data object *for the previous day*.
-     */
     window.loadPreviousDailyData = function() {
         try {
             const [year, month, day] = window.currentScheduleDate.split('-').map(Number);
@@ -171,9 +151,6 @@
         }
     }
 
-    /**
-     * [DAILY] Saves a piece of data *to the currently selected date*.
-     */
     window.saveCurrentDailyData = function(key, data) {
         try {
             const allData = window.loadAllDailyData();
@@ -216,15 +193,11 @@
             };
         }
     }
-    // ===== REMOVED DOMCONTENTLOADED LISTENER HERE =====
 
     // Initial load on script start
     window.loadCurrentDailyData();
 
     // --- 5. NEW: ERASE CURRENT DAY FUNCTION ---
-    /**
-     * [DAILY] Erases all schedule data for the currently selected date.
-     */
     window.eraseCurrentDailyData = function() {
         try {
             const allData = window.loadAllDailyData();
@@ -235,9 +208,8 @@
                 localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allData));
                 console.log(`Erased schedule data for ${date}.`);
                 
-                // Reload the (now empty) data and refresh the table
-                window.loadCurrentDailyData(); // This will create a new, empty object
-                window.initScheduleSystem?.(); // This will render the empty schedule
+                window.loadCurrentDailyData();
+                window.initScheduleSystem?.();
             }
         } catch (e) {
             console.error(`Failed to erase daily data for ${date}:`, e);
@@ -245,15 +217,10 @@
     }
     
     // --- 6. NEW: ERASE ALL SCHEDULES FUNCTION ---
-    /**
-     * [DAILY] Erases ALL daily data but leaves GLOBAL settings.
-     */
     window.eraseAllDailyData = function() {
         try {
-            // This just removes the daily data key
             localStorage.removeItem(DAILY_DATA_KEY);
             
-            // Also clean up old stray keys
             localStorage.removeItem("scheduleAssignments");
             localStorage.removeItem("leagueAssignments");
             localStorage.removeItem("camp_league_round_state");
@@ -261,8 +228,6 @@
 
             console.log("Erased ALL daily schedules.");
             
-            // Reload the page, which will reload global settings
-            // and create a new, empty daily data object.
             window.location.reload();
             
         } catch (e) {
@@ -274,7 +239,6 @@
     // ===== START OF NEW INIT FUNCTION =====
     // =============================================
     function initCalendar() {
-      // From the first listener
       datePicker = document.getElementById("calendar-date-picker");
       if (datePicker) {
         datePicker.value = window.currentScheduleDate;
@@ -283,7 +247,6 @@
         console.error("CRITICAL: calendar-date-picker element not found in index.html");
       }
     
-      // From the second listener
       setupEraseAll();
     }
     window.initCalendar = initCalendar;
