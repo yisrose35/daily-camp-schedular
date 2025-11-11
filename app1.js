@@ -2,11 +2,14 @@
 // app1.js
 //
 // UPDATED:
-// - **REMOVED** all references to the `division.timeline` property
-//   from `addDivision`, `saveData`, and `loadData`. It is no
-//   longer needed.
-// - All logic for "Global Camp Times" and the "Update" button
-//   remains intact.
+// - **NEW:** Manages a global `allSports` list.
+// - `loadData` now initializes this list with your new
+//   pre-made sports if it doesn't exist.
+// - `saveData` now saves this list.
+// - **NEW Global Functions:**
+//   - `window.getAllGlobalSports()`: Lets other files read the list.
+//   - `window.addGlobalSport(sportName)`: Lets other files (like
+//     Fields and Leagues) add new sports to the master list.
 // =================================================================
 
 (function() {
@@ -19,9 +22,16 @@ let divisions = {}; // { divName:{ bunks:[], color } }
 let availableDivisions = [];
 let selectedDivision = null;
 
-// NEW: Global time settings default to empty
 let globalStartTime = "";
 let globalEndTime = "";
+
+// NEW: Master list of all sports
+let allSports = [];
+// NEW: User-defined default sports list
+const defaultSports = [
+    "Baseball", "Basketball", "Football", "Hockey", "Kickball", 
+    "Lacrosse", "Newcomb", "Punchball", "Soccer", "Volleyball"
+];
 
 const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
 let colorIndex = 0;
@@ -150,7 +160,6 @@ function addDivision() {
         divisions[name] = { 
             bunks: [], 
             color
-            // --- REMOVED timeline property ---
         };
         
         window.divisions = divisions; // keep global in sync
@@ -225,14 +234,6 @@ if (enableColorEl) {
     enableColorEl.addEventListener("change", setupDivisionButtons);
 }
 
-// -------------------- Division Timeline Editor (REMOVED) --------------------
-// The UI for editing timelines is gone, but the data property remains.
-
-// -------------------- Fields / Specials (ALL REMOVED) --------------------
-// All logic moved to fields.js and special_activities.js
-// -----------------------------------------------------------------------
-
-
 // -------------------- Local Storage (UPDATED) --------------------
 function saveData() {
     const data = { 
@@ -242,6 +243,7 @@ function saveData() {
         selectedDivision,
         globalStartTime, // NEW
         globalEndTime,   // NEW
+        allSports // NEW: Save the master sports list
     };
     window.saveGlobalSettings?.("app1", data);
 }
@@ -256,8 +258,6 @@ function loadData() {
             ? data.availableDivisions.slice()
             : Object.keys(divisions);
         
-        // --- REMOVED all timeline loading logic ---
-        
         window.divisions = divisions;
         window.availableDivisions = availableDivisions;
         selectedDivision = data.selectedDivision || null;
@@ -265,6 +265,18 @@ function loadData() {
         // NEW: Load global times, defaulting to empty strings
         globalStartTime = data.globalStartTime || "";
         globalEndTime = data.globalEndTime || "";
+
+        // NEW: Load master sports list
+        if (data.allSports && Array.isArray(data.allSports) && data.allSports.length > 0) {
+            // Use saved list, but also ensure defaults are present
+            const savedSports = new Set(data.allSports.map(s => s.trim()));
+            defaultSports.forEach(s => savedSports.add(s));
+            allSports = Array.from(savedSports);
+        } else {
+            // Not saved yet, initialize with defaults
+            allSports = [...defaultSports];
+        }
+        allSports.sort(); // Keep it sorted
         
     } catch (e) { console.error("Error loading data:", e); }
 }
@@ -339,5 +351,28 @@ window.initApp1 = initApp1;
 
 // Expose internal objects
 window.getDivisions = () => divisions;
+
+// --- NEW GLOBAL SPORT FUNCTIONS ---
+/**
+ * Returns a sorted list of all known sports.
+ * @returns {string[]}
+ */
+window.getAllGlobalSports = function() {
+    return (allSports || []).slice().sort();
+}
+
+/**
+ * Adds a new sport to the master list if it doesn't exist.
+ * @param {string} sportName
+ */
+window.addGlobalSport = function(sportName) {
+    if (!sportName) return;
+    const s = sportName.trim();
+    if (s && !allSports.find(sport => sport.toLowerCase() === s.toLowerCase())) {
+        allSports.push(s);
+        allSports.sort(); // Keep it sorted
+        saveData(); // Save the updated app1 data
+    }
+}
 
 })();
