@@ -3,22 +3,14 @@
 //
 // UPDATED:
 // - **Major UI Overhaul:**
-//   - `init` function completely rebuilt to add a
-//     "Template Management" and "Day of Week Assignments" section.
-//   - Removed the old "Save as Default" button.
-// - **New Helper Functions:**
-//   - `renderTemplateUI`: Builds the new management controls.
-//   - `loadSkeletonToBuilder`: New function to load a selected
-//     template into the grid.
-// - **Updated `loadDailySkeleton`:**
-//   - This function is now the core of your new feature.
-//   - It gets the current date from `window.currentScheduleDate`.
-//   - It checks `skeletonAssignments` for the day of the week.
-//   - It loads the correct skeleton (or a fallback).
-// - **BUG FIX:**
-//   - The local `runOptimizer` function was loading the wrong
-//     skeleton. It is now fixed to run the optimizer on the
-//     skeleton *currently visible in the builder* (`dailySkeleton`).
+//   - `renderTemplateUI` has been completely rewritten.
+//   - The bulky 2-column layout is replaced with a single,
+//     compact "toolbar" for Load/Save.
+//   - The "Day of Week Assignments" and "Delete" button are
+//     now hidden inside a collapsible <details> element,
+//     saving a large amount of space.
+// - All other logic (loading, saving, grid rendering) is
+//   unchanged.
 // =================================================================
 
 (function() {
@@ -58,7 +50,7 @@ function mapEventNameForOptimizer(name) {
 
 /**
  * Main entry point. Called by index.html tab click.
- * --- HEAVILY UPDATED ---
+ * --- UPDATED ---
  */
 function init() {
     container = document.getElementById("master-scheduler-content");
@@ -101,6 +93,7 @@ function init() {
 
 /**
  * NEW: Renders the new template management UI
+ * --- COMPLETELY REWRITTEN ---
  */
 function renderTemplateUI() {
     const uiContainer = document.getElementById("scheduler-template-ui");
@@ -114,66 +107,149 @@ function renderTemplateUI() {
 
     uiContainer.innerHTML = `
         <style>
-            .template-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-            .template-section { border: 1px solid #eee; padding: 15px; border-radius: 5px; background: #fff; }
-            .template-section h4 { margin-top: 0; }
-            .template-section label { display: block; margin-bottom: 5px; font-weight: 600; }
-            .template-section input, .template-section select { width: 100%; padding: 8px; box-sizing: border-box; }
-            .day-assignment { display: grid; grid-template-columns: 100px 1fr; gap: 10px; align-items: center; margin-bottom: 8px; }
+            .template-toolbar {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 20px;
+                align-items: flex-end;
+            }
+            .template-group {
+                display: flex;
+                flex-direction: column;
+            }
+            .template-group label {
+                font-weight: 600;
+                font-size: 0.9em;
+                margin-bottom: 4px;
+            }
+            .template-group input, .template-group select {
+                padding: 8px;
+                border-radius: 5px;
+                border: 1px solid #ccc;
+            }
+            .template-group button {
+                padding: 8px 12px;
+                background: #007bff;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                margin-left: -5px; /* Align with input */
+            }
+            #template-manage-details {
+                margin-top: 15px;
+                width: 100%;
+            }
+            #template-manage-details summary {
+                cursor: pointer;
+                color: #007bff;
+                font-weight: 600;
+                padding: 5px;
+                border-radius: 5px;
+                background: #f0f6ff;
+                display: inline-block;
+            }
+            .assignments-container {
+                margin-top: 10px;
+                padding: 15px;
+                border: 1px solid #eee;
+                background: #fff;
+                border-radius: 5px;
+            }
+            .assignments-grid {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 15px;
+            }
+            .day-assignment {
+                display: flex;
+                flex-direction: column;
+                min-width: 150px;
+            }
+            .day-assignment label {
+                font-weight: 600;
+                font-size: 0.9em;
+                margin-bottom: 4px;
+            }
+            .delete-section {
+                margin-top: 15px;
+                padding-top: 15px;
+                border-top: 1px dashed #ccc;
+            }
         </style>
         
-        <div class="template-grid">
-            <div class="template-section">
-                <h4>Save / Load Template</h4>
-                <label for="template-load-select">Load Saved Template:</label>
+        <div class="template-toolbar">
+            <div class="template-group">
+                <label for="template-load-select">Load Template</label>
                 <select id="template-load-select">
-                    <option value="">-- Select a template to load --</option>
+                    <option value="">-- Select template --</option>
                     ${loadOptions}
                 </select>
-                <hr style="margin: 15px 0;">
-                <label for="template-save-name">Save Current Schedule as:</label>
-                <input type="text" id="template-save-name" placeholder="e.g., 'Regular Day' or 'Friday Short'">
-                <button id="template-save-btn" style="margin-top: 10px; padding: 8px 12px;">Save</button>
-                <button id="template-delete-btn" style="margin-top: 10px; padding: 8px 12px; background: #c0392b; color: white; border: none; margin-left: 5px;">Delete Selected</button>
             </div>
             
-            <div class="template-section">
-                <h4>Day of Week Assignments</h4>
-                <div class="day-assignment">
-                    <label for="assign-Sunday">Sunday:</label>
-                    <select id="assign-Sunday" data-day="Sunday">${loadOptions}</select>
-                </div>
-                <div class="day-assignment">
-                    <label for="assign-Monday">Monday:</label>
-                    <select id="assign-Monday" data-day="Monday">${loadOptions}</select>
-                </div>
-                <div class="day-assignment">
-                    <label for="assign-Tuesday">Tuesday:</label>
-                    <select id="assign-Tuesday" data-day="Tuesday">${loadOptions}</select>
-                </div>
-                <div class="day-assignment">
-                    <label for="assign-Wednesday">Wednesday:</label>
-                    <select id="assign-Wednesday" data-day="Wednesday">${loadOptions}</select>
-                </div>
-                <div class="day-assignment">
-                    <label for="assign-Thursday">Thursday:</label>
-                    <select id="assign-Thursday" data-day="Thursday">${loadOptions}</select>
-                </div>
-                <div class="day-assignment">
-                    <label for="assign-Friday">Friday:</label>
-                    <select id="assign-Friday" data-day="Friday">${loadOptions}</select>
-                </div>
-                <div class="day-assignment">
-                    <label for="assign-Saturday">Saturday:</label>
-                    <select id="assign-Saturday" data-day="Saturday">${loadOptions}</select>
-                </div>
-                <div class="day-assignment" style="border-top: 1px solid #eee; padding-top: 8px;">
-                    <label for="assign-Default"><b>Default:</b></label>
-                    <select id="assign-Default" data-day="Default">${loadOptions}</select>
-                </div>
-                <button id="template-assign-save-btn" style="margin-top: 10px; padding: 8px 12px;">Save Assignments</button>
+            <div class="template-group">
+                <label for="template-save-name">Save Current Grid as</label>
+                <input type="text" id="template-save-name" placeholder="e.g., 'Friday Short Day'">
+            </div>
+            
+            <div class="template-group">
+                <label>&nbsp;</label> <button id="template-save-btn">Save</button>
             </div>
         </div>
+        
+        <details id="template-manage-details">
+            <summary>Manage Assignments & Delete...</summary>
+            
+            <div class="assignments-container">
+                <h4>Day of Week Assignments</h4>
+                <p style="font-size: 0.9em; margin-top: -10px; color: #555;">
+                    Automatically load a specific template when you select a day on the calendar.
+                </p>
+                <div class="assignments-grid">
+                    <div class="day-assignment">
+                        <label for="assign-Sunday">Sunday:</label>
+                        <select id="assign-Sunday" data-day="Sunday">${loadOptions}</select>
+                    </div>
+                    <div class="day-assignment">
+                        <label for="assign-Monday">Monday:</label>
+                        <select id="assign-Monday" data-day="Monday">${loadOptions}</select>
+                    </div>
+                    <div class="day-assignment">
+                        <label for="assign-Tuesday">Tuesday:</label>
+                        <select id="assign-Tuesday" data-day="Tuesday">${loadOptions}</select>
+                    </div>
+                    <div class="day-assignment">
+                        <label for="assign-Wednesday">Wednesday:</label>
+                        <select id="assign-Wednesday" data-day="Wednesday">${loadOptions}</select>
+                    </div>
+                    <div class="day-assignment">
+                        <label for="assign-Thursday">Thursday:</label>
+                        <select id="assign-Thursday" data-day="Thursday">${loadOptions}</select>
+                    </div>
+                    <div class="day-assignment">
+                        <label for="assign-Friday">Friday:</label>
+                        <select id="assign-Friday" data-day="Friday">${loadOptions}</select>
+                    </div>
+                    <div class="day-assignment">
+                        <label for="assign-Saturday">Saturday:</label>
+                        <select id="assign-Saturday" data-day="Saturday">${loadOptions}</select>
+                    </div>
+                    <div class="day-assignment">
+                        <label for="assign-Default"><b>Default:</b></label>
+                        <select id="assign-Default" data-day="Default">${loadOptions}</select>
+                    </div>
+                </div>
+                <button id="template-assign-save-btn" style="margin-top: 15px; padding: 8px 12px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer;">Save Assignments</button>
+
+                <div class="delete-section">
+                    <h4>Delete Template</h4>
+                    <p style="font-size: 0.9em; margin-top: -10px; color: #555;">
+                        To delete a template, select it from the "Load Template" dropdown above, then click delete.
+                    </p>
+                    <button id="template-delete-btn" style="padding: 8px 12px; background: #c0392b; color: white; border: none; border-radius: 5px; cursor: pointer;">Delete Selected Template</button>
+                </div>
+            </div>
+        </details>
     `;
 
     // --- Hook up event listeners ---
@@ -211,7 +287,7 @@ function renderTemplateUI() {
     document.getElementById("template-delete-btn").onclick = () => {
         const name = loadSelect.value;
         if (!name) {
-            alert("Please select a template to delete from the dropdown first.");
+            alert("Please select a template to delete from the 'Load Template' dropdown first.");
             return;
         }
         if (confirm(`Are you sure you want to permanently delete "${name}"?`)) {
@@ -250,6 +326,7 @@ function renderTemplateUI() {
         alert("Assignments saved!");
     };
 }
+
 
 /**
  * Renders the draggable tiles
@@ -533,6 +610,7 @@ function runOptimizer() {
 
     // Save this skeleton to the *current day* so the
     // staggered view can read it.
+    console.log("Running optimizer with skeleton currently in the builder.");
     window.saveCurrentDailyData?.("manualSkeleton", dailySkeleton);
     
     const success = window.runSkeletonOptimizer(dailySkeleton);
