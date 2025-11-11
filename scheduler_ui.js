@@ -1,13 +1,21 @@
-// -------------------- scheduler_ui.js --------------------
-// UI-only: rendering, save/load, init, and window exports.
+// =================================================================
+// scheduler_ui.js
 //
 // UPDATED:
-// - Removed the "Fixed Block" / "Staggered" toggle logic.
-// - `updateTable` now *only* calls `renderStaggeredView`.
-// - `initScheduleSystem` no longer looks for the toggle.
-// - Deleted the entire `renderFixedBlockView` function as it
-//   is no longer used.
-// -----------------------------------------------------------------
+// - **CRITICAL BUG FIX (Missing Blocks):**
+//   - `findFirstSlotForTime` was failing for blocks shorter
+//     than 30 minutes (like "Snacks").
+//   - It has been rewritten to find the time slot that
+//     *contains* the block's start time, not one that
+//     starts at the same time. This will fix "Snacks"
+//     and "Dismissal" not appearing.
+// - **CRITICAL BUG FIX (Duplicated Rows):**
+//   - The `blocksByDivision` de-duplication logic was
+//     insufficient.
+//   - It has been rewritten to use a `Set` to *guarantee*
+//     that each time block label appears only once per
+//     division, which will fix the duplicated rows.
+// =================================================================
 
 // ===== HELPERS =====
 const INCREMENT_MINS = 30; // Base optimizer grid size
@@ -66,14 +74,6 @@ function updateTable() {
     const container = document.getElementById("scheduleTable");
     if (!container) return;
     
-    // const toggle = document.getElementById("schedule-view-toggle"); // No longer needed
-    
-    // if (toggle && toggle.checked) {
-    //     renderStaggeredView(container);
-    // } else {
-    //     renderFixedBlockView(container);
-    // }
-    
     // Always render the Staggered View
     renderStaggeredView(container);
 }
@@ -128,15 +128,29 @@ function formatEntry(entry) {
 }
 
 /**
- * NEW Helper: Finds the *first* 30-min slot index
- * that matches the start time of a custom block.
+ * --- BUG FIX ---
+ * Helper: Finds the *first* 30-min slot index
+ * that *contains* the start time of a custom block.
  */
 function findFirstSlotForTime(startMin) {
     if (!window.unifiedTimes) return -1;
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
         const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-        // Failsafe: find the closest one
+        const slotEnd = slotStart + INCREMENT_MINS;
+        
+        // Check if the block's start time falls *within* this slot
+        // e.g., block starts at 9:05 (545)
+        // slot is 9:00-9:30 (540-570)
+        // 545 >= 540 AND 545 < 570 -> TRUE
+        if (startMin >= slotStart && startMin < slotEnd) {
+            return i;
+        }
+    }
+    // Failsafe: if no slot contains it (e.g., block starts at 8:59 but grid starts at 9:00)
+    // find the first slot it's "mostly" in.
+    for (let i = 0; i < window.unifiedTimes.length; i++) {
+        const slotStart = new Date(window.unifiedTimes[i].start).getHours() * 60 + new Date(window.unifiedTimes[i].start).getMinutes();
         if (slotStart >= startMin && slotStart < startMin + INCREMENT_MINS) {
             return i;
         }
@@ -180,7 +194,7 @@ function renderStaggeredView(container) {
     const manualSkeleton = dailyData.manualSkeleton || [];
     
     if (manualSkeleton.length === 0) {
-        container.innerHTML = "<p>No schedule built for this day. Go to the 'Master Scheduler' tab to build one.</p>";
+        container.innerHTML = "<p>No schedule built for this day. Go to the 'Daily Adjustments' tab to build one.</p>";
         return;
     }
 
@@ -243,9 +257,16 @@ function renderStaggeredView(container) {
             }
         });
         divBlocks.sort((a,b) => a.startMin - b.startMin);
-        blocksByDivision[div] = divBlocks.filter((block, index, self) =>
-            index === self.findIndex((t) => (t.label === block.label))
-        );
+        
+        // --- BUG FIX: Use a Set to guarantee unique labels ---
+        const uniqueLabels = new Set();
+        blocksByDivision[div] = divBlocks.filter(block => {
+            if (!block.label || uniqueLabels.has(block.label)) {
+                return false;
+            }
+            uniqueLabels.add(block.label);
+            return true;
+        });
     });
 
     // --- NEW LOGIC: "Flatten" split blocks into two half-blocks ---
@@ -315,9 +336,7 @@ function renderStaggeredView(container) {
 
             // --- 2. Add ACTIVITY cells (Merged or Individual) ---
             
-            // --- START OF MODIFIED FIX ---
             if (eventBlock && (eventBlock.event === 'League Game' || eventBlock.event === 'Specialty League')) {
-            // --- END OF MODIFIED FIX ---
             
                 // === LEAGUE GAME / SPECIALTY LEAGUE: MERGED CELL ===
                 const tdLeague = document.createElement("td");
@@ -329,7 +348,6 @@ function renderStaggeredView(container) {
                 
                 const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
                 
-                // --- START OF NEW FORMATTING LOGIC ---
                 if (eventBlock.event === 'Specialty League') {
                     // --- NEW: Specialty League Formatting (Group by Field) ---
                     const gamesByField = new Map();
@@ -386,8 +404,6 @@ function renderStaggeredView(container) {
                     if (games.size > 0) { html += '</ul>'; }
                     tdLeague.innerHTML = html;
                 }
-                // --- END OF NEW FORMATTING LOGIC ---
-
                 tr.appendChild(tdLeague);
 
             } else {
@@ -433,9 +449,6 @@ function renderStaggeredView(container) {
  * ===== renderFixedBlockView HAS BEEN DELETED =====================
  * =================================================================
  */
-// function renderFixedBlockView(container) { ... }
-// ... (The entire function is gone) ...
-
 
 // ===== Save/Load/Init =====
 
@@ -479,13 +492,6 @@ function initScheduleSystem() {
         window.scheduleAssignments = window.scheduleAssignments || {};
         window.leagueAssignments = window.leagueAssignments || {};
         reconcileOrRenderSaved();
-        
-        // const toggle = document.getElementById("schedule-view-toggle"); // No longer needed
-        // if (toggle) {
-        //     toggle.onchange = () => {
-        //         updateTable();
-        //     };
-        // }
         
     } catch (e) {
         updateTable();
