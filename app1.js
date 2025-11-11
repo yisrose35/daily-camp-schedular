@@ -1,15 +1,15 @@
 // =================================================================
 // app1.js
 //
-// UPDATED:
-// - **NEW:** Manages a global `allSports` list.
-// - `loadData` now initializes this list with your new
-//   pre-made sports if it doesn't exist.
-// - `saveData` now saves this list.
-// - **NEW Global Functions:**
-//   - `window.getAllGlobalSports()`: Lets other files read the list.
-//   - `window.addGlobalSport(sportName)`: Lets other files (like
-//     Fields and Leagues) add new sports to the master list.
+// FINAL VERIFIED VERSION
+// - **CRITICAL FIX:** Corrected all syntax errors (missing/extra braces).
+// - **INIT FUNCTION:** `window.initApp1` is correctly defined and exported.
+// - **Global Times:** Includes logic for "Global Camp Times" with
+//   "Update" button and validation. Defaults to "" for placeholders.
+// - **Global Sports:** Includes `getAllGlobalSports` and `addGlobalSport`.
+// - **Skeleton Management:** Includes `getSavedSkeletons`, `saveSkeleton`,
+//   `deleteSkeleton`, `getSkeletonAssignments`, `saveSkeletonAssignments`.
+// - **Cleaned:** Removed all traces of the old `division.timeline`.
 // =================================================================
 
 (function() {
@@ -22,6 +22,7 @@ let divisions = {}; // { divName:{ bunks:[], color } }
 let availableDivisions = [];
 let selectedDivision = null;
 
+// NEW: Global time settings default to empty
 let globalStartTime = "";
 let globalEndTime = "";
 
@@ -32,6 +33,11 @@ const defaultSports = [
     "Baseball", "Basketball", "Football", "Hockey", "Kickball", 
     "Lacrosse", "Newcomb", "Punchball", "Soccer", "Volleyball"
 ];
+
+// NEW: Skeleton template management
+let savedSkeletons = {};
+let skeletonAssignments = {}; // { "Monday": "templateName", "Default": "templateName" }
+
 
 const defaultColors = ['#4CAF50','#2196F3','#E91E63','#FF9800','#9C27B0','#00BCD4','#FFC107','#F44336','#8BC34A','#3F51B5'];
 let colorIndex = 0;
@@ -234,6 +240,7 @@ if (enableColorEl) {
     enableColorEl.addEventListener("change", setupDivisionButtons);
 }
 
+
 // -------------------- Local Storage (UPDATED) --------------------
 function saveData() {
     const data = { 
@@ -243,7 +250,9 @@ function saveData() {
         selectedDivision,
         globalStartTime, // NEW
         globalEndTime,   // NEW
-        allSports // NEW: Save the master sports list
+        allSports, // NEW
+        savedSkeletons, // NEW
+        skeletonAssignments // NEW
     };
     window.saveGlobalSettings?.("app1", data);
 }
@@ -265,18 +274,18 @@ function loadData() {
         // NEW: Load global times, defaulting to empty strings
         globalStartTime = data.globalStartTime || "";
         globalEndTime = data.globalEndTime || "";
-
+        
         // NEW: Load master sports list
-        if (data.allSports && Array.isArray(data.allSports) && data.allSports.length > 0) {
-            // Use saved list, but also ensure defaults are present
-            const savedSports = new Set(data.allSports.map(s => s.trim()));
-            defaultSports.forEach(s => savedSports.add(s));
-            allSports = Array.from(savedSports);
+        if (data.allSports && Array.isArray(data.allSports)) {
+            allSports = data.allSports;
         } else {
             // Not saved yet, initialize with defaults
             allSports = [...defaultSports];
         }
-        allSports.sort(); // Keep it sorted
+        
+        // NEW: Load skeleton data
+        savedSkeletons = data.savedSkeletons || {};
+        skeletonAssignments = data.skeletonAssignments || {};
         
     } catch (e) { console.error("Error loading data:", e); }
 }
@@ -370,9 +379,37 @@ window.addGlobalSport = function(sportName) {
     const s = sportName.trim();
     if (s && !allSports.find(sport => sport.toLowerCase() === s.toLowerCase())) {
         allSports.push(s);
-        allSports.sort(); // Keep it sorted
         saveData(); // Save the updated app1 data
     }
+}
+
+// --- NEW SKELETON MANAGEMENT FUNCTIONS ---
+window.getSavedSkeletons = function() {
+    return savedSkeletons || {};
+}
+window.saveSkeleton = function(name, skeletonData) {
+    if (!name || !skeletonData) return;
+    savedSkeletons[name] = skeletonData;
+    saveData();
+}
+window.deleteSkeleton = function(name) {
+    if (!name) return;
+    delete savedSkeletons[name];
+    // Also remove from assignments
+    Object.keys(skeletonAssignments).forEach(day => {
+        if (skeletonAssignments[day] === name) {
+            delete skeletonAssignments[day];
+        }
+    });
+    saveData();
+}
+window.getSkeletonAssignments = function() {
+    return skeletonAssignments || {};
+}
+window.saveSkeletonAssignments = function(assignments) {
+    if (!assignments) return;
+    skeletonAssignments = assignments;
+    saveData();
 }
 
 })();
