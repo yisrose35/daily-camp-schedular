@@ -1,3 +1,4 @@
+
 // -------------------- scheduler_logic_fillers.js --------------------
 // This file is now a "helper library" for the Optimizer.
 // It provides functions to find the *best* activity for a given slot.
