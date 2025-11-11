@@ -1,18 +1,11 @@
 // -------------------- scheduler_logic_fillers.js --------------------
+// This file is now a "helper library" for the Optimizer.
+// It provides functions to find the *best* activity for a given slot.
 //
-// UPDATED (Phase 2a - Activity Rotation):
-// - **NEW FUNCTION:** `getActivityFreshnessScores(bunk, history, activities)`
-//   This function calculates a "freshness" score for all activities
-//   based on the last 7 days of history.
-// - **CRITICAL LOGIC:** This new function *ignores* league games
-//   (where `_h2h: true`) and pinned events (like "Lunch"),
-//   so only regular activities count towards the rotation.
-// - `findBestSpecial`, `findBestSportActivity`, and
-//   `findBestGeneralActivity` are all updated:
-//   - They now call `window.loadScheduleHistory(7)`.
-//   - They get the freshness scores.
-//   - They **sort by score** (lowest is best/freshest) instead
-//     of shuffling randomly.
+// UPDATED:
+// - `canBlockFit` has been updated to be IDENTICAL to the new
+//   `canBlockFit` in `scheduler_logic_core.js`. It now enforces
+//   the `limitUsage` (Allowed Bunks/Divisions) rules.
 // -----------------------------------------------------------------
 
 (function() {
@@ -25,96 +18,55 @@ function fieldLabel(f) {
     return "";
 }
 
-// --- NEW: Scoring constants ---
-const SCORE_1_DAY_AGO = 100;
-const SCORE_2_DAYS_AGO = 50;
-const SCORE_3_DAYS_AGO = 25;
-const SCORE_DEFAULT = 5;
-
-/**
- * --- NEW: ACTIVITY ROTATION SCORING ENGINE ---
- * Calculates a "freshness" score for all activities for a specific bunk.
- * Lower score is better (fresher).
- * @param {string} bunk The bunk name to check history for.
- * @param {Object} history The history object from `loadScheduleHistory`.
- * @param {Array} activities The list of activities to score.
- * @returns {Object} A map of { activityName: score }
- */
-function getActivityFreshnessScores(bunk, history, activities) {
-    const scores = {};
-    const activityNames = activities.map(a => fieldLabel(a.field));
-    activityNames.forEach(name => scores[name] = 0);
-
-    if (!bunk || !history) return scores;
-
-    const historyDays = Object.keys(history).sort().reverse(); // Sorts from most recent (yesterday) to oldest
-    
-    for (let i = 0; i < historyDays.length; i++) {
-        const day = historyDays[i];
-        const daySchedule = history[day][bunk] || [];
-        
-        let scoreToAdd = SCORE_DEFAULT;
-        if (i === 0) scoreToAdd = SCORE_1_DAY_AGO;      // Yesterday
-        else if (i === 1) scoreToAdd = SCORE_2_DAYS_AGO; // 2 days ago
-        else if (i === 2) scoreToAdd = SCORE_3_DAYS_AGO; // 3 days ago
-        
-        const activitiesDoneThisDay = new Set();
-        
-        daySchedule.forEach(entry => {
-            if (!entry) return;
-            
-            // --- YOUR CRITICAL RULE ---
-            // Ignore league games and pinned events
-            if (entry._h2h || entry._fixed) {
-                return;
-            }
-            
-            const name = fieldLabel(entry.field);
-            if (scores.hasOwnProperty(name) && !activitiesDoneThisDay.has(name)) {
-                scores[name] += scoreToAdd;
-                activitiesDoneThisDay.add(name);
-            }
-        });
-    }
-    return scores;
-}
-
-
 // --- START OF NEW TIME LOGIC ---
+/**
+ * NEW: Checks if a field is available for a specific time slot,
+ * respecting the new timeRules array.
+ */
 function isTimeAvailable(slotIndex, fieldProps) {
     if (!window.unifiedTimes || !window.unifiedTimes[slotIndex]) return false;
     
     const slot = window.unifiedTimes[slotIndex];
     const slotStartMin = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+    // Use INCREMENT_MINS to avoid 2:59:59 issues
     const slotEndMin = slotStartMin + (window.INCREMENT_MINS || 30); 
     
     const rules = fieldProps.timeRules || [];
     
+    // 1. If no rules, field is available (respecting master toggle).
     if (rules.length === 0) {
-        return fieldProps.available;
+        return fieldProps.available; // `available` is the master toggle from app1
     }
     
+    // 2. Check if master toggle is off.
     if (!fieldProps.available) {
         return false;
     }
 
+    // 3. Determine default state based on rules
+    // If *any* "Available" rule exists, the default becomes "Unavailable"
     const hasAvailableRules = rules.some(r => r.type === 'Available');
     let isAvailable = !hasAvailableRules;
 
+    // 4. Check "Available" rules first
     for (const rule of rules) {
         if (rule.type === 'Available') {
+            // Slot must be *fully contained* within an available block
             if (slotStartMin >= rule.startMin && slotEndMin <= rule.endMin) {
                 isAvailable = true;
-                break;
+                break; // Found a matching "Available" rule
             }
         }
     }
 
+    // 5. Check "Unavailable" rules (they override "Available" rules)
     for (const rule of rules) {
         if (rule.type === 'Unavailable') {
+            // Slot just needs to *overlap* with an unavailable block
+            // Overlap check: (StartA < EndB) and (EndA > StartB)
             if (slotStartMin < rule.endMin && slotEndMin > rule.startMin) {
                 isAvailable = false;
-                break;
+                break; // Found a conflicting "Unavailable" rule
             }
         }
     }
@@ -129,7 +81,7 @@ function isTimeAvailable(slotIndex, fieldProps) {
  * AND the new bunk/division limits.
  */
 function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
-    if (!fieldName) return false; 
+    if (!fieldName) return false; // Can't fit a null field
     
     const props = activityProperties[fieldName];
     if (!props) {
@@ -144,33 +96,43 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     // --- NEW: Check 2: Bunk/Division Limit (from limitUsage) ---
     const limitRules = props.limitUsage;
     if (limitRules && limitRules.enabled) {
+        // "Specific" rules are on
         if (!limitRules.divisions[block.divName]) {
+            // This entire division is NOT in the allowed list
             return false;
         }
         
         const allowedBunks = limitRules.divisions[block.divName];
         if (allowedBunks.length > 0) {
+            // Specific bunks are listed
             if (!block.bunk) {
+                // This block doesn't have a bunk property.
+                // This shouldn't happen for general fillers,
+                // but if it does, we'll fail closed.
                 console.warn(`canBlockFit in filler.js missing block.bunk for ${fieldName}`);
                 return false; 
             } else if (!allowedBunks.includes(block.bunk)) {
+                // This is a specific bunk, and it's NOT in the list
                 return false;
             }
         }
+        // If we are here, it's either:
+        // 1. The division is in the list, and the allowedBunks array is empty (meaning "all bunks")
+        // 2. The division is in the list, and this specific bunk is in the allowedBunks array
     }
     // --- END OF NEW CHECK ---
 
     // Check 3 & 4: Usage per slot & Time-based availability
     for (const slotIndex of block.slots) {
-        if (slotIndex === undefined) { return false; } 
+        if (slotIndex === undefined) { return false; } // Invalid block
         
         // Check 3: Usage limit
         const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
         if (used >= limit) return false;
         
-        // Check 4: Time-based availability
+        // Check 4: NEW: Time-based availability
         if (!isTimeAvailable(slotIndex, props)) {
-            return false;
+            return false; // This slot is blocked by an override
         }
     }
     return true;
@@ -178,20 +140,14 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
 // --- END OF UPDATED FUNCTION ---
 
 /**
- * --- UPDATED: Now uses freshness scores ---
  * Finds the best-available special activity (special-only).
  * Called by "Special Activity" tile.
  */
 window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties) {
     const specials = allActivities.filter(a => a.type === 'special');
     
-    // --- NEW: Activity Rotation ---
-    const history = window.loadScheduleHistory?.(7) || {};
-    const scores = getActivityFreshnessScores(block.bunk, history, specials);
-    specials.sort((a, b) => scores[fieldLabel(a.field)] - scores[fieldLabel(b.field)]);
-    // --- END: Activity Rotation ---
-    
-    for (const pick of specials) {
+    // TODO: Use yesterdayHistory to pick a "fresh" one
+    for (const pick of specials.sort(() => 0.5 - Math.random())) {
         if (canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)) {
             return pick;
         }
@@ -200,20 +156,14 @@ window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yester
 }
 
 /**
- * --- UPDATED: Now uses freshness scores ---
- * Finds the best-available sport activity (sports-only).
+ * NEW: Finds the best-available sport activity (sports-only).
  * Called by "Sports" tile.
  */
 window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties) {
     const sports = allActivities.filter(a => a.type === 'field');
     
-    // --- NEW: Activity Rotation ---
-    const history = window.loadScheduleHistory?.(7) || {};
-    const scores = getActivityFreshnessScores(block.bunk, history, sports);
-    sports.sort((a, b) => scores[fieldLabel(a.field)] - scores[fieldLabel(b.field)]);
-    // --- END: Activity Rotation ---
-    
-    for (const pick of sports) {
+    // TODO: Use yesterdayHistory to pick a "fresh" one
+    for (const pick of sports.sort(() => 0.5 - Math.random())) {
         if (canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)) {
             return pick;
         }
@@ -223,7 +173,6 @@ window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, 
 
 
 /**
- * --- UPDATED: Now uses freshness scores ---
  * Finds the best-available general activity (hybrid: sports OR special).
  * Called by "Activity" tile.
  */
@@ -232,15 +181,8 @@ window.findBestGeneralActivity = function(block, allActivities, h2hActivities, f
     // TODO: 1. Attempt H2H (This is not implemented yet)
     
     // 2. Attempt "fresh" general OR special activity
-    
-    // --- NEW: Activity Rotation ---
-    const history = window.loadScheduleHistory?.(7) || {};
-    // Score *all* activities (specials and sports)
-    const scores = getActivityFreshnessScores(block.bunk, history, allActivities);
-    allActivities.sort((a, b) => scores[fieldLabel(a.field)] - scores[fieldLabel(b.field)]);
-    // --- END: Activity Rotation ---
-    
-    for (const pick of allActivities) {
+    // No filter needed, `allActivities` contains both types
+    for (const pick of allActivities.sort(() => 0.5 - Math.random())) {
          if (canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)) {
             return pick;
         }
@@ -250,7 +192,7 @@ window.findBestGeneralActivity = function(block, allActivities, h2hActivities, f
     return { field: "Free", sport: null };
 }
 
-// Expose helper for core logic
+// Expose helper for core logic (so logic_core can use it for its own league pass)
 window.findBestGeneralActivity.canBlockFit = canBlockFit;
 
 })();
