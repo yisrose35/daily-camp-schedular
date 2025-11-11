@@ -10,6 +10,13 @@
 // - **Skeleton Management:** Includes `getSavedSkeletons`, `saveSkeleton`,
 //   `deleteSkeleton`, `getSkeletonAssignments`, `saveSkeletonAssignments`.
 // - **Cleaned:** Removed all traces of the old `division.timeline`.
+//
+// UPDATED:
+// - Added `specialActivities` to the file's state.
+// - Added `specialActivities` to `loadData` and `saveData`.
+// - Added the missing `window.getGlobalSpecialActivities` and
+//   `window.saveGlobalSpecialActivities` functions that
+//   `special_activities.js` depends on to make saving work.
 // =================================================================
 
 (function() {
@@ -18,6 +25,7 @@
 // -------------------- State --------------------
 let bunks = [];
 let divisions = {}; // { divName:{ bunks:[], color } }
+let specialActivities = []; // NEW: For special_activities.js
 
 let availableDivisions = [];
 let selectedDivision = null;
@@ -243,16 +251,21 @@ if (enableColorEl) {
 
 // -------------------- Local Storage (UPDATED) --------------------
 function saveData() {
+    const app1Data = window.loadGlobalSettings?.().app1 || {};
+    
+    // Merge the existing app1 data with our current state
     const data = { 
+        ...app1Data, // Keep other data fields may have added
         bunks, 
         divisions, 
         availableDivisions, 
         selectedDivision,
-        globalStartTime, // NEW
-        globalEndTime,   // NEW
-        allSports, // NEW
-        savedSkeletons, // NEW
-        skeletonAssignments // NEW
+        globalStartTime,
+        globalEndTime,
+        allSports,
+        savedSkeletons,
+        skeletonAssignments,
+        specialActivities // NEW: Add special activities
     };
     window.saveGlobalSettings?.("app1", data);
 }
@@ -262,6 +275,7 @@ function loadData() {
     try {
         bunks = data.bunks || [];
         divisions = data.divisions || {};
+        specialActivities = data.specialActivities || []; // NEW: Load special activities
 
         availableDivisions = (data.availableDivisions && Array.isArray(data.availableDivisions))
             ? data.availableDivisions.slice()
@@ -409,6 +423,28 @@ window.getSkeletonAssignments = function() {
 window.saveSkeletonAssignments = function(assignments) {
     if (!assignments) return;
     skeletonAssignments = assignments;
+    saveData();
+}
+
+// --- NEWLY ADDED: FUNCTIONS FOR special_activities.js ---
+
+/**
+ * Returns a reference to the master special activities array.
+ * This is called by special_activities.js.
+ */
+window.getGlobalSpecialActivities = function() {
+    // `specialActivities` is loaded in loadData()
+    return specialActivities;
+}
+
+/**
+ * Saves the master special activities array.
+ * This is called by special_activities.js.
+ */
+window.saveGlobalSpecialActivities = function(updatedActivities) {
+    // Update the internal reference
+    specialActivities = updatedActivities;
+    // Call the main saveData() function to persist all app1 data
     saveData();
 }
 
