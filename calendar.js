@@ -2,8 +2,12 @@
 // calendar.js
 //
 // UPDATED:
-// - `onDateChanged`: Changed reference from
-//   `initDailyOverrides` to `initDailyAdjustments`.
+// - `loadCurrentDailyData`: When creating a new, empty day,
+//   it now adds `leagueSportRotationIndex: {}` to store
+//   the starting sport for league games.
+// - **NEW FUNCTION:** Added `window.loadScheduleHistory(daysToLoad)`.
+//   This is the "History Engine" for our new Activity Rotation
+//   feature. It loads the schedule assignments from the past X days.
 // =================================================================
 
 (function() {
@@ -42,7 +46,7 @@
         
         window.loadCurrentDailyData();
         window.initScheduleSystem?.(); // Reloads schedule
-        window.initDailyAdjustments?.(); // <-- UPDATED
+        window.initDailyAdjustments?.(); // Reloads adjustments tab
         
         // If the master scheduler is the active tab, re-init it
         // to load the correct skeleton for the new day.
@@ -125,9 +129,14 @@
                 scheduleAssignments: {},
                 leagueAssignments: {},
                 leagueRoundState: {},
-                leagueSportRotation: {},
+                leagueSportRotationIndex: {}, // <-- NEWLY ADDED
                 overrides: { fields: [], bunks: [], leagues: [] } 
             };
+        }
+        
+        // Ensure new keys exist on older data
+        if (!allData[date].leagueSportRotationIndex) {
+            allData[date].leagueSportRotationIndex = {};
         }
         
         window.currentDailyData = allData[date];
@@ -150,6 +159,33 @@
             return {};
         }
     }
+    
+    // --- NEW: HISTORY ENGINE ---
+    /**
+     * [DAILY] Gets the schedule history for the past X days.
+     * @param {number} daysToLoad The number of past days to load (e.g., 7).
+     * @returns {Object} An object where keys are YYYY-MM-DD strings
+     * and values are the `scheduleAssignments` for that day.
+     */
+    window.loadScheduleHistory = function(daysToLoad = 7) {
+        const history = {};
+        const allData = window.loadAllDailyData();
+        
+        const [year, month, day] = window.currentScheduleDate.split('-').map(Number);
+        const baseDate = new Date(year, month - 1, day, 12, 0, 0);
+
+        for (let i = 1; i <= daysToLoad; i++) {
+            const pastDate = new Date(baseDate.getTime());
+            pastDate.setDate(pastDate.getDate() - i);
+            const pastDateString = getTodayString(pastDate);
+            
+            const dayData = allData[pastDateString] || {};
+            history[pastDateString] = dayData.scheduleAssignments || {};
+        }
+        
+        return history;
+    }
+    // --- END: HISTORY ENGINE ---
 
     window.saveCurrentDailyData = function(key, data) {
         try {
