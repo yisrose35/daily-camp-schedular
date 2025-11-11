@@ -13,8 +13,8 @@
 //   - `findSlotsForRange` was only checking if a slot *started*
 //     within a block. This failed for short blocks like "Snacks".
 //   - It is now fixed to find all slots that *overlap* with the
-//     block, which will correctly find slots for "Snacks",
-//     "Dismissal", and "Leagues".
+//     block (StartA < EndB && EndA > StartB), which will correctly
+//     find slots for "Snacks", "Dismissal", and "Leagues".
 // =================================================================
 
 (function() {
