@@ -2,11 +2,13 @@
 // This file is now the "OPTIMIZER"
 //
 // UPDATED:
-// - `loadAndFilterData` now loads the new `disabledSports` list
-//   from the daily overrides.
-// - It now filters `allActivities`, `h2hActivities`, and
-//   `fieldsBySport` to remove any sport that is disabled
-//   for the day. This enforces the new daily override.
+// - `loadAndFilterData`:
+//   - **REMOVED** the global `disabledSports` logic.
+//   - **NEW:** Loads the `dailyDisabledSportsByField` object.
+//   - The logic for building `fieldsBySport` now checks this new
+//     object and skips any sport disabled for that specific field.
+//   - The logic for building `allActivities` also filters
+//     based on this new object.
 // -----------------------------------------------------------------
 
 (function() {
@@ -198,7 +200,11 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const divLeague = leagueEntry[1];
         const leagueTeams = (divLeague.teams || []).map(t => String(t).trim()).filter(Boolean);
         if (leagueTeams.length === 0) return;
-        const sports = Array.isArray(divLeague.sports) && divLeague.sports.length ? divLeague.sports : ["League"];
+        
+        // Filter league sports by what's available today in fieldsBySport
+        const availableLeagueSports = (divLeague.sports || []).filter(s => fieldsBySport[s]);
+        const sports = availableLeagueSports.length > 0 ? availableLeagueSports : ["League"];
+        
         let matchups = [];
         if (typeof window.getLeagueMatchups === 'function') {
             matchups = window.getLeagueMatchups(divLeagueName, leagueTeams) || [];
@@ -222,7 +228,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                     fieldName = f; break;
                 }
             }
-            if (!fieldName) {
+            if (!fieldName && sport !== "League") { // Don't search all fields if it's a generic "League" game
                 for (const f of window.allSchedulableNames) {
                     if (canBlockFit(blockBase, f, activityProperties, fieldUsageBySlot)) {
                         fieldName = f; break;
@@ -270,9 +276,13 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         if (!leagueEntry) return; 
 
         const sport = leagueEntry.sport;
+        // Check if the sport for this league is even available today
+        if (!sport || !fieldsBySport[sport]) return; 
+        
         const leagueFields = leagueEntry.fields || [];
         const leagueTeams = (leagueEntry.teams || []).map(t => String(t).trim()).filter(Boolean);
-        if (!sport || leagueFields.length === 0 || leagueTeams.length < 2) return;
+        if (leagueFields.length === 0 || leagueTeams.length < 2) return;
+        
         let matchups = [];
         if (typeof window.getLeagueMatchups === 'function') {
             matchups = window.getLeagueMatchups(leagueEntry.name, leagueTeams) || [];
@@ -291,7 +301,9 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             const fieldName = leagueFields[fieldIndex % leagueFields.length];
             const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
             let pick;
-            if (fieldName) {
+            
+            // Check if this specific field is available today
+            if (fieldName && canBlockFit(blockBase, fieldName, activityProperties, fieldUsageBySlot)) {
                 pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null };
                 markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
             } else {
@@ -528,7 +540,7 @@ function pairRoundRobin(teamList) {
 // --- START OF UPDATED FUNCTION ---
 /**
  * UPDATED: This function now loads and filters by
- * the new `disabledSports` list.
+ * the new `dailyDisabledSportsByField` list.
  */
 function loadAndFilterData() {
     const globalSettings = window.loadGlobalSettings?.() || {};
@@ -538,7 +550,6 @@ function loadAndFilterData() {
     const masterDivisions = app1Data.divisions || {};
     const masterAvailableDivs = app1Data.availableDivisions || [];
     const masterSpecials = app1Data.specialActivities || [];
-    const allGlobalSports = app1Data.allSports || []; // <-- NEW
     
     const masterLeagues = globalSettings.leaguesByName || {};
     const masterSpecialtyLeagues = globalSettings.specialtyLeagues || {};
@@ -547,16 +558,15 @@ function loadAndFilterData() {
     
     const dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
     
-    // --- NEW: Load daily disabled sports ---
+    // --- UPDATED: Load new daily overrides ---
     const dailyOverrides = dailyData.overrides || {};
     const disabledLeagues = dailyOverrides.leagues || [];
-    const disabledSports = dailyOverrides.sports || []; // <-- NEW LIST
     const disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
+    const dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {}; // <-- NEW
     
     const overrides = {
         bunks: dailyOverrides.bunks || [],
         leagues: disabledLeagues,
-        sports: disabledSports // <-- PASS IT ALONG
     };
 
     const availableDivisions = masterAvailableDivs.filter(divName => !overrides.bunks.includes(divName));
@@ -613,15 +623,14 @@ function loadAndFilterData() {
     const availSpecials = masterSpecials.filter(s => availableActivityNames.includes(s.name));
     
     // --- NEW: Filter available sports based on daily overrides ---
-    const availableSports = allGlobalSports.filter(sport => !overrides.sports.includes(sport));
-
-    // Filter fieldsBySport
     const fieldsBySport = {};
     availFields.forEach(f => {
         if (Array.isArray(f.activities)) {
             f.activities.forEach(sport => {
-                // ONLY add sport if it's in the availableSports list
-                if (availableSports.includes(sport)) {
+                // NEW CHECK: See if this sport is disabled on this field *for today*
+                const isDisabledToday = dailyDisabledSportsByField[f.name]?.includes(sport);
+                
+                if (!isDisabledToday) {
                     fieldsBySport[sport] = fieldsBySport[sport] || [];
                     fieldsBySport[sport].push(f.name);
                 }
@@ -632,9 +641,10 @@ function loadAndFilterData() {
     // Filter allActivities
     const allActivities = [
         ...availFields.flatMap((f) => (f.activities || []).map((act) => ({ type: "field", field: f.name, sport: act })))
-            .filter(a => !a.sport || availableSports.includes(a.sport)), // Filter out activities whose sport is disabled
+            // NEW CHECK: Filter out sports that are disabled for this field today
+            .filter(a => !a.sport || !dailyDisabledSportsByField[a.field]?.includes(a.sport)),
         ...availSpecials.map((sa) => ({ type: "special", field: sa.name, sport: null }))
-    ].filter(a => availableActivityNames.includes(a.field)); // Filter out unavailable fields/specials
+    ];
     
     const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
     
@@ -655,8 +665,7 @@ function loadAndFilterData() {
         masterSpecialtyLeagues,
         yesterdayHistory,
         disabledLeagues,
-        disabledSpecialtyLeagues,
-        disabledSports // <-- NEW
+        disabledSpecialtyLeagues
     };
 }
 // --- END OF UPDATED FUNCTION ---
