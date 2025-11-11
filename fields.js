@@ -3,6 +3,16 @@
 // NEW FILE
 // This file manages the new "Fields" tab.
 // It uses a two-column (master-detail) layout.
+//
+// UPDATED:
+// - **NEW** `renderLimitUsageControls` is now
+//   `renderAllowedBunksControls` and provides a UI to select
+//   "All Divisions" or "Specific Divisions/Bunks".
+// - This new logic is saved to the `item.limitUsage` property.
+//   `limitUsage.enabled = true` means "Specific" is selected.
+//   `limitUsage.divisions` maps allowed divisions to bunks.
+//     - `{"5th Grade": []}` means all bunks in 5th Grade.
+//     - `{"5th Grade": ["Bunk 1"]}` means ONLY Bunk 1 in 5th Grade.
 // =================================================================
 
 (function() {
@@ -111,6 +121,7 @@ function loadData() {
         f.available = f.available !== false;
         f.timeRules = f.timeRules || [];
         f.sharableWith = f.sharableWith || { type: 'not_sharable', divisions: [] };
+        // Ensure limitUsage exists and has the correct shape
         f.limitUsage = f.limitUsage || { enabled: false, divisions: {} };
     });
 }
@@ -314,7 +325,8 @@ function renderDetailPane() {
     sharableControls.style.marginTop = '15px';
     detailPaneEl.appendChild(sharableControls);
     
-    const limitControls = renderLimitUsageControls(item, onSave, onRerender);
+    // --- UPDATED ---
+    const limitControls = renderAllowedBunksControls(item, onSave, onRerender);
     detailPaneEl.appendChild(limitControls);
     
     const timeRuleControls = renderTimeRulesUI(item, onSave, onRerender);
@@ -573,18 +585,23 @@ function createChipPicker(allItems, selectedItems, onToggle) {
     return chipBox;
 }
 
-function renderLimitUsageControls(item, onSave, onRerender) {
+// =================================================================
+// ===== NEW: Allowed Bunks Controls (replaces LimitUsage) =====
+// =================================================================
+
+function renderAllowedBunksControls(item, onSave, onRerender) {
     const container = document.createElement("div");
     container.style.marginTop = "10px";
     container.style.paddingTop = "10px";
     container.style.borderTop = "1px solid #eee";
-    container.innerHTML = `<strong>Usage Limit Rules:</strong>`;
+    container.innerHTML = `<strong>Allowed Divisions & Bunks:</strong>`;
 
     if (!item.limitUsage) {
         item.limitUsage = { enabled: false, divisions: {} };
     }
     const rules = item.limitUsage;
 
+    // --- 1. "All Divisions" vs "Specific" Toggle ---
     const modeLabel = document.createElement("label");
     modeLabel.style.display = "flex";
     modeLabel.style.alignItems = "center";
@@ -593,7 +610,7 @@ function renderLimitUsageControls(item, onSave, onRerender) {
     modeLabel.style.marginTop = '5px';
 
     const textAll = document.createElement("span");
-    textAll.textContent = "All";
+    textAll.textContent = "All Divisions";
     const toggleTrack = document.createElement("span");
     Object.assign(toggleTrack.style, {
         "width": "44px", "height": "24px", "borderRadius": "99px", "position": "relative",
@@ -609,9 +626,11 @@ function renderLimitUsageControls(item, onSave, onRerender) {
     });
     toggleTrack.appendChild(toggleKnob);
     const textLimit = document.createElement("span");
-    textLimit.textContent = "Limit";
+    textLimit.textContent = "Specific Divisions/Bunks";
+    
     textAll.style.fontWeight = rules.enabled ? 'normal' : 'bold';
     textLimit.style.fontWeight = rules.enabled ? 'bold' : 'normal';
+    
     modeLabel.onclick = () => {
         rules.enabled = !rules.enabled;
         onSave();
@@ -622,48 +641,85 @@ function renderLimitUsageControls(item, onSave, onRerender) {
     modeLabel.appendChild(textLimit);
     container.appendChild(modeLabel);
 
+    // --- 2. Panel for "Specific" rules ---
     if (rules.enabled) {
         const customPanel = document.createElement("div");
         customPanel.style.paddingLeft = "20px";
         customPanel.style.marginTop = "10px";
         customPanel.style.borderLeft = "3px solid #eee";
-        const divLabel = document.createElement("div");
-        divLabel.textContent = "Limit to specific divisions and/or bunks:";
-        divLabel.style.fontWeight = "500";
-        customPanel.appendChild(divLabel);
+        
         const allDivisions = window.availableDivisions || [];
         if (allDivisions.length === 0) {
             customPanel.innerHTML += `<p class="muted">No divisions found. Add divisions in Setup.</p>`;
         }
+
         allDivisions.forEach(divName => {
             const divWrapper = document.createElement("div");
             divWrapper.style.marginTop = "8px";
-            const divChip = createLimitChip(divName, divName in rules.divisions);
+            
+            const isAllowed = divName in rules.divisions;
+            const allowedBunks = rules.divisions[divName] || [];
+            
+            // Division-level chip
+            const divChip = createLimitChip(divName, isAllowed, true);
             divChip.onclick = () => {
-                if (divName in rules.divisions) { delete rules.divisions[divName]; } 
-                else { rules.divisions[divName] = []; }
+                if (isAllowed) {
+                    // If it IS allowed, clicking it again will
+                    // toggle to bunk-specific mode *if* bunks exist
+                    const bunksInDiv = (window.divisions[divName]?.bunks || []);
+                    if (bunksInDiv.length > 0) {
+                        // Switch to specific bunks (start with none)
+                        rules.divisions[divName] = []; 
+                    } else {
+                        // No bunks, so just disable
+                        delete rules.divisions[divName];
+                    }
+                } else {
+                    // If it's NOT allowed, clicking it
+                    // enables it for ALL bunks in that division
+                    rules.divisions[divName] = []; // Empty array = all bunks
+                }
                 onSave();
                 onRerender();
             };
             divWrapper.appendChild(divChip);
-            if (divName in rules.divisions) {
+
+            // Bunk-level chips (if in bunk-specific mode)
+            if (isAllowed && allowedBunks.length > 0) {
                 const bunkList = document.createElement("div");
                 bunkList.style.display = "flex";
                 bunkList.style.flexWrap = "wrap";
                 bunkList.style.gap = "5px";
                 bunkList.style.marginTop = "5px";
                 bunkList.style.paddingLeft = "25px";
+                
                 const bunksInDiv = (window.divisions[divName]?.bunks || []);
                 if (bunksInDiv.length === 0) {
                     bunkList.innerHTML = `<span class="muted" style="font-size: 0.9em;">No bunks in this division.</span>`;
                 }
-                const selectedBunks = rules.divisions[divName] || [];
+
+                // "All" button
+                const allBunksChip = createLimitChip(`All ${divName}`, false, false);
+                allBunksChip.style.backgroundColor = "#f0f0f0";
+                allBunksChip.style.color = "#007BFF";
+                allBunksChip.style.borderColor = "#007BFF";
+                allBunksChip.onclick = () => {
+                    rules.divisions[divName] = []; // Set to empty array for "all"
+                    onSave();
+                    onRerender();
+                };
+                bunkList.appendChild(allBunksChip);
+
+                // Individual bunk chips
                 bunksInDiv.forEach(bunkName => {
-                    const bunkChip = createLimitChip(bunkName, selectedBunks.includes(bunkName), false);
+                    const bunkChip = createLimitChip(bunkName, allowedBunks.includes(bunkName), false);
                     bunkChip.onclick = () => {
-                        const bunkIdx = selectedBunks.indexOf(bunkName);
-                        if (bunkIdx > -1) { selectedBunks.splice(bunkIdx, 1); } 
-                        else { selectedBunks.push(bunkName); }
+                        const bunkIdx = allowedBunks.indexOf(bunkName);
+                        if (bunkIdx > -1) {
+                            allowedBunks.splice(bunkIdx, 1);
+                        } else {
+                            allowedBunks.push(bunkName);
+                        }
                         onSave();
                         onRerender();
                     };
@@ -686,7 +742,7 @@ function createLimitChip(name, isActive, isDivision = true) {
     chip.style.cursor = "pointer";
     chip.style.border = "1px solid #ccc";
     chip.style.fontSize = isDivision ? "0.95em" : "0.9em";
-    const activeBG = isDivision ? "#007BFF" : "#5bc0de";
+    const activeBG = isDivision ? "#007BFF" : "#5bc0de"; // Blue for division, teal for bunk
     const activeColor = "white";
     const inactiveBG = isDivision ? "#f0f0f0" : "#f9f9f9";
     const inactiveColor = "black";
