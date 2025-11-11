@@ -1,21 +1,13 @@
-// =================================================================
-// scheduler_ui.js
+// -------------------- scheduler_ui.js --------------------
+// UI-only: rendering, save/load, init, and window exports.
 //
-// UPDATED:
-// - **CRITICAL BUG FIX (Missing Blocks):**
-//   - `findFirstSlotForTime` was failing for blocks shorter
-//     than 30 minutes (like "Snacks").
-//   - It has been rewritten to find the time slot that
-//     *contains* the block's start time, not one that
-//     starts at the same time. This will fix "Snacks"
-//     and "Dismissal" not appearing.
-// - **CRITICAL BUG FIX (Duplicated Rows):**
-//   - The `blocksByDivision` de-duplication logic was
-//     insufficient.
-//   - It has been rewritten to use a `Set` to *guarantee*
-//     that each time block label appears only once per
-//     division, which will fix the duplicated rows.
-// =================================================================
+// UPDATED (BUG FIX):
+// - This version's `renderStaggeredView` function builds its
+//   rows based on the `manualSkeleton` for the day, *not* the
+//   `unifiedTimes` time grid.
+// - This fixes the "double row" bug you saw, as it will only
+//   render the blocks that actually exist in your skeleton.
+// -----------------------------------------------------------------
 
 // ===== HELPERS =====
 const INCREMENT_MINS = 30; // Base optimizer grid size
@@ -66,10 +58,6 @@ function minutesToTimeLabel(min) {
 
 
 // ===== NEW: Main updateTable function =====
-/**
- * UPDATED: This function no longer checks for a toggle
- * and *only* calls renderStaggeredView.
- */
 function updateTable() {
     const container = document.getElementById("scheduleTable");
     if (!container) return;
@@ -90,28 +78,6 @@ function getEntry(bunk, slotIndex) {
 }
 
 /**
- * Helper to calculate rowspan for a given bunk/slot.
- * NOTE: This is only used by the deleted renderFixedBlockView,
- * but is kept in case it's useful for other views later.
- */
-function calculateRowspan(bunk, slotIndex) {
-    let rowspan = 1;
-    if (!bunk) return 1; // Failsafe
-    const firstEntry = getEntry(bunk, slotIndex);
-    if (!firstEntry || !window.unifiedTimes) return 1;
-
-    for (let i = slotIndex + 1; i < window.unifiedTimes.length; i++) {
-        const nextEntry = getEntry(bunk, i);
-        if (nextEntry && nextEntry.continuation && nextEntry.field === firstEntry.field) {
-            rowspan++;
-        } else {
-            break;
-        }
-    }
-    return rowspan;
-}
-
-/**
  * Helper to format a schedule entry into text.
  */
 function formatEntry(entry) {
@@ -128,56 +94,32 @@ function formatEntry(entry) {
 }
 
 /**
- * --- BUG FIX ---
  * Helper: Finds the *first* 30-min slot index
- * that *contains* the start time of a custom block.
+ * that matches the start time of a custom block.
  */
 function findFirstSlotForTime(startMin) {
     if (!window.unifiedTimes) return -1;
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
         const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-        const slotEnd = slotStart + INCREMENT_MINS;
         
-        // Check if the block's start time falls *within* this slot
-        // e.g., block starts at 9:05 (545)
-        // slot is 9:00-9:30 (540-570)
-        // 545 >= 540 AND 545 < 570 -> TRUE
-        if (startMin >= slotStart && startMin < slotEnd) {
-            return i;
-        }
-    }
-    // Failsafe: if no slot contains it (e.g., block starts at 8:59 but grid starts at 9:00)
-    // find the first slot it's "mostly" in.
-    for (let i = 0; i < window.unifiedTimes.length; i++) {
-        const slotStart = new Date(window.unifiedTimes[i].start).getHours() * 60 + new Date(window.unifiedTimes[i].start).getMinutes();
+        // Find the slot that this time *falls into*
         if (slotStart >= startMin && slotStart < startMin + INCREMENT_MINS) {
             return i;
         }
     }
-    return -1;
-}
-
-/**
- * NEW Helper: Finds all 30-min slot indices within a time range.
- * (Used by renderFixedBlockView, but not Staggered)
- */
-function findSlotsForRange(startMin, endMin) {
-    const slots = [];
-    if (!window.unifiedTimes) return slots;
     
+    // Fallback: Find the closest slot
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
         const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-        
-        // Find any slot that *starts* within the block
-        if (slotStart >= startMin && slotStart < endMin) {
-            slots.push(i);
+        if (slotStart >= startMin) {
+            return i;
         }
     }
-    return slots;
+    
+    return -1;
 }
-
 
 /**
  * Renders the "Staggered" (YKLI) view
@@ -191,10 +133,12 @@ function renderStaggeredView(container) {
     const scheduleAssignments = window.scheduleAssignments || {};
 
     const dailyData = window.loadCurrentDailyData?.() || {};
+    // --- THIS IS THE KEY ---
+    // It reads the *same* skeleton that the optimizer just ran on.
     const manualSkeleton = dailyData.manualSkeleton || [];
     
     if (manualSkeleton.length === 0) {
-        container.innerHTML = "<p>No schedule built for this day. Go to the 'Daily Adjustments' tab to build one.</p>";
+        container.innerHTML = "<p>No schedule built for this day. Go to the 'Daily Adjustments' tab to run the optimizer.</p>";
         return;
     }
 
@@ -258,18 +202,13 @@ function renderStaggeredView(container) {
         });
         divBlocks.sort((a,b) => a.startMin - b.startMin);
         
-        // --- BUG FIX: Use a Set to guarantee unique labels ---
-        const uniqueLabels = new Set();
-        blocksByDivision[div] = divBlocks.filter(block => {
-            if (!block.label || uniqueLabels.has(block.label)) {
-                return false;
-            }
-            uniqueLabels.add(block.label);
-            return true;
-        });
+        // --- THIS FILTER FIXES THE "DOUBLE ROW" BUG ---
+        blocksByDivision[div] = divBlocks.filter((block, index, self) =>
+            index === self.findIndex((t) => (t.label === block.label))
+        );
     });
 
-    // --- NEW LOGIC: "Flatten" split blocks into two half-blocks ---
+    // --- "Flatten" split blocks into two half-blocks ---
     const splitBlocksByDivision = {};
     let maxEvents = 0;
 
@@ -309,7 +248,7 @@ function renderStaggeredView(container) {
             maxEvents = flattenedBlocks.length;
         }
     });
-    // --- END OF NEW LOGIC ---
+    // --- END OF FLATTENING ---
 
 
     // Now render the rows, one for each "event index"
@@ -318,7 +257,6 @@ function renderStaggeredView(container) {
         
         availableDivisions.forEach(div => {
             const bunks = divisions[div]?.bunks || [];
-            // Use the NEW splitBlocksByDivision object
             const blocks = splitBlocksByDivision[div] || []; 
             const eventBlock = blocks[i]; // Get the i-th event block for this division
             
@@ -327,7 +265,6 @@ function renderStaggeredView(container) {
             tdTime.style.border = "1px solid #ccc";
             tdTime.style.verticalAlign = "top";
             if (eventBlock) {
-                // The label is now pre-formatted (e.g., "12:20pm - 1:10pm")
                 tdTime.textContent = eventBlock.label; 
             } else {
                 tdTime.className = "grey-cell";
@@ -337,7 +274,6 @@ function renderStaggeredView(container) {
             // --- 2. Add ACTIVITY cells (Merged or Individual) ---
             
             if (eventBlock && (eventBlock.event === 'League Game' || eventBlock.event === 'Specialty League')) {
-            
                 // === LEAGUE GAME / SPECIALTY LEAGUE: MERGED CELL ===
                 const tdLeague = document.createElement("td");
                 tdLeague.colSpan = bunks.length;
@@ -349,10 +285,10 @@ function renderStaggeredView(container) {
                 const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
                 
                 if (eventBlock.event === 'Specialty League') {
-                    // --- NEW: Specialty League Formatting (Group by Field) ---
+                    // --- Specialty League Formatting (Group by Field) ---
                     const gamesByField = new Map();
                     if (firstSlotIndex !== -1) {
-                        const uniqueMatchups = new Set(); // Prevent duplicates
+                        const uniqueMatchups = new Set(); 
                         bunks.forEach(bunk => {
                             const entry = getEntry(bunk, firstSlotIndex);
                             if (entry && entry._h2h && entry.sport) {
@@ -373,7 +309,6 @@ function renderStaggeredView(container) {
                         html = '<p class="muted" style="margin:0; padding: 4px;">Specialty League</p>';
                     }
                     gamesByField.forEach((matchups, field) => {
-                        // Strip the sport name (e.g., "(Basketball)") from the end
                         const matchupNames = matchups.map(m => m.substring(0, m.lastIndexOf('(')).trim());
                         html += `<div style="margin-bottom: 2px;">
                                     <strong>${matchupNames.join(', ')}</strong> - ${field}
@@ -383,7 +318,7 @@ function renderStaggeredView(container) {
                     tdLeague.innerHTML = html;
 
                 } else {
-                    // --- ORIGINAL: Regular League Formatting (List) ---
+                    // --- Regular League Formatting (List) ---
                     let games = new Map();
                     if (firstSlotIndex !== -1) {
                         bunks.forEach(bunk => {
@@ -404,6 +339,7 @@ function renderStaggeredView(container) {
                     if (games.size > 0) { html += '</ul>'; }
                     tdLeague.innerHTML = html;
                 }
+                
                 tr.appendChild(tdLeague);
 
             } else {
@@ -414,8 +350,6 @@ function renderStaggeredView(container) {
                     tdActivity.style.verticalAlign = "top";
                     
                     if (eventBlock) {
-                        // We just need to find the activity for the *start time*
-                        // of this specific block (which is now a half-block).
                         const slotIndex = findFirstSlotForTime(eventBlock.startMin);
                         const entry = getEntry(bunk, slotIndex);
 
@@ -443,12 +377,6 @@ function renderStaggeredView(container) {
     container.appendChild(table);
 }
 
-
-/**
- * =================================================================
- * ===== renderFixedBlockView HAS BEEN DELETED =====================
- * =================================================================
- */
 
 // ===== Save/Load/Init =====
 
@@ -484,9 +412,6 @@ function reconcileOrRenderSaved() {
     updateTable(); // This will now call the correct renderer
 }
 
-/**
- * UPDATED: This function no longer looks for the toggle.
- */
 function initScheduleSystem() {
     try {
         window.scheduleAssignments = window.scheduleAssignments || {};
@@ -502,3 +427,5 @@ function initScheduleSystem() {
 window.updateTable = window.updateTable || updateTable;
 window.initScheduleSystem = window.initScheduleSystem || initScheduleSystem;
 window.saveSchedule = window.saveSchedule || saveSchedule;
+
+}
