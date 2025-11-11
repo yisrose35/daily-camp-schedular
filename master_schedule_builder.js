@@ -2,15 +2,10 @@
 // master_schedule_builder.js
 //
 // UPDATED:
-// - **Major UI Overhaul:**
-//   - `renderTemplateUI` has been completely rewritten.
-//   - The bulky 2-column layout is replaced with a single,
-//     compact "toolbar" for Load/Save.
-//   - The "Day of Week Assignments" and "Delete" button are
-//     now hidden inside a collapsible <details> element,
-//     saving a large amount of space.
-// - All other logic (loading, saving, grid rendering) is
-//   unchanged.
+// - **MOVED** the "Run Optimizer" button and the local
+//   `runOptimizer` helper function to `daily_adjustments.js`.
+// - This file is now only responsible for building and
+//   assigning templates.
 // =================================================================
 
 (function() {
@@ -60,18 +55,13 @@ function init() {
     loadDailySkeleton();
     
     // 2. Build the main UI
+    // --- REMOVED scheduler-controls div and run-optimizer-btn ---
     container.innerHTML = `
         <div id="scheduler-template-ui" style="padding: 15px; background: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 20px;">
             </div>
         
         <div id="scheduler-palette" style="padding: 10px; background: #f4f4f4; border-radius: 8px; margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px;">
             </div>
-        
-        <div id="scheduler-controls" style="margin-bottom: 15px; display: flex; justify-content: flex-end; align-items: center;">
-            <button id="run-optimizer-btn" style="background: #28a745; color: white; padding: 12px 20px; font-size: 1.2em; border: none; border-radius: 5px; cursor: pointer;">
-                Run Optimizer & Create Schedule
-            </button>
-        </div>
         
         <div id="scheduler-grid" style="overflow-x: auto; border: 1px solid #999;">
             </div>
@@ -81,19 +71,15 @@ function init() {
     grid = document.getElementById("scheduler-grid");
 
     // 3. Render all components
-    renderTemplateUI(); // NEW
+    renderTemplateUI(); 
     renderPalette();
     renderGrid();
     
-    // 4. Hook up optimizer button
-    document.getElementById("run-optimizer-btn").onclick = () => {
-        runOptimizer();
-    };
+    // 4. "Run Optimizer" button hookup REMOVED
 }
 
 /**
  * NEW: Renders the new template management UI
- * --- COMPLETELY REWRITTEN ---
  */
 function renderTemplateUI() {
     const uiContainer = document.getElementById("scheduler-template-ui");
@@ -591,37 +577,7 @@ function renderEventTile(event, top, height) {
     `;
 }
 
-/**
- * --- BUG FIX ---
- * This function now runs the optimizer on the in-memory
- * `dailySkeleton` instead of re-loading from storage.
- */
-function runOptimizer() {
-    if (!window.runSkeletonOptimizer) {
-        alert("Error: 'runSkeletonOptimizer' function not found. Is scheduler_logic_core.js loaded?");
-        return;
-    }
-    
-    // Use the skeleton currently in the builder
-    if (dailySkeleton.length === 0) {
-        alert("Skeleton is empty. Please add blocks to the schedule before running the optimizer.");
-        return;
-    }
-
-    // Save this skeleton to the *current day* so the
-    // staggered view can read it.
-    console.log("Running optimizer with skeleton currently in the builder.");
-    window.saveCurrentDailyData?.("manualSkeleton", dailySkeleton);
-    
-    const success = window.runSkeletonOptimizer(dailySkeleton);
-    
-    if (success) {
-        alert("Schedule Generated Successfully!");
-        window.showTab?.('schedule');
-    } else {
-        alert("Error during schedule generation. Check console for details (or skeleton may be empty).");
-    }
-}
+// --- runOptimizer function REMOVED ---
 
 // --- Save/Load Skeleton ---
 
