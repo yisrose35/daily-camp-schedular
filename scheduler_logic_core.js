@@ -2,11 +2,19 @@
 // scheduler_logic_core.js
 //
 // UPDATED:
-// - **CRITICAL BUG FIX:** `findSlotsForRange` was only checking
-//   if a slot *started* within a block. It's now fixed to check
-//   if a slot *overlaps* with a block (StartA < EndB && EndA > StartB).
-//   This fixes the bug where short pinned events like "Snacks"
-//   were not being placed on the grid.
+// - **CRITICAL BUG FIX 1 (The "No Field" bug):**
+//   - `canBlockFit` was checking both `allowedDivisions` (from
+//     sharing) and `limitUsage.divisions`. This was conflicting
+//     and causing no fields to be found.
+//   - I have **removed** the redundant `allowedDivisions` check.
+//     The `limitUsage` ("Allowed Divisions/Bunks") is now the
+//     single source of truth for this, as intended.
+// - **CRITICAL BUG FIX 2 (The "Free" Slots bug):**
+//   - `findSlotsForRange` was only checking if a slot *started*
+//     within a block. This failed for short blocks like "Snacks".
+//   - It is now fixed to find all slots that *overlap* with the
+//     block, which will correctly find slots for "Snacks",
+//     "Dismissal", and "Leagues".
 // =================================================================
 
 (function() {
@@ -121,7 +129,9 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const endMin = parseTimeToMinutes(item.endTime);
         const allSlots = findSlotsForRange(startMin, endMin); // <-- This now works
         
-        if (allSlots.length === 0) return;
+        if (allSlots.length === 0) {
+            console.warn(`No slots found for ${item.event} (${item.startTime} - ${item.endTime})`);
+        }
 
         if (item.type === 'pinned') {
             allBunks.forEach(bunk => {
@@ -182,7 +192,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         leagueGroups[key].bunks.add(block.bunk);
     });
 
-    let leagueSportRotationIndex = window.currentDailyData?.leagueSportRotationIndex || {};
+    // (Reverting to non-rotation logic as requested)
+    // let leagueSportRotationIndex = window.currentDailyData?.leagueSportRotationIndex || {};
 
     Object.values(leagueGroups).forEach(group => {
         
@@ -211,15 +222,15 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const allBunksInGroup = Array.from(group.bunks);
         const scheduledGames = []; 
         
-        let sportIndex = leagueSportRotationIndex[divLeagueName] || 0;
+        let gameIndex = 0; // (Reverted to simple index)
         
         const blockBase = { slots: group.slots, divName: group.divName };
 
         for (const [teamA, teamB] of matchups) {
             if (teamA === "BYE" || teamB === "BYE") continue;
             
-            const sport = sports[sportIndex % sports.length];
-            sportIndex++; 
+            const sport = sports[gameIndex % sports.length];
+            gameIndex++; 
             
             const possibleFields = fieldsBySport[sport] || [];
             let fieldName = null;
@@ -248,7 +259,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             scheduledGames.push(pick);
         }
         
-        leagueSportRotationIndex[divLeagueName] = sportIndex;
+        // (Reverted: no longer saves sport index)
         
         allBunksInGroup.forEach((bunk, bunkIndex) => {
             let pickToAssign;
@@ -348,7 +359,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     
     // ===== PASS 5: Save unifiedTimes and Update the UI =====
     
-    window.saveCurrentDailyData?.("leagueSportRotationIndex", leagueSportRotationIndex);
+    // (Reverted: no longer saves sport index)
     
     window.saveCurrentDailyData?.("unifiedTimes", window.unifiedTimes); 
     window.updateTable?.();
@@ -358,7 +369,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
 // --- Helper functions for Pass 3 & 4 ---
 
-// --- CRITICAL BUG FIX ---
+// --- CRITICAL BUG FIX (The "Free" Slots bug) ---
 /**
  * Finds all slot indices that OVERLAP with a given time range.
  * @param {number} startMin The start of the block (in minutes).
@@ -366,15 +377,16 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
  */
 function findSlotsForRange(startMin, endMin) {
     const slots = [];
-    if (!window.unifiedTimes || !startMin || !endMin) return slots;
+    // Failsafe for invalid skeleton blocks
+    if (startMin == null || endMin == null || !window.unifiedTimes) return slots;
     
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
         const slotStartMin = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
         const slotEndMin = slotStartMin + INCREMENT_MINS;
         
-        // Overlap check: (StartA < EndB) and (EndA > StartB)
-        if (slotStartMin < endMin && slotEndMin > startMin) {
+        // Overlap check: (Block Start < Slot End) and (Block End > Slot Start)
+        if (startMin < slotEndMin && endMin > slotStartMin) {
             slots.push(i);
         }
     }
@@ -451,36 +463,42 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     }
     const limit = (props && props.sharable) ? 2 : 1;
 
-    // Check 1: Division allowance (from Sharing)
-    if (props && props.allowedDivisions && props.allowedDivisions.length && !props.allowedDivisions.includes(block.divName)) return false;
-
-    // --- NEW: Check 2: Bunk/Division Limit (from limitUsage) ---
+    // --- CRITICAL BUG FIX (The "No Field" bug) ---
+    // The `allowedDivisions` check (from "Sharing") was conflicting
+    // with the `limitUsage` check (from "Allowed Divisions/Bunks").
+    // The `limitUsage` check is the correct one to use.
+    
+    // Check 1: Bunk/Division Limit (from limitUsage)
     const limitRules = props.limitUsage;
     if (limitRules && limitRules.enabled) {
+        // "Specific" rules are on
         if (!limitRules.divisions[block.divName]) {
+            // This entire division is NOT in the allowed list
             return false;
         }
         
         const allowedBunks = limitRules.divisions[block.divName];
         if (allowedBunks.length > 0) {
+            // Specific bunks are listed
             if (!block.bunk) {
-                // League pass logic (as before)
+                // This is a league pass (no bunk). We'll allow it.
             } else if (!allowedBunks.includes(block.bunk)) {
+                // This is a specific bunk, and it's NOT in the list
                 return false;
             }
         }
     }
-    // --- END OF NEW CHECK ---
+    // --- END BUG FIX ---
 
-    // Check 3 & 4: Usage per slot & Time-based availability
+    // Check 2 & 3: Usage per slot & Time-based availability
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) return false; 
         
-        // Check 3: Usage per slot
+        // Check 2: Usage per slot
         const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
         if (used >= limit) return false;
         
-        // Check 4: Time-based availability
+        // Check 3: Time-based availability
         if (!isTimeAvailable(slotIndex, props)) {
             return false; 
         }
@@ -602,6 +620,8 @@ function loadAndFilterData() {
         activityProperties[f.name] = {
             available: isMasterAvailable,
             sharable: f.sharableWith?.type === 'all' || f.sharableWith?.type === 'custom',
+            // This 'allowedDivisions' is from the "Sharing" section, which is a legacy
+            // check. The main check is now `limitUsage`.
             allowedDivisions: (f.sharableWith?.divisions?.length > 0) ? f.sharableWith.divisions : availableDivisions,
             limitUsage: f.limitUsage || { enabled: false, divisions: {} },
             timeRules: finalRules
@@ -638,6 +658,7 @@ function loadAndFilterData() {
     
     const h2hActivities = allActivities.filter(a => a.type === 'field' && a.sport);
     
+    // (Reverted: No longer loads 7-day history)
     const yesterdayData = window.loadPreviousDailyData?.() || {}; 
     const yesterdayHistory = {
         schedule: yesterdayData.scheduleAssignments || {},
