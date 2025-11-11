@@ -859,7 +859,7 @@ function renderOverrideMasterLists() {
     // --- 4. Specialty Leagues ---
     const specialtyLeagues = masterSettings.specialtyLeagues || {};
     const specialtyLeagueNames = Object.values(specialtyLeagues).map(l => l.name).sort();
-    if (specialtyLeagueNames.length === 0) {
+    if (specialtyLeagues.length === 0) {
         overrideSpecialtyLeaguesListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No specialty leagues found in Setup.</p>`;
     }
     specialtyLeagueNames.forEach(name => {
