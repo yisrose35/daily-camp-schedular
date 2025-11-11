@@ -1,21 +1,20 @@
 // =================================================================
 // fields.js
 //
-// UPDATED:
-// - `renderDetailPane`:
-//   - Removed hard-coded `commonActivities` array.
-//   - Now calls `window.getAllGlobalSports()` to get the master list
-//     of sports (pre-made and custom).
-//   - All sports are now rendered as toggle buttons.
-//   - The "Other activity" input now calls `window.addGlobalSport()`
-//     to register the new sport globally before adding it to the
-//     field and re-rendering the detail pane.
+// UPDATED (CRITICAL SAVE FIX):
+// - Removed the local `fields = []` variable.
+// - Removed the internal `loadData()` and `saveData()` functions.
+//   These were causing the data overwrite bug.
+// - `initFieldsTab` now gets its data from `window.getGlobalFields()`.
+// - All functions that need to save (like `addField`,
+//   `renderDetailPane`, etc.) now call `window.saveGlobalFields(fields)`
+//   to safely save the data via app1.js.
 // =================================================================
 
 (function() {
 'use strict';
 
-let fields = [];
+let fields = []; // This will be a *reference* to the global data
 let selectedItemId = null; // e.g., "field-Court 1"
 
 let fieldsListEl = null;
@@ -29,8 +28,17 @@ function initFieldsTab() {
     const container = document.getElementById("fields");
     if (!container) return;
     
-    // Load the data from the 'app1' object in global settings
-    loadData();
+    // --- UPDATED: Load data from app1.js ---
+    fields = window.getGlobalFields?.() || [];
+    
+    // Ensure all fields have the new structure (still good to do)
+    fields.forEach(f => {
+        f.available = f.available !== false;
+        f.timeRules = f.timeRules || [];
+        f.sharableWith = f.sharableWith || { type: 'not_sharable', divisions: [] };
+        f.limitUsage = f.limitUsage || { enabled: false, divisions: {} };
+    });
+    // --- END UPDATE ---
 
     // Create the new UI structure
     container.innerHTML = `
@@ -106,31 +114,8 @@ function initFieldsTab() {
     renderDetailPane();
 }
 
-/**
- * Loads fields from the 'app1' object in global settings
- */
-function loadData() {
-    const app1Data = window.loadGlobalSettings?.().app1 || {};
-    fields = app1Data.fields || [];
-    
-    // Ensure all fields have the new structure
-    fields.forEach(f => {
-        f.available = f.available !== false;
-        f.timeRules = f.timeRules || [];
-        f.sharableWith = f.sharableWith || { type: 'not_sharable', divisions: [] };
-        // Ensure limitUsage exists and has the correct shape
-        f.limitUsage = f.limitUsage || { enabled: false, divisions: {} };
-    });
-}
-
-/**
- * Saves fields back to the 'app1' object
- */
-function saveData() {
-    const app1Data = window.loadGlobalSettings?.().app1 || {};
-    app1Data.fields = fields;
-    window.saveGlobalSettings?.("app1", app1Data);
-}
+// --- REMOVED loadData() function ---
+// --- REMOVED saveData() function ---
 
 /**
  * Renders the left-hand list of fields
@@ -180,7 +165,7 @@ function createMasterListItem(type, item) {
     cb.onchange = (e) => { 
         e.stopPropagation();
         item.available = cb.checked; 
-        saveData(); 
+        window.saveGlobalFields(fields); // --- UPDATED ---
         renderDetailPane(); // Re-render details if this item is selected
     };
     
@@ -212,7 +197,6 @@ function renderDetailPane() {
         return;
     }
     
-    // --- UPDATED: Load sports from global list ---
     const allSports = window.getAllGlobalSports?.() || [];
 
     // Build the inner HTML for the pane
@@ -235,7 +219,7 @@ function renderDetailPane() {
         if (!newName.trim()) return;
         item.name = newName;
         selectedItemId = `${type}-${newName}`; // Update selected ID
-        saveData();
+        window.saveGlobalFields(fields); // --- UPDATED ---
         renderMasterLists(); // Re-render lists to show new name
     });
     
@@ -247,7 +231,7 @@ function renderDetailPane() {
         if (confirm(`Are you sure you want to delete "${item.name}"?`)) {
             fields = fields.filter(f => f.name !== item.name);
             selectedItemId = null;
-            saveData();
+            window.saveGlobalFields(fields); // --- UPDATED ---
             renderMasterLists();
             renderDetailPane();
         }
@@ -265,7 +249,7 @@ function renderDetailPane() {
     masterToggle.textContent = `This item is globally ${item.available ? 'AVAILABLE' : 'UNAVAILABLE'}. (Toggle in list view)`;
     detailPaneEl.appendChild(masterToggle);
 
-    // --- 3. Activities (UPDATED) ---
+    // --- 3. Activities ---
     const actSection = document.createElement('div');
     actSection.innerHTML = `<strong>Activities on this field:</strong>`;
     
@@ -275,42 +259,31 @@ function renderDetailPane() {
     bw.style.flexWrap = 'wrap';
     bw.style.gap = '5px';
     
-    // Render all sports as toggle buttons
     allSports.forEach(act => {
         const b = document.createElement("button"); 
         b.textContent = act; 
         b.className = "activity-button";
         if (item.activities.includes(act)) b.classList.add("active");
         b.onclick = () => {
-            if (item.activities.includes(act)) {
-                item.activities = item.activities.filter(a => a !== act);
-            } else {
-                item.activities.push(act);
-            }
-            saveData(); 
+            if (item.activities.includes(act)) item.activities = item.activities.filter(a => a !== act);
+            else item.activities.push(act);
+            window.saveGlobalFields(fields); // --- UPDATED ---
             renderDetailPane(); // Just re-render this pane
         };
         bw.appendChild(b);
     });
     
-    // "Add new sport" input
     const other = document.createElement("input");
     other.placeholder = "Add new sport type";
     other.style.marginTop = '5px';
     other.onkeyup = e => {
         if (e.key === "Enter" && other.value.trim()) {
             const newSport = other.value.trim();
-            
-            // 1. Register the sport globally (if it's new)
-            window.addGlobalSport?.(newSport);
-            
-            // 2. Add it to this field's list (if not already)
+            window.addGlobalSport?.(newSport); // Add to global list
             if (!item.activities.includes(newSport)) {
                 item.activities.push(newSport);
-                saveData();
             }
-            
-            // 3. Clear input and re-render to show the new button
+            window.saveGlobalFields(fields); // --- UPDATED ---
             other.value = "";
             renderDetailPane();
         }
@@ -321,7 +294,7 @@ function renderDetailPane() {
     detailPaneEl.appendChild(actSection);
 
     // --- 4. Sharable, Limit, and Time Rules ---
-    const onSave = saveData;
+    const onSave = () => window.saveGlobalFields(fields); // --- UPDATED ---
     const onRerender = renderDetailPane;
     
     const sharableControls = renderSharableControls(item, onSave, onRerender);
@@ -357,7 +330,7 @@ function addField() {
         timeRules: []
     });
     addFieldInput.value = "";
-    saveData();
+    window.saveGlobalFields(fields); // --- UPDATED ---
     selectedItemId = `field-${n}`; // Auto-select new item
     renderMasterLists();
     renderDetailPane();
@@ -668,19 +641,13 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
             const divChip = createLimitChip(divName, isAllowed, true);
             divChip.onclick = () => {
                 if (isAllowed) {
-                    // If it IS allowed, clicking it again will
-                    // toggle to bunk-specific mode *if* bunks exist
                     const bunksInDiv = (window.divisions[divName]?.bunks || []);
-                    if (bunksInDiv.length > 0 && allowedBunks.length === 0) { // Check if not already in bunk-specific mode
-                        // Switch to specific bunks (start with none)
+                    if (bunksInDiv.length > 0 && allowedBunks.length === 0) { 
                         rules.divisions[divName] = []; 
                     } else {
-                        // No bunks, or already in bunk-specific mode, so just disable
                         delete rules.divisions[divName];
                     }
                 } else {
-                    // If it's NOT allowed, clicking it
-                    // enables it for ALL bunks in that division
                     rules.divisions[divName] = []; // Empty array = all bunks
                 }
                 onSave();
