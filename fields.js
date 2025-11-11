@@ -1,18 +1,15 @@
 // =================================================================
 // fields.js
-// NEW FILE
-// This file manages the new "Fields" tab.
-// It uses a two-column (master-detail) layout.
 //
 // UPDATED:
-// - **NEW** `renderLimitUsageControls` is now
-//   `renderAllowedBunksControls` and provides a UI to select
-//   "All Divisions" or "Specific Divisions/Bunks".
-// - This new logic is saved to the `item.limitUsage` property.
-//   `limitUsage.enabled = true` means "Specific" is selected.
-//   `limitUsage.divisions` maps allowed divisions to bunks.
-//     - `{"5th Grade": []}` means all bunks in 5th Grade.
-//     - `{"5th Grade": ["Bunk 1"]}` means ONLY Bunk 1 in 5th Grade.
+// - `renderDetailPane`:
+//   - Removed hard-coded `commonActivities` array.
+//   - Now calls `window.getAllGlobalSports()` to get the master list
+//     of sports (pre-made and custom).
+//   - All sports are now rendered as toggle buttons.
+//   - The "Other activity" input now calls `window.addGlobalSport()`
+//     to register the new sport globally before adding it to the
+//     field and re-rendering the detail pane.
 // =================================================================
 
 (function() {
@@ -215,7 +212,8 @@ function renderDetailPane() {
         return;
     }
     
-    const commonActivities = ["Basketball","Baseball","Hockey","Football","Soccer","Volleyball","Lacrosse"];
+    // --- UPDATED: Load sports from global list ---
+    const allSports = window.getAllGlobalSports?.() || [];
 
     // Build the inner HTML for the pane
     detailPaneEl.innerHTML = ""; // Clear
@@ -267,7 +265,7 @@ function renderDetailPane() {
     masterToggle.textContent = `This item is globally ${item.available ? 'AVAILABLE' : 'UNAVAILABLE'}. (Toggle in list view)`;
     detailPaneEl.appendChild(masterToggle);
 
-    // --- 3. Activities ---
+    // --- 3. Activities (UPDATED) ---
     const actSection = document.createElement('div');
     actSection.innerHTML = `<strong>Activities on this field:</strong>`;
     
@@ -277,39 +275,46 @@ function renderDetailPane() {
     bw.style.flexWrap = 'wrap';
     bw.style.gap = '5px';
     
-    commonActivities.forEach(act => {
+    // Render all sports as toggle buttons
+    allSports.forEach(act => {
         const b = document.createElement("button"); 
         b.textContent = act; 
         b.className = "activity-button";
         if (item.activities.includes(act)) b.classList.add("active");
         b.onclick = () => {
-            if (item.activities.includes(act)) item.activities = item.activities.filter(a => a !== act);
-            else item.activities.push(act);
+            if (item.activities.includes(act)) {
+                item.activities = item.activities.filter(a => a !== act);
+            } else {
+                item.activities.push(act);
+            }
             saveData(); 
             renderDetailPane(); // Just re-render this pane
         };
         bw.appendChild(b);
     });
     
+    // "Add new sport" input
     const other = document.createElement("input");
-    other.placeholder = "Other activity";
+    other.placeholder = "Add new sport type";
     other.style.marginTop = '5px';
     other.onkeyup = e => {
         if (e.key === "Enter" && other.value.trim()) {
-            const v = other.value.trim();
-            if (!item.activities.includes(v)) item.activities.push(v);
+            const newSport = other.value.trim();
+            
+            // 1. Register the sport globally (if it's new)
+            window.addGlobalSport?.(newSport);
+            
+            // 2. Add it to this field's list (if not already)
+            if (!item.activities.includes(newSport)) {
+                item.activities.push(newSport);
+                saveData();
+            }
+            
+            // 3. Clear input and re-render to show the new button
             other.value = "";
-            saveData(); 
             renderDetailPane();
         }
     };
-    
-    if (item.activities.length > 0) {
-        const p = document.createElement("p"); 
-        p.style.marginTop = "6px";
-        p.textContent = "Current: " + item.activities.join(", ");
-        actSection.appendChild(p);
-    }
     
     actSection.appendChild(bw);
     actSection.appendChild(other);
@@ -325,7 +330,6 @@ function renderDetailPane() {
     sharableControls.style.marginTop = '15px';
     detailPaneEl.appendChild(sharableControls);
     
-    // --- UPDATED ---
     const limitControls = renderAllowedBunksControls(item, onSave, onRerender);
     detailPaneEl.appendChild(limitControls);
     
@@ -667,11 +671,11 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
                     // If it IS allowed, clicking it again will
                     // toggle to bunk-specific mode *if* bunks exist
                     const bunksInDiv = (window.divisions[divName]?.bunks || []);
-                    if (bunksInDiv.length > 0) {
+                    if (bunksInDiv.length > 0 && allowedBunks.length === 0) { // Check if not already in bunk-specific mode
                         // Switch to specific bunks (start with none)
                         rules.divisions[divName] = []; 
                     } else {
-                        // No bunks, so just disable
+                        // No bunks, or already in bunk-specific mode, so just disable
                         delete rules.divisions[divName];
                     }
                 } else {
@@ -684,8 +688,8 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
             };
             divWrapper.appendChild(divChip);
 
-            // Bunk-level chips (if in bunk-specific mode)
-            if (isAllowed && allowedBunks.length > 0) {
+            // Bunk-level chips (if in bunk-specific mode, i.e., array exists)
+            if (isAllowed) {
                 const bunkList = document.createElement("div");
                 bunkList.style.display = "flex";
                 bunkList.style.flexWrap = "wrap";
@@ -698,17 +702,19 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
                     bunkList.innerHTML = `<span class="muted" style="font-size: 0.9em;">No bunks in this division.</span>`;
                 }
 
-                // "All" button
-                const allBunksChip = createLimitChip(`All ${divName}`, false, false);
-                allBunksChip.style.backgroundColor = "#f0f0f0";
-                allBunksChip.style.color = "#007BFF";
-                allBunksChip.style.borderColor = "#007BFF";
-                allBunksChip.onclick = () => {
-                    rules.divisions[divName] = []; // Set to empty array for "all"
-                    onSave();
-                    onRerender();
-                };
-                bunkList.appendChild(allBunksChip);
+                // "All" button (only show if in bunk-specific mode)
+                if (allowedBunks.length > 0) {
+                    const allBunksChip = createLimitChip(`All ${divName}`, false, false);
+                    allBunksChip.style.backgroundColor = "#f0f0f0";
+                    allBunksChip.style.color = "#007BFF";
+                    allBunksChip.style.borderColor = "#007BFF";
+                    allBunksChip.onclick = () => {
+                        rules.divisions[divName] = []; // Set to empty array for "all"
+                        onSave();
+                        onRerender();
+                    };
+                    bunkList.appendChild(allBunksChip);
+                }
 
                 // Individual bunk chips
                 bunksInDiv.forEach(bunkName => {
@@ -733,6 +739,7 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
     }
     return container;
 }
+
 
 function createLimitChip(name, isActive, isDivision = true) {
     const chip = document.createElement("span");
