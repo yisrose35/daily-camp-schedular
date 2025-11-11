@@ -3,19 +3,15 @@
 // This file creates the UI for the "Daily Overrides" tab.
 //
 // UPDATED:
-// - **NEW** Added `disabledSports` to the `currentOverrides` object.
-// - `init`: Loads `dailyData.disabledSports`.
-// - `init`: Added a new "Daily Sport Availability" section to
-//   the HTML layout, with a container `id="override-sports-list"`.
-// - **NEW Function:** `renderOverrideSportsList()`:
-//   - Fetches the global sports list from `window.getAllGlobalSports()`.
-//   - Renders a toggle for each sport.
-//   - Toggles are "Enabled" (checked) by default.
-//   - Toggles are "Disabled" (unchecked) if the sport is found in
-//     the `currentOverrides.disabledSports` list.
-//   - Clicking a toggle adds/removes the sport from the
-//     `disabledSports` list and saves it to the current day's data.
-// - `init` now calls `renderOverrideSportsList()` on load.
+// - **REMOVED** the global "Daily Sport Availability" section
+//   from the bottom of the tab.
+// - **NEW:** `renderOverrideDetailPane` for fields now also
+//   renders a list of toggles for each sport assigned to that
+//   field (from the "Fields" tab).
+// - This new list reads from and saves to a new data property:
+//   `dailyDisabledSportsByField`.
+// - The `init` function has been updated to load this new
+//   property from daily data.
 // =================================================================
 
 (function() {
@@ -27,7 +23,7 @@ let currentOverrides = {
   dailyFieldAvailability: {},
   leagues: [],
   disabledSpecialtyLeagues: [],
-  disabledSports: [] // NEW
+  dailyDisabledSportsByField: {} // <-- NEW
 };
 
 // --- Helper containers ---
@@ -40,7 +36,6 @@ let overrideSpecialsListEl = null;
 let overrideLeaguesListEl = null;
 let overrideSpecialtyLeaguesListEl = null;
 let overrideDetailPaneEl = null;
-let overrideSportsListEl = null; // NEW
 
 // =================================================================
 // ===== START: SKELETON EDITOR LOGIC =====
@@ -185,11 +180,11 @@ function renderGrid(gridContainer) {
     }
     gridHtml += `</div>`;
     availableDivisions.forEach((divName, i) => {
-        // --- REMOVED timeline, divStart, divEnd logic ---
+        // --- REMOVED timeline logic ---
         
         gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
         
-        // --- REMOVED grayed-out area 'if' blocks ---
+        // --- REMOVED grayed-out area logic ---
         
         dailyOverrideSkeleton.filter(ev => ev.division === divName).forEach(event => {
             const startMin = parseTimeToMinutes(event.startTime);
@@ -373,7 +368,7 @@ function init() {
 
   console.log("Daily Overrides: Initializing for", window.currentScheduleDate);
   
-  // --- UPDATED: Re-ordered layout ---
+  // --- UPDATED: Removed the "Daily Sport Availability" section ---
   container.innerHTML = `
     <h2>Overrides & Trips for ${window.currentScheduleDate}</h2>
     
@@ -407,24 +402,16 @@ function init() {
               
               <h4 style="margin-top: 15px;">Specialty Leagues</h4>
               <div id="override-specialty-leagues-list" class="master-list"></div>
-          </div>
+              
+              </div>
 
           <div style="flex: 2; min-width: 400px; position: sticky; top: 20px;">
               <h4>Details</h4>
               <div id="override-detail-pane" class="detail-pane">
-                  <p class="muted">Select an item from the left to edit its details.</p>
+                  <p class="muted">Select an item from the left to edit its daily override.</p>
               </div>
           </div>
       </div>
-      
-      <h3 style="margin-top: 20px;">Daily Sport Availability</h3>
-      <p class="muted" style="font-size: 0.9em;">
-        Turn sports on or off for <strong>this day only</strong>.
-        This will override the global settings in the "Fields" tab.
-      </p>
-      <div id="override-sports-list" style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px;">
-        </div>
-      
     </div>
     
     <style>
@@ -452,6 +439,21 @@ function init() {
             background: #fdfdfd;
             min-height: 300px;
         }
+        /* NEW: Styles for the sport toggle list */
+        .sport-override-list {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+        }
+        .sport-override-list label {
+            display: block;
+            margin: 5px 0 5px 10px;
+            font-size: 1.0em;
+        }
+        .sport-override-list label input {
+            margin-right: 8px;
+            vertical-align: middle;
+        }
     </style>
   `;
 
@@ -465,7 +467,7 @@ function init() {
   overrideLeaguesListEl = document.getElementById("override-leagues-list");
   overrideSpecialtyLeaguesListEl = document.getElementById("override-specialty-leagues-list");
   overrideDetailPaneEl = document.getElementById("override-detail-pane");
-  overrideSportsListEl = document.getElementById("override-sports-list"); // NEW
+
 
   // 1. Load Master "Setup" Data
   masterSettings.global = window.loadGlobalSettings?.() || {};
@@ -477,8 +479,11 @@ function init() {
   const dailyData = window.loadCurrentDailyData?.() || {};
   
   currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
+  currentOverrides.leagues = (dailyData.overrides || {}).leagues || [];
+  currentOverrides.disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
+  currentOverrides.dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {}; // <-- NEW
   
-  // --- One-time migration from old system ---
+  // --- One-time migration from old system (can stay) ---
   if (dailyData.fieldAvailability) {
     console.log("Daily Overrides: Migrating old 'fieldAvailability' overrides...");
     const oldRules = dailyData.fieldAvailability || {};
@@ -499,19 +504,13 @@ function init() {
     window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
   }
   // --- End Migration ---
-  
-  currentOverrides.leagues = (dailyData.overrides || {}).leagues || [];
-  currentOverrides.disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
-  currentOverrides.disabledSports = dailyData.disabledSports || []; // NEW
 
   // 3. Render ALL UI sections
   initDailySkeletonUI(); // Render the skeleton editor
   renderTripsForm();     // Render the trip form
   
-  // --- NEW Render Calls ---
   renderOverrideMasterLists();
   renderOverrideDetailPane();
-  renderOverrideSportsList(); // NEW
 }
 
 
@@ -860,9 +859,50 @@ function renderOverrideDetailPane() {
             renderOverrideDetailPane(); // Re-render this pane
         };
 
+        // Render the Time Rules UI
         overrideDetailPaneEl.appendChild(
             renderTimeRulesUI(name, globalRules, dailyRules, onSave)
         );
+        
+        // --- NEW: Render Sport Availability for Fields ---
+        if (type === 'field') {
+            const sportListContainer = document.createElement('div');
+            sportListContainer.className = 'sport-override-list';
+            sportListContainer.innerHTML = `<strong>Daily Sport Availability for ${name}</strong>`;
+            
+            const sports = item.activities || [];
+            if (sports.length === 0) {
+                sportListContainer.innerHTML += `<p class="muted" style="margin: 5px 0 0 10px; font-size: 0.9em;">No sports are assigned to this field in the "Fields" tab.</p>`;
+            }
+            
+            const disabledToday = currentOverrides.dailyDisabledSportsByField[name] || [];
+            
+            sports.forEach(sport => {
+                // A sport is enabled if it's NOT in the disabled list
+                const isEnabled = !disabledToday.includes(sport);
+                const el = createCheckbox(sport, isEnabled);
+                
+                el.checkbox.onchange = () => {
+                    let list = currentOverrides.dailyDisabledSportsByField[name] || [];
+                    
+                    if (el.checkbox.checked) {
+                        // Sport is ON, so REMOVE it from the disabled list
+                        list = list.filter(s => s !== sport);
+                    } else {
+                        // Sport is OFF, so ADD it to the disabled list
+                        if (!list.includes(sport)) {
+                            list.push(sport);
+                        }
+                    }
+                    
+                    currentOverrides.dailyDisabledSportsByField[name] = list;
+                    window.saveCurrentDailyData("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
+                };
+                sportListContainer.appendChild(el.wrapper);
+            });
+            
+            overrideDetailPaneEl.appendChild(sportListContainer);
+        }
     }
     
     // --- 2. Handle Regular Leagues (Disable Toggle) ---
@@ -907,59 +947,6 @@ function renderOverrideDetailPane() {
 // =================================================================
 // ===== END: NEW MASTER/DETAIL UI FUNCTIONS =====
 // =================================================================
-
-// --- NEW: Renders the Daily Sport Availability toggles ---
-function renderOverrideSportsList() {
-    if (!overrideSportsListEl) return;
-    overrideSportsListEl.innerHTML = "";
-    
-    const allSports = window.getAllGlobalSports?.() || [];
-    if (allSports.length === 0) {
-        overrideSportsListEl.innerHTML = `<p class="muted">No sports found in Setup.</p>`;
-        return;
-    }
-    
-    allSports.forEach(sport => {
-        // A sport is ENABLED if it is NOT in the disabled list
-        const isEnabled = !currentOverrides.disabledSports.includes(sport);
-        
-        const label = document.createElement('label');
-        label.className = 'switch';
-        label.style.marginRight = '15px'; // Spacing
-        
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.checked = isEnabled;
-        
-        checkbox.onchange = () => {
-            if (checkbox.checked) {
-                // --- ENABLED ---
-                // Remove from disabled list
-                currentOverrides.disabledSports = currentOverrides.disabledSports.filter(s => s !== sport);
-            } else {
-                // --- DISABLED ---
-                // Add to disabled list (if not already there)
-                if (!currentOverrides.disabledSports.includes(sport)) {
-                    currentOverrides.disabledSports.push(sport);
-                }
-            }
-            // Save the entire list
-            window.saveCurrentDailyData("disabledSports", currentOverrides.disabledSports);
-        };
-        
-        const slider = document.createElement('span');
-        slider.className = 'slider';
-        
-        const text = document.createElement('span');
-        text.textContent = sport;
-        text.style.marginLeft = '50px'; // Give space for the toggle
-        
-        label.appendChild(checkbox);
-        label.appendChild(slider);
-        label.appendChild(text);
-        overrideSportsListEl.appendChild(label);
-    });
-}
 
 
 /**
