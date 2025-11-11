@@ -1,15 +1,14 @@
-// -------------------- scheduler_logic_core.js --------------------
-// This file is now the "OPTIMIZER"
+// =================================================================
+// scheduler_logic_core.js
 //
 // UPDATED:
 // - `loadAndFilterData`:
-//   - **REMOVED** the global `disabledSports` logic.
-//   - **NEW:** Loads the `dailyDisabledSportsByField` object.
-//   - The logic for building `fieldsBySport` now checks this new
-//     object and skips any sport disabled for that specific field.
-//   - The logic for building `allActivities` also filters
-//     based on this new object.
-// -----------------------------------------------------------------
+//   - **NEW:** Loads the `disabledFields` and `disabledSpecials`
+//     lists from the daily overrides.
+//   - **NEW:** `allMasterActivities` is now filtered at the start
+//     to immediately remove any field or special that is disabled
+//     for the day via the new quick toggles.
+// =================================================================
 
 (function() {
 'use strict';
@@ -79,20 +78,17 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     let fieldUsageBySlot = {}; 
     
     // ===== PASS 1: Generate Master Time Grid =====
-    // --- UPDATED: Load global times from app1 settings ---
     const globalSettings = window.loadGlobalSettings?.() || {};
     const app1Data = globalSettings.app1 || {};
-    // Use fallback defaults if values are empty strings
     const globalStart = app1Data.globalStartTime || "9:00 AM";
     const globalEnd = app1Data.globalEndTime || "4:00 PM";
     
     let earliestMin = parseTimeToMinutes(globalStart);
     let latestMin = parseTimeToMinutes(globalEnd);
 
-    // Failsafe if times are invalid
-    if (earliestMin == null) earliestMin = 540; // 9:00 AM
-    if (latestMin == null) latestMin = 960; // 4:00 PM
-    if (latestMin <= earliestMin) latestMin = earliestMin + 60; // Ensure at least 1 hour
+    if (earliestMin == null) earliestMin = 540; 
+    if (latestMin == null) latestMin = 960; 
+    if (latestMin <= earliestMin) latestMin = earliestMin + 60; 
 
     const baseDate = new Date(1970, 0, 1, 0, 0, 0); 
     let currentMin = earliestMin;
@@ -378,10 +374,6 @@ function markFieldUsage(block, fieldName, fieldUsageBySlot) {
 
 
 // --- START OF NEW TIME LOGIC ---
-/**
- * NEW: Checks if a field is available for a specific time slot,
- * respecting the new timeRules array.
- */
 function isTimeAvailable(slotIndex, fieldProps) {
     if (!window.unifiedTimes || !window.unifiedTimes[slotIndex]) return false;
     
@@ -391,40 +383,31 @@ function isTimeAvailable(slotIndex, fieldProps) {
     
     const rules = fieldProps.timeRules || [];
     
-    // 1. If no rules, field is available (respecting master toggle).
     if (rules.length === 0) {
-        return fieldProps.available; // `available` is the master toggle from app1
+        return fieldProps.available;
     }
     
-    // 2. Check if master toggle is off.
     if (!fieldProps.available) {
         return false;
     }
 
-    // 3. Determine default state based on rules
-    // If *any* "Available" rule exists, the default becomes "Unavailable"
     const hasAvailableRules = rules.some(r => r.type === 'Available');
     let isAvailable = !hasAvailableRules;
 
-    // 4. Check "Available" rules first
     for (const rule of rules) {
         if (rule.type === 'Available') {
-            // Slot must be *fully contained* within an available block
             if (slotStartMin >= rule.startMin && slotEndMin <= rule.endMin) {
                 isAvailable = true;
-                break; // Found a matching "Available" rule
+                break;
             }
         }
     }
 
-    // 5. Check "Unavailable" rules (they override "Available" rules)
     for (const rule of rules) {
         if (rule.type === 'Unavailable') {
-            // Slot just needs to *overlap* with an unavailable block
-            // Overlap check: (StartA < EndB) and (EndA > StartB)
             if (slotStartMin < rule.endMin && slotEndMin > rule.startMin) {
                 isAvailable = false;
-                break; // Found a conflicting "Unavailable" rule
+                break;
             }
         }
     }
@@ -453,29 +436,18 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     // --- NEW: Check 2: Bunk/Division Limit (from limitUsage) ---
     const limitRules = props.limitUsage;
     if (limitRules && limitRules.enabled) {
-        // "Specific" rules are on
         if (!limitRules.divisions[block.divName]) {
-            // This entire division is NOT in the allowed list
             return false;
         }
         
         const allowedBunks = limitRules.divisions[block.divName];
         if (allowedBunks.length > 0) {
-            // Specific bunks are listed
             if (!block.bunk) {
-                // This is a league pass (no bunk). Since the division
-                // is specified, we'll allow it at the division level.
-                // This assumes if you want a league for a division,
-                // you wouldn't restrict the field from that division.
-                // This is a reasonable assumption for league scheduling.
+                // League pass logic (as before)
             } else if (!allowedBunks.includes(block.bunk)) {
-                // This is a specific bunk, and it's NOT in the list
                 return false;
             }
         }
-        // If we are here, it's either:
-        // 1. The division is in the list, and the allowedBunks array is empty (meaning "all bunks")
-        // 2. The division is in the list, and this specific bunk is in the allowedBunks array
     }
     // --- END OF NEW CHECK ---
 
@@ -489,7 +461,7 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
         
         // Check 4: Time-based availability
         if (!isTimeAvailable(slotIndex, props)) {
-            return false; // This slot is blocked by an override
+            return false; 
         }
     }
     return true;
@@ -540,7 +512,8 @@ function pairRoundRobin(teamList) {
 // --- START OF UPDATED FUNCTION ---
 /**
  * UPDATED: This function now loads and filters by
- * the new `dailyDisabledSportsByField` list.
+ * the new `dailyDisabledSportsByField`, `disabledFields`,
+ * and `disabledSpecials` lists.
  */
 function loadAndFilterData() {
     const globalSettings = window.loadGlobalSettings?.() || {};
@@ -562,7 +535,9 @@ function loadAndFilterData() {
     const dailyOverrides = dailyData.overrides || {};
     const disabledLeagues = dailyOverrides.leagues || [];
     const disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
-    const dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {}; // <-- NEW
+    const dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};
+    const disabledFields = dailyOverrides.disabledFields || []; // <-- NEW
+    const disabledSpecials = dailyOverrides.disabledSpecials || []; // <-- NEW
     
     const overrides = {
         bunks: dailyOverrides.bunks || [],
@@ -590,7 +565,12 @@ function loadAndFilterData() {
     }
     
     const activityProperties = {};
-    const allMasterActivities = masterFields.concat(masterSpecials);
+    // --- NEW: Filter master lists by daily overrides FIRST ---
+    const allMasterActivities = [
+        ...masterFields.filter(f => !disabledFields.includes(f.name)),
+        ...masterSpecials.filter(s => !disabledSpecials.includes(s.name))
+    ];
+    
     const availableActivityNames = [];
 
     allMasterActivities.forEach(f => {
@@ -613,12 +593,15 @@ function loadAndFilterData() {
             timeRules: finalRules
         };
 
+        // Only add if it's *globally* available (in setup)
+        // The daily quick-toggle is already handled above.
         if (isMasterAvailable) {
             availableActivityNames.push(f.name);
         }
     });
 
     window.allSchedulableNames = availableActivityNames;
+    // Filter availFields/Specials by the *already filtered* activity names
     const availFields = masterFields.filter(f => availableActivityNames.includes(f.name));
     const availSpecials = masterSpecials.filter(s => availableActivityNames.includes(s.name));
     
