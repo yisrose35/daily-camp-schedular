@@ -20,12 +20,12 @@
         <button class="tab-button" onclick="showTab('special_activities'); window.initSpecialActivitiesTab?.();">Special Activities</button>
         
         <button class="tab-button" onclick="showTab('master-scheduler'); window.initMasterScheduler?.();">
-            🗓️ Master Scheduler (Build)
+            🗓️ Master Scheduler (Templates)
         </button>
         <button class="tab-button" onclick="showTab('schedule')">Daily Schedule (View)</button>
         <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
         <button class="tab-button" onclick="showTab('specialty-leagues'); window.initSpecialtyLeagues?.();">🏆 Specialty Leagues</button>
-        <button class="tab-button" onclick="showTab('daily-overrides'); window.initDailyOverrides?.();">Daily Overrides</button>
+        <button class="tab-button" onclick="showTab('daily-adjustments'); window.initDailyAdjustments?.();">Daily Adjustments</button>
     </div>
 
     <div id="setup" class="tab-content active">
@@ -62,6 +62,7 @@
                 Update Grid Times
             </button>
         </div>
+
         <hr style="margin: 20px 0;">
         
         <h3>Clear Schedules</h3>
@@ -91,7 +92,6 @@
         <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">
             Erase All Camp Data (Reset Application)
         </button>
-
     </div> 
     
     <div id="fields" class="tab-content">
@@ -120,8 +120,8 @@
         <div id="specialtyLeaguesContainer"></div>
     </div>
 
-    <div id="daily-overrides" class="tab-content">
-        <div id="daily-overrides-content">
+    <div id="daily-adjustments" class="tab-content">
+        <div id="daily-adjustments-content">
         </div>
     </div>
 
@@ -144,6 +144,8 @@
                 window.initFieldsTab?.();
             } else if (id === 'special_activities') { // Init new tab
                 window.initSpecialActivitiesTab?.();
+            } else if (id === 'daily-adjustments') { // <-- UPDATED
+                window.initDailyAdjustments?.(); // <-- UPDATED
             }
         }
 
@@ -192,13 +194,14 @@
     </script>
 
     <script src="calendar.js" defer></script>
-    <script src="daily_overrides.js" defer></script>
+    <script src="daily_adjustments.js" defer></script>
     <script src="app1.js" defer></script>
     
     <script src="fields.js" defer></script>
     <script src="special_activities.js" defer></script>
     
     <script src="leagues.js" defer></script>
+
     <script src="specialty_leagues.js" defer></script> 
 
     <script src="master_schedule_builder.js" defer></script>
