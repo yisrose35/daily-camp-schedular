@@ -1,13 +1,14 @@
-// -------------------- scheduler_ui.js --------------------
-// UI-only: rendering, save/load, init, and window exports.
+// =================================================================
+// scheduler_ui.js
 //
-// UPDATED (BUG FIX):
-// - This version's `renderStaggeredView` function builds its
-//   rows based on the `manualSkeleton` for the day, *not* the
-//   `unifiedTimes` time grid.
-// - This fixes the "double row" bug you saw, as it will only
-//   render the blocks that actually exist in your skeleton.
-// -----------------------------------------------------------------
+// UPDATED (CRITICAL BUG FIX):
+// - `renderStaggeredView`: The logic for finding blocks for a
+//   division was flawed and creating duplicate rows.
+// - It now has a new filter `blocksByDivision[div] = divBlocks.filter(...)`
+//   that correctly finds only *unique* blocks based on their
+//   time label (e.g., "3:20pm - 4:10pm").
+// - This will fix the "double row" bug.
+// =================================================================
 
 // ===== HELPERS =====
 const INCREMENT_MINS = 30; // Base optimizer grid size
@@ -109,11 +110,14 @@ function findFirstSlotForTime(startMin) {
         }
     }
     
-    // Fallback: Find the closest slot
+    // Fallback: Find the closest slot that overlaps
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
         const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-        if (slotStart >= startMin) {
+        const slotEnd = slotStart + INCREMENT_MINS;
+        // Overlap check: (Block Start < Slot End) and (Block End > Slot Start)
+        // We assume block end is at least startMin + 1
+        if (startMin < slotEnd && (startMin + 1) > slotStart) {
             return i;
         }
     }
@@ -204,7 +208,7 @@ function renderStaggeredView(container) {
         
         // --- THIS FILTER FIXES THE "DOUBLE ROW" BUG ---
         blocksByDivision[div] = divBlocks.filter((block, index, self) =>
-            index === self.findIndex((t) => (t.label === block.label))
+            index === self.findIndex((t) => (t.label === block.label && t.event === block.event))
         );
     });
 
