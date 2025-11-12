@@ -143,6 +143,26 @@
         </div>
     </div>
 
+    <!-- ALL SCRIPT FILES LOADED FIRST -->
+    <script src="calendar.js" defer></script>
+    <script src="daily_adjustments.js" defer></script>
+    <script src="app1.js" defer></script>
+    <script src="analytics.js" defer></script> <!-- NEW SCRIPT -->
+    
+    <script src="fields.js" defer></script>
+    <script src="special_activities.js" defer></script>
+    
+    <script src="leagues.js" defer></script>
+
+    <script src="specialty_leagues.js" defer></script> 
+
+    <script src="master_schedule_builder.js" defer></script>
+    
+    <script src="scheduler_logic_core.js" defer></script>
+    <script src="scheduler_logic_fillers.js" defer></script>
+    <script src="scheduler_ui.js" defer></script>
+
+    <!-- INLINE SCRIPT MOVED TO THE VERY END -->
     <script>
         function showTab(id) {
             document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
@@ -212,23 +232,5 @@
             // when the user clicks the tab. This saves load time.
         }
     </script>
-
-    <script src="calendar.js" defer></script>
-    <script src="daily_adjustments.js" defer></script>
-    <script src="app1.js" defer></script>
-    <script src="analytics.js" defer></script> <!-- NEW SCRIPT -->
-    
-    <script src="fields.js" defer></script>
-    <script src="special_activities.js" defer></script>
-    
-    <script src="leagues.js" defer></script>
-
-    <script src="specialty_leagues.js" defer></script> 
-
-    <script src="master_schedule_builder.js" defer></script>
-    
-    <script src="scheduler_logic_core.js" defer></script>
-    <script src="scheduler_logic_fillers.js" defer></script>
-    <script src="scheduler_ui.js" defer></script>
 </body>
 </html>
