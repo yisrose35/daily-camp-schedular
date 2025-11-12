@@ -9,6 +9,8 @@
 // - **VALIDATION:** Added input validation to the time `prompt`s in
 //   `addDropListeners` to prevent bad time entries.
 // - **VALIDATION:** `parseTimeToMinutes` now requires 'am' or 'pm'.
+// - **NEW TILE:** Added "Dismissal" tile to the `TILES` constant
+//   and updated helper functions to match daily_adjustments.js.
 // =================================================================
 
 (function() {
@@ -32,6 +34,7 @@ const TILES = [
     { type: 'swim', name: 'Swim', style: 'background: #bbdefb; border: 1px solid #1976d2;', description: "A 'pinned' event. The optimizer will block out this time for 'Swim' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
     { type: 'lunch', name: 'Lunch', style: 'background: #fbe9e7; border: 1px solid #d84315;', description: "A 'pinned' event. The optimizer will block out this time for 'Lunch' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
     { type: 'snacks', name: 'Snacks', style: 'background: #fff9c4; border: 1px solid #fbc02d;', description: "A 'pinned' event. The optimizer will block out this time for 'Snacks' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
+    { type: 'dismissal', name: 'Dismissal', style: 'background: #f44336; color: white; border: 1px solid #b71c1c;', description: "A 'pinned' event. The optimizer will block out this time for 'Dismissal' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
     { type: 'custom', name: 'Custom Pinned Event', style: 'background: #eee; border: 1px solid #616161;', description: "A 'pinned' event. You will be asked to give it a custom name (e.g., 'Assembly' or 'Trip'). The optimizer will block out this time and will not schedule anything else here." }
 ];
 
@@ -41,7 +44,7 @@ function mapEventNameForOptimizer(name) {
     if (lowerName === 'activity') return { type: 'slot', event: 'General Activity Slot' };
     if (lowerName === 'sports') return { type: 'slot', event: 'Sports Slot' };
     if (lowerName === 'special activity' || lowerName === 'special') return { type: 'slot', event: 'Special Activity' };
-    if (lowerName === 'swim' || lowerName === 'lunch' || lowerName === 'snacks') return { type: 'pinned', event: name };
+    if (lowerName === 'swim' || lowerName === 'lunch' || lowerName === 'snacks' || lowerName === 'dismissal') return { type: 'pinned', event: name };
     return { type: 'pinned', event: name };
 }
 
@@ -501,7 +504,7 @@ function addDropListeners(selector) {
                     subEvents: [ event1, event2 ]
                 };
 
-            } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'custom') {
+            } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'custom' || tileData.type === 'dismissal') {
                 eventType = 'pinned';
                 
                 if (tileData.type === 'custom') {
@@ -596,6 +599,7 @@ function renderEventTile(event, top, height) {
         else if (event.event === 'General Activity Slot') tile = TILES.find(t => t.type === 'activity');
         else if (event.event === 'Sports Slot') tile = TILES.find(t => t.type === 'sports');
         else if (event.event === 'Special Activity') tile = TILES.find(t => t.type === 'special');
+        else if (event.event === 'Dismissal') tile = TILES.find(t => t.type === 'dismissal');
         else tile = TILES.find(t => t.type === 'custom');
     }
     
