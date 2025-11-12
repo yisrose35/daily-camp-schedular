@@ -1,22 +1,16 @@
 // =================================================================
 // app1.js
 //
-// FINAL VERIFIED VERSION
-// - **CRITICAL FIX:** Corrected all syntax errors (missing/extra braces).
-// - **INIT FUNCTION:** `window.initApp1` is correctly defined and exported.
-// - **Global Times:** Includes logic for "Global Camp Times" with
-//   "Update" button and validation. Defaults to "" for placeholders.
-// - **Global Sports:** Includes `getAllGlobalSports` and `addGlobalSport`.
-// - **Skeleton Management:** Includes `getSavedSkeletons`, `saveSkeleton`,
-//   `deleteSkeleton`, `getSkeletonAssignments`, `saveSkeletonAssignments`.
-// - **Cleaned:** Removed all traces of the old `division.timeline`.
-//
 // UPDATED:
-// - Added `specialActivities` to the file's state.
-// - Added `specialActivities` to `loadData` and `saveData`.
-// - Added the missing `window.getGlobalSpecialActivities` and
-//   `window.saveGlobalSpecialActivities` functions that
-//   `special_activities.js` depends on to make saving work.
+// - **REMOVED** `globalStartTime` and `globalEndTime`.
+// - The "Global Camp Times" UI and logic have been deleted from `initApp1`.
+// - **ADDED** `startTime` and `endTime` (defaulting to "") to the
+//   `divisions` object in `addDivision` and `loadData`.
+// - **MODIFIED** `setupDivisionButtons` to:
+//   - Add "Start Time" and "End Time" inputs for each division.
+//   - Add an "Update" button for each division to save its times.
+//   - Validate the times (must have "am/pm") upon update.
+// - `specialActivities` logic from last update is still present.
 // =================================================================
 
 (function() {
@@ -24,15 +18,11 @@
 
 // -------------------- State --------------------
 let bunks = [];
-let divisions = {}; // { divName:{ bunks:[], color } }
-let specialActivities = []; // NEW: For special_activities.js
+let divisions = {}; // { divName:{ bunks:[], color, startTime, endTime } }
+let specialActivities = []; // For special_activities.js
 
 let availableDivisions = [];
 let selectedDivision = null;
-
-// NEW: Global time settings default to empty
-let globalStartTime = "";
-let globalEndTime = "";
 
 // NEW: Master list of all sports
 let allSports = [];
@@ -76,23 +66,28 @@ function uid() {
 }
 
 function parseTimeToMinutes(str) {
-    if (!str || typeof str !== "string") return null;
-    let s = str.trim().toLowerCase();
-    let mer = null;
-    if (s.endsWith("am") || s.endsWith("pm")) {
-        mer = s.endsWith("am") ? "am" : "pm";
-        s = s.replace(/am|pm/g, "").trim();
-    }
-    const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-    if (!m) return null;
-    let hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-    if (mer) {
-        if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
-        else if (mer === "pm") hh += 12; // 1pm -> 13
-    }
-    return hh * 60 + mm;
+  if (!str || typeof str !== "string") return null;
+  let s = str.trim().toLowerCase();
+  let mer = null;
+  if (s.endsWith("am") || s.endsWith("pm")) {
+    mer = s.endsWith("am") ? "am" : "pm";
+    s = s.replace(/am|pm/g, "").trim();
+  }
+  
+  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+  if (!m) return null;
+  let hh = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
+
+  if (mer) {
+      if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
+      else if (mer === "pm") hh += 12; // 1pm -> 13
+  } else {
+      return null; // AM/PM is required
+  }
+
+  return hh * 60 + mm;
 }
 
 // -------------------- Bunks --------------------
@@ -173,7 +168,9 @@ function addDivision() {
 
         divisions[name] = { 
             bunks: [], 
-            color
+            color,
+            startTime: "", // NEW: Add blank start time
+            endTime: ""    // NEW: Add blank end time
         };
         
         window.divisions = divisions; // keep global in sync
@@ -186,6 +183,10 @@ function addDivision() {
     }
 }
 
+/**
+ * --- HEAVILY MODIFIED ---
+ * Now adds time inputs and an update button for each division.
+ */
 function setupDivisionButtons() {
     const cont = document.getElementById("divisionButtons"); 
     if (!cont) return; // Failsafe
@@ -202,8 +203,19 @@ function setupDivisionButtons() {
             return;
         }
 
-        const wrap = document.createElement("div"); wrap.className = "divisionWrapper";
-        const span = document.createElement("span"); span.textContent = name; span.className = "bunk-button";
+        // Main wrapper for the division's settings
+        const wrap = document.createElement("div"); 
+        wrap.className = "divisionWrapper";
+        
+        // --- 1. Top row: Name, Color ---
+        const topRow = document.createElement("div");
+        topRow.style.display = "flex";
+        topRow.style.alignItems = "center";
+        topRow.style.gap = "8px";
+
+        const span = document.createElement("span"); 
+        span.textContent = name; 
+        span.className = "bunk-button";
         span.style.backgroundColor = colorEnabled ? obj.color : "transparent";
         span.style.color = colorEnabled ? "#fff" : "inherit";
         span.onclick = () => {
@@ -228,19 +240,82 @@ function setupDivisionButtons() {
             window.initLeaguesTab?.();
             window.updateTable?.();
         });
-        wrap.appendChild(span);
-        const col = document.createElement("input"); col.type = "color";
-        col.value = obj.color; col.className = "colorPicker";
+        topRow.appendChild(span);
+        
+        const col = document.createElement("input"); 
+        col.type = "color";
+        col.value = obj.color; 
+        col.className = "colorPicker";
         col.oninput = e => {
             obj.color = e.target.value;
             if (colorEnabled) { span.style.backgroundColor = e.target.value; span.style.color = "#fff"; }
             saveData();
             window.updateTable?.();
         };
-        wrap.appendChild(col);
+        topRow.appendChild(col);
+        wrap.appendChild(topRow);
+
+        // --- 2. Bottom row: Time Inputs & Update Button ---
+        const bottomRow = document.createElement("div");
+        bottomRow.style.marginTop = "8px";
+        bottomRow.style.display = "flex";
+        bottomRow.style.alignItems = "center";
+        bottomRow.style.gap = "5px";
+
+        const startInput = document.createElement("input");
+        startInput.type = "text";
+        startInput.placeholder = "Start (e.g., 9:00am)";
+        startInput.value = obj.startTime || "";
+        startInput.style.width = "120px";
+        
+        const endInput = document.createElement("input");
+        endInput.type = "text";
+        endInput.placeholder = "End (e.g., 4:30pm)";
+        endInput.value = obj.endTime || "";
+        endInput.style.width = "120px";
+
+        const updateBtn = document.createElement("button");
+        updateBtn.textContent = "Update";
+        updateBtn.style.padding = "4px 8px";
+
+        updateBtn.onclick = () => {
+            const newStart = startInput.value.trim();
+            const newEnd = endInput.value.trim();
+            
+            // Validation
+            const startMin = parseTimeToMinutes(newStart);
+            const endMin = parseTimeToMinutes(newEnd);
+
+            if (startMin == null || endMin == null) {
+                alert("Error: Invalid time format. Please use '9:00am' or '2:30pm'. Both 'am' or 'pm' are required.");
+                return;
+            }
+            if (endMin <= startMin) {
+                alert("Error: End time must be after start time.");
+                return;
+            }
+            
+            // Save valid times to the division object
+            obj.startTime = newStart;
+            obj.endTime = newEnd;
+            saveData();
+
+            // Rerender grids if they are active
+            if (document.getElementById('master-scheduler')?.classList.contains('active')) {
+                window.initMasterScheduler?.();
+            } else if (document.getElementById('daily-adjustments')?.classList.contains('active')) {
+                window.initDailyAdjustments?.();
+            }
+        };
+
+        bottomRow.appendChild(startInput);
+        bottomRow.appendChild(document.createTextNode("to"));
+        bottomRow.appendChild(endInput);
+        bottomRow.appendChild(updateBtn);
+        wrap.appendChild(bottomRow);
+
         cont.appendChild(wrap);
     });
-    
 }
 // Hook up the color checkbox
 const enableColorEl = document.getElementById("enableColor");
@@ -260,8 +335,7 @@ function saveData() {
         divisions, 
         availableDivisions, 
         selectedDivision,
-        globalStartTime,
-        globalEndTime,
+        // globalStartTime/EndTime REMOVED
         allSports,
         savedSkeletons,
         skeletonAssignments,
@@ -277,6 +351,13 @@ function loadData() {
         divisions = data.divisions || {};
         specialActivities = data.specialActivities || []; // NEW: Load special activities
 
+        // --- NEW: Ensure old division data gets new time fields ---
+        Object.keys(divisions).forEach(divName => {
+            divisions[divName].startTime = divisions[divName].startTime || "";
+            divisions[divName].endTime = divisions[divName].endTime || "";
+        });
+        // --- End new logic ---
+
         availableDivisions = (data.availableDivisions && Array.isArray(data.availableDivisions))
             ? data.availableDivisions.slice()
             : Object.keys(divisions);
@@ -285,9 +366,7 @@ function loadData() {
         window.availableDivisions = availableDivisions;
         selectedDivision = data.selectedDivision || null;
         
-        // NEW: Load global times, defaulting to empty strings
-        globalStartTime = data.globalStartTime || "";
-        globalEndTime = data.globalEndTime || "";
+        // globalStartTime/EndTime REMOVED
         
         // NEW: Load master sports list
         if (data.allSports && Array.isArray(data.allSports)) {
@@ -304,7 +383,7 @@ function loadData() {
     } catch (e) { console.error("Error loading data:", e); }
 }
 
-// -------------------- Init --------------------
+// -------------------- Init (UPDATED) --------------------
 function initApp1() {
     // --- BUNK LISTENERS ---
     const addBunkBtn = document.getElementById("addBunkBtn");
@@ -321,49 +400,7 @@ function initApp1() {
     // Load all data
     loadData();
     
-    // --- UPDATED: GLOBAL TIME LISTENERS ---
-    const globalStartInput = document.getElementById("globalStartTime");
-    const globalEndInput = document.getElementById("globalEndTime");
-    const updateTimeBtn = document.getElementById("updateGlobalTimeBtn");
-    
-    // Set the .value to the loaded data. If it's "", the placeholder will show.
-    if (globalStartInput) globalStartInput.value = globalStartTime;
-    if (globalEndInput) globalEndInput.value = globalEndTime;
-
-    if (updateTimeBtn) {
-        updateTimeBtn.onclick = () => {
-            const newStart = globalStartInput.value;
-            const newEnd = globalEndInput.value;
-            
-            // Validation
-            const startMin = parseTimeToMinutes(newStart);
-            const endMin = parseTimeToMinutes(newEnd);
-            
-            if (startMin == null || endMin == null) {
-                alert("Error: Invalid time format. Please use a format like '9:00 AM' or '2:30 PM'.");
-                return;
-            }
-            
-            if (endMin <= startMin) {
-                alert("Error: End time must be after start time.");
-                return;
-            }
-
-            // Save the valid times
-            globalStartTime = newStart;
-            globalEndTime = newEnd;
-            saveData();
-            
-            alert("Global times updated!");
-
-            // Force re-render of the active scheduler grid
-            if (document.getElementById('master-scheduler')?.classList.contains('active')) {
-                window.initMasterScheduler?.();
-            } else if (document.getElementById('daily-adjustments')?.classList.contains('active')) { // <-- UPDATED
-                window.initDailyAdjustments?.(); // <-- UPDATED
-            }
-        };
-    }
+    // --- GLOBAL TIME LISTENERS REMOVED ---
     
     // Render all UI components
     updateUnassigned();
