@@ -1,17 +1,14 @@
 // -------------------- scheduler_ui.js --------------------
 //
 // UPDATED (Major Bug Fix):
-// - **REVERTED** layout to the original "side-by-side" (single, wide) table
-//   per the user's request.
-// - **BUG FIX:** The jumbled text ("123456Time...") was caused by
-//   divisions with fewer blocks not adding empty cells, breaking the
-//   table structure.
-// - **THE FIX:** The main `renderStaggeredView` loop now *forces*
-//   the correct number of empty `<td>` cells to be added for
-//   any division that doesn't have an event at a given row index,
-//   which keeps all columns perfectly aligned.
-// - **KEPT:** The "Invalid Time" check for skeleton blocks with
-//   badly formatted times (e.g., "4:10" instead of "4:10pm").
+// - **REVERTED** to the "one-table-per-division" layout, as this is
+//   the only way to fix the "ghost" activity/jumbling bug.
+// - **ADDED** new CSS classes (`.schedule-view-wrapper`, `.schedule-division-table`)
+//   to allow `styles.css` to display these tables side-by-side.
+// - **THE FIX:** The "Invalid Time" bug is fixed. The code now
+//   *filters out* any block from the skeleton where the start or
+//   end time is invalid (`startMin === null` or `endMin === null`).
+//   These blocks will now be *completely disregarded*, as requested.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -126,7 +123,7 @@ function findFirstSlotForTime(startMin) {
 
 /**
  * Renders the "Staggered" (YKLI) view
- * --- REWRITTEN to fix alignment bugs with the side-by-side view ---
+ * --- REWRITTEN to be one table PER DIVISION ---
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -143,22 +140,27 @@ function renderStaggeredView(container) {
         return;
     }
 
-    const table = document.createElement("table");
-    table.style.borderCollapse = "collapse";
-    table.style.width = "100%";
+    // --- NEW: Add a wrapper for side-by-side styling ---
+    const wrapper = document.createElement("div");
+    wrapper.className = "schedule-view-wrapper";
+    container.appendChild(wrapper);
 
-    // --- 1. Build Header ---
-    const thead = document.createElement("thead");
-    const tr1 = document.createElement("tr"); // Division names
-    const tr2 = document.createElement("tr"); // Column titles (Time, Bunk 1, Bunk 2...)
-
+    // --- 1. Loop over each division and create a separate table ---
     availableDivisions.forEach((div) => {
         const bunks = (divisions[div]?.bunks || []).sort();
-        const bunkCount = bunks.length;
-        if (bunkCount === 0) return;
+        if (bunks.length === 0) return; // Don't render a table for a division with no bunks
+
+        const table = document.createElement("table");
+        table.className = "schedule-division-table"; // NEW CLASS
+        table.style.borderCollapse = "collapse";
+        
+        // --- 2. Build Header for this division ---
+        const thead = document.createElement("thead");
+        const tr1 = document.createElement("tr"); // Division name
+        const tr2 = document.createElement("tr"); // Column titles (Time, Bunk 1, Bunk 2...)
 
         const thDiv = document.createElement("th");
-        thDiv.colSpan = 1 + bunkCount; // 1 for Time, N for bunks
+        thDiv.colSpan = 1 + bunks.length; // 1 for Time, N for bunks
         thDiv.textContent = div;
         thDiv.style.background = divisions[div]?.color || "#333";
         thDiv.style.color = "#fff";
@@ -178,29 +180,27 @@ function renderStaggeredView(container) {
             thBunk.style.minWidth = "120px";
             tr2.appendChild(thBunk);
         });
-    });
-    thead.appendChild(tr1);
-    thead.appendChild(tr2);
-    table.appendChild(thead);
+        thead.appendChild(tr1);
+        thead.appendChild(tr2);
+        table.appendChild(thead);
 
-    // --- 2. Build Body (Event-based) ---
-    const tbody = document.createElement("tbody");
-    
-    // Find all unique, sorted blocks *per division* from the SKELETON
-    const blocksByDivision = {};
-    let maxEvents = 0; // Find the division with the MOST event blocks
-
-    availableDivisions.forEach(div => {
-        const divBlocks = [];
+        // --- 3. Build Body for this division (Event-based) ---
+        const tbody = document.createElement("tbody");
+        
+        // Find all unique, sorted blocks *for this division*
+        const divisionBlocks = [];
         manualSkeleton.forEach(item => {
             if (item.division === div) {
                 const startMin = parseTimeToMinutes(item.startTime);
                 const endMin = parseTimeToMinutes(item.endTime);
 
-                divBlocks.push({
-                    label: (startMin === null || endMin === null) ? 
-                           "Invalid Time" : 
-                           `${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}`,
+                // --- FIX: DISREGARD INVALID TIMES ---
+                if (startMin === null || endMin === null) {
+                    return; // Don't add this block at all
+                }
+
+                divisionBlocks.push({
+                    label: `${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}`,
                     startMin: startMin,
                     endMin: endMin,
                     event: item.event,
@@ -208,10 +208,9 @@ function renderStaggeredView(container) {
                 });
             }
         });
-        divBlocks.sort((a,b) => a.startMin - b.startMin);
+        divisionBlocks.sort((a,b) => a.startMin - b.startMin);
         
-        // Get unique blocks based on the text label
-        const uniqueBlocks = divBlocks.filter((block, index, self) =>
+        const uniqueBlocks = divisionBlocks.filter((block, index, self) =>
             index === self.findIndex((t) => (t.label === block.label))
         );
 
@@ -241,44 +240,31 @@ function renderStaggeredView(container) {
                 flattenedBlocks.push(block);
             }
         });
-        
-        blocksByDivision[div] = flattenedBlocks;
-        if (flattenedBlocks.length > maxEvents) {
-            maxEvents = flattenedBlocks.length;
+
+        // --- 4. Render rows for this division ---
+        if (flattenedBlocks.length === 0) {
+            const tr = document.createElement("tr");
+            const td = document.createElement("td");
+            td.colSpan = bunks.length + 1;
+            td.textContent = "No schedule blocks found for this division in the template.";
+            td.className = "grey-cell";
+            tr.appendChild(td);
+            tbody.appendChild(tr);
         }
-    });
-    // --- END OF NEW LOGIC ---
 
-
-    // Now render the rows, one for each "event index"
-    for (let i = 0; i < maxEvents; i++) {
-        const tr = document.createElement("tr");
-        
-        availableDivisions.forEach(div => {
-            const bunks = (divisions[div]?.bunks || []).sort();
-            if (bunks.length === 0) return; // Skip divisions with no bunks
-
-            const blocks = blocksByDivision[div] || []; 
-            const eventBlock = blocks[i]; // Get the i-th event block for this division
+        flattenedBlocks.forEach(eventBlock => {
+            const tr = document.createElement("tr");
             
-            // --- 1. Add the TIME cell for this division ---
+            // --- Add the TIME cell ---
             const tdTime = document.createElement("td");
             tdTime.style.border = "1px solid #ccc";
             tdTime.style.verticalAlign = "top";
             tdTime.style.fontWeight = "bold";
-
-            if (eventBlock) {
-                tdTime.textContent = eventBlock.label; 
-                 if (eventBlock.label === "Invalid Time") {
-                    tdTime.style.color = "red";
-                }
-            } else {
-                tdTime.className = "grey-cell"; // Grey out if no event
-            }
+            tdTime.textContent = eventBlock.label;
             tr.appendChild(tdTime);
 
-            // --- 2. Add ACTIVITY cells (Merged or Individual) ---
-            if (eventBlock && (eventBlock.event === 'League Game' || eventBlock.event === 'Specialty League')) {
+            // --- Add ACTIVITY cells (Merged or Individual) ---
+            if (eventBlock.event === 'League Game' || eventBlock.event === 'Specialty League') {
                 // === LEAGUE GAME / SPECIALTY LEAGUE: MERGED CELL ===
                 const tdLeague = document.createElement("td");
                 tdLeague.colSpan = bunks.length;
@@ -353,35 +339,27 @@ function renderStaggeredView(container) {
                     tdActivity.style.border = "1px solid #ccc";
                     tdActivity.style.verticalAlign = "top";
                     
-                    if (eventBlock) {
-                        const slotIndex = findFirstSlotForTime(eventBlock.startMin);
-                        const entry = getEntry(bunk, slotIndex);
+                    const slotIndex = findFirstSlotForTime(eventBlock.startMin);
+                    const entry = getEntry(bunk, slotIndex);
 
-                        if (entry) {
-                            tdActivity.textContent = formatEntry(entry);
-                            if (entry._h2h) {
-                                tdActivity.style.background = "#e8f4ff";
-                                tdActivity.style.fontWeight = "bold";
-                            } else if (entry._fixed) {
-                                tdActivity.style.background = "#f1f1f1";
-                            }
+                    if (entry) {
+                        tdActivity.textContent = formatEntry(entry);
+                        if (entry._h2h) {
+                            tdActivity.style.background = "#e8f4ff";
+                            tdActivity.style.fontWeight = "bold";
+                        } else if (entry._fixed) {
+                            tdActivity.style.background = "#f1f1f1";
                         }
-                    } else {
-                        // *** THIS IS THE FIX ***
-                        // If this division (blocks[i]) is undefined,
-                        // it means we must add an empty cell to keep
-                        // the table aligned.
-                        tdActivity.className = "grey-cell";
                     }
                     tr.appendChild(tdActivity);
                 });
             }
-        });
-        tbody.appendChild(tr);
-    } 
+            tbody.appendChild(tr);
+        }); 
 
-    table.appendChild(tbody);
-    container.appendChild(table);
+        table.appendChild(tbody);
+        wrapper.appendChild(table); // Add table to wrapper
+    }); // --- End of main division loop ---
 }
 
 
