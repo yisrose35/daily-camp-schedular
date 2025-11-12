@@ -13,6 +13,10 @@
 //   to show only that bunk's table.
 // - `renderReport` is now `renderBunkReport` and can target
 //   a specific container for the new Division Report.
+//
+// UPDATED (UI/UX):
+// - Added CSS classes to all generated elements for styling.
+// - Styled elements are now in styles.css.
 // =================================================================
 
 (function() {
@@ -40,26 +44,22 @@ function initRotationReport() {
     
     // 2. Build the UI
     container.innerHTML = `
-        <h2>Rotation Report</h2>
+        <h2 class="report-title">Rotation Report</h2>
         <p>See how many times each bunk has done a "regular" (non-league, non-pinned) activity in the past 7 days.</p>
         
-        <div style="display: flex; gap: 20px; align-items: flex-end;">
+        <div class="report-controls">
             <div>
-                <label for="report-division-select" style="font-weight: 600; font-size: 1.1em; display: block; margin-bottom: 5px;">
-                    1. Select a Division:
-                </label>
-                <select id="report-division-select" style="font-size: 1.1em; padding: 5px; min-width: 200px;"></select>
+                <label for="report-division-select">1. Select a Division:</label>
+                <select id="report-division-select" class="report-select"></select>
             </div>
             <div>
-                <label for="report-bunk-select" style="font-weight: 600; font-size: 1.1em; display: block; margin-bottom: 5px;">
-                    2. Select a Bunk (Optional):
-                </label>
-                <select id="report-bunk-select" style="font-size: 1.1em; padding: 5px; min-width: 200px;" disabled></select>
+                <label for="report-bunk-select">2. Select a Bunk (Optional):</label>
+                <select id="report-bunk-select" class="report-select" disabled></select>
             </div>
         </div>
         
-        <div id="report-table-container" style="margin-top: 20px;">
-            <p class="muted">Please select a division to view its report.</p>
+        <div id="report-table-container" class="report-container">
+            <p class="report-muted">Please select a division to view its report.</p>
         </div>
     `;
     
@@ -112,7 +112,7 @@ function onDivisionSelect() {
     if (!divName) {
         bunkSelect.innerHTML = "";
         bunkSelect.disabled = true;
-        reportContainer.innerHTML = `<p class="muted">Please select a division to view its report.</p>`;
+        reportContainer.innerHTML = `<p class="report-muted">Please select a division to view its report.</p>`;
         return;
     }
     
@@ -155,7 +155,7 @@ function renderDivisionReport(divName, bunks) {
     reportContainer.innerHTML = ""; // Clear container
     
     if (bunks.length === 0) {
-        reportContainer.innerHTML = `<p class="muted">No bunks found in ${divName}.</p>`;
+        reportContainer.innerHTML = `<p class="report-muted">No bunks found in ${divName}.</p>`;
         return;
     }
     
@@ -166,11 +166,10 @@ function renderDivisionReport(divName, bunks) {
     bunks.forEach(bunkName => {
         const bunkHeader = document.createElement('h3');
         bunkHeader.textContent = bunkName;
-        bunkHeader.style.marginTop = "25px";
-        bunkHeader.style.borderBottom = "2px solid #eee";
-        bunkHeader.style.paddingBottom = "5px";
+        bunkHeader.className = "report-bunk-header"; // NEW CLASS
         
         const tableDiv = document.createElement('div');
+        tableDiv.className = "report-bunk-table-wrapper"; // NEW CLASS
         
         reportContainer.appendChild(bunkHeader);
         reportContainer.appendChild(tableDiv);
@@ -188,7 +187,7 @@ function renderDivisionReport(divName, bunks) {
  */
 function renderBunkReport(bunkName, targetContainer, clearContainer = true, preloadedHistory = null) {
     if (clearContainer) {
-        targetContainer.innerHTML = `<p>Loading report for ${bunkName}...</p>`;
+        targetContainer.innerHTML = `<p class="report-loading">Loading report for ${bunkName}...</p>`;
     }
 
     // Load history only if it wasn't provided
@@ -235,12 +234,12 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
     
     // --- Build the HTML Table ---
     let tableHtml = `
-        <table style="width: 100%; border-collapse: collapse;">
+        <table class="report-table">
             <thead>
                 <tr>
-                    <th style="text-align: left; padding: 6px; border-bottom: 2px solid #ccc;">Activity</th>
-                    <th style="text-align: left; padding: 6px; border-bottom: 2px solid #ccc;">Times (Last 7 Days)</th>
-                    <th style="text-align: left; padding: 6px; border-bottom: 2px solid #ccc;">Last Done</th>
+                    <th>Activity</th>
+                    <th>Times (Last 7 Days)</th>
+                    <th>Last Done</th>
                 </tr>
             </thead>
             <tbody>
@@ -256,13 +255,13 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
     sortedActivities.forEach(actName => {
         const data = report[actName];
         const isFresh = data.count === 0;
-        const rowStyle = isFresh ? "background: #e8f5e9; font-weight: bold;" : "";
+        const rowClass = isFresh ? "report-row-fresh" : ""; // NEW CLASS
         
         tableHtml += `
-            <tr style="${rowStyle}">
-                <td style="padding: 8px; border-bottom: 1px solid #ddd;">${actName} ${isFresh ? '🌟' : ''}</td>
-                <td style="padding: 8px; border-bottom: 1px solid #ddd;">${data.count}</td>
-                <td style="padding: 8px; border-bottom: 1px solid #ddd;">${data.lastDone}</td>
+            <tr class="${rowClass}">
+                <td>${actName} ${isFresh ? '🌟' : ''}</td>
+                <td>${data.count}</td>
+                <td>${data.lastDone}</td>
             </tr>
         `;
     });
