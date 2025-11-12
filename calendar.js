@@ -6,6 +6,10 @@
 // - **NEW:** Added `loadRotationHistory`, `saveRotationHistory`,
 //   `updateRotationHistory`, and `eraseRotationHistory` to
 //   manage the new "memory" for activity freshness.
+//
+// --- YOUR NEWEST REQUEST (League Day Counter) ---
+// - **NEW:** `loadCurrentDailyData` now initializes
+//   `leagueDayCounters: {}` for any new day.
 // =================================================================
 
 (function() {
@@ -89,6 +93,9 @@
         }
     }
     
+    /**
+     * --- UPDATED with leagueDayCounters ---
+     */
     window.loadCurrentDailyData = function() {
         const allData = window.loadAllDailyData();
         const date = window.currentScheduleDate;
@@ -99,9 +106,13 @@
                 leagueAssignments: {},
                 leagueRoundState: {},
                 leagueSportRotation: {},
+                leagueDayCounters: {}, // <-- NEWLY ADDED
                 overrides: { fields: [], bunks: [], leagues: [] } 
             };
         }
+        
+        // Ensure it exists on older data
+        allData[date].leagueDayCounters = allData[date].leagueDayCounters || {};
         
         window.currentDailyData = allData[date];
         return window.currentDailyData;
@@ -115,7 +126,11 @@
             const yesterdayString = getTodayString(currentDate);
             
             const allData = window.loadAllDailyData();
-            return allData[yesterdayString] || {};
+            // Initialize with default if yesterday doesn't exist
+            return allData[yesterdayString] || { 
+                leagueDayCounters: {}, 
+                leagueRoundState: {} 
+            };
         } catch (e) {
             return {};
         }
