@@ -10,6 +10,11 @@
 // - **NEW DATA:** `loadLeagues` and the new "Update" button
 //   now save and load a `standings` object for each league
 //   to track team records.
+//
+// --- YOUR NEW REQUEST ---
+// - **UPDATED:** `renderLeagueUI` now adds a default "-- Select View --"
+//   option. Both "Setup" and "Standings" panes are hidden by
+//   default and only appear when an option is selected.
 // -----------------------------------------------------------------
 
 // Internal store keyed by LEAGUE NAME for UI/storage
@@ -70,6 +75,7 @@ function loadLeagues() {
 /**
  * --- NEW: Main UI Rendering Function ---
  * Renders the dropdown nav and the two content panes.
+ * --- UPDATED to be hidden by default ---
  */
 function renderLeagueUI() {
     const leaguesContainer = document.getElementById("leaguesContainer");
@@ -80,12 +86,13 @@ function renderLeagueUI() {
         <div class="league-nav">
             <label for="league-view-select">Select View:</label>
             <select id="league-view-select">
+                <option value="">-- Select View --</option>
                 <option value="setup">League Setup</option>
                 <option value="standings">League Standings</option>
             </select>
         </div>
         
-        <div id="league-setup-content" class="league-content-pane active">
+        <div id="league-setup-content" class="league-content-pane">
             </div>
         <div id="league-standings-content" class="league-content-pane">
             </div>
@@ -98,12 +105,19 @@ function renderLeagueUI() {
     // 3. Hook up the dropdown
     document.getElementById("league-view-select").onchange = (e) => {
         const selected = e.target.value;
+        const setupPane = document.getElementById("league-setup-content");
+        const standingsPane = document.getElementById("league-standings-content");
+
         if (selected === 'setup') {
-            document.getElementById("league-setup-content").classList.add("active");
-            document.getElementById("league-standings-content").classList.remove("active");
+            setupPane.classList.add("active");
+            standingsPane.classList.remove("active");
+        } else if (selected === 'standings') {
+            setupPane.classList.remove("active");
+            standingsPane.classList.add("active");
         } else {
-            document.getElementById("league-setup-content").classList.remove("active");
-            document.getElementById("league-standings-content").classList.add("active");
+            // This is the new "none" state
+            setupPane.classList.remove("active");
+            standingsPane.classList.remove("active");
         }
     };
 }
@@ -354,7 +368,7 @@ function renderLeagueSetupUI() {
 
     toggle.addEventListener("change", () => {
       leagueData.enabled = toggle.checked;
-      toggle.style.background = toggle.checked ? "#22c55e" : "#d1d5db";
+      toggle.style.background = toggle.checked ? "#22c5Ff" : "#d1d5db";
       knob.style.left = toggle.checked ? "24px" : "2px";
       toggleText.textContent = toggle.checked ? "Enabled" : "Disabled";
       section.style.opacity = leagueData.enabled ? "1" : "0.85";
