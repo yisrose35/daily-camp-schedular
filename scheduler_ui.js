@@ -14,6 +14,15 @@
 //   the division's `startTime` and `endTime` and will
 //   *ignore* any schedule block that is completely outside
 //   that division's time range.
+//
+// --- YOUR NEWEST REQUEST (League Day Counter) ---
+// - **NEW:** `renderStaggeredView` now loads `leagueDayCounters` from
+//   the *previous day's* data.
+// - **NEW:** It checks if a league/specialty league is scheduled
+//   *today* and increments the counter.
+// - **NEW:** The division header (e.g., "5th Grade") now shows
+//   the new count (e.g., "5th Grade (League Day: 3)").
+// - **NEW:** It saves the new counts to the *current day's* data.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -129,7 +138,7 @@ function findFirstSlotForTime(startMin) {
 /**
  * Renders the "Staggered" (YKLI) view
  * --- REWRITTEN to be one table PER DIVISION ---
- * --- **UPDATED WITH YOUR FIX** ---
+ * --- **UPDATED WITH LEAGUE DAY COUNTER** ---
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -140,6 +149,11 @@ function renderStaggeredView(container) {
 
     const dailyData = window.loadCurrentDailyData?.() || {};
     const manualSkeleton = dailyData.manualSkeleton || [];
+    
+    // --- NEW: Load previous day's counters ---
+    const prevDailyData = window.loadPreviousDailyData?.() || {};
+    const prevCounters = prevDailyData.leagueDayCounters || {};
+    const todayCounters = {}; // This will be saved at the end
     
     if (manualSkeleton.length === 0) {
         container.innerHTML = "<p>No schedule built for this day. Go to the 'Daily Adjustments' tab to build one.</p>";
@@ -165,9 +179,45 @@ function renderStaggeredView(container) {
         const tr1 = document.createElement("tr"); // Division name
         const tr2 = document.createElement("tr"); // Column titles (Time, Bunk 1, Bunk 2...)
 
+        // --- NEW: Calculate Today's League Day ---
+        const prevDivCounts = prevCounters[div] || { league: 0, specialty: 0 };
+        let todayLeagueCount = prevDivCounts.league;
+        let todaySpecialtyCount = prevDivCounts.specialty;
+        
+        // Check if a valid league/specialty game is in *today's* skeleton
+        const hasLeagueGame = manualSkeleton.some(item => 
+            item.division === div && 
+            item.event === 'League Game' && 
+            parseTimeToMinutes(item.startTime) !== null
+        );
+        const hasSpecialtyGame = manualSkeleton.some(item => 
+            item.division === div && 
+            item.event === 'Specialty League' && 
+            parseTimeToMinutes(item.startTime) !== null
+        );
+
+        let leagueLabel = "";
+        let specialtyLabel = "";
+
+        if (hasLeagueGame) {
+            todayLeagueCount++;
+            leagueLabel = ` (League Day: ${todayLeagueCount})`;
+        }
+        if (hasSpecialtyGame) {
+            todaySpecialtyCount++;
+            specialtyLabel = ` (Specialty Day: ${todaySpecialtyCount})`;
+        }
+        
+        // Store the new counts to be saved
+        todayCounters[div] = { 
+            league: todayLeagueCount, 
+            specialty: todaySpecialtyCount 
+        };
+        // --- END NEW COUNTER LOGIC ---
+
         const thDiv = document.createElement("th");
         thDiv.colSpan = 1 + bunks.length; // 1 for Time, N for bunks
-        thDiv.textContent = div;
+        thDiv.textContent = `${div}${leagueLabel}${specialtyLabel}`; // <-- UPDATED
         thDiv.style.background = divisions[div]?.color || "#333";
         thDiv.style.color = "#fff";
         thDiv.style.border = "1px solid #999";
@@ -211,10 +261,6 @@ function renderStaggeredView(container) {
                     const divStartMin = parseTimeToMinutes(divData.startTime);
                     const divEndMin = parseTimeToMinutes(divData.endTime);
 
-                    // Check if the block is *completely outside* the division's range
-                    // A block is outside if:
-                    // 1. It ends AT OR before the division starts (endMin <= divStartMin)
-                    // 2. It starts AT OR after the division ends (startMin >= divEndMin)
                     if (divStartMin !== null && endMin <= divStartMin) {
                         return; // Block is entirely too early
                     }
@@ -385,6 +431,9 @@ function renderStaggeredView(container) {
         table.appendChild(tbody);
         wrapper.appendChild(table); // Add table to wrapper
     }); // --- End of main division loop ---
+    
+    // --- NEW: Save the new counters to today's data ---
+    window.saveCurrentDailyData?.("leagueDayCounters", todayCounters);
 }
 
 
