@@ -1,3 +1,4 @@
+
 // -------------------- scheduler_ui.js --------------------
 //
 // UPDATED (Major Bug Fix):
