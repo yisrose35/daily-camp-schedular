@@ -1,5 +1,6 @@
-
-// -------------------- scheduler_logic_fillers.js --------------------
+// =================================================================
+// scheduler_logic_fillers.js
+//
 // This file is now a "helper library" for the Optimizer.
 // It provides functions to find the *best* activity for a given slot.
 //
@@ -7,7 +8,12 @@
 // - `canBlockFit` has been updated to be IDENTICAL to the new
 //   `canBlockFit` in `scheduler_logic_core.js`. It now enforces
 //   the `limitUsage` (Allowed Bunks/Divisions) rules.
-// -----------------------------------------------------------------
+// - **SMART SCHEDULER:**
+//   - All `findBest...` functions now accept `rotationHistory`.
+//   - Instead of picking randomly, they now get the bunk's
+//     history and sort all available activities by the
+//     least recently used, ensuring "fresh" picks.
+// =================================================================
 
 (function() {
 'use strict';
@@ -141,52 +147,115 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
 // --- END OF UPDATED FUNCTION ---
 
 /**
+ * --- NEW: Smart Scheduler Helper ---
+ * Sorts a list of possible activities based on the bunk's history.
+ * @param {array} possiblePicks - List of { field, sport, _activity } objects.
+ * @param {object} bunkHistory - The history object for this specific bunk.
+ * @returns {array} The sorted list of picks, from "freshest" to "stalest".
+ */
+function sortPicksByFreshness(possiblePicks, bunkHistory = {}) {
+    return possiblePicks.sort((a, b) => {
+        // Use the _activity name (e.g., "Basketball", "Canteen") for history tracking
+        const lastA = bunkHistory[a._activity] || 0; // 0 = never played
+        const lastB = bunkHistory[b._activity] || 0;
+        
+        if (lastA !== lastB) {
+            return lastA - lastB; // Sorts by oldest (smallest timestamp) first
+        }
+        
+        // If they are equally fresh (or stale), add some randomness
+        return 0.5 - Math.random();
+    });
+}
+
+
+/**
  * Finds the best-available special activity (special-only).
  * Called by "Special Activity" tile.
+ * --- UPDATED for Smart Scheduler ---
  */
-window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties) {
-    const specials = allActivities.filter(a => a.type === 'special');
+window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory) {
+    const specials = allActivities
+        .filter(a => a.type === 'special')
+        .map(a => ({
+            field: a.field, // e.g., "Canteen"
+            sport: null,
+            _activity: a.field // History is tracked by the field name
+        }));
+
+    const bunkHistory = rotationHistory?.bunks?.[block.bunk] || {};
+
+    // 1. Find all specials that *can* fit this slot
+    const availablePicks = specials.filter(pick => 
+        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)
+    );
     
-    // TODO: Use yesterdayHistory to pick a "fresh" one
-    for (const pick of specials.sort(() => 0.5 - Math.random())) {
-        if (canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)) {
-            return pick;
-        }
-    }
-    return null; // Fails if no special is available
+    // 2. Sort them by freshness
+    const sortedPicks = sortPicksByFreshness(availablePicks, bunkHistory);
+
+    // 3. Return the "freshest" one
+    return sortedPicks[0] || null; // Fails if no special is available
 }
 
 /**
  * NEW: Finds the best-available sport activity (sports-only).
  * Called by "Sports" tile.
+ * --- UPDATED for Smart Scheduler ---
  */
-window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties) {
-    const sports = allActivities.filter(a => a.type === 'field');
+window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory) {
+    const sports = allActivities
+        .filter(a => a.type === 'field')
+        .map(a => ({
+            field: a.field, // e.g., "Main Court"
+            sport: a.sport, // e.g., "Basketball"
+            _activity: a.sport // History is tracked by the sport name
+        }));
+        
+    const bunkHistory = rotationHistory?.bunks?.[block.bunk] || {};
+
+    // 1. Find all sports that *can* fit this slot
+    const availablePicks = sports.filter(pick => 
+        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)
+    );
     
-    // TODO: Use yesterdayHistory to pick a "fresh" one
-    for (const pick of sports.sort(() => 0.5 - Math.random())) {
-        if (canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)) {
-            return pick;
-        }
-    }
-    return null; // Fails if no sport is available
+    // 2. Sort them by freshness
+    const sortedPicks = sortPicksByFreshness(availablePicks, bunkHistory);
+    
+    // 3. Return the "freshest" one
+    return sortedPicks[0] || null; // Fails if no sport is available
 }
 
 
 /**
  * Finds the best-available general activity (hybrid: sports OR special).
  * Called by "Activity" tile.
+ * --- UPDATED for Smart Scheduler ---
  */
-window.findBestGeneralActivity = function(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties) {
+window.findBestGeneralActivity = function(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory) {
     
     // TODO: 1. Attempt H2H (This is not implemented yet)
     
     // 2. Attempt "fresh" general OR special activity
-    // No filter needed, `allActivities` contains both types
-    for (const pick of allActivities.sort(() => 0.5 - Math.random())) {
-         if (canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)) {
-            return pick;
-        }
+    // Map all activities to the common format { field, sport, _activity }
+    const allPossiblePicks = allActivities.map(a => ({
+        field: a.field,
+        sport: a.sport,
+        _activity: a.sport || a.field // Use sport name, or field name (for specials)
+    }));
+    
+    const bunkHistory = rotationHistory?.bunks?.[block.bunk] || {};
+    
+    // 1. Find all activities that *can* fit this slot
+    const availablePicks = allPossiblePicks.filter(pick => 
+        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)
+    );
+
+    // 2. Sort them by freshness
+    const sortedPicks = sortPicksByFreshness(availablePicks, bunkHistory);
+
+    // 3. Return the "freshest" one
+    if (sortedPicks[0]) {
+        return sortedPicks[0];
     }
     
     // Failsafe
