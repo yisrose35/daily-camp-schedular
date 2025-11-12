@@ -1,4 +1,3 @@
-
 // =================================================================
 // specialty_leagues.js
 //
@@ -7,12 +6,34 @@
 //   from app1.js) to `window.loadGlobalSettings().app1.fields`.
 // - `loadData`: Also updated to get special activities from
 //   `app1.specialActivities` for future use (if needed).
+//
+// --- YOUR NEW REQUEST (League Standings) ---
+// - **REFACTORED:** `initSpecialtyLeagues` now builds a dropdown
+//   nav ("League Setup" / "League Standings") and two
+//   content panes, hidden by default.
+// - **NEW:** `renderSpecialtyLeagueSetupUI` contains the original
+//   setup logic.
+// - **NEW:** `renderSpecialtyLeagueStandingsUI` builds the new
+//   standings grid with W/L/T inputs, rankings, and an
+//   "Update" button for each league.
+// - **UPDATED:** `loadData`, `renderTeamPicker`, and the "Add
+//   League" button now also initialize and manage the
+//   `standings` object for each league.
 // =================================================================
 
 (function() {
     'use strict';
 
-    let specialtyLeagues = {}; // { "leagueId": { id, name, sport, fields, teams, divisions, enabled } }
+    /**
+     * NEW Helper: Gets the suffix for a place number (1st, 2nd, 3rd)
+     */
+    function getPlaceSuffix(n) {
+        const s = ["th", "st", "nd", "rd"];
+        const v = n % 100;
+        return (s[(v - 20) % 10] || s[v] || s[0]);
+    }
+
+    let specialtyLeagues = {}; // { "leagueId": { id, name, ..., teams, standings: { "Team A": {w,l,t} } } }
     
     // Data from app1
     let allFields = [];
@@ -21,6 +42,7 @@
 
     /**
      * Loads all data from global settings
+     * --- UPDATED to initialize standings ---
      */
     function loadData() {
         const globalSettings = window.loadGlobalSettings?.() || {};
@@ -28,17 +50,23 @@
 
         // 1. Load our own data
         specialtyLeagues = globalSettings.specialtyLeagues || {};
+        
+        // --- NEW: Initialize standings objects ---
+        Object.values(specialtyLeagues).forEach(league => {
+            league.standings = league.standings || {};
+            (league.teams || []).forEach(team => {
+                league.standings[team] = league.standings[team] || { w: 0, l: 0, t: 0 };
+            });
+        });
+        // --- End new block ---
 
         // 2. Load data from app1
-        // --- UPDATED THESE LINES ---
         allFields = app1Data.fields || []; 
-        // We get special activities too, in case they are ever used
         const allSpecialActivities = app1Data.specialActivities || [];
         allDivisions = app1Data.availableDivisions || [];
         
         // 3. Process data for our UI
         fieldsBySport = {};
-        // Only fields (not specials) can have sports
         allFields.forEach(f => {
             (f.activities || []).forEach(sport => {
                 fieldsBySport[sport] = fieldsBySport[sport] || [];
@@ -62,13 +90,13 @@
     }
 
     /**
-     * Main entry point, called by index.html
+     * --- NEW: Renders the "League Setup" UI ---
+     * (This is the refactored old initSpecialtyLeagues function)
      */
-    function initSpecialtyLeagues() {
-        const container = document.getElementById("specialtyLeaguesContainer");
+    function renderSpecialtyLeagueSetupUI() {
+        const container = document.getElementById("sl-setup-content");
         if (!container) return;
 
-        loadData();
         container.innerHTML = ""; // Clear
 
         // --- 1. "Add New" Form ---
@@ -101,7 +129,8 @@
                 sport: null,
                 fields: [],
                 teams: [],
-                enabled: true
+                enabled: true,
+                standings: {} // NEW: Add standings object
             };
             saveData();
             initSpecialtyLeagues(); // Re-render
@@ -114,7 +143,174 @@
     }
 
     /**
-     * Renders the UI for a single league
+     * --- NEW: Renders the "League Standings" UI ---
+     */
+    function renderSpecialtyLeagueStandingsUI() {
+        const container = document.getElementById("sl-standings-content");
+        if (!container) return;
+
+        container.innerHTML = ""; // Clear
+        
+        const enabledLeagues = Object.values(specialtyLeagues)
+            .filter(l => l.enabled && l.teams.length > 0);
+        
+        if (enabledLeagues.length === 0) {
+            container.innerHTML = '<p class="muted" style="padding: 10px;">No active specialty leagues with teams were found. Go to "League Setup" to create one.</p>';
+            return;
+        }
+
+        enabledLeagues.forEach(league => {
+            
+            // --- 1. Create wrapper and title ---
+            const wrapper = document.createElement("div");
+            wrapper.className = "league-standings-wrapper";
+            const title = document.createElement("h3");
+            title.textContent = `${league.name} Standings`;
+            wrapper.appendChild(title);
+
+            // --- 2. Sort teams based on standings ---
+            const sortedTeams = [...league.teams].sort((a, b) => {
+                const standingA = league.standings[a];
+                const standingB = league.standings[b];
+                
+                if (standingA.w !== standingB.w) return standingB.w - standingA.w;
+                if (standingA.l !== standingB.l) return standingA.l - standingB.l;
+                if (standingA.t !== standingB.t) return standingB.t - standingA.t;
+                
+                const numA = Number(a);
+                const numB = Number(b);
+                if (!isNaN(numA) && !isNaN(numB)) {
+                    return numA - numB;
+                }
+                return a.localeCompare(b);
+            });
+
+            // --- 3. Create table ---
+            const table = document.createElement("table");
+            table.className = "league-standings-grid";
+            table.innerHTML = `
+                <thead>
+                    <tr>
+                        <th>Place</th>
+                        <th>Team</th>
+                        <th>Win</th>
+                        <th>Loss</th>
+                        <th>Tie</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            `;
+            
+            const tbody = table.querySelector("tbody");
+            
+            sortedTeams.forEach((teamName, index) => {
+                const teamData = league.standings[teamName];
+                const tr = document.createElement("tr");
+                
+                const place = index + 1;
+                const suffix = getPlaceSuffix(place);
+                
+                tr.innerHTML = `
+                    <td>${place}${suffix}</td>
+                    <td>${teamName}</td>
+                    <td><input type="number" min="0" value="${teamData.w}" data-league-id="${league.id}" data-team="${teamName}" data-record="w"></td>
+                    <td><input type="number" min="0" value="${teamData.l}" data-league-id="${league.id}" data-team="${teamName}" data-record="l"></td>
+                    <td><input type="number" min="0" value="${teamData.t}" data-league-id="${league.id}" data-team="${teamName}" data-record="t"></td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            wrapper.appendChild(table);
+            
+            // --- 4. Add Update Button (for this league only) ---
+            const updateBtn = document.createElement("button");
+            updateBtn.textContent = "Update Standings";
+            updateBtn.className = "update-standings-btn";
+            updateBtn.style.marginTop = "10px";
+            updateBtn.style.marginLeft = "12px"; 
+            
+            updateBtn.onclick = () => {
+                let changed = false;
+                wrapper.querySelectorAll("input[type='number']").forEach(input => {
+                    const leagueId = input.dataset.leagueId;
+                    const teamName = input.dataset.team;
+                    const recordType = input.dataset.record;
+                    const value = parseInt(input.value, 10) || 0;
+
+                    if (specialtyLeagues[leagueId] && specialtyLeagues[leagueId].standings[teamName]) {
+                        if (specialtyLeagues[leagueId].standings[teamName][recordType] !== value) {
+                            specialtyLeagues[leagueId].standings[teamName][recordType] = value;
+                            changed = true;
+                        }
+                    }
+                });
+
+                if (changed) {
+                    saveData();
+                    renderSpecialtyLeagueStandingsUI(); // Re-render to show new sort order
+                    alert(`Standings for ${league.name} updated and saved!`);
+                } else {
+                    alert("No changes detected for this league.");
+                }
+            };
+            wrapper.appendChild(updateBtn);
+            container.appendChild(wrapper);
+        });
+    }
+
+
+    /**
+     * --- REFACTORED: Main entry point ---
+     * Now builds the dropdown nav and panes.
+     */
+    function initSpecialtyLeagues() {
+        const container = document.getElementById("specialtyLeaguesContainer");
+        if (!container) return;
+
+        loadData(); // Load data once
+
+        // 1. Build the new navigation UI
+        container.innerHTML = `
+            <div class="league-nav"> <label for="sl-view-select">Select View:</label>
+                <select id="sl-view-select">
+                    <option value="">-- Select View --</option>
+                    <option value="setup">League Setup</option>
+                    <option value="standings">League Standings</option>
+                </select>
+            </div>
+            
+            <div id="sl-setup-content" class="league-content-pane">
+                </div>
+            <div id="sl-standings-content" class="league-content-pane">
+                </div>
+        `;
+        
+        // 2. Render the (hidden) content for both panes
+        renderSpecialtyLeagueSetupUI();
+        renderSpecialtyLeagueStandingsUI();
+        
+        // 3. Hook up the dropdown
+        document.getElementById("sl-view-select").onchange = (e) => {
+            const selected = e.target.value;
+            const setupPane = document.getElementById("sl-setup-content");
+            const standingsPane = document.getElementById("sl-standings-content");
+
+            if (selected === 'setup') {
+                setupPane.classList.add("active");
+                standingsPane.classList.remove("active");
+            } else if (selected === 'standings') {
+                setupPane.classList.remove("active");
+                standingsPane.classList.add("active");
+            } else {
+                // This is the new "none" state
+                setupPane.classList.remove("active");
+                standingsPane.classList.remove("active");
+            }
+        };
+    }
+
+    /**
+     * Renders the UI for a single league (in the Setup pane)
      */
     function renderLeagueSection(league) {
         const section = document.createElement("div");
@@ -140,6 +336,8 @@
             league.enabled = e.target.checked;
             section.style.opacity = league.enabled ? "1" : "0.85";
             saveData();
+            // Also re-render standings pane in case it was active
+            renderSpecialtyLeagueStandingsUI();
         };
 
         header.querySelector('[data-act="delete"]').onclick = () => {
@@ -251,6 +449,9 @@
         return wrapper;
     }
 
+    /**
+     * --- UPDATED to manage standings object ---
+     */
     function renderTeamPicker(league) {
         const wrapper = document.createElement("div");
         wrapper.style.marginTop = "15px";
@@ -271,6 +472,8 @@
             if (teamName && !league.teams.includes(teamName)) {
                 league.teams.push(teamName);
                 league.teams.sort();
+                // NEW: Add team to standings
+                league.standings[teamName] = league.standings[teamName] || { w: 0, l: 0, t: 0 };
                 saveData();
                 initSpecialtyLeagues(); // Re-render this tab
             }
@@ -294,7 +497,9 @@
         league.teams.forEach(teamName => {
             const chip = createChip(`${teamName} ✖`, true, "#5bc0de"); // Light blue
             chip.onclick = () => {
-                toggleArrayItem(league.teams, teamName);
+                // NEW: Remove from standings
+                delete league.standings[teamName];
+                toggleArrayItem(league.teams, teamName); // This removes it from the array
                 saveData();
                 initSpecialtyLeagues(); // Re-render
             };
