@@ -15,6 +15,12 @@
 // - **UPDATED:** `renderLeagueUI` now adds a default "-- Select View --"
 //   option. Both "Setup" and "Standings" panes are hidden by
 //   default and only appear when an option is selected.
+//
+// --- FIXES 11/12 ---
+// - **FIXED BUG 1:** `renderLeagueStandingsUI` now correctly finds
+//   the `leagueName` instead of showing "(undefined)".
+// - **FIXED BUG 2:** The sorting logic in `renderLeagueStandingsUI`
+//   now correctly sorts numeric team names (e.g., 2 before 10).
 // -----------------------------------------------------------------
 
 // Internal store keyed by LEAGUE NAME for UI/storage
@@ -125,6 +131,7 @@ function renderLeagueUI() {
 /**
  * --- NEW: Renders the Standings UI ---
  * Creates a sorted grid for each division with a league.
+ * --- UPDATED 11/12 with BUG FIXES ---
  */
 function renderLeagueStandingsUI() {
     const container = document.getElementById("league-standings-content");
@@ -136,18 +143,21 @@ function renderLeagueStandingsUI() {
     let gridsRendered = 0;
 
     allDivisions.forEach(divName => {
+        // --- FIX 1: Find the entry, not just the league object ---
         // Find the first *enabled* league associated with this division
-        const league = Object.values(leaguesByName).find(l => 
+        const leagueEntry = Object.entries(leaguesByName).find(([name, l]) => 
             l.enabled && l.divisions.includes(divName)
         );
 
-        if (!league || league.teams.length === 0) {
+        if (!leagueEntry || leagueEntry[1].teams.length === 0) {
             return; // No league or no teams for this division, skip
         }
 
         gridsRendered++;
         
-        const leagueName = league.name; // Get the league name
+        const leagueName = leagueEntry[0]; // Get the league name (the key)
+        const league = leagueEntry[1]; // Get the league object (the value)
+        // --- END FIX 1 ---
         
         // --- 1. Create wrapper and title ---
         const wrapper = document.createElement("div");
@@ -178,8 +188,15 @@ function renderLeagueStandingsUI() {
             if (standingA.t !== standingB.t) {
                 return standingB.t - standingA.t;
             }
-            // Finally by team name (alphabetical)
-            return a.localeCompare(b);
+            
+            // --- FIX 2: Sort numerically if teams are numbers ---
+            const numA = Number(a);
+            const numB = Number(b);
+            if (!isNaN(numA) && !isNaN(numB)) {
+                return numA - numB; // Sort numerically
+            }
+            return a.localeCompare(b); // Sort alphabetically
+            // --- END FIX 2 ---
         });
 
         // --- 3. Create table ---
@@ -368,7 +385,7 @@ function renderLeagueSetupUI() {
 
     toggle.addEventListener("change", () => {
       leagueData.enabled = toggle.checked;
-      toggle.style.background = toggle.checked ? "#22c5Ff" : "#d1d5db";
+      toggle.style.background = toggle.checked ? "#22c55e" : "#d1d5db";
       knob.style.left = toggle.checked ? "24px" : "2px";
       toggleText.textContent = toggle.checked ? "Enabled" : "Disabled";
       section.style.opacity = leagueData.enabled ? "1" : "0.85";
@@ -433,7 +450,7 @@ function renderLeagueSetupUI() {
       divBtn.style.cursor = "pointer";
       divBtn.style.transition = "all 0.15s ease";
 
-      divBtn.onmouseenter = () => { if (!active) divBtn.style.backgroundColor = "#f3f3f3"; };
+      divBtn.onmouseenter = () => { if (!active) divBtn.style.backgroundColor = "#f3f3ff"; };
       divBtn.onmouseleave = () => { if (!active) divBtn.style.backgroundColor = "white"; };
 
       divBtn.onclick = () => {
