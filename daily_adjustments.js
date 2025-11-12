@@ -160,7 +160,7 @@ function renderGrid(gridContainer) {
         dailyOverrideSkeleton.filter(ev => ev.division === divName).forEach(event => {
             const startMin = parseTimeToMinutes(event.startTime);
             const endMin = parseTimeToMinutes(event.endTime);
-            if (startMin == null || endMin == null) return;
+            if (startMin == null || endMin == null) return; // <-- FIX: Disregard invalid blocks
             
             const visibleStartMin = Math.max(startMin, earliestMin);
             const visibleEndMin = Math.min(endMin, latestMin);
