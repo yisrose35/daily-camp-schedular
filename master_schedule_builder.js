@@ -6,6 +6,9 @@
 //   `runOptimizer` helper function to `daily_adjustments.js`.
 // - This file is now only responsible for building and
 //   assigning templates.
+// - **VALIDATION:** Added input validation to the time `prompt`s in
+//   `addDropListeners` to prevent bad time entries.
+// - **VALIDATION:** `parseTimeToMinutes` now requires 'am' or 'pm'.
 // =================================================================
 
 (function() {
@@ -415,6 +418,7 @@ function renderGrid() {
 
 /**
  * Helper to add all the drag/drop event listeners
+ * --- UPDATED with VALIDATION ---
  */
 function addDropListeners(selector) {
     grid.querySelectorAll(selector).forEach(cell => {
@@ -452,10 +456,32 @@ function addDropListeners(selector) {
             else if (tileData.type === 'league' || tileData.type === 'specialty_league' || tileData.type === 'swim') eventName = tileData.name; 
             
             if (tileData.type === 'split') {
-                const startTime = prompt(`Enter Start Time for the *full* block:`, defaultStartTime);
-                if (!startTime) return;
-                const endTime = prompt(`Enter End Time for the *full* block:`);
-                if (!endTime) return;
+                let startTime, endTime, startMin, endMin;
+                
+                // Loop for Start Time
+                while (true) {
+                    startTime = prompt(`Enter Start Time for the *full* block:`, defaultStartTime);
+                    if (!startTime) return; // User cancelled
+                    startMin = parseTimeToMinutes(startTime);
+                    if (startMin !== null) break; // Valid time
+                    alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
+                }
+                
+                // Loop for End Time
+                while (true) {
+                    endTime = prompt(`Enter End Time for the *full* block:`);
+                    if (!endTime) return; // User cancelled
+                    endMin = parseTimeToMinutes(endTime);
+                    if (endMin !== null) {
+                        if (endMin <= startMin) {
+                            alert("End time must be after start time.");
+                        } else {
+                            break; // Valid time and valid range
+                        }
+                    } else {
+                        alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
+                    }
+                }
 
                 const eventName1 = prompt("Enter name for FIRST activity (e.g., Swim, Sports, Activity):");
                 if (!eventName1) return;
@@ -493,11 +519,32 @@ function addDropListeners(selector) {
             }
 
             if (!newEvent) {
-                const startTime = prompt(`Add "${eventName}" for ${divName}?\n\nEnter Start Time:`, defaultStartTime);
-                if (!startTime) return;
+                let startTime, endTime, startMin, endMin;
+
+                // Loop for Start Time
+                while (true) {
+                    startTime = prompt(`Add "${eventName}" for ${divName}?\n\nEnter Start Time:`, defaultStartTime);
+                    if (!startTime) return; // User cancelled
+                    startMin = parseTimeToMinutes(startTime);
+                    if (startMin !== null) break; // Valid time
+                    alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
+                }
                 
-                const endTime = prompt(`Enter End Time:`);
-                if (!endTime) return;
+                // Loop for End Time
+                while (true) {
+                    endTime = prompt(`Enter End Time:`);
+                    if (!endTime) return; // User cancelled
+                    endMin = parseTimeToMinutes(endTime);
+                    if (endMin !== null) {
+                        if (endMin <= startMin) {
+                            alert("End time must be after start time.");
+                        } else {
+                            break; // Valid time and valid range
+                        }
+                    } else {
+                        alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
+                    }
+                }
                 
                 newEvent = {
                     id: `evt_${Math.random().toString(36).slice(2, 9)}`,
@@ -641,6 +688,10 @@ function loadSkeletonToBuilder(name) {
 
 
 // --- Helper Functions ---
+/**
+ * --- UPDATED: `parseTimeToMinutes` ---
+ * This function now requires 'am' or 'pm' to be present.
+ */
 function parseTimeToMinutes(str) {
   if (!str || typeof str !== "string") return null;
   let s = str.trim().toLowerCase();
@@ -649,15 +700,24 @@ function parseTimeToMinutes(str) {
     mer = s.endsWith("am") ? "am" : "pm";
     s = s.replace(/am|pm/g, "").trim();
   }
+  
   const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
   if (!m) return null;
   let hh = parseInt(m[1], 10);
   const mm = parseInt(m[2], 10);
   if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
+
+  // --- MODIFIED VALIDATION ---
   if (mer) {
-    if (hh === 12) hh = mer === "am" ? 0 : 12;
-    else if (mer === "pm") hh += 12;
+      // AM/PM is present, process it
+      if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
+      else if (mer === "pm") hh += 12; // 1pm -> 13
+  } else {
+      // AM/PM is missing, return null as requested
+      return null;
   }
+  // --- END MODIFICATION ---
+
   return hh * 60 + mm;
 }
 
