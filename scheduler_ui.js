@@ -1,16 +1,17 @@
 // -------------------- scheduler_ui.js --------------------
 //
 // UPDATED (Major Bug Fix):
-// - **REWRITTEN** `renderStaggeredView` from scratch.
-// - **THE FIX:** Instead of one giant horizontal table (which was
-//   causing the jumbled headers and "ghost time" bugs), it
-//   now renders a *separate, vertical table for each division*.
-//   This is much cleaner and solves the alignment issues.
-// - **ADDED** `parseTimeToMinutes` to this file (it was missing)
-//   and added safety checks for invalid skeleton times.
-// - If a block in the skeleton has a bad time ("4:10" instead
-//   of "4:10pm"), it will now render "Invalid Time" instead of
-//   "$:00pm", so the user can find and fix the error.
+// - **REVERTED** layout to the original "side-by-side" (single, wide) table
+//   per the user's request.
+// - **BUG FIX:** The jumbled text ("123456Time...") was caused by
+//   divisions with fewer blocks not adding empty cells, breaking the
+//   table structure.
+// - **THE FIX:** The main `renderStaggeredView` loop now *forces*
+//   the correct number of empty `<td>` cells to be added for
+//   any division that doesn't have an event at a given row index,
+//   which keeps all columns perfectly aligned.
+// - **KEPT:** The "Invalid Time" check for skeleton blocks with
+//   badly formatted times (e.g., "4:10" instead of "4:10pm").
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -125,7 +126,7 @@ function findFirstSlotForTime(startMin) {
 
 /**
  * Renders the "Staggered" (YKLI) view
- * --- REWRITTEN to be one table PER DIVISION ---
+ * --- REWRITTEN to fix alignment bugs with the side-by-side view ---
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -142,23 +143,22 @@ function renderStaggeredView(container) {
         return;
     }
 
-    // --- 1. Loop over each division and create a separate table ---
+    const table = document.createElement("table");
+    table.style.borderCollapse = "collapse";
+    table.style.width = "100%";
+
+    // --- 1. Build Header ---
+    const thead = document.createElement("thead");
+    const tr1 = document.createElement("tr"); // Division names
+    const tr2 = document.createElement("tr"); // Column titles (Time, Bunk 1, Bunk 2...)
+
     availableDivisions.forEach((div) => {
         const bunks = (divisions[div]?.bunks || []).sort();
-        if (bunks.length === 0) return; // Don't render a table for a division with no bunks
-
-        const table = document.createElement("table");
-        table.style.borderCollapse = "collapse";
-        table.style.width = "100%";
-        table.style.marginBottom = "30px"; // Space between division tables
-
-        // --- 2. Build Header for this division ---
-        const thead = document.createElement("thead");
-        const tr1 = document.createElement("tr"); // Division name
-        const tr2 = document.createElement("tr"); // Column titles (Time, Bunk 1, Bunk 2...)
+        const bunkCount = bunks.length;
+        if (bunkCount === 0) return;
 
         const thDiv = document.createElement("th");
-        thDiv.colSpan = 1 + bunks.length; // 1 for Time, N for bunks
+        thDiv.colSpan = 1 + bunkCount; // 1 for Time, N for bunks
         thDiv.textContent = div;
         thDiv.style.background = divisions[div]?.color || "#333";
         thDiv.style.color = "#fff";
@@ -178,21 +178,26 @@ function renderStaggeredView(container) {
             thBunk.style.minWidth = "120px";
             tr2.appendChild(thBunk);
         });
-        thead.appendChild(tr1);
-        thead.appendChild(tr2);
-        table.appendChild(thead);
+    });
+    thead.appendChild(tr1);
+    thead.appendChild(tr2);
+    table.appendChild(thead);
 
-        // --- 3. Build Body for this division (Event-based) ---
-        const tbody = document.createElement("tbody");
-        
-        // Find all unique, sorted blocks *for this division*
-        const divisionBlocks = [];
+    // --- 2. Build Body (Event-based) ---
+    const tbody = document.createElement("tbody");
+    
+    // Find all unique, sorted blocks *per division* from the SKELETON
+    const blocksByDivision = {};
+    let maxEvents = 0; // Find the division with the MOST event blocks
+
+    availableDivisions.forEach(div => {
+        const divBlocks = [];
         manualSkeleton.forEach(item => {
             if (item.division === div) {
                 const startMin = parseTimeToMinutes(item.startTime);
                 const endMin = parseTimeToMinutes(item.endTime);
 
-                divisionBlocks.push({
+                divBlocks.push({
                     label: (startMin === null || endMin === null) ? 
                            "Invalid Time" : 
                            `${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}`,
@@ -203,9 +208,10 @@ function renderStaggeredView(container) {
                 });
             }
         });
-        divisionBlocks.sort((a,b) => a.startMin - b.startMin);
+        divBlocks.sort((a,b) => a.startMin - b.startMin);
         
-        const uniqueBlocks = divisionBlocks.filter((block, index, self) =>
+        // Get unique blocks based on the text label
+        const uniqueBlocks = divBlocks.filter((block, index, self) =>
             index === self.findIndex((t) => (t.label === block.label))
         );
 
@@ -235,34 +241,44 @@ function renderStaggeredView(container) {
                 flattenedBlocks.push(block);
             }
         });
-
-        // --- 4. Render rows for this division ---
-        if (flattenedBlocks.length === 0) {
-            const tr = document.createElement("tr");
-            const td = document.createElement("td");
-            td.colSpan = bunks.length + 1;
-            td.textContent = "No schedule blocks found for this division in the template.";
-            td.className = "grey-cell";
-            tr.appendChild(td);
-            tbody.appendChild(tr);
+        
+        blocksByDivision[div] = flattenedBlocks;
+        if (flattenedBlocks.length > maxEvents) {
+            maxEvents = flattenedBlocks.length;
         }
+    });
+    // --- END OF NEW LOGIC ---
 
-        flattenedBlocks.forEach(eventBlock => {
-            const tr = document.createElement("tr");
+
+    // Now render the rows, one for each "event index"
+    for (let i = 0; i < maxEvents; i++) {
+        const tr = document.createElement("tr");
+        
+        availableDivisions.forEach(div => {
+            const bunks = (divisions[div]?.bunks || []).sort();
+            if (bunks.length === 0) return; // Skip divisions with no bunks
+
+            const blocks = blocksByDivision[div] || []; 
+            const eventBlock = blocks[i]; // Get the i-th event block for this division
             
-            // --- Add the TIME cell ---
+            // --- 1. Add the TIME cell for this division ---
             const tdTime = document.createElement("td");
             tdTime.style.border = "1px solid #ccc";
             tdTime.style.verticalAlign = "top";
             tdTime.style.fontWeight = "bold";
-            tdTime.textContent = eventBlock.label;
-            if (eventBlock.label === "Invalid Time") {
-                 tdTime.style.color = "red";
+
+            if (eventBlock) {
+                tdTime.textContent = eventBlock.label; 
+                 if (eventBlock.label === "Invalid Time") {
+                    tdTime.style.color = "red";
+                }
+            } else {
+                tdTime.className = "grey-cell"; // Grey out if no event
             }
             tr.appendChild(tdTime);
 
-            // --- Add ACTIVITY cells (Merged or Individual) ---
-            if (eventBlock.event === 'League Game' || eventBlock.event === 'Specialty League') {
+            // --- 2. Add ACTIVITY cells (Merged or Individual) ---
+            if (eventBlock && (eventBlock.event === 'League Game' || eventBlock.event === 'Specialty League')) {
                 // === LEAGUE GAME / SPECIALTY LEAGUE: MERGED CELL ===
                 const tdLeague = document.createElement("td");
                 tdLeague.colSpan = bunks.length;
@@ -337,27 +353,35 @@ function renderStaggeredView(container) {
                     tdActivity.style.border = "1px solid #ccc";
                     tdActivity.style.verticalAlign = "top";
                     
-                    const slotIndex = findFirstSlotForTime(eventBlock.startMin);
-                    const entry = getEntry(bunk, slotIndex);
+                    if (eventBlock) {
+                        const slotIndex = findFirstSlotForTime(eventBlock.startMin);
+                        const entry = getEntry(bunk, slotIndex);
 
-                    if (entry) {
-                        tdActivity.textContent = formatEntry(entry);
-                        if (entry._h2h) {
-                            tdActivity.style.background = "#e8f4ff";
-                            tdActivity.style.fontWeight = "bold";
-                        } else if (entry._fixed) {
-                            tdActivity.style.background = "#f1f1f1";
+                        if (entry) {
+                            tdActivity.textContent = formatEntry(entry);
+                            if (entry._h2h) {
+                                tdActivity.style.background = "#e8f4ff";
+                                tdActivity.style.fontWeight = "bold";
+                            } else if (entry._fixed) {
+                                tdActivity.style.background = "#f1f1f1";
+                            }
                         }
+                    } else {
+                        // *** THIS IS THE FIX ***
+                        // If this division (blocks[i]) is undefined,
+                        // it means we must add an empty cell to keep
+                        // the table aligned.
+                        tdActivity.className = "grey-cell";
                     }
                     tr.appendChild(tdActivity);
                 });
             }
-            tbody.appendChild(tr);
-        }); 
+        });
+        tbody.appendChild(tr);
+    } 
 
-        table.appendChild(tbody);
-        container.appendChild(table);
-    }); // --- End of main division loop ---
+    table.appendChild(tbody);
+    container.appendChild(table);
 }
 
 
