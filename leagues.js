@@ -21,6 +21,12 @@
 //   the `leagueName` instead of showing "(undefined)".
 // - **FIXED BUG 2:** The sorting logic in `renderLeagueStandingsUI`
 //   now correctly sorts numeric team names (e.g., 2 before 10).
+//
+// --- YOUR NEWEST REQUEST ---
+// - **UPDATED:** `renderLeagueStandingsUI` no longer has one
+//   global "Update" button. Instead, an "Update Standings"
+//   button is created for *each individual division's grid*
+//   and will only update that specific grid.
 // -----------------------------------------------------------------
 
 // Internal store keyed by LEAGUE NAME for UI/storage
@@ -131,7 +137,7 @@ function renderLeagueUI() {
 /**
  * --- NEW: Renders the Standings UI ---
  * Creates a sorted grid for each division with a league.
- * --- UPDATED 11/12 with BUG FIXES ---
+ * --- UPDATED with individual Update Buttons ---
  */
 function renderLeagueStandingsUI() {
     const container = document.getElementById("league-standings-content");
@@ -143,7 +149,6 @@ function renderLeagueStandingsUI() {
     let gridsRendered = 0;
 
     allDivisions.forEach(divName => {
-        // --- FIX 1: Find the entry, not just the league object ---
         // Find the first *enabled* league associated with this division
         const leagueEntry = Object.entries(leaguesByName).find(([name, l]) => 
             l.enabled && l.divisions.includes(divName)
@@ -157,7 +162,6 @@ function renderLeagueStandingsUI() {
         
         const leagueName = leagueEntry[0]; // Get the league name (the key)
         const league = leagueEntry[1]; // Get the league object (the value)
-        // --- END FIX 1 ---
         
         // --- 1. Create wrapper and title ---
         const wrapper = document.createElement("div");
@@ -167,7 +171,6 @@ function renderLeagueStandingsUI() {
         wrapper.appendChild(title);
 
         // --- 2. Sort teams based on standings ---
-        // Ensure all teams have a standing object before sorting
         league.teams.forEach(team => {
             league.standings[team] = league.standings[team] || { w: 0, l: 0, t: 0 };
         });
@@ -176,27 +179,16 @@ function renderLeagueStandingsUI() {
             const standingA = league.standings[a];
             const standingB = league.standings[b];
             
-            // Sort by Wins (descending)
-            if (standingA.w !== standingB.w) {
-                return standingB.w - standingA.w;
-            }
-            // Then by Losses (ascending)
-            if (standingA.l !== standingB.l) {
-                return standingA.l - standingB.l;
-            }
-            // Then by Ties (descending)
-            if (standingA.t !== standingB.t) {
-                return standingB.t - standingA.t;
-            }
+            if (standingA.w !== standingB.w) return standingB.w - standingA.w;
+            if (standingA.l !== standingB.l) return standingA.l - standingB.l;
+            if (standingA.t !== standingB.t) return standingB.t - standingA.t;
             
-            // --- FIX 2: Sort numerically if teams are numbers ---
             const numA = Number(a);
             const numB = Number(b);
             if (!isNaN(numA) && !isNaN(numB)) {
                 return numA - numB; // Sort numerically
             }
             return a.localeCompare(b); // Sort alphabetically
-            // --- END FIX 2 ---
         });
 
         // --- 3. Create table ---
@@ -231,6 +223,44 @@ function renderLeagueStandingsUI() {
         });
 
         wrapper.appendChild(table);
+        
+        // --- 4. Add Update Button (for this division only) ---
+        const updateBtn = document.createElement("button");
+        updateBtn.textContent = "Update Standings";
+        updateBtn.className = "update-standings-btn";
+        // Add some margin to separate it from the table
+        updateBtn.style.marginTop = "10px";
+        updateBtn.style.marginLeft = "12px"; 
+        
+        updateBtn.onclick = () => {
+            let changed = false;
+            // Find all inputs *within this division's wrapper*
+            wrapper.querySelectorAll("input[type='number']").forEach(input => {
+                const leagueName = input.dataset.league;
+                const teamName = input.dataset.team;
+                const recordType = input.dataset.record;
+                const value = parseInt(input.value, 10) || 0;
+
+                if (leaguesByName[leagueName] && leaguesByName[leagueName].standings[teamName]) {
+                    if (leaguesByName[leagueName].standings[teamName][recordType] !== value) {
+                        leaguesByName[leagueName].standings[teamName][recordType] = value;
+                        changed = true;
+                    }
+                }
+            });
+
+            if (changed) {
+                saveLeagues();
+                // Re-render the entire standings UI to show new sorted order
+                renderLeagueStandingsUI(); 
+                alert(`Standings for ${divName} updated and saved!`);
+            } else {
+                alert("No changes detected for this division.");
+            }
+        };
+        wrapper.appendChild(updateBtn); // Append button to the wrapper
+
+        // Append the whole wrapper to the main container
         container.appendChild(wrapper);
     });
 
@@ -239,36 +269,7 @@ function renderLeagueStandingsUI() {
         return;
     }
 
-    // --- 4. Add Update Button ---
-    const updateBtn = document.createElement("button");
-    updateBtn.textContent = "Update All Standings";
-    updateBtn.className = "update-standings-btn";
-    updateBtn.onclick = () => {
-        let changed = false;
-        // Find all inputs within the standings container
-        container.querySelectorAll("input[type='number']").forEach(input => {
-            const leagueName = input.dataset.league;
-            const teamName = input.dataset.team;
-            const recordType = input.dataset.record; // 'w', 'l', or 't'
-            const value = parseInt(input.value, 10) || 0;
-
-            if (leaguesByName[leagueName] && leaguesByName[leagueName].standings[teamName]) {
-                if (leaguesByName[leagueName].standings[teamName][recordType] !== value) {
-                    leaguesByName[leagueName].standings[teamName][recordType] = value;
-                    changed = true;
-                }
-            }
-        });
-
-        if (changed) {
-            saveLeagues();
-            renderLeagueStandingsUI(); // Re-render to show sorted order
-            alert("Standings updated and saved!");
-        } else {
-            alert("No changes detected.");
-        }
-    };
-    container.appendChild(updateBtn);
+    // --- Global Update Button REMOVED ---
 }
 
 
@@ -450,7 +451,7 @@ function renderLeagueSetupUI() {
       divBtn.style.cursor = "pointer";
       divBtn.style.transition = "all 0.15s ease";
 
-      divBtn.onmouseenter = () => { if (!active) divBtn.style.backgroundColor = "#f3f3ff"; };
+      divBtn.onmouseenter = () => { if (!active) divBtn.style.backgroundColor = "#f3f3f3"; };
       divBtn.onmouseleave = () => { if (!active) divBtn.style.backgroundColor = "white"; };
 
       divBtn.onclick = () => {
