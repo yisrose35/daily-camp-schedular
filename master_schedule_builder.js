@@ -2,15 +2,9 @@
 // master_schedule_builder.js
 //
 // UPDATED:
-// - **REMOVED** "Global Camp Times" logic.
-// - **MODIFIED** `renderGrid` to be fully dynamic:
-//   - It now reads all division-specific times from `window.divisions`.
-//   - It calculates the grid's `earliestMin` and `latestMin`
-//     based on the min/max of all division times.
-//   - It adds greyed-out blocks (`<div class="grid-disabled">`)
-//     to columns for times that are outside that specific
-//     division's start/end time.
-// - `init` function simplified.
+// - **VALIDATION:** `addDropListeners` now checks the dropped
+//   time against the specific division's `startTime` and `endTime`
+//   and will reject the drop if it's out of bounds.
 // =================================================================
 
 (function() {
@@ -69,8 +63,7 @@ function init() {
             </div>
         
         <div id="scheduler-grid" style="overflow-x: auto; border: 1px solid #999;">
-            <!-- Grid rendered by renderGrid() -->
-        </div>
+            </div>
         <style>
             .grid-disabled {
                 position: absolute;
@@ -492,6 +485,12 @@ function addDropListeners(selector) {
             const tileData = JSON.parse(e.dataTransfer.getData('application/json'));
             const divName = cell.dataset.div;
             
+            // --- NEW: Get Division Time Constraints ---
+            const div = window.divisions[divName] || {};
+            const divStartMin = parseTimeToMinutes(div.startTime);
+            const divEndMin = parseTimeToMinutes(div.endTime);
+            // --- End New ---
+            
             const rect = cell.getBoundingClientRect();
             const scrollTop = grid.scrollTop; 
             const y = e.clientY - rect.top + scrollTop;
@@ -508,6 +507,24 @@ function addDropListeners(selector) {
             else if (tileData.type === 'special') eventName = 'Special Activity';
             else if (tileData.type === 'league' || tileData.type === 'specialty_league' || tileData.type === 'swim') eventName = tileData.name; 
             
+            // Helper function for validation
+            const validateTime = (timeStr, isStartTime) => {
+                const timeMin = parseTimeToMinutes(timeStr);
+                if (timeMin === null) {
+                    alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
+                    return null;
+                }
+                if (divStartMin !== null && timeMin < divStartMin) {
+                    alert(`Error: ${timeStr} is before this division's start time of ${div.startTime}.`);
+                    return null;
+                }
+                if (divEndMin !== null && (isStartTime ? timeMin >= divEndMin : timeMin > divEndMin)) {
+                     alert(`Error: ${timeStr} is after this division's end time of ${div.endTime}.`);
+                    return null;
+                }
+                return timeMin;
+            };
+
             if (tileData.type === 'split') {
                 let startTime, endTime, startMin, endMin;
                 
@@ -515,24 +532,21 @@ function addDropListeners(selector) {
                 while (true) {
                     startTime = prompt(`Enter Start Time for the *full* block:`, defaultStartTime);
                     if (!startTime) return; // User cancelled
-                    startMin = parseTimeToMinutes(startTime);
+                    startMin = validateTime(startTime, true);
                     if (startMin !== null) break; // Valid time
-                    alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
                 }
                 
                 // Loop for End Time
                 while (true) {
                     endTime = prompt(`Enter End Time for the *full* block:`);
                     if (!endTime) return; // User cancelled
-                    endMin = parseTimeToMinutes(endTime);
+                    endMin = validateTime(endTime, false); // false = not a start time
                     if (endMin !== null) {
                         if (endMin <= startMin) {
                             alert("End time must be after start time.");
                         } else {
                             break; // Valid time and valid range
                         }
-                    } else {
-                        alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
                     }
                 }
 
@@ -578,24 +592,21 @@ function addDropListeners(selector) {
                 while (true) {
                     startTime = prompt(`Add "${eventName}" for ${divName}?\n\nEnter Start Time:`, defaultStartTime);
                     if (!startTime) return; // User cancelled
-                    startMin = parseTimeToMinutes(startTime);
+                    startMin = validateTime(startTime, true);
                     if (startMin !== null) break; // Valid time
-                    alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
                 }
                 
                 // Loop for End Time
                 while (true) {
                     endTime = prompt(`Enter End Time:`);
                     if (!endTime) return; // User cancelled
-                    endMin = parseTimeToMinutes(endTime);
+                    endMin = validateTime(endTime, false); // false = not a start time
                     if (endMin !== null) {
                         if (endMin <= startMin) {
                             alert("End time must be after start time.");
                         } else {
                             break; // Valid time and valid range
                         }
-                    } else {
-                        alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
                     }
                 }
                 
