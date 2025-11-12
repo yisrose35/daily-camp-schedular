@@ -1,35 +1,44 @@
 // -------------------- scheduler_ui.js --------------------
-// UI-only: rendering, save/load, init, and window exports.
 //
-// UPDATED:
-// - Removed the "Fixed Block" / "Staggered" toggle logic.
-// - `updateTable` now *only* calls `renderStaggeredView`.
-// - `initScheduleSystem` no longer looks for the toggle.
-// - Deleted the entire `renderFixedBlockView` function as it
-//   is no longer used.
+// UPDATED (Major Bug Fix):
+// - **REWRITTEN** `renderStaggeredView` from scratch.
+// - **THE FIX:** Instead of one giant horizontal table (which was
+//   causing the jumbled headers and "ghost time" bugs), it
+//   now renders a *separate, vertical table for each division*.
+//   This is much cleaner and solves the alignment issues.
+// - **ADDED** `parseTimeToMinutes` to this file (it was missing)
+//   and added safety checks for invalid skeleton times.
+// - If a block in the skeleton has a bad time ("4:10" instead
+//   of "4:10pm"), it will now render "Invalid Time" instead of
+//   "$:00pm", so the user can find and fix the error.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
 const INCREMENT_MINS = 30; // Base optimizer grid size
 
 function parseTimeToMinutes(str) {
-    if (!str || typeof str !== "string") return null;
-    let s = str.trim().toLowerCase();
-    let mer = null;
-    if (s.endsWith("am") || s.endsWith("pm")) {
-        mer = s.endsWith("am") ? "am" : "pm";
-        s = s.replace(/am|pm/g, "").trim();
-    }
-    const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-    if (!m) return null;
-    let hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-    if (mer) {
-        if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
-        else if (mer === "pm") hh += 12; // 1pm -> 13
-    }
-    return hh * 60 + mm;
+  if (!str || typeof str !== "string") return null;
+  let s = str.trim().toLowerCase();
+  let mer = null;
+  if (s.endsWith("am") || s.endsWith("pm")) {
+    mer = s.endsWith("am") ? "am" : "pm";
+    s = s.replace(/am|pm/g, "").trim();
+  }
+  
+  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+  if (!m) return null;
+  let hh = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
+
+  if (mer) {
+      if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
+      else if (mer === "pm") hh += 12; // 1pm -> 13
+  } else {
+      return null; // AM/PM is required
+  }
+
+  return hh * 60 + mm;
 }
 function fieldLabel(f) {
     if (typeof f === "string") return f;
@@ -48,7 +57,7 @@ function fmtTime(d) {
  * NEW Helper: Converts minutes (e.g., 740) to a 12-hour string (e.g., "12:20 PM")
  */
 function minutesToTimeLabel(min) {
-    if (min == null) return "";
+    if (min == null || Number.isNaN(min)) return "Invalid Time"; // <-- SAFETY CHECK
     let h = Math.floor(min / 60);
     const m = (min % 60).toString().padStart(2, '0');
     const ap = h >= 12 ? "PM" : "AM";
@@ -66,14 +75,6 @@ function updateTable() {
     const container = document.getElementById("scheduleTable");
     if (!container) return;
     
-    // const toggle = document.getElementById("schedule-view-toggle"); // No longer needed
-    
-    // if (toggle && toggle.checked) {
-    //     renderStaggeredView(container);
-    // } else {
-    //     renderFixedBlockView(container);
-    // }
-    
     // Always render the Staggered View
     renderStaggeredView(container);
 }
@@ -87,28 +88,6 @@ function getEntry(bunk, slotIndex) {
         return assignments[bunk][slotIndex];
     }
     return null; // Return null if empty or bunk is invalid
-}
-
-/**
- * Helper to calculate rowspan for a given bunk/slot.
- * NOTE: This is only used by the deleted renderFixedBlockView,
- * but is kept in case it's useful for other views later.
- */
-function calculateRowspan(bunk, slotIndex) {
-    let rowspan = 1;
-    if (!bunk) return 1; // Failsafe
-    const firstEntry = getEntry(bunk, slotIndex);
-    if (!firstEntry || !window.unifiedTimes) return 1;
-
-    for (let i = slotIndex + 1; i < window.unifiedTimes.length; i++) {
-        const nextEntry = getEntry(bunk, i);
-        if (nextEntry && nextEntry.continuation && nextEntry.field === firstEntry.field) {
-            rowspan++;
-        } else {
-            break;
-        }
-    }
-    return rowspan;
 }
 
 /**
@@ -132,7 +111,7 @@ function formatEntry(entry) {
  * that matches the start time of a custom block.
  */
 function findFirstSlotForTime(startMin) {
-    if (!window.unifiedTimes) return -1;
+    if (startMin === null || !window.unifiedTimes) return -1; // <-- SAFETY CHECK
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
         const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
@@ -145,29 +124,8 @@ function findFirstSlotForTime(startMin) {
 }
 
 /**
- * NEW Helper: Finds all 30-min slot indices within a time range.
- * (Used by renderFixedBlockView, but not Staggered)
- */
-function findSlotsForRange(startMin, endMin) {
-    const slots = [];
-    if (!window.unifiedTimes) return slots;
-    
-    for (let i = 0; i < window.unifiedTimes.length; i++) {
-        const slot = window.unifiedTimes[i];
-        const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-        
-        // Find any slot that *starts* within the block
-        if (slotStart >= startMin && slotStart < endMin) {
-            slots.push(i);
-        }
-    }
-    return slots;
-}
-
-
-/**
  * Renders the "Staggered" (YKLI) view
- * REWRITTEN to "flatten" split blocks and correctly render leagues.
+ * --- REWRITTEN to be one table PER DIVISION ---
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -180,26 +138,27 @@ function renderStaggeredView(container) {
     const manualSkeleton = dailyData.manualSkeleton || [];
     
     if (manualSkeleton.length === 0) {
-        container.innerHTML = "<p>No schedule built for this day. Go to the 'Master Scheduler' tab to build one.</p>";
+        container.innerHTML = "<p>No schedule built for this day. Go to the 'Daily Adjustments' tab to build one.</p>";
         return;
     }
 
-    const table = document.createElement("table");
-    table.style.borderCollapse = "collapse";
-    table.style.width = "100%";
-
-    // --- 1. Build Header ---
-    const thead = document.createElement("thead");
-    const tr1 = document.createElement("tr"); // Division names
-    const tr2 = document.createElement("tr"); // Column titles (Time, Bunk 1, Bunk 2...)
-
+    // --- 1. Loop over each division and create a separate table ---
     availableDivisions.forEach((div) => {
-        const bunks = divisions[div]?.bunks || [];
-        const bunkCount = bunks.length;
-        if (bunkCount === 0) return;
+        const bunks = (divisions[div]?.bunks || []).sort();
+        if (bunks.length === 0) return; // Don't render a table for a division with no bunks
+
+        const table = document.createElement("table");
+        table.style.borderCollapse = "collapse";
+        table.style.width = "100%";
+        table.style.marginBottom = "30px"; // Space between division tables
+
+        // --- 2. Build Header for this division ---
+        const thead = document.createElement("thead");
+        const tr1 = document.createElement("tr"); // Division name
+        const tr2 = document.createElement("tr"); // Column titles (Time, Bunk 1, Bunk 2...)
 
         const thDiv = document.createElement("th");
-        thDiv.colSpan = 1 + bunkCount; // 1 for Time, N for bunks
+        thDiv.colSpan = 1 + bunks.length; // 1 for Time, N for bunks
         thDiv.textContent = div;
         thDiv.style.background = divisions[div]?.color || "#333";
         thDiv.style.color = "#fff";
@@ -219,46 +178,41 @@ function renderStaggeredView(container) {
             thBunk.style.minWidth = "120px";
             tr2.appendChild(thBunk);
         });
-    });
-    thead.appendChild(tr1);
-    thead.appendChild(tr2);
-    table.appendChild(thead);
+        thead.appendChild(tr1);
+        thead.appendChild(tr2);
+        table.appendChild(thead);
 
-    // --- 2. Build Body (Event-based) ---
-    const tbody = document.createElement("tbody");
-    
-    // Find all unique, sorted blocks *per division* from the SKELETON
-    const blocksByDivision = {};
-    availableDivisions.forEach(div => {
-        const divBlocks = [];
+        // --- 3. Build Body for this division (Event-based) ---
+        const tbody = document.createElement("tbody");
+        
+        // Find all unique, sorted blocks *for this division*
+        const divisionBlocks = [];
         manualSkeleton.forEach(item => {
             if (item.division === div) {
-                divBlocks.push({
-                    label: `${item.startTime} - ${item.endTime}`,
-                    startMin: parseTimeToMinutes(item.startTime),
-                    endMin: parseTimeToMinutes(item.endTime),
+                const startMin = parseTimeToMinutes(item.startTime);
+                const endMin = parseTimeToMinutes(item.endTime);
+
+                divisionBlocks.push({
+                    label: (startMin === null || endMin === null) ? 
+                           "Invalid Time" : 
+                           `${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}`,
+                    startMin: startMin,
+                    endMin: endMin,
                     event: item.event,
                     type: item.type 
                 });
             }
         });
-        divBlocks.sort((a,b) => a.startMin - b.startMin);
-        blocksByDivision[div] = divBlocks.filter((block, index, self) =>
+        divisionBlocks.sort((a,b) => a.startMin - b.startMin);
+        
+        const uniqueBlocks = divisionBlocks.filter((block, index, self) =>
             index === self.findIndex((t) => (t.label === block.label))
         );
-    });
 
-    // --- NEW LOGIC: "Flatten" split blocks into two half-blocks ---
-    const splitBlocksByDivision = {};
-    let maxEvents = 0;
-
-    availableDivisions.forEach(div => {
+        // --- "Flatten" split blocks into two half-blocks ---
         const flattenedBlocks = [];
-        const originalBlocks = blocksByDivision[div] || [];
-
-        originalBlocks.forEach(block => {
-            if (block.type === 'split' && block.startMin != null && block.endMin != null) {
-                // Calculate midpoint, rounding to nearest minute
+        uniqueBlocks.forEach(block => {
+            if (block.type === 'split' && block.startMin !== null && block.endMin !== null) {
                 const midMin = Math.round(block.startMin + (block.endMin - block.startMin) / 2);
                 
                 // First half
@@ -267,7 +221,7 @@ function renderStaggeredView(container) {
                     label: `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(midMin)}`,
                     startMin: block.startMin,
                     endMin: midMin,
-                    splitPart: 1 // Mark as first half
+                    splitPart: 1
                 });
                 // Second half
                 flattenedBlocks.push({
@@ -275,66 +229,55 @@ function renderStaggeredView(container) {
                     label: `${minutesToTimeLabel(midMin)} - ${minutesToTimeLabel(block.endMin)}`,
                     startMin: midMin,
                     endMin: block.endMin,
-                    splitPart: 2 // Mark as second half
+                    splitPart: 2
                 });
             } else {
-                // Not a split block, add as is
                 flattenedBlocks.push(block);
             }
         });
-        
-        splitBlocksByDivision[div] = flattenedBlocks;
-        if (flattenedBlocks.length > maxEvents) {
-            maxEvents = flattenedBlocks.length;
+
+        // --- 4. Render rows for this division ---
+        if (flattenedBlocks.length === 0) {
+            const tr = document.createElement("tr");
+            const td = document.createElement("td");
+            td.colSpan = bunks.length + 1;
+            td.textContent = "No schedule blocks found for this division in the template.";
+            td.className = "grey-cell";
+            tr.appendChild(td);
+            tbody.appendChild(tr);
         }
-    });
-    // --- END OF NEW LOGIC ---
 
-
-    // Now render the rows, one for each "event index"
-    for (let i = 0; i < maxEvents; i++) {
-        const tr = document.createElement("tr");
-        
-        availableDivisions.forEach(div => {
-            const bunks = divisions[div]?.bunks || [];
-            // Use the NEW splitBlocksByDivision object
-            const blocks = splitBlocksByDivision[div] || []; 
-            const eventBlock = blocks[i]; // Get the i-th event block for this division
+        flattenedBlocks.forEach(eventBlock => {
+            const tr = document.createElement("tr");
             
-            // --- 1. Add the TIME cell for this division ---
+            // --- Add the TIME cell ---
             const tdTime = document.createElement("td");
             tdTime.style.border = "1px solid #ccc";
             tdTime.style.verticalAlign = "top";
-            if (eventBlock) {
-                // The label is now pre-formatted (e.g., "12:20pm - 1:10pm")
-                tdTime.textContent = eventBlock.label; 
-            } else {
-                tdTime.className = "grey-cell";
+            tdTime.style.fontWeight = "bold";
+            tdTime.textContent = eventBlock.label;
+            if (eventBlock.label === "Invalid Time") {
+                 tdTime.style.color = "red";
             }
             tr.appendChild(tdTime);
 
-            // --- 2. Add ACTIVITY cells (Merged or Individual) ---
-            
-            // --- START OF MODIFIED FIX ---
-            if (eventBlock && (eventBlock.event === 'League Game' || eventBlock.event === 'Specialty League')) {
-            // --- END OF MODIFIED FIX ---
-            
+            // --- Add ACTIVITY cells (Merged or Individual) ---
+            if (eventBlock.event === 'League Game' || eventBlock.event === 'Specialty League') {
                 // === LEAGUE GAME / SPECIALTY LEAGUE: MERGED CELL ===
                 const tdLeague = document.createElement("td");
                 tdLeague.colSpan = bunks.length;
                 tdLeague.style.verticalAlign = "top";
                 tdLeague.style.textAlign = "left";
                 tdLeague.style.padding = "5px 8px";
-                tdLeague.style.background = "#e8f5e9";
+                tdLeague.style.background = "#f0f8f0"; // Light green
                 
                 const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
                 
-                // --- START OF NEW FORMATTING LOGIC ---
                 if (eventBlock.event === 'Specialty League') {
-                    // --- NEW: Specialty League Formatting (Group by Field) ---
+                    // Specialty League Formatting (Group by Field)
                     const gamesByField = new Map();
                     if (firstSlotIndex !== -1) {
-                        const uniqueMatchups = new Set(); // Prevent duplicates
+                        const uniqueMatchups = new Set();
                         bunks.forEach(bunk => {
                             const entry = getEntry(bunk, firstSlotIndex);
                             if (entry && entry._h2h && entry.sport) {
@@ -355,7 +298,6 @@ function renderStaggeredView(container) {
                         html = '<p class="muted" style="margin:0; padding: 4px;">Specialty League</p>';
                     }
                     gamesByField.forEach((matchups, field) => {
-                        // Strip the sport name (e.g., "(Basketball)") from the end
                         const matchupNames = matchups.map(m => m.substring(0, m.lastIndexOf('(')).trim());
                         html += `<div style="margin-bottom: 2px;">
                                     <strong>${matchupNames.join(', ')}</strong> - ${field}
@@ -365,7 +307,7 @@ function renderStaggeredView(container) {
                     tdLeague.innerHTML = html;
 
                 } else {
-                    // --- ORIGINAL: Regular League Formatting (List) ---
+                    // Regular League Formatting (List)
                     let games = new Map();
                     if (firstSlotIndex !== -1) {
                         bunks.forEach(bunk => {
@@ -386,8 +328,6 @@ function renderStaggeredView(container) {
                     if (games.size > 0) { html += '</ul>'; }
                     tdLeague.innerHTML = html;
                 }
-                // --- END OF NEW FORMATTING LOGIC ---
-
                 tr.appendChild(tdLeague);
 
             } else {
@@ -397,44 +337,28 @@ function renderStaggeredView(container) {
                     tdActivity.style.border = "1px solid #ccc";
                     tdActivity.style.verticalAlign = "top";
                     
-                    if (eventBlock) {
-                        // We just need to find the activity for the *start time*
-                        // of this specific block (which is now a half-block).
-                        const slotIndex = findFirstSlotForTime(eventBlock.startMin);
-                        const entry = getEntry(bunk, slotIndex);
+                    const slotIndex = findFirstSlotForTime(eventBlock.startMin);
+                    const entry = getEntry(bunk, slotIndex);
 
-                        if (entry) {
-                            tdActivity.textContent = formatEntry(entry);
-                            if (entry._h2h) {
-                                tdActivity.style.background = "#e8f4ff";
-                                tdActivity.style.fontWeight = "bold";
-                            } else if (entry._fixed) {
-                                tdActivity.style.background = "#f1f1f1";
-                            }
+                    if (entry) {
+                        tdActivity.textContent = formatEntry(entry);
+                        if (entry._h2h) {
+                            tdActivity.style.background = "#e8f4ff";
+                            tdActivity.style.fontWeight = "bold";
+                        } else if (entry._fixed) {
+                            tdActivity.style.background = "#f1f1f1";
                         }
-                    
-                    } else {
-                        tdActivity.className = "grey-cell";
                     }
                     tr.appendChild(tdActivity);
                 });
             }
-        });
-        tbody.appendChild(tr);
-    } 
+            tbody.appendChild(tr);
+        }); 
 
-    table.appendChild(tbody);
-    container.appendChild(table);
+        table.appendChild(tbody);
+        container.appendChild(table);
+    }); // --- End of main division loop ---
 }
-
-
-/**
- * =================================================================
- * ===== renderFixedBlockView HAS BEEN DELETED =====================
- * =================================================================
- */
-// function renderFixedBlockView(container) { ... }
-// ... (The entire function is gone) ...
 
 
 // ===== Save/Load/Init =====
@@ -479,14 +403,6 @@ function initScheduleSystem() {
         window.scheduleAssignments = window.scheduleAssignments || {};
         window.leagueAssignments = window.leagueAssignments || {};
         reconcileOrRenderSaved();
-        
-        // const toggle = document.getElementById("schedule-view-toggle"); // No longer needed
-        // if (toggle) {
-        //     toggle.onchange = () => {
-        //         updateTable();
-        //     };
-        // }
-        
     } catch (e) {
         updateTable();
     }
