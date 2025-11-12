@@ -8,7 +8,12 @@
 // - **THE FIX:** The "Invalid Time" bug is fixed. The code now
 //   *filters out* any block from the skeleton where the start or
 //   end time is invalid (`startMin === null` or `endMin === null`).
-//   These blocks will now be *completely disregarded*, as requested.
+//
+// --- NEW FIX (YOURS!) ---
+// - **THE REAL FIX:** `renderStaggeredView` now also checks
+//   the division's `startTime` and `endTime` and will
+//   *ignore* any schedule block that is completely outside
+//   that division's time range.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -124,6 +129,7 @@ function findFirstSlotForTime(startMin) {
 /**
  * Renders the "Staggered" (YKLI) view
  * --- REWRITTEN to be one table PER DIVISION ---
+ * --- **UPDATED WITH YOUR FIX** ---
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -198,6 +204,25 @@ function renderStaggeredView(container) {
                 if (startMin === null || endMin === null) {
                     return; // Don't add this block at all
                 }
+
+                // --- NEW FIX: DISREGARD BLOCKS OUTSIDE DIVISION'S TIME ---
+                const divData = divisions[div];
+                if (divData) {
+                    const divStartMin = parseTimeToMinutes(divData.startTime);
+                    const divEndMin = parseTimeToMinutes(divData.endTime);
+
+                    // Check if the block is *completely outside* the division's range
+                    // A block is outside if:
+                    // 1. It ends AT OR before the division starts (endMin <= divStartMin)
+                    // 2. It starts AT OR after the division ends (startMin >= divEndMin)
+                    if (divStartMin !== null && endMin <= divStartMin) {
+                        return; // Block is entirely too early
+                    }
+                    if (divEndMin !== null && startMin >= divEndMin) {
+                        return; // Block is entirely too late
+                    }
+                }
+                // --- END NEW FIX ---
 
                 divisionBlocks.push({
                     label: `${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}`,
