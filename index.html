@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -24,6 +23,10 @@
             🗓️ Master Scheduler (Templates)
         </button>
         <button class="tab-button" onclick="showTab('schedule')">Daily Schedule (View)</button>
+        
+        <!-- NEW BUTTON -->
+        <button class="tab-button" onclick="showTab('rotation-report'); window.initRotationReport?.();">📊 Rotation Report</button>
+        
         <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
         <button class="tab-button" onclick="showTab('specialty-leagues'); window.initSpecialtyLeagues?.();">🏆 Specialty Leagues</button>
         <button class="tab-button" onclick="showTab('daily-adjustments'); window.initDailyAdjustments?.();">Daily Adjustments</button>
@@ -66,7 +69,7 @@
 
         <hr style="margin: 20px 0;">
         
-        <h3>Clear Schedules</h3>
+        <h3>Clear Schedules & History</h3>
         <p>Use these buttons to clear saved schedule data.
         Your Setup (bunks, fields, etc.) will NOT be affected.</p>
 
@@ -83,12 +86,21 @@
             onclick="if(confirm('Are you sure you want to delete ALL saved schedules for ALL days? Your setup will be kept.')) window.eraseAllDailyData?.();">
             Delete ALL Daily Schedules
         </button>
+        
+        <!-- NEW: Reset History Button -->
+        <button id="eraseHistoryBtn"
+            style="background: #5e35b1;
+            color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;"
+            onclick="if(confirm('Are you sure you want to reset all activity rotation history? This will make all activities &quot;fresh&quot; again for the Smart Scheduler.')) window.eraseRotationHistory?.();">
+            Reset Activity History
+        </button>
+        <!-- END NEW -->
 
         <hr style="margin: 20px 0;">
 
         <h3>Erase All Data</h3>
         <p><strong>⚠️ Warning:</strong> This deletes everything.
-        It deletes all schedules AND all of your setup (bunks, divisions, fields, leagues, etc.).</p>
+        It deletes all schedules, all history, AND all of your setup (bunks, divisions, fields, leagues, etc.).</p>
 
         <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">
             Erase All Camp Data (Reset Application)
@@ -109,6 +121,11 @@
         <h3>Daily Schedule (View)</h3>
         <p>This tab shows the final, "filled-in" schedule. To build or edit the day's layout, use the "Master Scheduler" tab.</p>
         <div id="scheduleTable"></div>
+    </div>
+    
+    <!-- NEW TAB CONTENT -->
+    <div id="rotation-report" class="tab-content">
+        <div id="rotation-report-content"></div>
     </div>
 
     <div id="leagues" class="tab-content">
@@ -145,8 +162,10 @@
                 window.initFieldsTab?.();
             } else if (id === 'special_activities') { // Init new tab
                 window.initSpecialActivitiesTab?.();
-            } else if (id === 'daily-adjustments') { // <-- UPDATED
-                window.initDailyAdjustments?.(); // <-- UPDATED
+            } else if (id === 'rotation-report') { // <-- NEW
+                window.initRotationReport?.(); // <-- NEW
+            } else if (id === 'daily-adjustments') { 
+                window.initDailyAdjustments?.(); 
             }
         }
 
@@ -197,6 +216,7 @@
     <script src="calendar.js" defer></script>
     <script src="daily_adjustments.js" defer></script>
     <script src="app1.js" defer></script>
+    <script src="analytics.js" defer></script> <!-- NEW SCRIPT -->
     
     <script src="fields.js" defer></script>
     <script src="special_activities.js" defer></script>
