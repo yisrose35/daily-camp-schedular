@@ -281,3 +281,260 @@ label.override-checkbox span {
 #scheduleTable table {
   margin-bottom: 0;
 }
+/* --- Add to end of styles.css --- */
+
+/* Styles for Daily Overrides Tab */
+.override-section {
+  margin-bottom: 25px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 20px;
+}
+
+.override-section h3 {
+  border-bottom: 2px solid #eee;
+  padding-bottom: 8px;
+}
+
+label.override-checkbox {
+  display: block;
+  margin: 8px 0;
+  font-size: 1.1em;
+  cursor: pointer;
+}
+
+label.override-checkbox input {
+  width: 16px;
+  height: 16px;
+  margin-right: 10px;
+  vertical-align: middle;
+}
+
+label.override-checkbox span {
+  vertical-align: middle;
+}
+
+/* ----------------------------------- */
+/* --- NEW: Rotation Report Styles --- */
+/* ----------------------------------- */
+
+.report-title {
+  border-bottom: 2px solid #007BFF;
+  padding-bottom: 10px;
+}
+
+.report-controls {
+  display: flex;
+  gap: 20px;
+  align-items: flex-end;
+  margin-bottom: 20px;
+  padding: 15px;
+  background-color: #f9f9f9;
+  border-radius: 8px;
+}
+.report-controls label {
+  font-weight: 600;
+  font-size: 0.9em;
+  display: block;
+  margin-bottom: 5px;
+}
+.report-select {
+  font-size: 1.05em;
+  padding: 8px 12px;
+  min-width: 220px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  background-color: white;
+}
+
+.report-container {
+  margin-top: 20px;
+}
+
+.report-muted, .report-loading {
+  color: #555;
+  font-style: italic;
+  font-size: 1.1em;
+  padding: 20px;
+  text-align: center;
+  background: #fafafa;
+  border-radius: 8px;
+}
+
+/* Card layout for Division Report */
+.report-bunk-header {
+  background-color: #f4f4f4;
+  padding: 12px 15px;
+  margin-top: 25px;
+  margin-bottom: 0;
+  border: 1px solid #ddd;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+}
+
+.report-bunk-table-wrapper {
+  border: 1px solid #ddd;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  margin-bottom: 25px;
+  /* Prevents table from overflowing wrapper */
+  overflow: hidden; 
+}
+.report-bunk-table-wrapper .report-table {
+  margin-top: 0;
+  border: none;
+}
+
+/* Table Styles */
+.report-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid #ddd; /* For single-bunk view */
+  border-radius: 8px; /* For single-bunk view */
+}
+.report-table th {
+  background-color: #f0f0f0;
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 0.9em;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border: 1px solid #ddd;
+}
+.report-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+  border-left: 1px solid #eee;
+  border-right: 1px solid #eee;
+}
+.report-table tbody tr:hover {
+  background-color: #f9f9f9;
+}
+.report-row-fresh {
+  background-color: #e8f5e9;
+  font-weight: 600;
+}
+.report-row-fresh td {
+  color: #1e4620;
+}
+
+/* ----------------------------------- */
+/* --- NEW: Daily Schedule View Styles --- */
+/* ----------------------------------- */
+
+/* This wrapper allows the tables to sit side-by-side */
+.schedule-view-wrapper {
+  width: 100%;
+  overflow-x: auto; /* Adds horizontal scrollbar if needed */
+  display: flex;
+  flex-direction: row; /* Aligns tables horizontally */
+  align-items: flex-start; /* Aligns tables to the top */
+}
+
+/* This is each individual division's table */
+.schedule-division-table {
+  width: auto; /* Let the table size itself */
+  margin-right: -1px; /* Overlap borders to look like one grid */
+  border-spacing: 0;
+  border-collapse: collapse;
+}
+
+/* Ensure all tables share the same border style */
+.schedule-division-table th,
+.schedule-division-table td {
+    border: 1px solid #999;
+}
+
+/* Remove the extra margin-bottom from the old single-table layout */
+#scheduleTable table {
+  margin-bottom: 0;
+}
+
+/* ----------------------------------- */
+/* --- NEW: League Standings Styles --- */
+/* ----------------------------------- */
+
+.league-nav {
+  padding: 10px 15px;
+  background: #f1f1f1;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  margin-bottom: 15px;
+}
+.league-nav label {
+  font-weight: 600;
+  margin-right: 8px;
+}
+.league-nav select {
+  font-size: 1.1em;
+  padding: 5px 8px;
+  border-radius: 5px;
+}
+
+.league-content-pane {
+  display: none; /* Hidden by default */
+}
+.league-content-pane.active {
+  display: block; /* Shown by dropdown */
+}
+
+.league-standings-wrapper {
+  margin-bottom: 25px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.league-standings-wrapper h3 {
+  margin: 0;
+  padding: 12px 15px;
+  background: #f9f9f9;
+  border-bottom: 1px solid #ccc;
+}
+
+.league-standings-grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+.league-standings-grid th,
+.league-standings-grid td {
+  border-bottom: 1px solid #ddd;
+  padding: 10px 12px;
+  text-align: left;
+}
+.league-standings-grid th {
+  background-color: #f0f0f0;
+}
+.league-standings-grid td:first-child {
+  font-weight: 600;
+}
+.league-standings-grid input[type="number"] {
+  width: 60px;
+  padding: 6px 8px;
+  font-size: 1em;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+/* Hide spin buttons on number inputs */
+.league-standings-grid input::-webkit-outer-spin-button,
+.league-standings-grid input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.league-standings-grid input[type=number] {
+  -moz-appearance: textfield;
+}
+
+.update-standings-btn {
+  padding: 12px 20px;
+  font-size: 1.1em;
+  font-weight: 600;
+  background: #28a745;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  margin-top: 10px;
+}
+.update-standings-btn:hover {
+  background: #218838;
+}
