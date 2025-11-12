@@ -23,7 +23,7 @@
             🗓️ Master Scheduler (Templates)
         </button>
         <button class="tab-button" onclick="showTab('schedule')">Daily Schedule (View)</button>
-        <button class="tab-button" onclick="showTab('leagues')">Leagues</button>
+        <button class="tab-button" onclick="showTab('leagues'); window.initLeagues?.();">Leagues</button>
         <button class="tab-button" onclick="showTab('specialty-leagues'); window.initSpecialtyLeagues?.();">🏆 Specialty Leagues</button>
         <button class="tab-button" onclick="showTab('daily-adjustments'); window.initDailyAdjustments?.();">Daily Adjustments</button>
         <button class="tab-button" onclick="showTab('rotation-report'); window.initRotationReport?.();">Rotation Report</button>
@@ -99,7 +99,6 @@
     </div>
 
     <div id="leagues" class="tab-content">
-        <h3>Leagues Setup</h3>
         <div id="leaguesContainer"></div>
     </div>
 
@@ -142,7 +141,8 @@
             if (id === 'schedule') {
                 window.updateTable?.();
             } else if (id === 'leagues') {
-                window.initLeaguesTab?.();
+                // UPDATED: Changed to initLeagues
+                window.initLeagues?.();
             } else if (id === 'specialty-leagues') {
                 window.initSpecialtyLeagues?.();
             } else if (id === 'master-scheduler') {
@@ -179,7 +179,7 @@
 
             // 3. Init Leagues (loads league data, renders tab)
             if (window.initLeagues) {
-                window.initLeagues();
+                window.initLeagues(); // This is the correct, new function
             } else {
                 console.warn("Leagues.js init not found.");
             }
