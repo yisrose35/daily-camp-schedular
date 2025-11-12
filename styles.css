@@ -90,28 +90,28 @@ input:checked + .slider:before {
 /* Push-box chips */
 .chips { display:flex; flex-wrap:wrap; gap:6px; }
 .chip-toggle {
-  appearance:none;
-  border:1px solid #cbd5e1;
-  border-radius:12px;
-  padding:6px 10px;
-  font:inherit;
-  background:#f8fafc;
-  cursor:pointer;
-  user-select:none;
-  transition:transform .02s ease, background .15s ease, border-color .15s ease;
+  appearance:none;
+  border:1px solid #cbd5e1;
+  border-radius:12px;
+  padding:6px 10px;
+  font:inherit;
+  background:#f8fafc;
+  cursor:pointer;
+  user-select:none;
+  transition:transform .02s ease, background .15s ease, border-color .15s ease;
 }
 .chip-toggle:hover { border-color:#94a3b8; }
 .chip-toggle[aria-pressed="true"] {
-  background:#dbeafe;
-  border-color:#60a5fa;
+  background:#dbeafe;
+  border-color:#60a5fa;
 }
 .chip-actions { display:flex; gap:8px; margin-top:6px; }
 .chip-ghost {
-  background:#ffffff;
-  border:1px dashed #cbd5e1;
-  border-radius:10px;
-  padding:4px 8px;
-  cursor:pointer;
+  background:#ffffff;
+  border:1px dashed #cbd5e1;
+  border-radius:10px;
+  padding:4px 8px;
+  cursor:pointer;
 }
 /* --- Add to end of styles.css --- */
 
@@ -248,4 +248,36 @@ label.override-checkbox span {
 }
 .report-row-fresh td {
   color: #1e4620;
+}
+
+/* ----------------------------------- */
+/* --- NEW: Daily Schedule View Styles --- */
+/* ----------------------------------- */
+
+/* This wrapper allows the tables to sit side-by-side */
+.schedule-view-wrapper {
+  width: 100%;
+  overflow-x: auto; /* Adds horizontal scrollbar if needed */
+  display: flex;
+  flex-direction: row; /* Aligns tables horizontally */
+  align-items: flex-start; /* Aligns tables to the top */
+}
+
+/* This is each individual division's table */
+.schedule-division-table {
+  width: auto; /* Let the table size itself */
+  margin-right: -1px; /* Overlap borders to look like one grid */
+  border-spacing: 0;
+  border-collapse: collapse;
+}
+
+/* Ensure all tables share the same border style */
+.schedule-division-table th,
+.schedule-division-table td {
+    border: 1px solid #999;
+}
+
+/* Remove the extra margin-bottom from the old single-table layout */
+#scheduleTable table {
+  margin-bottom: 0;
 }
