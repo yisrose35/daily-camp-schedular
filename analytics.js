@@ -1,504 +1,417 @@
+body { font-family: Arial, sans-serif; padding: 20px; }
+.tabs { margin-bottom: 20px; }
+.tab-button { padding: 10px 20px; cursor: pointer; border: 1px solid #ccc; background: #f0f0f0; margin-right: 5px; }
+.tab-button.active { background: #007BFF; color: white; font-weight: bold; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
 
-// =================================================================
-// analytics.js
-//
-// --- UPDATED (MAJOR REFACTOR) ---
-// - Renamed "Rotation Report" to "Report".
-// - `initRotationReport` is now `initReportTab`.
-// - `initReportTab` creates a dropdown to select one of two reports:
-//   1. "Bunk Rotation Report" (the original report).
-//   2. "Field Availability Grid" (the new report).
-// - Both reports are hidden by default, per your request.
-//
-// - **NEW:** `renderBunkRotationUI` contains the UI logic for
-//   the original rotation report.
-// - **NEW:** `renderFieldAvailabilityGrid` builds the new
-//   grid you specified, showing `✓` (Available) or `X` (Used/Unavailable).
-// =================================================================
+table { border-collapse: collapse; margin-top: 20px; width: 100%; }
+th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 120px; }
+caption { font-weight: bold; margin: 10px 0; }
 
-(function() {
-'use strict';
+.bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; display: inline-block; }
+.selected { outline: 3px solid #90CAF9; }
+#unassignedBunks { margin-top: 10px; }
+.divisionWrapper { display: inline-block; margin: 6px; padding: 6px; border: 1px dashed #ccc; border-radius: 6px; }
+.colorPicker { width: 30px; height: 30px; border: none; cursor: pointer; vertical-align: middle; margin-left: 6px; }
 
-// --- Copied Helpers (needed for Field Availability) ---
-function parseTimeToMinutes(str) {
-  if (!str || typeof str !== "string") return null;
-  let s = str.trim().toLowerCase();
-  let mer = null;
-  if (s.endsWith("am") || s.endsWith("pm")) {
-    mer = s.endsWith("am") ? "am" : "pm";
-    s = s.replace(/am|pm/g, "").trim();
-  } else {
-    return null; // REQUIRE am/pm
-  }
-  
-  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-  if (!m) return null;
-  let hh = parseInt(m[1], 10);
-  const mm = parseInt(m[2], 10);
-  if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-  if (mer) {
-    if (hh === 12) hh = mer === "am" ? 0 : 12; 
-    else if (mer === "pm") hh += 12; 
-  }
-  return hh * 60 + mm;
+.fieldWrapper { border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 6px; }
+.fieldWrapper.unavailable { opacity: 0.5; }
+.fieldTitle { font-weight: 600; margin-right: 10px; cursor: pointer; }
+
+.activity-button { margin: 2px; padding: 4px 8px; border: 1px solid #333; border-radius: 3px; cursor: pointer; }
+.activity-button.active { background: #007BFF; color: white; }
+
+/* -------------------- FIXED ACTIVITIES LIST ITEM LAYOUT (The fix!) -------------------- */
+.item {
+  /* Use Flexbox for horizontal alignment */
+  display: flex;
+  /* Space content to left (details) and right (controls) */
+  justify-content: space-between;
+  /* Crucial for making the toggle and button line up with the text */
+  align-items: center; 
+  padding: 10px 0;
+  border-bottom: 1px solid #eee;
+}
+#fixedList .item:last-child {
+  border-bottom: none;
+}
+/* -------------------- END LIST ITEM LAYOUT -------------------- */
+
+
+/* -------------------- TOGGLE SWITCH STYLES (The visibility fix!) -------------------- */
+.switch { 
+  position: relative; 
+  display: inline-block; 
+  width: 40px; 
+  height: 20px; 
+  vertical-align: middle; 
+  margin: 0 8px 0 8px; /* Cleaned up spacing */
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+
+.slider { 
+  position: absolute; 
+  cursor: pointer; 
+  top: 0; 
+  left: 0; 
+  right: 0; 
+  bottom: 0;
+  background-color: #ccc; 
+  transition: .4s; 
+  border-radius: 20px; 
 }
 
-function fieldLabel(f) {
-    if (typeof f === "string") return f;
-    if (f && typeof f === "object" && typeof f.name === "string") return f.name;
-    return "";
+/* Knob dimensions: 14px wide/high, with 3px top/bottom/left padding */
+.slider:before { 
+  position: absolute; 
+  content: ""; 
+  height: 14px; 
+  width: 14px; 
+  left: 3px; 
+  bottom: 3px;
+  background-color: white; 
+  transition: .4s; 
+  border-radius: 50%; 
 }
 
-/**
- * Checks if a field is available for a specific time slot,
- * respecting the new timeRules array.
- * (Copied from scheduler_logic_fillers.js)
- */
-function isTimeAvailable(slotIndex, fieldProps) {
-    if (!window.unifiedTimes || !window.unifiedTimes[slotIndex]) return false;
-    
-    const slot = window.unifiedTimes[slotIndex];
-    const slotStartMin = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-    const slotEndMin = slotStartMin + (window.INCREMENT_MINS || 30); 
-    
-    const rules = fieldProps.timeRules || [];
-    
-    if (rules.length === 0) {
-        return fieldProps.available;
-    }
-    
-    if (!fieldProps.available) {
-        return false;
-    }
-
-    const hasAvailableRules = rules.some(r => r.type === 'Available');
-    let isAvailable = !hasAvailableRules;
-
-    for (const rule of rules) {
-        if (rule.type === 'Available') {
-            if (slotStartMin >= rule.startMin && slotEndMin <= rule.endMin) {
-                isAvailable = true;
-                break;
-            }
-        }
-    }
-
-    for (const rule of rules) {
-        if (rule.type === 'Unavailable') {
-            if (slotStartMin < rule.endMin && slotEndMin > rule.startMin) {
-                isAvailable = false;
-                break;
-            }
-        }
-    }
-    
-    return isAvailable;
+/* 40px container width - 3px left pad - 3px right pad - 14px knob width = 20px travel distance */
+input:checked + .slider { 
+  background-color: #4CAF50; /* Nice activation green */
 }
-// --- End of Copied Helpers ---
+input:checked + .slider:before { 
+  transform: translateX(20px); 
+}
+/* -------------------- END TOGGLE SWITCH STYLES -------------------- */
 
+.continuation { opacity: 0.7; font-style: italic; }
+.league-pill { background:#4CAF50; color:#fff; padding:2px 6px; border-radius:12px; }
+.grey-cell { background:#eee; }
+/* Push-box chips */
+.chips { display:flex; flex-wrap:wrap; gap:6px; }
+.chip-toggle {
+  appearance:none;
+  border:1px solid #cbd5e1;
+  border-radius:12px;
+  padding:6px 10px;
+  font:inherit;
+  background:#f8fafc;
+  cursor:pointer;
+  user-select:none;
+  transition:transform .02s ease, background .15s ease, border-color .15s ease;
+}
+.chip-toggle:hover { border-color:#94a3b8; }
+.chip-toggle[aria-pressed="true"] {
+  background:#dbeafe;
+  border-color:#60a5fa;
+}
+.chip-actions { display:flex; gap:8px; margin-top:6px; }
+.chip-ghost {
+  background:#ffffff;
+  border:1px dashed #cbd5e1;
+  border-radius:10px;
+  padding:4px 8px;
+  cursor:pointer;
+}
+/* --- Add to end of styles.css --- */
 
-let container = null;
-let allActivities = []; // For Bunk Report
-let divisions = {};
-let availableDivisions = [];
-
-// Keep track of DOM elements
-let divisionSelect = null;
-let bunkSelect = null;
-let rotationReportContainer = null;
-let availabilityReportContainer = null;
-
-/**
- * --- NEW: Main entry point, called by index.html tab click ---
- */
-function initReportTab() {
-    container = document.getElementById("report-content");
-    if (!container) return;
-
-    // 1. Build the new navigation UI
-    container.innerHTML = `
-        <div class="league-nav"> <label for="report-view-select">Select Report:</label>
-            <select id="report-view-select">
-                <option value="">-- Select View --</option>
-                <option value="rotation">Bunk Rotation Report</option>
-                <option value="availability">Field Availability Grid</option>
-            </select>
-        </div>
-        
-        <div id="report-rotation-content" class="league-content-pane">
-            </div>
-        <div id="report-availability-content" class="league-content-pane">
-            </div>
-    `;
-
-    // 2. Get references
-    rotationReportContainer = document.getElementById("report-rotation-content");
-    availabilityReportContainer = document.getElementById("report-availability-content");
-
-    // 3. Render the (hidden) content for both panes
-    renderBunkRotationUI();
-    renderFieldAvailabilityGrid();
-
-    // 4. Hook up the dropdown
-    document.getElementById("report-view-select").onchange = (e) => {
-        const selected = e.target.value;
-        if (selected === 'rotation') {
-            rotationReportContainer.classList.add("active");
-            availabilityReportContainer.classList.remove("active");
-        } else if (selected === 'availability') {
-            rotationReportContainer.classList.remove("active");
-            availabilityReportContainer.classList.add("active");
-        } else {
-            rotationReportContainer.classList.remove("active");
-            availabilityReportContainer.classList.remove("active");
-        }
-    };
+/* Styles for Daily Overrides Tab */
+.override-section {
+  margin-bottom: 25px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 20px;
 }
 
-// =================================================================
-// --- 1. BUNK ROTATION REPORT (Original Report) ---
-// =================================================================
-
-/**
- * --- NEW: Renders the Bunk Rotation Report UI ---
- * (This is the old initRotationReport, refactored)
- */
-function renderBunkRotationUI() {
-    // 1. Load the data we need
-    loadMasterData();
-    
-    // 2. Build the UI
-    rotationReportContainer.innerHTML = `
-        <h2 class="report-title">Bunk Rotation Report</h2>
-        <p>See how many times each bunk has done a "regular" (non-league, non-pinned) activity in the past 7 days.</p>
-        
-        <div class="report-controls">
-            <div>
-                <label for="report-division-select">1. Select a Division:</label>
-                <select id="report-division-select" class="report-select"></select>
-            </div>
-            <div>
-                <label for="report-bunk-select">2. Select a Bunk (Optional):</label>
-                <select id="report-bunk-select" class="report-select" disabled></select>
-            </div>
-        </div>
-        
-        <div id="report-table-container" class="report-container">
-            <p class="report-muted">Please select a division to view its report.</p>
-        </div>
-    `;
-    
-    // 3. Get element references
-    divisionSelect = document.getElementById("report-division-select");
-    bunkSelect = document.getElementById("report-bunk-select");
-    reportContainer = document.getElementById("report-table-container"); // This is the inner container
-
-    // 4. Populate the division dropdown
-    let divOptions = '<option value="">-- Select a division --</option>';
-    availableDivisions.forEach(divName => {
-        divOptions += `<option value="${divName}">${divName}</option>`;
-    });
-    divisionSelect.innerHTML = divOptions;
-    
-    // 5. Hook up event listeners
-    divisionSelect.onchange = onDivisionSelect;
-    bunkSelect.onchange = onBunkSelect;
+.override-section h3 {
+  border-bottom: 2px solid #eee;
+  padding-bottom: 8px;
 }
 
-/**
- * Loads the master list of all bunks and activities
- */
-function loadMasterData() {
-    const app1Data = window.loadGlobalSettings?.().app1 || {};
-    
-    // Get division and bunk structure
-    divisions = window.divisions || {};
-    availableDivisions = (window.availableDivisions || []).sort();
-    
-    // Get all activities (fields + specials)
-    const fields = app1Data.fields || [];
-    const specials = app1Data.specialActivities || [];
-    
-    // We only care about sports/activities that can be *in* a rotation
-    const sportActivities = fields.flatMap(f => f.activities || []);
-    const specialActivities = specials.map(s => s.name);
-    
-    allActivities = Array.from(new Set([...sportActivities, ...specialActivities])).sort();
+label.override-checkbox {
+  display: block;
+  margin: 8px 0;
+  font-size: 1.1em;
+  cursor: pointer;
 }
 
-/**
- * Handles when the user selects a division.
- */
-function onDivisionSelect() {
-    const divName = divisionSelect.value;
-    reportContainer.innerHTML = ""; // Clear old report
-    
-    if (!divName) {
-        bunkSelect.innerHTML = "";
-        bunkSelect.disabled = true;
-        reportContainer.innerHTML = `<p class="report-muted">Please select a division to view its report.</p>`;
-        return;
-    }
-    
-    const bunksInDiv = (divisions[divName]?.bunks || []).sort();
-    let bunkOptions = `<option value="">--- Show All ${divName} Bunks ---</option>`;
-    bunksInDiv.forEach(bunk => {
-        bunkOptions += `<option value="${bunk}">${bunk}</option>`;
-    });
-    bunkSelect.innerHTML = bunkOptions;
-    bunkSelect.disabled = false;
-    
-    renderDivisionReport(divName, bunksInDiv);
+label.override-checkbox input {
+  width: 16px;
+  height: 16px;
+  margin-right: 10px;
+  vertical-align: middle;
 }
 
-/**
- * Handles when the user selects a specific bunk.
- */
-function onBunkSelect() {
-    const bunkName = bunkSelect.value;
-    const divName = divisionSelect.value;
-    
-    if (!bunkName) {
-        const bunksInDiv = (divisions[divName]?.bunks || []).sort();
-        renderDivisionReport(divName, bunksInDiv);
-    } else {
-        renderBunkReport(bunkName, reportContainer, true);
-    }
+label.override-checkbox span {
+  vertical-align: middle;
 }
 
-/**
- * Renders a report for ALL bunks in a division.
- */
-function renderDivisionReport(divName, bunks) {
-    reportContainer.innerHTML = ""; // Clear container
-    
-    if (bunks.length === 0) {
-        reportContainer.innerHTML = `<p class="report-muted">No bunks found in ${divName}.</p>`;
-        return;
-    }
-    
-    const history = window.loadScheduleHistory(7);
+/* ----------------------------------- */
+/* --- NEW: Rotation Report Styles --- */
+/* ----------------------------------- */
 
-    bunks.forEach(bunkName => {
-        const bunkHeader = document.createElement('h3');
-        bunkHeader.textContent = bunkName;
-        bunkHeader.className = "report-bunk-header";
-        
-        const tableDiv = document.createElement('div');
-        tableDiv.className = "report-bunk-table-wrapper";
-        
-        reportContainer.appendChild(bunkHeader);
-        reportContainer.appendChild(tableDiv);
-        
-        renderBunkReport(bunkName, tableDiv, false, history);
-    });
+.report-title {
+  border-bottom: 2px solid #007BFF;
+  padding-bottom: 10px;
 }
 
-
-/**
- * Renders the report table for a SINGLE bunk.
- */
-function renderBunkReport(bunkName, targetContainer, clearContainer = true, preloadedHistory = null) {
-    if (clearContainer) {
-        targetContainer.innerHTML = `<p class="report-loading">Loading report for ${bunkName}...</p>`;
-    }
-
-    const history = preloadedHistory || window.loadScheduleHistory(7);
-    const historyDays = Object.keys(history).sort().reverse();
-    
-    const report = {};
-    allActivities.forEach(act => {
-        report[act] = {
-            count: 0,
-            lastDone: "7+ days ago"
-        };
-    });
-
-    for (let i = 0; i < historyDays.length; i++) {
-        const day = historyDays[i];
-        const daySchedule = history[day][bunkName] || [];
-        const daysAgo = i + 1;
-
-        daySchedule.forEach(entry => {
-            if (!entry) return;
-            if (entry._h2h || entry._fixed || !entry.sport) {
-                return;
-            }
-            
-            let activityName = entry._activity;
-            if (!activityName) {
-                if (allActivities.includes(entry.sport)) activityName = entry.sport;
-                else if (allActivities.includes(entry.field)) activityName = entry.field;
-            }
-            
-            if (activityName && report[activityName]) {
-                report[activityName].count++;
-                
-                if (report[activityName].lastDone === "7+ days ago") {
-                    report[activityName].lastDone = (daysAgo === 1) ? "1 day ago" : `${daysAgo} days ago`;
-                }
-            }
-        });
-    }
-    
-    let tableHtml = `
-        <table class="report-table">
-            <thead>
-                <tr>
-                    <th>Activity</th>
-                    <th>Times (Last 7 Days)</th>
-                    <th>Last Done</th>
-                </tr>
-            </thead>
-            <tbody>
-    `;
-    
-    const sortedActivities = allActivities.sort((a, b) => {
-        if (report[a].count !== report[b].count) {
-            return report[a].count - report[b].count; 
-        }
-        return a.localeCompare(b); 
-    });
-    
-    sortedActivities.forEach(actName => {
-        const data = report[actName];
-        const isFresh = data.count === 0;
-        const rowClass = isFresh ? "report-row-fresh" : "";
-        
-        tableHtml += `
-            <tr class="${rowClass}">
-                <td>${actName} ${isFresh ? '🌟' : ''}</td>
-                <td>${data.count}</td>
-                <td>${data.lastDone}</td>
-            </tr>
-        `;
-    });
-    
-    tableHtml += `</tbody></table>`;
-    targetContainer.innerHTML = tableHtml;
+.report-controls {
+  display: flex;
+  gap: 20px;
+  align-items: flex-end;
+  margin-bottom: 20px;
+  padding: 15px;
+  background-color: #f9f9f9;
+  border-radius: 8px;
+}
+.report-controls label {
+  font-weight: 600;
+  font-size: 0.9em;
+  display: block;
+  margin-bottom: 5px;
+}
+.report-select {
+  font-size: 1.05em;
+  padding: 8px 12px;
+  min-width: 220px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  background-color: white;
 }
 
-
-/**
- * Helper: Loads the last N days of schedule data for analysis
- */
-window.loadScheduleHistory = function(daysToLoad) {
-    const allData = window.loadAllDailyData?.() || {};
-    const today = new Date(window.currentScheduleDate);
-    const history = {};
-    
-    for (let i = 1; i <= daysToLoad; i++) {
-        const d = new Date(today);
-        d.setDate(today.getDate() - i);
-        
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, '0');
-        const dayStr = String(d.getDate()).padStart(2, '0');
-        const dateKey = `${y}-${m}-${dayStr}`;
-        
-        if (allData[dateKey] && allData[dateKey].scheduleAssignments) {
-            history[dateKey] = allData[dateKey].scheduleAssignments;
-        }
-    }
-    return history;
+.report-container {
+  margin-top: 20px;
 }
 
-// =================================================================
-// --- 2. FIELD AVAILABILITY GRID (New Report) ---
-// =================================================================
+.report-muted, .report-loading {
+  color: #555;
+  font-style: italic;
+  font-size: 1.1em;
+  padding: 20px;
+  text-align: center;
+  background: #fafafa;
+  border-radius: 8px;
+}
 
-/**
- * --- NEW: Renders the Field Availability Grid ---
- */
-function renderFieldAvailabilityGrid() {
-    availabilityReportContainer.innerHTML = ""; // Clear
-    
-    // 1. Load Data
-    const dailyData = window.loadCurrentDailyData?.() || {};
-    const scheduleAssignments = dailyData.scheduleAssignments || {};
-    const unifiedTimes = dailyData.unifiedTimes || [];
+/* Card layout for Division Report */
+.report-bunk-header {
+  background-color: #f4f4f4;
+  padding: 12px 15px;
+  margin-top: 25px;
+  margin-bottom: 0;
+  border: 1px solid #ddd;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+}
 
-    if (unifiedTimes.length === 0) {
-        availabilityReportContainer.innerHTML = `<p class="report-muted">No schedule has been generated for this day. Please go to the "Daily Adjustments" tab and click "Run Optimizer" first.</p>`;
-        return;
-    }
+.report-bunk-table-wrapper {
+  border: 1px solid #ddd;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  margin-bottom: 25px;
+  /* Prevents table from overflowing wrapper */
+  overflow: hidden; 
+}
+.report-bunk-table-wrapper .report-table {
+  margin-top: 0;
+  border: none;
+}
 
-    const app1Data = window.loadGlobalSettings?.().app1 || {};
-    const allFields = app1Data.fields || [];
-    const allSpecials = app1Data.specialActivities || [];
-    const allResources = [...allFields, ...allSpecials].sort((a,b) => a.name.localeCompare(b.name));
+/* Table Styles */
+.report-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid #ddd; /* For single-bunk view */
+  border-radius: 8px; /* For single-bunk view */
+}
+.report-table th {
+  background-color: #f0f0f0;
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 0.9em;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border: 1px solid #ddd;
+}
+.report-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+  border-left: 1px solid #eee;
+  border-right: 1px solid #eee;
+}
+.report-table tbody tr:hover {
+  background-color: #f9f9f9;
+}
+.report-row-fresh {
+  background-color: #e8f5e9;
+  font-weight: 600;
+}
+.report-row-fresh td {
+  color: #1e4620;
+}
 
-    // 2. Compile Field Usage
-    const fieldUsageBySlot = {}; // { slotIndex: { fieldName: count } }
-    for (const bunk in scheduleAssignments) {
-        const schedule = scheduleAssignments[bunk] || [];
-        for (let i = 0; i < schedule.length; i++) {
-            const entry = schedule[i];
-            // We only count non-continuing, non-fixed, non-league entries
-            if (entry && !entry.continuation && !entry._fixed && !entry._h2h) {
-                const fieldName = fieldLabel(entry.field);
-                if (fieldName && fieldName !== "Free" && fieldName !== "No Field") {
-                    fieldUsageBySlot[i] = fieldUsageBySlot[i] || {};
-                    fieldUsageBySlot[i][fieldName] = (fieldUsageBySlot[i][fieldName] || 0) + 1;
-                }
-            }
-        }
-    }
+/* ----------------------------------- */
+/* --- NEW: Daily Schedule View Styles --- */
+/* ----------------------------------- */
 
-    // 3. Compile Field Properties
-    const fieldProperties = {};
-    allResources.forEach(f => {
-        const rules = (f.timeRules || []).map(r => {
-            const startMin = parseTimeToMinutes(r.start);
-            const endMin = parseTimeToMinutes(r.end);
-            if (startMin == null || endMin == null) return null;
-            return { type: r.type, startMin: startMin, endMin: endMin };
-        }).filter(Boolean);
+/* This wrapper allows the tables to sit side-by-side */
+.schedule-view-wrapper {
+  width: 100%;
+  overflow-x: auto; /* Adds horizontal scrollbar if needed */
+  display: flex;
+  flex-direction: row; /* Aligns tables horizontally */
+  align-items: flex-start; /* Aligns tables to the top */
+}
 
-        fieldProperties[f.name] = {
-            available: f.available !== false,
-            sharable: f.sharableWith?.type === 'all' || f.sharableWith?.type === 'custom',
-            timeRules: rules
-        };
-    });
+/* This is each individual division's table */
+.schedule-division-table {
+  width: auto; /* Let the table size itself */
+  margin-right: -1px; /* Overlap borders to look like one grid */
+  border-spacing: 0;
+  border-collapse: collapse;
+}
 
-    // 4. Build the Grid
-    let tableHtml = `<div class="schedule-view-wrapper"> `;
-    tableHtml += `<table class="availability-grid"><thead><tr><th>Time</th>`;
-    
-    allResources.forEach(r => {
-        tableHtml += `<th>${r.name}</th>`;
-    });
-    tableHtml += `</tr></thead><tbody>`;
+/* Ensure all tables share the same border style */
+.schedule-division-table th,
+.schedule-division-table td {
+    border: 1px solid #999;
+}
 
-    unifiedTimes.forEach((slot, i) => {
-        const timeLabel = slot.label || `${new Date(slot.start).toLocaleTimeString()} - ${new Date(slot.end).toLocaleTimeString()}`;
-        tableHtml += `<tr><td>${timeLabel}</td>`;
+/* Remove the extra margin-bottom from the old single-table layout */
+#scheduleTable table {
+  margin-bottom: 0;
+}
 
-        allResources.forEach(r => {
-            const props = fieldProperties[r.name];
-            const limit = props.sharable ? 2 : 1;
-            const used = fieldUsageBySlot[i]?.[r.name] || 0;
-            
-            const timeAvail = isTimeAvailable(i, props);
-            
-            if (!timeAvail) {
-                tableHtml += `<td class="avail-x">X</td>`; // Unavailable by time rule
-            } else if (used >= limit) {
-                tableHtml += `<td class="avail-x">X</td>`; // Used to capacity
-            } else {
-                tableHtml += `<td class="avail-check">✓</td>`; // Available
-            }
-        });
-        tableHtml += `</tr>`;
-    });
-    
-    tableHtml += `</tbody></table></div>`;
-    availabilityReportContainer.innerHTML = tableHtml;
+/* ----------------------------------- */
+/* --- NEW: League Standings Styles --- */
+/* ----------------------------------- */
+
+.league-nav {
+  padding: 10px 15px;
+  background: #f1f1f1;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  margin-bottom: 15px;
+}
+.league-nav label {
+  font-weight: 600;
+  margin-right: 8px;
+}
+.league-nav select {
+  font-size: 1.1em;
+  padding: 5px 8px;
+  border-radius: 5px;
+}
+
+.league-content-pane {
+  display: none; /* Hidden by default */
+}
+.league-content-pane.active {
+  display: block; /* Shown by dropdown */
+}
+
+.league-standings-wrapper {
+  margin-bottom: 25px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.league-standings-wrapper h3 {
+  margin: 0;
+  padding: 12px 15px;
+  background: #f9f9f9;
+  border-bottom: 1px solid #ccc;
+}
+
+.league-standings-grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+.league-standings-grid th,
+.league-standings-grid td {
+  border-bottom: 1px solid #ddd;
+  padding: 10px 12px;
+  text-align: left;
+}
+.league-standings-grid th {
+  background-color: #f0f0f0;
+}
+.league-standings-grid td:first-child {
+  font-weight: 600; /* This is the "Place" column */
+}
+.league-standings-grid td:nth-child(2) {
+  font-weight: bold; /* This is the "Team" column */
+}
+.league-standings-grid input[type="number"] {
+  width: 60px;
+  padding: 6px 8px;
+  font-size: 1em;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+/* Hide spin buttons on number inputs */
+.league-standings-grid input::-webkit-outer-spin-button,
+.league-standings-grid input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.league-standings-grid input[type=number] {
+  -moz-appearance: textfield;
+}
+
+.update-standings-btn {
+  padding: 10px 16px; /* Slightly smaller */
+  font-size: 1.0em; /* Slightly smaller */
+  font-weight: 600;
+  background: #28a745;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  margin-top: 10px;
+  margin-bottom: 12px; /* Add bottom margin */
+  margin-left: 12px; /* Add left margin */
+}
+.update-standings-btn:hover {
+  background: #218838;
 }
 
 
-// Expose the new init function
-window.initReportTab = initReportTab;
+/* ----------------------------------- */
+/* --- NEW: Field Availability Grid Styles --- */
+/* ----------------------------------- */
 
-})();
+.availability-grid {
+  border-collapse: collapse;
+  margin: 0;
+}
+.availability-grid th,
+.availability-grid td {
+  border: 1px solid #999;
+  padding: 8px;
+  text-align: center;
+  min-width: 100px;
+}
+.availability-grid th {
+  background: #f4f4f4;
+  position: sticky;
+  top: 0;
+}
+.availability-grid td:first-child {
+  font-weight: 600;
+  background: #fdfdfd;
+  text-align: right;
+  min-width: 120px;
+  position: sticky;
+  left: 0;
+}
+.avail-check {
+  font-size: 1.2em;
+  color: #28a745;
+  font-weight: 700;
+}
+.avail-x {
+  font-size: 1.2em;
+  color: #c0392b;
+  font-weight: 700;
+}
