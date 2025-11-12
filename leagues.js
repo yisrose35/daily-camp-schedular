@@ -22,11 +22,18 @@
 // - **FIXED BUG 2:** The sorting logic in `renderLeagueStandingsUI`
 //   now correctly sorts numeric team names (e.g., 2 before 10).
 //
-// --- YOUR NEWEST REQUEST ---
+// --- YOUR NEWEST REQUEST (Individual Update) ---
 // - **UPDATED:** `renderLeagueStandingsUI` no longer has one
 //   global "Update" button. Instead, an "Update Standings"
 //   button is created for *each individual division's grid*
 //   and will only update that specific grid.
+//
+// --- YOUR LATEST REQUEST (Ranking) ---
+// - **NEW FEATURE:** `renderLeagueStandingsUI` now adds a "Place"
+//   column (1st, 2nd, etc.) to the standings grid.
+// - **AUTO-SORT:** The `updateBtn.onclick` already calls
+//   `renderLeagueStandingsUI()`, which re-runs the sorting
+//   logic, automatically re-ordering the teams by rank.
 // -----------------------------------------------------------------
 
 // Internal store keyed by LEAGUE NAME for UI/storage
@@ -35,6 +42,16 @@ let leaguesByName = {};
 // app2 also reads window.leaguesByName (full map)
 
 // -------------------- Helpers --------------------
+
+/**
+ * NEW Helper: Gets the suffix for a place number (1st, 2nd, 3rd)
+ */
+function getPlaceSuffix(n) {
+    const s = ["th", "st", "nd", "rd"];
+    const v = n % 100;
+    return (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
 function publishDivisionToggleMap() {
   const divMap = {};
   Object.values(leaguesByName).forEach(lg => {
@@ -137,7 +154,7 @@ function renderLeagueUI() {
 /**
  * --- NEW: Renders the Standings UI ---
  * Creates a sorted grid for each division with a league.
- * --- UPDATED with individual Update Buttons ---
+ * --- UPDATED with Place column ---
  */
 function renderLeagueStandingsUI() {
     const container = document.getElementById("league-standings-content");
@@ -197,6 +214,7 @@ function renderLeagueStandingsUI() {
         table.innerHTML = `
             <thead>
                 <tr>
+                    <th>Place</th>
                     <th>Team</th>
                     <th>Win</th>
                     <th>Loss</th>
@@ -209,11 +227,15 @@ function renderLeagueStandingsUI() {
         
         const tbody = table.querySelector("tbody");
         
-        sortedTeams.forEach(teamName => {
+        sortedTeams.forEach((teamName, index) => {
             const teamData = league.standings[teamName];
             const tr = document.createElement("tr");
             
+            const place = index + 1;
+            const suffix = getPlaceSuffix(place);
+            
             tr.innerHTML = `
+                <td>${place}${suffix}</td>
                 <td>${teamName}</td>
                 <td><input type="number" min="0" value="${teamData.w}" data-league="${leagueName}" data-team="${teamName}" data-record="w"></td>
                 <td><input type="number" min="0" value="${teamData.l}" data-league="${leagueName}" data-team="${teamName}" data-record="l"></td>
@@ -228,7 +250,6 @@ function renderLeagueStandingsUI() {
         const updateBtn = document.createElement("button");
         updateBtn.textContent = "Update Standings";
         updateBtn.className = "update-standings-btn";
-        // Add some margin to separate it from the table
         updateBtn.style.marginTop = "10px";
         updateBtn.style.marginLeft = "12px"; 
         
@@ -268,8 +289,6 @@ function renderLeagueStandingsUI() {
         container.innerHTML = '<p class="muted" style="padding: 10px;">No active leagues with teams were found. Go to "League Setup" to create one.</p>';
         return;
     }
-
-    // --- Global Update Button REMOVED ---
 }
 
 
