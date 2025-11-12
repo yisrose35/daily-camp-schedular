@@ -1,16 +1,15 @@
 // =================================================================
-// daily_adjustments.js (RENAMED from daily_overrides.js)
+// daily_adjustments.js
 //
 // UPDATED:
-// - Renamed init function to `initDailyAdjustments` and
-//   changed export to `window.initDailyAdjustments`.
-// - `init` function now searches for `daily-adjustments-content`.
-// - **NEW:** "Run Optimizer" button and its logic have been
-//   moved here from `master_schedule_builder.js`.
-// - The button is added to the top of the tab.
-// - The `runOptimizer` helper function is now part of this file
-//   and correctly uses `dailyOverrideSkeleton`.
-// - **NEW:** Added "Dismissal" as a pinned tile.
+// - **REMOVED** "Global Camp Times" logic.
+// - **MODIFIED** `renderGrid` to be fully dynamic:
+//   - It now reads all division-specific times from `window.divisions`.
+//   - It calculates the grid's `earliestMin` and `latestMin`
+//     based on the min/max of all division times.
+//   - It adds greyed-out blocks (`<div class="grid-disabled">`)
+//     to columns for times that are outside that specific
+//     division's start/end time.
 // =================================================================
 
 (function() {
@@ -98,24 +97,39 @@ function renderPalette(paletteContainer) {
     });
 }
 
+/**
+ * --- HEAVILY MODIFIED ---
+ * Now calculates grid size dynamically and adds greyed-out blocks.
+ */
 function renderGrid(gridContainer) {
     const divisions = window.divisions || {};
     const availableDivisions = window.availableDivisions || [];
     
-    const globalSettings = window.loadGlobalSettings?.() || {};
-    const app1Data = globalSettings.app1 || {};
-    const globalStart = app1Data.globalStartTime || "9:00 AM";
-    const globalEnd = app1Data.globalEndTime || "4:00 PM";
-    
-    let earliestMin = parseTimeToMinutes(globalStart);
-    let latestMin = parseTimeToMinutes(globalEnd);
+    // --- DYNAMIC TIME CALCULATION ---
+    let earliestMin = null;
+    let latestMin = null;
 
-    if (earliestMin == null) earliestMin = 540; 
-    if (latestMin == null) latestMin = 960; 
+    Object.values(divisions).forEach(div => {
+        const startMin = parseTimeToMinutes(div.startTime);
+        const endMin = parseTimeToMinutes(div.endTime);
+        
+        if (startMin !== null && (earliestMin === null || startMin < earliestMin)) {
+            earliestMin = startMin;
+        }
+        if (endMin !== null && (latestMin === null || endMin > latestMin)) {
+            latestMin = endMin;
+        }
+    });
+
+    // Fallback if no divisions have times set
+    if (earliestMin === null) earliestMin = 540; // 9:00 AM
+    if (latestMin === null) latestMin = 960; // 4:00 PM
     if (latestMin <= earliestMin) latestMin = earliestMin + 60; 
     
     const totalMinutes = latestMin - earliestMin;
     const totalHeight = totalMinutes * PIXELS_PER_MINUTE;
+    // --- END DYNAMIC TIME CALCULATION ---
+    
     let gridHtml = `<div style="display: grid; grid-template-columns: 60px repeat(${availableDivisions.length}, 1fr); position: relative;">`;
     gridHtml += `<div style="grid-row: 1; position: sticky; top: 0; background: #fff; z-index: 10; border-bottom: 1px solid #999; padding: 8px;">Time</div>`;
     availableDivisions.forEach((divName, i) => {
@@ -128,7 +142,24 @@ function renderGrid(gridContainer) {
     }
     gridHtml += `</div>`;
     availableDivisions.forEach((divName, i) => {
+        const div = divisions[divName];
+        const divStartMin = parseTimeToMinutes(div?.startTime);
+        const divEndMin = parseTimeToMinutes(div?.endTime);
+
         gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
+        
+        // --- NEW: Render Greyed-out "Before" block ---
+        if (divStartMin !== null && divStartMin > earliestMin) {
+            const greyHeight = (divStartMin - earliestMin) * PIXELS_PER_MINUTE;
+            gridHtml += `<div class="grid-disabled" style="top: 0; height: ${greyHeight}px;"></div>`;
+        }
+        
+        // --- NEW: Render Greyed-out "After" block ---
+        if (divEndMin !== null && divEndMin < latestMin) {
+            const greyTop = (divEndMin - earliestMin) * PIXELS_PER_MINUTE;
+            const greyHeight = (latestMin - divEndMin) * PIXELS_PER_MINUTE;
+            gridHtml += `<div class="grid-disabled" style="top: ${greyTop}px; height: ${greyHeight}px;"></div>`;
+        }
         
         dailyOverrideSkeleton.filter(ev => ev.division === divName).forEach(event => {
             const startMin = parseTimeToMinutes(event.startTime);
@@ -152,6 +183,9 @@ function renderGrid(gridContainer) {
     addDropListeners(gridContainer);
     addRemoveListeners(gridContainer);
 }
+/**
+ * --- UPDATED with VALIDATION ---
+ */
 function addDropListeners(gridContainer) {
     gridContainer.querySelectorAll('.grid-cell').forEach(cell => {
         cell.ondragover = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; cell.style.backgroundColor = '#e0ffe0'; };
@@ -174,9 +208,35 @@ function addDropListeners(gridContainer) {
             else if (tileData.type === 'sports') eventName = 'Sports Slot';
             else if (tileData.type === 'special') eventName = 'Special Activity';
             else if (tileData.type === 'league' || tileData.type === 'specialty_league' || tileData.type === 'swim') eventName = tileData.name; 
+            
             if (tileData.type === 'split') {
-                const startTime = prompt(`Enter Start Time for the *full* block:`, defaultStartTime); if (!startTime) return;
-                const endTime = prompt(`Enter End Time for the *full* block:`); if (!endTime) return;
+                let startTime, endTime, startMin, endMin;
+                
+                // Loop for Start Time
+                while (true) {
+                    startTime = prompt(`Enter Start Time for the *full* block:`, defaultStartTime);
+                    if (!startTime) return; // User cancelled
+                    startMin = parseTimeToMinutes(startTime);
+                    if (startMin !== null) break; // Valid time
+                    alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
+                }
+                
+                // Loop for End Time
+                while (true) {
+                    endTime = prompt(`Enter End Time for the *full* block:`);
+                    if (!endTime) return; // User cancelled
+                    endMin = parseTimeToMinutes(endTime);
+                    if (endMin !== null) {
+                        if (endMin <= startMin) {
+                            alert("End time must be after start time.");
+                        } else {
+                            break; // Valid time and valid range
+                        }
+                    } else {
+                        alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
+                    }
+                }
+                
                 const eventName1 = prompt("Enter name for FIRST activity (e.g., Swim, Sports):"); if (!eventName1) return;
                 const eventName2 = prompt("Enter name for SECOND activity (e.g., Activity, Sports):"); if (!eventName2) return;
                 const event1 = mapEventNameForOptimizer(eventName1);
@@ -189,9 +249,34 @@ function addDropListeners(gridContainer) {
                     if (confirm("Is this a 'Slot' to be filled (OK) or a 'Pinned' event (Cancel)?")) eventType = 'slot';
                 } else { eventName = tileData.name; }
             }
+            
             if (!newEvent) {
-                const startTime = prompt(`Add "${eventName}" for ${divName}?\nEnter Start Time:`, defaultStartTime); if (!startTime) return;
-                const endTime = prompt(`Enter End Time:`); if (!endTime) return;
+                let startTime, endTime, startMin, endMin;
+
+                // Loop for Start Time
+                while (true) {
+                    startTime = prompt(`Add "${eventName}" for ${divName}?\nEnter Start Time:`, defaultStartTime);
+                    if (!startTime) return; // User cancelled
+                    startMin = parseTimeToMinutes(startTime);
+                    if (startMin !== null) break; // Valid time
+                    alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
+                }
+                
+                // Loop for End Time
+                while (true) {
+                    endTime = prompt(`Enter End Time:`);
+                    if (!endTime) return; // User cancelled
+                    endMin = parseTimeToMinutes(endTime);
+                    if (endMin !== null) {
+                        if (endMin <= startMin) {
+                            alert("End time must be after start time.");
+                        } else {
+                            break; // Valid time and valid range
+                        }
+                    } else {
+                        alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
+                    }
+                }
                 newEvent = { id: `evt_${Math.random().toString(36).slice(2, 9)}`, type: eventType, event: eventName, division: divName, startTime: startTime, endTime: endTime };
             }
             dailyOverrideSkeleton.push(newEvent);
@@ -299,7 +384,32 @@ function initDailySkeletonUI() {
     loadDailySkeleton();
     skeletonContainer.innerHTML = `
         <div id="daily-skeleton-palette" style="padding: 10px; background: #f4f4f4; border-radius: 8px; margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px;"></div>
-        <div id="daily-skeleton-grid" style="overflow-x: auto; border: 1px solid #999; max-height: 600px; overflow-y: auto;"></div>`;
+        <div id="daily-skeleton-grid" style="overflow-x: auto; border: 1px solid #999; max-height: 600px; overflow-y: auto;"></div>
+        <style>
+            .grid-disabled {
+                position: absolute;
+                width: 100%;
+                background-color: #80808040; /* transparent grey */
+                background-image: linear-gradient(
+                    -45deg, 
+                    #0000001a 25%, 
+                    transparent 25%, 
+                    transparent 50%, 
+                    #0000001a 50%, 
+                    #0000001a 75%, 
+                    transparent 75%, 
+                    transparent
+                );
+                background-size: 20px 20px;
+                z-index: 1; /* Below events, above cell */
+                pointer-events: none; /* Allows clicks to go through */
+            }
+            .grid-event {
+                z-index: 2; /* Make sure events are on top */
+                position: relative;
+            }
+        </style>
+        `;
     const palette = document.getElementById("daily-skeleton-palette");
     const grid = document.getElementById("daily-skeleton-grid");
     renderPalette(palette);
@@ -340,8 +450,8 @@ function runOptimizer() {
 
 
 /**
- * This is a copy of the helper from scheduler_logic_core.js
- * It's needed here for validation.
+ * --- UPDATED: `parseTimeToMinutes` ---
+ * This function now requires 'am' or 'pm' to be present.
  */
 function parseTimeToMinutes(str) {
   if (!str || typeof str !== "string") return null;
@@ -351,15 +461,24 @@ function parseTimeToMinutes(str) {
     mer = s.endsWith("am") ? "am" : "pm";
     s = s.replace(/am|pm/g, "").trim();
   }
+  
   const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
   if (!m) return null;
   let hh = parseInt(m[1], 10);
   const mm = parseInt(m[2], 10);
   if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
+
+  // --- MODIFIED VALIDATION ---
   if (mer) {
-    if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
-    else if (mer === "pm") hh += 12; // 1pm -> 13
+      // AM/PM is present, process it
+      if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
+      else if (mer === "pm") hh += 12; // 1pm -> 13
+  } else {
+      // AM/PM is missing, return null as requested
+      return null;
   }
+  // --- END MODIFICATION ---
+
   return hh * 60 + mm;
 }
 
