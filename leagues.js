@@ -2,11 +2,14 @@
 // (UPDATED to use calendar.js save/load)
 //
 // UPDATED:
-// - `initLeaguesTab`:
-//   - Removed hard-coded `sportsList`.
-//   - Now calls `window.getAllGlobalSports()` to get the master list.
-//   - "Other sport" input now calls `window.addGlobalSport()`
-//     to register the sport globally before re-rendering the tab.
+// - **NEW UI:** `initLeagues` (formerly `initLeaguesTab`) now
+//   creates a dropdown to switch between "League Setup" and
+//   "League Standings".
+// - **NEW FEATURE:** `renderLeagueStandingsUI` is a new function
+//   that builds a grid for each division, allowing W/L/T input.
+// - **NEW DATA:** `loadLeagues` and the new "Update" button
+//   now save and load a `standings` object for each league
+//   to track team records.
 // -----------------------------------------------------------------
 
 // Internal store keyed by LEAGUE NAME for UI/storage
@@ -16,52 +19,236 @@ let leaguesByName = {};
 
 // -------------------- Helpers --------------------
 function publishDivisionToggleMap() {
-const divMap = {};
-Object.values(leaguesByName).forEach(lg => {
-if (lg?.enabled && Array.isArray(lg.divisions)) {
-lg.divisions.forEach(d => { if (d) divMap[d] = { enabled: true }; });
-}
-});
-window.leagues = divMap;
+  const divMap = {};
+  Object.values(leaguesByName).forEach(lg => {
+    if (lg?.enabled && Array.isArray(lg.divisions)) {
+      lg.divisions.forEach(d => { if (d) divMap[d] = { enabled: true }; });
+    }
+  });
+  window.leagues = divMap;
 }
 
 function saveLeagues() {
-// UPDATED: Save to global settings
-window.saveGlobalSettings?.("leaguesByName", leaguesByName);
+  // UPDATED: Save to global settings
+  window.saveGlobalSettings?.("leaguesByName", leaguesByName);
 
-window.leaguesByName = leaguesByName; // publish full map
-publishDivisionToggleMap();
+  window.leaguesByName = leaguesByName; // publish full map
+  publishDivisionToggleMap();
 }
 
+/**
+ * UPDATED: Now loads and initializes the `standings` object
+ * for each league and team.
+ */
 function loadLeagues() {
-// UPDATED: Load from global settings
-// Relies on calendar.js migration logic to find "leagues" key once
-const stored = window.loadGlobalSettings?.().leaguesByName;
+  // UPDATED: Load from global settings
+  const stored = window.loadGlobalSettings?.().leaguesByName;
 
-leaguesByName = stored || {};
-Object.keys(leaguesByName).forEach(name => {
-const l = leaguesByName[name] || {};
-if (typeof l.enabled === "undefined") l.enabled = false;
-l.divisions = Array.isArray(l.divisions) ? l.divisions : [];
-l.sports = Array.isArray(l.sports) ? l.sports : [];
-l.teams = Array.isArray(l.teams) ? l.teams : [];
-leaguesByName[name] = l;
-});
-window.leaguesByName = leaguesByName; // publish full map
-publishDivisionToggleMap();
+  leaguesByName = stored || {};
+  Object.keys(leaguesByName).forEach(name => {
+    const l = leaguesByName[name] || {};
+    if (typeof l.enabled === "undefined") l.enabled = false;
+    l.divisions = Array.isArray(l.divisions) ? l.divisions : [];
+    l.sports = Array.isArray(l.sports) ? l.sports : [];
+    l.teams = Array.isArray(l.teams) ? l.teams : [];
+    
+    // NEW: Initialize standings object
+    l.standings = l.standings || {};
+    // Ensure every team has a standings entry
+    l.teams.forEach(team => {
+        l.standings[team] = l.standings[team] || { w: 0, l: 0, t: 0 };
+    });
+    
+    leaguesByName[name] = l;
+  });
+  window.leaguesByName = leaguesByName; // publish full map
+  publishDivisionToggleMap();
 }
 
 // -------------------- UI --------------------
+
 /**
- * UPDATED FUNCTION
- * - Fixes the bug where the custom sport input had no "Add" button.
- * - NEW: Renders buttons for ALL saved sports (including custom ones).
- * - NEW: All sport buttons now toggle (add/remove) on click.
+ * --- NEW: Main UI Rendering Function ---
+ * Renders the dropdown nav and the two content panes.
  */
-function initLeaguesTab() {
-  const leaguesContainer = document.getElementById("leaguesContainer");
+function renderLeagueUI() {
+    const leaguesContainer = document.getElementById("leaguesContainer");
+    if (!leaguesContainer) return;
+    
+    // 1. Build the new navigation UI
+    leaguesContainer.innerHTML = `
+        <div class="league-nav">
+            <label for="league-view-select">Select View:</label>
+            <select id="league-view-select">
+                <option value="setup">League Setup</option>
+                <option value="standings">League Standings</option>
+            </select>
+        </div>
+        
+        <div id="league-setup-content" class="league-content-pane active">
+            </div>
+        <div id="league-standings-content" class="league-content-pane">
+            </div>
+    `;
+
+    // 2. Render the content for both panes
+    renderLeagueSetupUI();
+    renderLeagueStandingsUI();
+
+    // 3. Hook up the dropdown
+    document.getElementById("league-view-select").onchange = (e) => {
+        const selected = e.target.value;
+        if (selected === 'setup') {
+            document.getElementById("league-setup-content").classList.add("active");
+            document.getElementById("league-standings-content").classList.remove("active");
+        } else {
+            document.getElementById("league-setup-content").classList.remove("active");
+            document.getElementById("league-standings-content").classList.add("active");
+        }
+    };
+}
+
+/**
+ * --- NEW: Renders the Standings UI ---
+ * Creates a sorted grid for each division with a league.
+ */
+function renderLeagueStandingsUI() {
+    const container = document.getElementById("league-standings-content");
+    if (!container) return;
+
+    container.innerHTML = ""; // Clear
+    
+    const allDivisions = window.availableDivisions || [];
+    let gridsRendered = 0;
+
+    allDivisions.forEach(divName => {
+        // Find the first *enabled* league associated with this division
+        const league = Object.values(leaguesByName).find(l => 
+            l.enabled && l.divisions.includes(divName)
+        );
+
+        if (!league || league.teams.length === 0) {
+            return; // No league or no teams for this division, skip
+        }
+
+        gridsRendered++;
+        
+        const leagueName = league.name; // Get the league name
+        
+        // --- 1. Create wrapper and title ---
+        const wrapper = document.createElement("div");
+        wrapper.className = "league-standings-wrapper";
+        const title = document.createElement("h3");
+        title.textContent = `${divName} (${leagueName}) Standings`;
+        wrapper.appendChild(title);
+
+        // --- 2. Sort teams based on standings ---
+        // Ensure all teams have a standing object before sorting
+        league.teams.forEach(team => {
+            league.standings[team] = league.standings[team] || { w: 0, l: 0, t: 0 };
+        });
+        
+        const sortedTeams = [...league.teams].sort((a, b) => {
+            const standingA = league.standings[a];
+            const standingB = league.standings[b];
+            
+            // Sort by Wins (descending)
+            if (standingA.w !== standingB.w) {
+                return standingB.w - standingA.w;
+            }
+            // Then by Losses (ascending)
+            if (standingA.l !== standingB.l) {
+                return standingA.l - standingB.l;
+            }
+            // Then by Ties (descending)
+            if (standingA.t !== standingB.t) {
+                return standingB.t - standingA.t;
+            }
+            // Finally by team name (alphabetical)
+            return a.localeCompare(b);
+        });
+
+        // --- 3. Create table ---
+        const table = document.createElement("table");
+        table.className = "league-standings-grid";
+        table.innerHTML = `
+            <thead>
+                <tr>
+                    <th>Team</th>
+                    <th>Win</th>
+                    <th>Loss</th>
+                    <th>Tie</th>
+                </tr>
+            </thead>
+            <tbody>
+            </tbody>
+        `;
+        
+        const tbody = table.querySelector("tbody");
+        
+        sortedTeams.forEach(teamName => {
+            const teamData = league.standings[teamName];
+            const tr = document.createElement("tr");
+            
+            tr.innerHTML = `
+                <td>${teamName}</td>
+                <td><input type="number" min="0" value="${teamData.w}" data-league="${leagueName}" data-team="${teamName}" data-record="w"></td>
+                <td><input type="number" min="0" value="${teamData.l}" data-league="${leagueName}" data-team="${teamName}" data-record="l"></td>
+                <td><input type="number" min="0" value="${teamData.t}" data-league="${leagueName}" data-team="${teamName}" data-record="t"></td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        wrapper.appendChild(table);
+        container.appendChild(wrapper);
+    });
+
+    if (gridsRendered === 0) {
+        container.innerHTML = '<p class="muted" style="padding: 10px;">No active leagues with teams were found. Go to "League Setup" to create one.</p>';
+        return;
+    }
+
+    // --- 4. Add Update Button ---
+    const updateBtn = document.createElement("button");
+    updateBtn.textContent = "Update All Standings";
+    updateBtn.className = "update-standings-btn";
+    updateBtn.onclick = () => {
+        let changed = false;
+        // Find all inputs within the standings container
+        container.querySelectorAll("input[type='number']").forEach(input => {
+            const leagueName = input.dataset.league;
+            const teamName = input.dataset.team;
+            const recordType = input.dataset.record; // 'w', 'l', or 't'
+            const value = parseInt(input.value, 10) || 0;
+
+            if (leaguesByName[leagueName] && leaguesByName[leagueName].standings[teamName]) {
+                if (leaguesByName[leagueName].standings[teamName][recordType] !== value) {
+                    leaguesByName[leagueName].standings[teamName][recordType] = value;
+                    changed = true;
+                }
+            }
+        });
+
+        if (changed) {
+            saveLeagues();
+            renderLeagueStandingsUI(); // Re-render to show sorted order
+            alert("Standings updated and saved!");
+        } else {
+            alert("No changes detected.");
+        }
+    };
+    container.appendChild(updateBtn);
+}
+
+
+/**
+ * --- RENAMED: from `initLeaguesTab` ---
+ * This function now *only* renders the setup UI.
+ */
+function renderLeagueSetupUI() {
+  const leaguesContainer = document.getElementById("league-setup-content");
   if (!leaguesContainer) return;
-  leaguesContainer.innerHTML = "";
+  leaguesContainer.innerHTML = ""; // Clear only setup container
 
   const addLeagueDiv = document.createElement("div");
   addLeagueDiv.style.marginBottom = "15px";
@@ -75,10 +262,16 @@ function initLeaguesTab() {
   addLeagueBtn.onclick = () => {
     const name = newLeagueInput.value.trim();
     if (name !== "" && !leaguesByName[name]) {
-      leaguesByName[name] = { enabled: false, divisions: [], sports: [], teams: [] };
+      leaguesByName[name] = { 
+          enabled: false, 
+          divisions: [], 
+          sports: [], 
+          teams: [],
+          standings: {} // NEW: Add standings object
+      };
       newLeagueInput.value = "";
       saveLeagues();
-      initLeaguesTab();
+      renderLeagueSetupUI(); // Re-render setup
     }
   };
   newLeagueInput.addEventListener("keypress", e => { if (e.key === "Enter") addLeagueBtn.click(); });
@@ -179,7 +372,8 @@ function initLeaguesTab() {
       if (confirm(`Delete ${leagueName}?`)) {
         delete leaguesByName[leagueName];
         saveLeagues();
-        initLeaguesTab();
+        renderLeagueSetupUI(); // Re-render setup
+        renderLeagueStandingsUI(); // Re-render standings
       }
     };
 
@@ -233,7 +427,7 @@ function initLeaguesTab() {
         if (idx >= 0) leagueData.divisions.splice(idx, 1);
         else leagueData.divisions.push(divName);
         saveLeagues();
-        initLeaguesTab();
+        renderLeagueSetupUI(); // Re-render setup
       };
 
       divContainer.appendChild(divBtn);
@@ -277,7 +471,7 @@ function initLeaguesTab() {
           leagueData.sports.push(sport);
         }
         saveLeagues();
-        initLeaguesTab(); // Re-render
+        renderLeagueSetupUI(); // Re-render setup
       };
       sportsContainer.appendChild(btn);
     });
@@ -306,7 +500,7 @@ function initLeaguesTab() {
       
       // 3. Re-render the tab
       customSportInput.value = "";
-      initLeaguesTab(); 
+      renderLeagueSetupUI(); // Re-render setup
     };
 
     customSportInput.onkeypress = e => {
@@ -342,8 +536,10 @@ function initLeaguesTab() {
         if (!val) return;
         if (!leagueData.teams.includes(val)) {
           leagueData.teams.push(val);
+          // NEW: Add team to standings
+          leagueData.standings[val] = leagueData.standings[val] || { w: 0, l: 0, t: 0 };
           saveLeagues();
-          initLeaguesTab();
+          renderLeagueSetupUI(); // Re-render setup
         }
         teamInput.value = "";
       }
@@ -357,8 +553,10 @@ function initLeaguesTab() {
       if (!val) return;
       if (!leagueData.teams.includes(val)) {
         leagueData.teams.push(val);
+        // NEW: Add team to standings
+        leagueData.standings[val] = leagueData.standings[val] || { w: 0, l: 0, t: 0 };
         saveLeagues();
-        initLeaguesTab();
+        renderLeagueSetupUI(); // Re-render setup
       }
       teamInput.value = "";
     };
@@ -379,10 +577,13 @@ function initLeaguesTab() {
       teamBtn.style.cursor = "pointer";
       teamBtn.style.backgroundColor = "#f9f9f9";
       teamBtn.onclick = () => {
-        if (confirm(`Remove ${team} from ${leagueName}?`)) {
+        if (confirm(`Remove ${team} from ${leagueName}? This will also remove their standings.`)) {
           leagueData.teams = leagueData.teams.filter(t => t !== team);
+          // NEW: Remove from standings
+          delete leagueData.standings[team];
           saveLeagues();
-          initLeaguesTab();
+          renderLeagueSetupUI(); // Re-render setup
+          renderLeagueStandingsUI(); // Re-render standings
         }
       };
       teamListContainer.appendChild(teamBtn);
@@ -392,6 +593,7 @@ function initLeaguesTab() {
     leaguesContainer.appendChild(section);
   });
 }
+
 
 // Init
 loadLeagues();
@@ -403,9 +605,15 @@ window.saveLeagues = saveLeagues;
 // =============================================
 // ===== START OF NEW INIT FUNCTION =====
 // =============================================
+/**
+ * RENAMED: from `initLeaguesTab`
+ * This is now the main entry point for the Leagues tab.
+ */
 function initLeagues() {
-// loadLeagues() is already called at the top level of this file.
-if (document.getElementById("leaguesContainer")) initLeaguesTab();
+  // loadLeagues() is already called at the top level of this file.
+  if (document.getElementById("leaguesContainer")) {
+      renderLeagueUI(); // Renders the new nav and both panes
+  }
 }
 window.initLeagues = initLeagues;
 // =============================================
