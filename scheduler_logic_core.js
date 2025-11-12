@@ -2,40 +2,44 @@
 // scheduler_logic_core.js
 //
 // UPDATED:
-// - `loadAndFilterData`:
-//   - **NEW:** Loads the `disabledFields` and `disabledSpecials`
-//     lists from the daily overrides.
-//   - **NEW:** `allMasterActivities` is now filtered at the start
-//     to immediately remove any field or special that is disabled
-//     for the day via the new quick toggles.
+// - **SMART SCHEDULER IMPLEMENTATION**
+// - `loadAndFilterData`: Now loads `rotationHistory` via `window.loadRotationHistory()`.
+// - `runSkeletonOptimizer`:
+//   - **Pass 3 (League Shuffle):** Checks `rotationHistory` to pick the
+//     sport played least recently by that league.
+//   - **Pass 5 (History Save):** Iterates through the newly generated
+//     schedule and updates the history for bunks and leagues.
 // =================================================================
 
 (function() {
 'use strict';
 
 // ===== CONFIG =====
-const INCREMENT_MINS = 30; // The base grid resolution
-window.INCREMENT_MINS = INCREMENT_MINS; // Expose for filler.js
+const INCREMENT_MINS = 30; 
+window.INCREMENT_MINS = INCREMENT_MINS;
 
 // ===== Helpers =====
 function parseTimeToMinutes(str) {
-    if (!str || typeof str !== "string") return null;
-    let s = str.trim().toLowerCase();
-    let mer = null;
-    if (s.endsWith("am") || s.endsWith("pm")) {
-        mer = s.endsWith("am") ? "am" : "pm";
-        s = s.replace(/am|pm/g, "").trim();
-    }
-    const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-    if (!m) return null;
-    let hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-    if (mer) {
-        if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
-        else if (mer === "pm") hh += 12; // 1pm -> 13
-    }
-    return hh * 60 + mm;
+  if (!str || typeof str !== "string") return null;
+  let s = str.trim().toLowerCase();
+  let mer = null;
+  if (s.endsWith("am") || s.endsWith("pm")) {
+    mer = s.endsWith("am") ? "am" : "pm";
+    s = s.replace(/am|pm/g, "").trim();
+  } else {
+    return null; // REQUIRE am/pm
+  }
+  
+  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+  if (!m) return null;
+  let hh = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
+  if (mer) {
+    if (hh === 12) hh = mer === "am" ? 0 : 12; 
+    else if (mer === "pm") hh += 12; 
+  }
+  return hh * 60 + mm;
 }
 function fieldLabel(f) {
     if (typeof f === "string") return f;
@@ -64,13 +68,14 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     const { 
         divisions, 
         availableDivisions,
-        activityProperties, // This now contains resolved time rules & limitUsage
+        activityProperties, 
         allActivities,
         h2hActivities,
         fieldsBySport,
         masterLeagues,
         masterSpecialtyLeagues,
         yesterdayHistory,
+        rotationHistory, // NEW: Smart Scheduler History
         disabledLeagues,
         disabledSpecialtyLeagues
     } = loadAndFilterData();
@@ -168,7 +173,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         }
     });
 
-    // ===== PASS 3: NEW "League Pass" (REWRITTEN) =====
+    // ===== PASS 3: NEW "League Pass" (With Smart Shuffle) =====
     const leagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'League Game');
     const specialtyLeagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'Specialty League');
     const remainingBlocks = schedulableSlotBlocks.filter(b => b.event !== 'League Game' && b.event !== 'Specialty League');
@@ -199,7 +204,23 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         
         // Filter league sports by what's available today in fieldsBySport
         const availableLeagueSports = (divLeague.sports || []).filter(s => fieldsBySport[s]);
-        const sports = availableLeagueSports.length > 0 ? availableLeagueSports : ["League"];
+        
+        // --- NEW: SMART SHUFFLE FOR LEAGUE SPORT ---
+        let sport;
+        const leagueHistory = rotationHistory.leagues[divLeagueName] || {};
+        
+        if (availableLeagueSports.length > 0) {
+            // Find the least recently used sport
+            // Sorts by timestamp (oldest first). Undefined (never played) comes first.
+            sport = availableLeagueSports.sort((a, b) => {
+                const lastA = leagueHistory[a] || 0; // 0 = never played
+                const lastB = leagueHistory[b] || 0;
+                return lastA - lastB; 
+            })[0]; 
+        } else {
+            sport = "League"; // Fallback
+        }
+        // --- END SMART SHUFFLE ---
         
         let matchups = [];
         if (typeof window.getLeagueMatchups === 'function') {
@@ -209,13 +230,11 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         }
         const allBunksInGroup = Array.from(group.bunks);
         const scheduledGames = []; 
-        let gameIndex = 0;
         const blockBase = { slots: group.slots, divName: group.divName };
 
         for (const [teamA, teamB] of matchups) {
             if (teamA === "BYE" || teamB === "BYE") continue;
-            const sport = sports[gameIndex % sports.length];
-            gameIndex++;
+
             const possibleFields = fieldsBySport[sport] || [];
             let fieldName = null;
             
@@ -235,10 +254,11 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
             let pick;
             if (fieldName) {
-                pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null };
+                // NEW: We add `_activity` property to help track history later
+                pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport }; 
                 markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
             } else {
-                pick = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null };
+                pick = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
             }
             scheduledGames.push(pick);
         }
@@ -246,7 +266,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         allBunksInGroup.forEach((bunk, bunkIndex) => {
             let pickToAssign;
             if (scheduledGames.length > 0) pickToAssign = scheduledGames[bunkIndex % scheduledGames.length];
-            else pickToAssign = { field: "Leagues", sport: null, _h2h: true };
+            else pickToAssign = { field: "Leagues", sport: null, _h2h: true, _activity: "League" };
             fillBlock({ ...blockBase, bunk: bunk }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
         });
     });
@@ -272,7 +292,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         if (!leagueEntry) return; 
 
         const sport = leagueEntry.sport;
-        // Check if the sport for this league is even available today
         if (!sport || !fieldsBySport[sport]) return; 
         
         const leagueFields = leagueEntry.fields || [];
@@ -283,7 +302,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         if (typeof window.getLeagueMatchups === 'function') {
             matchups = window.getLeagueMatchups(leagueEntry.name, leagueTeams) || [];
         } else {
-            matchups = pairRoundRobin(leagueTeams); // Failsafe
+            matchups = pairRoundRobin(leagueTeams); 
         }
         const allBunksInGroup = Array.from(group.bunks);
         const scheduledGames = []; 
@@ -298,25 +317,24 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
             let pick;
             
-            // Check if this specific field is available today
             if (fieldName && canBlockFit(blockBase, fieldName, activityProperties, fieldUsageBySlot)) {
-                pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null };
+                pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
                 markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
             } else {
-                pick = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null };
+                pick = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
             }
             scheduledGames.push(pick);
         }
         allBunksInGroup.forEach((bunk, bunkIndex) => {
             let pickToAssign;
             if (scheduledGames.length > 0) pickToAssign = scheduledGames[bunkIndex % scheduledGames.length];
-            else pickToAssign = { field: "Specialty League", sport: null, _h2h: true };
+            else pickToAssign = { field: "Specialty League", sport: null, _h2h: true, _activity: sport };
             fillBlock({ ...blockBase, bunk: bunk }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
         });
     });
 
 
-    // ===== PASS 4: Fill remaining Schedulable Slots =====
+    // ===== PASS 4: Fill remaining Schedulable Slots (With Smart Shuffle) =====
     remainingBlocks.sort((a, b) => a.startTime - b.startTime);
 
     for (const block of remainingBlocks) {
@@ -324,16 +342,18 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             continue;
         }
         let pick = null;
+        // NEW: Pass rotationHistory to the "findBest" functions
         if (block.event === 'Special Activity') {
-            pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties);
+            pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
         } else if (block.event === 'Sports Slot') {
-            pick = window.findBestSportActivity?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties);
+            pick = window.findBestSportActivity?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
         } else if (block.event === 'Swim') {
-            pick = { field: "Swim", sport: null }; 
+            pick = { field: "Swim", sport: null, _activity: "Swim" }; 
         }
         if (!pick) {
-            pick = window.findBestGeneralActivity?.(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties);
+            pick = window.findBestGeneralActivity?.(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
         }
+        
         if (pick) {
             fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, false);
         } else {
@@ -341,7 +361,51 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         }
     }
     
-    // ===== PASS 5: Save unifiedTimes and Update the UI =====
+    // ===== PASS 5: NEW: Update Rotation History =====
+    try {
+        const historyToSave = window.loadRotationHistory();
+        const timestamp = Date.now();
+
+        availableDivisions.forEach(divName => {
+            (divisions[divName]?.bunks || []).forEach(bunk => {
+                const schedule = window.scheduleAssignments[bunk] || [];
+                let lastActivity = null; // Prevent double-counting a 2-slot activity
+                
+                for (const entry of schedule) {
+                    if (entry && entry._activity && entry._activity !== lastActivity) {
+                        const activityName = entry._activity;
+                        lastActivity = activityName;
+                        
+                        // 1. Update bunk history (for "freshness" check in fillers)
+                        historyToSave.bunks[bunk] = historyToSave.bunks[bunk] || {};
+                        historyToSave.bunks[bunk][activityName] = timestamp;
+                        
+                        // 2. If it's a league, update league history (for "fairness" check in Pass 3)
+                        if (entry._h2h) {
+                            const leagueEntry = Object.entries(masterLeagues).find(([name, l]) => 
+                                l.enabled && l.divisions.includes(divName)
+                            );
+                            if (leagueEntry) {
+                                const leagueName = leagueEntry[0];
+                                historyToSave.leagues[leagueName] = historyToSave.leagues[leagueName] || {};
+                                historyToSave.leagues[leagueName][activityName] = timestamp;
+                            }
+                        }
+                    } else if (entry && !entry.continuation) {
+                        lastActivity = null; // Reset for new block
+                    }
+                }
+            });
+        });
+        
+        window.saveRotationHistory(historyToSave);
+        console.log("Smart Scheduler: Rotation history updated.");
+
+    } catch (e) {
+        console.error("Smart Scheduler: Failed to update rotation history.", e);
+    }
+    
+    // ===== PASS 6: Save unifiedTimes and Update the UI =====
     window.saveCurrentDailyData?.("unifiedTimes", window.unifiedTimes); 
     window.updateTable?.();
     window.saveSchedule?.(); 
@@ -405,7 +469,7 @@ function isTimeAvailable(slotIndex, fieldProps) {
 
     for (const rule of rules) {
         if (rule.type === 'Unavailable') {
-            if (slotStartMin < rule.endMin && slotEndMin > rule.startMin) {
+            if (slotStartMin < rule.endMin && slotEndMin > rule.endMin) {
                 isAvailable = false;
                 break;
             }
@@ -484,7 +548,8 @@ function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill
                 continuation: (idx > 0),
                 _fixed: false,
                 _h2h: pick._h2h || false,
-                vs: pick.vs || null
+                vs: pick.vs || null,
+                _activity: pick._activity || null // NEW: Save the base activity name for history
             };
             
             if (!isLeagueFill && fieldName && window.allSchedulableNames.includes(fieldName)) {
@@ -514,6 +579,7 @@ function pairRoundRobin(teamList) {
  * UPDATED: This function now loads and filters by
  * the new `dailyDisabledSportsByField`, `disabledFields`,
  * and `disabledSpecials` lists.
+ * NEW: Also loads `rotationHistory`.
  */
 function loadAndFilterData() {
     const globalSettings = window.loadGlobalSettings?.() || {};
@@ -536,8 +602,11 @@ function loadAndFilterData() {
     const disabledLeagues = dailyOverrides.leagues || [];
     const disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
     const dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};
-    const disabledFields = dailyOverrides.disabledFields || []; // <-- NEW
-    const disabledSpecials = dailyOverrides.disabledSpecials || []; // <-- NEW
+    const disabledFields = dailyOverrides.disabledFields || []; 
+    const disabledSpecials = dailyOverrides.disabledSpecials || []; 
+    
+    // --- NEW: Load Smart Scheduler History ---
+    const rotationHistory = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
     
     const overrides = {
         bunks: dailyOverrides.bunks || [],
@@ -593,8 +662,6 @@ function loadAndFilterData() {
             timeRules: finalRules
         };
 
-        // Only add if it's *globally* available (in setup)
-        // The daily quick-toggle is already handled above.
         if (isMasterAvailable) {
             availableActivityNames.push(f.name);
         }
@@ -647,6 +714,7 @@ function loadAndFilterData() {
         masterLeagues,
         masterSpecialtyLeagues,
         yesterdayHistory,
+        rotationHistory, // NEW: Smart Scheduler
         disabledLeagues,
         disabledSpecialtyLeagues
     };
