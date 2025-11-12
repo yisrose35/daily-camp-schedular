@@ -2,15 +2,15 @@
 // master_schedule_builder.js
 //
 // UPDATED:
-// - **MOVED** the "Run Optimizer" button and the local
-//   `runOptimizer` helper function to `daily_adjustments.js`.
-// - This file is now only responsible for building and
-//   assigning templates.
-// - **VALIDATION:** Added input validation to the time `prompt`s in
-//   `addDropListeners` to prevent bad time entries.
-// - **VALIDATION:** `parseTimeToMinutes` now requires 'am' or 'pm'.
-// - **NEW TILE:** Added "Dismissal" tile to the `TILES` constant
-//   and updated helper functions to match daily_adjustments.js.
+// - **REMOVED** "Global Camp Times" logic.
+// - **MODIFIED** `renderGrid` to be fully dynamic:
+//   - It now reads all division-specific times from `window.divisions`.
+//   - It calculates the grid's `earliestMin` and `latestMin`
+//     based on the min/max of all division times.
+//   - It adds greyed-out blocks (`<div class="grid-disabled">`)
+//     to columns for times that are outside that specific
+//     division's start/end time.
+// - `init` function simplified.
 // =================================================================
 
 (function() {
@@ -61,7 +61,6 @@ function init() {
     loadDailySkeleton();
     
     // 2. Build the main UI
-    // --- REMOVED scheduler-controls div and run-optimizer-btn ---
     container.innerHTML = `
         <div id="scheduler-template-ui" style="padding: 15px; background: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 20px;">
             </div>
@@ -70,7 +69,32 @@ function init() {
             </div>
         
         <div id="scheduler-grid" style="overflow-x: auto; border: 1px solid #999;">
-            </div>
+            <!-- Grid rendered by renderGrid() -->
+        </div>
+        <style>
+            .grid-disabled {
+                position: absolute;
+                width: 100%;
+                background-color: #80808040; /* transparent grey */
+                background-image: linear-gradient(
+                    -45deg, 
+                    #0000001a 25%, 
+                    transparent 25%, 
+                    transparent 50%, 
+                    #0000001a 50%, 
+                    #0000001a 75%, 
+                    transparent 75%, 
+                    transparent
+                );
+                background-size: 20px 20px;
+                z-index: 1; /* Below events, above cell */
+                pointer-events: none; /* Allows clicks to go through */
+            }
+            .grid-event {
+                z-index: 2; /* Make sure events are on top */
+                position: relative;
+            }
+        </style>
     `;
     
     palette = document.getElementById("scheduler-palette");
@@ -80,8 +104,6 @@ function init() {
     renderTemplateUI(); 
     renderPalette();
     renderGrid();
-    
-    // 4. "Run Optimizer" button hookup REMOVED
 }
 
 /**
@@ -353,25 +375,37 @@ function renderPalette() {
 
 /**
  * Renders the main schedule grid
+ * --- HEAVILY MODIFIED ---
+ * Now calculates grid size dynamically and adds greyed-out blocks.
  */
 function renderGrid() {
     const divisions = window.divisions || {};
     const availableDivisions = window.availableDivisions || [];
     
-    const globalSettings = window.loadGlobalSettings?.() || {};
-    const app1Data = globalSettings.app1 || {};
-    const globalStart = app1Data.globalStartTime || "9:00 AM";
-    const globalEnd = app1Data.globalEndTime || "4:00 PM";
-    
-    let earliestMin = parseTimeToMinutes(globalStart);
-    let latestMin = parseTimeToMinutes(globalEnd);
+    // --- DYNAMIC TIME CALCULATION ---
+    let earliestMin = null;
+    let latestMin = null;
 
-    if (earliestMin == null) earliestMin = 540; 
-    if (latestMin == null) latestMin = 960; 
+    Object.values(divisions).forEach(div => {
+        const startMin = parseTimeToMinutes(div.startTime);
+        const endMin = parseTimeToMinutes(div.endTime);
+        
+        if (startMin !== null && (earliestMin === null || startMin < earliestMin)) {
+            earliestMin = startMin;
+        }
+        if (endMin !== null && (latestMin === null || endMin > latestMin)) {
+            latestMin = endMin;
+        }
+    });
+
+    // Fallback if no divisions have times set
+    if (earliestMin === null) earliestMin = 540; // 9:00 AM
+    if (latestMin === null) latestMin = 960; // 4:00 PM
     if (latestMin <= earliestMin) latestMin = earliestMin + 60; 
     
     const totalMinutes = latestMin - earliestMin;
     const totalHeight = totalMinutes * PIXELS_PER_MINUTE;
+    // --- END DYNAMIC TIME CALCULATION ---
 
     let gridHtml = `<div style="display: grid; grid-template-columns: 60px repeat(${availableDivisions.length}, 1fr); position: relative;">`;
     
@@ -390,10 +424,26 @@ function renderGrid() {
     gridHtml += `</div>`;
     
     availableDivisions.forEach((divName, i) => {
+        const div = divisions[divName];
+        const divStartMin = parseTimeToMinutes(div?.startTime);
+        const divEndMin = parseTimeToMinutes(div?.endTime);
+        
         gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
         
-        // --- REMOVED Grayed-out area logic ---
+        // --- NEW: Render Greyed-out "Before" block ---
+        if (divStartMin !== null && divStartMin > earliestMin) {
+            const greyHeight = (divStartMin - earliestMin) * PIXELS_PER_MINUTE;
+            gridHtml += `<div class="grid-disabled" style="top: 0; height: ${greyHeight}px;"></div>`;
+        }
+        
+        // --- NEW: Render Greyed-out "After" block ---
+        if (divEndMin !== null && divEndMin < latestMin) {
+            const greyTop = (divEndMin - earliestMin) * PIXELS_PER_MINUTE;
+            const greyHeight = (latestMin - divEndMin) * PIXELS_PER_MINUTE;
+            gridHtml += `<div class="grid-disabled" style="top: ${greyTop}px; height: ${greyHeight}px;"></div>`;
+        }
 
+        // Render existing event tiles
         dailySkeleton.filter(ev => ev.division === divName).forEach(event => {
             const startMin = parseTimeToMinutes(event.startTime);
             const endMin = parseTimeToMinutes(event.endTime);
