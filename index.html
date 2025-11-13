@@ -73,6 +73,20 @@
 
         <hr style="margin: 20px 0;">
 
+        <h3>Backup & Restore</h3>
+        <p>Save all your setup (Fields, Bunks, Leagues, Templates, etc.) to a file, or restore it from a backup.</p>
+        <button id="exportBackupBtn"
+            style="background: #007bff; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;">
+            Export All Data to File
+        </button>
+        <button id="importBackupBtn"
+            style="background: #28a745; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;">
+            Import Data from File
+        </button>
+        <input type="file" id="importFileInput" accept=".json" style="display: none;">
+
+        <hr style="margin: 20px 0;">
+
         <h3>Erase All Data</h3>
         <p><strong>⚠️ Warning:</strong> This deletes everything.
         It deletes all schedules, all history, AND all of your setup (bunks, divisions, fields, leagues, etc.).</p>
