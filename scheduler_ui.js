@@ -2,17 +2,15 @@
 //
 // ... (previous changelog) ...
 //
-// --- YOUR LATEST REQUEST (Sequential Game Counter) ---
-// - **REMOVED:** All logic for `leagueDayCounters`, `prevCounters`,
-//   and saving the count. This is no longer needed.
-// - **NEW:** Inside `renderStaggeredView`, before processing blocks,
-//   the code now pre-filters all blocks for a division,
-//   *sorts them by start time*, and *then* loops through
-//   them to assign sequential counters (e.g., "League Game 1",
-//   "League Game 2").
-// - **FIXED:** The division header is reverted to just the div name.
-// - **UPDATED:** The league block rendering now uses the
-//   new sequential name (e.g., "League Game 1") as its title.
+// --- YOUR LATEST REQUEST (Fixing the reset) ---
+// - **RE-IMPLEMENTED:** The logic to load counters from the
+//   *previous day* is back.
+// - **FIXED:** The logic now correctly increments the counter
+//   sequentially *based on the previous day's total*.
+// - **EXAMPLE:** If yesterday's total was 2, today's games will
+//   be "League Game 3" and "League Game 4".
+// - **FIXED:** The new total count (e.g., 4) is now correctly
+//   saved to the *current day's* data.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -128,7 +126,7 @@ function findFirstSlotForTime(startMin) {
 /**
  * Renders the "Staggered" (YKLI) view
  * --- REWRITTEN to be one table PER DIVISION ---
- * --- **UPDATED WITH SEQUENTIAL GAME COUNTER** ---
+ * --- **UPDATED WITH PERSISTENT GAME COUNTER** ---
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -139,6 +137,11 @@ function renderStaggeredView(container) {
 
     const dailyData = window.loadCurrentDailyData?.() || {};
     const manualSkeleton = dailyData.manualSkeleton || [];
+    
+    // --- NEW: Load previous day's counters ---
+    const prevDailyData = window.loadPreviousDailyData?.() || {};
+    const prevCounters = prevDailyData.leagueDayCounters || {};
+    const todayCounters = {}; // This will be saved at the end
     
     if (manualSkeleton.length === 0) {
         container.innerHTML = "<p>No schedule built for this day. Go to the 'Daily Adjustments' tab to build one.</p>";
@@ -223,8 +226,11 @@ function renderStaggeredView(container) {
         tempSortedBlocks.sort((a,b) => a.startMin - b.startMin);
 
         // --- NEW: Build final blocks WITH counters ---
-        let leagueGameCounter = 0;
-        let specialtyLeagueCounter = 0;
+        // Get the *starting* counts from the previous day
+        const prevDivCounts = prevCounters[div] || { league: 0, specialty: 0 };
+        let todayLeagueCount = prevDivCounts.league; // This is now the running total
+        let todaySpecialtyCount = prevDivCounts.specialty; // Running total
+        
         const divisionBlocks = [];
         
         tempSortedBlocks.forEach(block => {
@@ -232,11 +238,11 @@ function renderStaggeredView(container) {
             
             let eventName = item.event;
             if (item.event === 'League Game') {
-                leagueGameCounter++;
-                eventName = `League Game ${leagueGameCounter}`;
+                todayLeagueCount++; // Increment the running total
+                eventName = `League Game ${todayLeagueCount}`; // Assign the new total
             } else if (item.event === 'Specialty League') {
-                specialtyLeagueCounter++;
-                eventName = `Specialty League ${specialtyLeagueCounter}`;
+                todaySpecialtyCount++; // Increment the running total
+                eventName = `Specialty League ${todaySpecialtyCount}`; // Assign the new total
             }
             
             divisionBlocks.push({
@@ -247,6 +253,12 @@ function renderStaggeredView(container) {
                 type: item.type 
             });
         });
+
+        // Store the *final* new counts to be saved
+        todayCounters[div] = { 
+            league: todayLeagueCount, 
+            specialty: todaySpecialtyCount 
+        };
         // --- END NEW LOGIC ---
         
         const uniqueBlocks = divisionBlocks.filter((block, index, self) =>
@@ -404,7 +416,8 @@ function renderStaggeredView(container) {
         wrapper.appendChild(table); // Add table to wrapper
     }); // --- End of main division loop ---
     
-    // --- REMOVED: Save counters to daily data ---
+    // --- NEW: Save the new counters to today's data ---
+    window.saveCurrentDailyData?.("leagueDayCounters", todayCounters);
 }
 
 
