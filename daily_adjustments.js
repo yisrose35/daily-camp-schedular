@@ -3,19 +3,23 @@
 //
 // UPDATED:
 // - **VALIDATION:** `addDropListeners` (in the SKELETON EDITOR
-//   LOGIC section) now checks the dropped time against the
+//   LOGIC section) now checks the dropped
+//   time against the
 //   specific division's `startTime` and `endTime` and will
 //   reject the drop if it's out of bounds.
 //
-// --- YOUR NEWEST FIX (Glitchy Skeleton Load) ---
-// - **FIXED:** `loadDailySkeleton` (line 405) was calling
-//   `window.getSavedSkeletons()`, which sometimes provided
-//   stale data from the app1.js module.
-// - **FIX:** `loadDailySkeleton` now reads directly from the
+// --- YOUR NEWEST FIX (Pinned Tiles Bug) ---
+// - **FIXED:** Removed the buggy `confirm` dialog from the
+//   `addDropListeners` function for "Custom Pinned Event".
+// - **FIXED:** This tile, along with "Snacks" and "Dismissal",
+//   will now be correctly created with `type: 'pinned'`
+//   every time.
+//
+// --- Glitchy Skeleton Load Fix ---
+// - **FIXED:** `loadDailySkeleton` now reads directly from the
 //   `masterSettings.app1` object, which is loaded fresh
 //   from localStorage every time the tab's `init()`
-//   function is called. This guarantees it always
-//   gets the most recent template assignments.
+//   function is called.
 // =================================================================
 
 (function() {
@@ -190,7 +194,7 @@ function renderGrid(gridContainer) {
     addRemoveListeners(gridContainer);
 }
 /**
- * --- UPDATED with VALIDATION ---
+ * --- UPDATED with VALIDATION & PINNED TILE FIX ---
  */
 function addDropListeners(gridContainer) {
     gridContainer.querySelectorAll('.grid-cell').forEach(cell => {
@@ -214,9 +218,11 @@ function addDropListeners(gridContainer) {
             const droppedMin = Math.round(y / PIXELS_PER_MINUTE / 15) * 15;
             const earliestMin = parseInt(cell.dataset.startMin, 10);
             const defaultStartTime = minutesToTime(earliestMin + droppedMin);
-            let eventType = 'slot';
+            
+            let eventType = 'slot'; // Default type
             let eventName = tileData.name;
             let newEvent = null; 
+            
             if (tileData.type === 'activity') eventName = 'General Activity Slot';
             else if (tileData.type === 'sports') eventName = 'Sports Slot';
             else if (tileData.type === 'special') eventName = 'Special Activity';
@@ -270,13 +276,20 @@ function addDropListeners(gridContainer) {
                 const event1 = mapEventNameForOptimizer(eventName1);
                 const event2 = mapEventNameForOptimizer(eventName2);
                 newEvent = { id: `evt_${Math.random().toString(36).slice(2, 9)}`, type: 'split', event: `${eventName1} / ${eventName2}`, division: divName, startTime: startTime, endTime: endTime, subEvents: [ event1, event2 ] };
+            
+            // --- **THIS IS THE FIX** ---
             } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'custom' || tileData.type === 'dismissal') {
-                eventType = 'pinned';
+                eventType = 'pinned'; // Set type to pinned
+                
                 if (tileData.type === 'custom') {
-                    eventName = prompt("Enter the name for this custom event (e.g., 'Snacks'):"); if (!eventName) return;
-                    if (confirm("Is this a 'Slot' to be filled (OK) or a 'Pinned' event (Cancel)?")) eventType = 'slot';
-                } else { eventName = tileData.name; }
+                    eventName = prompt("Enter the name for this custom pinned event (e.g., 'Assembly'):");
+                    if (!eventName) return; // User cancelled
+                    // No more confusing confirm dialog
+                } else {
+                    eventName = tileData.name; // Use the tile's name (e.g., "Snacks")
+                }
             }
+            // --- END FIX ---
             
             if (!newEvent) {
                 let startTime, endTime, startMin, endMin;
