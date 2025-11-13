@@ -357,14 +357,14 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         let pick = null;
         // NEW: Pass rotationHistory to the "findBest" functions
         if (block.event === 'Special Activity') {
-            pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
+            pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions);
         } else if (block.event === 'Sports Slot') {
-            pick = window.findBestSportActivity?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
+            pick = window.findBestSportActivity?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions);
         } else if (block.event === 'Swim') {
             pick = { field: "Swim", sport: null, _activity: "Swim" }; 
         }
         if (!pick) {
-            pick = window.findBestGeneralActivity?.(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
+            pick = window.findBestGeneralActivity?.(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions);
         }
         
         if (pick) {
