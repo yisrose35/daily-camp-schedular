@@ -116,7 +116,9 @@ function findFirstSlotForTime(startMin) {
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
         const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-        const slotEnd = slotStart + INCREMENT_MINS;
+        
+        // Use the globally defined constant
+        const slotEnd = slotStart + (window.INCREMENT_MINS || 30);
         
         // Correct "contains" check: (slotStart <= startMin < slotEnd)
         if (slotStart <= startMin && slotEnd > startMin) {
@@ -246,7 +248,7 @@ function renderStaggeredView(container) {
                 todayLeagueCount++; // Increment the running total
                 eventName = `League Game ${todayLeagueCount}`; // Assign the new total
             } else if (item.event === 'Specialty League') {
-                todaySpecialtyCount++; // Increment the running total
+                todaySpecialTYpeof window.getLeagueMatchups === 'function'Count++; // Increment the running total
                 eventName = `Specialty League ${todaySpecialtyCount}`; // Assign the new total
             }
             
@@ -478,4 +480,4 @@ window.updateTable = window.updateTable || updateTable;
 window.initScheduleSystem = window.initScheduleSystem || initScheduleSystem;
 window.saveSchedule = window.saveSchedule || saveSchedule;
 
-}
+})();
