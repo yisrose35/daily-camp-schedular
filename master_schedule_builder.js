@@ -1,803 +1,356 @@
 // =================================================================
-// master_schedule_builder.js
-//
-// ... (previous changelog) ...
-//
-// --- YOUR NEWEST FIX (Pinned Tiles Bug) ---
-// - **FIXED:** Removed the confusing `confirm` dialog from the
-//   `addDropListeners` function.
-// - **FIXED:** "Custom Pinned Event", "Snacks", and "Dismissal"
-//   will now be correctly created with `type: 'pinned'`.
+// master_schedule_builder.js  (FIXED)
+// - Pinned creation includes SWIM
+// - Grid extends to latest pinned end so late "Dismissal" renders
 // =================================================================
-
-(function() {
+(function(){
 'use strict';
 
-let container = null;
-let palette = null;
-let grid = null;
+let container=null, palette=null, grid=null;
+let dailySkeleton=[];
 
-let dailySkeleton = []; // This will be the "skeleton" we build
-const PIXELS_PER_MINUTE = 2; // Each minute is 2px high
-const INCREMENT_MINS = 30; // The "sightseeer" grid resolution
+const PIXELS_PER_MINUTE=2;
+const INCREMENT_MINS=30;
 
-const TILES = [
-    { type: 'activity', name: 'Activity', style: 'background: #e0f7fa; border: 1px solid #007bff;', description: "A flexible slot. The optimizer will fill this with the best available Sport OR Special Activity based on availability and rotation." },
-    { type: 'sports', name: 'Sports', style: 'background: #dcedc8; border: 1px solid #689f38;', description: "A dedicated sports slot. The optimizer will fill this *only* with a Sport (e.g., Basketball, Soccer) from your 'Fields' list." },
-    { type: 'special', name: 'Special Activity', style: 'background: #e8f5e9; border: 1px solid #43a047;', description: "A dedicated special slot. The optimizer will fill this *only* with a Special Activity (e.g., Canteen, Arts & Crafts) from your 'Special Activities' list." },
-    { type: 'split', name: 'Split Activity', style: 'background: #fff3e0; border: 1px solid #f57c00;', description: "Creates a block that is split in two. You will be asked to name two different activities (e.g., Swim / Activity). The division will be split, and they will switch activities halfway through the block." },
-    { type: 'league', name: 'League Game', style: 'background: #d1c4e9; border: 1px solid #5e35b1;', description: "A dedicated slot for a regular League Game. The optimizer will automatically create matchups from your 'Leagues' tab (e.g., Team A vs. Team B) and find a field for them." },
-    { type: 'specialty_league', name: 'Specialty League', style: 'background: #fff8e1; border: 1px solid #f9a825;', description: "A dedicated slot for a Specialty League. The optimizer will create matchups from your custom teams (e.g., Blue vs. Gold) and assign them to their exclusive fields." },
-    { type: 'swim', name: 'Swim', style: 'background: #bbdefb; border: 1px solid #1976d2;', description: "A 'pinned' event. The optimizer will block out this time for 'Swim' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
-    { type: 'lunch', name: 'Lunch', style: 'background: #fbe9e7; border: 1px solid #d84315;', description: "A 'pinned' event. The optimizer will block out this time for 'Lunch' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
-    { type: 'snacks', name: 'Snacks', style: 'background: #fff9c4; border: 1px solid #fbc02d;', description: "A 'pinned' event. The optimizer will block out this time for 'Snacks' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
-    { type: 'dismissal', name: 'Dismissal', style: 'background: #f44336; color: white; border: 1px solid #b71c1c;', description: "A 'pinned' event. The optimizer will block out this time for 'Dismissal' and will not schedule anything else here. This is a simple block and does not use the optimizer." },
-    { type: 'custom', name: 'Custom Pinned Event', style: 'background: #eee; border: 1px solid #616161;', description: "A 'pinned' event. You will be asked to give it a custom name (e.g., 'Assembly' or 'Trip'). The optimizer will block out this time and will not schedule anything else here." }
+const TILES=[
+  {type:'activity', name:'Activity', style:'background:#e0f7fa;border:1px solid #007bff;', description:'Flexible slot (Sport or Special).'},
+  {type:'sports', name:'Sports', style:'background:#dcedc8;border:1px solid #689f38;', description:'Sports slot only.'},
+  {type:'special', name:'Special Activity', style:'background:#e8f5e9;border:1px solid #43a047;', description:'Special Activity slot only.'},
+  {type:'split', name:'Split Activity', style:'background:#fff3e0;border:1px solid #f57c00;', description:'Two activities share the block.'},
+  {type:'league', name:'League Game', style:'background:#d1c4e9;border:1px solid #5e35b1;', description:'Regular League slot.'},
+  {type:'specialty_league', name:'Specialty League', style:'background:#fff8e1;border:1px solid #f9a825;', description:'Specialty League slot.'},
+  {type:'swim', name:'Swim', style:'background:#bbdefb;border:1px solid #1976d2;', description:'Pinned.'},
+  {type:'lunch', name:'Lunch', style:'background:#fbe9e7;border:1px solid #d84315;', description:'Pinned.'},
+  {type:'snacks', name:'Snacks', style:'background:#fff9c4;border:1px solid #fbc02d;', description:'Pinned.'},
+  {type:'dismissal', name:'Dismissal', style:'background:#f44336;color:white;border:1px solid #b71c1c;', description:'Pinned.'},
+  {type:'custom', name:'Custom Pinned Event', style:'background:#eee;border:1px solid #616161;', description:'Pinned custom (e.g., Regroup).'}
 ];
 
-function mapEventNameForOptimizer(name) {
-    if (!name) name = "Free";
-    const lowerName = name.toLowerCase().trim();
-    if (lowerName === 'activity') return { type: 'slot', event: 'General Activity Slot' };
-    if (lowerName === 'sports') return { type: 'slot', event: 'Sports Slot' };
-    if (lowerName === 'special activity' || lowerName === 'special') return { type: 'slot', event: 'Special Activity' };
-    if (lowerName === 'swim' || lowerName === 'lunch' || lowerName === 'snacks' || lowerName === 'dismissal') return { type: 'pinned', event: name };
-    return { type: 'pinned', event: name };
+function mapEventNameForOptimizer(name){
+  if(!name) name='Free';
+  const lower=name.toLowerCase().trim();
+  if(lower==='activity') return {type:'slot',event:'General Activity Slot'};
+  if(lower==='sports') return {type:'slot',event:'Sports Slot'};
+  if(lower==='special activity'||lower==='special') return {type:'slot',event:'Special Activity'};
+  if(['swim','lunch','snacks','dismissal'].includes(lower)) return {type:'pinned',event:name};
+  return {type:'pinned',event:name};
 }
 
-
-/**
- * Main entry point. Called by index.html tab click.
- * --- UPDATED ---
- */
-function init() {
-    container = document.getElementById("master-scheduler-content");
-    if (!container) return;
-
-    // 1. Load the correct skeleton for the current date
-    loadDailySkeleton();
-    
-    // 2. Build the main UI
-    container.innerHTML = `
-        <div id="scheduler-template-ui" style="padding: 15px; background: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 20px;">
-            </div>
-        
-        <div id="scheduler-palette" style="padding: 10px; background: #f4f4f4; border-radius: 8px; margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px;">
-            </div>
-        
-        <div id="scheduler-grid" style="overflow-x: auto; border: 1px solid #999;">
-            </div>
-        <style>
-            .grid-disabled {
-                position: absolute;
-                width: 100%;
-                background-color: #80808040; /* transparent grey */
-                background-image: linear-gradient(
-                    -45deg, 
-                    #0000001a 25%, 
-                    transparent 25%, 
-                    transparent 50%, 
-                    #0000001a 50%, 
-                    #0000001a 75%, 
-                    transparent 75%, 
-                    transparent
-                );
-                background-size: 20px 20px;
-                z-index: 1; /* Below events, above cell */
-                pointer-events: none; /* Allows clicks to go through */
-            }
-            .grid-event {
-                z-index: 2; /* Make sure events are on top */
-                position: relative;
-            }
-        </style>
-    `;
-    
-    palette = document.getElementById("scheduler-palette");
-    grid = document.getElementById("scheduler-grid");
-
-    // 3. Render all components
-    renderTemplateUI(); 
-    renderPalette();
-    renderGrid();
+function init(){
+  container=document.getElementById("master-scheduler-content");
+  if(!container) return;
+  loadDailySkeleton();
+  container.innerHTML=`
+    <div id="scheduler-template-ui" style="padding:15px;background:#f9f9f9;border:1px solid #ddd;border-radius:8px;margin-bottom:20px;"></div>
+    <div id="scheduler-palette" style="padding:10px;background:#f4f4f4;border-radius:8px;margin-bottom:15px;display:flex;flex-wrap:wrap;gap:10px;"></div>
+    <div id="scheduler-grid" style="overflow-x:auto;border:1px solid #999;"></div>
+    <style>.grid-disabled{position:absolute;width:100%;background-color:#80808040;background-image:linear-gradient(-45deg,#0000001a 25%,transparent 25%,transparent 50%,#0000001a 50%,#0000001a 75%,transparent 75%,transparent);background-size:20px 20px;z-index:1;pointer-events:none}.grid-event{z-index:2;position:relative}</style>
+  `;
+  palette=document.getElementById("scheduler-palette");
+  grid=document.getElementById("scheduler-grid");
+  renderTemplateUI();
+  renderPalette();
+  renderGrid();
 }
 
-/**
- * NEW: Renders the new template management UI
- */
-function renderTemplateUI() {
-    const uiContainer = document.getElementById("scheduler-template-ui");
-    if (!uiContainer) return;
-
-    const savedSkeletons = window.getSavedSkeletons?.() || {};
-    const skeletonNames = Object.keys(savedSkeletons).sort();
-    const assignments = window.getSkeletonAssignments?.() || {};
-
-    let loadOptions = skeletonNames.map(name => `<option value="${name}">${name}</option>`).join('');
-
-    uiContainer.innerHTML = `
-        <style>
-            .template-toolbar {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 20px;
-                align-items: flex-end;
-            }
-            .template-group {
-                display: flex;
-                flex-direction: column;
-            }
-            .template-group label {
-                font-weight: 600;
-                font-size: 0.9em;
-                margin-bottom: 4px;
-            }
-            .template-group input, .template-group select {
-                padding: 8px;
-                border-radius: 5px;
-                border: 1px solid #ccc;
-            }
-            .template-group button {
-                padding: 8px 12px;
-                background: #007bff;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                cursor: pointer;
-                margin-left: -5px; /* Align with input */
-            }
-            #template-manage-details {
-                margin-top: 15px;
-                width: 100%;
-            }
-            #template-manage-details summary {
-                cursor: pointer;
-                color: #007bff;
-                font-weight: 600;
-                padding: 5px;
-                border-radius: 5px;
-                background: #f0f6ff;
-                display: inline-block;
-            }
-            .assignments-container {
-                margin-top: 10px;
-                padding: 15px;
-                border: 1px solid #eee;
-                background: #fff;
-                border-radius: 5px;
-            }
-            .assignments-grid {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 15px;
-            }
-            .day-assignment {
-                display: flex;
-                flex-direction: column;
-                min-width: 150px;
-            }
-            .day-assignment label {
-                font-weight: 600;
-                font-size: 0.9em;
-                margin-bottom: 4px;
-            }
-            .delete-section {
-                margin-top: 15px;
-                padding-top: 15px;
-                border-top: 1px dashed #ccc;
-            }
-        </style>
-        
-        <div class="template-toolbar">
-            <div class="template-group">
-                <label for="template-load-select">Load Template</label>
-                <select id="template-load-select">
-                    <option value="">-- Select template --</option>
-                    ${loadOptions}
-                </select>
-            </div>
-            
-            <div class="template-group">
-                <label for="template-save-name">Save Current Grid as</label>
-                <input type="text" id="template-save-name" placeholder="e.g., 'Friday Short Day'">
-            </div>
-            
-            <div class="template-group">
-                <label>&nbsp;</label> <button id="template-save-btn">Save</button>
-            </div>
+function renderTemplateUI(){
+  const ui=document.getElementById("scheduler-template-ui");
+  if(!ui) return;
+  const saved=window.getSavedSkeletons?.()||{};
+  const names=Object.keys(saved).sort();
+  const assignments=window.getSkeletonAssignments?.()||{};
+  let loadOptions=names.map(n=>`<option value="${n}">${n}</option>`).join('');
+  ui.innerHTML=`
+    <div class="template-toolbar" style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-end;">
+      <div class="template-group"><label>Load Template</label>
+        <select id="template-load-select"><option value="">-- Select template --</option>${loadOptions}</select>
+      </div>
+      <div class="template-group"><label>Save Current Grid as</label><input type="text" id="template-save-name" placeholder="e.g., Friday Short Day"></div>
+      <div class="template-group"><label>&nbsp;</label><button id="template-save-btn" style="padding:8px 12px;background:#007bff;color:#fff;border:none;border-radius:5px;">Save</button></div>
+    </div>
+    <details id="template-manage-details" style="margin-top:15px;">
+      <summary style="cursor:pointer;color:#007bff;font-weight:600;padding:5px;border-radius:5px;background:#f0f6ff;display:inline-block;">Manage Assignments & Delete...</summary>
+      <div class="assignments-container" style="margin-top:10px;padding:15px;border:1px solid #eee;background:#fff;border-radius:5px;">
+        <h4>Day of Week Assignments</h4>
+        <div class="assignments-grid" style="display:flex;flex-wrap:wrap;gap:15px;">
+          ${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Default"].map(day=>`
+            <div class="day-assignment" style="display:flex;flex-direction:column;min-width:150px;">
+              <label>${day}:</label>
+              <select data-day="${day}">${loadOptions}</select>
+            </div>`).join('')}
         </div>
-        
-        <details id="template-manage-details">
-            <summary>Manage Assignments & Delete...</summary>
-            
-            <div class="assignments-container">
-                <h4>Day of Week Assignments</h4>
-                <p style="font-size: 0.9em; margin-top: -10px; color: #555;">
-                    Automatically load a specific template when you select a day on the calendar.
-                </p>
-                <div class="assignments-grid">
-                    <div class="day-assignment">
-                        <label for="assign-Sunday">Sunday:</label>
-                        <select id="assign-Sunday" data-day="Sunday">${loadOptions}</select>
-                    </div>
-                    <div class="day-assignment">
-                        <label for="assign-Monday">Monday:</label>
-                        <select id="assign-Monday" data-day="Monday">${loadOptions}</select>
-                    </div>
-                    <div class="day-assignment">
-                        <label for="assign-Tuesday">Tuesday:</label>
-                        <select id="assign-Tuesday" data-day="Tuesday">${loadOptions}</select>
-                    </div>
-                    <div class="day-assignment">
-                        <label for="assign-Wednesday">Wednesday:</label>
-                        <select id="assign-Wednesday" data-day="Wednesday">${loadOptions}</select>
-                    </div>
-                    <div class="day-assignment">
-                        <label for="assign-Thursday">Thursday:</label>
-                        <select id="assign-Thursday" data-day="Thursday">${loadOptions}</select>
-                    </div>
-                    <div class="day-assignment">
-                        <label for="assign-Friday">Friday:</label>
-                        <select id="assign-Friday" data-day="Friday">${loadOptions}</select>
-                    </div>
-                    <div class="day-assignment">
-                        <label for="assign-Saturday">Saturday:</label>
-                        <select id="assign-Saturday" data-day="Saturday">${loadOptions}</select>
-                    </div>
-                    <div class="day-assignment">
-                        <label for="assign-Default"><b>Default:</b></label>
-                        <select id="assign-Default" data-day="Default">${loadOptions}</select>
-                    </div>
-                </div>
-                <button id="template-assign-save-btn" style="margin-top: 15px; padding: 8px 12px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer;">Save Assignments</button>
-
-                <div class="delete-section">
-                    <h4>Delete Template</h4>
-                    <p style="font-size: 0.9em; margin-top: -10px; color: #555;">
-                        To delete a template, select it from the "Load Template" dropdown above, then click delete.
-                    </p>
-                    <button id="template-delete-btn" style="padding: 8px 12px; background: #c0392b; color: white; border: none; border-radius: 5px; cursor: pointer;">Delete Selected Template</button>
-                </div>
-            </div>
-        </details>
-    `;
-
-    // --- Hook up event listeners ---
-    const loadSelect = document.getElementById("template-load-select");
-    const saveNameInput = document.getElementById("template-save-name");
-
-    // Load button
-    loadSelect.onchange = () => {
-        const name = loadSelect.value;
-        if (name && savedSkeletons[name]) {
-            if (confirm(`Load "${name}"? This will replace the current grid.`)) {
-                loadSkeletonToBuilder(name);
-                saveNameInput.value = name; // Pre-fill name for re-saving
-            } else {
-                loadSelect.value = ""; // Reset dropdown
-            }
-        }
-    };
-    
-    // Save button
-    document.getElementById("template-save-btn").onclick = () => {
-        const name = saveNameInput.value.trim();
-        if (!name) {
-            alert("Please enter a name for this template.");
-            return;
-        }
-        if (confirm(`Save current schedule as "${name}"? This will overwrite any existing template with this name.`)) {
-            window.saveSkeleton?.(name, dailySkeleton);
-            alert("Template saved!");
-            renderTemplateUI(); // Re-render to update dropdowns
-        }
-    };
-
-    // Delete button
-    document.getElementById("template-delete-btn").onclick = () => {
-        const name = loadSelect.value;
-        if (!name) {
-            alert("Please select a template to delete from the 'Load Template' dropdown first.");
-            return;
-        }
-        if (confirm(`Are you sure you want to permanently delete "${name}"?`)) {
-            window.deleteSkeleton?.(name);
-            alert("Template deleted!");
-            renderTemplateUI(); // Re-render
-            loadSkeletonToBuilder(null); // Load an empty grid
-        }
-    };
-
-    // Populate day assignment dropdowns
-    const assignmentSelects = uiContainer.querySelectorAll('.day-assignment select');
-    assignmentSelects.forEach(select => {
-        const day = select.dataset.day;
-        const assignedTemplate = assignments[day] || "";
-        // Add a "None" option
-        const noneOption = document.createElement('option');
-        noneOption.value = "";
-        noneOption.textContent = (day === "Default") ? "-- Use No Default --" : "-- Use Default --";
-        select.prepend(noneOption);
-        
-        select.value = assignedTemplate;
-    });
-
-    // Save Assignments button
-    document.getElementById("template-assign-save-btn").onclick = () => {
-        const newAssignments = {};
-        assignmentSelects.forEach(select => {
-            const day = select.dataset.day;
-            const templateName = select.value;
-            if (templateName) {
-                newAssignments[day] = templateName;
-            }
-        });
-        window.saveSkeletonAssignments?.(newAssignments);
-        alert("Assignments saved!");
-    };
-}
-
-
-/**
- * Renders the draggable tiles
- */
-function renderPalette() {
-    palette.innerHTML = '<span style="font-weight: 600; align-self: center;">Drag tiles onto the grid:</span>';
-    TILES.forEach(tile => {
-        const el = document.createElement('div');
-        el.className = 'grid-tile-draggable';
-        el.textContent = tile.name;
-        el.style.cssText = tile.style;
-        el.style.padding = '8px 12px';
-        el.style.borderRadius = '5px';
-        el.style.cursor = 'grab';
-        
-        el.onclick = () => alert(tile.description);
-        el.draggable = true;
-        
-        el.ondragstart = (e) => {
-            e.dataTransfer.setData('application/json', JSON.stringify(tile));
-            e.dataTransfer.effectAllowed = 'copy';
-            el.style.cursor = 'grabbing';
-        };
-        
-        el.ondragend = () => {
-            el.style.cursor = 'grab';
-        };
-        
-        palette.appendChild(el);
-    });
-}
-
-/**
- * Renders the main schedule grid
- * --- HEAVILY MODIFIED ---
- * Now calculates grid size dynamically and adds greyed-out blocks.
- */
-function renderGrid() {
-    const divisions = window.divisions || {};
-    const availableDivisions = window.availableDivisions || [];
-    
-    // --- DYNAMIC TIME CALCULATION ---
-    let earliestMin = null;
-    let latestMin = null;
-
-    Object.values(divisions).forEach(div => {
-        const startMin = parseTimeToMinutes(div.startTime);
-        const endMin = parseTimeToMinutes(div.endTime);
-        
-        if (startMin !== null && (earliestMin === null || startMin < earliestMin)) {
-            earliestMin = startMin;
-        }
-        if (endMin !== null && (latestMin === null || endMin > latestMin)) {
-            latestMin = endMin;
-        }
-    });
-
-    // Fallback if no divisions have times set
-    if (earliestMin === null) earliestMin = 540; // 9:00 AM
-    if (latestMin === null) latestMin = 960; // 4:00 PM
-    if (latestMin <= earliestMin) latestMin = earliestMin + 60; 
-    
-    const totalMinutes = latestMin - earliestMin;
-    const totalHeight = totalMinutes * PIXELS_PER_MINUTE;
-    // --- END DYNAMIC TIME CALCULATION ---
-
-    let gridHtml = `<div style="display: grid; grid-template-columns: 60px repeat(${availableDivisions.length}, 1fr); position: relative;">`;
-    
-    gridHtml += `<div style="grid-row: 1; position: sticky; top: 0; background: #fff; z-index: 10; border-bottom: 1px solid #999; padding: 8px;">Time</div>`;
-    availableDivisions.forEach((divName, i) => {
-        gridHtml += `<div style="grid-row: 1; grid-column: ${i + 2}; position: sticky; top: 0; background: ${divisions[divName]?.color || '#333'}; color: #fff; z-index: 10; border-bottom: 1px solid #999; padding: 8px; text-align: center;">${divName}</div>`;
-    });
-
-    gridHtml += `<div style="grid-row: 2; grid-column: 1; height: ${totalHeight}px; position: relative; background: #f9f9f9; border-right: 1px solid #ccc;">`;
-    for (let min = earliestMin; min < latestMin; min += INCREMENT_MINS) {
-        const top = (min - earliestMin) * PIXELS_PER_MINUTE;
-        gridHtml += `<div style="position: absolute; top: ${top}px; left: 0; width: 100%; height: ${INCREMENT_MINS * PIXELS_PER_MINUTE}px; border-bottom: 1px dashed #ddd; box-sizing: border-box; font-size: 10px; padding: 2px; color: #777;">
-            ${minutesToTime(min)}
-        </div>`;
-    }
-    gridHtml += `</div>`;
-    
-    availableDivisions.forEach((divName, i) => {
-        const div = divisions[divName];
-        const divStartMin = parseTimeToMinutes(div?.startTime);
-        const divEndMin = parseTimeToMinutes(div?.endTime);
-        
-        gridHtml += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row: 2; grid-column: ${i + 2}; position: relative; height: ${totalHeight}px; border-right: 1px solid #ccc;">`;
-        
-        // --- NEW: Render Greyed-out "Before" block ---
-        if (divStartMin !== null && divStartMin > earliestMin) {
-            const greyHeight = (divStartMin - earliestMin) * PIXELS_PER_MINUTE;
-            gridHtml += `<div class="grid-disabled" style="top: 0; height: ${greyHeight}px;"></div>`;
-        }
-        
-        // --- NEW: Render Greyed-out "After" block ---
-        if (divEndMin !== null && divEndMin < latestMin) {
-            const greyTop = (divEndMin - earliestMin) * PIXELS_PER_MINUTE;
-            const greyHeight = (latestMin - divEndMin) * PIXELS_PER_MINUTE;
-            gridHtml += `<div class="grid-disabled" style="top: ${greyTop}px; height: ${greyHeight}px;"></div>`;
-        }
-
-        // Render existing event tiles
-        dailySkeleton.filter(ev => ev.division === divName).forEach(event => {
-            const startMin = parseTimeToMinutes(event.startTime);
-            const endMin = parseTimeToMinutes(event.endTime);
-            if (startMin == null || endMin == null) return; // <-- FIX: Disregard invalid blocks
-
-            const visibleStartMin = Math.max(startMin, earliestMin);
-            const visibleEndMin = Math.min(endMin, latestMin);
-            if (visibleEndMin <= visibleStartMin) return; 
-
-            const top = (visibleStartMin - earliestMin) * PIXELS_PER_MINUTE;
-            const height = (visibleEndMin - visibleStartMin) * PIXELS_PER_MINUTE;
-
-            gridHtml += renderEventTile(event, top, height);
-        });
-
-        gridHtml += `</div>`;
-    });
-
-    gridHtml += `</div>`;
-    grid.innerHTML = gridHtml;
-    
-    addDropListeners('.grid-cell');
-    addRemoveListeners('.grid-event');
-}
-
-/**
- * Helper to add all the drag/drop event listeners
- * --- UPDATED with VALIDATION & PINNED TILE FIX ---
- */
-function addDropListeners(selector) {
-    grid.querySelectorAll(selector).forEach(cell => {
-        cell.ondragover = (e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'copy';
-            cell.style.backgroundColor = '#e0ffe0';
-        };
-        
-        cell.ondragleave = () => {
-            cell.style.backgroundColor = '';
-        };
-        
-        cell.ondrop = (e) => {
-            e.preventDefault();
-            cell.style.backgroundColor = '';
-            
-            const tileData = JSON.parse(e.dataTransfer.getData('application/json'));
-            const divName = cell.dataset.div;
-            
-            // --- NEW: Get Division Time Constraints ---
-            const div = window.divisions[divName] || {};
-            const divStartMin = parseTimeToMinutes(div.startTime);
-            const divEndMin = parseTimeToMinutes(div.endTime);
-            // --- End New ---
-            
-            const rect = cell.getBoundingClientRect();
-            const scrollTop = grid.scrollTop; 
-            const y = e.clientY - rect.top + scrollTop;
-            const droppedMin = Math.round(y / PIXELS_PER_MINUTE / 15) * 15;
-            const earliestMin = parseInt(cell.dataset.startMin, 10);
-            const defaultStartTime = minutesToTime(earliestMin + droppedMin);
-            
-            let eventType = 'slot'; // Default type
-            let eventName = tileData.name;
-            let newEvent = null; 
-
-            // Handle type mapping
-            if (tileData.type === 'activity') eventName = 'General Activity Slot';
-            else if (tileData.type === 'sports') eventName = 'Sports Slot';
-            else if (tileData.type === 'special') eventName = 'Special Activity';
-            else if (tileData.type === 'league' || tileData.type === 'specialty_league' || tileData.type === 'swim') eventName = tileData.name; 
-            
-            // Helper function for validation
-            const validateTime = (timeStr, isStartTime) => {
-                const timeMin = parseTimeToMinutes(timeStr);
-                if (timeMin === null) {
-                    alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
-                    return null;
-                }
-                if (divStartMin !== null && timeMin < divStartMin) {
-                    alert(`Error: ${timeStr} is before this division's start time of ${div.startTime}.`);
-                    return null;
-                }
-                if (divEndMin !== null && (isStartTime ? timeMin >= divEndMin : timeMin > divEndMin)) {
-                     alert(`Error: ${timeStr} is after this division's end time of ${div.endTime}.`);
-                    return null;
-                }
-                return timeMin;
-            };
-
-            if (tileData.type === 'split') {
-                let startTime, endTime, startMin, endMin;
-                
-                // Loop for Start Time
-                while (true) {
-                    startTime = prompt(`Enter Start Time for the *full* block:`, defaultStartTime);
-                    if (!startTime) return; // User cancelled
-                    startMin = validateTime(startTime, true);
-                    if (startMin !== null) break; // Valid time
-                }
-                
-                // Loop for End Time
-                while (true) {
-                    endTime = prompt(`Enter End Time for the *full* block:`);
-                    if (!endTime) return; // User cancelled
-                    endMin = validateTime(endTime, false); // false = not a start time
-                    if (endMin !== null) {
-                        if (endMin <= startMin) {
-                            alert("End time must be after start time.");
-                        } else {
-                            break; // Valid time and valid range
-                        }
-                    }
-                }
-
-                const eventName1 = prompt("Enter name for FIRST activity (e.g., Swim, Sports, Activity):");
-                if (!eventName1) return;
-                const eventName2 = prompt("Enter name for SECOND activity (e.g., Activity, Sports):");
-                if (!eventName2) return;
-
-                const event1 = mapEventNameForOptimizer(eventName1);
-                const event2 = mapEventNameForOptimizer(eventName2);
-
-                newEvent = {
-                    id: `evt_${Math.random().toString(36).slice(2, 9)}`,
-                    type: 'split',
-                    event: `${eventName1} / ${eventName2}`,
-                    division: divName,
-                    startTime: startTime,
-                    endTime: endTime,
-                    subEvents: [ event1, event2 ]
-                };
-
-            // --- **THIS IS THE FIX** ---
-            } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'custom' || tileData.type === 'dismissal') {
-                eventType = 'pinned'; // Set type to pinned
-                
-                if (tileData.type === 'custom') {
-                    eventName = prompt("Enter the name for this custom pinned event (e.g., 'Assembly'):");
-                    if (!eventName) return; // User cancelled
-                    // ** BUGGY LINES REMOVED **
-                } else {
-                    eventName = tileData.name; // Use the tile's name (e.g., "Snacks")
-                }
-            }
-            // --- END FIX ---
-
-            if (!newEvent) {
-                let startTime, endTime, startMin, endMin;
-
-                // Loop for Start Time
-                while (true) {
-                    startTime = prompt(`Add "${eventName}" for ${divName}?\n\nEnter Start Time:`, defaultStartTime);
-                    if (!startTime) return; // User cancelled
-                    startMin = validateTime(startTime, true);
-                    if (startMin !== null) break; // Valid time
-                }
-                
-                // Loop for End Time
-                while (true) {
-                    endTime = prompt(`Enter End Time:`);
-                    if (!endTime) return; // User cancelled
-                    endMin = validateTime(endTime, false); // false = not a start time
-                    if (endMin !== null) {
-                        if (endMin <= startMin) {
-                            alert("End time must be after start time.");
-                        } else {
-                            break; // Valid time and valid range
-                        }
-                    }
-                }
-                
-                newEvent = {
-                    id: `evt_${Math.random().toString(36).slice(2, 9)}`,
-                    type: eventType,
-                    event: eventName,
-                    division: divName,
-                    startTime: startTime,
-                    endTime: endTime
-                };
-            }
-            
-            dailySkeleton.push(newEvent);
-            renderGrid(); 
-        };
-    });
-}
-
-/**
- * Helper to add click-to-remove listeners
- */
-function addRemoveListeners(selector) {
-    grid.querySelectorAll(selector).forEach(tile => {
-        tile.onclick = (e) => {
-            e.stopPropagation(); 
-            
-            const eventId = tile.dataset.eventId;
-            if (!eventId) return;
-
-            const event = dailySkeleton.find(ev => ev.id === eventId);
-            const eventName = event ? event.event : 'this event';
-
-            if (confirm(`Are you sure you want to remove "${eventName}"?`)) {
-                dailySkeleton = dailySkeleton.filter(ev => ev.id !== eventId);
-                renderGrid();
-            }
-        };
-    });
-}
-
-
-/**
- * Renders a single event tile
- */
-function renderEventTile(event, top, height) {
-    let tile = TILES.find(t => t.name === event.event);
-    
-    if (!tile) {
-        if (event.type === 'split') tile = TILES.find(t => t.type === 'split');
-        else if (event.event === 'General Activity Slot') tile = TILES.find(t => t.type === 'activity');
-        else if (event.event === 'Sports Slot') tile = TILES.find(t => t.type === 'sports');
-        else if (event.event === 'Special Activity') tile = TILES.find(t => t.type === 'special');
-        else if (event.event === 'Dismissal') tile = TILES.find(t => t.type === 'dismissal');
-        else tile = TILES.find(t => t.type === 'custom');
-    }
-    
-    const style = tile ? tile.style : 'background: #eee; border: 1px solid #616161;';
-    
-    return `
-        <div class="grid-event" 
-             data-event-id="${event.id}" 
-             title="Click to remove this event"
-             style="${style}; 
-                    padding: 2px 5px; 
-                    border-radius: 4px; 
-                    text-align: center; 
-                    margin: 0 1px;
-                    font-size: 0.9em;
-                    position: absolute;
-                    top: ${top}px;
-                    height: ${height}px;
-                    width: calc(100% - 4px);
-                    box-sizing: border-box;
-                    overflow: hidden;
-                    cursor: pointer;">
-            <strong>${event.event}</strong>
-            <div style="font-size: 0.85em;">${event.startTime} - ${event.endTime}</div>
+        <button id="template-assign-save-btn" style="margin-top:15px;padding:8px 12px;background:#28a745;color:#fff;border:none;border-radius:5px;">Save Assignments</button>
+        <div class="delete-section" style="margin-top:15px;padding-top:15px;border-top:1px dashed #ccc;">
+          <h4>Delete Template</h4>
+          <button id="template-delete-btn" style="padding:8px 12px;background:#c0392b;color:#fff;border:none;border-radius:5px;">Delete Selected Template</button>
         </div>
-    `;
+      </div>
+    </details>
+  `;
+
+  const loadSel=document.getElementById("template-load-select");
+  const saveName=document.getElementById("template-save-name");
+  loadSel.onchange=()=>{ const name=loadSel.value; if(name && saved[name]){ if(confirm(`Load "${name}"?`)){ loadSkeletonToBuilder(name); saveName.value=name; } else loadSel.value=""; } };
+  document.getElementById("template-save-btn").onclick=()=>{ const name=saveName.value.trim(); if(!name){ alert("Enter a name"); return; } if(confirm(`Save as "${name}"?`)){ window.saveSkeleton?.(name,dailySkeleton); alert("Template saved!"); renderTemplateUI(); } };
+  document.getElementById("template-delete-btn").onclick=()=>{ const name=loadSel.value; if(!name){ alert("Select a template to delete."); return; } if(confirm(`Delete "${name}"?`)){ window.deleteSkeleton?.(name); alert("Deleted!"); renderTemplateUI(); loadSkeletonToBuilder(null); } };
+
+  const selects=ui.querySelectorAll('.assignments-container select');
+  const namesWithNone = (sel,day)=>{
+    const noneOpt=document.createElement('option');
+    noneOpt.value=""; noneOpt.textContent=(day==="Default")?"-- Use No Default --":"-- Use Default --";
+    sel.prepend(noneOpt);
+  };
+  selects.forEach(sel=>{
+    const day=sel.dataset.day;
+    namesWithNone(sel,day);
+    sel.value=assignments[day]||"";
+  });
+  document.getElementById("template-assign-save-btn").onclick=()=>{
+    const newAssign={};
+    selects.forEach(sel=>{ const day=sel.dataset.day; const name=sel.value; if(name) newAssign[day]=name; });
+    window.saveSkeletonAssignments?.(newAssign);
+    alert("Assignments saved!");
+  };
 }
 
-// --- runOptimizer function REMOVED ---
-
-// --- Save/Load Skeleton ---
-
-/**
- * --- UPDATED: loadDailySkeleton ---
- * This function now loads the correct skeleton based on
- * the day of the week and assignments.
- */
-function loadDailySkeleton() {
-    const assignments = window.getSkeletonAssignments?.() || {};
-    const skeletons = window.getSavedSkeletons?.() || {};
-    
-    // Get day of week (0=Sun, 1=Mon, ..., 6=Sat)
-    // We must parse the YYYY-MM-DD string safely
-    const dateStr = window.currentScheduleDate || "";
-    const [year, month, day] = dateStr.split('-').map(Number);
-    let dayOfWeek = 0;
-    if (year && month && day) {
-        // Note: month is 0-indexed for Date object
-        const date = new Date(year, month - 1, day);
-        dayOfWeek = date.getDay();
-    }
-    
-    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-    const todayName = dayNames[dayOfWeek];
-
-    let templateName = assignments[todayName]; // 1. Try to find a template for this specific day
-    if (!templateName || !skeletons[templateName]) {
-        templateName = assignments["Default"]; // 2. Fall back to the "Default" template
-    }
-    
-    let skeletonToLoad = skeletons[templateName]; // 3. Get the skeleton
-    
-    if (skeletonToLoad) {
-        // Deep-copy the skeleton so in-memory edits don't affect the saved template
-        dailySkeleton = JSON.parse(JSON.stringify(skeletonToLoad));
-    } else {
-        // 4. Final fallback: an empty skeleton
-        dailySkeleton = [];
-    }
+function renderPalette(){
+  palette.innerHTML='<span style="font-weight:600;align-self:center;">Drag tiles onto the grid:</span>';
+  TILES.forEach(tile=>{
+    const el=document.createElement('div');
+    el.className='grid-tile-draggable';
+    el.textContent=tile.name;
+    el.style.cssText=tile.style;
+    el.style.padding='8px 12px';
+    el.style.borderRadius='5px';
+    el.style.cursor='grab';
+    el.onclick=()=>alert(tile.description);
+    el.draggable=true;
+    el.ondragstart=(e)=>{ e.dataTransfer.setData('application/json',JSON.stringify(tile)); e.dataTransfer.effectAllowed='copy'; el.style.cursor='grabbing'; };
+    el.ondragend=()=>{ el.style.cursor='grab'; };
+    palette.appendChild(el);
+  });
 }
 
-/**
- * NEW: Loads a specific skeleton into the builder
- */
-function loadSkeletonToBuilder(name) {
-    if (!name) {
-        dailySkeleton = [];
-    } else {
-        const skeletons = window.getSavedSkeletons?.() || {};
-        const skeletonToLoad = skeletons[name];
-        if (skeletonToLoad) {
-            dailySkeleton = JSON.parse(JSON.stringify(skeletonToLoad));
+function renderGrid(){
+  const divisions=window.divisions||{};
+  const availableDivisions=window.availableDivisions||[];
+
+  let earliestMin=null, latestMin=null;
+  Object.values(divisions).forEach(div=>{
+    const s=parseTimeToMinutes(div.startTime);
+    const e=parseTimeToMinutes(div.endTime);
+    if(s!==null && (earliestMin===null || s<earliestMin)) earliestMin=s;
+    if(e!==null && (latestMin===null || e>latestMin)) latestMin=e;
+  });
+  if(earliestMin===null) earliestMin=540;
+  if(latestMin===null) latestMin=960;
+
+  // NEW: extend by latest pinned end so "Dismissal" shows
+  const latestPinnedEnd=Math.max(
+    -Infinity,
+    ...dailySkeleton.filter(ev=>ev && ev.type==='pinned').map(ev=>parseTimeToMinutes(ev.endTime)??-Infinity)
+  );
+  if(Number.isFinite(latestPinnedEnd)) latestMin=Math.max(latestMin, latestPinnedEnd);
+
+  if(latestMin<=earliestMin) latestMin=earliestMin+60;
+
+  const totalMinutes=latestMin-earliestMin;
+  const totalHeight=totalMinutes*PIXELS_PER_MINUTE;
+
+  let html=`<div style="display:grid;grid-template-columns:60px repeat(${availableDivisions.length},1fr);position:relative;">`;
+  html+=`<div style="grid-row:1;position:sticky;top:0;background:#fff;z-index:10;border-bottom:1px solid #999;padding:8px;">Time</div>`;
+  availableDivisions.forEach((divName,i)=>{
+    html+=`<div style="grid-row:1;grid-column:${i+2};position:sticky;top:0;background:${divisions[divName]?.color||'#333'};color:#fff;z-index:10;border-bottom:1px solid #999;padding:8px;text-align:center;">${divName}</div>`;
+  });
+
+  html+=`<div style="grid-row:2;grid-column:1;height:${totalHeight}px;position:relative;background:#f9f9f9;border-right:1px solid #ccc;">`;
+  for(let m=earliestMin;m<latestMin;m+=INCREMENT_MINS){
+    const top=(m-earliestMin)*PIXELS_PER_MINUTE;
+    html+=`<div style="position:absolute;top:${top}px;left:0;width:100%;height:${INCREMENT_MINS*PIXELS_PER_MINUTE}px;border-bottom:1px dashed #ddd;box-sizing:border-box;font-size:10px;padding:2px;color:#777;">${minutesToTime(m)}</div>`;
+  }
+  html+=`</div>`;
+
+  availableDivisions.forEach((divName,i)=>{
+    const div=divisions[divName];
+    const s=parseTimeToMinutes(div?.startTime);
+    const e=parseTimeToMinutes(div?.endTime);
+    html+=`<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row:2;grid-column:${i+2};position:relative;height:${totalHeight}px;border-right:1px solid #ccc;">`;
+    if(s!==null && s>earliestMin){
+      const gh=(s-earliestMin)*PIXELS_PER_MINUTE;
+      html+=`<div class="grid-disabled" style="top:0;height:${gh}px;"></div>`;
+    }
+    if(e!==null && e<latestMin){
+      const gt=(e-earliestMin)*PIXELS_PER_MINUTE;
+      const gh=(latestMin-e)*PIXELS_PER_MINUTE;
+      html+=`<div class="grid-disabled" style="top:${gt}px;height:${gh}px;"></div>`;
+    }
+    dailySkeleton.filter(ev=>ev.division===divName).forEach(event=>{
+      const startMin=parseTimeToMinutes(event.startTime);
+      const endMin=parseTimeToMinutes(event.endTime);
+      if(startMin==null||endMin==null) return;
+      const vs=Math.max(startMin,earliestMin);
+      const ve=Math.min(endMin,latestMin);
+      if(ve<=vs) return;
+      const top=(vs-earliestMin)*PIXELS_PER_MINUTE;
+      const height=(ve-vs)*PIXELS_PER_MINUTE;
+      html+=renderEventTile(event,top,height);
+    });
+    html+=`</div>`;
+  });
+
+  html+=`</div>`;
+  grid.innerHTML=html;
+  addDropListeners('.grid-cell');
+  addRemoveListeners('.grid-event');
+}
+
+function addDropListeners(selector){
+  grid.querySelectorAll(selector).forEach(cell=>{
+    cell.ondragover=(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect='copy'; cell.style.backgroundColor='#e0ffe0'; };
+    cell.ondragleave=()=>{ cell.style.backgroundColor=''; };
+    cell.ondrop=(e)=>{
+      e.preventDefault();
+      cell.style.backgroundColor='';
+      const tileData=JSON.parse(e.dataTransfer.getData('application/json'));
+      const divName=cell.dataset.div;
+
+      const div=window.divisions[divName]||{};
+      const divStart=parseTimeToMinutes(div.startTime);
+      const divEnd=parseTimeToMinutes(div.endTime);
+
+      const rect=cell.getBoundingClientRect();
+      const scrollTop=grid.scrollTop;
+      const y=e.clientY-rect.top+scrollTop;
+      const droppedMin=Math.round(y/PIXELS_PER_MINUTE/15)*15;
+      const earliestMin=parseInt(cell.dataset.startMin,10);
+      const defaultStart=minutesToTime(earliestMin+droppedMin);
+
+      let eventType='slot';
+      let eventName=tileData.name;
+      let newEvent=null;
+
+      if(tileData.type==='activity') eventName='General Activity Slot';
+      else if(tileData.type==='sports') eventName='Sports Slot';
+      else if(tileData.type==='special') eventName='Special Activity';
+      else if(['league','specialty_league','swim'].includes(tileData.type)) eventName=tileData.name;
+
+      const validate=(timeStr,isStart)=>{
+        const m=parseTimeToMinutes(timeStr);
+        if(m===null){ alert("Invalid time. Use '9:00am' etc."); return null; }
+        if(divStart!==null && m<divStart){ alert(`Error: ${timeStr} is before ${div.startTime}.`); return null; }
+        if(divEnd!==null && (isStart? m>=divEnd : m>divEnd)){ alert(`Error: ${timeStr} is after ${div.endTime}.`); return null; }
+        return m;
+      };
+
+      if(tileData.type==='split'){
+        let st,et,sm,em;
+        while(true){ st=prompt(`Enter Start Time for the *full* block:`,defaultStart); if(!st) return; sm=validate(st,true); if(sm!==null) break; }
+        while(true){ et=prompt(`Enter End Time for the *full* block:`); if(!et) return; em=validate(et,false); if(em!==null){ if(em<=sm) alert("End must be after start."); else break; } }
+        const n1=prompt("Enter FIRST activity (e.g., Swim, Sports):"); if(!n1) return;
+        const n2=prompt("Enter SECOND activity (e.g., Activity, Sports):"); if(!n2) return;
+        const e1=mapEventNameForOptimizer(n1), e2=mapEventNameForOptimizer(n2);
+        newEvent={id:`evt_${Math.random().toString(36).slice(2,9)}`, type:'split', event:`${n1} / ${n2}`, division:divName, startTime:st, endTime:et, subEvents:[e1,e2]};
+      
+      // --- THIS IS THE FIX ---
+      } else if(['lunch','snacks','custom','dismissal','swim'].includes(tileData.type)){
+        eventType='pinned';
+        if(tileData.type==='custom'){
+          eventName=prompt("Enter the name (e.g., 'Regroup', 'Assembly'):");
+          if(!eventName) return;
         } else {
-            dailySkeleton = [];
+          eventName=tileData.name;
         }
-    }
-    // Re-render the grid with the newly loaded skeleton
-    renderGrid();
+      }
+      // --- END FIX ---
+
+      if(!newEvent){
+        let st,et,sm,em;
+        while(true){ st=prompt(`Add "${eventName}" for ${divName}?\n\nEnter Start Time:`,defaultStart); if(!st) return; sm=validate(st,true); if(sm!==null) break; }
+        while(true){ et=prompt(`Enter End Time:`); if(!et) return; em=validate(et,false); if(em!==null){ if(em<=sm) alert("End must be after start."); else break; } }
+        newEvent={ id:`evt_${Math.random().toString(36).slice(2,9)}`, type:eventType, event:eventName, division:divName, startTime:st, endTime:et };
+      }
+
+      dailySkeleton.push(newEvent);
+      renderGrid();
+    };
+  });
 }
 
+function addRemoveListeners(selector){
+  grid.querySelectorAll(selector).forEach(tile=>{
+    tile.onclick=(e)=>{
+      e.stopPropagation();
+      const id=tile.dataset.eventId;
+      if(!id) return;
+      const ev=dailySkeleton.find(v=>v.id===id);
+      if(confirm(`Remove "${ev?ev.event:'this event'}"?`)){
+        dailySkeleton=dailySkeleton.filter(v=>v.id!==id);
+        renderGrid();
+      }
+    };
+  });
+}
 
-// --- Helper Functions ---
-/**
- * --- UPDATED: `parseTimeToMinutes` ---
- * This function now requires 'am' or 'pm' to be present.
- */
-function parseTimeToMinutes(str) {
-  if (!str || typeof str !== "string") return null;
-  let s = str.trim().toLowerCase();
-  let mer = null;
-  if (s.endsWith("am") || s.endsWith("pm")) {
-    mer = s.endsWith("am") ? "am" : "pm";
-    s = s.replace(/am|pm/g, "").trim();
+function renderEventTile(event, top, height){
+  let tile=TILES.find(t=>t.name===event.event);
+  if(!tile){
+    if(event.type==='split') tile=TILES.find(t=>t.type==='split');
+    else if(event.event==='General Activity Slot') tile=TILES.find(t=>t.type==='activity');
+    else if(event.event==='Sports Slot') tile=TILES.find(t=>t.type==='sports');
+    else if(event.event==='Special Activity') tile=TILES.find(t=>t.type==='special');
+    else if(event.event==='Dismissal') tile=TILES.find(t=>t.type==='dismissal');
+    else tile=TILES.find(t=>t.type==='custom');
   }
-  
-  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-  if (!m) return null;
-  let hh = parseInt(m[1], 10);
-  const mm = parseInt(m[2], 10);
-  if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
+  const style=tile?tile.style:'background:#eee;border:1px solid #616161;';
+  return `
+    <div class="grid-event" data-event-id="${event.id}" title="Click to remove this event"
+         style="${style};padding:2px 5px;border-radius:4px;text-align:center;margin:0 1px;font-size:.9em;position:absolute;top:${top}px;height:${height}px;width:calc(100% - 4px);box-sizing:border-box;overflow:hidden;cursor:pointer;">
+      <strong>${event.event}</strong>
+      <div style="font-size:.85em;">${event.startTime} - ${event.endTime}</div>
+    </div>`;
+}
 
-  // --- MODIFIED VALIDATION ---
-  if (mer) {
-      // AM/PM is present, process it
-      if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
-      else if (mer === "pm") hh += 12; // 1pm -> 13
-  } else {
-      // AM/PM is missing, return null as requested
-      return null;
+function loadDailySkeleton(){
+  const assignments=window.getSkeletonAssignments?.()||{};
+  const skeletons=window.getSavedSkeletons?.()||{};
+  const dateStr=window.currentScheduleDate||"";
+  const [Y,M,D]=dateStr.split('-').map(Number);
+  let dow=0; if(Y&&M&&D) dow=new Date(Y,M-1,D).getDay();
+  const dayNames=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  const today=dayNames[dow];
+  let tmpl=assignments[today];
+  if(!tmpl || !skeletons[tmpl]) tmpl=assignments["Default"];
+  const s=skeletons[tmpl];
+  dailySkeleton=s? JSON.parse(JSON.stringify(s)): [];
+}
+function loadSkeletonToBuilder(name){
+  if(!name) dailySkeleton=[];
+  else {
+    const all=window.getSavedSkeletons?.()||{};
+    const s=all[name];
+    dailySkeleton=s? JSON.parse(JSON.stringify(s)): [];
   }
-  // --- END MODIFICATION ---
-
-  return hh * 60 + mm;
+  renderGrid();
 }
 
-function minutesToTime(min) {
-    const hh = Math.floor(min / 60);
-    const mm = min % 60;
-    const h = hh % 12 === 0 ? 12 : hh % 12;
-    const m = String(mm).padStart(2, '0');
-    const ampm = hh < 12 ? 'am' : 'pm';
-    return `${h}:${m}${ampm}`;
+// time helpers
+function parseTimeToMinutes(str){
+  if(!str||typeof str!=='string') return null;
+  let s=str.trim().toLowerCase(), mer=null;
+  if(s.endsWith('am')||s.endsWith('pm')){ mer=s.endsWith('am')?'am':'pm'; s=s.replace(/am|pm/g,'').trim(); }
+  const m=s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+  if(!m) return null;
+  let hh=parseInt(m[1],10), mm=parseInt(m[2],10);
+  if(Number.isNaN(hh)||Number.isNaN(mm)||mm<0||mm>59) return null;
+  if(mer){ if(hh===12) hh= mer==='am'?0:12; else if(mer==='pm') hh+=12; } else return null;
+  return hh*60+mm;
+}
+function minutesToTime(min){
+  const hh=Math.floor(min/60), mm=min%60;
+  const h=hh%12===0?12:hh%12, m=String(mm).padStart(2,'0'), ap=hh<12?'am':'pm';
+  return `${h}:${m}${ap}`;
 }
 
-
-// Expose the init function to the global window
-window.initMasterScheduler = init;
+window.initMasterScheduler=init;
 
 })();
