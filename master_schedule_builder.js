@@ -5,6 +5,13 @@
 // - **VALIDATION:** `addDropListeners` now checks the dropped
 //   time against the specific division's `startTime` and `endTime`
 //   and will reject the drop if it's out of bounds.
+//
+// --- YOUR NEWEST FIX (Pinned Tiles Bug) ---
+// - **FIXED:** Removed the confusing `confirm` dialog from the
+//   `addDropListeners` function for "Custom Pinned Event".
+// - **FIXED:** This tile, along with "Snacks" and "Dismissal",
+//   will now be correctly created with `type: 'pinned'`
+//   every time, which the optimizer will respect.
 // =================================================================
 
 (function() {
@@ -464,7 +471,7 @@ function renderGrid() {
 
 /**
  * Helper to add all the drag/drop event listeners
- * --- UPDATED with VALIDATION ---
+ * --- UPDATED with VALIDATION & PINNED TILE FIX ---
  */
 function addDropListeners(selector) {
     grid.querySelectorAll(selector).forEach(cell => {
@@ -498,10 +505,11 @@ function addDropListeners(selector) {
             const earliestMin = parseInt(cell.dataset.startMin, 10);
             const defaultStartTime = minutesToTime(earliestMin + droppedMin);
             
-            let eventType = 'slot';
+            let eventType = 'slot'; // Default type
             let eventName = tileData.name;
             let newEvent = null; 
 
+            // Handle type mapping
             if (tileData.type === 'activity') eventName = 'General Activity Slot';
             else if (tileData.type === 'sports') eventName = 'Sports Slot';
             else if (tileData.type === 'special') eventName = 'Special Activity';
@@ -568,22 +576,19 @@ function addDropListeners(selector) {
                     subEvents: [ event1, event2 ]
                 };
 
+            // --- **THIS IS THE FIX** ---
             } else if (tileData.type === 'lunch' || tileData.type === 'snacks' || tileData.type === 'custom' || tileData.type === 'dismissal') {
-                eventType = 'pinned';
+                eventType = 'pinned'; // Set type to pinned
                 
                 if (tileData.type === 'custom') {
-                    eventName = prompt("Enter the name for this custom event (e.g., 'Snacks'):");
-                    if (!eventName) return;
-                    
-                    if (confirm("Does this event require scheduling (like 'General Activity')?\n\n- OK = Yes (it's a 'Slot' to be filled)\n- Cancel = No (it's a 'Pinned' event like 'Snacks')")) {
-                        eventType = 'slot';
-                    } else {
-                        eventType = 'pinned';
-                    }
+                    eventName = prompt("Enter the name for this custom pinned event (e.g., 'Assembly'):");
+                    if (!eventName) return; // User cancelled
+                    // No more confusing confirm dialog
                 } else {
-                    eventName = tileData.name;
+                    eventName = tileData.name; // Use the tile's name (e.g., "Snacks")
                 }
             }
+            // --- END FIX ---
 
             if (!newEvent) {
                 let startTime, endTime, startMin, endMin;
