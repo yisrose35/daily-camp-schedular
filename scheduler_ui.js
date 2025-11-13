@@ -1,29 +1,18 @@
 // -------------------- scheduler_ui.js --------------------
 //
-// UPDATED (Major Bug Fix):
-// - **REVERTED** to the "one-table-per-division" layout, as this is
-//   the only way to fix the "ghost" activity/jumbling bug.
-// - **ADDED** new CSS classes (`.schedule-view-wrapper`, `.schedule-division-table`)
-//   to allow `styles.css` to display these tables side-by-side.
-// - **THE FIX:** The "Invalid Time" bug is fixed. The code now
-//   *filters out* any block from the skeleton where the start or
-//   end time is invalid (`startMin === null` or `endMin === null`).
+// ... (previous changelog) ...
 //
-// --- NEW FIX (YOURS!) ---
-// - **THE REAL FIX:** `renderStaggeredView` now also checks
-//   the division's `startTime` and `endTime` and will
-//   *ignore* any schedule block that is completely outside
-//   that division's time range.
-//
-// --- YOUR NEWEST REQUEST (League Day Counter) ---
-// - **NEW:** `renderStaggeredView` now loads `leagueDayCounters` from
-//   the *previous day's* data.
-// - **NEW:** It checks if a league/specialty league is scheduled
-//   *today* and increments the counter.
-// - **MOVED:** The count is *removed* from the division header.
-// - **NEW:** The count is *added* to the event block name itself
-//   (e.g., "League Game 3") and displayed in the merged cell.
-// - **NEW:** It saves the new counts to the *current day's* data.
+// --- YOUR LATEST REQUEST (Sequential Game Counter) ---
+// - **REMOVED:** All logic for `leagueDayCounters`, `prevCounters`,
+//   and saving the count. This is no longer needed.
+// - **NEW:** Inside `renderStaggeredView`, before processing blocks,
+//   the code now pre-filters all blocks for a division,
+//   *sorts them by start time*, and *then* loops through
+//   them to assign sequential counters (e.g., "League Game 1",
+//   "League Game 2").
+// - **FIXED:** The division header is reverted to just the div name.
+// - **UPDATED:** The league block rendering now uses the
+//   new sequential name (e.g., "League Game 1") as its title.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -139,7 +128,7 @@ function findFirstSlotForTime(startMin) {
 /**
  * Renders the "Staggered" (YKLI) view
  * --- REWRITTEN to be one table PER DIVISION ---
- * --- **UPDATED WITH LEAGUE DAY COUNTER MOVED TO BLOCK** ---
+ * --- **UPDATED WITH SEQUENTIAL GAME COUNTER** ---
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -150,11 +139,6 @@ function renderStaggeredView(container) {
 
     const dailyData = window.loadCurrentDailyData?.() || {};
     const manualSkeleton = dailyData.manualSkeleton || [];
-    
-    // --- NEW: Load previous day's counters ---
-    const prevDailyData = window.loadPreviousDailyData?.() || {};
-    const prevCounters = prevDailyData.leagueDayCounters || {};
-    const todayCounters = {}; // This will be saved at the end
     
     if (manualSkeleton.length === 0) {
         container.innerHTML = "<p>No schedule built for this day. Go to the 'Daily Adjustments' tab to build one.</p>";
@@ -170,36 +154,6 @@ function renderStaggeredView(container) {
     availableDivisions.forEach((div) => {
         const bunks = (divisions[div]?.bunks || []).sort();
         if (bunks.length === 0) return; // Don't render a table for a division with no bunks
-
-        // --- NEW: Calculate Today's League Day Counts for this division ---
-        const prevDivCounts = prevCounters[div] || { league: 0, specialty: 0 };
-        let todayLeagueCount = prevDivCounts.league;
-        let todaySpecialtyCount = prevDivCounts.specialty;
-        
-        const hasLeagueGame = manualSkeleton.some(item => 
-            item.division === div && 
-            item.event === 'League Game' && 
-            parseTimeToMinutes(item.startTime) !== null
-        );
-        const hasSpecialtyGame = manualSkeleton.some(item => 
-            item.division === div && 
-            item.event === 'Specialty League' && 
-            parseTimeToMinutes(item.startTime) !== null
-        );
-
-        if (hasLeagueGame) {
-            todayLeagueCount++;
-        }
-        if (hasSpecialtyGame) {
-            todaySpecialtyCount++;
-        }
-        
-        // Store the new counts to be saved
-        todayCounters[div] = { 
-            league: todayLeagueCount, 
-            specialty: todaySpecialtyCount 
-        };
-        // --- END NEW COUNTER LOGIC ---
 
         const table = document.createElement("table");
         table.className = "schedule-division-table"; // NEW CLASS
@@ -238,15 +192,15 @@ function renderStaggeredView(container) {
         // --- 3. Build Body for this division (Event-based) ---
         const tbody = document.createElement("tbody");
         
-        // Find all unique, sorted blocks *for this division*
-        const divisionBlocks = [];
+        // --- NEW: Pre-filter, validate, and sort blocks FIRST ---
+        const tempSortedBlocks = [];
         manualSkeleton.forEach(item => {
             if (item.division === div) {
                 const startMin = parseTimeToMinutes(item.startTime);
                 const endMin = parseTimeToMinutes(item.endTime);
 
                 if (startMin === null || endMin === null) {
-                    return; 
+                    return; // Invalid time
                 }
 
                 const divData = divisions[div];
@@ -255,34 +209,45 @@ function renderStaggeredView(container) {
                     const divEndMin = parseTimeToMinutes(divData.endTime);
 
                     if (divStartMin !== null && endMin <= divStartMin) {
-                        return; 
+                        return; // Block too early
                     }
                     if (divEndMin !== null && startMin >= divEndMin) {
-                        return;
+                        return; // Block too late
                     }
                 }
-
-                // --- NEW: Inject day count into event name ---
-                let eventName = item.event; // Default
-                if (item.event === 'League Game') {
-                    const count = todayCounters[div].league;
-                    if (count > 0) eventName = `League Game ${count}`;
-                } else if (item.event === 'Specialty League') {
-                    const count = todayCounters[div].specialty;
-                    if (count > 0) eventName = `Specialty League ${count}`;
-                }
-                // --- END NEW BLOCK ---
-
-                divisionBlocks.push({
-                    label: `${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}`,
-                    startMin: startMin,
-                    endMin: endMin,
-                    event: eventName, // <-- USE NEW NAME
-                    type: item.type 
-                });
+                
+                tempSortedBlocks.push({ item, startMin, endMin });
             }
         });
-        divisionBlocks.sort((a,b) => a.startMin - b.startMin);
+        // Sort by start time, so counters are sequential
+        tempSortedBlocks.sort((a,b) => a.startMin - b.startMin);
+
+        // --- NEW: Build final blocks WITH counters ---
+        let leagueGameCounter = 0;
+        let specialtyLeagueCounter = 0;
+        const divisionBlocks = [];
+        
+        tempSortedBlocks.forEach(block => {
+            const { item, startMin, endMin } = block;
+            
+            let eventName = item.event;
+            if (item.event === 'League Game') {
+                leagueGameCounter++;
+                eventName = `League Game ${leagueGameCounter}`;
+            } else if (item.event === 'Specialty League') {
+                specialtyLeagueCounter++;
+                eventName = `Specialty League ${specialtyLeagueCounter}`;
+            }
+            
+            divisionBlocks.push({
+                label: `${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}`,
+                startMin: startMin,
+                endMin: endMin,
+                event: eventName, // Use the new name
+                type: item.type 
+            });
+        });
+        // --- END NEW LOGIC ---
         
         const uniqueBlocks = divisionBlocks.filter((block, index, self) =>
             index === self.findIndex((t) => (t.label === block.label))
@@ -338,7 +303,6 @@ function renderStaggeredView(container) {
             tr.appendChild(tdTime);
 
             // --- Add ACTIVITY cells (Merged or Individual) ---
-            // --- UPDATED: Use startsWith() to find league blocks ---
             if (eventBlock.event.startsWith('League Game') || eventBlock.event.startsWith('Specialty League')) {
                 // === LEAGUE GAME / SPECIALTY LEAGUE: MERGED CELL ===
                 const tdLeague = document.createElement("td");
@@ -350,7 +314,6 @@ function renderStaggeredView(container) {
                 
                 const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
                 
-                // --- UPDATED: Use startsWith() ---
                 if (eventBlock.event.startsWith('Specialty League')) {
                     // Specialty League Formatting (Group by Field)
                     const gamesByField = new Map();
@@ -371,18 +334,18 @@ function renderStaggeredView(container) {
                         });
                     }
 
-                    let html = '<div style="margin: 0; padding: 4px;">';
+                    let html = '';
                     if (gamesByField.size === 0) {
-                        // --- UPDATED: Use eventBlock.event ---
                         html = `<p class="muted" style="margin:0; padding: 4px;">${eventBlock.event}</p>`;
+                    } else {
+                        html = `<p style="margin:2px 0 5px 4px; font-weight: bold;">${eventBlock.event}</p>`;
+                        gamesByField.forEach((matchups, field) => {
+                            const matchupNames = matchups.map(m => m.substring(0, m.lastIndexOf('(')).trim());
+                            html += `<div style="margin-bottom: 2px; padding-left: 4px;">
+                                        <strong>${matchupNames.join(', ')}</strong> - ${field}
+                                     </div>`;
+                        });
                     }
-                    gamesByField.forEach((matchups, field) => {
-                        const matchupNames = matchups.map(m => m.substring(0, m.lastIndexOf('(')).trim());
-                        html += `<div style="margin-bottom: 2px;">
-                                    <strong>${matchupNames.join(', ')}</strong> - ${field}
-                                 </div>`;
-                    });
-                    if (gamesByField.size > 0) { html += '</div>'; }
                     tdLeague.innerHTML = html;
 
                 } else {
@@ -399,10 +362,8 @@ function renderStaggeredView(container) {
                     
                     let html = '';
                     if (games.size === 0) {
-                         // --- UPDATED: Use eventBlock.event ---
                         html = `<p class="muted" style="margin:0; padding: 4px;">${eventBlock.event}</p>`;
                     } else {
-                        // --- NEW: Add the title ABOVE the matchups ---
                         html = `<p style="margin:2px 0 5px 4px; font-weight: bold;">${eventBlock.event}</p>`;
                         html += '<ul style="margin: 0; padding-left: 18px;">';
                         games.forEach((field, matchup) => {
@@ -443,8 +404,7 @@ function renderStaggeredView(container) {
         wrapper.appendChild(table); // Add table to wrapper
     }); // --- End of main division loop ---
     
-    // --- NEW: Save the new counters to today's data ---
-    window.saveCurrentDailyData?.("leagueDayCounters", todayCounters);
+    // --- REMOVED: Save counters to daily data ---
 }
 
 
