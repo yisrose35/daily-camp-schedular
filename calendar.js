@@ -12,6 +12,10 @@
 //   `leagueDayCounters: {}` for any new day.
 // - **RESTORED:** `loadPreviousDailyData` now safely returns
 //   an empty `leagueDayCounters` object if no data exists.
+//
+// --- LATEST FIX (11/13) ---
+// - **REMOVED:** `leagueSportRotation` has been removed from
+//   `loadCurrentDailyData` as it's no longer used.
 // =================================================================
 
 (function() {
@@ -97,6 +101,7 @@
     
     /**
      * --- UPDATED with leagueDayCounters ---
+     * --- REMOVED leagueSportRotation ---
      */
     window.loadCurrentDailyData = function() {
         const allData = window.loadAllDailyData();
@@ -107,7 +112,7 @@
                 scheduleAssignments: {},
                 leagueAssignments: {},
                 leagueRoundState: {},
-                leagueSportRotation: {},
+                // leagueSportRotation: {}, // <-- REMOVED
                 leagueDayCounters: {}, // <-- RESTORED
                 overrides: { fields: [], bunks: [], leagues: [] } 
             };
