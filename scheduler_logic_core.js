@@ -1,4 +1,3 @@
-
 // =================================================================
 // scheduler_logic_core.js
 //
@@ -20,6 +19,11 @@
 // - **UPDATED:** "Pass 3" (League Game) and "Pass 3.5"
 //   (Specialty League) now use this new `canLeagueGameFit`
 //   function to find fields, ensuring one game per field.
+//
+// --- LATEST FIX (11/13) ---
+// - **BUG FIX:** Corrected Pass 4 to pass the `divisions` object
+//   to the `findBest...` functions in scheduler_logic_fillers.js.
+//   This fixes a "Cannot read properties of undefined" error.
 // =================================================================
 
 (function() {
@@ -356,17 +360,21 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             continue;
         }
         let pick = null;
-        // NEW: Pass rotationHistory to the "findBest" functions
+        
+        // --- THIS IS THE FIX ---
+        // Pass `divisions` as the last argument to all findBest... functions
+        
         if (block.event === 'Special Activity') {
-            pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
+            pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions);
         } else if (block.event === 'Sports Slot') {
-            pick = window.findBestSportActivity?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
+            pick = window.findBestSportActivity?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions);
         } else if (block.event === 'Swim') {
             pick = { field: "Swim", sport: null, _activity: "Swim" }; 
         }
         if (!pick) {
-            pick = window.findBestGeneralActivity?.(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
+            pick = window.findBestGeneralActivity?.(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions);
         }
+        // --- END OF FIX ---
         
         if (pick) {
             fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, false);
