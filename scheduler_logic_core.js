@@ -216,7 +216,10 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     // --- NEW: Get timestamp for real-time history update ---
     const timestamp = Date.now(); 
 
-    Object.values(leagueGroups).forEach(group => {
+    // --- **FIX**: Sort groups by start time to process chronologically ---
+    const sortedLeagueGroups = Object.values(leagueGroups).sort((a, b) => a.startTime - b.startTime);
+
+    for (const group of sortedLeagueGroups) {
         // This 'group' is now correct, e.g.:
         // { divLeagueName: "Senior League", ... bunks: Set("Bunk 5A", "Bunk 6A", ...) }
         
@@ -240,17 +243,18 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         }
         
         const allBunksInGroup = Array.from(group.bunks);
-        const scheduledGames = []; 
-
-        // --- FIX: Find a divName for this group to check rules ---
-        // We only need one, assuming rules are consistent for the league
+        
+        // --- **CRITICAL FIX (Mirroring)** ---
+        // Create a map of which bunk gets which game.
+        const bunkToGameMap = {};
+        
+        // --- Find a divName for this group to check rules ---
         let firstDivName = null;
         if (allBunksInGroup.length > 0) {
              const firstBunk = allBunksInGroup[0];
              firstDivName = Object.keys(divisions).find(div => divisions[div].bunks.includes(firstBunk));
         }
-        if (!firstDivName) return; // No bunks, no division, can't schedule.
-
+        if (!firstDivName) continue; // No bunks, no division, can't schedule.
         const blockBase = { slots: group.slots, divName: firstDivName };
         // --- End Fix ---
 
@@ -281,7 +285,11 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                     // 3. Assign this game and mark the field as used
                     const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
                     const pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
-                    scheduledGames.push(pick);
+                    
+                    // **THIS IS THE MIRRORING**:
+                    bunkToGameMap[teamA] = pick;
+                    bunkToGameMap[teamB] = pick;
+                    
                     markFieldUsage(blockBase, fieldName, fieldUsageBySlot); // Mark as used *immediately*
                     
                     // --- **CRITICAL FIX**: Update local history to force rotation ---
@@ -297,29 +305,34 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             if (!assigned) {
                 const fullMatchupLabel = `${teamA} vs ${teamB} (No Field)`;
                 const pick = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null, _activity: "League" };
-                scheduledGames.push(pick);
+                bunkToGameMap[teamA] = pick;
+                bunkToGameMap[teamB] = pick;
             }
         } // end matchup loop
         // --- END MATCUP-FIRST LOGIC ---
         
         allBunksInGroup.forEach((bunk, bunkIndex) => {
-            let pickToAssign;
-            if (scheduledGames.length > 0) pickToAssign = scheduledGames[bunkIndex % scheduledGames.length];
-            else pickToAssign = { field: "Leagues", sport: null, _h2h: true, _activity: "League" };
+            // Find the game this specific bunk is supposed to play
+            const pickToAssign = bunkToGameMap[bunk];
             
             // --- NEW: Find the correct division for *this bunk* ---
             const bunkDivName = Object.keys(divisions).find(div => divisions[div].bunks.includes(bunk));
             if (!bunkDivName) return; // Skip if bunk not found (shouldn't happen)
             // --- END NEW ---
             
-            fillBlock({ slots: group.slots, bunk: bunk, divName: bunkDivName }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
+            if (pickToAssign) {
+                fillBlock({ slots: group.slots, bunk: bunk, divName: bunkDivName }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
+            } else {
+                // This bunk is in the league block but has no game (e.g., BYE or not in team list)
+                fillBlock({ slots: group.slots, bunk: bunk, divName: bunkDivName }, { field: "No Game", sport: null, _h2h: true, _activity: "League" }, fieldUsageBySlot, yesterdayHistory, true);
+            }
         });
-    });
+    } // --- End League Group Loop ---
 
     // ===== PASS 3.5: NEW "Specialty League Pass" =====
     const specialtyLeagueGroups = {};
     specialtyLeagueBlocks.forEach(block => {
-        const key = `${block.divName}-${block.startTime}`;
+        key = `${block.divName}-${block.startTime}`;
         if (!specialtyLeagueGroups[key]) {
             specialtyLeagueGroups[key] = { divName: block.divName, startTime: block.startTime, slots: block.slots, bunks: new Set() };
         }
@@ -350,32 +363,41 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             matchups = pairRoundRobin(leagueTeams); 
         }
         const allBunksInGroup = Array.from(group.bunks);
-        const scheduledGames = []; 
+
+        // --- **CRITICAL FIX (Mirroring)** ---
+        const bunkToGameMap = {};
         const blockBase = { slots: group.slots, divName: group.divName };
         const gamesPerField = Math.ceil(matchups.length / leagueFields.length);
 
         for (let i = 0; i < matchups.length; i++) {
             const [teamA, teamB] = matchups[i];
             if (teamA === "BYE" || teamB === "BYE") continue;
+            
             const fieldIndex = Math.floor(i / gamesPerField);
             const fieldName = leagueFields[fieldIndex % leagueFields.length];
             const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
             let pick;
             
-            // --- **THE FIX**: Use new `canLeagueGameFit` ---
             if (fieldName && canLeagueGameFit(blockBase, fieldName, fieldUsageBySlot, activityProperties)) {
                 pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
                 markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
             } else {
                 pick = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
             }
-            scheduledGames.push(pick);
+            
+            // **THIS IS THE MIRRORING**:
+            bunkToGameMap[teamA] = pick;
+            bunkToGameMap[teamB] = pick;
         }
+        
         allBunksInGroup.forEach((bunk, bunkIndex) => {
-            let pickToAssign;
-            if (scheduledGames.length > 0) pickToAssign = scheduledGames[bunkIndex % scheduledGames.length];
-            else pickToAssign = { field: "Specialty League", sport: null, _h2h: true, _activity: sport };
-            fillBlock({ ...blockBase, bunk: bunk }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
+            const pickToAssign = bunkToGameMap[bunk];
+            
+            if (pickToAssign) {
+                fillBlock({ ...blockBase, bunk: bunk }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
+            } else {
+                fillBlock({ ...blockBase, bunk: bunk }, { field: "No Game", sport: null, _h2h: true, _activity: sport }, fieldUsageBySlot, yesterdayHistory, true);
+            }
         });
     });
 
@@ -432,7 +454,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                         historyToSave.bunks[bunk][activityName] = timestamp;
                         
                         // 2. If it's a league, update league history (for "fairness" check in Pass 3)
-                        if (entry._h2h && entry._activity !== "League") { // Don't log "League" or "No Field"
+                        if (entry._h2h && entry._activity !== "League" && entry._activity !== "No Game") { // Don't log "League" or "No Game"
                             const leagueEntry = Object.entries(masterLeagues).find(([name, l]) => 
                                 l.enabled && l.divisions.includes(divName)
                             );
