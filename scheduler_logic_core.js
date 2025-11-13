@@ -1,3 +1,4 @@
+
 // =================================================================
 // scheduler_logic_core.js
 //
@@ -357,14 +358,14 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         let pick = null;
         // NEW: Pass rotationHistory to the "findBest" functions
         if (block.event === 'Special Activity') {
-            pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions);
+            pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
         } else if (block.event === 'Sports Slot') {
-            pick = window.findBestSportActivity?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions);
+            pick = window.findBestSportActivity?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
         } else if (block.event === 'Swim') {
             pick = { field: "Swim", sport: null, _activity: "Swim" }; 
         }
         if (!pick) {
-            pick = window.findBestGeneralActivity?.(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions);
+            pick = window.findBestGeneralActivity?.(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
         }
         
         if (pick) {
@@ -432,14 +433,7 @@ function findSlotsForRange(startMin, endMin) {
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
         const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-        
-        // --- THIS IS THE FIX ---
-        // Use the globally defined constant
-        const slotEnd = slotStart + INCREMENT_MINS; 
-        
-        // Correct Overlap check: (StartA < EndB) and (EndA > StartB)
-        if (slotStart < endMin && slotEnd > startMin) {
-        // --- END FIX ---
+        if (slotStart >= startMin && slotStart < endMin) {
             slots.push(i);
         }
     }
