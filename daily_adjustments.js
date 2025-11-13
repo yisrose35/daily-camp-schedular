@@ -6,6 +6,16 @@
 //   LOGIC section) now checks the dropped time against the
 //   specific division's `startTime` and `endTime` and will
 //   reject the drop if it's out of bounds.
+//
+// --- YOUR NEWEST FIX (Glitchy Skeleton Load) ---
+// - **FIXED:** `loadDailySkeleton` (line 405) was calling
+//   `window.getSavedSkeletons()`, which sometimes provided
+//   stale data from the app1.js module.
+// - **FIX:** `loadDailySkeleton` now reads directly from the
+//   `masterSettings.app1` object, which is loaded fresh
+//   from localStorage every time the tab's `init()`
+//   function is called. This guarantees it always
+//   gets the most recent template assignments.
 // =================================================================
 
 (function() {
@@ -340,6 +350,11 @@ function renderEventTile(event, top, height) {
         </div>`;
 }
 
+/**
+ * --- UPDATED: THIS IS THE FIX ---
+ * Now reads from `masterSettings.app1` (loaded in `init()`)
+ * instead of global `window.get...` functions.
+ */
 function loadDailySkeleton() {
     // 1. Check for a saved *daily* override first.
     const dailyData = window.loadCurrentDailyData?.() || {};
@@ -351,8 +366,11 @@ function loadDailySkeleton() {
     
     // 2. No daily override exists. Load the default template
     //    based on the day of the week (same as master builder).
-    const assignments = window.getSkeletonAssignments?.() || {};
-    const skeletons = window.getSavedSkeletons?.() || {};
+    
+    // --- **THE FIX**: Load from masterSettings, not global functions ---
+    const assignments = masterSettings.app1.skeletonAssignments || {};
+    const skeletons = masterSettings.app1.savedSkeletons || {};
+    // --- END FIX ---
     
     const dateStr = window.currentScheduleDate || "";
     const [year, month, day] = dateStr.split('-').map(Number);
@@ -396,7 +414,10 @@ function minutesToTime(min) {
 function initDailySkeletonUI() {
     skeletonContainer = document.getElementById("override-scheduler-content");
     if (!skeletonContainer) return;
-    loadDailySkeleton();
+    
+    // This function MUST run *after* init() has populated masterSettings
+    loadDailySkeleton(); 
+    
     skeletonContainer.innerHTML = `
         <div id="daily-skeleton-palette" style="padding: 10px; background: #f4f4f4; border-radius: 8px; margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px;"></div>
         <div id="daily-skeleton-grid" style="overflow-x: auto; border: 1px solid #999; max-height: 600px; overflow-y: auto;"></div>
@@ -632,6 +653,7 @@ function init() {
 
 
   // 1. Load Master "Setup" Data
+  // This is the CRITICAL step. masterSettings.app1 is now populated.
   masterSettings.global = window.loadGlobalSettings?.() || {};
   masterSettings.app1 = masterSettings.global.app1 || {};
   masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
@@ -674,6 +696,7 @@ function init() {
   // --- End Migration ---
 
   // 3. Render ALL UI sections
+  // This call is now safe, because masterSettings.app1 is populated.
   initDailySkeletonUI(); // Render the skeleton editor
   renderTripsForm();     // Render the trip form
   
