@@ -9,6 +9,16 @@
 //     sport played least recently by that league.
 //   - **Pass 5 (History Save):** Iterates through the newly generated
 //     schedule and updates the history for bunks and leagues.
+//
+// --- YOUR NEWEST FIX (League Field Assignment) ---
+// - **BUG FIX:** The scheduler was putting multiple league games on
+//   one field if that field was marked "sharable".
+// - **NEW:** Added a `canLeagueGameFit` function that is a copy
+//   of `canBlockFit` but hard-codes the `limit` to 1,
+//   ignoring the "sharable" property.
+// - **UPDATED:** "Pass 3" (League Game) and "Pass 3.5"
+//   (Specialty League) now use this new `canLeagueGameFit`
+//   function to find fields, ensuring one game per field.
 // =================================================================
 
 (function() {
@@ -239,13 +249,15 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             let fieldName = null;
             
             for (const f of possibleFields) {
-                if (canBlockFit(blockBase, f, activityProperties, fieldUsageBySlot)) {
+                // --- **THE FIX**: Use new `canLeagueGameFit` ---
+                if (canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
                     fieldName = f; break;
                 }
             }
             if (!fieldName && sport !== "League") { // Don't search all fields if it's a generic "League" game
                 for (const f of window.allSchedulableNames) {
-                    if (canBlockFit(blockBase, f, activityProperties, fieldUsageBySlot)) {
+                     // --- **THE FIX**: Use new `canLeagueGameFit` ---
+                    if (canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
                         fieldName = f; break;
                     }
                 }
@@ -317,7 +329,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
             let pick;
             
-            if (fieldName && canBlockFit(blockBase, fieldName, activityProperties, fieldUsageBySlot)) {
+            // --- **THE FIX**: Use new `canLeagueGameFit` ---
+            if (fieldName && canLeagueGameFit(blockBase, fieldName, fieldUsageBySlot, activityProperties)) {
                 pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
                 markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
             } else {
@@ -469,7 +482,9 @@ function isTimeAvailable(slotIndex, fieldProps) {
 
     for (const rule of rules) {
         if (rule.type === 'Unavailable') {
-            if (slotStartMin < rule.endMin && slotEndMin > rule.endMin) {
+            // --- FIX: This logic was incorrect. It should check for overlap. ---
+            // Overlap check: (StartA < EndB) and (EndA > StartB)
+            if (slotStartMin < rule.endMin && slotEndMin > rule.startMin) {
                 isAvailable = false;
                 break;
             }
@@ -514,6 +529,51 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
         }
     }
     // --- END OF NEW CHECK ---
+
+    // Check 3 & 4: Usage per slot & Time-based availability
+    for (const slotIndex of block.slots) {
+        if (slotIndex === undefined) return false; 
+        
+        // Check 3: Usage per slot
+        const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
+        if (used >= limit) return false;
+        
+        // Check 4: Time-based availability
+        if (!isTimeAvailable(slotIndex, props)) {
+            return false; 
+        }
+    }
+    return true;
+}
+
+/**
+ * --- **NEW FUNCTION** ---
+ * This is a copy of `canBlockFit` but hard-codes the
+ * limit to 1, specifically for league games.
+ */
+function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties) {
+    if (!fieldName) return false;
+    const props = activityProperties[fieldName];
+    if (!props) {
+        console.warn(`No properties found for field: ${fieldName}`);
+        return false;
+    }
+    // --- THIS IS THE FIX ---
+    const limit = 1; // League games are NEVER sharable
+    // --- END FIX ---
+
+    // Check 1: Division allowance (from Sharing)
+    if (props && props.allowedDivisions && props.allowedDivisions.length && !props.allowedDivisions.includes(block.divName)) return false;
+
+    // Check 2: Bunk/Division Limit (from limitUsage)
+    const limitRules = props.limitUsage;
+    if (limitRules && limitRules.enabled) {
+        if (!limitRules.divisions[block.divName]) {
+            return false;
+        }
+        // Note: We don't check for specific bunks here,
+        // as league games apply to the whole division.
+    }
 
     // Check 3 & 4: Usage per slot & Time-based availability
     for (const slotIndex of block.slots) {
