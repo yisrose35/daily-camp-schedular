@@ -16,6 +16,7 @@
 
 // ===== HELPERS =====
 const INCREMENT_MINS = 30; // Base optimizer grid size
+window.INCREMENT_MINS = window.INCREMENT_MINS || INCREMENT_MINS;
 
 function parseTimeToMinutes(str) {
   if (!str || typeof str !== "string") return null;
