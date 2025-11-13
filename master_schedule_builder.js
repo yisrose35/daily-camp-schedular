@@ -1,17 +1,13 @@
 // =================================================================
 // master_schedule_builder.js
 //
-// UPDATED:
-// - **VALIDATION:** `addDropListeners` now checks the dropped
-//   time against the specific division's `startTime` and `endTime`
-//   and will reject the drop if it's out of bounds.
+// ... (previous changelog) ...
 //
 // --- YOUR NEWEST FIX (Pinned Tiles Bug) ---
 // - **FIXED:** Removed the confusing `confirm` dialog from the
-//   `addDropListeners` function for "Custom Pinned Event".
-// - **FIXED:** This tile, along with "Snacks" and "Dismissal",
-//   will now be correctly created with `type: 'pinned'`
-//   every time, which the optimizer will respect.
+//   `addDropListeners` function.
+// - **FIXED:** "Custom Pinned Event", "Snacks", and "Dismissal"
+//   will now be correctly created with `type: 'pinned'`.
 // =================================================================
 
 (function() {
@@ -583,7 +579,7 @@ function addDropListeners(selector) {
                 if (tileData.type === 'custom') {
                     eventName = prompt("Enter the name for this custom pinned event (e.g., 'Assembly'):");
                     if (!eventName) return; // User cancelled
-                    // No more confusing confirm dialog
+                    // ** BUGGY LINES REMOVED **
                 } else {
                     eventName = tileData.name; // Use the tile's name (e.g., "Snacks")
                 }
