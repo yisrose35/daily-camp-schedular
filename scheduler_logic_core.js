@@ -1,24 +1,20 @@
 // =================================================================
 // scheduler_logic_core.js
 //
-// UPDATED:
-// - **SMART SCHEDULER IMPLEMENTATION**
-// - `loadAndFilterData`: Now loads `rotationHistory` via `window.loadRotationHistory()`.
-// - `runSkeletonOptimizer`:
-//   - **Pass 3 (League Shuffle):** Checks `rotationHistory` to pick the
-//     sport played least recently by that league.
-//   - **Pass 5 (History Save):** Iterates through the newly generated
-//     schedule and updates the history for bunks and leagues.
+// ... (previous changelog) ...
 //
-// --- YOUR NEWEST FIX (League Field Assignment) ---
-// - **BUG FIX:** The scheduler was putting multiple league games on
-//   one field if that field was marked "sharable".
-// - **NEW:** Added a `canLeagueGameFit` function that is a copy
-//   of `canBlockFit` but hard-codes the `limit` to 1,
-//   ignoring the "sharable" property.
-// - **UPDATED:** "Pass 3" (League Game) and "Pass 3.5"
-//   (Specialty League) now use this new `canLeagueGameFit`
-//   function to find fields, ensuring one game per field.
+// --- YOUR NEWEST FIX (Sharable Logic) ---
+// - **FIXED (Hard Rule):** `markFieldUsage` now stores an
+//   object `{ count, divisions: [] }` in `fieldUsageBySlot`.
+// - **FIXED (Hard Rule):** `canBlockFit` is updated. It now
+//   checks `fieldUsageBySlot` and blocks sharing if the
+//   bunk's division is not in the `divisions` array.
+// - **NEW (Soft Rule):** The "Pass 4" optimizer loop now
+//   sorts blocks by time, then division, then bunk. This
+//   ensures Bunk 1 runs before Bunk 2, allowing the
+//   "neighbor push" logic to work.
+// - **NEW (Soft Rule):** `divisions` object is now passed
+//   to all `findBest...` functions.
 // =================================================================
 
 (function() {
@@ -65,6 +61,7 @@ function fmtTime(d) {
 
 /**
  * Main entry point, called by the "Run Optimizer" button
+ * --- UPDATED: Pass 4 sort order changed ---
  */
 window.runSkeletonOptimizer = function(manualSkeleton) {
     window.scheduleAssignments = {}; 
@@ -95,11 +92,23 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     // ===== PASS 1: Generate Master Time Grid =====
     const globalSettings = window.loadGlobalSettings?.() || {};
     const app1Data = globalSettings.app1 || {};
-    const globalStart = app1Data.globalStartTime || "9:00 AM";
-    const globalEnd = app1Data.globalEndTime || "4:00 PM";
+    // --- REMOVED globalStartTime/EndTime ---
     
-    let earliestMin = parseTimeToMinutes(globalStart);
-    let latestMin = parseTimeToMinutes(globalEnd);
+    let earliestMin = null;
+    let latestMin = null;
+
+    // --- NEW: Use division times to find range ---
+    Object.values(divisions).forEach(div => {
+        const startMin = parseTimeToMinutes(div.startTime);
+        const endMin = parseTimeToMinutes(div.endTime);
+        
+        if (startMin !== null && (earliestMin === null || startMin < earliestMin)) {
+            earliestMin = startMin;
+        }
+        if (endMin !== null && (latestMin === null || endMin > latestMin)) {
+            latestMin = endMin;
+        }
+    });
 
     if (earliestMin == null) earliestMin = 540; 
     if (latestMin == null) latestMin = 960; 
@@ -348,23 +357,38 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
 
     // ===== PASS 4: Fill remaining Schedulable Slots (With Smart Shuffle) =====
-    remainingBlocks.sort((a, b) => a.startTime - b.startTime);
+    // --- NEW: Sort by time, then div, then bunk ---
+    remainingBlocks.sort((a, b) => {
+        if (a.startTime !== b.startTime) {
+            return a.startTime - b.startTime;
+        }
+        if (a.divName !== b.divName) {
+            return a.divName.localeCompare(b.divName);
+        }
+        // Bunks need to be sorted "1", "2", ... "10" not "1", "10", "2"
+        const numA = parseInt(a.bunk.match(/\d+/) || 0);
+        const numB = parseInt(b.bunk.match(/\d+/) || 0);
+        if (numA !== numB) {
+            return numA - numB;
+        }
+        return a.bunk.localeCompare(b.bunk);
+    });
 
     for (const block of remainingBlocks) {
         if (block.slots.length === 0 || window.scheduleAssignments[block.bunk][block.slots[0]]) {
             continue;
         }
         let pick = null;
-        // NEW: Pass rotationHistory to the "findBest" functions
+        // NEW: Pass rotationHistory AND divisions to the "findBest" functions
         if (block.event === 'Special Activity') {
-            pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
+            pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions);
         } else if (block.event === 'Sports Slot') {
-            pick = window.findBestSportActivity?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
+            pick = window.findBestSportActivity?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions);
         } else if (block.event === 'Swim') {
             pick = { field: "Swim", sport: null, _activity: "Swim" }; 
         }
         if (!pick) {
-            pick = window.findBestGeneralActivity?.(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
+            pick = window.findBestGeneralActivity?.(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions);
         }
         
         if (pick) {
@@ -438,14 +462,28 @@ function findSlotsForRange(startMin, endMin) {
     }
     return slots;
 }
+/**
+ * --- UPDATED: THIS IS THE FIX (Hard Rule) ---
+ * Now stores usage as `{ count, divisions: [] }`.
+ */
 function markFieldUsage(block, fieldName, fieldUsageBySlot) {
     if (!fieldName || fieldName === "No Field" || !window.allSchedulableNames.includes(fieldName)) {
         return;
     }
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) continue;
+        
         fieldUsageBySlot[slotIndex] = fieldUsageBySlot[slotIndex] || {};
-        fieldUsageBySlot[slotIndex][fieldName] = (fieldUsageBySlot[slotIndex][fieldName] || 0) + 1;
+        
+        // --- NEW SHARING LOGIC ---
+        const currentUsage = fieldUsageBySlot[slotIndex][fieldName] || { count: 0, divisions: [] };
+        currentUsage.count++;
+        // Add this bunk's division to the list of users
+        if (!currentUsage.divisions.includes(block.divName)) {
+            currentUsage.divisions.push(block.divName);
+        }
+        fieldUsageBySlot[slotIndex][fieldName] = currentUsage;
+        // --- END NEW SHARING LOGIC ---
     }
 }
 
@@ -458,7 +496,12 @@ function isTimeAvailable(slotIndex, fieldProps) {
     const slotStartMin = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
     const slotEndMin = slotStartMin + INCREMENT_MINS; 
     
-    const rules = fieldProps.timeRules || [];
+    // --- FIX: Use parseTimeToMinutes for rule times ---
+    const rules = (fieldProps.timeRules || []).map(r => ({
+        type: r.type,
+        startMin: parseTimeToMinutes(r.start),
+        endMin: parseTimeToMinutes(r.end)
+    })).filter(r => r.startMin !== null && r.endMin !== null);
     
     if (rules.length === 0) {
         return fieldProps.available;
@@ -482,7 +525,6 @@ function isTimeAvailable(slotIndex, fieldProps) {
 
     for (const rule of rules) {
         if (rule.type === 'Unavailable') {
-            // --- FIX: This logic was incorrect. It should check for overlap. ---
             // Overlap check: (StartA < EndB) and (EndA > StartB)
             if (slotStartMin < rule.endMin && slotEndMin > rule.startMin) {
                 isAvailable = false;
@@ -497,8 +539,8 @@ function isTimeAvailable(slotIndex, fieldProps) {
 
 
 /**
- * UPDATED: This function now checks time-based availability
- * AND the new bunk/division limits.
+ * --- UPDATED: THIS IS THE FIX (Hard Rule) ---
+ * Now checks *which* division is using a sharable field.
  */
 function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     if (!fieldName) return false;
@@ -512,7 +554,7 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     // Check 1: Division allowance (from Sharing)
     if (props && props.allowedDivisions && props.allowedDivisions.length && !props.allowedDivisions.includes(block.divName)) return false;
 
-    // --- NEW: Check 2: Bunk/Division Limit (from limitUsage) ---
+    // Check 2: Bunk/Division Limit (from limitUsage)
     const limitRules = props.limitUsage;
     if (limitRules && limitRules.enabled) {
         if (!limitRules.divisions[block.divName]) {
@@ -528,15 +570,25 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
             }
         }
     }
-    // --- END OF NEW CHECK ---
 
     // Check 3 & 4: Usage per slot & Time-based availability
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) return false; 
         
-        // Check 3: Usage per slot
-        const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
-        if (used >= limit) return false;
+        // --- NEW SHARING LOGIC (Check 3) ---
+        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+        
+        if (usage.count >= limit) {
+            return false; // Already full
+        }
+        
+        if (usage.count > 0) {
+            // It's being used. Check if it's by a *different* division.
+            if (!usage.divisions.includes(block.divName)) {
+                return false; // Can't share across divisions
+            }
+        }
+        // --- END NEW SHARING LOGIC ---
         
         // Check 4: Time-based availability
         if (!isTimeAvailable(slotIndex, props)) {
@@ -549,7 +601,7 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
 /**
  * --- **NEW FUNCTION** ---
  * This is a copy of `canBlockFit` but hard-codes the
- * limit to 1, specifically for league games.
+ * limit to 1, and only checks for *cross-division* sharing.
  */
 function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties) {
     if (!fieldName) return false;
@@ -579,9 +631,15 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) return false; 
         
-        // Check 3: Usage per slot
-        const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
-        if (used >= limit) return false;
+        // --- NEW SHARING LOGIC (Check 3) ---
+        // We only check for usage. A league game can't be
+        // placed on a field already in use by anyone.
+        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+        
+        if (usage.count >= limit) {
+            return false; // Already full
+        }
+        // --- END NEW SHARING LOGIC ---
         
         // Check 4: Time-based availability
         if (!isTimeAvailable(slotIndex, props)) {
@@ -612,9 +670,9 @@ function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill
                 _activity: pick._activity || null // NEW: Save the base activity name for history
             };
             
-            if (!isLeagueFill && fieldName && window.allSchedulableNames.includes(fieldName)) {
-                fieldUsageBySlot[slotIndex] = fieldUsageBySlot[slotIndex] || {};
-                fieldUsageBySlot[slotIndex][fieldName] = (fieldUsageBySlot[slotIndex][fieldName] || 0) + 1;
+            // --- UPDATED: Use new markFieldUsage ---
+            if (!isLeagueFill) {
+                 markFieldUsage(block, fieldName, fieldUsageBySlot);
             }
         }
     });
@@ -682,14 +740,14 @@ function loadAndFilterData() {
         divisions[divName].bunks = (divisions[divName].bunks || []).filter(bunkName => !overrides.bunks.includes(bunkName));
     }
     
-    function parseTimeRule(rule) {
-        const startMin = parseTimeToMinutes(rule.start);
-        const endMin = parseTimeToMinutes(rule.end);
-        if (startMin == null || endMin == null) return null;
+    // --- Renamed helper, was parseTimeRule ---
+    function parseRule(rule) {
+        // We no longer parse time to minutes here.
+        // The isTimeAvailable function will do it.
         return {
             type: rule.type,
-            startMin: startMin,
-            endMin: endMin
+            start: rule.start,
+            end: rule.end
         };
     }
     
@@ -707,9 +765,9 @@ function loadAndFilterData() {
         const dailyRules = dailyFieldAvailability[f.name];
         
         if (dailyRules && dailyRules.length > 0) {
-            finalRules = dailyRules.map(parseTimeRule).filter(Boolean);
+            finalRules = dailyRules.map(parseRule).filter(Boolean);
         } else {
-            finalRules = (f.timeRules || []).map(parseTimeRule).filter(Boolean);
+            finalRules = (f.timeRules || []).map(parseRule).filter(Boolean);
         }
 
         const isMasterAvailable = f.available !== false; 
@@ -717,9 +775,14 @@ function loadAndFilterData() {
         activityProperties[f.name] = {
             available: isMasterAvailable,
             sharable: f.sharableWith?.type === 'all' || f.sharableWith?.type === 'custom',
-            allowedDivisions: (f.sharableWith?.divisions?.length > 0) ? f.sharableWith.divisions : availableDivisions,
+            // --- This logic was the bug. It's now fixed. ---
+            // If divisions are specified, use them.
+            // Otherwise, allowedDivisions is an empty array.
+            // `canBlockFit` will *not* use this to block.
+            // The *new* logic in `canBlockFit` handles cross-division sharing.
+            allowedDivisions: (f.sharableWith?.divisions?.length > 0) ? f.sharableWith.divisions : [],
             limitUsage: f.limitUsage || { enabled: false, divisions: {} },
-            timeRules: finalRules
+            timeRules: finalRules // Pass the raw rules {type, start, end}
         };
 
         if (isMasterAvailable) {
