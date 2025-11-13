@@ -107,21 +107,26 @@ function formatEntry(entry) {
 }
 
 /**
- * NEW Helper: Finds the *first* 30-min slot index
- * that matches the start time of a custom block.
+ * --- THIS IS THE FIX ---
+ * Finds the *first* 30-min slot index
+ * that *contains* the start time of a custom block.
  */
 function findFirstSlotForTime(startMin) {
     if (startMin === null || !window.unifiedTimes) return -1; // <-- SAFETY CHECK
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
         const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-        // Failsafe: find the closest one
-        if (slotStart >= startMin && slotStart < startMin + INCREMENT_MINS) {
+        const slotEnd = slotStart + INCREMENT_MINS;
+        
+        // Correct "contains" check: (slotStart <= startMin < slotEnd)
+        if (slotStart <= startMin && slotEnd > startMin) {
             return i;
         }
     }
     return -1;
 }
+// --- END FIX ---
+
 
 /**
  * Renders the "Staggered" (YKLI) view
@@ -472,3 +477,5 @@ function initScheduleSystem() {
 window.updateTable = window.updateTable || updateTable;
 window.initScheduleSystem = window.initScheduleSystem || initScheduleSystem;
 window.saveSchedule = window.saveSchedule || saveSchedule;
+
+}
