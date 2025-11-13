@@ -1,26 +1,24 @@
 // =================================================================
 // scheduler_logic_core.js
 //
-// ... (previous changelog) ...
+// UPDATED:
+// - **SMART SCHEDULER IMPLEMENTATION**
+// - `loadAndFilterData`: Now loads `rotationHistory` via `window.loadRotationHistory()`.
+// - `runSkeletonOptimizer`:
+//   - **Pass 3 (League Shuffle):** Checks `rotationHistory` to pick the
+//     sport played least recently by that league.
+//   - **Pass 5 (History Save):** Iterates through the newly generated
+//     schedule and updates the history for bunks and leagues.
 //
-// --- YOUR LATEST FIX (No Repeats Per Day) ---
-// - **NEW (Hard Rule):** "Pass 4" now creates a temporary
-//   `activitiesUsedTodayByBunk = {}` object.
-// - **FIXED:** Before calling `findBest...`, the optimizer
-//   now pre-filters the `allActivities` list, removing any
-//   activity that the bunk has already been assigned today.
-// - **FIXED:** When a `pick` is made, its `_activity` name
-//   is added to the `activitiesUsedTodayByBunk` set.
-//   This *guarantees* an activity cannot be picked twice.
-//
-// --- SYNTAX ERROR FIX ---
-// - Removed an accidental `.js` from line 364 that was
-//   causing a fatal syntax error.
-//
-// --- NEW (Pinned-Event Slot Matching) ---
-// - findSlotsForRange now uses proper interval overlap logic,
-//   so pinned events like Regroup/Snacks/Dismissal at off-grid
-//   times (e.g. 3:10–3:20) still claim the correct grid slots.
+// --- YOUR NEWEST FIX (League Field Assignment) ---
+// - **BUG FIX:** The scheduler was putting multiple league games on
+//   one field if that field was marked "sharable".
+// - **NEW:** Added a `canLeagueGameFit` function that is a copy
+//   of `canBlockFit` but hard-codes the `limit` to 1,
+//   ignoring the "sharable" property.
+// - **UPDATED:** "Pass 3" (League Game) and "Pass 3.5"
+//   (Specialty League) now use this new `canLeagueGameFit`
+//   function to find fields, ensuring one game per field.
 // =================================================================
 
 (function() {
@@ -53,26 +51,20 @@ function parseTimeToMinutes(str) {
   }
   return hh * 60 + mm;
 }
-
 function fieldLabel(f) {
     if (typeof f === "string") return f;
     if (f && typeof f === "object" && typeof f.name === "string") return f.name;
     return "";
 }
-
 function fmtTime(d) {
     if (!d) return "";
-    let h = d.getHours(),
-        m = d.getMinutes().toString().padStart(2,"0"),
-        ap = h >= 12 ? "PM" : "AM";
-    h = h % 12 || 12;
+    let h = d.getHours(), m = d.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12;
     return `${h}:${m} ${ap}`;
 }
 
 
 /**
  * Main entry point, called by the "Run Optimizer" button
- * --- UPDATED: Pass 4 now tracks "used today" ---
  */
 window.runSkeletonOptimizer = function(manualSkeleton) {
     window.scheduleAssignments = {}; 
@@ -103,26 +95,14 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     // ===== PASS 1: Generate Master Time Grid =====
     const globalSettings = window.loadGlobalSettings?.() || {};
     const app1Data = globalSettings.app1 || {};
-    // --- REMOVED globalStartTime/EndTime ---
+    const globalStart = app1Data.globalStartTime || "9:00 AM";
+    const globalEnd = app1Data.globalEndTime || "4:00 PM";
     
-    let earliestMin = null;
-    let latestMin = null;
+    let earliestMin = parseTimeToMinutes(globalStart);
+    let latestMin = parseTimeToMinutes(globalEnd);
 
-    // --- NEW: Use division times to find range ---
-    Object.values(divisions).forEach(div => {
-        const startMin = parseTimeToMinutes(div.startTime);
-        const endMin = parseTimeToMinutes(div.endTime);
-        
-        if (startMin !== null && (earliestMin === null || startMin < earliestMin)) {
-            earliestMin = startMin;
-        }
-        if (endMin !== null && (latestMin === null || endMin > latestMin)) {
-            latestMin = endMin;
-        }
-    });
-
-    if (earliestMin == null) earliestMin = 540; // 9:00am
-    if (latestMin == null) latestMin = 960;     // 4:00pm
+    if (earliestMin == null) earliestMin = 540; 
+    if (latestMin == null) latestMin = 960; 
     if (latestMin <= earliestMin) latestMin = earliestMin + 60; 
 
     const baseDate = new Date(1970, 0, 1, 0, 0, 0); 
@@ -142,8 +122,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         window.updateTable?.();
         return false;
     }
-
-    // Initialize per-bunk schedule
     availableDivisions.forEach(divName => {
         (divisions[divName]?.bunks || []).forEach(bunk => {
             window.scheduleAssignments[bunk] = new Array(window.unifiedTimes.length);
@@ -155,87 +133,52 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     manualSkeleton.forEach(item => {
         const allBunks = divisions[item.division]?.bunks || [];
         if (!allBunks || allBunks.length === 0) return;
-
         const startMin = parseTimeToMinutes(item.startTime);
         const endMin = parseTimeToMinutes(item.endTime);
         const allSlots = findSlotsForRange(startMin, endMin);
         if (allSlots.length === 0) return;
 
         if (item.type === 'pinned') {
-            // Hard pinned: fill slots and mark _fixed
             allBunks.forEach(bunk => {
                 allSlots.forEach((slotIndex, idx) => {
                     if (!window.scheduleAssignments[bunk][slotIndex]) {
-                        window.scheduleAssignments[bunk][slotIndex] = {
-                            field: { name: item.event },
-                            sport: null,
-                            continuation: (idx > 0),
-                            _fixed: true
-                        };
+                        window.scheduleAssignments[bunk][slotIndex] = { field: { name: item.event }, sport: null, continuation: (idx > 0), _fixed: true };
                     }
                 });
             });
-
         } else if (item.type === 'split') {
             if (!item.subEvents || item.subEvents.length < 2) return; 
             const event1 = item.subEvents[0]; 
             const event2 = item.subEvents[1]; 
-
             const splitIndex = Math.ceil(allBunks.length / 2);
             const bunksHalf1 = allBunks.slice(0, splitIndex);
             const bunksHalf2 = allBunks.slice(splitIndex);
-
             const slotSplitIndex = Math.ceil(allSlots.length / 2);
             const slotsHalf1 = allSlots.slice(0, slotSplitIndex);
             const slotsHalf2 = allSlots.slice(slotSplitIndex);
-
             const groups = [
                 { bunks: bunksHalf1, slots: slotsHalf1, eventDef: event1 },
                 { bunks: bunksHalf2, slots: slotsHalf1, eventDef: event2 },
                 { bunks: bunksHalf1, slots: slotsHalf2, eventDef: event2 },
                 { bunks: bunksHalf2, slots: slotsHalf2, eventDef: event1 }
             ];
-
             groups.forEach(group => {
                 if (group.slots.length === 0) return; 
                 group.bunks.forEach(bunk => {
                     if (group.eventDef.type === 'pinned') {
-                        // Pinned half of split
                         group.slots.forEach((slotIndex, idx) => {
                              if (!window.scheduleAssignments[bunk][slotIndex]) {
-                                window.scheduleAssignments[bunk][slotIndex] = {
-                                    field: { name: group.eventDef.event },
-                                    sport: null,
-                                    continuation: (idx > 0),
-                                    _fixed: true
-                                };
+                                window.scheduleAssignments[bunk][slotIndex] = { field: { name: group.eventDef.event }, sport: null, continuation: (idx > 0), _fixed: true };
                             }
                         });
                     } else if (group.eventDef.type === 'slot') {
-                        // Schedulable half of split
-                        schedulableSlotBlocks.push({
-                            divName: item.division,
-                            bunk: bunk,
-                            event: group.eventDef.event,
-                            startTime: startMin,
-                            endTime: endMin,
-                            slots: group.slots
-                        });
+                        schedulableSlotBlocks.push({ divName: item.division, bunk: bunk, event: group.eventDef.event, startTime: startMin, endTime: endMin, slots: group.slots });
                     }
                 });
             });
-
         } else if (item.type === 'slot') {
-            // Regular schedulable block
             allBunks.forEach(bunk => {
-                schedulableSlotBlocks.push({
-                    divName: item.division,
-                    bunk: bunk,
-                    event: item.event,
-                    startTime: startMin,
-                    endTime: endMin,
-                    slots: allSlots
-                });
+                schedulableSlotBlocks.push({ divName: item.division, bunk: bunk, event: item.event, startTime: startMin, endTime: endMin, slots: allSlots });
             });
         }
     });
@@ -278,6 +221,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         
         if (availableLeagueSports.length > 0) {
             // Find the least recently used sport
+            // Sorts by timestamp (oldest first). Undefined (never played) comes first.
             sport = availableLeagueSports.sort((a, b) => {
                 const lastA = leagueHistory[a] || 0; // 0 = never played
                 const lastB = leagueHistory[b] || 0;
@@ -294,7 +238,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         } else {
             matchups = pairRoundRobin(leagueTeams);
         }
-
         const allBunksInGroup = Array.from(group.bunks);
         const scheduledGames = []; 
         const blockBase = { slots: group.slots, divName: group.divName };
@@ -306,17 +249,16 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             let fieldName = null;
             
             for (const f of possibleFields) {
-                // Use new `canLeagueGameFit`
+                // --- **THE FIX**: Use new `canLeagueGameFit` ---
                 if (canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
-                    fieldName = f;
-                    break;
+                    fieldName = f; break;
                 }
             }
-            if (!fieldName && sport !== "League") { 
+            if (!fieldName && sport !== "League") { // Don't search all fields if it's a generic "League" game
                 for (const f of window.allSchedulableNames) {
+                     // --- **THE FIX**: Use new `canLeagueGameFit` ---
                     if (canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
-                        fieldName = f;
-                        break;
+                        fieldName = f; break;
                     }
                 }
             }
@@ -324,6 +266,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
             let pick;
             if (fieldName) {
+                // NEW: We add `_activity` property to help track history later
                 pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport }; 
                 markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
             } else {
@@ -373,7 +316,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         } else {
             matchups = pairRoundRobin(leagueTeams); 
         }
-
         const allBunksInGroup = Array.from(group.bunks);
         const scheduledGames = []; 
         const blockBase = { slots: group.slots, divName: group.divName };
@@ -382,12 +324,12 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         for (let i = 0; i < matchups.length; i++) {
             const [teamA, teamB] = matchups[i];
             if (teamA === "BYE" || teamB === "BYE") continue;
-
             const fieldIndex = Math.floor(i / gamesPerField);
             const fieldName = leagueFields[fieldIndex % leagueFields.length];
             const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
             let pick;
             
+            // --- **THE FIX**: Use new `canLeagueGameFit` ---
             if (fieldName && canLeagueGameFit(blockBase, fieldName, fieldUsageBySlot, activityProperties)) {
                 pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
                 markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
@@ -396,7 +338,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             }
             scheduledGames.push(pick);
         }
-
         allBunksInGroup.forEach((bunk, bunkIndex) => {
             let pickToAssign;
             if (scheduledGames.length > 0) pickToAssign = scheduledGames[bunkIndex % scheduledGames.length];
@@ -407,84 +348,26 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
 
     // ===== PASS 4: Fill remaining Schedulable Slots (With Smart Shuffle) =====
-    
-    // Track activities used *today* per bunk
-    const activitiesUsedTodayByBunk = {};
-    
-    // NEW: Sort by time, then div, then bunk
-    remainingBlocks.sort((a, b) => {
-        if (a.startTime !== b.startTime) {
-            return a.startTime - b.startTime;
-        }
-        if (a.divName !== b.divName) {
-            return a.divName.localeCompare(b.divName);
-        }
-        // Sort bunks numerically when possible
-        const numA = parseInt(a.bunk.match(/\d+/) || 0);
-        const numB = parseInt(b.bunk.match(/\d+/) || 0);
-        if (numA !== numB) {
-            return numA - numB;
-        }
-        return a.bunk.localeCompare(b.bunk);
-    });
+    remainingBlocks.sort((a, b) => a.startTime - b.startTime);
 
     for (const block of remainingBlocks) {
         if (block.slots.length === 0 || window.scheduleAssignments[block.bunk][block.slots[0]]) {
             continue;
         }
-        
-        const bunk = block.bunk;
-        activitiesUsedTodayByBunk[bunk] = activitiesUsedTodayByBunk[bunk] || new Set();
-        const usedToday = activitiesUsedTodayByBunk[bunk];
-
-        // Filter master list to exclude activities already used today for this bunk
-        const availableActivitiesForThisSlot = allActivities.filter(a => {
-            const activityName = a.sport || a.field;
-            return !usedToday.has(activityName);
-        });
-
         let pick = null;
+        // NEW: Pass rotationHistory to the "findBest" functions
         if (block.event === 'Special Activity') {
-            pick = window.findBestSpecial?.(
-                block,
-                availableActivitiesForThisSlot,
-                fieldUsageBySlot,
-                yesterdayHistory,
-                activityProperties,
-                rotationHistory,
-                divisions
-            );
+            pick = window.findBestSpecial?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
         } else if (block.event === 'Sports Slot') {
-            pick = window.findBestSportActivity?.(
-                block,
-                availableActivitiesForThisSlot,
-                fieldUsageBySlot,
-                yesterdayHistory,
-                activityProperties,
-                rotationHistory,
-                divisions
-            );
+            pick = window.findBestSportActivity?.(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
         } else if (block.event === 'Swim') {
             pick = { field: "Swim", sport: null, _activity: "Swim" }; 
         }
-
         if (!pick) {
-            pick = window.findBestGeneralActivity?.(
-                block,
-                availableActivitiesForThisSlot,
-                h2hActivities,
-                fieldUsageBySlot,
-                yesterdayHistory,
-                activityProperties,
-                rotationHistory,
-                divisions
-            );
+            pick = window.findBestGeneralActivity?.(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory);
         }
         
         if (pick) {
-            if (pick._activity) {
-                activitiesUsedTodayByBunk[bunk].add(pick._activity);
-            }
             fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, false);
         } else {
             fillBlock(block, { field: "Free", sport: null }, fieldUsageBySlot, yesterdayHistory, false);
@@ -506,11 +389,11 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                         const activityName = entry._activity;
                         lastActivity = activityName;
                         
-                        // 1. Update bunk history
+                        // 1. Update bunk history (for "freshness" check in fillers)
                         historyToSave.bunks[bunk] = historyToSave.bunks[bunk] || {};
                         historyToSave.bunks[bunk][activityName] = timestamp;
                         
-                        // 2. If it's a league, update league history
+                        // 2. If it's a league, update league history (for "fairness" check in Pass 3)
                         if (entry._h2h) {
                             const leagueEntry = Object.entries(masterLeagues).find(([name, l]) => 
                                 l.enabled && l.divisions.includes(divName)
@@ -522,7 +405,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                             }
                         }
                     } else if (entry && !entry.continuation) {
-                        lastActivity = null;
+                        lastActivity = null; // Reset for new block
                     }
                 }
             });
@@ -540,57 +423,29 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     window.updateTable?.();
     window.saveSchedule?.(); 
     return true; 
-};
-
+}
 
 // --- Helper functions for Pass 3 & 4 ---
-
-/**
- * UPDATED:
- * - Uses full interval-overlap logic instead of only checking
- *   slot start times. This means ANY overlap between
- *   [startMin, endMin) and a grid slot will claim that slot.
- *
- *   Overlap condition:
- *     slotStart < endMin && slotEnd > startMin
- */
 function findSlotsForRange(startMin, endMin) {
     const slots = [];
-    if (!window.unifiedTimes || startMin == null || endMin == null) return slots;
-
+    if (!window.unifiedTimes) return slots;
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
-        const slotStartDate = new Date(slot.start);
-        const slotStart = slotStartDate.getHours() * 60 + slotStartDate.getMinutes();
-        const slotEnd = slotStart + INCREMENT_MINS;
-
-        // interval overlap
-        if (slotStart < endMin && slotEnd > startMin) {
+        const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+        if (slotStart >= startMin && slotStart < endMin) {
             slots.push(i);
         }
     }
     return slots;
 }
-
-/**
- * --- UPDATED: THIS IS THE FIX (Hard Rule) ---
- * Now stores usage as `{ count, divisions: [] }`.
- */
 function markFieldUsage(block, fieldName, fieldUsageBySlot) {
     if (!fieldName || fieldName === "No Field" || !window.allSchedulableNames.includes(fieldName)) {
         return;
     }
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) continue;
-        
         fieldUsageBySlot[slotIndex] = fieldUsageBySlot[slotIndex] || {};
-        
-        const currentUsage = fieldUsageBySlot[slotIndex][fieldName] || { count: 0, divisions: [] };
-        currentUsage.count++;
-        if (!currentUsage.divisions.includes(block.divName)) {
-            currentUsage.divisions.push(block.divName);
-        }
-        fieldUsageBySlot[slotIndex][fieldName] = currentUsage;
+        fieldUsageBySlot[slotIndex][fieldName] = (fieldUsageBySlot[slotIndex][fieldName] || 0) + 1;
     }
 }
 
@@ -603,12 +458,7 @@ function isTimeAvailable(slotIndex, fieldProps) {
     const slotStartMin = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
     const slotEndMin = slotStartMin + INCREMENT_MINS; 
     
-    // Use parseTimeToMinutes for rule times
-    const rules = (fieldProps.timeRules || []).map(r => ({
-        type: r.type,
-        startMin: parseTimeToMinutes(r.start),
-        endMin: parseTimeToMinutes(r.end)
-    })).filter(r => r.startMin !== null && r.endMin !== null);
+    const rules = fieldProps.timeRules || [];
     
     if (rules.length === 0) {
         return fieldProps.available;
@@ -632,6 +482,8 @@ function isTimeAvailable(slotIndex, fieldProps) {
 
     for (const rule of rules) {
         if (rule.type === 'Unavailable') {
+            // --- FIX: This logic was incorrect. It should check for overlap. ---
+            // Overlap check: (StartA < EndB) and (EndA > StartB)
             if (slotStartMin < rule.endMin && slotEndMin > rule.startMin) {
                 isAvailable = false;
                 break;
@@ -645,8 +497,8 @@ function isTimeAvailable(slotIndex, fieldProps) {
 
 
 /**
- * --- UPDATED: THIS IS THE FIX (Hard Rule) ---
- * Now checks *which* division is using a sharable field.
+ * UPDATED: This function now checks time-based availability
+ * AND the new bunk/division limits.
  */
 function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     if (!fieldName) return false;
@@ -660,7 +512,7 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     // Check 1: Division allowance (from Sharing)
     if (props && props.allowedDivisions && props.allowedDivisions.length && !props.allowedDivisions.includes(block.divName)) return false;
 
-    // Check 2: Bunk/Division Limit (from limitUsage)
+    // --- NEW: Check 2: Bunk/Division Limit (from limitUsage) ---
     const limitRules = props.limitUsage;
     if (limitRules && limitRules.enabled) {
         if (!limitRules.divisions[block.divName]) {
@@ -676,23 +528,17 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
             }
         }
     }
+    // --- END OF NEW CHECK ---
 
     // Check 3 & 4: Usage per slot & Time-based availability
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) return false; 
         
-        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+        // Check 3: Usage per slot
+        const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
+        if (used >= limit) return false;
         
-        if (usage.count >= limit) {
-            return false;
-        }
-        
-        if (usage.count > 0) {
-            if (!usage.divisions.includes(block.divName)) {
-                return false;
-            }
-        }
-        
+        // Check 4: Time-based availability
         if (!isTimeAvailable(slotIndex, props)) {
             return false; 
         }
@@ -701,10 +547,9 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
 }
 
 /**
- * --- NEW FUNCTION ---
- * A stricter version of canBlockFit for league games:
- * - limit is always 1
- * - field cannot be in use by ANYONE else in that slot
+ * --- **NEW FUNCTION** ---
+ * This is a copy of `canBlockFit` but hard-codes the
+ * limit to 1, specifically for league games.
  */
 function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties) {
     if (!fieldName) return false;
@@ -713,26 +558,32 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
         console.warn(`No properties found for field: ${fieldName}`);
         return false;
     }
+    // --- THIS IS THE FIX ---
     const limit = 1; // League games are NEVER sharable
+    // --- END FIX ---
 
+    // Check 1: Division allowance (from Sharing)
     if (props && props.allowedDivisions && props.allowedDivisions.length && !props.allowedDivisions.includes(block.divName)) return false;
 
+    // Check 2: Bunk/Division Limit (from limitUsage)
     const limitRules = props.limitUsage;
     if (limitRules && limitRules.enabled) {
         if (!limitRules.divisions[block.divName]) {
             return false;
         }
+        // Note: We don't check for specific bunks here,
+        // as league games apply to the whole division.
     }
 
+    // Check 3 & 4: Usage per slot & Time-based availability
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) return false; 
         
-        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+        // Check 3: Usage per slot
+        const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
+        if (used >= limit) return false;
         
-        if (usage.count >= limit) {
-            return false;
-        }
-        
+        // Check 4: Time-based availability
         if (!isTimeAvailable(slotIndex, props)) {
             return false; 
         }
@@ -758,16 +609,16 @@ function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill
                 _fixed: false,
                 _h2h: pick._h2h || false,
                 vs: pick.vs || null,
-                _activity: pick._activity || null
+                _activity: pick._activity || null // NEW: Save the base activity name for history
             };
             
-            if (!isLeagueFill) {
-                markFieldUsage(block, fieldName, fieldUsageBySlot);
+            if (!isLeagueFill && fieldName && window.allSchedulableNames.includes(fieldName)) {
+                fieldUsageBySlot[slotIndex] = fieldUsageBySlot[slotIndex] || {};
+                fieldUsageBySlot[slotIndex][fieldName] = (fieldUsageBySlot[slotIndex][fieldName] || 0) + 1;
             }
         }
     });
 }
-
 function pairRoundRobin(teamList) {
     const arr = teamList.map(String);
     if (arr.length < 2) return [];
@@ -783,7 +634,13 @@ function pairRoundRobin(teamList) {
 }
 
 
-// --- START OF UPDATED LOAD/FILTER FUNCTION ---
+// --- START OF UPDATED FUNCTION ---
+/**
+ * UPDATED: This function now loads and filters by
+ * the new `dailyDisabledSportsByField`, `disabledFields`,
+ * and `disabledSpecials` lists.
+ * NEW: Also loads `rotationHistory`.
+ */
 function loadAndFilterData() {
     const globalSettings = window.loadGlobalSettings?.() || {};
     const app1Data = globalSettings.app1 || {};
@@ -800,6 +657,7 @@ function loadAndFilterData() {
     
     const dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
     
+    // --- UPDATED: Load new daily overrides ---
     const dailyOverrides = dailyData.overrides || {};
     const disabledLeagues = dailyOverrides.leagues || [];
     const disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
@@ -807,6 +665,7 @@ function loadAndFilterData() {
     const disabledFields = dailyOverrides.disabledFields || []; 
     const disabledSpecials = dailyOverrides.disabledSpecials || []; 
     
+    // --- NEW: Load Smart Scheduler History ---
     const rotationHistory = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
     
     const overrides = {
@@ -823,16 +682,19 @@ function loadAndFilterData() {
         divisions[divName].bunks = (divisions[divName].bunks || []).filter(bunkName => !overrides.bunks.includes(bunkName));
     }
     
-    function parseRule(rule) {
+    function parseTimeRule(rule) {
+        const startMin = parseTimeToMinutes(rule.start);
+        const endMin = parseTimeToMinutes(rule.end);
+        if (startMin == null || endMin == null) return null;
         return {
             type: rule.type,
-            start: rule.start,
-            end: rule.end
+            startMin: startMin,
+            endMin: endMin
         };
     }
     
     const activityProperties = {};
-
+    // --- NEW: Filter master lists by daily overrides FIRST ---
     const allMasterActivities = [
         ...masterFields.filter(f => !disabledFields.includes(f.name)),
         ...masterSpecials.filter(s => !disabledSpecials.includes(s.name))
@@ -845,9 +707,9 @@ function loadAndFilterData() {
         const dailyRules = dailyFieldAvailability[f.name];
         
         if (dailyRules && dailyRules.length > 0) {
-            finalRules = dailyRules.map(parseRule).filter(Boolean);
+            finalRules = dailyRules.map(parseTimeRule).filter(Boolean);
         } else {
-            finalRules = (f.timeRules || []).map(parseRule).filter(Boolean);
+            finalRules = (f.timeRules || []).map(parseTimeRule).filter(Boolean);
         }
 
         const isMasterAvailable = f.available !== false; 
@@ -855,7 +717,7 @@ function loadAndFilterData() {
         activityProperties[f.name] = {
             available: isMasterAvailable,
             sharable: f.sharableWith?.type === 'all' || f.sharableWith?.type === 'custom',
-            allowedDivisions: (f.sharableWith?.divisions?.length > 0) ? f.sharableWith.divisions : [],
+            allowedDivisions: (f.sharableWith?.divisions?.length > 0) ? f.sharableWith.divisions : availableDivisions,
             limitUsage: f.limitUsage || { enabled: false, divisions: {} },
             timeRules: finalRules
         };
@@ -866,14 +728,18 @@ function loadAndFilterData() {
     });
 
     window.allSchedulableNames = availableActivityNames;
+    // Filter availFields/Specials by the *already filtered* activity names
     const availFields = masterFields.filter(f => availableActivityNames.includes(f.name));
     const availSpecials = masterSpecials.filter(s => availableActivityNames.includes(s.name));
     
+    // --- NEW: Filter available sports based on daily overrides ---
     const fieldsBySport = {};
     availFields.forEach(f => {
         if (Array.isArray(f.activities)) {
             f.activities.forEach(sport => {
+                // NEW CHECK: See if this sport is disabled on this field *for today*
                 const isDisabledToday = dailyDisabledSportsByField[f.name]?.includes(sport);
+                
                 if (!isDisabledToday) {
                     fieldsBySport[sport] = fieldsBySport[sport] || [];
                     fieldsBySport[sport].push(f.name);
@@ -882,9 +748,10 @@ function loadAndFilterData() {
         }
     });
 
+    // Filter allActivities
     const allActivities = [
-        ...availFields
-            .flatMap((f) => (f.activities || []).map((act) => ({ type: "field", field: f.name, sport: act })))
+        ...availFields.flatMap((f) => (f.activities || []).map((act) => ({ type: "field", field: f.name, sport: act })))
+            // NEW CHECK: Filter out sports that are disabled for this field today
             .filter(a => !a.sport || !dailyDisabledSportsByField[a.field]?.includes(a.sport)),
         ...availSpecials.map((sa) => ({ type: "special", field: sa.name, sport: null }))
     ];
@@ -907,11 +774,11 @@ function loadAndFilterData() {
         masterLeagues,
         masterSpecialtyLeagues,
         yesterdayHistory,
-        rotationHistory,
+        rotationHistory, // NEW: Smart Scheduler
         disabledLeagues,
         disabledSpecialtyLeagues
     };
 }
 // --- END OF UPDATED FUNCTION ---
 
-})(); 
+})();
