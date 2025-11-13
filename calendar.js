@@ -7,9 +7,9 @@
 //   `updateRotationHistory`, and `eraseRotationHistory` to
 //   manage the new "memory" for activity freshness.
 //
-// --- YOUR NEWEST REQUEST (League Day Counter) ---
-// - **NEW:** `loadCurrentDailyData` now initializes
-//   `leagueDayCounters: {}` for any new day.
+// --- (League Day Counter) ---
+// - **REMOVED:** `leagueDayCounters` is no longer saved,
+//   as the count is now sequential within a day.
 // =================================================================
 
 (function() {
@@ -94,7 +94,7 @@
     }
     
     /**
-     * --- UPDATED with leagueDayCounters ---
+     * --- UPDATED: Removed leagueDayCounters ---
      */
     window.loadCurrentDailyData = function() {
         const allData = window.loadAllDailyData();
@@ -106,13 +106,13 @@
                 leagueAssignments: {},
                 leagueRoundState: {},
                 leagueSportRotation: {},
-                leagueDayCounters: {}, // <-- NEWLY ADDED
+                // leagueDayCounters: {}, // <-- REMOVED
                 overrides: { fields: [], bunks: [], leagues: [] } 
             };
         }
         
-        // Ensure it exists on older data
-        allData[date].leagueDayCounters = allData[date].leagueDayCounters || {};
+        // Ensure older data keys exist
+        allData[date].leagueRoundState = allData[date].leagueRoundState || {};
         
         window.currentDailyData = allData[date];
         return window.currentDailyData;
@@ -128,7 +128,7 @@
             const allData = window.loadAllDailyData();
             // Initialize with default if yesterday doesn't exist
             return allData[yesterdayString] || { 
-                leagueDayCounters: {}, 
+                // leagueDayCounters: {}, // <-- REMOVED
                 leagueRoundState: {} 
             };
         } catch (e) {
