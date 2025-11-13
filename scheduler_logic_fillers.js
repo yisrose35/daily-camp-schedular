@@ -9,9 +9,14 @@
 //   blocks bunks from *other* divisions from sharing.
 // - **NEW (Soft Rule):** Added `getNeighborBunk` helper.
 // - **NEW (Soft Rule):** All `findBest...` functions now
-//   implement a "neighbor boost." They check if their
-//   paired bunk (1&2, 3&4) is on a sharable field and
-//   will "strongly push" to join them.
+//   implement a "neighbor boost."
+//
+// --- YOUR LATEST FIX (Same Activity) ---
+// - **UPDATED (Soft Rule):** The "neighbor boost" logic
+//   is now more specific. It doesn't just look for a
+//   sharable *field*, it looks for a sharable
+//   *activity* (Field + Sport). This prevents
+//   Bunk 1/Soccer and Bunk 2/Football on the same field.
 // =================================================================
 
 (function() {
@@ -199,7 +204,7 @@ function getNeighborBunk(myBunk, allBunksInDivision) {
 
 /**
  * Finds the best-available special activity (special-only).
- * --- UPDATED for Neighbor Boost ---
+ * --- UPDATED for Neighbor Boost (Same Activity) ---
  */
 window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     const specials = allActivities
@@ -230,12 +235,18 @@ window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yester
         
         if (neighborEntry && !neighborEntry.continuation && neighborEntry.field) {
             const neighborField = fieldLabel(neighborEntry.field);
+            const neighborActivity = neighborEntry._activity; // ** GET ACTIVITY **
             const neighborProps = activityProperties[neighborField];
             
             // Check if neighbor is on a sharable field
             if (neighborProps && neighborProps.sharable) {
-                // Find this activity in our sorted list
-                const neighborPickIndex = sortedPicks.findIndex(pick => fieldLabel(pick.field) === neighborField);
+                // --- **THIS IS THE FIX** ---
+                // Find the pick that matches BOTH the field AND the activity
+                const neighborPickIndex = sortedPicks.findIndex(pick => 
+                    fieldLabel(pick.field) === neighborField &&
+                    pick._activity === neighborActivity
+                );
+                // --- END FIX ---
                 
                 if (neighborPickIndex > 0) {
                     // It exists, and it's not already #1. Move it to the front.
@@ -253,7 +264,7 @@ window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yester
 
 /**
  * NEW: Finds the best-available sport activity (sports-only).
- * --- UPDATED for Neighbor Boost ---
+ * --- UPDATED for Neighbor Boost (Same Activity) ---
  */
 window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     const sports = allActivities
@@ -283,10 +294,17 @@ window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, 
         
         if (neighborEntry && !neighborEntry.continuation && neighborEntry.field) {
             const neighborField = fieldLabel(neighborEntry.field);
+            const neighborActivity = neighborEntry._activity; // ** GET ACTIVITY **
             const neighborProps = activityProperties[neighborField];
             
             if (neighborProps && neighborProps.sharable) {
-                const neighborPickIndex = sortedPicks.findIndex(pick => fieldLabel(pick.field) === neighborField);
+                // --- **THIS IS THE FIX** ---
+                // Find the pick that matches BOTH the field AND the activity
+                const neighborPickIndex = sortedPicks.findIndex(pick => 
+                    fieldLabel(pick.field) === neighborField &&
+                    pick._activity === neighborActivity
+                );
+                // --- END FIX ---
                 
                 if (neighborPickIndex > 0) {
                     const [boostedPick] = sortedPicks.splice(neighborPickIndex, 1);
@@ -304,7 +322,7 @@ window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, 
 
 /**
  * Finds the best-available general activity (hybrid: sports OR special).
- * --- UPDATED for Neighbor Boost ---
+ * --- UPDATED for Neighbor Boost (Same Activity) ---
  */
 window.findBestGeneralActivity = function(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     
@@ -337,10 +355,17 @@ window.findBestGeneralActivity = function(block, allActivities, h2hActivities, f
         
         if (neighborEntry && !neighborEntry.continuation && neighborEntry.field) {
             const neighborField = fieldLabel(neighborEntry.field);
+            const neighborActivity = neighborEntry._activity; // ** GET ACTIVITY **
             const neighborProps = activityProperties[neighborField];
             
             if (neighborProps && neighborProps.sharable) {
-                const neighborPickIndex = sortedPicks.findIndex(pick => fieldLabel(pick.field) === neighborField);
+                // --- **THIS IS THE FIX** ---
+                // Find the pick that matches BOTH the field AND the activity
+                const neighborPickIndex = sortedPicks.findIndex(pick => 
+                    fieldLabel(pick.field) === neighborField &&
+                    pick._activity === neighborActivity
+                );
+                // --- END FIX ---
                 
                 if (neighborPickIndex > 0) {
                     const [boostedPick] = sortedPicks.splice(neighborPickIndex, 1);
