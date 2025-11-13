@@ -248,7 +248,9 @@ function renderStaggeredView(container) {
                 todayLeagueCount++; // Increment the running total
                 eventName = `League Game ${todayLeagueCount}`; // Assign the new total
             } else if (item.event === 'Specialty League') {
-                todaySpecialTYpeof window.getLeagueMatchups === 'function'Count++; // Increment the running total
+                // --- THIS IS THE SYNTAX FIX ---
+                todaySpecialtyCount++; // Increment the running total
+                // --- END FIX ---
                 eventName = `Specialty League ${todaySpecialtyCount}`; // Assign the new total
             }
             
