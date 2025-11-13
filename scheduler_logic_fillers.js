@@ -1,18 +1,17 @@
 // =================================================================
 // scheduler_logic_fillers.js
 //
-// This file is now a "helper library" for the Optimizer.
-// It provides functions to find the *best* activity for a given slot.
+// ... (previous changelog) ...
 //
-// UPDATED:
-// - `canBlockFit` has been updated to be IDENTICAL to the new
-//   `canBlockFit` in `scheduler_logic_core.js`. It now enforces
-//   the `limitUsage` (Allowed Bunks/Divisions) rules.
-// - **SMART SCHEDULER:**
-//   - All `findBest...` functions now accept `rotationHistory`.
-//   - Instead of picking randomly, they now get the bunk's
-//     history and sort all available activities by the
-//     least recently used, ensuring "fresh" picks.
+// --- YOUR NEWEST FIX (Sharable Logic) ---
+// - **FIXED (Hard Rule):** `canBlockFit` is updated. It now
+//   checks *which division* is using a sharable field and
+//   blocks bunks from *other* divisions from sharing.
+// - **NEW (Soft Rule):** Added `getNeighborBunk` helper.
+// - **NEW (Soft Rule):** All `findBest...` functions now
+//   implement a "neighbor boost." They check if their
+//   paired bunk (1&2, 3&4) is on a sharable field and
+//   will "strongly push" to join them.
 // =================================================================
 
 (function() {
@@ -38,7 +37,12 @@ function isTimeAvailable(slotIndex, fieldProps) {
     // Use INCREMENT_MINS to avoid 2:59:59 issues
     const slotEndMin = slotStartMin + (window.INCREMENT_MINS || 30); 
     
-    const rules = fieldProps.timeRules || [];
+    // --- FIX: Use parseTimeToMinutes for rule times ---
+    const rules = (fieldProps.timeRules || []).map(r => ({
+        type: r.type,
+        startMin: parseTimeToMinutes(r.start),
+        endMin: parseTimeToMinutes(r.end)
+    })).filter(r => r.startMin !== null && r.endMin !== null);
     
     // 1. If no rules, field is available (respecting master toggle).
     if (rules.length === 0) {
@@ -84,8 +88,8 @@ function isTimeAvailable(slotIndex, fieldProps) {
 
 
 /**
- * UPDATED: This function now checks time-based availability
- * AND the new bunk/division limits.
+ * --- UPDATED: THIS IS THE FIX (Hard Rule) ---
+ * Now checks *which* division is using a sharable field.
  */
 function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     if (!fieldName) return false; // Can't fit a null field
@@ -100,42 +104,42 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     // Check 1: Division allowance (from Sharing)
     if (props && props.allowedDivisions && props.allowedDivisions.length && !props.allowedDivisions.includes(block.divName)) return false;
 
-    // --- NEW: Check 2: Bunk/Division Limit (from limitUsage) ---
+    // Check 2: Bunk/Division Limit (from limitUsage)
     const limitRules = props.limitUsage;
     if (limitRules && limitRules.enabled) {
-        // "Specific" rules are on
         if (!limitRules.divisions[block.divName]) {
-            // This entire division is NOT in the allowed list
             return false;
         }
         
         const allowedBunks = limitRules.divisions[block.divName];
         if (allowedBunks.length > 0) {
-            // Specific bunks are listed
             if (!block.bunk) {
-                // This block doesn't have a bunk property.
-                // This shouldn't happen for general fillers,
-                // but if it does, we'll fail closed.
                 console.warn(`canBlockFit in filler.js missing block.bunk for ${fieldName}`);
                 return false; 
             } else if (!allowedBunks.includes(block.bunk)) {
-                // This is a specific bunk, and it's NOT in the list
                 return false;
             }
         }
-        // If we are here, it's either:
-        // 1. The division is in the list, and the allowedBunks array is empty (meaning "all bunks")
-        // 2. The division is in the list, and this specific bunk is in the allowedBunks array
     }
-    // --- END OF NEW CHECK ---
 
     // Check 3 & 4: Usage per slot & Time-based availability
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) { return false; } // Invalid block
         
-        // Check 3: Usage limit
-        const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
-        if (used >= limit) return false;
+        // --- NEW SHARING LOGIC (Check 3) ---
+        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+        
+        if (usage.count >= limit) {
+            return false; // Already full
+        }
+        
+        if (usage.count > 0) {
+            // It's being used. Check if it's by a *different* division.
+            if (!usage.divisions.includes(block.divName)) {
+                return false; // Can't share across divisions
+            }
+        }
+        // --- END NEW SHARING LOGIC ---
         
         // Check 4: NEW: Time-based availability
         if (!isTimeAvailable(slotIndex, props)) {
@@ -168,13 +172,36 @@ function sortPicksByFreshness(possiblePicks, bunkHistory = {}) {
     });
 }
 
+/**
+ * --- NEW: Neighbor Bunk Helper ---
+ * Finds the "paired" bunk for sharing.
+ * e.g., Bunk 1 (index 0) pairs with Bunk 2 (index 1)
+ * e.g., Bunk 3 (index 2) pairs with Bunk 4 (index 3)
+ */
+function getNeighborBunk(myBunk, allBunksInDivision) {
+    if (!myBunk || !allBunksInDivision) return null;
+    
+    // Sort bunks to ensure "1" comes before "2", etc.
+    const sortedBunks = [...allBunksInDivision].sort();
+    
+    const myIndex = sortedBunks.indexOf(myBunk);
+    if (myIndex === -1) return null;
+    
+    if (myIndex % 2 === 0) {
+        // I am Bunk 1 (index 0), neighbor is Bunk 2 (index 1)
+        return sortedBunks[myIndex + 1] || null;
+    } else {
+        // I am Bunk 2 (index 1), neighbor is Bunk 1 (index 0)
+        return sortedBunks[myIndex - 1] || null;
+    }
+}
+
 
 /**
  * Finds the best-available special activity (special-only).
- * Called by "Special Activity" tile.
- * --- UPDATED for Smart Scheduler ---
+ * --- UPDATED for Neighbor Boost ---
  */
-window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory) {
+window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     const specials = allActivities
         .filter(a => a.type === 'special')
         .map(a => ({
@@ -193,16 +220,42 @@ window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yester
     // 2. Sort them by freshness
     const sortedPicks = sortPicksByFreshness(availablePicks, bunkHistory);
 
-    // 3. Return the "freshest" one
+    // --- NEW: Neighbor Boost Logic (Soft Rule) ---
+    const myBunk = block.bunk;
+    const neighborBunk = getNeighborBunk(myBunk, divisions[block.divName]?.bunks);
+    
+    if (neighborBunk && window.scheduleAssignments[neighborBunk]) {
+        // Check the first slot of the block
+        const neighborEntry = window.scheduleAssignments[neighborBunk][block.slots[0]];
+        
+        if (neighborEntry && !neighborEntry.continuation && neighborEntry.field) {
+            const neighborField = fieldLabel(neighborEntry.field);
+            const neighborProps = activityProperties[neighborField];
+            
+            // Check if neighbor is on a sharable field
+            if (neighborProps && neighborProps.sharable) {
+                // Find this activity in our sorted list
+                const neighborPickIndex = sortedPicks.findIndex(pick => fieldLabel(pick.field) === neighborField);
+                
+                if (neighborPickIndex > 0) {
+                    // It exists, and it's not already #1. Move it to the front.
+                    const [boostedPick] = sortedPicks.splice(neighborPickIndex, 1);
+                    sortedPicks.unshift(boostedPick);
+                }
+            }
+        }
+    }
+    // --- END Neighbor Boost Logic ---
+
+    // 3. Return the "freshest" (or boosted) one
     return sortedPicks[0] || null; // Fails if no special is available
 }
 
 /**
  * NEW: Finds the best-available sport activity (sports-only).
- * Called by "Sports" tile.
- * --- UPDATED for Smart Scheduler ---
+ * --- UPDATED for Neighbor Boost ---
  */
-window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory) {
+window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     const sports = allActivities
         .filter(a => a.type === 'field')
         .map(a => ({
@@ -221,17 +274,39 @@ window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, 
     // 2. Sort them by freshness
     const sortedPicks = sortPicksByFreshness(availablePicks, bunkHistory);
     
-    // 3. Return the "freshest" one
+    // --- NEW: Neighbor Boost Logic (Soft Rule) ---
+    const myBunk = block.bunk;
+    const neighborBunk = getNeighborBunk(myBunk, divisions[block.divName]?.bunks);
+    
+    if (neighborBunk && window.scheduleAssignments[neighborBunk]) {
+        const neighborEntry = window.scheduleAssignments[neighborBunk][block.slots[0]];
+        
+        if (neighborEntry && !neighborEntry.continuation && neighborEntry.field) {
+            const neighborField = fieldLabel(neighborEntry.field);
+            const neighborProps = activityProperties[neighborField];
+            
+            if (neighborProps && neighborProps.sharable) {
+                const neighborPickIndex = sortedPicks.findIndex(pick => fieldLabel(pick.field) === neighborField);
+                
+                if (neighborPickIndex > 0) {
+                    const [boostedPick] = sortedPicks.splice(neighborPickIndex, 1);
+                    sortedPicks.unshift(boostedPick);
+                }
+            }
+        }
+    }
+    // --- END Neighbor Boost Logic ---
+
+    // 3. Return the "freshest" (or boosted) one
     return sortedPicks[0] || null; // Fails if no sport is available
 }
 
 
 /**
  * Finds the best-available general activity (hybrid: sports OR special).
- * Called by "Activity" tile.
- * --- UPDATED for Smart Scheduler ---
+ * --- UPDATED for Neighbor Boost ---
  */
-window.findBestGeneralActivity = function(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory) {
+window.findBestGeneralActivity = function(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     
     // TODO: 1. Attempt H2H (This is not implemented yet)
     
@@ -253,7 +328,30 @@ window.findBestGeneralActivity = function(block, allActivities, h2hActivities, f
     // 2. Sort them by freshness
     const sortedPicks = sortPicksByFreshness(availablePicks, bunkHistory);
 
-    // 3. Return the "freshest" one
+    // --- NEW: Neighbor Boost Logic (Soft Rule) ---
+    const myBunk = block.bunk;
+    const neighborBunk = getNeighborBunk(myBunk, divisions[block.divName]?.bunks);
+    
+    if (neighborBunk && window.scheduleAssignments[neighborBunk]) {
+        const neighborEntry = window.scheduleAssignments[neighborBunk][block.slots[0]];
+        
+        if (neighborEntry && !neighborEntry.continuation && neighborEntry.field) {
+            const neighborField = fieldLabel(neighborEntry.field);
+            const neighborProps = activityProperties[neighborField];
+            
+            if (neighborProps && neighborProps.sharable) {
+                const neighborPickIndex = sortedPicks.findIndex(pick => fieldLabel(pick.field) === neighborField);
+                
+                if (neighborPickIndex > 0) {
+                    const [boostedPick] = sortedPicks.splice(neighborPickIndex, 1);
+                    sortedPicks.unshift(boostedPick);
+                }
+            }
+        }
+    }
+    // --- END Neighbor Boost Logic ---
+
+    // 3. Return the "freshest" (or boosted) one
     if (sortedPicks[0]) {
         return sortedPicks[0];
     }
@@ -264,5 +362,31 @@ window.findBestGeneralActivity = function(block, allActivities, h2hActivities, f
 
 // Expose helper for core logic (so logic_core can use it for its own league pass)
 window.findBestGeneralActivity.canBlockFit = canBlockFit;
+
+// --- Copied from app1.js, needed for isTimeAvailable ---
+function parseTimeToMinutes(str) {
+  if (!str || typeof str !== "string") return null;
+  let s = str.trim().toLowerCase();
+  let mer = null;
+  if (s.endsWith("am") || s.endsWith("pm")) {
+    mer = s.endsWith("am") ? "am" : "pm";
+    s = s.replace(/am|pm/g, "").trim();
+  }
+  
+  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+  if (!m) return null;
+  let hh = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
+
+  if (mer) {
+      if (hh === 12) hh = mer === "am" ? 0 : 12; // 12am -> 0, 12pm -> 12
+      else if (mer === "pm") hh += 12; // 1pm -> 13
+  } else {
+      return null; // AM/PM is required
+  }
+
+  return hh * 60 + mm;
+}
 
 })();
