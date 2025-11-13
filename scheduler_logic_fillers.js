@@ -17,6 +17,13 @@
 //   sharable *field*, it looks for a sharable
 //   *activity* (Field + Sport). This prevents
 //   Bunk 1/Soccer and Bunk 2/Football on the same field.
+//
+// --- CRITICAL FIX (11/13) ---
+// - **NEW (Hard Rule):** Added `getActivitiesDoneToday` helper.
+// - **UPDATED (Hard Rule):** All `findBest...` functions
+//   now use this helper to filter out any activity
+//   (sport or special) that the bunk has *already done*
+//   today, preventing duplicates.
 // =================================================================
 
 (function() {
@@ -201,10 +208,29 @@ function getNeighborBunk(myBunk, allBunksInDivision) {
     }
 }
 
+/**
+ * --- NEW HELPER (CRITICAL FIX 11/13) ---
+ * Gets all activities a bunk has already been assigned today.
+ */
+function getActivitiesDoneToday(bunkName) {
+    const activities = new Set();
+    const schedule = window.scheduleAssignments[bunkName] || [];
+    
+    // Iterate over the in-progress schedule for today
+    for (const entry of schedule) {
+        if (entry && entry._activity) {
+            // Add the base activity name (e.g., "Basketball", "Canteen")
+            activities.add(entry._activity);
+        }
+    }
+    return activities;
+}
+
 
 /**
  * Finds the best-available special activity (special-only).
  * --- UPDATED for Neighbor Boost (Same Activity) ---
+ * --- UPDATED for No Duplicates (Hard Rule) ---
  */
 window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     const specials = allActivities
@@ -216,10 +242,14 @@ window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yester
         }));
 
     const bunkHistory = rotationHistory?.bunks?.[block.bunk] || {};
+    
+    // --- NEW (Hard Rule): Get activities already done today ---
+    const activitiesDoneToday = getActivitiesDoneToday(block.bunk);
 
     // 1. Find all specials that *can* fit this slot
     const availablePicks = specials.filter(pick => 
-        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)
+        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot) &&
+        !activitiesDoneToday.has(pick._activity) // <-- CRITICAL FIX
     );
     
     // 2. Sort them by freshness
@@ -265,6 +295,7 @@ window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yester
 /**
  * NEW: Finds the best-available sport activity (sports-only).
  * --- UPDATED for Neighbor Boost (Same Activity) ---
+ * --- UPDATED for No Duplicates (Hard Rule) ---
  */
 window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     const sports = allActivities
@@ -277,9 +308,13 @@ window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, 
         
     const bunkHistory = rotationHistory?.bunks?.[block.bunk] || {};
 
+    // --- NEW (Hard Rule): Get activities already done today ---
+    const activitiesDoneToday = getActivitiesDoneToday(block.bunk);
+
     // 1. Find all sports that *can* fit this slot
     const availablePicks = sports.filter(pick => 
-        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)
+        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot) &&
+        !activitiesDoneToday.has(pick._activity) // <-- CRITICAL FIX
     );
     
     // 2. Sort them by freshness
@@ -323,6 +358,7 @@ window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, 
 /**
  * Finds the best-available general activity (hybrid: sports OR special).
  * --- UPDATED for Neighbor Boost (Same Activity) ---
+ * --- UPDATED for No Duplicates (Hard Rule) ---
  */
 window.findBestGeneralActivity = function(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     
@@ -338,9 +374,13 @@ window.findBestGeneralActivity = function(block, allActivities, h2hActivities, f
     
     const bunkHistory = rotationHistory?.bunks?.[block.bunk] || {};
     
+    // --- NEW (Hard Rule): Get activities already done today ---
+    const activitiesDoneToday = getActivitiesDoneToday(block.bunk);
+
     // 1. Find all activities that *can* fit this slot
     const availablePicks = allPossiblePicks.filter(pick => 
-        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot)
+        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot) &&
+        !activitiesDoneToday.has(pick._activity) // <-- CRITICAL FIX
     );
 
     // 2. Sort them by freshness
