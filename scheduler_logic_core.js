@@ -724,9 +724,20 @@ function loadAndFilterData() {
     const app1Data = globalSettings.app1 || {};
     
     const masterFields = app1Data.fields || [];
-    const masterDivisions = app1Data.divisions || {};
-    const masterAvailableDivs = app1Data.availableDivisions || [];
-    const masterSpecials = app1Data.specialActivities || [];
+const masterDivisions = app1Data.divisions || {};
+
+// NEW: be backward-compatible if availableDivisions is missing/empty
+let masterAvailableDivs;
+if (Array.isArray(app1Data.availableDivisions) && app1Data.availableDivisions.length > 0) {
+    // Use the saved list if it exists and has content
+    masterAvailableDivs = app1Data.availableDivisions.slice();
+} else {
+    // Fallback: all divisions from global settings
+    masterAvailableDivs = Object.keys(masterDivisions);
+}
+
+const masterSpecials = app1Data.specialActivities || [];
+
     
     const masterLeagues = globalSettings.leaguesByName || {};
     const masterSpecialtyLeagues = globalSettings.specialtyLeagues || {};
