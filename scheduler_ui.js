@@ -479,3 +479,5 @@ function initScheduleSystem() {
 window.updateTable = window.updateTable || updateTable;
 window.initScheduleSystem = window.initScheduleSystem || initScheduleSystem;
 window.saveSchedule = window.saveSchedule || saveSchedule;
+
+})(); // <-- proper IIFE close
