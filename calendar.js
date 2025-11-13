@@ -1,21 +1,15 @@
 // =================================================================
 // calendar.js
 //
-// UPDATED:
-// - **NEW:** Added `ROTATION_HISTORY_KEY` for Smart Scheduler.
-// - **NEW:** Added `loadRotationHistory`, `saveRotationHistory`,
-//   `updateRotationHistory`, and `eraseRotationHistory` to
-//   manage the new "memory" for activity freshness.
+// ... (previous changelogs) ...
 //
-// --- YOUR NEWEST REQUEST (League Day Counter) ---
-// - **RESTORED:** `loadCurrentDailyData` now initializes
-//   `leagueDayCounters: {}` for any new day.
-// - **RESTORED:** `loadPreviousDailyData` now safely returns
-//   an empty `leagueDayCounters` object if no data exists.
-//
-// --- LATEST FIX (11/13) ---
-// - **REMOVED:** `leagueSportRotation` has been removed from
-//   `loadCurrentDailyData` as it's no longer used.
+// --- NEW FEATURE (11/13) ---
+// - Added `exportAllData` function to save all three
+//   main localstorage keys into a single JSON file.
+// - Added `handleFileSelect` function to read a backup
+//   JSON file and overwrite all data.
+// - Updated `initCalendar` to hook up the new
+//   "Export" and "Import" buttons from index.html.
 // =================================================================
 
 (function() {
@@ -278,6 +272,87 @@
         }
     }
 
+    // --- 8. NEW: BACKUP & RESTORE FUNCTIONS ---
+
+    /**
+     * Gathers all data from localstorage and downloads it as a JSON file.
+     */
+    function exportAllData() {
+        console.log("Exporting all data...");
+        const backupData = {};
+
+        try {
+            const globalData = localStorage.getItem(GLOBAL_SETTINGS_KEY);
+            const dailyData = localStorage.getItem(DAILY_DATA_KEY);
+            const rotationData = localStorage.getItem(ROTATION_HISTORY_KEY);
+
+            backupData.globalSettings = JSON.parse(globalData) || {};
+            backupData.dailyData = JSON.parse(dailyData) || {};
+            backupData.rotationHistory = JSON.parse(rotationData) || {};
+            
+            const jsonString = JSON.stringify(backupData, null, 2);
+            const blob = new Blob([jsonString], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `camp_scheduler_backup_${getTodayString()}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            console.log("Export successful.");
+
+        } catch (e) {
+            console.error("Failed to export data:", e);
+            alert("Error exporting data. Check the console for details.");
+        }
+    }
+
+    /**
+     * Handles the file input change event for importing.
+     */
+    function handleFileSelect(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        if (!confirm("Are you sure you want to import this file?\nThis will OVERWRITE all existing data (setup, schedules, etc.) with the contents of the backup file.\nThis action cannot be undone.")) {
+            // Clear the file input so the same file can be selected again
+            event.target.value = null;
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const text = e.target.result;
+                const backupData = JSON.parse(text);
+
+                if (!backupData || !backupData.globalSettings) {
+                    throw new Error("Invalid backup file. Missing 'globalSettings'.");
+                }
+
+                // Restore all data from the backup
+                localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(backupData.globalSettings || {}));
+                localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(backupData.dailyData || {}));
+                localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify(backupData.rotationHistory || {}));
+
+                alert("Import successful! The application will now reload.");
+                window.location.reload();
+
+            } catch (err) {
+                console.error("Failed to import file:", err);
+                alert(`Error importing file: ${err.message}`);
+            } finally {
+                // Clear the file input
+                event.target.value = null;
+            }
+        };
+        reader.readAsText(file);
+    }
+    
+
     function initCalendar() {
       datePicker = document.getElementById("calendar-date-picker");
       if (datePicker) {
@@ -288,6 +363,19 @@
       }
     
       setupEraseAll();
+
+      // --- NEW: Hook up Backup/Restore buttons ---
+      const exportBtn = document.getElementById('exportBackupBtn');
+      const importBtn = document.getElementById('importBackupBtn');
+      const importInput = document.getElementById('importFileInput');
+
+      if (exportBtn) {
+          exportBtn.addEventListener('click', exportAllData);
+      }
+      if (importBtn && importInput) {
+          importBtn.addEventListener('click', () => importInput.click());
+          importInput.addEventListener('change', handleFileSelect);
+      }
     }
     window.initCalendar = initCalendar;
 
