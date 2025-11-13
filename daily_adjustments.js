@@ -1,25 +1,14 @@
 // =================================================================
 // daily_adjustments.js
 //
-// UPDATED:
-// - **VALIDATION:** `addDropListeners` (in the SKELETON EDITOR
-//   LOGIC section) now checks the dropped
-//   time against the
-//   specific division's `startTime` and `endTime` and will
-//   reject the drop if it's out of bounds.
+// ... (previous changelog) ...
 //
 // --- YOUR NEWEST FIX (Pinned Tiles Bug) ---
 // - **FIXED:** Removed the buggy `confirm` dialog from the
-//   `addDropListeners` function for "Custom Pinned Event".
-// - **FIXED:** This tile, along with "Snacks" and "Dismissal",
+//   `addDropListeners` function.
+// - **FIXED:** "Custom Pinned Event", "Snacks", and "Dismissal"
 //   will now be correctly created with `type: 'pinned'`
-//   every time.
-//
-// --- Glitchy Skeleton Load Fix ---
-// - **FIXED:** `loadDailySkeleton` now reads directly from the
-//   `masterSettings.app1` object, which is loaded fresh
-//   from localStorage every time the tab's `init()`
-//   function is called.
+//   every time, which the optimizer will respect.
 // =================================================================
 
 (function() {
@@ -284,7 +273,7 @@ function addDropListeners(gridContainer) {
                 if (tileData.type === 'custom') {
                     eventName = prompt("Enter the name for this custom pinned event (e.g., 'Assembly'):");
                     if (!eventName) return; // User cancelled
-                    // No more confusing confirm dialog
+                    // ** BUGGY LINE REMOVED **
                 } else {
                     eventName = tileData.name; // Use the tile's name (e.g., "Snacks")
                 }
