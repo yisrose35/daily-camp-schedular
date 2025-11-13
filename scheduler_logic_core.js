@@ -24,6 +24,22 @@
 // - **BUG FIX:** Corrected Pass 4 to pass the `divisions` object
 //   to the `findBest...` functions in scheduler_logic_fillers.js.
 //   This fixes a "Cannot read properties of undefined" error.
+//
+// --- CRITICAL LEAGUE FIX (11/13) ---
+// - **REMOVED:** Deleted fallback logic that assigned sports
+//   to incorrect fields (e.g., Basketball on Grass).
+// - **REPLACED:** Replaced "Smart Shuffle" (which picked one
+//   sport per day) with a "Sport Rotation" that rotates
+//   the sport for each league block during the day.
+//
+// --- FINAL LEAGUE FIX (11/13) ---
+// - **NEW (Matchup-First Logic):** Pass 3 now iterates
+//   through each matchup one by one.
+// - **NEW (Smart Field Assignment):** For each matchup, it finds
+//   the freshest sport *that has an available and correct field*.
+//   This allows multi-sport league blocks.
+// - **REMOVED:** Deleted the `leagueSportRotation` logic from
+//   Pass 3, as it's no longer needed.
 // =================================================================
 
 (function() {
@@ -202,6 +218,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         leagueGroups[key].bunks.add(block.bunk);
     });
 
+
     Object.values(leagueGroups).forEach(group => {
         
         const leagueEntry = Object.entries(masterLeagues).find(([name, l]) => 
@@ -220,22 +237,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         // Filter league sports by what's available today in fieldsBySport
         const availableLeagueSports = (divLeague.sports || []).filter(s => fieldsBySport[s]);
         
-        // --- NEW: SMART SHUFFLE FOR LEAGUE SPORT ---
-        let sport;
+        // --- NEW: MATCUP-FIRST LOGIC (replaces Sport Rotation) ---
         const leagueHistory = rotationHistory.leagues[divLeagueName] || {};
-        
-        if (availableLeagueSports.length > 0) {
-            // Find the least recently used sport
-            // Sorts by timestamp (oldest first). Undefined (never played) comes first.
-            sport = availableLeagueSports.sort((a, b) => {
-                const lastA = leagueHistory[a] || 0; // 0 = never played
-                const lastB = leagueHistory[b] || 0;
-                return lastA - lastB; 
-            })[0]; 
-        } else {
-            sport = "League"; // Fallback
-        }
-        // --- END SMART SHUFFLE ---
         
         let matchups = [];
         if (typeof window.getLeagueMatchups === 'function') {
@@ -243,6 +246,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         } else {
             matchups = pairRoundRobin(leagueTeams);
         }
+        
         const allBunksInGroup = Array.from(group.bunks);
         const scheduledGames = []; 
         const blockBase = { slots: group.slots, divName: group.divName };
@@ -250,35 +254,45 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         for (const [teamA, teamB] of matchups) {
             if (teamA === "BYE" || teamB === "BYE") continue;
 
-            const possibleFields = fieldsBySport[sport] || [];
-            let fieldName = null;
+            // 1. Find the "freshest" sports for this league
+            const sortedSports = [...availableLeagueSports].sort((a, b) => {
+                const lastA = leagueHistory[a] || 0;
+                const lastB = leagueHistory[b] || 0;
+                return lastA - lastB;
+            });
             
-            for (const f of possibleFields) {
-                // --- **THE FIX**: Use new `canLeagueGameFit` ---
-                if (canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
-                    fieldName = f; break;
-                }
-            }
-            if (!fieldName && sport !== "League") { // Don't search all fields if it's a generic "League" game
-                for (const f of window.allSchedulableNames) {
-                     // --- **THE FIX**: Use new `canLeagueGameFit` ---
+            let assigned = false;
+            // 2. Try to find a field for the freshest sport first
+            for (const sport of sortedSports) {
+                const possibleFields = fieldsBySport[sport] || [];
+                let fieldName = null;
+                
+                for (const f of possibleFields) {
                     if (canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
-                        fieldName = f; break;
+                        fieldName = f; 
+                        break; // Found a valid field
                     }
                 }
-            }
+                
+                if (fieldName) {
+                    // 3. Assign this game and mark the field as used
+                    const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
+                    const pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
+                    scheduledGames.push(pick);
+                    markFieldUsage(blockBase, fieldName, fieldUsageBySlot); // Mark as used *immediately*
+                    assigned = true;
+                    break; // This matchup is assigned, move to the next matchup
+                }
+            } // end sport loop
             
-            const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
-            let pick;
-            if (fieldName) {
-                // NEW: We add `_activity` property to help track history later
-                pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport }; 
-                markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
-            } else {
-                pick = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
+            // 4. If no field could be found for any valid sport
+            if (!assigned) {
+                const fullMatchupLabel = `${teamA} vs ${teamB} (No Field)`;
+                const pick = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null, _activity: "League" };
+                scheduledGames.push(pick);
             }
-            scheduledGames.push(pick);
-        }
+        } // end matchup loop
+        // --- END MATCUP-FIRST LOGIC ---
         
         allBunksInGroup.forEach((bunk, bunkIndex) => {
             let pickToAssign;
@@ -410,7 +424,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                             if (leagueEntry) {
                                 const leagueName = leagueEntry[0];
                                 historyToSave.leagues[leagueName] = historyToSave.leagues[leagueName] || {};
-                                historyToSave.leagues[leagueName][activityName] = timestamp;
+                                // --- FIX: Save history for the *actual sport*, not the matchup label ---
+                                historyToSave.leagues[leagueName][entry._activity] = timestamp;
                             }
                         }
                     } else if (entry && !entry.continuation) {
@@ -454,7 +469,13 @@ function markFieldUsage(block, fieldName, fieldUsageBySlot) {
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) continue;
         fieldUsageBySlot[slotIndex] = fieldUsageBySlot[slotIndex] || {};
-        fieldUsageBySlot[slotIndex][fieldName] = (fieldUsageBySlot[slotIndex][fieldName] || 0) + 1;
+        // --- FIX: Correctly mark usage based on division ---
+        const usage = fieldUsageBySlot[slotIndex][fieldName] || { count: 0, divisions: [] };
+        usage.count++;
+        if (!usage.divisions.includes(block.divName)) {
+            usage.divisions.push(block.divName);
+        }
+        fieldUsageBySlot[slotIndex][fieldName] = usage;
     }
 }
 
@@ -508,6 +529,7 @@ function isTimeAvailable(slotIndex, fieldProps) {
 /**
  * UPDATED: This function now checks time-based availability
  * AND the new bunk/division limits.
+ * --- FIX: Correctly reads from `fieldUsageBySlot` object ---
  */
 function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     if (!fieldName) return false;
@@ -543,9 +565,10 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) return false; 
         
-        // Check 3: Usage per slot
-        const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
-        if (used >= limit) return false;
+        // --- FIX: Read usage.count ---
+        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+        if (usage.count >= limit) return false;
+        // --- END FIX ---
         
         // Check 4: Time-based availability
         if (!isTimeAvailable(slotIndex, props)) {
@@ -559,6 +582,7 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
  * --- **NEW FUNCTION** ---
  * This is a copy of `canBlockFit` but hard-codes the
  * limit to 1, specifically for league games.
+ * --- FIX: Correctly reads from `fieldUsageBySlot` object ---
  */
 function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties) {
     if (!fieldName) return false;
@@ -588,9 +612,10 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
     for (const slotIndex of block.slots) {
         if (slotIndex === undefined) return false; 
         
-        // Check 3: Usage per slot
-        const used = fieldUsageBySlot[slotIndex]?.[fieldName] || 0;
-        if (used >= limit) return false;
+        // --- FIX: Read usage.count ---
+        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+        if (usage.count >= limit) return false;
+        // --- END FIX ---
         
         // Check 4: Time-based availability
         if (!isTimeAvailable(slotIndex, props)) {
@@ -622,8 +647,15 @@ function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill
             };
             
             if (!isLeagueFill && fieldName && window.allSchedulableNames.includes(fieldName)) {
+                // --- FIX: Correctly mark usage based on division ---
                 fieldUsageBySlot[slotIndex] = fieldUsageBySlot[slotIndex] || {};
-                fieldUsageBySlot[slotIndex][fieldName] = (fieldUsageBySlot[slotIndex][fieldName] || 0) + 1;
+                const usage = fieldUsageBySlot[slotIndex][fieldName] || { count: 0, divisions: [] };
+                usage.count++;
+                if (!usage.divisions.includes(block.divName)) {
+                    usage.divisions.push(block.divName);
+                }
+                fieldUsageBySlot[slotIndex][fieldName] = usage;
+                // --- END FIX ---
             }
         }
     });
