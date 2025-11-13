@@ -40,6 +40,11 @@
 //   This allows multi-sport league blocks.
 // - **REMOVED:** Deleted the `leagueSportRotation` logic from
 //   Pass 3, as it's no longer needed.
+//
+// --- CRITICAL LEAGUE FIX #2 (11/13) ---
+// - **FIXED:** `leagueHistory` is now updated *in real-time*
+//   during Pass 3, forcing the *next* league block to
+//   use a different sport.
 // =================================================================
 
 (function() {
@@ -218,6 +223,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         leagueGroups[key].bunks.add(block.bunk);
     });
 
+    // --- NEW: Get timestamp for real-time history update ---
+    const timestamp = Date.now(); 
 
     Object.values(leagueGroups).forEach(group => {
         
@@ -238,6 +245,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const availableLeagueSports = (divLeague.sports || []).filter(s => fieldsBySport[s]);
         
         // --- NEW: MATCUP-FIRST LOGIC (replaces Sport Rotation) ---
+        // --- NOTE: `rotationHistory` is loaded once, `leagueHistory` is the *local* copy we update
         const leagueHistory = rotationHistory.leagues[divLeagueName] || {};
         
         let matchups = [];
@@ -280,6 +288,11 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                     const pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
                     scheduledGames.push(pick);
                     markFieldUsage(blockBase, fieldName, fieldUsageBySlot); // Mark as used *immediately*
+                    
+                    // --- **CRITICAL FIX**: Update local history to force rotation ---
+                    leagueHistory[sport] = timestamp; 
+                    // --- End Fix ---
+
                     assigned = true;
                     break; // This matchup is assigned, move to the next matchup
                 }
@@ -399,9 +412,10 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     
     // ===== PASS 5: NEW: Update Rotation History =====
     try {
-        const historyToSave = window.loadRotationHistory();
-        const timestamp = Date.now();
-
+        // --- **CRITICAL FIX**: Use the `rotationHistory` object we've
+        // been modifying in Pass 3, not a fresh load.
+        const historyToSave = rotationHistory; 
+        
         availableDivisions.forEach(divName => {
             (divisions[divName]?.bunks || []).forEach(bunk => {
                 const schedule = window.scheduleAssignments[bunk] || [];
@@ -417,14 +431,14 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                         historyToSave.bunks[bunk][activityName] = timestamp;
                         
                         // 2. If it's a league, update league history (for "fairness" check in Pass 3)
-                        if (entry._h2h) {
+                        if (entry._h2h && entry._activity !== "League") { // Don't log "League" or "No Field"
                             const leagueEntry = Object.entries(masterLeagues).find(([name, l]) => 
                                 l.enabled && l.divisions.includes(divName)
                             );
                             if (leagueEntry) {
                                 const leagueName = leagueEntry[0];
                                 historyToSave.leagues[leagueName] = historyToSave.leagues[leagueName] || {};
-                                // --- FIX: Save history for the *actual sport*, not the matchup label ---
+                                // --- FIX: Save history for the *actual sport* ---
                                 historyToSave.leagues[leagueName][entry._activity] = timestamp;
                             }
                         }
