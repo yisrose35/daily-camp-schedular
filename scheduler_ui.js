@@ -2,15 +2,17 @@
 //
 // ... (previous changelog) ...
 //
-// --- YOUR LATEST REQUEST (Fixing the reset) ---
-// - **RE-IMPLEMENTED:** The logic to load counters from the
-//   *previous day* is back.
-// - **FIXED:** The logic now correctly increments the counter
-//   sequentially *based on the previous day's total*.
-// - **EXAMPLE:** If yesterday's total was 2, today's games will
-//   be "League Game 3" and "League Game 4".
-// - **FIXED:** The new total count (e.g., 4) is now correctly
-//   saved to the *current day's* data.
+// --- "LEAGUE MIRRORING" FIX (11/13) ---
+// - **UPDATED:** The `renderStaggeredView` function for
+//   league blocks has been rewritten.
+// - It no longer tries to "find" games by looping
+//   over bunks in the division.
+// - It now gets the schedule entry for the *first bunk*
+//   and looks for the new `_allMatchups` list.
+// - If that list exists, it prints it. This ensures
+//   that all divisions in a league (e.g., Div 5 and Div 6)
+//   show the identical, complete, "mirrored" list of
+//   all games for that block.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -96,7 +98,10 @@ function getEntry(bunk, slotIndex) {
 function formatEntry(entry) {
     if (!entry) return "";
     if (entry._h2h) {
-        return `${entry.sport} @ ${fieldLabel(entry.field)}`;
+        // This is a league game, but being shown in an
+        // individual cell (e.g. split activity).
+        // The 'sport' field contains the full matchup label.
+        return entry.sport || "League Game";
     } else if (entry._fixed) {
         return fieldLabel(entry.field);
     } else if (entry.sport) {
@@ -126,7 +131,7 @@ function findFirstSlotForTime(startMin) {
 /**
  * Renders the "Staggered" (YKLI) view
  * --- REWRITTEN to be one table PER DIVISION ---
- * --- **UPDATED WITH PERSISTENT GAME COUNTER** ---
+ * --- **UPDATED WITH "MIRRORING" FIX** ---
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -317,6 +322,8 @@ function renderStaggeredView(container) {
             // --- Add ACTIVITY cells (Merged or Individual) ---
             if (eventBlock.event.startsWith('League Game') || eventBlock.event.startsWith('Specialty League')) {
                 // === LEAGUE GAME / SPECIALTY LEAGUE: MERGED CELL ===
+                // --- THIS ENTIRE BLOCK IS REWRITTEN ---
+                
                 const tdLeague = document.createElement("td");
                 tdLeague.colSpan = bunks.length;
                 tdLeague.style.verticalAlign = "top";
@@ -325,67 +332,32 @@ function renderStaggeredView(container) {
                 tdLeague.style.background = "#f0f8f0"; // Light green
                 
                 const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
+                let allMatchups = [];
                 
-                if (eventBlock.event.startsWith('Specialty League')) {
-                    // Specialty League Formatting (Group by Field)
-                    const gamesByField = new Map();
-                    if (firstSlotIndex !== -1) {
-                        const uniqueMatchups = new Set();
-                        bunks.forEach(bunk => {
-                            const entry = getEntry(bunk, firstSlotIndex);
-                            if (entry && entry._h2h && entry.sport) {
-                                if (!uniqueMatchups.has(entry.sport)) {
-                                    uniqueMatchups.add(entry.sport);
-                                    const field = fieldLabel(entry.field);
-                                    if (!gamesByField.has(field)) {
-                                        gamesByField.set(field, []);
-                                    }
-                                    gamesByField.get(field).push(entry.sport);
-                                }
-                            }
-                        });
+                // Find the entry for the first bunk in this division's table
+                if (bunks.length > 0) {
+                    const firstBunkEntry = getEntry(bunks[0], firstSlotIndex);
+                    // Check if the "stamped" list exists
+                    if (firstBunkEntry && firstBunkEntry._allMatchups) {
+                        allMatchups = firstBunkEntry._allMatchups;
                     }
-
-                    let html = '';
-                    if (gamesByField.size === 0) {
-                        html = `<p class="muted" style="margin:0; padding: 4px;">${eventBlock.event}</p>`;
-                    } else {
-                        html = `<p style="margin:2px 0 5px 4px; font-weight: bold;">${eventBlock.event}</p>`;
-                        gamesByField.forEach((matchups, field) => {
-                            const matchupNames = matchups.map(m => m.substring(0, m.lastIndexOf('(')).trim());
-                            html += `<div style="margin-bottom: 2px; padding-left: 4px;">
-                                        <strong>${matchupNames.join(', ')}</strong> - ${field}
-                                     </div>`;
-                        });
-                    }
-                    tdLeague.innerHTML = html;
-
-                } else {
-                    // Regular League Formatting (List)
-                    let games = new Map();
-                    if (firstSlotIndex !== -1) {
-                        bunks.forEach(bunk => {
-                            const entry = getEntry(bunk, firstSlotIndex);
-                            if (entry && entry._h2h && entry.sport) {
-                                games.set(entry.sport, fieldLabel(entry.field));
-                            }
-                        });
-                    }
-                    
-                    let html = '';
-                    if (games.size === 0) {
-                        html = `<p class="muted" style="margin:0; padding: 4px;">${eventBlock.event}</p>`;
-                    } else {
-                        html = `<p style="margin:2px 0 5px 4px; font-weight: bold;">${eventBlock.event}</p>`;
-                        html += '<ul style="margin: 0; padding-left: 18px;">';
-                        games.forEach((field, matchup) => {
-                            html += `<li>${matchup} @ ${field}</li>`;
-                        });
-                        html += '</ul>';
-                    }
-                    tdLeague.innerHTML = html;
                 }
+
+                // Render the mirrored list
+                let html = '';
+                if (allMatchups.length === 0) {
+                    html = `<p class="muted" style="margin:0; padding: 4px;">${eventBlock.event}</p>`;
+                } else {
+                    html = `<p style="margin:2px 0 5px 4px; font-weight: bold;">${eventBlock.event}</p>`;
+                    html += '<ul style="margin: 0; padding-left: 18px;">';
+                    allMatchups.forEach(matchupLabel => {
+                        html += `<li>${matchupLabel}</li>`;
+                    });
+                    html += '</ul>';
+                }
+                tdLeague.innerHTML = html;
                 tr.appendChild(tdLeague);
+                // --- END OF REWRITTEN BLOCK ---
 
             } else {
                 // === REGULAR GAME / SPLIT GAME: INDIVIDUAL CELLS ===
