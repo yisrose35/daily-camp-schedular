@@ -9,7 +9,7 @@
 //   in a league block so the UI can mirror schedules across divisions.
 //
 // --- "ULTIMATE SPORTS APPLICATOR" (11/14) ---
-// - NEW: Per-league, per-team sport counters for the current day.
+// - Per-league, per-team sport counters for the current day.
 // - For each matchup, we choose the sport that minimizes repeats
 //   for both teams, using league history as a tie-breaker.
 // - Result: teams cycle through all league sports once before
@@ -133,7 +133,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     });
 
     // =================================================================
-    // ===== NEW: PASS 1.5: Place Bunk-Specific Pinned Activities =====
+    // ===== PASS 1.5: Place Bunk-Specific Pinned Activities ===========
     // =================================================================
     try {
         const dailyData = window.loadCurrentDailyData?.() || {};
@@ -145,19 +145,17 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             const slots = findSlotsForRange(startMin, endMin);
             const bunk = override.bunk;
 
-            // Ensure bunk exists in schedule and slots were found
             if (window.scheduleAssignments[bunk] && slots.length > 0) {
                 slots.forEach((slotIndex, idx) => {
-                    // Only place if the slot is currently empty
                     if (!window.scheduleAssignments[bunk][slotIndex]) {
                         window.scheduleAssignments[bunk][slotIndex] = {
                             field: { name: override.activity },
                             sport: null,
                             continuation: (idx > 0),
-                            _fixed: true, // Mark as "fixed" so no other pass overwrites it
+                            _fixed: true,
                             _h2h: false,
                             vs: null,
-                            _activity: override.activity // integrates with smart scheduler
+                            _activity: override.activity
                         };
                     }
                 });
@@ -167,7 +165,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         console.error("Error placing bunk-specific overrides:", e);
     }
     // =================================================================
-    // ===== END: PASS 1.5 =====
+    // ===== END: PASS 1.5 =============================================
     // =================================================================
 
 
@@ -185,7 +183,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         if (item.type === 'pinned') {
             allBunks.forEach(bunk => {
                 allSlots.forEach((slotIndex, idx) => {
-                    // Do NOT overwrite bunk-specific overrides
                     if (!window.scheduleAssignments[bunk][slotIndex]) {
                         window.scheduleAssignments[bunk][slotIndex] = {
                             field: { name: item.event },
@@ -337,72 +334,101 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             const [teamA, teamB] = pair;
             if (teamA === "BYE" || teamB === "BYE") continue;
 
-            // Not enough bunks to place another game
-            if (bunkIndex + 1 >= allBunksInGroup.length) {
-                break;
-            }
+            const haveBunkPair = (bunkIndex + 1 < allBunksInGroup.length);
+            let bunkA = null;
+            let bunkB = null;
+            let matchupLabel = "";
+            let pickToAssign = null;
 
-            const bunkA = allBunksInGroup[bunkIndex];
-            const bunkB = allBunksInGroup[bunkIndex + 1];
-            bunkIndex += 2;
+            if (haveBunkPair) {
+                bunkA = allBunksInGroup[bunkIndex];
+                bunkB = allBunksInGroup[bunkIndex + 1];
+                bunkIndex += 2;
 
-            // --- ULTIMATE SPORTS APPLICATOR: choose sport to minimize repeats ---
-            const choice = pickBestLeagueSportForMatchup(
-                teamA,
-                teamB,
-                availableLeagueSports,
-                fieldsBySport,
-                blockBase,
-                fieldUsageBySlot,
-                activityProperties,
-                leagueHistory,
-                teamCounts
-            );
+                // --- ULTIMATE SPORTS APPLICATOR for *played* games ---
+                const choice = pickBestLeagueSportForMatchup(
+                    teamA,
+                    teamB,
+                    availableLeagueSports,
+                    fieldsBySport,
+                    blockBase,
+                    fieldUsageBySlot,
+                    activityProperties,
+                    leagueHistory,
+                    teamCounts
+                );
 
-            let matchupLabel;
-            let pickToAssign;
+                if (choice) {
+                    const sport = choice.sport;
+                    const fieldName = choice.fieldName;
 
-            if (choice) {
-                const sport = choice.sport;
-                const fieldName = choice.fieldName;
+                    if (fieldName && fieldName !== "No Field") {
+                        matchupLabel = `${teamA} vs ${teamB} (${sport}) @ ${fieldName}`;
+                    } else {
+                        matchupLabel = `${teamA} vs ${teamB} (${sport}) (No Field)`;
+                    }
 
-                if (fieldName && fieldName !== "No Field") {
-                    matchupLabel = `${teamA} vs ${teamB} (${sport}) @ ${fieldName}`;
+                    pickToAssign = {
+                        field: fieldName || "No Field",
+                        sport: matchupLabel,
+                        _h2h: true,
+                        vs: null,
+                        _activity: sport
+                    };
+
+                    if (fieldName && fieldName !== "No Field") {
+                        markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
+                    }
+                    leagueHistory[sport] = timestamp;
+
+                    // Track team-level usage for fairness
+                    teamCounts[teamA] = teamCounts[teamA] || {};
+                    teamCounts[teamB] = teamCounts[teamB] || {};
+                    teamCounts[teamA][sport] = (teamCounts[teamA][sport] || 0) + 1;
+                    teamCounts[teamB][sport] = (teamCounts[teamB][sport] || 0) + 1;
                 } else {
-                    matchupLabel = `${teamA} vs ${teamB} (${sport}) (No Field)`;
+                    matchupLabel = `${teamA} vs ${teamB} (No Field)`;
+                    pickToAssign = {
+                        field: "No Field",
+                        sport: matchupLabel,
+                        _h2h: true,
+                        vs: null,
+                        _activity: "League"
+                    };
                 }
-
-                pickToAssign = {
-                    field: fieldName || "No Field",
-                    sport: matchupLabel,
-                    _h2h: true,
-                    vs: null,
-                    _activity: sport
-                };
-
-                if (fieldName && fieldName !== "No Field") {
-                    markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
-                }
-                leagueHistory[sport] = timestamp;
-
-                // Track team-level usage for fairness
-                teamCounts[teamA] = teamCounts[teamA] || {};
-                teamCounts[teamB] = teamCounts[teamB] || {};
-                teamCounts[teamA][sport] = (teamCounts[teamA][sport] || 0) + 1;
-                teamCounts[teamB][sport] = (teamCounts[teamB][sport] || 0) + 1;
             } else {
-                matchupLabel = `${teamA} vs ${teamB} (No Field)`;
-                pickToAssign = {
-                    field: "No Field",
-                    sport: matchupLabel,
-                    _h2h: true,
-                    vs: null,
-                    _activity: "League"
-                };
+                // No bunk capacity left: scoreboard-only game.
+                // We still want *some* sport label; use applicator but
+                // DO NOT update counts/history/field usage.
+                const choice = pickBestLeagueSportForMatchup(
+                    teamA,
+                    teamB,
+                    availableLeagueSports,
+                    fieldsBySport,
+                    blockBase,
+                    fieldUsageBySlot,
+                    activityProperties,
+                    leagueHistory,
+                    teamCounts
+                );
+                if (choice) {
+                    const sport = choice.sport;
+                    const fieldName = choice.fieldName;
+                    if (fieldName && fieldName !== "No Field") {
+                        matchupLabel = `${teamA} vs ${teamB} (${sport}) @ ${fieldName}`;
+                    } else {
+                        matchupLabel = `${teamA} vs ${teamB} (${sport}) (No Field)`;
+                    }
+                } else {
+                    matchupLabel = `${teamA} vs ${teamB} (No Field)`;
+                }
+                // pickToAssign remains null ⇒ no bunk assignment
             }
 
             allMatchupLabels.push(matchupLabel);
-            picksToAssign.push({ pick: pickToAssign, bunks: [bunkA, bunkB] });
+            if (pickToAssign && bunkA && bunkB) {
+                picksToAssign.push({ pick: pickToAssign, bunks: [bunkA, bunkB] });
+            }
         }
 
         const noGamePick = {
@@ -501,12 +527,11 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             leagueHistory
         );
 
-        // MIRRORING FIX
         const allMatchupLabels = [];
         const picksToAssign = {}; // { teamName: pick }
 
         if (bestSport === null) {
-            // sport already used today by these bunks; we skip scheduling
+            // sport already used today by these bunks; skip scheduling
         } else {
             const leagueFields = leagueEntry.fields || [];
             const leagueTeams = (leagueEntry.teams || []).map(t => String(t).trim()).filter(Boolean);
@@ -567,7 +592,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         };
 
         allBunksInGroup.forEach((bunk) => {
-            // In specialty leagues, bunk name == team name
             const pickToAssign = picksToAssign[bunk] || noGamePick;
             pickToAssign._allMatchups = allMatchupLabels;
 
@@ -579,7 +603,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     remainingBlocks.sort((a, b) => a.startTime - b.startTime);
 
     for (const block of remainingBlocks) {
-        // Skip if slot already filled by overrides/pinned/special league/etc.
         if (block.slots.length === 0 || window.scheduleAssignments[block.bunk][block.slots[0]]) {
             continue;
         }
@@ -919,7 +942,7 @@ function loadAndFilterData() {
 
     const dailyData = window.loadCurrentDailyData?.() || {};
     const dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
-    const dailyOverrides = dailyData.overrides || {};
+    the dailyOverrides = dailyData.overrides || {};
     const disabledLeagues = dailyOverrides.leagues || [];
     const disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
     const dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};
