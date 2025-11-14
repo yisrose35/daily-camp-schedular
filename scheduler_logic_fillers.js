@@ -3,27 +3,22 @@
 //
 // ... (previous changelog) ...
 //
-// --- YOUR NEWEST FIX (Sharable Logic) ---
-// - **FIXED (Hard Rule):** `canBlockFit` is updated. It now
-//   checks *which division* is using a sharable field and
-//   blocks bunks from *other* divisions from sharing.
-// - **NEW (Soft Rule):** Added `getNeighborBunk` helper.
-// - **NEW (Soft Rule):** All `findBest...` functions now
-//   implement a "neighbor boost."
-//
-// --- YOUR LATEST FIX (Same Activity) ---
-// - **UPDATED (Soft Rule):** The "neighbor boost" logic
-//   is now more specific. It doesn't just look for a
-//   sharable *field*, it looks for a sharable
-//   *activity* (Field + Sport). This prevents
-//   Bunk 1/Soccer and Bunk 2/Football on the same field.
-//
 // --- CRITICAL FIX (11/13) ---
 // - **NEW (Hard Rule):** Added `getActivitiesDoneToday` helper.
 // - **UPDATED (Hard Rule):** All `findBest...` functions
 //   now use this helper to filter out any activity
 //   (sport or special) that the bunk has *already done*
 //   today, preventing duplicates.
+//
+// --- NEW "SUPER PLACER" FIX (11/13) ---
+// - **NEW:** Added `window.findBestSportForBunks`. This
+//   is the "super powerful sport placer" you requested.
+// - It is called by the league scheduler.
+// - It checks the activities *already done today* by
+//   the specific bunks in the matchup.
+// - It gives a massive penalty to any sport that
+//   *any* of the bunks have already played, forcing
+//   the scheduler to pick a fresh sport (like Basketball).
 // =================================================================
 
 (function() {
@@ -224,6 +219,55 @@ function getActivitiesDoneToday(bunkName) {
         }
     }
     return activities;
+}
+
+/**
+ * --- NEW: THE "SUPER POWERFUL SPORT PLACER" ---
+ * This function is called by the league scheduler (logic_core.js)
+ * to find the best sport for a set of bunks.
+ * It prioritizes sports that *none* of the bunks have done today.
+ */
+window.findBestSportForBunks = function(bunkNames, availableSports, leagueHistory = {}) {
+    if (!bunkNames || bunkNames.length === 0 || !availableSports || availableSports.length === 0) {
+        return null; // No bunks or sports to choose from
+    }
+
+    // 1. Get all activities already done by these bunks
+    const allActivitiesDone = new Set();
+    bunkNames.forEach(bunkName => {
+        // We need to get the schedule *as it is right now*
+        const schedule = window.scheduleAssignments[bunkName] || [];
+        for (const entry of schedule) {
+            if (entry && entry._activity) {
+                allActivitiesDone.add(entry._activity);
+            }
+        }
+    });
+
+    // 2. Score and sort available sports
+    const scoredSports = availableSports.map(sport => {
+        const longTermHistory = leagueHistory[sport] || 0;
+        const hasDoneToday = allActivitiesDone.has(sport);
+        
+        // Cost: 
+        // - 1000000 if done today (high penalty)
+        // - long-term history (lower penalty)
+        const cost = (hasDoneToday ? 1000000 : 0) + longTermHistory;
+        
+        return { sport, cost };
+    });
+
+    // 3. Sort by cost (lowest cost is best)
+    scoredSports.sort((a, b) => {
+        if (a.cost !== b.cost) {
+            return a.cost - b.cost;
+        }
+        // If costs are equal (e.g., two fresh sports), randomize
+        return 0.5 - Math.random();
+    });
+    
+    // 4. Return the best sport name (or null if list was empty)
+    return scoredSports.length > 0 ? scoredSports[0].sport : null;
 }
 
 
