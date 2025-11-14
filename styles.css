@@ -580,3 +580,22 @@ label.override-checkbox span {
   color: #c0392b;
   font-weight: 700;
 }
+/* ----------------------------------- */
+/* --- NEW: Daily Adjustments Tabs --- */
+/* ----------------------------------- */
+
+/* Use league-nav style for the tab bar */
+.da-tabs-nav {
+  /* This class is already defined, 
+     but we note its use here */
+}
+
+/* Hide tab panes by default */
+.da-tab-pane {
+  display: none;
+}
+
+/* Show the active one */
+.da-tab-pane.active {
+  display: block;
+}
