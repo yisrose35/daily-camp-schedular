@@ -3,14 +3,8 @@
 //
 // ... (previous changelog) ...
 //
-// --- CRITICAL FIX (11/13) ---
-// - **NEW (Hard Rule):** Added `getActivitiesDoneToday` helper.
-// - **UPDATED (Hard Rule):** All `findBest...` functions
-//   now use this helper to filter out any activity
-//   (sport or special) that the bunk has *already done*
-//   today, preventing duplicates.
-//
 // --- NEW "SUPER PLACER" FIX (11/13) ---
+// - **REMOVED:** `window.findBestSportForBunks`.
 // - **NEW:** Added `window.findBestSportForBunks`. This
 //   is the "super powerful sport placer" you requested.
 // - It is called by the league scheduler.
@@ -19,6 +13,19 @@
 // - It gives a massive penalty to any sport that
 //   *any* of the bunks have already played, forcing
 //   the scheduler to pick a fresh sport (like Basketball).
+//
+// --- "TWO BRAINS" FIX (11/13) ---
+// - **NEW:** Created `getGeneralActivitiesDoneToday`. This
+//   "General Brain" ignores all league games.
+// - **NEW:** Created `getLeagueActivitiesDoneToday`. This
+//   "League Brain" *only* looks at league games.
+// - **UPDATED:** `findBestSpecial`, `findBestSportActivity`,
+//   and `findBestGeneralActivity` now *only* use the
+//   "General Brain".
+// - **UPDATED:** `findBestSportForBunks` (the league placer)
+//   now *only* uses the "League Brain".
+// - This completely separates the logic for general
+//   activities and league activities, as requested.
 // =================================================================
 
 (function() {
@@ -203,18 +210,22 @@ function getNeighborBunk(myBunk, allBunksInDivision) {
     }
 }
 
+
+// =================================================================
+// --- "TWO BRAINS" FIX: START ---
+// =================================================================
+
 /**
- * --- NEW HELPER (CRITICAL FIX 11/13) ---
- * Gets all activities a bunk has already been assigned today.
+ * --- NEW HELPER (FIX 11/13 - "General Brain") ---
+ * Gets all NON-LEAGUE activities a bunk has already been assigned today.
  */
-function getActivitiesDoneToday(bunkName) {
+function getGeneralActivitiesDoneToday(bunkName) {
     const activities = new Set();
     const schedule = window.scheduleAssignments[bunkName] || [];
     
-    // Iterate over the in-progress schedule for today
     for (const entry of schedule) {
-        if (entry && entry._activity) {
-            // Add the base activity name (e.g., "Basketball", "Canteen")
+        // ONLY add if it's an activity AND it's NOT a league game
+        if (entry && entry._activity && !entry._h2h) {
             activities.add(entry._activity);
         }
     }
@@ -222,26 +233,46 @@ function getActivitiesDoneToday(bunkName) {
 }
 
 /**
+ * --- NEW HELPER (FIX 11/13 - "League Brain") ---
+ * Gets all LEAGUE activities a bunk has already been assigned today.
+ */
+function getLeagueActivitiesDoneToday(bunkName) {
+    const activities = new Set();
+    const schedule = window.scheduleAssignments[bunkName] || [];
+    
+    for (const entry of schedule) {
+        // ONLY add if it's an activity AND it IS a league game
+        if (entry && entry._activity && entry._h2h) {
+            activities.add(entry._activity);
+        }
+    }
+    return activities;
+}
+
+// =================================================================
+// --- "TWO BRAINS" FIX: END ---
+// =================================================================
+
+
+/**
  * --- NEW: THE "SUPER POWERFUL SPORT PLACER" ---
  * This function is called by the league scheduler (logic_core.js)
  * to find the best sport for a set of bunks.
- * It prioritizes sports that *none* of the bunks have done today.
+ * --- UPDATED: Now uses the "League Brain" ---
  */
 window.findBestSportForBunks = function(bunkNames, availableSports, leagueHistory = {}) {
     if (!bunkNames || bunkNames.length === 0 || !availableSports || availableSports.length === 0) {
         return null; // No bunks or sports to choose from
     }
 
-    // 1. Get all activities already done by these bunks
+    // 1. Get all LEAGUE activities already done by these bunks
     const allActivitiesDone = new Set();
     bunkNames.forEach(bunkName => {
-        // We need to get the schedule *as it is right now*
-        const schedule = window.scheduleAssignments[bunkName] || [];
-        for (const entry of schedule) {
-            if (entry && entry._activity) {
-                allActivitiesDone.add(entry._activity);
-            }
-        }
+        // --- THIS IS THE FIX ---
+        // Call the "League Brain" helper
+        const leagueActivities = getLeagueActivitiesDoneToday(bunkName);
+        leagueActivities.forEach(act => allActivitiesDone.add(act));
+        // --- END FIX ---
     });
 
     // 2. Score and sort available sports
@@ -273,8 +304,7 @@ window.findBestSportForBunks = function(bunkNames, availableSports, leagueHistor
 
 /**
  * Finds the best-available special activity (special-only).
- * --- UPDATED for Neighbor Boost (Same Activity) ---
- * --- UPDATED for No Duplicates (Hard Rule) ---
+ * --- UPDATED: Now uses the "General Brain" ---
  */
 window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     const specials = allActivities
@@ -287,8 +317,8 @@ window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yester
 
     const bunkHistory = rotationHistory?.bunks?.[block.bunk] || {};
     
-    // --- NEW (Hard Rule): Get activities already done today ---
-    const activitiesDoneToday = getActivitiesDoneToday(block.bunk);
+    // --- UPDATED: Call the "General Brain" ---
+    const activitiesDoneToday = getGeneralActivitiesDoneToday(block.bunk);
 
     // 1. Find all specials that *can* fit this slot
     const availablePicks = specials.filter(pick => 
@@ -338,8 +368,7 @@ window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yester
 
 /**
  * NEW: Finds the best-available sport activity (sports-only).
- * --- UPDATED for Neighbor Boost (Same Activity) ---
- * --- UPDATED for No Duplicates (Hard Rule) ---
+ * --- UPDATED: Now uses the "General Brain" ---
  */
 window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     const sports = allActivities
@@ -352,8 +381,8 @@ window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, 
         
     const bunkHistory = rotationHistory?.bunks?.[block.bunk] || {};
 
-    // --- NEW (Hard Rule): Get activities already done today ---
-    const activitiesDoneToday = getActivitiesDoneToday(block.bunk);
+    // --- UPDATED: Call the "General Brain" ---
+    const activitiesDoneToday = getGeneralActivitiesDoneToday(block.bunk);
 
     // 1. Find all sports that *can* fit this slot
     const availablePicks = sports.filter(pick => 
@@ -401,8 +430,7 @@ window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, 
 
 /**
  * Finds the best-available general activity (hybrid: sports OR special).
- * --- UPDATED for Neighbor Boost (Same Activity) ---
- * --- UPDATED for No Duplicates (Hard Rule) ---
+ * --- UPDATED: Now uses the "General Brain" ---
  */
 window.findBestGeneralActivity = function(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     
@@ -418,8 +446,8 @@ window.findBestGeneralActivity = function(block, allActivities, h2hActivities, f
     
     const bunkHistory = rotationHistory?.bunks?.[block.bunk] || {};
     
-    // --- NEW (Hard Rule): Get activities already done today ---
-    const activitiesDoneToday = getActivitiesDoneToday(block.bunk);
+    // --- UPDATED: Call the "General Brain" ---
+    const activitiesDoneToday = getGeneralActivitiesDoneToday(block.bunk);
 
     // 1. Find all activities that *can* fit this slot
     const availablePicks = allPossiblePicks.filter(pick => 
