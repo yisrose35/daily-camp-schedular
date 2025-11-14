@@ -20,6 +20,12 @@
 // - **REMOVED:** `loadRoundState()` call from `getLeagueMatchups`.
 //   This prevents the round from resetting during a single
 //   optimizer run.
+//
+// --- FIX (Glitchy Tab) 11/14/2025 ---
+// - Replaced all calls to `initSpecialtyLeagues()` inside
+//   sub-panes with calls to the specific `render...UI()`
+//   functions (e.g., `renderSpecialtyLeagueSetupUI()`).
+//   This prevents the main dropdown from resetting.
 // =================================================================
 
 (function() {
@@ -171,7 +177,7 @@
                 standings: {} // NEW: Add standings object
             };
             saveData();
-            initSpecialtyLeagues(); // Re-render
+            renderSpecialtyLeagueSetupUI(); // Re-render setup pane
         };
 
         // --- 2. Render Existing Leagues ---
@@ -382,7 +388,8 @@
             if (confirm(`Are you sure you want to delete "${league.name}"?`)) {
                 delete specialtyLeagues[league.id];
                 saveData();
-                initSpecialtyLeagues(); // Re-render
+                renderSpecialtyLeagueSetupUI(); // Re-render setup pane
+                renderSpecialtyLeagueStandingsUI(); // Also re-render standings
             }
         };
 
@@ -452,7 +459,7 @@
             league.sport = e.target.value || null;
             league.fields = []; // Reset fields if sport changes
             saveData();
-            initSpecialtyLeagues(); // Re-render to show/hide field picker
+            renderSpecialtyLeagueSetupUI(); // Re-render setup pane
         };
         return wrapper;
     }
@@ -513,7 +520,7 @@
                 // NEW: Add team to standings
                 league.standings[teamName] = league.standings[teamName] || { w: 0, l: 0, t: 0 };
                 saveData();
-                initSpecialtyLeagues(); // Re-render this tab
+                renderSpecialtyLeagueSetupUI(); // Re-render setup pane
             }
             teamInput.value = "";
         };
@@ -539,7 +546,8 @@
                 delete league.standings[teamName];
                 toggleArrayItem(league.teams, teamName); // This removes it from the array
                 saveData();
-                initSpecialtyLeagues(); // Re-render
+                renderSpecialtyLeagueSetupUI(); // Re-render setup pane
+                renderSpecialtyLeagueStandingsUI(); // Also re-render standings
             };
             chipBox.appendChild(chip);
         });
