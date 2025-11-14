@@ -942,7 +942,7 @@ function loadAndFilterData() {
 
     const dailyData = window.loadCurrentDailyData?.() || {};
     const dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
-    the dailyOverrides = dailyData.overrides || {};
+    const dailyOverrides = dailyData.overrides || {};
     const disabledLeagues = dailyOverrides.leagues || [];
     const disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
     const dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};
