@@ -1,32 +1,7 @@
 // -------------------- Leagues.js --------------------
 // (UPDATED to use calendar.js save/load)
 //
-// UPDATED:
-// - **NEW UI:** `initLeagues` (formerly `initLeaguesTab`) now
-//   creates a dropdown to switch between "League Setup" and
-//   "League Standings".
-// - **NEW FEATURE:** `renderLeagueStandingsUI` is a new function
-//   that builds a grid for each division, allowing W/L/T input.
-// - **NEW DATA:** `loadLeagues` and the new "Update" button
-//   now save and load a `standings` object for each league
-//   to track team records.
-//
-// --- YOUR NEW REQUEST ---
-// - **UPDATED:** `renderLeagueUI` now adds a default "-- Select View --"
-//   option. Both "Setup" and "Standings" panes are hidden by
-//   default and only appear when an option is selected.
-//
-// --- FIXES 11/12 ---
-// - **FIXED BUG 1:** `renderLeagueStandingsUI` now correctly finds
-//   the `leagueName` instead of showing "(undefined)".
-// - **FIXED BUG 2:** The sorting logic in `renderLeagueStandingsUI`
-//   now correctly sorts numeric team names (e.g., 2 before 10).
-//
-// --- YOUR NEWEST REQUEST (Individual Update) ---
-// - **UPDATED:** `renderLeagueStandingsUI` no longer has one
-//   global "Update" button. Instead, an "Update Standings"
-//   button is created for *each individual division's grid*
-//   and will only update that specific grid.
+// ... (previous changelogs) ...
 //
 // --- YOUR LATEST REQUEST (Ranking) ---
 // - **NEW FEATURE:** `renderLeagueStandingsUI` now adds a "Place"
@@ -34,6 +9,12 @@
 // - **AUTO-SORT:** The `updateBtn.onclick` already calls
 //   `renderLeagueStandingsUI()`, which re-runs the sorting
 //   logic, automatically re-ordering the teams by rank.
+//
+// --- FIX (Round-Robin) ---
+// - **REMOVED:** `loadRoundState()` call from `getLeagueMatchups`.
+//   This prevents the round from resetting during a single
+//   optimizer run, allowing multiple league blocks in one
+//   day to get the correct, advancing matchups.
 // -----------------------------------------------------------------
 
 // Internal store keyed by LEAGUE NAME for UI/storage
@@ -675,6 +656,10 @@ window.initLeagues = initLeagues;
 * =============================================================
 * LEAGUE SCHEDULING CORE (league_scheduling.js)
 * (UPDATED to use calendar.js save/load)
+*
+* --- ROUND-ROBIN FIX ---
+* - REMOVED `loadRoundState()` from `getLeagueMatchups` to
+* prevent state from resetting during a single optimizer run.
 * =============================================================
 */
 
@@ -764,13 +749,14 @@ return schedule;
 
 /**
 * Public function to get the *next* set of matchups for a league.
+* --- UPDATED: Removed loadRoundState() ---
 */
 function getLeagueMatchups(leagueName, teams) {
 if (!leagueName || !teams || teams.length < 2) {
 return [];
 }
 
-loadRoundState();
+// loadRoundState(); // <-- THIS LINE IS REMOVED. State is loaded once on script load.
 
 const state = leagueRoundState[leagueName] || { currentRound: 0 };
 const fullSchedule = generateRoundRobin(teams);
@@ -784,7 +770,7 @@ const todayMatchups = fullSchedule[state.currentRound];
 // Increment and save the round number for next time
 const nextRound = (state.currentRound + 1) % fullSchedule.length;
 leagueRoundState[leagueName] = { currentRound: nextRound };
-saveRoundState();
+saveRoundState(); // This updates the in-memory global object and saves to storage
 
 return todayMatchups;
 }
