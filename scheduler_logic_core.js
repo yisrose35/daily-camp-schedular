@@ -8,13 +8,18 @@
 //   are the same as Team Names.
 // - It now generates matchups (e.g., "Team A vs Team B")
 //   and assigns them to pairs of available bunks
-//   (e.g., Bunk "19" and Bunk "20") in sequential order.
+//   (e.g., Bunk "19" and "20") in sequential order.
 //
 // --- FIX (Smart Shuffle / Intra-Day) ---
-// - **NEW:** Added `leagueSportsUsedToday` tracker to Pass 3
-//   and 3.5. This prevents the *same sport* from being
-//   assigned to the *same league* multiple times in one day.
-// - This fixes the bug where "1 vs 8" played Baseball twice.
+// - **REMOVED:** The old, flawed "de-prioritization"
+//   logic from Pass 3.
+// - **NEW LOGIC:** Pass 3 now calls the new
+//   `window.findBestSportForBunks` function from
+//   `scheduler_logic_fillers.js`.
+// - This new "super placer" checks what the *specific
+//   bunks in the matchup* have already played today
+//   and picks the best available "fresh" sport.
+// - This will fix the bug where Bunk 25 played Baseball twice.
 // =================================================================
 
 (function() {
@@ -252,9 +257,6 @@ leagueGroups[key].bunks.add(block.bunk);
 const timestamp = Date.now();
 const sortedLeagueGroups = Object.values(leagueGroups).sort((a, b) => a.startTime - b.startTime);
 
-// --- NEW (FIX 2): Track sports used per league *today* ---
-const leagueSportsUsedToday = {};
-
 for (const group of sortedLeagueGroups) {
 const divLeagueName = group.divLeagueName;
 const divLeague = group.divLeague;
@@ -282,12 +284,6 @@ firstDivName = Object.keys(divisions).find(div => divisions[div].bunks.includes(
 if (!firstDivName) continue;
 const blockBase = { slots: group.slots, divName: firstDivName };
 
-// --- NEW (FIX 2): Get this league's used sports set ---
-if (!leagueSportsUsedToday[divLeagueName]) {
-    leagueSportsUsedToday[divLeagueName] = new Set();
-}
-const usedSports = leagueSportsUsedToday[divLeagueName];
-
 // Loop through each matchup
 for (const [teamA, teamB] of matchups) {
 if (teamA === "BYE" || teamB === "BYE") continue;
@@ -302,48 +298,56 @@ const bunkA = allBunksInGroup[bunkIndex];
 const bunkB = allBunksInGroup[bunkIndex + 1];
 bunkIndex += 2; // Move the pointer for the next game
 
-// Find the best field/sport for this matchup
-// --- UPDATED (FIX 2): Filter out sports already used today ---
-const sortedSports = [...availableLeagueSports]
-    .filter(s => !usedSports.has(s)) // <-- Filters out used sports
-    .sort((a, b) => {
+// --- THIS IS THE FIX ---
+// Call the "Super Placer" to get the best sport for these bunks
+const bestSport = window.findBestSportForBunks(
+    [bunkA, bunkB], 
+    availableLeagueSports, 
+    leagueHistory
+);
+// --- END FIX ---
+
+let assigned = false;
+let pickToAssign = null;
+
+// --- UPDATED: Use the "bestSport" first ---
+if (bestSport) {
+    const possibleFields = fieldsBySport[bestSport] || [];
+    let fieldName = null;
+    for (const f of possibleFields) {
+        if (canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
+            fieldName = f;
+            break;
+        }
+    }
+    if (fieldName) {
+        const fullMatchupLabel = `${teamA} vs ${teamB} (${bestSport})`;
+        pickToAssign = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: bestSport };
+        markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
+        leagueHistory[bestSport] = timestamp; // Update long-term history
+        assigned = true;
+    }
+}
+// --- END UPDATED BLOCK ---
+
+// Failsafe: If bestSport failed (no fields) or wasn't found,
+// try the old long-term history sort for remaining sports.
+if (!assigned) {
+    const fallbackSports = [...availableLeagueSports].sort((a, b) => {
         const lastA = leagueHistory[a] || 0;
         const lastB = leagueHistory[b] || 0;
         return lastA - lastB;
     });
 
-let assigned = false;
-let pickToAssign = null;
-
-for (const sport of sortedSports) {
-const possibleFields = fieldsBySport[sport] || [];
-let fieldName = null;
-for (const f of possibleFields) {
-if (canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
-fieldName = f;
-break;
-}
-}
-if (fieldName) {
-const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
-pickToAssign = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
-markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
-leagueHistory[sport] = timestamp; // Update long-term history
-usedSports.add(sport); // --- NEW (FIX 2): Add to *today's* used set
-assigned = true;
-break;
-}
-}
-if (!assigned) {
-    // Failsafe: If all sports are used, try picking from the *full* list
-    // This handles running out of "fresh" sports
-    const fallbackSortedSports = [...availableLeagueSports].sort((a, b) => (leagueHistory[a] || 0) - (leagueHistory[b] || 0));
-    for (const sport of fallbackSortedSports) {
+    for (const sport of fallbackSports) {
+        if (sport === bestSport) continue; // Already tried this one
+        
         const possibleFields = fieldsBySport[sport] || [];
         let fieldName = null;
         for (const f of possibleFields) {
             if (canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
-                fieldName = f; break;
+                fieldName = f;
+                break;
             }
         }
         if (fieldName) {
@@ -351,15 +355,15 @@ if (!assigned) {
             pickToAssign = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
             markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
             leagueHistory[sport] = timestamp;
-            usedSports.add(sport); // Still track it
             assigned = true;
             break;
         }
     }
 }
+
 if (!assigned) {
-const fullMatchupLabel = `${teamA} vs ${teamB} (No Field)`;
-pickToAssign = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null, _activity: "League" };
+    const fullMatchupLabel = `${teamA} vs ${teamB} (No Field)`;
+    pickToAssign = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null, _activity: "League" };
 }
 
 // Assign the game to both bunks
@@ -405,25 +409,28 @@ l.enabled &&
 l.divisions.includes(group.divName)
 );
 if (!leagueEntry) return;
+
+const allBunksInGroup = Array.from(group.bunks);
+const blockBase = { slots: group.slots, divName: group.divName };
     
 // --- NEW (FIX 2): Get this league's used sports set ---
 const divLeagueName = leagueEntry.name;
-if (!leagueSportsUsedToday[divLeagueName]) {
-    leagueSportsUsedToday[divLeagueName] = new Set();
-}
-const usedSports = leagueSportsUsedToday[divLeagueName];
-// (Note: Specialty leagues only have one sport, but this prevents
-// them from being scheduled if that sport was somehow
-// used by another league, if they share a name)
+const leagueHistory = rotationHistory.leagues[divLeagueName] || {};
 
 const sport = leagueEntry.sport;
 if (!sport || !fieldsBySport[sport]) return;
 
 // --- NEW (FIX 2): Check if sport already used ---
-if (usedSports.has(sport)) {
-    // This sport was already used today by this league,
+const bestSport = window.findBestSportForBunks(
+    allBunksInGroup, // Check all bunks in this group
+    [sport], // Only one sport is available
+    leagueHistory
+);
+
+if (bestSport === null) {
+    // This sport was already used today by these bunks,
     // so we can't schedule it again. Fill with "No Game".
-    Array.from(group.bunks).forEach(bunk => {
+    allBunksInGroup.forEach(bunk => {
         fillBlock({ ...blockBase, bunk: bunk }, { field: "No Game", sport: null, _h2h: true, _activity: sport }, fieldUsageBySlot, yesterdayHistory, true);
     });
     return; // Skip this group
@@ -439,9 +446,8 @@ matchups = window.getLeagueMatchups(leagueEntry.name, leagueTeams) || [];
 } else {
 matchups = pairRoundRobin(leagueTeams);
 }
-const allBunksInGroup = Array.from(group.bunks);
+
 const bunkToGameMap = {};
-const blockBase = { slots: group.slots, divName: group.divName };
 const gamesPerField = Math.ceil(matchups.length / leagueFields.length);
 
 for (let i = 0; i < matchups.length; i++) {
@@ -456,7 +462,6 @@ let pick;
 if (fieldName && canLeagueGameFit(blockBase, fieldName, fieldUsageBySlot, activityProperties)) {
 pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
 markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
-usedSports.add(sport); // --- NEW (FIX 2): Mark as used
 } else {
 pick = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
 }
