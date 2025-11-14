@@ -1,9 +1,16 @@
 // =================================================================
-// daily_adjustments.js  (FIXED)
-// - Honors ALL pinned events (custom/snacks/dismissal/swim) by
-//   tagging them type:'pinned' at creation
-// - Grid extends to latest pinned end so late pinned blocks render
-// - Loads skeleton from masterSettings.app1 reliably
+// daily_adjustments.js  (REFACTORED)
+// - REFACTORED: `init` function to use a mini-tab UI for
+//   "Skeleton", "Trips", "Bunk Specific", and "Resource Availability".
+//   (Similar to leagues.js and analytics.js)
+// - NEW: "Bunk Specific" tab (Mini Tab 3) is added, with a
+//   form to add/remove bunk-specific pinned activities.
+// - NEW: `renderBunkOverridesUI` function builds and manages
+//   the new Bunk Specific UI.
+// - NEW: Bunk-specific overrides are saved to the current
+//   day's data as `bunkActivityOverrides`.
+// - All other existing logic (Skeleton, Trips, Resources) has
+//   been moved into its respective tab pane.
 // =================================================================
 
 (function() {
@@ -17,21 +24,21 @@ let currentOverrides = {
   disabledSpecialtyLeagues: [],
   dailyDisabledSportsByField: {},
   disabledFields: [],
-  disabledSpecials: []
+  disabledSpecials: [],
+  bunkActivityOverrides: [] // NEW: For bunk-specific pins
 };
 
 // --- Helper containers ---
 let skeletonContainer = null;
 let tripsFormContainer = null;
-let selectedOverrideId = null;
-let overrideFieldsListEl = null;
-let overrideSpecialsListEl = null;
-let overrideLeaguesListEl = null;
-let overrideSpecialtyLeaguesListEl = null;
-let overrideDetailPaneEl = null;
+let bunkOverridesContainer = null; // NEW
+let resourceOverridesContainer = null; // NEW
+
+// Keep track of which sub-tab is active
+let activeSubTab = 'skeleton';
 
 // =================================================================
-// ===== START: SKELETON EDITOR LOGIC =====
+// ===== START: SKELETON EDITOR LOGIC (Unchanged) =====
 // =================================================================
 
 let dailyOverrideSkeleton = []; 
@@ -88,7 +95,6 @@ function renderGrid(gridContainer) {
   const divisions = window.divisions || {};
   const availableDivisions = window.availableDivisions || [];
   
-  // --- Dynamic bounds from division times
   let earliestMin = null;
   let latestMin = null;
   Object.values(divisions).forEach(div => {
@@ -100,7 +106,6 @@ function renderGrid(gridContainer) {
   if (earliestMin === null) earliestMin = 540; // 9:00
   if (latestMin === null) latestMin = 960;     // 4:00
   
-  // --- NEW: also respect latest pinned end
   const latestPinnedEnd = Math.max(
     -Infinity,
     ...dailyOverrideSkeleton
@@ -228,7 +233,6 @@ function addDropListeners(gridContainer) {
         const event2 = mapEventNameForOptimizer(eventName2);
         newEvent = { id: `evt_${Math.random().toString(36).slice(2, 9)}`, type: 'split', event: `${eventName1} / ${eventName2}`, division: divName, startTime: startTime, endTime: endTime, subEvents: [ event1, event2 ] };
       
-      // --- THIS IS THE FIX ---
       } else if (['lunch','snacks','custom','dismissal','swim'].includes(tileData.type)) {
         eventType = 'pinned';
         if (tileData.type === 'custom') {
@@ -238,7 +242,6 @@ function addDropListeners(gridContainer) {
           eventName = tileData.name;
         }
       }
-      // --- END FIX ---
       
       if (!newEvent) {
         let startTime, endTime, startMin, endMin;
@@ -347,14 +350,12 @@ function runOptimizer() {
     alert("Skeleton is empty. Please add blocks before running the optimizer.");
     return;
   }
-  // Save for today and call optimizer
   saveDailySkeleton();
   const success = window.runSkeletonOptimizer(dailyOverrideSkeleton);
   if (success) { alert("Schedule Generated Successfully!"); window.showTab?.('schedule'); }
   else { alert("Error during schedule generation. Check console."); }
 }
 
-// parseTimeToMinutes REQUIRES am/pm
 function parseTimeToMinutes(str) {
   if (!str || typeof str !== "string") return null;
   let s = str.trim().toLowerCase();
@@ -376,13 +377,40 @@ function parseTimeToMinutes(str) {
   }
   return hh * 60 + mm;
 }
+function uid() { return `id_${Math.random().toString(36).slice(2, 9)}`; }
 
-/** Main entry */
+// =================================================================
+// ===== END: SKELETON EDITOR LOGIC =====
+// =================================================================
+
+
+/**
+ * Main entry point for the Daily Adjustments tab
+ */
 function init() {
   container = document.getElementById("daily-adjustments-content");
   if (!container) { console.error("Daily Adjustments: container not found"); return; }
   console.log("Daily Adjustments: Initializing for", window.currentScheduleDate);
 
+  // --- 1. Load all data ---
+  masterSettings.global = window.loadGlobalSettings?.() || {};
+  masterSettings.app1 = masterSettings.global.app1 || {};
+  masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
+  masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
+
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const dailyOverrides = dailyData.overrides || {};
+  
+  // Populate the 'currentOverrides' object from loaded data
+  currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
+  currentOverrides.leagues = dailyOverrides.leagues || [];
+  currentOverrides.disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
+  currentOverrides.dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};
+  currentOverrides.disabledFields = dailyOverrides.disabledFields || [];
+  currentOverrides.disabledSpecials = dailyOverrides.disabledSpecials || [];
+  currentOverrides.bunkActivityOverrides = dailyData.bunkActivityOverrides || []; // NEW
+
+  // --- 2. Build the main UI (Tabs + Panes) ---
   container.innerHTML = `
     <div style="padding: 10px 15px; background: #fff; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
       <div>
@@ -393,30 +421,45 @@ function init() {
         Run Optimizer & Create Schedule
       </button>
     </div>
-    <div class="override-section" id="daily-skeleton-editor-section">
-      <h3>Daily Skeleton Override</h3>
-      <p style="font-size: 0.9em; color: #555;">Modify the schedule layout for <strong>this day only</strong>.</p>
-      <div id="override-scheduler-content"></div>
+
+    <div class="da-tabs-nav league-nav">
+        <button class="tab-button active" data-tab="skeleton">Skeleton</button>
+        <button class="tab-button" data-tab="trips">Trips</button>
+        <button class="tab-button" data-tab="bunk-specific">Bunk Specific</button>
+        <button class="tab-button" data-tab="resources">Resource Availability</button>
     </div>
-    <div class="override-section" id="daily-trips-section">
-      <h3>Daily Trips (Adds to Skeleton)</h3>
-      <div id="trips-form-container"></div>
-    </div>
-    <div class="override-section" id="other-overrides-section">
-      <h3>Daily Overrides (Fields, Leagues, etc.)</h3>
-      <div style="display: flex; flex-wrap: wrap; gap: 20px;">
-        <div style="flex: 1; min-width: 300px;">
-          <h4>Fields</h4><div id="override-fields-list" class="master-list"></div>
-          <h4 style="margin-top: 15px;">Special Activities</h4><div id="override-specials-list" class="master-list"></div>
-          <h4 style="margin-top: 15px;">Leagues</h4><div id="override-leagues-list" class="master-list"></div>
-          <h4 style="margin-top: 15px;">Specialty Leagues</h4><div id="override-specialty-leagues-list" class="master-list"></div>
-        </div>
-        <div style="flex: 2; min-width: 400px; position: sticky; top: 20px;">
-          <h4>Details</h4>
-          <div id="override-detail-pane" class="detail-pane"><p class="muted">Select an item from the left to edit its details.</p></div>
-        </div>
+
+    <div id="da-pane-skeleton" class="da-tab-pane league-content-pane active">
+      <div class="override-section" id="daily-skeleton-editor-section">
+        <h3>Daily Skeleton Override</h3>
+        <p style="font-size: 0.9em; color: #555;">Modify the schedule layout for <strong>this day only</strong>.</p>
+        <div id="override-scheduler-content"></div>
       </div>
     </div>
+
+    <div id="da-pane-trips" class="da-tab-pane league-content-pane">
+      <div class="override-section" id="daily-trips-section">
+        <h3>Daily Trips (Adds to Skeleton)</h3>
+        <div id="trips-form-container"></div>
+      </div>
+    </div>
+
+    <div id="da-pane-bunk-specific" class="da-tab-pane league-content-pane">
+      <div class="override-section" id="daily-bunk-overrides-section">
+        <h3>Bunk-Specific Pinned Activities</h3>
+        <p style="font-size: 0.9em; color: #555;">Assign a specific activity to one or more bunks at a specific time. This will override the skeleton.</p>
+        <div id="bunk-overrides-container"></div>
+      </div>
+    </div>
+
+    <div id="da-pane-resources" class="da-tab-pane league-content-pane">
+      <div class="override-section" id="other-overrides-section">
+        <h3>Daily Resource Availability</h3>
+        <p style="font-size: 0.9em; color: #555;">Disable fields, leagues, or activities for <strong>this day only</strong>.</p>
+        <div id="resource-overrides-container"></div>
+      </div>
+    </div>
+
     <style>
       .grid-disabled{position:absolute;width:100%;background-color:#80808040;background-image:linear-gradient(-45deg,#0000001a 25%,transparent 25%,transparent 50%,#0000001a 50%,#0000001a 75%,transparent 75%,transparent);background-size:20px 20px;z-index:1;pointer-events:none;}
       .grid-event{z-index:2;position:relative;}
@@ -432,39 +475,36 @@ function init() {
     </style>
   `;
 
+  // --- 3. Hook up event listeners ---
   document.getElementById("run-optimizer-btn").onclick = runOptimizer;
 
+  // Tab switching logic
+  container.querySelectorAll('.da-tabs-nav .tab-button').forEach(btn => {
+    btn.onclick = () => {
+      activeSubTab = btn.dataset.tab;
+      container.querySelectorAll('.da-tabs-nav .tab-button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      container.querySelectorAll('.da-tab-pane').forEach(p => p.classList.remove('active'));
+      container.querySelector(`#da-pane-${activeSubTab}`).classList.add('active');
+    };
+  });
+
+  // --- 4. Get pane containers and render content ---
   skeletonContainer = document.getElementById("override-scheduler-content");
   tripsFormContainer = document.getElementById("trips-form-container");
-  overrideFieldsListEl = document.getElementById("override-fields-list");
-  overrideSpecialsListEl = document.getElementById("override-specials-list");
-  overrideLeaguesListEl = document.getElementById("override-leagues-list");
-  overrideSpecialtyLeaguesListEl = document.getElementById("override-specialty-leagues-list");
-  overrideDetailPaneEl = document.getElementById("override-detail-pane");
-
-  // Load master data
-  masterSettings.global = window.loadGlobalSettings?.() || {};
-  masterSettings.app1 = masterSettings.global.app1 || {};
-  masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
-  masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
-
-  const dailyData = window.loadCurrentDailyData?.() || {};
-  const dailyOverrides = dailyData.overrides || {};
-  currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
-  currentOverrides.leagues = dailyOverrides.leagues || [];
-  currentOverrides.disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
-  currentOverrides.dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};
-  currentOverrides.disabledFields = dailyOverrides.disabledFields || [];
-  currentOverrides.disabledSpecials = dailyOverrides.disabledSpecials || [];
+  bunkOverridesContainer = document.getElementById("bunk-overrides-container");
+  resourceOverridesContainer = document.getElementById("resource-overrides-container");
 
   initDailySkeletonUI();
   renderTripsForm();
-  renderOverrideMasterLists();
-  renderOverrideDetailPane();
+  renderBunkOverridesUI(); // NEW
+  renderResourceOverridesUI(); // Renamed from renderOverrideMasterLists
 }
 
+/**
+ * Renders the UI for the "Skeleton" tab
+ */
 function initDailySkeletonUI() {
-  skeletonContainer = document.getElementById("override-scheduler-content");
   if (!skeletonContainer) return;
   loadDailySkeleton(); 
   skeletonContainer.innerHTML = `
@@ -477,9 +517,476 @@ function initDailySkeletonUI() {
   renderGrid(grid);
 }
 
-// --- Time Rules & Overrides UI (unchanged logic; omitted for brevity) ---
-// (Rendering functions are inlined below)
+/**
+ * Renders the UI for the "Trips" tab
+ */
+function renderTripsForm() {
+  tripsFormContainer.innerHTML = ""; // Clear only the form container
 
+  const form = document.createElement('div');
+  form.style.border = '1px solid #ccc';
+  form.style.padding = '15px';
+  form.style.borderRadius = '8px';
+
+  form.innerHTML = `
+<label for="tripName" style="display: block; margin-bottom: 5px; font-weight: 600;">Trip Name:</label>
+<input type="text" id="tripName" placeholder="e.g., Museum Trip" style="width: 250px;">
+
+<label for="tripStart" style="display: inline-block; margin-top: 10px; font-weight: 600;">Start Time:</label>
+<input id="tripStart" placeholder="e.g., 9:00am" style="margin-right: 8px;">
+
+<label for="tripEnd" style="display: inline-block; font-weight: 600;">End Time:</label>
+<input id="tripEnd" placeholder="e.g., 2:00pm" style="margin-right: 8px;">
+
+<p style="margin-top: 15px; font-weight: 600;">Select Divisions (Trip will apply to all bunks in the division):</p>
+`;
+
+  const divisions = masterSettings.app1.divisions || {};
+  const availableDivisions = masterSettings.app1.availableDivisions || [];
+
+  const divisionChipBox = document.createElement('div');
+  divisionChipBox.className = 'chips';
+  divisionChipBox.style.marginBottom = '5px';
+
+  availableDivisions.forEach(divName => {
+    const divColor = divisions[divName]?.color || '#333';
+    const chip = createChip(divName, divColor, true); // true = isDivision
+    divisionChipBox.appendChild(chip);
+  });
+  form.appendChild(divisionChipBox);
+
+  const addBtn = document.createElement('button');
+  addBtn.textContent = 'Add Trip to Skeleton';
+  addBtn.className = 'bunk-button';
+  addBtn.style.background = '#007BFF';
+  addBtn.style.color = 'white';
+  addBtn.style.marginTop = '15px';
+
+  addBtn.onclick = () => {
+    const nameEl = form.querySelector('#tripName');
+    const startEl = form.querySelector('#tripStart');
+    const endEl = form.querySelector('#tripEnd');
+    if (!nameEl || !startEl || !endEl) return;
+
+    const name = nameEl.value.trim();
+    const start = startEl.value;
+    const end = endEl.value;
+    const selectedDivisions = Array.from(divisionChipBox.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
+
+    if (!name || !start || !end) {
+      alert('Please enter a name, start time, and end time for the trip.');
+      return;
+    }
+    if (selectedDivisions.length === 0) {
+      alert('Please select at least one division for the trip.');
+      return;
+    }
+
+    const tripStartMin = parseTimeToMinutes(start);
+    const tripEndMin = parseTimeToMinutes(end);
+    if (tripStartMin == null || tripEndMin == null || tripEndMin <= tripStartMin) {
+        alert('Invalid time range. Please use formats like "9:00am" and ensure end is after start.');
+        return;
+    }
+
+    loadDailySkeleton(); 
+    
+    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(item => {
+        if (!selectedDivisions.includes(item.division)) return true; 
+        const itemStartMin = parseTimeToMinutes(item.startTime);
+        const itemEndMin = parseTimeToMinutes(item.endTime);
+        if (itemStartMin == null || itemEndMin == null) return true;
+        const overlaps = (itemStartMin < tripEndMin) && (itemEndMin > tripStartMin);
+        return !overlaps;
+    });
+    
+    selectedDivisions.forEach(divName => {
+         dailyOverrideSkeleton.push({
+            id: `evt_${Math.random().toString(36).slice(2, 9)}`,
+            type: 'pinned',
+            event: name, // Trip Name
+            division: divName,
+            startTime: start,
+            endTime: end
+         });
+    });
+    
+    saveDailySkeleton();
+    
+    const gridContainer = skeletonContainer.querySelector('#daily-skeleton-grid');
+    if (gridContainer) renderGrid(gridContainer);
+    
+    nameEl.value = ""; startEl.value = ""; endEl.value = "";
+    form.querySelectorAll('.bunk-button.selected').forEach(chip => chip.click());
+  };
+
+  form.appendChild(addBtn);
+  tripsFormContainer.appendChild(form);
+}
+
+/**
+ * NEW: Renders the UI for the "Bunk Specific" tab
+ */
+function renderBunkOverridesUI() {
+    bunkOverridesContainer.innerHTML = ""; // Clear
+
+    // --- 1. Get all bunks, grouped by division ---
+    const divisions = masterSettings.app1.divisions || {};
+    const availableDivisions = masterSettings.app1.availableDivisions || [];
+    const allBunksByDiv = {};
+    availableDivisions.forEach(divName => {
+        allBunksByDiv[divName] = (divisions[divName]?.bunks || []).sort();
+    });
+
+    // --- 2. Get all possible activities ---
+    const allSports = (masterSettings.app1.fields || []).flatMap(f => f.activities || []);
+    const allSpecials = (masterSettings.app1.specialActivities || []).map(s => s.name);
+    const allActivities = [...new Set([...allSports, ...allSpecials])].sort();
+
+    // --- 3. Build the Form ---
+    const form = document.createElement('div');
+    form.style.border = '1px solid #ccc';
+    form.style.padding = '15px';
+    form.style.borderRadius = '8px';
+    form.style.marginBottom = '20px';
+
+    // Activity Selector
+    let activityOptions = `<option value="">-- Select an Activity --</option>`;
+    allActivities.forEach(act => {
+        activityOptions += `<option value="${act}">${act}</option>`;
+    });
+    form.innerHTML = `
+      <label for="bunk-override-activity" style="display: block; margin-bottom: 5px; font-weight: 600;">Activity:</label>
+      <select id="bunk-override-activity" style="width: 250px; padding: 5px; font-size: 1em;">${activityOptions}</select>
+
+      <label for="bunk-override-start" style="display: inline-block; margin-top: 10px; font-weight: 600;">Start Time:</label>
+      <input id="bunk-override-start" placeholder="e.g., 9:00am" style="margin-right: 8px;">
+
+      <label for="bunk-override-end" style="display: inline-block; font-weight: 600;">End Time:</label>
+      <input id="bunk-override-end" placeholder="e.g., 10:00am" style="margin-right: 8px;">
+
+      <p style="margin-top: 15px; font-weight: 600;">Select Bunks:</p>
+    `;
+
+    // Bunk Chip Pickers
+    availableDivisions.forEach(divName => {
+        const bunks = allBunksByDiv[divName];
+        if (bunks.length === 0) return;
+
+        const divLabel = document.createElement('div');
+        divLabel.textContent = divName;
+        divLabel.style.fontWeight = 'bold';
+        divLabel.style.marginTop = '8px';
+        form.appendChild(divLabel);
+
+        const bunkChipBox = document.createElement('div');
+        bunkChipBox.className = 'chips';
+        bunkChipBox.style.marginBottom = '5px';
+        bunks.forEach(bunkName => {
+            const chip = createChip(bunkName, divisions[divName]?.color || '#ccc');
+            bunkChipBox.appendChild(chip);
+        });
+        form.appendChild(bunkChipBox);
+    });
+
+    // Add Button
+    const addBtn = document.createElement('button');
+    addBtn.textContent = 'Add Pinned Activity';
+    addBtn.className = 'bunk-button';
+    addBtn.style.background = '#007BFF';
+    addBtn.style.color = 'white';
+    addBtn.style.marginTop = '15px';
+    
+    addBtn.onclick = () => {
+        const activityEl = form.querySelector('#bunk-override-activity');
+        const startEl = form.querySelector('#bunk-override-start');
+        const endEl = form.querySelector('#bunk-override-end');
+        const selectedBunks = Array.from(form.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
+
+        const activity = activityEl.value;
+        const start = startEl.value.trim();
+        const end = endEl.value.trim();
+
+        if (!activity) { alert('Please select an activity.'); return; }
+        if (!start || !end) { alert('Please enter a start and end time.'); return; }
+        if (selectedBunks.length === 0) { alert('Please select at least one bunk.'); return; }
+        
+        const startMin = parseTimeToMinutes(start);
+        const endMin = parseTimeToMinutes(end);
+        if (startMin == null || endMin == null || endMin <= startMin) {
+            alert('Invalid time range. Please use formats like "9:00am" and ensure end is after start.');
+            return;
+        }
+
+        // Load, modify, and save the overrides list
+        const overrides = window.loadCurrentDailyData?.().bunkActivityOverrides || [];
+        selectedBunks.forEach(bunk => {
+            overrides.push({
+                id: uid(),
+                bunk: bunk,
+                activity: activity,
+                startTime: start,
+                endTime: end
+            });
+        });
+        window.saveCurrentDailyData("bunkActivityOverrides", overrides);
+        currentOverrides.bunkActivityOverrides = overrides; // Update local cache
+
+        // Reset form and re-render this UI
+        activityEl.value = "";
+        startEl.value = "";
+        endEl.value = "";
+        form.querySelectorAll('.bunk-button.selected').forEach(chip => chip.click());
+        renderBunkOverridesUI(); // Refresh the list
+    };
+    
+    form.appendChild(addBtn);
+    bunkOverridesContainer.appendChild(form);
+
+    // --- 4. Build the List of Existing Overrides ---
+    const listContainer = document.createElement('div');
+    listContainer.id = "bunk-overrides-list-container";
+    
+    const overrides = currentOverrides.bunkActivityOverrides;
+    if (overrides.length === 0) {
+        listContainer.innerHTML = `<p class="muted">No bunk-specific activities added yet.</p>`;
+    } else {
+        overrides.forEach(item => {
+            const el = document.createElement('div');
+            el.className = 'item'; // Use style from styles.css
+            el.innerHTML = `
+              <div style="flex-grow:1;">
+                <div><strong>${item.bunk}</strong> &raquo; ${item.activity}</div>
+                <div class="muted" style="font-size: 0.9em;">${item.startTime} - ${item.endTime}</div>
+              </div>
+              <button data-id="${item.id}" style="padding: 6px 10px; border-radius:4px; cursor:pointer; background: #c0392b; color: white; border: none;">Remove</button>
+            `;
+            el.querySelector('button').onclick = () => {
+                let currentList = window.loadCurrentDailyData?.().bunkActivityOverrides || [];
+                currentList = currentList.filter(o => o.id !== item.id);
+                window.saveCurrentDailyData("bunkActivityOverrides", currentList);
+                currentOverrides.bunkActivityOverrides = currentList;
+                renderBunkOverridesUI(); // Refresh
+            };
+            listContainer.appendChild(el);
+        });
+    }
+    bunkOverridesContainer.appendChild(listContainer);
+}
+
+/**
+ * NEW: Renders the UI for the "Resource Availability" tab
+ */
+function renderResourceOverridesUI() {
+    resourceOverridesContainer.innerHTML = ""; // Clear
+
+    // Create the two-column layout
+    resourceOverridesContainer.innerHTML = `
+      <div style="display: flex; flex-wrap: wrap; gap: 20px;">
+        <div style="flex: 1; min-width: 300px;">
+          <h4>Fields</h4><div id="override-fields-list" class="master-list"></div>
+          <h4 style="margin-top: 15px;">Special Activities</h4><div id="override-specials-list" class="master-list"></div>
+          <h4 style="margin-top: 15px;">Leagues</h4><div id="override-leagues-list" class="master-list"></div>
+          <h4 style="margin-top: 15px;">Specialty Leagues</h4><div id="override-specialty-leagues-list" class="master-list"></div>
+        </div>
+        <div style="flex: 2; min-width: 400px; position: sticky; top: 20px;">
+          <h4>Details</h4>
+          <div id="override-detail-pane" class="detail-pane"><p class="muted">Select an item from the left to edit its details.</p></div>
+        </div>
+      </div>
+    `;
+
+    // Get element references
+    const overrideFieldsListEl = document.getElementById("override-fields-list");
+    const overrideSpecialsListEl = document.getElementById("override-specials-list");
+    const overrideLeaguesListEl = document.getElementById("override-leagues-list");
+    const overrideSpecialtyLeaguesListEl = document.getElementById("override-specialty-leagues-list");
+    
+    // --- Render Master Lists ---
+    const saveOverrides = () => {
+        const dailyData = window.loadCurrentDailyData?.() || {};
+        const fullOverrides = dailyData.overrides || {};
+        fullOverrides.leagues = currentOverrides.leagues;
+        fullOverrides.disabledFields = currentOverrides.disabledFields;
+        fullOverrides.disabledSpecials = currentOverrides.disabledSpecials;
+        window.saveCurrentDailyData("overrides", fullOverrides);
+    };
+
+    const fields = masterSettings.app1.fields || [];
+    if (fields.length === 0) overrideFieldsListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No fields found in Setup.</p>`;
+    fields.forEach(item => {
+        const isDisabled = currentOverrides.disabledFields.includes(item.name);
+        const onToggle = (isEnabled) => {
+            if (isEnabled) currentOverrides.disabledFields = currentOverrides.disabledFields.filter(name => name !== item.name);
+            else if (!currentOverrides.disabledFields.includes(item.name)) currentOverrides.disabledFields.push(item.name);
+            saveOverrides();
+        };
+        overrideFieldsListEl.appendChild(createOverrideMasterListItem('field', item.name, !isDisabled, onToggle));
+    });
+
+    const specials = masterSettings.app1.specialActivities || [];
+    if (specials.length === 0) overrideSpecialsListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No special activities found in Setup.</p>`;
+    specials.forEach(item => {
+        const isDisabled = currentOverrides.disabledSpecials.includes(item.name);
+        const onToggle = (isEnabled) => {
+            if (isEnabled) currentOverrides.disabledSpecials = currentOverrides.disabledSpecials.filter(name => name !== item.name);
+            else if (!currentOverrides.disabledSpecials.includes(item.name)) currentOverrides.disabledSpecials.push(item.name);
+            saveOverrides();
+        };
+        overrideSpecialsListEl.appendChild(createOverrideMasterListItem('special', item.name, !isDisabled, onToggle));
+    });
+
+    const leagues = masterSettings.leaguesByName || {};
+    const leagueNames = Object.keys(leagues);
+    if (leagueNames.length === 0) overrideLeaguesListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No leagues found in Setup.</p>`;
+    leagueNames.forEach(name => {
+        const isDisabled = currentOverrides.leagues.includes(name);
+        const onToggle = (isEnabled) => {
+            if (isEnabled) currentOverrides.leagues = currentOverrides.leagues.filter(l => l !== name);
+            else if (!currentOverrides.leagues.includes(name)) currentOverrides.leagues.push(name);
+            saveOverrides();
+        };
+        overrideLeaguesListEl.appendChild(createOverrideMasterListItem('league', name, !isDisabled, onToggle));
+    });
+
+    const specialtyLeagues = masterSettings.specialtyLeagues || {};
+    const specialtyLeagueNames = Object.values(specialtyLeagues).map(l => l.name).sort();
+    if (specialtyLeagueNames.length === 0) overrideSpecialtyLeaguesListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No specialty leagues found in Setup.</p>`;
+    specialtyLeagueNames.forEach(name => {
+        const isDisabled = currentOverrides.disabledSpecialtyLeagues.includes(name);
+        const onToggle = (isEnabled) => {
+            if (isEnabled) currentOverrides.disabledSpecialtyLeagues = currentOverrides.disabledSpecialtyLeagues.filter(l => l !== name);
+            else if (!currentOverrides.disabledSpecialtyLeagues.includes(name)) currentOverrides.disabledSpecialtyLeagues.push(name);
+            window.saveCurrentDailyData("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
+        };
+        overrideSpecialtyLeaguesListEl.appendChild(createOverrideMasterListItem('specialty_league', name, !isDisabled, onToggle));
+    });
+    
+    // --- Render Detail Pane ---
+    renderOverrideDetailPane();
+}
+
+// (Helper functions for Resource Availability)
+let selectedOverrideId = null; 
+function createOverrideMasterListItem(type, name, isEnabled, onToggle) {
+    const el = document.createElement('div');
+    el.className = 'list-item';
+    const id = `${type}-${name}`;
+    if (id === selectedOverrideId) el.classList.add('selected');
+    
+    const nameEl = document.createElement('span');
+    nameEl.className = 'list-item-name';
+    nameEl.textContent = name;
+    el.appendChild(nameEl);
+    
+    nameEl.onclick = () => {
+        selectedOverrideId = id;
+        renderResourceOverridesUI(); // Re-render the entire resources pane
+        renderOverrideDetailPane(); // Then update the detail pane
+    };
+
+    const tog = document.createElement("label"); 
+    tog.className = "switch";
+    tog.title = isEnabled ? "Click to disable for today" : "Click to enable for today";
+    tog.onclick = (e) => e.stopPropagation();
+    
+    const cb = document.createElement("input"); 
+    cb.type = "checkbox"; 
+    cb.checked = isEnabled;
+    cb.onchange = (e) => { 
+        e.stopPropagation();
+        onToggle(cb.checked); 
+        tog.title = cb.checked ? "Click to disable for today" : "Click to enable for today";
+    };
+    
+    const sl = document.createElement("span"); 
+    sl.className = "slider";
+    
+    tog.appendChild(cb); 
+    tog.appendChild(sl);
+    el.appendChild(tog);
+
+    return el;
+}
+
+function renderOverrideDetailPane(){
+    const overrideDetailPaneEl = document.getElementById("override-detail-pane");
+    if (!overrideDetailPaneEl) return;
+    
+    if (!selectedOverrideId) {
+        overrideDetailPaneEl.innerHTML = `<p class="muted">Select an item from the left to edit its details.</p>`;
+        return;
+    }
+    
+    overrideDetailPaneEl.innerHTML = "";
+    const [type, name] = selectedOverrideId.split(/-(.+)/);
+
+    if (type === 'field' || type === 'special') {
+        const item = (type === 'field') 
+            ? (masterSettings.app1.fields || []).find(f => f.name === name)
+            : (masterSettings.app1.specialActivities || []).find(s => s.name === name);
+            
+        if (!item) {
+            overrideDetailPaneEl.innerHTML = `<p style="color: red;">Error: Could not find item.</p>`;
+            return;
+        }
+
+        const globalRules = item.timeRules || [];
+        if (!currentOverrides.dailyFieldAvailability[name]) {
+            currentOverrides.dailyFieldAvailability[name] = [];
+        }
+        const dailyRules = currentOverrides.dailyFieldAvailability[name];
+
+        const onSave = () => {
+            currentOverrides.dailyFieldAvailability[name] = dailyRules;
+            window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+            renderOverrideDetailPane();
+        };
+
+        overrideDetailPaneEl.appendChild(
+            renderTimeRulesUI(name, globalRules, dailyRules, onSave)
+        );
+        
+        if (type === 'field') {
+            const sportListContainer = document.createElement('div');
+            sportListContainer.className = 'sport-override-list';
+            sportListContainer.innerHTML = `<strong>Daily Sport Availability for ${name}</strong>`;
+            
+            const sports = item.activities || [];
+            if (sports.length === 0) {
+                sportListContainer.innerHTML += `<p class="muted" style="margin: 5px 0 0 10px; font-size: 0.9em;">No sports are assigned to this field in the "Fields" tab.</p>`;
+            }
+            
+            const disabledToday = currentOverrides.dailyDisabledSportsByField[name] || [];
+            
+            sports.forEach(sport => {
+                const isEnabled = !disabledToday.includes(sport);
+                const el = createCheckbox(sport, isEnabled);
+                
+                el.checkbox.onchange = () => {
+                    let list = currentOverrides.dailyDisabledSportsByField[name] || [];
+                    if (el.checkbox.checked) {
+                        list = list.filter(s => s !== sport);
+                    } else {
+                        if (!list.includes(sport)) list.push(sport);
+                    }
+                    currentOverrides.dailyDisabledSportsByField[name] = list;
+                    window.saveCurrentDailyData("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
+                };
+                sportListContainer.appendChild(el.wrapper);
+            });
+            overrideDetailPaneEl.appendChild(sportListContainer);
+        }
+    }
+    else if (type === 'league') {
+        overrideDetailPaneEl.innerHTML = `<p class="muted">Enable or disable this league for today using the toggle in the list on the left.</p>`;
+    }
+    else if (type === 'specialty_league') {
+        overrideDetailPaneEl.innerHTML = `<p class="muted">Enable or disable this league for today using the toggle in the list on the left.</p>`;
+    }
+}
+
+// --- Common Helpers ---
 function renderTimeRulesUI(itemName, globalRules, dailyRules, onSave) {
     const container = document.createElement("div");
     
@@ -592,296 +1099,6 @@ function renderTimeRulesUI(itemName, globalRules, dailyRules, onSave) {
 
     return container;
 }
-
-function renderTripsForm() {
-  tripsFormContainer.innerHTML = ""; // Clear only the form container
-
-  const form = document.createElement('div');
-  form.style.border = '1px solid #ccc';
-  form.style.padding = '15px';
-  form.style.borderRadius = '8px';
-
-  form.innerHTML = `
-<label for="tripName" style="display: block; margin-bottom: 5px; font-weight: 600;">Trip Name:</label>
-<input type="text" id="tripName" placeholder="e.g., Museum Trip" style="width: 250px;">
-
-<label for="tripStart" style="display: inline-block; margin-top: 10px; font-weight: 600;">Start Time:</label>
-<input id="tripStart" placeholder="e.g., 9:00am" style="margin-right: 8px;">
-
-<label for="tripEnd" style="display: inline-block; font-weight: 600;">End Time:</label>
-<input id="tripEnd" placeholder="e.g., 2:00pm" style="margin-right: 8px;">
-
-<p style="margin-top: 15px; font-weight: 600;">Select Divisions (Trip will apply to all bunks in the division):</p>
-`;
-
-  const divisions = masterSettings.app1.divisions || {};
-  const availableDivisions = masterSettings.app1.availableDivisions || [];
-
-  // 1. Create Division Chip Box
-  const divisionChipBox = document.createElement('div');
-  divisionChipBox.className = 'chips';
-  divisionChipBox.style.marginBottom = '5px';
-
-  availableDivisions.forEach(divName => {
-    const divColor = divisions[divName]?.color || '#333';
-    const chip = createChip(divName, divColor, true); // true = isDivision
-    divisionChipBox.appendChild(chip);
-  });
-
-  form.appendChild(divisionChipBox);
-
-  // 2. Add Button
-  const addBtn = document.createElement('button');
-  addBtn.textContent = 'Add Trip to Skeleton';
-  addBtn.className = 'bunk-button';
-  addBtn.style.background = '#007BFF';
-  addBtn.style.color = 'white';
-  addBtn.style.marginTop = '15px';
-
-  // --- OnClick Logic ---
-  addBtn.onclick = () => {
-    const nameEl = form.querySelector('#tripName');
-    const startEl = form.querySelector('#tripStart');
-    const endEl = form.querySelector('#tripEnd');
-    if (!nameEl || !startEl || !endEl) return;
-
-    const name = nameEl.value.trim();
-    const start = startEl.value;
-    const end = endEl.value;
-    const selectedDivisions = Array.from(divisionChipBox.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
-
-    if (!name || !start || !end) {
-      alert('Please enter a name, start time, and end time for the trip.');
-      return;
-    }
-    if (selectedDivisions.length === 0) {
-      alert('Please select at least one division for the trip.');
-      return;
-    }
-
-    const tripStartMin = parseTimeToMinutes(start);
-    const tripEndMin = parseTimeToMinutes(end);
-    if (tripStartMin == null || tripEndMin == null || tripEndMin <= tripStartMin) {
-        alert('Invalid time range. Please use formats like "9:00am" and ensure end is after start.');
-        return;
-    }
-
-    loadDailySkeleton(); // Ensure we have the latest
-    
-    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(item => {
-        if (!selectedDivisions.includes(item.division)) return true; 
-        const itemStartMin = parseTimeToMinutes(item.startTime);
-        const itemEndMin = parseTimeToMinutes(item.endTime);
-        if (itemStartMin == null || itemEndMin == null) return true;
-        const overlaps = (itemStartMin < tripEndMin) && (itemEndMin > tripStartMin);
-        return !overlaps;
-    });
-    
-    selectedDivisions.forEach(divName => {
-         dailyOverrideSkeleton.push({
-            id: `evt_${Math.random().toString(36).slice(2, 9)}`,
-            type: 'pinned',
-            event: name, // Trip Name
-            division: divName,
-            startTime: start,
-            endTime: end
-         });
-    });
-    
-    saveDailySkeleton(); // Saves `dailyOverrideSkeleton` to current day
-    
-    const gridContainer = skeletonContainer.querySelector('#daily-skeleton-grid');
-    if (gridContainer) renderGrid(gridContainer);
-    
-    nameEl.value = ""; startEl.value = ""; endEl.value = "";
-    form.querySelectorAll('.bunk-button.selected').forEach(chip => chip.click());
-  };
-
-  form.appendChild(addBtn);
-  tripsFormContainer.appendChild(form);
-}
-
-function renderOverrideMasterLists() {
-    overrideFieldsListEl.innerHTML = "";
-    overrideSpecialsListEl.innerHTML = "";
-    overrideLeaguesListEl.innerHTML = "";
-    overrideSpecialtyLeaguesListEl.innerHTML = "";
-    
-    const saveOverrides = () => {
-        const dailyData = window.loadCurrentDailyData?.() || {};
-        const fullOverrides = dailyData.overrides || {};
-        fullOverrides.leagues = currentOverrides.leagues;
-        fullOverrides.disabledFields = currentOverrides.disabledFields;
-        fullOverrides.disabledSpecials = currentOverrides.disabledSpecials;
-        window.saveCurrentDailyData("overrides", fullOverrides);
-    };
-
-    const fields = masterSettings.app1.fields || [];
-    if (fields.length === 0) overrideFieldsListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No fields found in Setup.</p>`;
-    fields.forEach(item => {
-        const isDisabled = currentOverrides.disabledFields.includes(item.name);
-        const onToggle = (isEnabled) => {
-            if (isEnabled) currentOverrides.disabledFields = currentOverrides.disabledFields.filter(name => name !== item.name);
-            else if (!currentOverrides.disabledFields.includes(item.name)) currentOverrides.disabledFields.push(item.name);
-            saveOverrides();
-        };
-        overrideFieldsListEl.appendChild(createOverrideMasterListItem('field', item.name, !isDisabled, onToggle));
-    });
-
-    const specials = masterSettings.app1.specialActivities || [];
-    if (specials.length === 0) overrideSpecialsListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No special activities found in Setup.</p>`;
-    specials.forEach(item => {
-        const isDisabled = currentOverrides.disabledSpecials.includes(item.name);
-        const onToggle = (isEnabled) => {
-            if (isEnabled) currentOverrides.disabledSpecials = currentOverrides.disabledSpecials.filter(name => name !== item.name);
-            else if (!currentOverrides.disabledSpecials.includes(item.name)) currentOverrides.disabledSpecials.push(item.name);
-            saveOverrides();
-        };
-        overrideSpecialsListEl.appendChild(createOverrideMasterListItem('special', item.name, !isDisabled, onToggle));
-    });
-
-    const leagues = masterSettings.leaguesByName || {};
-    const leagueNames = Object.keys(leagues);
-    if (leagueNames.length === 0) overrideLeaguesListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No leagues found in Setup.</p>`;
-    leagueNames.forEach(name => {
-        const isDisabled = currentOverrides.leagues.includes(name);
-        const onToggle = (isEnabled) => {
-            if (isEnabled) currentOverrides.leagues = currentOverrides.leagues.filter(l => l !== name);
-            else if (!currentOverrides.leagues.includes(name)) currentOverrides.leagues.push(name);
-            saveOverrides();
-        };
-        overrideLeaguesListEl.appendChild(createOverrideMasterListItem('league', name, !isDisabled, onToggle));
-    });
-
-    const specialtyLeagues = masterSettings.specialtyLeagues || {};
-    const specialtyLeagueNames = Object.values(specialtyLeagues).map(l => l.name).sort();
-    if (specialtyLeagueNames.length === 0) overrideSpecialtyLeaguesListEl.innerHTML = `<p class="muted" style="font-size: 0.9em;">No specialty leagues found in Setup.</p>`;
-    specialtyLeagueNames.forEach(name => {
-        const isDisabled = currentOverrides.disabledSpecialtyLeagues.includes(name);
-        const onToggle = (isEnabled) => {
-            if (isEnabled) currentOverrides.disabledSpecialtyLeagues = currentOverrides.disabledSpecialtyLeagues.filter(l => l !== name);
-            else if (!currentOverrides.disabledSpecialtyLeagues.includes(name)) currentOverrides.disabledSpecialtyLeagues.push(name);
-            window.saveCurrentDailyData("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
-        };
-        overrideSpecialtyLeaguesListEl.appendChild(createOverrideMasterListItem('specialty_league', name, !isDisabled, onToggle));
-    });
-}
-
-function createOverrideMasterListItem(type, name, isEnabled, onToggle) {
-    const el = document.createElement('div');
-    el.className = 'list-item';
-    const id = `${type}-${name}`;
-    if (id === selectedOverrideId) el.classList.add('selected');
-    
-    const nameEl = document.createElement('span');
-    nameEl.className = 'list-item-name';
-    nameEl.textContent = name;
-    el.appendChild(nameEl);
-    
-    nameEl.onclick = () => {
-        selectedOverrideId = id;
-        renderOverrideMasterLists();
-        renderOverrideDetailPane();
-    };
-
-    const tog = document.createElement("label"); 
-    tog.className = "switch";
-    tog.title = isEnabled ? "Click to disable for today" : "Click to enable for today";
-    tog.onclick = (e) => e.stopPropagation();
-    
-    const cb = document.createElement("input"); 
-    cb.type = "checkbox"; 
-    cb.checked = isEnabled;
-    cb.onchange = (e) => { 
-        e.stopPropagation();
-        onToggle(cb.checked); 
-        tog.title = cb.checked ? "Click to disable for today" : "Click to enable for today";
-    };
-    
-    const sl = document.createElement("span"); 
-    sl.className = "slider";
-    
-    tog.appendChild(cb); 
-    tog.appendChild(sl);
-    el.appendChild(tog);
-
-    return el;
-}
-
-function renderOverrideDetailPane(){
-    if (!selectedOverrideId) {
-        overrideDetailPaneEl.innerHTML = `<p class="muted">Select an item from the left to edit its details.</p>`;
-        return;
-    }
-    
-    overrideDetailPaneEl.innerHTML = "";
-    const [type, name] = selectedOverrideId.split(/-(.+)/);
-
-    if (type === 'field' || type === 'special') {
-        const item = (type === 'field') 
-            ? (masterSettings.app1.fields || []).find(f => f.name === name)
-            : (masterSettings.app1.specialActivities || []).find(s => s.name === name);
-            
-        if (!item) {
-            overrideDetailPaneEl.innerHTML = `<p style="color: red;">Error: Could not find item.</p>`;
-            return;
-        }
-
-        const globalRules = item.timeRules || [];
-        if (!currentOverrides.dailyFieldAvailability[name]) {
-            currentOverrides.dailyFieldAvailability[name] = [];
-        }
-        const dailyRules = currentOverrides.dailyFieldAvailability[name];
-
-        const onSave = () => {
-            currentOverrides.dailyFieldAvailability[name] = dailyRules;
-            window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
-            renderOverrideDetailPane();
-        };
-
-        overrideDetailPaneEl.appendChild(
-            renderTimeRulesUI(name, globalRules, dailyRules, onSave)
-        );
-        
-        if (type === 'field') {
-            const sportListContainer = document.createElement('div');
-            sportListContainer.className = 'sport-override-list';
-            sportListContainer.innerHTML = `<strong>Daily Sport Availability for ${name}</strong>`;
-            
-            const sports = item.activities || [];
-            if (sports.length === 0) {
-                sportListContainer.innerHTML += `<p class="muted" style="margin: 5px 0 0 10px; font-size: 0.9em;">No sports are assigned to this field in the "Fields" tab.</p>`;
-            }
-            
-            const disabledToday = currentOverrides.dailyDisabledSportsByField[name] || [];
-            
-            sports.forEach(sport => {
-                const isEnabled = !disabledToday.includes(sport);
-                const el = createCheckbox(sport, isEnabled);
-                
-                el.checkbox.onchange = () => {
-                    let list = currentOverrides.dailyDisabledSportsByField[name] || [];
-                    if (el.checkbox.checked) {
-                        list = list.filter(s => s !== sport);
-                    } else {
-                        if (!list.includes(sport)) list.push(sport);
-                    }
-                    currentOverrides.dailyDisabledSportsByField[name] = list;
-                    window.saveCurrentDailyData("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
-                };
-                sportListContainer.appendChild(el.wrapper);
-            });
-            overrideDetailPaneEl.appendChild(sportListContainer);
-        }
-    }
-    else if (type === 'league') {
-        overrideDetailPaneEl.innerHTML = `<p class="muted">Enable or disable this league for today using the toggle in the list on the left.</p>`;
-    }
-    else if (type === 'specialty_league') {
-        overrideDetailPaneEl.innerHTML = `<p class="muted">Enable or disable this league for today using the toggle in the list on the left.</p>`;
-    }
-}
-
 function createCheckbox(name,isChecked){ const w=document.createElement('label'); w.className='override-checkbox'; const c=document.createElement('input'); c.type='checkbox'; c.checked=isChecked; const t=document.createElement('span'); t.textContent=name; w.appendChild(c); w.appendChild(t); return {wrapper:w, checkbox:c}; }
 function createChip(name,color='#007BFF',isDivision=false){ const el=document.createElement('span'); el.className='bunk-button'; el.textContent=name; el.dataset.value=name; const defaultBorder=isDivision?color:'#ccc'; el.style.borderColor=defaultBorder; el.style.backgroundColor='white'; el.style.color='black'; el.addEventListener('click',()=>{ const sel=el.classList.toggle('selected'); el.style.backgroundColor=sel?color:'white'; el.style.color=sel?'white':'black'; el.style.borderColor=sel?color:defaultBorder; }); return el; }
 
