@@ -18,6 +18,15 @@
 //   ensures it fully integrates with the "smart scheduler"
 //   (preventing same-day repeats) and updates the
 //   "freshness" history (Pass 5).
+//
+// --- FIX (League Scheduling Logic) ---
+// - **REWRITTEN: Pass 3** no longer assumes Bunk Names
+//   are the same as Team Names.
+// - It now generates matchups (e.g., "Team A vs Team B")
+//   and assigns them to pairs of available bunks
+//   (e.g., Bunk "19" and Bunk "20") in sequential order.
+// - This fixes the bug where 2nd and 3rd grade leagues
+//   were not scheduling games.
 // =================================================================
 
 (function() {
@@ -223,6 +232,7 @@ schedulableSlotBlocks.push({ divName: item.division, bunk: bunk, event: item.eve
 });
 
 // ===== PASS 3: NEW "League Pass" (With Smart Shuffle) =====
+// --- THIS SECTION IS REWRITTEN ---
 const leagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'League Game');
 const specialtyLeagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'Specialty League');
 const remainingBlocks = schedulableSlotBlocks.filter(b => b.event !== 'League Game' && b.event !== 'Specialty League');
@@ -258,7 +268,7 @@ for (const group of sortedLeagueGroups) {
 const divLeagueName = group.divLeagueName;
 const divLeague = group.divLeague;
 const leagueTeams = (divLeague.teams || []).map(t => String(t).trim()).filter(Boolean);
-if (leagueTeams.length === 0) continue; // Changed return to continue
+if (leagueTeams.length === 0) continue;
 
 const availableLeagueSports = (divLeague.sports || []).filter(s => fieldsBySport[s]);
 const leagueHistory = rotationHistory.leagues[divLeagueName] || {};
@@ -268,8 +278,10 @@ matchups = window.getLeagueMatchups(divLeagueName, leagueTeams) || [];
 } else {
 matchups = pairRoundRobin(leagueTeams);
 }
-const allBunksInGroup = Array.from(group.bunks);
-const bunkToGameMap = {};
+
+// Get all bunks for this group and sort them consistently
+const allBunksInGroup = Array.from(group.bunks).sort();
+let bunkIndex = 0; // Pointer for assigning bunks in pairs
 
 let firstDivName = null;
 if (allBunksInGroup.length > 0) {
@@ -279,9 +291,21 @@ firstDivName = Object.keys(divisions).find(div => divisions[div].bunks.includes(
 if (!firstDivName) continue;
 const blockBase = { slots: group.slots, divName: firstDivName };
 
+// Loop through each matchup
 for (const [teamA, teamB] of matchups) {
 if (teamA === "BYE" || teamB === "BYE") continue;
 
+// Check if we have at least two bunks left to assign
+if (bunkIndex + 1 >= allBunksInGroup.length) {
+break; // Not enough bunks left for this matchup
+}
+
+// Get the next two bunks from the sorted list
+const bunkA = allBunksInGroup[bunkIndex];
+const bunkB = allBunksInGroup[bunkIndex + 1];
+bunkIndex += 2; // Move the pointer for the next game
+
+// Find the best field/sport for this matchup
 const sortedSports = [...availableLeagueSports].sort((a, b) => {
 const lastA = leagueHistory[a] || 0;
 const lastB = leagueHistory[b] || 0;
@@ -289,6 +313,8 @@ return lastA - lastB;
 });
 
 let assigned = false;
+let pickToAssign = null;
+
 for (const sport of sortedSports) {
 const possibleFields = fieldsBySport[sport] || [];
 let fieldName = null;
@@ -300,9 +326,7 @@ break;
 }
 if (fieldName) {
 const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
-const pick = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
-bunkToGameMap[teamA] = pick;
-bunkToGameMap[teamB] = pick;
+pickToAssign = { field: fieldName, sport: fullMatchupLabel, _h2h: true, vs: null, _activity: sport };
 markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
 leagueHistory[sport] = timestamp;
 assigned = true;
@@ -311,24 +335,33 @@ break;
 }
 if (!assigned) {
 const fullMatchupLabel = `${teamA} vs ${teamB} (No Field)`;
-const pick = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null, _activity: "League" };
-bunkToGameMap[teamA] = pick;
-bunkToGameMap[teamB] = pick;
+pickToAssign = { field: "No Field", sport: fullMatchupLabel, _h2h: true, vs: null, _activity: "League" };
+}
+
+// Assign the game to both bunks
+const bunkADiv = Object.keys(divisions).find(div => divisions[div].bunks.includes(bunkA));
+const bunkBDiv = Object.keys(divisions).find(div => divisions[div].bunks.includes(bunkB));
+
+if (bunkADiv) {
+fillBlock({ slots: group.slots, bunk: bunkA, divName: bunkADiv }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
+}
+if (bunkBDiv) {
+fillBlock({ slots: group.slots, bunk: bunkB, divName: bunkBDiv }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
 }
 }
 
-allBunksInGroup.forEach((bunk, bunkIndex) => {
-const pickToAssign = bunkToGameMap[bunk];
-const bunkDivName = Object.keys(divisions).find(div => divisions[div].bunks.includes(bunk));
-if (!bunkDivName) return;
+// Assign "No Game" to any remaining bunks
+while (bunkIndex < allBunksInGroup.length) {
+const leftoverBunk = allBunksInGroup[bunkIndex];
+const bunkDivName = Object.keys(divisions).find(div => divisions[div].bunks.includes(leftoverBunk));
+if (bunkDivName) {
+fillBlock({ slots: group.slots, bunk: leftoverBunk, divName: bunkDivName }, { field: "No Game", sport: null, _h2h: true, _activity: "League" }, fieldUsageBySlot, yesterdayHistory, true);
+}
+bunkIndex++;
+}
+}
+// --- END OF REWRITTEN SECTION ---
 
-if (pickToAssign) {
-fillBlock({ slots: group.slots, bunk: bunk, divName: bunkDivName }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
-} else {
-fillBlock({ slots: group.slots, bunk: bunk, divName: bunkDivName }, { field: "No Game", sport: null, _h2h: true, _activity: "League" }, fieldUsageBySlot, yesterdayHistory, true);
-}
-});
-}
 
 // ===== PASS 3.5: NEW "Specialty League Pass" =====
 const specialtyLeagueGroups = {};
