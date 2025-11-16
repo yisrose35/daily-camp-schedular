@@ -770,7 +770,7 @@ for (const group of sortedLeagueGroups) {
         window.updateTable?.();
         window.saveSchedule?.();
         return true;
-    };
+    }
 
     // =================================================================
     // Helper functions for Passes
