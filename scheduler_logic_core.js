@@ -1,7 +1,7 @@
 // =================================================================
 // scheduler_logic_core.js — ULTIMATE LEAGUE SUPERCHARGER EDITION
 // "Two Brains" + League Mirroring + Ultimate Sports Applicator + Ultimate Rotation
-// Full drop-in replacement — Nov 14, 2025
+// Full drop-in replacement — Nov 15, 2025
 // =================================================================
 (function () {
     'use strict';
@@ -42,86 +42,133 @@
     function fmtTime(d) {
         if (!d) return "";
         let h = d.getHours(),
-            m = d.getMinutes().toString().padStart(2,"0"),
+            m = d.getMinutes().toString().padStart(2, "0"),
             ap = h >= 12 ? "PM" : "AM";
         h = h % 12 || 12;
         return `${h}:${m} ${ap}`;
     }
 
     // =================================================================
+    // ROUND-ROBIN GENERATOR (Circle Method)
+    // =================================================================
+    function generateRoundRobin(teams) {
+        const t = teams.map(String);
+        if (t.length < 2) return [];
+        const n = t.length;
+        const rounds = [];
+
+        // If odd, we still run a circle method; BYE pairs get filtered later
+        let arr = [...t];
+        if (arr.length % 2 === 1) {
+            arr.push("BYE");
+        }
+        const total = arr.length;
+        const fixed = arr[0];
+        let rotating = arr.slice(1);
+
+        for (let r = 0; r < total - 1; r++) {
+            const round = [];
+
+            // fixed vs first rotating
+            round.push([fixed, rotating[0]]);
+
+            // remaining pairs
+            for (let i = 1; i < total / 2; i++) {
+                const a = rotating[i];
+                const b = rotating[rotating.length - i];
+                round.push([a, b]);
+            }
+
+            // filter BYE
+            const clean = round.filter(
+                ([a, b]) => a && b && a !== "BYE" && b !== "BYE"
+            );
+            rounds.push(clean);
+
+            // rotate
+            rotating.unshift(rotating.pop());
+        }
+
+        return rounds;
+    }
+
+    // =================================================================
     // ULTIMATE LEAGUE ROTATION — Perfect Multi-Dimensional Fairness
-    // Replaces old matchup + sport logic completely
     // =================================================================
     window.leagueRoundState = window.leagueRoundState || {};
 
+    // Uses round-robin over teams + Latin-square style sport rotation +
+    // per-slot field uniqueness. Uses global fieldUsageBySlot + activityProperties.
     window.generateUltimateLeagueRotation = function (
         leagueName,
         teams,
         possibleSports,
         fieldsBySport,
-        blockBase,
-        fieldUsageBySlot,
-        activityProperties
+        blockBase
     ) {
         if (!teams || teams.length < 2 || !possibleSports || possibleSports.length === 0) {
             console.warn("Ultimate rotation failed for", leagueName);
             return [];
         }
 
-        // Step 1: Perfect round-robin matchups (circle method style)
         const baseRounds = generateRoundRobin(teams);
         if (baseRounds.length === 0) return [];
 
-        // Step 2: Sport Latin square — each round uses a different sport
-        const sportRotation = possibleSports.slice();
-        const rounds = baseRounds.map((matchups, i) => ({
-            round: i + 1,
-            sport: sportRotation[i % sportRotation.length],
-            matchups
-        }));
-
-        // Step 3: Assign fields with no conflicts (per-slot sets)
+        const sports = possibleSports.slice();
         const schedule = [];
-        const usedFieldsPerSlot = Array.from({ length: blockBase.slots.length }, () => new Set());
+        const slots = blockBase.slots || [];
+        const slotCount = slots.length || 1;
+        const usedFieldsPerSlot = Array.from({ length: slotCount }, () => new Set());
 
-        rounds.forEach(({ round, sport, matchups }) => {
+        baseRounds.forEach((matchups, rIndex) => {
+            const sport = sports[rIndex % sports.length];
             const availableFields = fieldsBySport[sport] || [];
             let matchupIndex = 0;
 
             matchups.forEach(([teamA, teamB]) => {
                 if (teamA === "BYE" || teamB === "BYE") {
-                    schedule.push({ round, teamA, teamB, sport, field: "BYE", isBye: true });
+                    schedule.push({
+                        round: rIndex + 1,
+                        teamA,
+                        teamB,
+                        sport,
+                        field: "BYE",
+                        isBye: true
+                    });
                     return;
                 }
 
-                const slotIdx = matchupIndex % blockBase.slots.length;
-                let assignedField = null;
+                const localSlotIdx = matchupIndex % slotCount;
+                const slotIndex = slots[localSlotIdx];
 
-                // Greedy: first available field that fits globally
+                let chosenField = null;
+                const activityProps = window.activityProperties || {};
+                const fieldUsageBySlot = window.fieldUsageBySlot || {};
+
+                // Greedy pick: first field that can actually fit
                 for (const f of availableFields) {
-                    if (!usedFieldsPerSlot[slotIdx].has(f) &&
-                        canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)
-                    ) {
-                        assignedField = f;
-                        usedFieldsPerSlot[slotIdx].add(f);
+                    if (!usedFieldsPerSlot[localSlotIdx].has(f) &&
+                        canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProps)) {
+                        chosenField = f;
+                        usedFieldsPerSlot[localSlotIdx].add(f);
                         break;
                     }
                 }
 
-                // Fallback: soft rotation if nothing "fits"
-                if (!assignedField && availableFields.length > 0) {
-                    const idx = usedFieldsPerSlot[slotIdx].size % availableFields.length;
-                    assignedField = availableFields[idx];
-                    usedFieldsPerSlot[slotIdx].add(assignedField);
+                // Fallback: soft rotation among fields even if capacity logic blocks
+                if (!chosenField && availableFields.length > 0) {
+                    const idx = usedFieldsPerSlot[localSlotIdx].size % availableFields.length;
+                    chosenField = availableFields[idx];
+                    usedFieldsPerSlot[localSlotIdx].add(chosenField);
                 }
 
                 schedule.push({
-                    round,
-                    slot: blockBase.slots[slotIdx],
+                    round: rIndex + 1,
+                    slot: slotIndex,
                     teamA,
                     teamB,
                     sport,
-                    field: assignedField || "No Field",
+                    field: chosenField || "No Field",
                     isBye: false
                 });
 
@@ -129,7 +176,7 @@
             });
         });
 
-        // Auto-advance round state (for future use)
+        // Maintain simple per-league round pointer (if you want to use it later)
         const state = window.leagueRoundState[leagueName] || { current: 0 };
         window.leagueRoundState[leagueName] = {
             current: (state.current + 1) % baseRounds.length
@@ -141,28 +188,10 @@
         return schedule;
     };
 
-    // Circle-method style round-robin
-    function generateRoundRobin(teams) {
-        const t = teams.map(String);
-        if (t.length < 2) return [];
-        const n = t.length;
-        const rounds = [];
-        for (let r = 0; r < n - 1; r++) {
-            const round = [];
-            for (let i = 0; i < n / 2; i++) {
-                const a = t[i];
-                const b = t[(n - 1 - i + r) % (n - 1)];
-                if (a && b && a !== "BYE" && b !== "BYE") round.push([a, b]);
-            }
-            rounds.push(round);
-        }
-        return rounds;
-    }
-
-    /**
-     * Main entry point, called by the "Run Optimizer" button
-     */
-    window.runSkeletonOptimizer = function(manualSkeleton) {
+    // =================================================================
+    // MAIN OPTIMIZER
+    // =================================================================
+    window.runSkeletonOptimizer = function (manualSkeleton) {
         window.scheduleAssignments = {};
         window.leagueAssignments = {};
         window.unifiedTimes = [];
@@ -189,10 +218,6 @@
         let fieldUsageBySlot = {};
         window.fieldUsageBySlot = fieldUsageBySlot;
         window.activityProperties = activityProperties;
-
-        // Track per-league, per-team usage of each sport for TODAY
-        // (kept for potential future use; not used in ultimate rotation directly)
-        const leagueTeamSportCounts = {};
 
         // ===== PASS 1: Generate Master Time Grid =====
         const globalSettings = window.loadGlobalSettings?.() || {};
@@ -225,6 +250,7 @@
             return false;
         }
 
+        // Initialize per-bunk schedule arrays
         availableDivisions.forEach(divName => {
             (divisions[divName]?.bunks || []).forEach(bunk => {
                 window.scheduleAssignments[bunk] = new Array(window.unifiedTimes.length);
@@ -232,7 +258,7 @@
         });
 
         // =================================================================
-        // ===== PASS 1.5: Place Bunk-Specific Pinned Activities ===========
+        // ===== PASS 1.5: Place Bunk-Specific Pinned Activities ============
         // =================================================================
         try {
             const dailyData = window.loadCurrentDailyData?.() || {};
@@ -263,11 +289,10 @@
         } catch (e) {
             console.error("Error placing bunk-specific overrides:", e);
         }
-        // =================================================================
-        // ===== END: PASS 1.5 =============================================
-        // =================================================================
 
-        // ===== PASS 2: Place all "Pinned" Events from the Skeleton =====
+        // =================================================================
+        // ===== PASS 2: Place all "Pinned" Events from the Skeleton =======
+        // =================================================================
         const schedulableSlotBlocks = [];
         manualSkeleton.forEach(item => {
             const allBunks = divisions[item.division]?.bunks || [];
@@ -351,13 +376,16 @@
             }
         });
 
-        // ===== PASS 3: ULTIMATE LEAGUE PASS (with mirroring) =====
+        // ===== SPLIT into types =====
         const leagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'League Game');
         const specialtyLeagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'Specialty League');
         const remainingBlocks = schedulableSlotBlocks.filter(
             b => b.event !== 'League Game' && b.event !== 'Specialty League'
         );
 
+        // =================================================================
+        // ===== PASS 3: ULTIMATE LEAGUE PASS (with mirroring) =============
+        // =================================================================
         const leagueGroups = {};
         leagueBlocks.forEach(block => {
             const leagueEntry = Object.entries(masterLeagues).find(([name, l]) =>
@@ -384,7 +412,6 @@
         });
 
         const sortedLeagueGroups = Object.values(leagueGroups).sort((a, b) => a.startTime - b.startTime);
-        const timestamp = Date.now();
 
         for (const group of sortedLeagueGroups) {
             const { leagueName, league, slots, bunks } = group;
@@ -409,15 +436,13 @@
             const sports = (league.sports || []).filter(s => fieldsBySport[s]);
             if (sports.length === 0) continue;
 
-            // NEW: use Ultimate League Rotation to get matchups + sport + field
+            // Use Ultimate League Rotation to get matchups + sport + field
             const ultimateSchedule = window.generateUltimateLeagueRotation(
                 leagueName,
                 leagueTeams,
                 sports,
                 fieldsBySport,
-                blockBase,
-                fieldUsageBySlot,
-                activityProperties
+                blockBase
             );
 
             const allMatchupLabels = [];
@@ -479,7 +504,9 @@
             });
         }
 
-        // ===== PASS 3.5: "Specialty League Pass" (unchanged mirroring) =====
+        // =================================================================
+        // ===== PASS 3.5: "Specialty League Pass" (unchanged mirroring) ===
+        // =================================================================
         const specialtyLeagueGroups = {};
         specialtyLeagueBlocks.forEach(block => {
             let key = `${block.divName}-${block.startTime}`;
@@ -509,7 +536,7 @@
             const sport = leagueEntry.sport;
             if (!sport || !fieldsBySport[sport]) return;
 
-            const bestSport = window.findBestSportForBunks(
+            const bestSport = window.findBestSportForBunks?.(
                 allBunksInGroup,
                 [sport],
                 leagueHistory
@@ -587,7 +614,9 @@
             });
         });
 
-        // ===== PASS 4: Fill remaining Schedulable Slots =====
+        // =================================================================
+        // ===== PASS 4: Fill remaining Schedulable Slots ==================
+        // =================================================================
         remainingBlocks.sort((a, b) => a.startTime - b.startTime);
 
         for (const block of remainingBlocks) {
@@ -640,9 +669,13 @@
             }
         }
 
-        // ===== PASS 5: Update Rotation History =====
+        // =================================================================
+        // ===== PASS 5: Update Rotation History ===========================
+        // =================================================================
         try {
             const historyToSave = rotationHistory;
+            const timestamp = Date.now();
+
             availableDivisions.forEach(divName => {
                 (divisions[divName]?.bunks || []).forEach(bunk => {
                     const schedule = window.scheduleAssignments[bunk] || [];
@@ -678,14 +711,18 @@
             console.error("Smart Scheduler: Failed to update rotation history.", e);
         }
 
-        // ===== PASS 6: Save unifiedTimes and Update the UI =====
+        // =================================================================
+        // ===== PASS 6: Save unifiedTimes and Update the UI ===============
+        // =================================================================
         window.saveCurrentDailyData?.("unifiedTimes", window.unifiedTimes);
         window.updateTable?.();
         window.saveSchedule?.();
         return true;
     };
 
-    // --- Helper functions for Passes ---
+    // =================================================================
+    // Helper functions for Passes
+    // =================================================================
 
     function findSlotsForRange(startMin, endMin) {
         const slots = [];
@@ -714,59 +751,6 @@
             }
             fieldUsageBySlot[slotIndex][fieldName] = usage;
         }
-    }
-
-    // --- Ultimate Sports Applicator helper for leagues (kept for reference) ---
-    function pickBestLeagueSportForMatchup(
-        teamA,
-        teamB,
-        availableLeagueSports,
-        fieldsBySport,
-        blockBase,
-        fieldUsageBySlot,
-        activityProperties,
-        leagueHistory,
-        teamCounts
-    ) {
-        let bestChoice = null;
-        let bestScore = null;
-
-        for (const sport of availableLeagueSports) {
-            const possibleFields = fieldsBySport[sport] || [];
-            let usableField = null;
-
-            for (const f of possibleFields) {
-                if (canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
-                    usableField = f;
-                    break;
-                }
-            }
-
-            const teamAStats = (teamCounts[teamA] && teamCounts[teamA][sport]) || 0;
-            const teamBStats = (teamCounts[teamB] && teamCounts[teamB][sport]) || 0;
-            const totalRepeats = teamAStats + teamBStats;
-            const lastUsed = leagueHistory[sport] || 0;
-
-            const score = {
-                repeats: totalRepeats,
-                lastUsed: lastUsed
-            };
-
-            if (!bestChoice) {
-                bestChoice = { sport, fieldName: usableField || "No Field" };
-                bestScore = score;
-            } else {
-                if (
-                    score.repeats < bestScore.repeats ||
-                    (score.repeats === bestScore.repeats && score.lastUsed < bestScore.lastUsed)
-                ) {
-                    bestChoice = { sport, fieldName: usableField || "No Field" };
-                    bestScore = score;
-                }
-            }
-        }
-
-        return bestChoice;
     }
 
     function isTimeAvailable(slotIndex, fieldProps) {
