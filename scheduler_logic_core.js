@@ -648,6 +648,9 @@
 
       const gamesPerField = Math.ceil(matchups.length / leagueFields.length);
 
+      // ===================================
+      // --- START OF CORRECTED CODE (Pass 3) ---
+      // ===================================
       for (let i = 0; i < matchups.length; i++) {
         const [teamA, teamB] = matchups[i];
         if (teamA === "BYE" || teamB === "BYE") continue;
@@ -655,6 +658,7 @@
         const fieldIndex = Math.floor(i / gamesPerField);
         const candidateField = leagueFields[fieldIndex % leagueFields.length];
         let chosenFieldName = candidateField;
+        
         if (!canLeagueGameFit(blockBase, chosenFieldName, fieldUsageBySlot, activityProperties)) {
           // look for any field that can fit
           let alt = null;
@@ -664,28 +668,39 @@
               break;
             }
           }
-          chosenFieldName = alt || "No Field";
+          // --- THIS IS THE FIX ---
+          // It will be null if no alternate field is found.
+          chosenFieldName = alt; 
+          // --- END OF FIX ---
         }
 
-        const matchupLabel = `${teamA} vs ${teamB} (${chosenSport})` +
-          (chosenFieldName && chosenFieldName !== "No Field" ? ` @ ${chosenFieldName}` : "");
-        allMatchupLabels.push(matchupLabel);
+        // --- NEW: Only proceed if a field was found ---
+        if (chosenFieldName) { 
+            const matchupLabel = `${teamA} vs ${teamB} (${chosenSport}) @ ${chosenFieldName}`;
+            allMatchupLabels.push(matchupLabel);
 
-        const pick = {
-          field: chosenFieldName,
-          sport: matchupLabel,
-          _h2h: true,
-          vs: null,
-          _activity: chosenSport
-        };
+            const pick = {
+              field: chosenFieldName,
+              sport: matchupLabel,
+              _h2h: true,
+              vs: null,
+              _activity: chosenSport
+            };
 
-        if (chosenFieldName && chosenFieldName !== "No Field") {
-          markFieldUsage(blockBase, chosenFieldName, fieldUsageBySlot);
+            if (chosenFieldName && chosenFieldName !== "No Field") { // This check is safe
+              markFieldUsage(blockBase, chosenFieldName, fieldUsageBySlot);
+            }
+
+            picksByTeam[teamA] = pick;
+            picksByTeam[teamB] = pick;
+        } else {
+            // No field available for this game.
+            // We do NOT create a pick, so this game is skipped.
         }
-
-        picksByTeam[teamA] = pick;
-        picksByTeam[teamB] = pick;
       }
+      // ===================================
+      // --- END OF CORRECTED CODE (Pass 3) ---
+      // ===================================
 
       // Distribute these picks to bunks (mirroring across divisions)
       const noGamePick = {
@@ -717,7 +732,6 @@
       rotationHistory.leagues[leagueName] = rotationHistory.leagues[leagueName] || {};
       rotationHistory.leagues[leagueName][chosenSport] = timestamp;
     }
-
     // ===== PASS 3.5: SPECIALTY LEAGUE PASS (unchanged mirroring) =====
     const specialtyLeagueGroups = {};
     specialtyLeagueBlocks.forEach(block => {
@@ -771,6 +785,9 @@
 
         const gamesPerField = Math.ceil(matchups.length / leagueFields.length);
 
+        // ===================================
+        // --- START OF CORRECTED CODE (Pass 3.5) ---
+        // ===================================
         for (let i = 0; i < matchups.length; i++) {
           const [teamA, teamB] = matchups[i];
           if (teamA === "BYE" || teamB === "BYE") continue;
@@ -779,8 +796,9 @@
           const fieldName = leagueFields[fieldIndex % leagueFields.length];
           const fullMatchupLabel = `${teamA} vs ${teamB} (${sport})`;
 
-          let pick;
-          let labelWithField;
+          let pick = null;
+          let labelWithField = null;
+
           if (fieldName && canLeagueGameFit(blockBase, fieldName, fieldUsageBySlot, activityProperties)) {
             labelWithField = `${fullMatchupLabel} @ ${fieldName}`;
             pick = {
@@ -791,21 +809,23 @@
               _activity: sport
             };
             markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
-          } else {
-            labelWithField = `${fullMatchupLabel} (No Field)`;
-            pick = {
-              field: "No Field",
-              sport: fullMatchupLabel,
-              _h2h: true,
-              vs: null,
-              _activity: sport
-            };
-          }
 
-          allMatchupLabels.push(labelWithField);
-          picksToAssign[teamA] = pick;
-          picksToAssign[teamB] = pick;
+            // --- THIS IS THE FIX ---
+            // These lines are moved *inside* the 'if' block.
+            allMatchupLabels.push(labelWithField);
+            picksToAssign[teamA] = pick;
+            picksToAssign[teamB] = pick;
+            // --- END OF FIX ---
+
+          } else {
+            // The 'else' block that assigned "No Field" is
+            // now removed. If no field is found, 'pick'
+            // remains null and nothing is assigned.
+          }
         }
+        // ===================================
+        // --- END OF CORRECTED CODE (Pass 3.5) ---
+        // ===================================
       }
 
       const noGamePick = {
@@ -828,7 +848,6 @@
         );
       });
     });
-
     // ===== PASS 4: FILL REMAINING SCHEDULABLE SLOTS =====
     remainingBlocks.sort((a, b) => a.startTime - b.startTime);
 
