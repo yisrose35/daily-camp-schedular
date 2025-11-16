@@ -574,6 +574,8 @@ const schedulableSlotBlocks = [];
 const GENERATED_EVENTS = new Set([
     "activity",
     "activities",
+    "general activity",
+    "general activity slot",
     "sports",
     "sport",
     "sports slot",
@@ -583,6 +585,7 @@ const GENERATED_EVENTS = new Set([
     "speciality league",
     "swim" // keep swim as generated so the Swim logic in Pass 4 still runs
 ]);
+
 
 function isGeneratedEventName(name) {
     if (!name) return false;
