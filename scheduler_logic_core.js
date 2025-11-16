@@ -630,8 +630,47 @@ function pickBestLeagueSportForMatchup(
     };
 }
 
+// Internal full round-robin generator (for leagues)
+function generateLeagueRoundsInternal(teamList) {
+    if (!teamList || teamList.length < 2) return [];
 
-    // ===== PASS 3: League Pass (per-matchup sports, field-aware) =====
+    const teams = [...teamList].map(String);
+    if (teams.length % 2 !== 0) {
+        teams.push("BYE");
+    }
+
+    const n = teams.length;
+    const fixedTeam = teams[0];
+    const rotatingTeams = teams.slice(1);
+    const rounds = [];
+
+    for (let round = 0; round < n - 1; round++) {
+        const currentRound = [];
+
+        // fixed team pairing
+        currentRound.push([fixedTeam, rotatingTeams[0]]);
+
+        // other pairings
+        for (let i = 1; i < n / 2; i++) {
+            const team1 = rotatingTeams[i];
+            const team2 = rotatingTeams[rotatingTeams.length - i];
+            currentRound.push([team1, team2]);
+        }
+
+        // remove BYE pairs
+        const clean = currentRound.filter(
+            ([a, b]) => a !== "BYE" && b !== "BYE"
+        );
+        rounds.push(clean);
+
+        // rotate
+        rotatingTeams.unshift(rotatingTeams.pop());
+    }
+
+    return rounds;
+}
+
+    // ===== PASS 3: League Pass (true round-robin + per-matchup sports) =====
 const leagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'League Game');
 const specialtyLeagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'Specialty League');
 const remainingBlocks = schedulableSlotBlocks.filter(
@@ -669,8 +708,11 @@ const sortedLeagueGroups = Object.values(leagueGroups).sort(
 );
 const timestamp = Date.now();
 
-// Track per-league per-team sport counts for TODAY
+// Track today’s per-league per-team sport counts (for fairness)
 const leagueTeamSportCountsByLeague = {}; // { [leagueName]: { [team]: { [sport]: count } } }
+
+// Track how many blocks we used per league *this run* to advance rounds
+const perLeagueBlockCounter = {}; // { [leagueName]: numBlocksToday }
 
 for (const group of sortedLeagueGroups) {
     const { leagueName, leagueObj, slots, bunks } = group;
@@ -696,30 +738,39 @@ for (const group of sortedLeagueGroups) {
     const availableLeagueSports = (leagueObj.sports || []).filter(
         s => fieldsBySport[s]
     );
-    const leagueHistory = rotationHistory.leagues[leagueName] || {};
+
+    // Rotation history for this league (sports + round index)
+    const leagueHistory =
+        rotationHistory.leagues[leagueName] ||
+        (rotationHistory.leagues[leagueName] = {});
+
     const teamCounts =
         leagueTeamSportCountsByLeague[leagueName] ||
         (leagueTeamSportCountsByLeague[leagueName] = {});
 
-    // Get pairings for this round
-    let rawMatchups = [];
-    if (typeof window.getLeagueMatchups === 'function') {
-        rawMatchups = window.getLeagueMatchups(leagueName, leagueTeams) || [];
-    } else {
-        rawMatchups = pairRoundRobin(leagueTeams);
-    }
+    // ---- TRUE ROUND-ROBIN: pick which round this block is ----
+    const rounds = generateLeagueRoundsInternal(leagueTeams);
+    if (!rounds.length) continue;
 
+    const blocksUsedSoFar = perLeagueBlockCounter[leagueName] || 0;
+    perLeagueBlockCounter[leagueName] = blocksUsedSoFar + 1;
+
+    const baseRoundIndex = leagueHistory._roundIndex || 0; // persisted across days
+    const roundIndex = (baseRoundIndex + blocksUsedSoFar) % rounds.length;
+
+    const rawMatchups = rounds[roundIndex];
+
+    // ---- Build matchup labels + picks ----
     const allMatchupLabels = [];
     const picksToAssign = []; // [{ pick, bunks:[bunkA,bunkB] }]
-
-    let bunkIndex = 0; // we still only DISPLAY as many games as we have bunk pairs
+    let bunkIndex = 0; // how many bunk-pairs we’ve consumed
 
     for (const pair of rawMatchups) {
         if (!pair) continue;
         const [teamA, teamB] = pair;
         if (teamA === "BYE" || teamB === "BYE") continue;
 
-        // Decide the sport (per matchup!) and try to grab a field
+        // Decide sport + field for THIS matchup
         const choice = pickBestLeagueSportForMatchup(
             teamA,
             teamB,
@@ -744,20 +795,19 @@ for (const group of sortedLeagueGroups) {
         if (fieldName) {
             matchupLabel = `${teamA} vs ${teamB} (${sport}) @ ${fieldName}`;
         } else {
-            // No usable field for this sport in this block
             matchupLabel = `${teamA} vs ${teamB} (${sport}) (No Field)`;
         }
 
         allMatchupLabels.push(matchupLabel);
 
-        // Update per-team sport counts + league history
+        // Update per-team sport counts + "last used" time
         teamCounts[teamA] = teamCounts[teamA] || {};
         teamCounts[teamB] = teamCounts[teamB] || {};
         teamCounts[teamA][sport] = (teamCounts[teamA][sport] || 0) + 1;
         teamCounts[teamB][sport] = (teamCounts[teamB][sport] || 0) + 1;
         leagueHistory[sport] = timestamp;
 
-        // If we have bunk capacity, create a pick for this game
+        // If we have bunk capacity, assign this game to two bunks
         if (bunkIndex + 1 < allBunksInGroup.length) {
             const bunkA = allBunksInGroup[bunkIndex];
             const bunkB = allBunksInGroup[bunkIndex + 1];
@@ -778,10 +828,10 @@ for (const group of sortedLeagueGroups) {
 
             picksToAssign.push({ pick, bunks: [bunkA, bunkB] });
         }
-        // else: no bunk slots left → scoreboard-only, but we still keep the label
+        // else: no more bunk pairs → scoreboard-only game, but label is still stored
     }
 
-    // NO-GAME pick (still shows the full _allMatchups list)
+    // NO-GAME pick (still sees full mirrored schedule)
     const noGamePick = {
         field: "No Game",
         sport: null,
@@ -822,7 +872,7 @@ for (const group of sortedLeagueGroups) {
         }
     });
 
-    // Leftover bunks → "No Game" but with full mirrored schedule
+    // Leftover bunks → "No Game" but still see the full schedule
     while (bunkIndex < allBunksInGroup.length) {
         const leftoverBunk = allBunksInGroup[bunkIndex];
         bunkIndex++;
@@ -840,10 +890,28 @@ for (const group of sortedLeagueGroups) {
             true
         );
     }
-
-    // Persist updated leagueHistory back into rotationHistory
-    rotationHistory.leagues[leagueName] = leagueHistory;
 }
+
+// After all groups: advance the stored round index per league
+Object.keys(perLeagueBlockCounter).forEach(leagueName => {
+    const leagueObj = masterLeagues[leagueName];
+    if (!leagueObj) return;
+    const leagueTeams = (leagueObj.teams || [])
+        .map(t => String(t).trim())
+        .filter(Boolean);
+    const rounds = generateLeagueRoundsInternal(leagueTeams);
+    if (!rounds.length) return;
+
+    const leagueHistory =
+        rotationHistory.leagues[leagueName] ||
+        (rotationHistory.leagues[leagueName] = {});
+
+    const baseRoundIndex = leagueHistory._roundIndex || 0;
+    const usedBlocks = perLeagueBlockCounter[leagueName];
+    leagueHistory._roundIndex = (baseRoundIndex + usedBlocks) % rounds.length;
+
+    rotationHistory.leagues[leagueName] = leagueHistory;
+});
 // --- END OF PASS 3 ---
 
     // ===== PASS 3.5: SPECIALTY LEAGUE PASS (unchanged mirroring) =====
