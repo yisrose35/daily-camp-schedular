@@ -679,13 +679,21 @@ rotationHistory.leagueTeamLastSport[leagueName] = leagueTeamLastSport;
         const nonByeMatchups = rawMatchups.filter(p => p && p[0] !== "BYE" && p[1] !== "BYE");
 
         // Quantum-ish sport assignment
-        const { assignments, updatedTeamCounts } = assignSportsMultiRound(
-            nonByeMatchups,
-            sports,
-            leagueTeamCounts,
-            leagueHistory
-        );
-        rotationHistory.leagueTeamSports[leagueName] = updatedTeamCounts;
+        const {
+    assignments,
+    updatedTeamCounts,
+    updatedLastSports
+} = assignSportsMultiRound(
+    nonByeMatchups,
+    sports,
+    leagueTeamCounts,
+    leagueHistory,
+    leagueTeamLastSport
+);
+
+rotationHistory.leagueTeamSports[leagueName] = updatedTeamCounts;
+rotationHistory.leagueTeamLastSport[leagueName] = updatedLastSports;
+
 
         // Build full schedule of (matchup + sport + field / No Field)
         const allMatchupLabels = [];
