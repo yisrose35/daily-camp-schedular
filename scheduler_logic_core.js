@@ -2,15 +2,17 @@
 // scheduler_logic_core.js
 //
 // FULL REBUILD — "SUPERCOMPUTER / QUANTUM-ISH" LEAGUE SCHEDULER
-// Includes:
-//  - Global unified time grid
-//  - Bunk-specific overrides (Pass 1.5)
-//  - Pinned / split / slot skeleton handling
-//  - League mirroring across divisions
-//  - Quantum-ish multi-criteria sport optimizer for leagues
-//  - Specialty League pass
-//  - Smart filler for remaining blocks
-//  - Rotation history for bunks + leagues + per-team sport counts
+// ... (previous changelogs) ...
+//
+// --- BUG FIX (USER REQUEST): DISMISSAL TILE NOT SHOWING ---
+// - **REMOVED:** Old logic that read `globalStartTime` and `globalEndTime`
+//   from `app1.js` (which no longer exist).
+// - **REPLACED:** The "PASS 1" time grid builder now intelligently
+//   scans all division times AND all pinned events (from the
+//   `manualSkeleton`) to find the *true* earliest and latest
+//   times for the day.
+// - This ensures that 30-minute slots are created for late
+//   events like "Dismissal" that occur after 4:00 PM.
 // ============================================================================
 
 (function() {
@@ -168,16 +170,16 @@ function coreGetNextLeagueRound(leagueName, teams) {
  * assignSportsMultiRound
  * ----------------------
  * Decides WHICH SPORT each matchup should play, trying to:
- *  - Avoid repeating a sport for a team until it has seen all sports
- *  - Keep global sport usage balanced
- *  - Keep per-team distribution balanced
- *  - Respect "recentness" from leagueHistory (softly)
+ * - Avoid repeating a sport for a team until it has seen all sports
+ * - Keep global sport usage balanced
+ * - Keep per-team distribution balanced
+ * - Respect "recentness" from leagueHistory (softly)
  *
  * Returns:
- *  {
- *    assignments: [ { sport }, ... ]   // same length/order as matchups
- *    updatedTeamCounts: { team: { sport: count } }
- *  }
+ * {
+ * assignments: [ { sport }, ... ]   // same length/order as matchups
+ * updatedTeamCounts: { team: { sport: count } }
+ * }
  */
 function assignSportsMultiRound(
     matchups,
@@ -469,18 +471,41 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
     const timestamp = Date.now();
 
-    // ===== PASS 1: Build unified time grid =====
-    const globalSettings = window.loadGlobalSettings?.() || {};
-    const app1Data = globalSettings.app1 || {};
-    const globalStart = app1Data.globalStartTime || "9:00 AM";
-    const globalEnd   = app1Data.globalEndTime   || "4:00 PM";
+    // =================================================================
+    // PASS 1 — Build unified time grid
+    // --- START OF FIX (Replaces old globalStart/globalEnd logic) ---
+    // =================================================================
 
-    let earliestMin = parseTimeToMinutes(globalStart);
-    let latestMin   = parseTimeToMinutes(globalEnd);
+    let earliestMin = null;
+    let latestMin = null;
 
-    if (earliestMin == null) earliestMin = 540;
-    if (latestMin   == null) latestMin   = 960;
-    if (latestMin <= earliestMin) latestMin = earliestMin + 60;
+    // Find the earliest start and latest end time from all divisions
+    Object.values(divisions).forEach(div => {
+        const s = parseTimeToMinutes(div.startTime);
+        const e = parseTimeToMinutes(div.endTime);
+        if (s !== null && (earliestMin === null || s < earliestMin)) earliestMin = s;
+        if (e !== null && (latestMin === null || e > latestMin)) latestMin = e;
+    });
+
+    if (earliestMin === null) earliestMin = 540; // 9:00 AM fallback
+    if (latestMin === null) latestMin = 960; // 4:00 PM fallback
+
+    // Now, check the manual skeleton for any pinned events (like Dismissal)
+    // that go *later* than the latest division's end time.
+    const latestPinnedEnd = Math.max(
+        -Infinity,
+        ...manualSkeleton
+          .filter(ev => ev && ev.type === 'pinned')
+          .map(ev => parseTimeToMinutes(ev.endTime) ?? -Infinity)
+    );
+
+    if (Number.isFinite(latestPinnedEnd)) {
+        latestMin = Math.max(latestMin, latestPinnedEnd);
+    }
+
+    if (latestMin <= earliestMin) latestMin = earliestMin + 60; // Failsafe
+    
+    // --- END OF FIX ---
 
     const baseDate = new Date(1970, 0, 1, 0, 0, 0);
     let currentMin = earliestMin;
