@@ -157,6 +157,9 @@ function coreGetNextLeagueRound(leagueName, teams) {
     state.idx = (idx + 1) % rounds.length;
     coreLeagueRoundState[key] = state;
 
+    // We don't strictly need to save every call, but it's safe:
+    saveCoreLeagueRoundState();
+
     return matchups;
 }
 
@@ -656,8 +659,14 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const leagueTeamCounts = rotationHistory.leagueTeamSports[leagueName] || {};
         rotationHistory.leagueTeamSports[leagueName] = leagueTeamCounts;
 
-        // ✅ NEW: Get round-robin matchups via in-core engine (advances per block)
-        const rawMatchups = coreGetNextLeagueRound(leagueName, leagueTeams) || [];
+        // Get round-robin matchups from league_scheduling.js if available,
+        // otherwise fall back to our own full round-robin engine.
+        let rawMatchups = [];
+        if (typeof window.getLeagueMatchups === "function") {
+            rawMatchups = window.getLeagueMatchups(leagueName, leagueTeams) || [];
+        } else {
+            rawMatchups = coreGetNextLeagueRound(leagueName, leagueTeams) || [];
+        }
 
         // filter out BYE pairs for sport assignment
         const nonByeMatchups = rawMatchups.filter(p => p && p[0] !== "BYE" && p[1] !== "BYE");
@@ -1010,9 +1019,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         });
 
         window.saveRotationHistory?.(historyToSave);
-        // ✅ Also persist league round state so rounds advance correctly across blocks/days
-        saveCoreLeagueRoundState();
-
         console.log("Smart Scheduler: Rotation history updated.");
     } catch (e) {
         console.error("Smart Scheduler: Failed to update rotation history.", e);
@@ -1106,8 +1112,14 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     }
     const limit = (props && props.sharable) ? 2 : 1;
 
-    if (props && props.allowedDivisions && props.allowedDivisions.length &&
-        !props.allowedDivisions.includes(block.divName)) return false;
+    // ===== DIVISION FILTER (respects explicit division list only) =====
+    if (props &&
+        Array.isArray(props.allowedDivisions) &&
+        props.allowedDivisions.length > 0 &&
+        !props.allowedDivisions.includes(block.divName)
+    ) {
+        return false;
+    }
 
     const limitRules = props.limitUsage;
     if (limitRules && limitRules.enabled) {
@@ -1142,8 +1154,14 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
     }
     const limit = 1; // league games never sharable
 
-    if (props && props.allowedDivisions && props.allowedDivisions.length &&
-        !props.allowedDivisions.includes(block.divName)) return false;
+    // ===== DIVISION FILTER (respects explicit division list only) =====
+    if (props &&
+        Array.isArray(props.allowedDivisions) &&
+        props.allowedDivisions.length > 0 &&
+        !props.allowedDivisions.includes(block.divName)
+    ) {
+        return false;
+    }
 
     const limitRules = props.limitUsage;
     if (limitRules && limitRules.enabled) {
@@ -1199,7 +1217,7 @@ function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill
 function loadAndFilterData() {
     const globalSettings = window.loadGlobalSettings?.() || {};
     const app1Data = globalSettings.app1 || {};
-    const masterFields = app1Data.fields || {};
+    const masterFields = app1Data.fields || [];
     const masterDivisions = app1Data.divisions || {};
     const masterAvailableDivs = app1Data.availableDivisions || [];
     const masterSpecials = app1Data.specialActivities || [];
@@ -1253,7 +1271,7 @@ function loadAndFilterData() {
 
     const activityProperties = {};
     const allMasterActivities = [
-        ...Object.values(masterFields).filter(f => !disabledFields.includes(f.name)),
+        ...masterFields.filter(f => !disabledFields.includes(f.name)),
         ...masterSpecials.filter(s => !disabledSpecials.includes(s.name))
     ];
 
@@ -1268,13 +1286,22 @@ function loadAndFilterData() {
         }
 
         const isMasterAvailable = f.available !== false;
+
+        // 🔧 FIXED LOGIC FOR allowedDivisions:
+        // - If a custom list exists, use it EXACTLY.
+        // - If not, leave it null (no extra division restriction).
+        const hasCustomDivList =
+            Array.isArray(f.sharableWith?.divisions) &&
+            f.sharableWith.divisions.length > 0;
+
         activityProperties[f.name] = {
             available: isMasterAvailable,
-            sharable: f.sharableWith?.type === 'all' || f.sharableWith?.type === 'custom',
-            allowedDivisions:
-                (f.sharableWith?.divisions?.length > 0)
-                    ? f.sharableWith.divisions
-                    : availableDivisions,
+            sharable:
+                f.sharableWith?.type === 'all' ||
+                f.sharableWith?.type === 'custom',
+            allowedDivisions: hasCustomDivList
+                ? f.sharableWith.divisions.slice()
+                : null,
             limitUsage: f.limitUsage || { enabled: false, divisions: {} },
             timeRules: finalRules
         };
@@ -1286,7 +1313,7 @@ function loadAndFilterData() {
 
     window.allSchedulableNames = availableActivityNames;
 
-    const availFields = Object.values(masterFields).filter(f => availableActivityNames.includes(f.name));
+    const availFields = masterFields.filter(f => availableActivityNames.includes(f.name));
     const availSpecials = masterSpecials.filter(s => availableActivityNames.includes(s.name));
 
     const fieldsBySport = {};
