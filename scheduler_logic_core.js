@@ -565,117 +565,211 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         console.error("Error placing bunk-specific overrides:", e);
     }
 
-    // =================================================================
-    // PASS 2 — Pinned / Split / Slot Skeleton Blocks
-    // =================================================================
-    const schedulableSlotBlocks = [];
+  // =================================================================
+// PASS 2 — Pinned / Split / Slot Skeleton Blocks
+// =================================================================
+const schedulableSlotBlocks = [];
 
-    manualSkeleton.forEach(item => {
-        const allBunks = divisions[item.division]?.bunks || [];
-        if (!allBunks || allBunks.length === 0) return;
+// Events that REQUIRE generation (slot-type dynamic blocks)
+const GENERATED_EVENTS = new Set([
+    "activity",
+    "activities",
+    "sports",
+    "sport",
+    "sports slot",
+    "special activity",
+    "league game",
+    "specialty league",
+    "speciality league",
+    "swim" // keep swim as generated so the Swim logic in Pass 4 still runs
+]);
 
-        const startMin = parseTimeToMinutes(item.startTime);
-        const endMin   = parseTimeToMinutes(item.endTime);
-        const allSlots = findSlotsForRange(startMin, endMin);
-        if (allSlots.length === 0) return;
+function isGeneratedEventName(name) {
+    if (!name) return false;
+    const n = String(name).trim().toLowerCase();
+    return GENERATED_EVENTS.has(n);
+}
 
-        // 🔹 NEW: Treat "Dismissal" as a hard, fixed block that cannot be overwritten
-        const isDismissalEvent =
-            String(item.event || "").trim().toLowerCase() === "dismissal";
+manualSkeleton.forEach(item => {
+    const allBunks = divisions[item.division]?.bunks || [];
+    if (!allBunks || allBunks.length === 0) return;
 
-        if (isDismissalEvent) {
-            allBunks.forEach(bunk => {
-                allSlots.forEach((slotIndex, idx) => {
-                    if (!window.scheduleAssignments[bunk][slotIndex]) {
+    const startMin = parseTimeToMinutes(item.startTime);
+    const endMin   = parseTimeToMinutes(item.endTime);
+    const allSlots = findSlotsForRange(startMin, endMin);
+    if (allSlots.length === 0) return;
+
+    const rawEvent = item.event || "";
+    const normalizedEvent = rawEvent.trim().toLowerCase();
+
+    const isDismissal =
+        normalizedEvent === "dismissal";
+
+    const isSnack =
+        normalizedEvent === "snack" ||
+        normalizedEvent === "snacks" ||
+        normalizedEvent.includes("snack");
+
+    const isGenerated = isGeneratedEventName(rawEvent);
+
+    // ============================================================
+    // 1) ANYTHING EXPLICITLY "PINNED"  -> fixed tile (no generation)
+    // ============================================================
+    if (item.type === "pinned") {
+        const label = rawEvent || "Pinned";
+
+        allBunks.forEach(bunk => {
+            allSlots.forEach((slotIndex, idx) => {
+                window.scheduleAssignments[bunk][slotIndex] = {
+                    field: { name: label },
+                    sport: null,
+                    continuation: (idx > 0),
+                    _fixed: true,
+                    _h2h: false,
+                    vs: null,
+                    _activity: label,
+                    _isDismissal: isDismissal,
+                    _isSnack: isSnack,
+                    _isCustomTile: !isGenerated
+                };
+            });
+        });
+        return;
+    }
+
+    // ============================================================
+    // 2) SLOT that is *NOT* one of:
+    //    Activity / Sports / Special Activity / League Game /
+    //    Specialty League / Swim  -> PIN TILE (fixed)
+    // ============================================================
+    if (item.type === "slot" && !isGenerated) {
+        const label =
+            rawEvent ||
+            (isDismissal ? "Dismissal" :
+             isSnack     ? "Snacks"    :
+                           "Pinned");
+
+        allBunks.forEach(bunk => {
+            allSlots.forEach((slotIndex, idx) => {
+                window.scheduleAssignments[bunk][slotIndex] = {
+                    field: { name: label },
+                    sport: null,
+                    continuation: (idx > 0),
+                    _fixed: true,
+                    _h2h: false,
+                    vs: null,
+                    _activity: label,
+                    _isDismissal: isDismissal,
+                    _isSnack: isSnack,
+                    _isCustomTile: true
+                };
+            });
+        });
+        return;
+    }
+
+    // ============================================================
+    // 3) SPLIT BLOCKS
+    //    Each subEvent can be either generated or pinned.
+    // ============================================================
+    if (item.type === "split") {
+        if (!item.subEvents || item.subEvents.length < 2) return;
+        const [event1, event2] = item.subEvents;
+
+        const splitIndex = Math.ceil(allBunks.length / 2);
+        const bunks1 = allBunks.slice(0, splitIndex);
+        const bunks2 = allBunks.slice(splitIndex);
+
+        const slotSplitIndex = Math.ceil(allSlots.length / 2);
+        const slots1 = allSlots.slice(0, slotSplitIndex);
+        const slots2 = allSlots.slice(slotSplitIndex);
+
+        function handleSplitGroup(bunks, slots, subEvent) {
+            const subName = subEvent.event || "";
+            const subNorm = subName.trim().toLowerCase();
+            const subIsGenerated = isGeneratedEventName(subName);
+
+            // Dismissal / Snacks / non-generated names in splits are also pins
+            const subIsDismissal = subNorm === "dismissal";
+            const subIsSnack =
+                subNorm === "snack" ||
+                subNorm === "snacks" ||
+                subNorm.includes("snack");
+
+            const isPinnedSub =
+                subEvent.type === "pinned" || !subIsGenerated || subIsDismissal || subIsSnack;
+
+            if (isPinnedSub) {
+                const label =
+                    subName ||
+                    (subIsDismissal ? "Dismissal" :
+                     subIsSnack     ? "Snacks"    :
+                                      "Pinned");
+
+                bunks.forEach(bunk => {
+                    slots.forEach((slotIndex, idx) => {
                         window.scheduleAssignments[bunk][slotIndex] = {
-                            field: { name: item.event },   // "Dismissal"
+                            field: { name: label },
                             sport: null,
                             continuation: (idx > 0),
                             _fixed: true,
-                            _activity: "Dismissal",
-                            _isDismissal: true
+                            _h2h: false,
+                            vs: null,
+                            _activity: label,
+                            _isDismissal: subIsDismissal,
+                            _isSnack: subIsSnack,
+                            _isCustomTile: !subIsGenerated
                         };
-                    }
+                    });
                 });
-            });
-            // ❗ Important: do NOT add Dismissal to schedulableSlotBlocks.
-            // This keeps Pass 3 / Pass 4 from overwriting it.
-            return;
+            } else {
+                // Generated split (e.g., half sports / half activity)
+                bunks.forEach(bunk => {
+                    schedulableSlotBlocks.push({
+                        divName:   item.division,
+                        bunk,
+                        event:     subEvent.event,
+                        startTime: startMin,
+                        endTime:   endMin,
+                        slots
+                    });
+                });
+            }
         }
 
-        // 🔹 Existing logic for normal pinned / split / slot blocks
-        if (item.type === 'pinned') {
-            allBunks.forEach(bunk => {
-                allSlots.forEach((slotIndex, idx) => {
-                    if (!window.scheduleAssignments[bunk][slotIndex]) {
-                        window.scheduleAssignments[bunk][slotIndex] = {
-                            field: { name: item.event },
-                            sport: null,
-                            continuation: (idx > 0),
-                            _fixed: true
-                        };
-                    }
-                });
+        // top-left
+        handleSplitGroup(bunks1, slots1, event1);
+        // top-right
+        handleSplitGroup(bunks2, slots1, event2);
+        // bottom-left
+        handleSplitGroup(bunks1, slots2, event2);
+        // bottom-right
+        handleSplitGroup(bunks2, slots2, event1);
+
+        return;
+    }
+
+    // ============================================================
+    // 4) GENERATED SLOT TYPES:
+    //    Activity / Sports / Special Activity / League Game /
+    //    Specialty League / Swim
+    // ============================================================
+    if (item.type === "slot" && isGenerated) {
+        allBunks.forEach(bunk => {
+            schedulableSlotBlocks.push({
+                divName:   item.division,
+                bunk,
+                event:     rawEvent,
+                startTime: startMin,
+                endTime:   endMin,
+                slots:     allSlots
             });
-        } else if (item.type === 'split') {
-            if (!item.subEvents || item.subEvents.length < 2) return;
-            const event1 = item.subEvents[0];
-            const event2 = item.subEvents[1];
+        });
+        return;
+    }
 
-            const splitIndex = Math.ceil(allBunks.length / 2);
-            const bunksHalf1 = allBunks.slice(0, splitIndex);
-            const bunksHalf2 = allBunks.slice(splitIndex);
-
-            const slotSplitIndex = Math.ceil(allSlots.length / 2);
-            const slotsHalf1 = allSlots.slice(0, slotSplitIndex);
-            const slotsHalf2 = allSlots.slice(slotSplitIndex);
-
-            const groups = [
-                { bunks: bunksHalf1, slots: slotsHalf1, eventDef: event1 },
-                { bunks: bunksHalf2, slots: slotsHalf1, eventDef: event2 },
-                { bunks: bunksHalf1, slots: slotsHalf2, eventDef: event2 },
-                { bunks: bunksHalf2, slots: slotsHalf2, eventDef: event1 }
-            ];
-
-            groups.forEach(group => {
-                if (group.slots.length === 0) return;
-                group.bunks.forEach(bunk => {
-                    if (group.eventDef.type === 'pinned') {
-                        group.slots.forEach((slotIndex, idx) => {
-                            if (!window.scheduleAssignments[bunk][slotIndex]) {
-                                window.scheduleAssignments[bunk][slotIndex] = {
-                                    field: { name: group.eventDef.event },
-                                    sport: null,
-                                    continuation: (idx > 0),
-                                    _fixed: true
-                                };
-                            }
-                        });
-                    } else if (group.eventDef.type === 'slot') {
-                        schedulableSlotBlocks.push({
-                            divName:   item.division,
-                            bunk:      bunk,
-                            event:     group.eventDef.event,
-                            startTime: startMin,
-                            endTime:   endMin,
-                            slots:     group.slots
-                        });
-                    }
-                });
-            });
-        } else if (item.type === 'slot') {
-            allBunks.forEach(bunk => {
-                schedulableSlotBlocks.push({
-                    divName:   item.division,
-                    bunk:      bunk,
-                    event:     item.event,
-                    startTime: startMin,
-                    endTime:   endMin,
-                    slots:     allSlots
-                });
-            });
-        }
-    });
+    // If we somehow get here, do nothing.
+});
 
 
     // =================================================================
