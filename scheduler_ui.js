@@ -1,17 +1,28 @@
 // -------------------- scheduler_ui.js --------------------
 //
-// ... (previous changelogs) ...
+// ... (previous changelog) ...
 //
-// --- BUG FIX (USER REQUEST): DISMISSAL TILE NOT SHOWING (FINAL) ---
-// - **REWRITTEN:** The logic inside `renderStaggeredView` to
-//   find the correct schedule entry.
-// - **REMOVED:** The call to the buggy `findFirstSlotForTime` function.
-// - **REPLACED:** It now correctly uses `findSlotsForRange` (the
-//   overlap-aware function) to find all slots for an event.
-// - It then calls `getEntry(bunk, allSlots[0])` to get the
-//   activity from the *first* overlapping slot.
-// - This ensures that events like "Dismissal" (4:25pm) are
-//   correctly found within their parent slot (4:00-4:30pm).
+// --- "LEAGUE MIRRORING" FIX (11/13) ---
+// - **UPDATED:** The `renderStaggeredView` function for
+//   league blocks has been rewritten.
+// - It no longer tries to "find" games by looping
+//   over bunks in the division.
+// - It now gets the schedule entry for the *first bunk*
+//   and looks for the new `_allMatchups` list.
+// - If that list exists, it prints it. This ensures
+//   that all divisions in a league (e.g., Div 5 and Div 6)
+//   show the identical, complete, "mirrored" list of
+//   all games for that block.
+//
+// --- NEW FEATURE (USER REQUEST): POST-GENERATION EDITING ---
+// - **NEW:** Added `findSlotsForRange` helper to find all unified slots in a block.
+// - **NEW:** Added `editCell` function. This is triggered by `onclick`.
+//   - It opens a `prompt()` to get a new activity name.
+//   - It overwrites the schedule for all slots in that block for that bunk.
+//   - The new entry is marked as `_fixed: true`.
+//   - It saves and re-renders the table.
+// - **UPDATED:** `renderStaggeredView` now adds an `onclick` handler to all
+//   individual (non-league) activity cells to trigger `editCell`.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -69,27 +80,16 @@ function minutesToTimeLabel(min) {
 // ===== NEW EDITING FUNCTIONS =====
 
 /**
- * --- THIS IS THE FIX ---
- * Finds all 30-minute time slots that OVERLAP with a given event.
+ * NEW Helper: Finds all unified slot indices within a time range.
  */
 function findSlotsForRange(startMin, endMin) {
     const slots = [];
     if (!window.unifiedTimes) return slots;
-    
-    const eventStart = startMin;
-    const eventEnd = endMin;
-    
-    // Failsafe: if an event is 0-duration, it can't overlap
-    if (eventStart === eventEnd) return [];
-
     for (let i = 0; i < window.unifiedTimes.length; i++) {
         const slot = window.unifiedTimes[i];
-        const slotStart = new Date(slot.start).getHours() * 60 +
-                          new Date(slot.start).getMinutes();
-        const slotEnd = slotStart + INCREMENT_MINS;
-        
-        // Standard Overlap Check: (StartA < EndB) && (EndA > StartB)
-        if (eventStart < slotEnd && eventEnd > slotStart) {
+        const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+        // Slot starts within the block
+        if (slotStart >= startMin && slotStart < endMin) {
             slots.push(i);
         }
     }
@@ -199,17 +199,27 @@ function formatEntry(entry) {
 }
 
 /**
- * --- REMOVED `findFirstSlotForTime` ---
- * It was the source of the bug.
+ * NEW Helper: Finds the *first* 30-min slot index
+ * that matches the start time of a custom block.
  */
-
+function findFirstSlotForTime(startMin) {
+    if (startMin === null || !window.unifiedTimes) return -1; // <-- SAFETY CHECK
+    for (let i = 0; i < window.unifiedTimes.length; i++) {
+        const slot = window.unifiedTimes[i];
+        const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+        // Failsafe: find the closest one
+        if (slotStart >= startMin && slotStart < startMin + INCREMENT_MINS) {
+            return i;
+        }
+    }
+    return -1;
+}
 
 /**
  * Renders the "Staggered" (YKLI) view
  * --- REWRITTEN to be one table PER DIVISION ---
  * --- **UPDATED WITH "MIRRORING" FIX** ---
  * --- **UPDATED WITH EDIT-ON-CLICK** ---
- * --- **UPDATED WITH DISMISSAL (PINNED) FIX** ---
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -297,13 +307,9 @@ function renderStaggeredView(container) {
                     if (divStartMin !== null && endMin <= divStartMin) {
                         return; // Block too early
                     }
-                    
-                    // --- THIS IS THE FIX ---
-                    // Pinned events (like Dismissal) are allowed to be "too late"
-                    if (divEndMin !== null && startMin >= divEndMin && item.type !== 'pinned') {
-                        return; // Block too late (but allow pinned events)
+                    if (divEndMin !== null && startMin >= divEndMin) {
+                        return; // Block too late
                     }
-                    // --- END OF FIX ---
                 }
                 
                 tempSortedBlocks.push({ item, startMin, endMin });
@@ -404,6 +410,7 @@ function renderStaggeredView(container) {
             // --- Add ACTIVITY cells (Merged or Individual) ---
             if (eventBlock.event.startsWith('League Game') || eventBlock.event.startsWith('Specialty League')) {
                 // === LEAGUE GAME / SPECIALTY LEAGUE: MERGED CELL ===
+                // --- THIS ENTIRE BLOCK IS REWRITTEN ---
                 
                 const tdLeague = document.createElement("td");
                 tdLeague.colSpan = bunks.length;
@@ -412,15 +419,11 @@ function renderStaggeredView(container) {
                 tdLeague.style.padding = "5px 8px";
                 tdLeague.style.background = "#f0f8f0"; // Light green
                 
-                // --- THIS IS THE FIX (Part 1) ---
-                const allSlots = findSlotsForRange(eventBlock.startMin, eventBlock.endMin);
-                const firstSlotIndex = (allSlots.length > 0) ? allSlots[0] : -1;
-                // --- END FIX ---
-                
+                const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
                 let allMatchups = [];
                 
                 // Find the entry for the first bunk in this division's table
-                if (bunks.length > 0 && firstSlotIndex !== -1) {
+                if (bunks.length > 0) {
                     const firstBunkEntry = getEntry(bunks[0], firstSlotIndex);
                     // Check if the "stamped" list exists
                     if (firstBunkEntry && firstBunkEntry._allMatchups) {
@@ -442,6 +445,7 @@ function renderStaggeredView(container) {
                 }
                 tdLeague.innerHTML = html;
                 tr.appendChild(tdLeague);
+                // --- END OF REWRITTEN BLOCK ---
 
             } else {
                 // === REGULAR GAME / SPLIT GAME: INDIVIDUAL CELLS ===
@@ -449,16 +453,13 @@ function renderStaggeredView(container) {
                     const tdActivity = document.createElement("td");
                     tdActivity.style.border = "1px solid #ccc";
                     tdActivity.style.verticalAlign = "top";
+
+                    // --- **MODIFICATION FOR EDIT-ON-CLICK** ---
                     
                     const startMin = eventBlock.startMin;
                     const endMin = eventBlock.endMin;
-                    
-                    // --- THIS IS THE FIX (Part 2) ---
-                    // Use the correct overlap-aware function
-                    const allSlots = findSlotsForRange(startMin, endMin);
-                    const slotIndex = (allSlots.length > 0) ? allSlots[0] : -1;
+                    const slotIndex = findFirstSlotForTime(startMin); // Get the first slot for this block
                     const entry = getEntry(bunk, slotIndex);
-                    // --- END FIX ---
 
                     let currentActivity = "";
                     if (entry) {
@@ -477,6 +478,8 @@ function renderStaggeredView(container) {
                     tdActivity.style.cursor = "pointer";
                     tdActivity.title = "Click to edit this activity";
                     tdActivity.onclick = () => editCell(bunk, startMin, endMin, currentActivity);
+                    
+                    // --- **END MODIFICATION** ---
                     
                     tr.appendChild(tdActivity);
                 });
