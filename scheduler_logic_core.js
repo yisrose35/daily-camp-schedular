@@ -58,7 +58,8 @@ function fmtTime(d) {
     h = h % 12 || 12;
     return `${h}:${m} ${ap}`;
 }
-    // ======================================================
+
+// ======================================================
 // LEAGUE ROUND STATE (IN-CORE ROUND-ROBIN ENGINE)
 // ======================================================
 
@@ -158,7 +159,6 @@ function coreGetNextLeagueRound(leagueName, teams) {
 
     return matchups;
 }
-
 
 // ====== LEAGUE "QUANTUM-ISH" SPORT OPTIMIZER ======
 /**
@@ -656,13 +656,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const leagueTeamCounts = rotationHistory.leagueTeamSports[leagueName] || {};
         rotationHistory.leagueTeamSports[leagueName] = leagueTeamCounts;
 
-        // Get round-robin matchups from league_scheduling.js
-        let rawMatchups = [];
-        if (typeof window.getLeagueMatchups === "function") {
-            rawMatchups = window.getLeagueMatchups(leagueName, leagueTeams) || [];
-        } else {
-            rawMatchups = pairRoundRobin(leagueTeams);
-        }
+        // ✅ NEW: Get round-robin matchups via in-core engine (advances per block)
+        const rawMatchups = coreGetNextLeagueRound(leagueName, leagueTeams) || [];
 
         // filter out BYE pairs for sport assignment
         const nonByeMatchups = rawMatchups.filter(p => p && p[0] !== "BYE" && p[1] !== "BYE");
@@ -1015,6 +1010,9 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         });
 
         window.saveRotationHistory?.(historyToSave);
+        // ✅ Also persist league round state so rounds advance correctly across blocks/days
+        saveCoreLeagueRoundState();
+
         console.log("Smart Scheduler: Rotation history updated.");
     } catch (e) {
         console.error("Smart Scheduler: Failed to update rotation history.", e);
@@ -1201,7 +1199,7 @@ function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill
 function loadAndFilterData() {
     const globalSettings = window.loadGlobalSettings?.() || {};
     const app1Data = globalSettings.app1 || {};
-    const masterFields = app1Data.fields || [];
+    const masterFields = app1Data.fields || {};
     const masterDivisions = app1Data.divisions || {};
     const masterAvailableDivs = app1Data.availableDivisions || [];
     const masterSpecials = app1Data.specialActivities || [];
@@ -1255,7 +1253,7 @@ function loadAndFilterData() {
 
     const activityProperties = {};
     const allMasterActivities = [
-        ...masterFields.filter(f => !disabledFields.includes(f.name)),
+        ...Object.values(masterFields).filter(f => !disabledFields.includes(f.name)),
         ...masterSpecials.filter(s => !disabledSpecials.includes(s.name))
     ];
 
@@ -1288,7 +1286,7 @@ function loadAndFilterData() {
 
     window.allSchedulableNames = availableActivityNames;
 
-    const availFields = masterFields.filter(f => availableActivityNames.includes(f.name));
+    const availFields = Object.values(masterFields).filter(f => availableActivityNames.includes(f.name));
     const availSpecials = masterSpecials.filter(s => availableActivityNames.includes(s.name));
 
     const fieldsBySport = {};
