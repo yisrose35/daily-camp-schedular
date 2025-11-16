@@ -154,7 +154,7 @@ function renderLeagueStandingsUI() {
         const wrapper = document.createElement("div");
         wrapper.className = "league-standings-wrapper";
         const title = document.createElement("h3");
-        title.textContent = `${divName} (${leagueName}) Standings`;
+        title.textContent = `{divName} (${leagueName}) Standings`;
         wrapper.appendChild(title);
 
         // --- 2. Sort teams based on standings ---
