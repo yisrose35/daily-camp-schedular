@@ -179,9 +179,16 @@ function coreGetNextLeagueRound(leagueName, teams) {
  *    updatedTeamCounts: { team: { sport: count } }
  *  }
  */
-function assignSportsMultiRound(matchups, availableLeagueSports, existingTeamCounts, leagueHistory) {
+function assignSportsMultiRound(
+    matchups,
+    availableLeagueSports,
+    existingTeamCounts,
+    leagueHistory,
+    lastSportByTeamBase // NEW: map { teamName -> last sport played }
+) {
     const sports = availableLeagueSports.slice();
     const baseTeamCounts = existingTeamCounts || {};
+    const baseLastSports = lastSportByTeamBase || {};
 
     // collect all teams
     const allTeams = new Set();
@@ -203,6 +210,12 @@ function assignSportsMultiRound(matchups, availableLeagueSports, existingTeamCou
         }
     });
 
+    // NEW: working "last sport" per team, seeded from saved data
+    const workLastSport = {};
+    allTeams.forEach(t => {
+        workLastSport[t] = baseLastSports[t] || null;
+    });
+
     // global totals per sport
     const sportTotals = {};
     sports.forEach(s => { sportTotals[s] = 0; });
@@ -219,6 +232,7 @@ function assignSportsMultiRound(matchups, availableLeagueSports, existingTeamCou
     let bestPlan = null;
     let bestScore = Infinity;
     let bestCounts = null;
+    let bestLastSports = null;
     let nodesVisited = 0;
     const MAX_NODES = 30000; // safety
 
@@ -272,6 +286,7 @@ function assignSportsMultiRound(matchups, availableLeagueSports, existingTeamCou
                 bestScore = totalCost;
                 bestPlan = plan.slice();
                 bestCounts = JSON.parse(JSON.stringify(workCounts));
+                bestLastSports = JSON.parse(JSON.stringify(workLastSport));
             }
             return;
         }
@@ -296,6 +311,8 @@ function assignSportsMultiRound(matchups, availableLeagueSports, existingTeamCou
         const beforeGlobalImb = globalImbalance();
         const beforeTeamImbA = teamImbalance(teamA);
         const beforeTeamImbB = teamImbalance(teamB);
+        const beforeLastA = workLastSport[teamA] || null;
+        const beforeLastB = workLastSport[teamB] || null;
 
         for (const sport of orderedSports) {
             const prevA = workCounts[teamA][sport] || 0;
@@ -312,7 +329,7 @@ function assignSportsMultiRound(matchups, availableLeagueSports, existingTeamCou
             const idealCoverageA = Math.min(sports.length, Math.ceil(totalGamesA / Math.max(1, sports.length)));
             const idealCoverageB = Math.min(sports.length, Math.ceil(totalGamesB / Math.max(1, sports.length)));
 
-            // Per-team repeat penalties
+            // Per-team repeat penalties (ever played this sport)
             if (prevA > 0) {
                 delta += 5;
                 if (distinctBeforeA < sports.length) delta += 15;
@@ -324,10 +341,22 @@ function assignSportsMultiRound(matchups, availableLeagueSports, existingTeamCou
                 if (distinctBeforeB < idealCoverageB) delta += 6;
             }
 
+            // 🔥 NEW: consecutive-repeat penalty
+            if (beforeLastA === sport) {
+                delta += 40; // very strong: "don’t play same sport twice in a row"
+            }
+            if (beforeLastB === sport) {
+                delta += 40;
+            }
+
             // Apply
             workCounts[teamA][sport] = prevA + 1;
             workCounts[teamB][sport] = prevB + 1;
             sportTotals[sport] = (sportTotals[sport] || 0) + 2;
+
+            // Update last-sport state for this branch
+            workLastSport[teamA] = sport;
+            workLastSport[teamB] = sport;
 
             // Global imbalance delta
             const afterGlobalImb = globalImbalance();
@@ -359,12 +388,15 @@ function assignSportsMultiRound(matchups, availableLeagueSports, existingTeamCou
                 plan.pop();
             }
 
-            // revert
+            // revert counts + last-sport
             workCounts[teamA][sport] = prevA;
             workCounts[teamB][sport] = prevB;
             sportTotals[sport] = (sportTotals[sport] || 0) - 2;
             if (prevA === 0) delete workCounts[teamA][sport];
             if (prevB === 0) delete workCounts[teamB][sport];
+
+            workLastSport[teamA] = beforeLastA;
+            workLastSport[teamB] = beforeLastB;
         }
     }
 
@@ -376,13 +408,15 @@ function assignSportsMultiRound(matchups, availableLeagueSports, existingTeamCou
         }));
         return {
             assignments: fallback,
-            updatedTeamCounts: baseTeamCounts
+            updatedTeamCounts: baseTeamCounts,
+            updatedLastSports: baseLastSports
         };
     }
 
     return {
         assignments: bestPlan,
-        updatedTeamCounts: bestCounts || baseTeamCounts
+        updatedTeamCounts: bestCounts || baseTeamCounts,
+        updatedLastSports: bestLastSports || baseLastSports
     };
 }
 
