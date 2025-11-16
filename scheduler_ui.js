@@ -75,6 +75,27 @@ function minutesToTimeLabel(min) {
   h = h % 12 || 12;
   return `${h}:${m} ${ap}`;
 }
+// ===== MATCH GENERATED EVENTS (mirror of core) =====
+const UI_GENERATED_EVENTS = new Set([
+  "activity",
+  "activities",
+  "general activity",
+  "general activity slot",
+  "sports",
+  "sport",
+  "sports slot",
+  "special activity",
+  "league game",
+  "specialty league",
+  "speciality league",
+  "swim"
+]);
+
+function uiIsGeneratedEventName(name) {
+  if (!name) return false;
+  return UI_GENERATED_EVENTS.has(String(name).trim().toLowerCase());
+}
+
 
 // ===== EDITING FUNCTIONS =====
 
