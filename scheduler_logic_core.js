@@ -939,6 +939,45 @@ for (const group of sortedLeagueGroups) {
             }
         });
     }
+// === FIX 1: pickLeastRecentSport helper ===
+function pickLeastRecentSport(sports, leagueHistory) {
+    if (!sports || sports.length === 0) return null;
+    // leagueHistory: { [sportName]: lastUsedTimestamp }
+    let bestSport = null;
+    let bestStamp = null; // oldest (or undefined) wins
+
+    sports.forEach(sport => {
+        const stamp = leagueHistory ? leagueHistory[sport] : undefined;
+        if (stamp == null) {
+            // never used before – immediately best
+            if (bestSport === null) {
+                bestSport = sport;
+                bestStamp = -1;
+            }
+        } else if (bestStamp == null || stamp < bestStamp) {
+            bestSport = sport;
+            bestStamp = stamp;
+        }
+    });
+
+    // Fallback: just take first if somehow nothing chosen
+    return bestSport || sports[0];
+}
+
+// existing helper
+function pairRoundRobin(teamList) {
+    const arr = teamList.map(String);
+    if (arr.length < 2) return [];
+    if (arr.length % 2 === 1) arr.push("BYE");
+    const n = arr.length;
+    const half = n / 2;
+    const firstRoundPairs = [];
+    for (let i = 0; i < half; i++) {
+        const A = arr[i], B = arr[n - 1 - i];
+        if (A !== "BYE" && B !== "BYE") firstRoundPairs.push([A, B]);
+    }
+    return firstRoundPairs;
+}
 
     function pairRoundRobin(teamList) {
         const arr = teamList.map(String);
