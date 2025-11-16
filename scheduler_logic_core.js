@@ -654,10 +654,17 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         if (sports.length === 0) return;
 
         const leagueHistory = rotationHistory.leagues[leagueName] || {};
-        rotationHistory.leagues[leagueName] = leagueHistory;
+rotationHistory.leagues[leagueName] = leagueHistory;
 
-        const leagueTeamCounts = rotationHistory.leagueTeamSports[leagueName] || {};
-        rotationHistory.leagueTeamSports[leagueName] = leagueTeamCounts;
+// Per-team *totals* by sport
+const leagueTeamCounts = rotationHistory.leagueTeamSports[leagueName] || {};
+rotationHistory.leagueTeamSports[leagueName] = leagueTeamCounts;
+
+// NEW: per-team last sport (for consecutive-repeat penalty)
+const leagueTeamLastSport = rotationHistory.leagueTeamLastSport?.[leagueName] || {};
+rotationHistory.leagueTeamLastSport = rotationHistory.leagueTeamLastSport || {};
+rotationHistory.leagueTeamLastSport[leagueName] = leagueTeamLastSport;
+
 
         // Get round-robin matchups from league_scheduling.js if available,
         // otherwise fall back to our own full round-robin engine.
