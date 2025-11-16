@@ -1,28 +1,20 @@
 // -------------------- scheduler_ui.js --------------------
 //
-// ... (previous changelog) ...
+// ... (previous changelogs) ...
 //
 // --- "LEAGUE MIRRORING" FIX (11/13) ---
-// - **UPDATED:** The `renderStaggeredView` function for
-//   league blocks has been rewritten.
-// - It no longer tries to "find" games by looping
-//   over bunks in the division.
-// - It now gets the schedule entry for the *first bunk*
-//   and looks for the new `_allMatchups` list.
-// - If that list exists, it prints it. This ensures
-//   that all divisions in a league (e.g., Div 5 and Div 6)
-//   show the identical, complete, "mirrored" list of
-//   all games for that block.
+// - ... (details) ...
 //
 // --- NEW FEATURE (USER REQUEST): POST-GENERATION EDITING ---
-// - **NEW:** Added `findSlotsForRange` helper to find all unified slots in a block.
-// - **NEW:** Added `editCell` function. This is triggered by `onclick`.
-//   - It opens a `prompt()` to get a new activity name.
-//   - It overwrites the schedule for all slots in that block for that bunk.
-//   - The new entry is marked as `_fixed: true`.
-//   - It saves and re-renders the table.
-// - **UPDATED:** `renderStaggeredView` now adds an `onclick` handler to all
-//   individual (non-league) activity cells to trigger `editCell`.
+// - ... (details) ...
+//
+// --- BUG FIX (USER REQUEST): DISMISSAL TILE NOT SHOWING ---
+// - **UPDATED:** `renderStaggeredView`'s filter logic.
+// - The filter that checks if a block is "too late"
+//   (i.e., `startMin >= divEndMin`) now makes an exception
+//   for `item.type === 'pinned'`.
+// - This allows events like "Dismissal" to render even if
+//   they occur at or after the division's official end time.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -220,6 +212,7 @@ function findFirstSlotForTime(startMin) {
  * --- REWRITTEN to be one table PER DIVISION ---
  * --- **UPDATED WITH "MIRRORING" FIX** ---
  * --- **UPDATED WITH EDIT-ON-CLICK** ---
+ * --- **UPDATED WITH DISMISSAL (PINNED) FIX** ---
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -307,9 +300,13 @@ function renderStaggeredView(container) {
                     if (divStartMin !== null && endMin <= divStartMin) {
                         return; // Block too early
                     }
-                    if (divEndMin !== null && startMin >= divEndMin) {
-                        return; // Block too late
+                    
+                    // --- THIS IS THE FIX ---
+                    // Pinned events (like Dismissal) are allowed to be "too late"
+                    if (divEndMin !== null && startMin >= divEndMin && item.type !== 'pinned') {
+                        return; // Block too late (but allow pinned events)
                     }
+                    // --- END OF FIX ---
                 }
                 
                 tempSortedBlocks.push({ item, startMin, endMin });
