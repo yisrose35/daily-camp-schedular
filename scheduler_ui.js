@@ -13,6 +13,16 @@
 //   that all divisions in a league (e.g., Div 5 and Div 6)
 //   show the identical, complete, "mirrored" list of
 //   all games for that block.
+//
+// --- NEW FEATURE (USER REQUEST): POST-GENERATION EDITING ---
+// - **NEW:** Added `findSlotsForRange` helper to find all unified slots in a block.
+// - **NEW:** Added `editCell` function. This is triggered by `onclick`.
+//   - It opens a `prompt()` to get a new activity name.
+//   - It overwrites the schedule for all slots in that block for that bunk.
+//   - The new entry is marked as `_fixed: true`.
+//   - It saves and re-renders the table.
+// - **UPDATED:** `renderStaggeredView` now adds an `onclick` handler to all
+//   individual (non-league) activity cells to trigger `editCell`.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -65,6 +75,83 @@ function minutesToTimeLabel(min) {
     const ap = h >= 12 ? "PM" : "AM";
     h = h % 12 || 12;
     return `${h}:${m} ${ap}`;
+}
+
+// ===== NEW EDITING FUNCTIONS =====
+
+/**
+ * NEW Helper: Finds all unified slot indices within a time range.
+ */
+function findSlotsForRange(startMin, endMin) {
+    const slots = [];
+    if (!window.unifiedTimes) return slots;
+    for (let i = 0; i < window.unifiedTimes.length; i++) {
+        const slot = window.unifiedTimes[i];
+        const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+        // Slot starts within the block
+        if (slotStart >= startMin && slotStart < endMin) {
+            slots.push(i);
+        }
+    }
+    return slots;
+}
+
+/**
+ * NEW: Handles the editing of a single schedule cell.
+ */
+function editCell(bunkName, startMin, endMin, currentActivity) {
+    if (!bunkName) return;
+
+    const newActivityName = prompt(
+        `Edit activity for ${bunkName}\n(${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}):\n\n(Enter 'CLEAR' or 'FREE' to empty the slot)`, 
+        currentActivity
+    );
+
+    // User cancelled
+    if (newActivityName === null) return;
+
+    const finalActivityName = newActivityName.trim();
+    const slotsToUpdate = findSlotsForRange(startMin, endMin);
+    
+    if (slotsToUpdate.length === 0) {
+        console.error("Could not find slots to update for", startMin, endMin);
+        return;
+    }
+
+    if (!window.scheduleAssignments[bunkName]) {
+        window.scheduleAssignments[bunkName] = new Array(window.unifiedTimes.length);
+    }
+
+    if (finalActivityName === "" || finalActivityName.toUpperCase() === "CLEAR" || finalActivityName.toUpperCase() === "FREE") {
+        // Clear the slots by setting to "Free"
+        slotsToUpdate.forEach((slotIndex, idx) => {
+            window.scheduleAssignments[bunkName][slotIndex] = {
+                field: "Free",
+                sport: null,
+                continuation: (idx > 0), // "Free" can also be a block
+                _fixed: true, // Mark as manually set
+                _h2h: false,
+                _activity: "Free"
+            };
+        });
+    } else {
+        // Set the new activity
+        slotsToUpdate.forEach((slotIndex, idx) => {
+            window.scheduleAssignments[bunkName][slotIndex] = {
+                field: finalActivityName,
+                sport: null, // It's a custom pin, not a sport/field combo
+                continuation: (idx > 0), // Mark as continuation
+                _fixed: true, // Mark as a manual override
+                _h2h: false,
+                vs: null,
+                _activity: finalActivityName
+            };
+        });
+    }
+
+    // Save and re-render
+    saveSchedule();
+    updateTable();
 }
 
 
@@ -132,6 +219,7 @@ function findFirstSlotForTime(startMin) {
  * Renders the "Staggered" (YKLI) view
  * --- REWRITTEN to be one table PER DIVISION ---
  * --- **UPDATED WITH "MIRRORING" FIX** ---
+ * --- **UPDATED WITH EDIT-ON-CLICK** ---
  */
 function renderStaggeredView(container) {
     container.innerHTML = "";
@@ -365,19 +453,34 @@ function renderStaggeredView(container) {
                     const tdActivity = document.createElement("td");
                     tdActivity.style.border = "1px solid #ccc";
                     tdActivity.style.verticalAlign = "top";
+
+                    // --- **MODIFICATION FOR EDIT-ON-CLICK** ---
                     
-                    const slotIndex = findFirstSlotForTime(eventBlock.startMin);
+                    const startMin = eventBlock.startMin;
+                    const endMin = eventBlock.endMin;
+                    const slotIndex = findFirstSlotForTime(startMin); // Get the first slot for this block
                     const entry = getEntry(bunk, slotIndex);
 
+                    let currentActivity = "";
                     if (entry) {
-                        tdActivity.textContent = formatEntry(entry);
+                        currentActivity = formatEntry(entry);
+                        tdActivity.textContent = currentActivity;
+                        
                         if (entry._h2h) {
                             tdActivity.style.background = "#e8f4ff";
                             tdActivity.style.fontWeight = "bold";
                         } else if (entry._fixed) {
-                            tdActivity.style.background = "#f1f1f1";
+                            tdActivity.style.background = "#fff8e1"; // Light yellow for fixed/pinned
                         }
                     }
+                    
+                    // Add the click handler
+                    tdActivity.style.cursor = "pointer";
+                    tdActivity.title = "Click to edit this activity";
+                    tdActivity.onclick = () => editCell(bunk, startMin, endMin, currentActivity);
+                    
+                    // --- **END MODIFICATION** ---
+                    
                     tr.appendChild(tdActivity);
                 });
             }
