@@ -579,6 +579,31 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const allSlots = findSlotsForRange(startMin, endMin);
         if (allSlots.length === 0) return;
 
+        // 🔹 NEW: Treat "Dismissal" as a hard, fixed block that cannot be overwritten
+        const isDismissalEvent =
+            String(item.event || "").trim().toLowerCase() === "dismissal";
+
+        if (isDismissalEvent) {
+            allBunks.forEach(bunk => {
+                allSlots.forEach((slotIndex, idx) => {
+                    if (!window.scheduleAssignments[bunk][slotIndex]) {
+                        window.scheduleAssignments[bunk][slotIndex] = {
+                            field: { name: item.event },   // "Dismissal"
+                            sport: null,
+                            continuation: (idx > 0),
+                            _fixed: true,
+                            _activity: "Dismissal",
+                            _isDismissal: true
+                        };
+                    }
+                });
+            });
+            // ❗ Important: do NOT add Dismissal to schedulableSlotBlocks.
+            // This keeps Pass 3 / Pass 4 from overwriting it.
+            return;
+        }
+
+        // 🔹 Existing logic for normal pinned / split / slot blocks
         if (item.type === 'pinned') {
             allBunks.forEach(bunk => {
                 allSlots.forEach((slotIndex, idx) => {
@@ -651,6 +676,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             });
         }
     });
+
 
     // =================================================================
     // PASS 3 — LEAGUE PASS (Quantum-ish sports + mirroring)
