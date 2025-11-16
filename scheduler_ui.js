@@ -5,6 +5,7 @@
 // - League mirroring via _allMatchups list
 // - Post-generation editing for generated cells
 // - Dismissal / Snacks / custom tiles shown as fixed pin tiles
+// - Split blocks: first half of time A/B, second half B/A based on scheduleAssignments
 // - League counters (League Game 1, 2, 3...) persisted day-to-day
 // -----------------------------------------------------------------
 
@@ -487,8 +488,40 @@ function renderStaggeredView(container) {
         }
         tdLeague.innerHTML = html;
         tr.appendChild(tdLeague);
+      } else if (eventBlock.type === "split") {
+        // SPLIT BLOCKS: show whatever each bunk actually has (A/B then B/A)
+        bunks.forEach((bunk) => {
+          const tdActivity = document.createElement("td");
+          tdActivity.style.border = "1px solid #ccc";
+          tdActivity.style.verticalAlign = "top";
+
+          const startMin = eventBlock.startMin;
+          const slotIndex = findFirstSlotForTime(startMin);
+          const entry = getEntry(bunk, slotIndex);
+
+          let currentActivity = "";
+          if (entry) {
+            currentActivity = formatEntry(entry);
+            tdActivity.textContent = currentActivity;
+
+            if (entry._h2h) {
+              tdActivity.style.background = "#e8f4ff";
+              tdActivity.style.fontWeight = "bold";
+            } else if (entry._fixed) {
+              tdActivity.style.background = "#fff8e1"; // fixed/pinned
+            }
+          }
+
+          // Allow editing split-block cells too
+          tdActivity.style.cursor = "pointer";
+          tdActivity.title = "Click to edit this activity";
+          tdActivity.onclick = () =>
+            editCell(bunk, startMin, eventBlock.endMin, currentActivity);
+
+          tr.appendChild(tdActivity);
+        });
       } else {
-        // REGULAR / SPLIT / DISMISSAL / SNACKS / CUSTOM PINS: individual cells
+        // REGULAR / DISMISSAL / SNACKS / CUSTOM PINS: individual cells
         const rawName = eventBlock.event || "";
         const nameLc = rawName.toLowerCase();
 
