@@ -58,6 +58,107 @@ function fmtTime(d) {
     h = h % 12 || 12;
     return `${h}:${m} ${ap}`;
 }
+    // ======================================================
+// LEAGUE ROUND STATE (IN-CORE ROUND-ROBIN ENGINE)
+// ======================================================
+
+// Global-ish state for this file (per day), but saved to daily data
+let coreLeagueRoundState = (window.coreLeagueRoundState || {});
+
+// Load round state from today's daily data (if present)
+(function initCoreLeagueRoundState() {
+    try {
+        const daily = window.loadCurrentDailyData?.() || {};
+        if (daily && daily.coreLeagueRoundState && typeof daily.coreLeagueRoundState === "object") {
+            coreLeagueRoundState = daily.coreLeagueRoundState;
+        }
+    } catch (e) {
+        console.error("Failed to load core league round state:", e);
+        coreLeagueRoundState = {};
+    }
+    window.coreLeagueRoundState = coreLeagueRoundState;
+})();
+
+// Save round state back into today's daily data
+function saveCoreLeagueRoundState() {
+    try {
+        window.saveCurrentDailyData?.("coreLeagueRoundState", coreLeagueRoundState);
+    } catch (e) {
+        console.error("Failed to save core league round state:", e);
+    }
+}
+
+// Full round-robin (ALL rounds) using circle method + BYE
+function coreFullRoundRobin(teamList) {
+    if (!teamList || teamList.length < 2) return [];
+
+    const teams = teamList.map(String);
+    const t = [...teams];
+
+    if (t.length % 2 !== 0) {
+        t.push("BYE");
+    }
+
+    const n = t.length;
+    const fixed = t[0];
+    let rotating = t.slice(1);
+    const rounds = [];
+
+    for (let r = 0; r < n - 1; r++) {
+        const pairings = [];
+
+        // fixed team matches first rotating slot
+        pairings.push([fixed, rotating[0]]);
+
+        // pair remaining
+        for (let i = 1; i < n / 2; i++) {
+            const a = rotating[i];
+            const b = rotating[rotating.length - i];
+            pairings.push([a, b]);
+        }
+
+        // remove BYE pairs
+        const clean = pairings.filter(([a, b]) => a !== "BYE" && b !== "BYE");
+        rounds.push(clean);
+
+        // rotate
+        rotating.unshift(rotating.pop());
+    }
+
+    return rounds;
+}
+
+/**
+ * Get the NEXT round of matchups for a league, guaranteed to advance.
+ * - Each call moves to the next round.
+ * - After the last round, wraps back to round 1.
+ * - If teams set changes, round index resets.
+ */
+function coreGetNextLeagueRound(leagueName, teams) {
+    const key = String(leagueName || "");
+    if (!key || !teams || teams.length < 2) return [];
+
+    const teamKey = teams.map(String).sort().join("|"); // identity of the team set
+    const rounds = coreFullRoundRobin(teams);
+    if (rounds.length === 0) return [];
+
+    let state = coreLeagueRoundState[key] || { idx: 0, teamKey };
+
+    // If team set changed, reset the round index
+    if (state.teamKey !== teamKey) {
+        state = { idx: 0, teamKey };
+    }
+
+    const idx = state.idx % rounds.length;
+    const matchups = rounds[idx];
+
+    // advance pointer
+    state.idx = (idx + 1) % rounds.length;
+    coreLeagueRoundState[key] = state;
+
+    return matchups;
+}
+
 
 // ====== LEAGUE "QUANTUM-ISH" SPORT OPTIMIZER ======
 /**
