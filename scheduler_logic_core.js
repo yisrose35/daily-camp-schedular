@@ -932,7 +932,7 @@
         const dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
         const dailyOverrides = dailyData.overrides || {};
         const disabledLeagues = dailyOverrides.leagues || [];
-        thed const disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
+        const disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
         const dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};
         const disabledFields = dailyOverrides.disabledFields || [];
         const disabledSpecials = dailyOverrides.disabledSpecials || [];
