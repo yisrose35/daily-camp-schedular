@@ -1085,7 +1085,21 @@ if (normalizeLeague(item.event)) {
                 if (usedFieldsInThisBlock[i % slotCount].has(fieldName)) {
                     isFieldAvailable = false; // Already used by this league pass
                 }
-                // --- End Fix 3 ---
+                
+                // --- NEW ROBUST CHECK ---
+                // Check time/division rules *if* this field is also a main field
+                const props = activityProperties[fieldName];
+                if (props) {
+                    if (!isTimeAvailable(slotIndex, props)) {
+                        isFieldAvailable = false;
+                    }
+                    if (props.limitUsage && props.limitUsage.enabled) {
+                        if (!props.limitUsage.divisions[group.divName]) {
+                            isFieldAvailable = false;
+                        }
+                    }
+                }
+                // --- END NEW CHECK ---
 
                 let pick, fullLabel;
                 if (fieldName && isFieldAvailable) { // --- MODIFIED ---
