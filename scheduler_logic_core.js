@@ -1334,7 +1334,8 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     const limit = (props && props.sharable) ? 2 : 1;
 
     // ===== DIVISION FILTER (respects explicit division list only) =====
-    if (props &&
+    if (
+        props &&
         Array.isArray(props.allowedDivisions) &&
         props.allowedDivisions.length > 0 &&
         !props.allowedDivisions.includes(block.divName)
@@ -1345,24 +1346,57 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     const limitRules = props.limitUsage;
     if (limitRules && limitRules.enabled) {
         if (!limitRules.divisions[block.divName]) {
+            // division not allowed at all
             return false;
         }
         const allowedBunks = limitRules.divisions[block.divName];
         if (allowedBunks.length > 0) {
-            if (!block.bunk) {
-                // division level ok
-            } else if (!allowedBunks.includes(block.bunk)) {
+            if (block.bunk && !allowedBunks.includes(block.bunk)) {
                 return false;
             }
         }
     }
 
-    for (const slotIndex of block.slots) {
-        if (slotIndex === undefined) return false;
-        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
-        if (usage.count >= limit) return false;
-        if (!isTimeAvailable(slotIndex, props)) return false;
+    // ===== NEW: block-level time-window check =====
+    const { blockStartMin, blockEndMin } = getBlockTimeRange(block);
+    const rules = props.timeRules || [];
+
+    if (rules.length > 0) {
+        // If any time rules exist, the field must be globally "available"
+        if (!props.available) return false;
+
+        // 1) If the BLOCK overlaps ANY "Unavailable" window -> forbidden
+        if (blockStartMin != null && blockEndMin != null) {
+            for (const rule of rules) {
+                if (rule.type === 'Unavailable') {
+                    if (
+                        blockStartMin < rule.endMin &&
+                        blockEndMin   > rule.startMin
+                    ) {
+                        // Any overlap with an Unavailable period disqualifies this field
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // 2) Per-slot checks (usage/sharing + finer availability)
+        for (const slotIndex of block.slots || []) {
+            if (slotIndex === undefined) return false;
+            const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+            if (usage.count >= limit) return false;
+            if (!isTimeAvailable(slotIndex, props)) return false;
+        }
+    } else {
+        // No time rules at all -> rely on global "available" flag and limit
+        if (!props.available) return false;
+        for (const slotIndex of block.slots || []) {
+            if (slotIndex === undefined) return false;
+            const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+            if (usage.count >= limit) return false;
+        }
     }
+
     return true;
 }
 
