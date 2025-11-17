@@ -1,9 +1,17 @@
-
 // ============================================================================
 // scheduler_logic_core.js
 //
-// ... (changelog) ...
-//
+// "SUPERCOMPUTER" / "QUANTUM-ISH" LEAGUE SCHEDULER + SMART GRID
+// - Global unified time grid
+// - Bunk-specific overrides
+// - Pinned / split / slot skeleton handling
+// - League mirroring across divisions
+// - Quantum-ish multi-criteria sport optimizer for leagues
+// - Specialty League pass
+// - Smart filler for remaining blocks
+// - Rotation history (bunks + leagues + per-team sport counts)
+// - Strong time-rule enforcement (Available/Unavailable windows)
+// - No fake fields when nothing is actually available
 // ---
 // UPDATED (Sharing Fix):
 // - 'markFieldUsage' and 'fillBlock' now store the activity a bunk is doing.
@@ -11,10 +19,12 @@
 //   'existingActivity' on a shared field, enforcing same-activity rule.
 //
 // UPDATED (Specialty League Fix):
-// - PASS 3.5 no longer incorrectly checks `fieldsBySport`.
-// - PASS 3.5 now correctly uses the `bestSport` variable (from the finder)
-//   instead of the original `sport` variable when creating labels
-//   and pick objects.
+// - PASS 3.5 (Specialty Leagues) was incorrectly checking fields against
+//   activityProperties (the main fields list), causing "No Field" errors.
+// - REPLACED 'canLeagueGameFit' check with a simple, inline check
+//   that only verifies the field isn't already in use.
+// - FIXED 6 instances where the generic 'sport' variable was used
+//   instead of 'bestSport', which could cause other sports to be scheduled.
 // ============================================================================
 
 (function() {
@@ -1030,7 +1040,7 @@ if (normalizeLeague(item.event)) {
         rotationHistory.leagues[leagueName] = leagueHistory;
 
         const sport = leagueEntry.sport;
-        // --- FIX 1: Remove !fieldsBySport[sport] check ---
+        // --- FIX 1: Remove !fieldsBySport[sport] check (This was the bug) ---
         if (!sport) return;
 
         const bestSport = window.findBestSportForBunks
@@ -1053,6 +1063,8 @@ if (normalizeLeague(item.event)) {
             }
 
             const gamesPerField = Math.ceil(matchups.length / leagueFields.length);
+            const slotCount = group.slots.length || 1;
+            const usedFieldsInThisBlock = Array.from({ length: slotCount }, () => new Set());
 
             for (let i = 0; i < matchups.length; i++) {
                 const [teamA, teamB] = matchups[i];
@@ -1064,17 +1076,29 @@ if (normalizeLeague(item.event)) {
                 // --- FIX 2: Use bestSport variable ---
                 const baseLabel = `${teamA} vs ${teamB} (${bestSport})`;
 
+                // --- FIX 3: Replace 'canLeagueGameFit' with simple inline check ---
+                let isFieldAvailable = true;
+                const slotIndex = group.slots[i % slotCount]; // Get representative slot
+                if (fieldUsageBySlot[slotIndex]?.[fieldName]?.count >= 1) {
+                    isFieldAvailable = false; // Already used by another league
+                }
+                if (usedFieldsInThisBlock[i % slotCount].has(fieldName)) {
+                    isFieldAvailable = false; // Already used by this league pass
+                }
+                // --- End Fix 3 ---
+
                 let pick, fullLabel;
-                if (fieldName && canLeagueGameFit(blockBase, fieldName, fieldUsageBySlot, activityProperties)) {
+                if (fieldName && isFieldAvailable) { // --- MODIFIED ---
                     fullLabel = `${baseLabel} @ ${fieldName}`;
                     pick = {
                         field: fieldName,
                         sport: baseLabel,
                         _h2h: true,
                         vs: null,
-                        _activity: bestSport // --- FIX 3: Use bestSport ---
+                        _activity: bestSport // --- FIX 4: Use bestSport ---
                     };
-                    markFieldUsage({ ...blockBase, _activity: bestSport, bunk: 'league' }, fieldName, fieldUsageBySlot); // --- MODIFIED: Pass activity ---
+                    markFieldUsage({ ...blockBase, _activity: bestSport, bunk: 'league' }, fieldName, fieldUsageBySlot); // --- MODIFIED ---
+                    usedFieldsInThisBlock[i % slotCount].add(fieldName); // Mark as used
                 } else {
                     fullLabel = `${baseLabel} (No Field)`;
                     pick = {
@@ -1082,7 +1106,7 @@ if (normalizeLeague(item.event)) {
                         sport: baseLabel,
                         _h2h: true,
                         vs: null,
-                        _activity: bestSport // --- FIX 3: Use bestSport ---
+                        _activity: bestSport // --- FIX 5: Use bestSport ---
                     };
                 }
 
@@ -1096,7 +1120,7 @@ if (normalizeLeague(item.event)) {
             field: "No Game",
             sport: null,
             _h2h: true,
-            _activity: bestSport, // --- FIX 4: Use bestSport ---
+            _activity: bestSport, // --- FIX 6: Use bestSport ---
             _allMatchups: allMatchupLabels
         };
 
@@ -1279,7 +1303,7 @@ function isTimeAvailable(slotIndex, fieldProps) {
     const slotStartMin = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
     const slotEndMin   = slotStartMin + INCREMENT_MINS;
 
-    const rules = fieldProps.timeRules || [];
+    const rules = (fieldProps.timeRules || []).map(r => ({ ...r, startMin: parseTimeToMinutes(r.start), endMin: parseTimeToMinutes(r.end) }));
     if (rules.length === 0) {
         return fieldProps.available;
     }
@@ -1292,6 +1316,7 @@ function isTimeAvailable(slotIndex, fieldProps) {
 
     for (const rule of rules) {
         if (rule.type === 'Available') {
+            if (rule.startMin == null || rule.endMin == null) continue;
             if (slotStartMin >= rule.startMin && slotEndMin <= rule.endMin) {
                 isAvailable = true;
                 break;
@@ -1300,6 +1325,7 @@ function isTimeAvailable(slotIndex, fieldProps) {
     }
     for (const rule of rules) {
         if (rule.type === 'Unavailable') {
+            if (rule.startMin == null || rule.endMin == null) continue;
             if (slotStartMin < rule.endMin && slotEndMin > rule.startMin) {
                 isAvailable = false;
                 break;
@@ -1371,7 +1397,7 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot, pro
     }
 
     const { blockStartMin, blockEndMin } = getBlockTimeRange(block);
-    const rules = props.timeRules || [];
+    const rules = (props.timeRules || []).map(r => ({ ...r, startMin: parseTimeToMinutes(r.start), endMin: parseTimeToMinutes(r.end) }));
 
     if (rules.length > 0) {
         if (!props.available) return false;
@@ -1382,7 +1408,7 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot, pro
             if (hasAvailableRules) {
                 let insideAvailable = false;
                 for (const rule of rules) {
-                    if (rule.type !== 'Available') continue;
+                    if (rule.type !== 'Available' || rule.startMin == null || rule.endMin == null) continue;
                     if (blockStartMin >= rule.startMin && blockEndMin <= rule.endMin) {
                         insideAvailable = true;
                         break;
@@ -1394,7 +1420,7 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot, pro
             }
 
             for (const rule of rules) {
-                if (rule.type !== 'Unavailable') continue;
+                if (rule.type !== 'Unavailable' || rule.startMin == null || rule.endMin == null) continue;
                 if (
                     blockStartMin < rule.endMin &&
                     blockEndMin   > rule.startMin
@@ -1485,7 +1511,7 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
     }
 
     const { blockStartMin, blockEndMin } = getBlockTimeRange(block);
-    const rules = props.timeRules || [];
+    const rules = (props.timeRules || []).map(r => ({ ...r, startMin: parseTimeToMinutes(r.start), endMin: parseTimeToMinutes(r.end) }));
 
     if (rules.length > 0) {
         if (!props.available) return false;
@@ -1496,7 +1522,7 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
             if (hasAvailableRules) {
                 let insideAvailable = false;
                 for (const rule of rules) {
-                    if (rule.type !== 'Available') continue;
+                    if (rule.type !== 'Available' || rule.startMin == null || rule.endMin == null) continue;
                     if (blockStartMin >= rule.startMin && blockEndMin <= rule.endMin) {
                         insideAvailable = true;
                         break;
@@ -1508,7 +1534,7 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
             }
 
             for (const rule of rules) {
-                if (rule.type !== 'Unavailable') continue;
+                if (rule.type !== 'Unavailable' || rule.startMin == null || rule.endMin == null) continue;
                 if (
                     blockStartMin < rule.endMin &&
                     blockEndMin   > rule.startMin
@@ -1660,7 +1686,9 @@ function loadAndFilterData() {
         return {
             type: rule.type,
             startMin,
-            endMin
+            endMin,
+            start: rule.start, // Keep original strings for filler
+            end: rule.end
         };
     }
 
