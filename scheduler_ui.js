@@ -110,6 +110,36 @@ function findSlotsForRange(startMin, endMin) {
 }
 
 /**
+ * Helper: Finds the *first* 30-min slot index
+ * that matches the start time of a block.
+ */
+function findFirstSlotForTime(startMin) {
+  if (startMin === null || !window.unifiedTimes) return -1; // safety
+  for (let i = 0; i < window.unifiedTimes.length; i++) {
+    const slot = window.unifiedTimes[i];
+    const slotStart =
+      new Date(slot.start).getHours() * 60 +
+      new Date(slot.start).getMinutes();
+    // Failsafe: find the closest one
+    if (slotStart >= startMin && slotStart < startMin + INCREMENT_MINS) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * NEW Helper: For a block that spans [startMin, endMin),
+ * return the first unifiedTimes slot that actually belongs
+ * to that block, using the same logic as the core optimizer.
+ */
+function findFirstSlotForBlockRange(startMin, endMin) {
+  if (startMin == null || endMin == null || !window.unifiedTimes) return -1;
+  const slots = findSlotsForRange(startMin, endMin);
+  return slots.length > 0 ? slots[0] : -1;
+}
+
+/**
  * Handles the editing of a single schedule cell.
  */
 function editCell(bunkName, startMin, endMin, currentActivity) {
@@ -225,25 +255,6 @@ function formatEntry(entry) {
   } else {
     return label;
   }
-}
-
-/**
- * Helper: Finds the *first* 30-min slot index
- * that matches the start time of a custom block.
- */
-function findFirstSlotForTime(startMin) {
-  if (startMin === null || !window.unifiedTimes) return -1; // safety
-  for (let i = 0; i < window.unifiedTimes.length; i++) {
-    const slot = window.unifiedTimes[i];
-    const slotStart =
-      new Date(slot.start).getHours() * 60 +
-      new Date(slot.start).getMinutes();
-    // Failsafe: find the closest one
-    if (slotStart >= startMin && slotStart < startMin + INCREMENT_MINS) {
-      return i;
-    }
-  }
-  return -1;
 }
 
 /**
@@ -446,7 +457,7 @@ function renderStaggeredView(container) {
 
       // Time cell
       const tdTime = document.createElement("td");
-      tdTime.style.border = "1px solid #ccc";
+      tdTime.style.border = "1px solid "#ccc";
       tdTime.style.verticalAlign = "top";
       tdTime.style.fontWeight = "bold";
       tdTime.textContent = eventBlock.label;
@@ -465,10 +476,13 @@ function renderStaggeredView(container) {
         tdLeague.style.padding = "5px 8px";
         tdLeague.style.background = "#f0f8f0"; // light green
 
-        const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
+        const firstSlotIndex = findFirstSlotForBlockRange(
+          eventBlock.startMin,
+          eventBlock.endMin
+        );
         let allMatchups = [];
 
-        if (bunks.length > 0) {
+        if (bunks.length > 0 && firstSlotIndex >= 0) {
           const firstBunkEntry = getEntry(bunks[0], firstSlotIndex);
           if (firstBunkEntry && firstBunkEntry._allMatchups) {
             allMatchups = firstBunkEntry._allMatchups;
@@ -496,8 +510,12 @@ function renderStaggeredView(container) {
           tdActivity.style.verticalAlign = "top";
 
           const startMin = eventBlock.startMin;
-          const slotIndex = findFirstSlotForTime(startMin);
-          const entry = getEntry(bunk, slotIndex);
+          const endMin = eventBlock.endMin;
+
+          // IMPORTANT: use the same "range" logic as the core optimizer
+          const slotIndex = findFirstSlotForBlockRange(startMin, endMin);
+          const entry =
+            slotIndex >= 0 ? getEntry(bunk, slotIndex) : null;
 
           let currentActivity = "";
           if (entry) {
@@ -510,13 +528,15 @@ function renderStaggeredView(container) {
             } else if (entry._fixed) {
               tdActivity.style.background = "#fff8e1"; // fixed/pinned
             }
+          } else {
+            tdActivity.textContent = "";
           }
 
           // Allow editing split-block cells too
           tdActivity.style.cursor = "pointer";
           tdActivity.title = "Click to edit this activity";
           tdActivity.onclick = () =>
-            editCell(bunk, startMin, eventBlock.endMin, currentActivity);
+            editCell(bunk, startMin, endMin, currentActivity);
 
           tr.appendChild(tdActivity);
         });
@@ -574,8 +594,9 @@ function renderStaggeredView(container) {
 
           // GENERATED SLOTS (Activity / Sports / Special Activity / Swim)
           // -> show whatever the scheduler actually picked
-          const slotIndex = findFirstSlotForTime(startMin);
-          const entry = getEntry(bunk, slotIndex);
+          const slotIndex = findFirstSlotForBlockRange(startMin, endMin);
+          const entry =
+            slotIndex >= 0 ? getEntry(bunk, slotIndex) : null;
 
           let currentActivity = "";
           if (entry) {
