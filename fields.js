@@ -10,6 +10,9 @@
 //   - The "Other activity" input now calls `window.addGlobalSport()`
 //     to register the new sport globally before adding it to the
 //     field and re-rendering the detail pane.
+// - `renderAllowedBunksControls`:
+//   - **FIXED BUG:** Clicking an enabled division chip (in "All" or
+//     "Specific" mode) will now correctly disable (unchoose) it.
 // =================================================================
 
 (function() {
@@ -666,18 +669,13 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
             
             // Division-level chip
             const divChip = createLimitChip(divName, isAllowed, true);
+            
+            // --- THIS IS THE FIX ---
             divChip.onclick = () => {
                 if (isAllowed) {
-                    // If it IS allowed, clicking it again will
-                    // toggle to bunk-specific mode *if* bunks exist
-                    const bunksInDiv = (window.divisions[divName]?.bunks || []);
-                    if (bunksInDiv.length > 0 && allowedBunks.length === 0) { // Check if not already in bunk-specific mode
-                        // Switch to specific bunks (start with none)
-                        rules.divisions[divName] = []; 
-                    } else {
-                        // No bunks, or already in bunk-specific mode, so just disable
-                        delete rules.divisions[divName];
-                    }
+                    // If it IS allowed (in "All" or "Specific" mode),
+                    // clicking it again will disable (unchoose) it.
+                    delete rules.divisions[divName];
                 } else {
                     // If it's NOT allowed, clicking it
                     // enables it for ALL bunks in that division
@@ -686,9 +684,14 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
                 onSave();
                 onRerender();
             };
+            // --- END FIX ---
+            
             divWrapper.appendChild(divChip);
 
             // Bunk-level chips (if in bunk-specific mode, i.e., array exists)
+            // --- THIS LOGIC IS NOW CORRECT, NO CHANGE NEEDED ---
+            // It only renders if `isAllowed` is true.
+            // When user clicks a bunk, it correctly modifies the `allowedBunks` array.
             if (isAllowed) {
                 const bunkList = document.createElement("div");
                 bunkList.style.display = "flex";
@@ -703,6 +706,7 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
                 }
 
                 // "All" button (only show if in bunk-specific mode)
+                // This logic is correct: `allowedBunks.length > 0` means it's in specific mode.
                 if (allowedBunks.length > 0) {
                     const allBunksChip = createLimitChip(`All ${divName}`, false, false);
                     allBunksChip.style.backgroundColor = "#f0f0f0";
