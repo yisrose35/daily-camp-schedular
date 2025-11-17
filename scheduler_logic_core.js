@@ -735,11 +735,17 @@ manualSkeleton.forEach(item => {
     // -------------------------------------------------------------
     else if (item.type === 'slot' && isGeneratedEvent) {
 
-        const normalizedEvent =
-            normalizeGA(item.event) ||
-            normalizeLeague(item.event) ||
-            normalizeSpecialtyLeague(item.event) ||
-            item.event;
+        let normalizedEvent = null;
+
+if (normalizeLeague(item.event)) {
+    normalizedEvent = "League Game";          // FORCE EXACT
+} else if (normalizeSpecialtyLeague(item.event)) {
+    normalizedEvent = "Specialty League";     // FORCE EXACT
+} else if (normalizeGA(item.event)) {
+    normalizedEvent = "General Activity Slot";
+} else {
+    normalizedEvent = item.event;
+}
 
         allBunks.forEach(bunk => {
             schedulableSlotBlocks.push({
