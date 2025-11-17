@@ -7,6 +7,12 @@
 // - Dismissal / Snacks / custom tiles shown as fixed pin tiles
 // - Split blocks: first half of time A/B, second half B/A based on scheduleAssignments
 // - League counters (League Game 1, 2, 3...) persisted day-to-day
+//
+// --- YOUR NEW REQUEST (11/16) ---
+// - **FIXED:** `renderStaggeredView` now attaches the
+//   `editCell` onclick handler to *all* cells, including
+//   pinned tiles (Lunch, Snacks, Dismissal, etc.),
+//   not just generated ones.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -488,40 +494,8 @@ function renderStaggeredView(container) {
         }
         tdLeague.innerHTML = html;
         tr.appendChild(tdLeague);
-      } else if (eventBlock.type === "split") {
-        // SPLIT BLOCKS: show whatever each bunk actually has (A/B then B/A)
-        bunks.forEach((bunk) => {
-          const tdActivity = document.createElement("td");
-          tdActivity.style.border = "1px solid #ccc";
-          tdActivity.style.verticalAlign = "top";
-
-          const startMin = eventBlock.startMin;
-          const slotIndex = findFirstSlotForTime(startMin);
-          const entry = getEntry(bunk, slotIndex);
-
-          let currentActivity = "";
-          if (entry) {
-            currentActivity = formatEntry(entry);
-            tdActivity.textContent = currentActivity;
-
-            if (entry._h2h) {
-              tdActivity.style.background = "#e8f4ff";
-              tdActivity.style.fontWeight = "bold";
-            } else if (entry._fixed) {
-              tdActivity.style.background = "#fff8e1"; // fixed/pinned
-            }
-          }
-
-          // Allow editing split-block cells too
-          tdActivity.style.cursor = "pointer";
-          tdActivity.title = "Click to edit this activity";
-          tdActivity.onclick = () =>
-            editCell(bunk, startMin, eventBlock.endMin, currentActivity);
-
-          tr.appendChild(tdActivity);
-        });
       } else {
-        // REGULAR / DISMISSAL / SNACKS / CUSTOM PINS: individual cells
+        // REGULAR / SPLIT / DISMISSAL / SNACKS / CUSTOM PINS: individual cells
         const rawName = eventBlock.event || "";
         const nameLc = rawName.toLowerCase();
 
@@ -537,64 +511,53 @@ function renderStaggeredView(container) {
 
           const startMin = eventBlock.startMin;
           const endMin = eventBlock.endMin;
+          
+          // --- FIX: This variable will hold the text for the prompt ---
+          let cellActivityName = "";
 
           // Dismissal row
           if (isDismissalBlock) {
-            tdActivity.textContent = "Dismissal";
+            cellActivityName = "Dismissal";
+            tdActivity.textContent = cellActivityName;
             tdActivity.style.background = "#ffecec"; // light red/pink
             tdActivity.style.fontWeight = "bold";
-            tdActivity.style.cursor = "default";
-            tdActivity.title = "Dismissal";
-            tr.appendChild(tdActivity);
-            return;
           }
-
           // Snacks row
-          if (isSnackBlock) {
-            tdActivity.textContent = "Snacks";
+          else if (isSnackBlock) {
+            cellActivityName = "Snacks";
+            tdActivity.textContent = cellActivityName;
             tdActivity.style.background = "#e8f5e9"; // light green-ish
             tdActivity.style.fontWeight = "bold";
-            tdActivity.style.cursor = "default";
-            tdActivity.title = "Snacks";
-            tr.appendChild(tdActivity);
-            return;
           }
-
           // Any other NON-GENERATED tile = PIN TILE
-          // (Lunch, Regroup, Lineup, Cleanup, etc.)
-          if (isPinBlock) {
-            tdActivity.textContent = rawName || "Pinned";
+          else if (isPinBlock) {
+            cellActivityName = rawName || "Pinned";
+            tdActivity.textContent = cellActivityName;
             tdActivity.style.background = "#fff8e1"; // light yellow for pins
             tdActivity.style.fontWeight = "bold";
-            tdActivity.style.cursor = "default";
-            tdActivity.title = rawName || "Pinned";
-            tr.appendChild(tdActivity);
-            return;
           }
+          // GENERATED SLOTS (Activity / Sports / Special Activity / Swim / Split)
+          else {
+            const slotIndex = findFirstSlotForTime(startMin);
+            const entry = getEntry(bunk, slotIndex);
 
-          // GENERATED SLOTS (Activity / Sports / Special Activity / Swim)
-          // -> show whatever the scheduler actually picked
-          const slotIndex = findFirstSlotForTime(startMin);
-          const entry = getEntry(bunk, slotIndex);
-
-          let currentActivity = "";
-          if (entry) {
-            currentActivity = formatEntry(entry);
-            tdActivity.textContent = currentActivity;
-
-            if (entry._h2h) {
-              tdActivity.style.background = "#e8f4ff";
-              tdActivity.style.fontWeight = "bold";
-            } else if (entry._fixed) {
-              tdActivity.style.background = "#fff8e1"; // fixed/pinned
+            if (entry) {
+              cellActivityName = formatEntry(entry);
+              if (entry._h2h) {
+                tdActivity.style.background = "#e8f4ff";
+                tdActivity.style.fontWeight = "bold";
+              } else if (entry._fixed) {
+                tdActivity.style.background = "#fff8e1"; // fixed/pinned
+              }
             }
+            tdActivity.textContent = cellActivityName;
           }
 
-          // Generated cells remain editable
+          // --- FIX: Apply the click handler to ALL cells ---
           tdActivity.style.cursor = "pointer";
           tdActivity.title = "Click to edit this activity";
           tdActivity.onclick = () =>
-            editCell(bunk, startMin, endMin, currentActivity);
+            editCell(bunk, startMin, endMin, cellActivityName);
 
           tr.appendChild(tdActivity);
         });
