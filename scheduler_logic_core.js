@@ -1426,6 +1426,22 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
         }
         // (we usually don't do per-bunk filtering for leagues)
     }
+    function isPickValidForBlock(block, pick, activityProperties, fieldUsageBySlot) {
+    if (!pick) return false;
+
+    const fname = fieldLabel(pick.field);
+
+    // If there is no real field name, or it's just a custom/pin label
+    // (e.g., "Free", "Regroup", Dismissal) we treat it as always valid.
+    if (!fname) return true;
+    if (!window.allSchedulableNames || !window.allSchedulableNames.includes(fname)) {
+        return true;
+    }
+
+    // Real schedulable field: must actually be able to fit here
+    return canBlockFit(block, fname, activityProperties, fieldUsageBySlot);
+}
+
 
     // ===== NEW: block-level time-window check for leagues too =====
     const { blockStartMin, blockEndMin } = getBlockTimeRange(block);
