@@ -534,106 +534,139 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         console.error("Error placing bunk-specific overrides:", e);
     }
 
-    // =================================================================
-    // PASS 2 — Pinned / Split / Slot Skeleton Blocks
-    // =================================================================
-    const schedulableSlotBlocks = [];
+  // =================================================================
+// PASS 2 — Pinned / Split / Slot Skeleton Blocks
+// =================================================================
+const schedulableSlotBlocks = [];
 
-    manualSkeleton.forEach(item => {
-        const allBunks = divisions[item.division]?.bunks || [];
-        if (!allBunks || allBunks.length === 0) return;
+manualSkeleton.forEach(item => {
+    const allBunks = divisions[item.division]?.bunks || [];
+    if (!allBunks || allBunks.length === 0) return;
 
-        const startMin = parseTimeToMinutes(item.startTime);
-        const endMin   = parseTimeToMinutes(item.endTime);
-        const allSlots = findSlotsForRange(startMin, endMin);
-        if (allSlots.length === 0) return;
+    const startMin = parseTimeToMinutes(item.startTime);
+    const endMin   = parseTimeToMinutes(item.endTime);
+    const allSlots = findSlotsForRange(startMin, endMin);
+    if (allSlots.length === 0) return;
 
-        const isGeneratedEvent = GENERATED_EVENTS.includes(item.event);
+    const isGeneratedEvent = GENERATED_EVENTS.includes(item.event);
 
-        if (item.type === 'pinned' || !isGeneratedEvent) {
-            // Pure PIN TILE (Lunch, Snacks, Dismissal, Regroup, custom, etc.)
-            allBunks.forEach(bunk => {
-                allSlots.forEach((slotIndex, idx) => {
+    // -------------------------------------------------------------
+    //  PURE PINNED (Lunch, Dismissal, Snacks, Cleanup, Custom, etc.)
+    // -------------------------------------------------------------
+    if (item.type === 'pinned' || !isGeneratedEvent) {
+        allBunks.forEach(bunk => {
+            allSlots.forEach((slotIndex, idx) => {
+                if (!window.scheduleAssignments[bunk][slotIndex]) {
+                    window.scheduleAssignments[bunk][slotIndex] = {
+                        field: { name: item.event },
+                        sport: null,
+                        continuation: (idx > 0),
+                        _fixed: true,
+                        _h2h: false,
+                        vs: null,
+                        _activity: item.event
+                    };
+                }
+            });
+        });
+    }
+
+    // -------------------------------------------------------------
+    //  **NEW FULLY-GENERATED SPLIT BLOCK LOGIC**
+    // -------------------------------------------------------------
+    else if (item.type === 'split') {
+
+        // Must have two subEvents (e.g., Swim + GA)
+        if (!item.subEvents || item.subEvents.length < 2) return;
+
+        const swimEvent = item.subEvents[0];   // FIRST half's swim definition
+        const gaEvent   = item.subEvents[1];   // fully generated GA definition
+
+        // ----------------------------
+        // Split bunks Top / Bottom
+        // ----------------------------
+        const splitCount = Math.ceil(allBunks.length / 2);
+        const bunksTop    = allBunks.slice(0, splitCount);
+        const bunksBottom = allBunks.slice(splitCount);
+
+        // ----------------------------
+        // Split TIME First Half / Second Half
+        // ----------------------------
+        const slotMidpoint = Math.ceil(allSlots.length / 2);
+        const slotsFirst   = allSlots.slice(0, slotMidpoint);
+        const slotsSecond  = allSlots.slice(slotMidpoint);
+
+        // ----------------------------
+        // Helper: assign SWIM (PINNED)
+        // ----------------------------
+        function assignSwim(bunks, slots) {
+            bunks.forEach(bunk => {
+                slots.forEach((slotIndex, idx) => {
                     if (!window.scheduleAssignments[bunk][slotIndex]) {
                         window.scheduleAssignments[bunk][slotIndex] = {
-                            field: { name: item.event },
+                            field: { name: "Swim" },
                             sport: null,
                             continuation: (idx > 0),
                             _fixed: true,
                             _h2h: false,
                             vs: null,
-                            _activity: item.event
+                            _activity: "Swim"
                         };
                     }
                 });
             });
-        } else if (item.type === 'split') {
-            if (!item.subEvents || item.subEvents.length < 2) return;
-            const event1 = item.subEvents[0];
-            const event2 = item.subEvents[1];
+        }
 
-            const splitIndex = Math.ceil(allBunks.length / 2);
-            const bunksHalf1 = allBunks.slice(0, splitIndex);
-            const bunksHalf2 = allBunks.slice(splitIndex);
-
-            const slotSplitIndex = Math.ceil(allSlots.length / 2);
-            const slotsHalf1 = allSlots.slice(0, slotSplitIndex);
-            const slotsHalf2 = allSlots.slice(slotSplitIndex);
-
-            const groups = [
-                { bunks: bunksHalf1, slots: slotsHalf1, eventDef: event1 },
-                { bunks: bunksHalf2, slots: slotsHalf1, eventDef: event2 },
-                { bunks: bunksHalf1, slots: slotsHalf2, eventDef: event2 },
-                { bunks: bunksHalf2, slots: slotsHalf2, eventDef: event1 }
-            ];
-
-            groups.forEach(group => {
-                if (group.slots.length === 0) return;
-                const subEventIsGenerated = GENERATED_EVENTS.includes(group.eventDef.event);
-
-                group.bunks.forEach(bunk => {
-                    if (group.eventDef.type === 'pinned' || !subEventIsGenerated) {
-                        // Split but *this half* is a pin tile
-                        group.slots.forEach((slotIndex, idx) => {
-                            if (!window.scheduleAssignments[bunk][slotIndex]) {
-                                window.scheduleAssignments[bunk][slotIndex] = {
-                                    field: { name: group.eventDef.event },
-                                    sport: null,
-                                    continuation: (idx > 0),
-                                    _fixed: true,
-                                    _h2h: false,
-                                    vs: null,
-                                    _activity: group.eventDef.event
-                                };
-                            }
-                        });
-                    } else if (group.eventDef.type === 'slot' && subEventIsGenerated) {
-                        // Split half is schedulable/generatable
-                        schedulableSlotBlocks.push({
-                            divName:   item.division,
-                            bunk:      bunk,
-                            event:     group.eventDef.event,
-                            startTime: startMin,
-                            endTime:   endMin,
-                            slots:     group.slots
-                        });
-                    }
-                });
-            });
-        } else if (item.type === 'slot' && isGeneratedEvent) {
-            // Normal schedulable/generatable slot
-            allBunks.forEach(bunk => {
+        // ----------------------------
+        // Helper: push GA blocks to optimizer (FULLY GENERATED)
+        // ----------------------------
+        function assignGA(bunks, slots) {
+            bunks.forEach(bunk => {
                 schedulableSlotBlocks.push({
                     divName:   item.division,
                     bunk:      bunk,
-                    event:     item.event,
+                    event:     gaEvent.event,   // MUST be "General Activity Slot"
                     startTime: startMin,
                     endTime:   endMin,
-                    slots:     allSlots
+                    slots
                 });
             });
         }
-    });
+
+        // ---------------------------------------
+        //  HALF 1 — FIRST TIME HALF
+        //    Top bunks: SWIM
+        //    Bottom bunks: GENERATED GA
+        // ---------------------------------------
+        assignSwim(bunksTop, slotsFirst);
+        assignGA(bunksBottom, slotsFirst);
+
+        // ---------------------------------------
+        //  HALF 2 — SECOND TIME HALF
+        //    Top bunks: GENERATED GA
+        //    Bottom bunks: SWIM
+        // ---------------------------------------
+        assignGA(bunksTop, slotsSecond);
+        assignSwim(bunksBottom, slotsSecond);
+    }
+
+    // -------------------------------------------------------------
+    //  NORMAL GENERATED SLOTS (Sports Slot, GA Slot, Special Activity)
+    // -------------------------------------------------------------
+    else if (item.type === 'slot' && isGeneratedEvent) {
+        allBunks.forEach(bunk => {
+            schedulableSlotBlocks.push({
+                divName:   item.division,
+                bunk:      bunk,
+                event:     item.event,
+                startTime: startMin,
+                endTime:   endMin,
+                slots:     allSlots
+            });
+        });
+    }
+
+});  // end manualSkeleton.forEach
 
     // =================================================================
     // PASS 3 — LEAGUE PASS (Quantum-ish sports + mirroring)
