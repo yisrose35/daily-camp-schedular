@@ -2,12 +2,37 @@
 // master_schedule_builder.js  (FIXED)
 // - Pinned creation includes SWIM
 // - Grid extends to latest pinned end so late "Dismissal" renders
+// - NEW: Added localStorage auto-save to prevent losing work
 // =================================================================
 (function(){
 'use strict';
 
 let container=null, palette=null, grid=null;
 let dailySkeleton=[];
+
+// --- NEW: Constants for the auto-save draft ---
+const SKELETON_DRAFT_KEY = 'master-schedule-draft';
+const SKELETON_DRAFT_NAME_KEY = 'master-schedule-draft-name';
+
+// --- NEW: Function to save the current draft ---
+function saveDraftToLocalStorage() {
+    try {
+        if (dailySkeleton && dailySkeleton.length > 0) {
+            localStorage.setItem(SKELETON_DRAFT_KEY, JSON.stringify(dailySkeleton));
+        } else {
+            localStorage.removeItem(SKELETON_DRAFT_KEY);
+        }
+    } catch (e) {
+        console.error("Error saving draft to localStorage:", e);
+    }
+}
+
+// --- NEW: Function to clear the draft (after successful save) ---
+function clearDraftFromLocalStorage() {
+    localStorage.removeItem(SKELETON_DRAFT_KEY);
+    localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
+    console.log("Master template draft cleared.");
+}
 
 const PIXELS_PER_MINUTE=2;
 const INCREMENT_MINS=30;
@@ -40,6 +65,19 @@ function init(){
   container=document.getElementById("master-scheduler-content");
   if(!container) return;
   loadDailySkeleton();
+
+  // --- NEW: Load draft from localStorage ---
+  const savedDraft = localStorage.getItem(SKELETON_DRAFT_KEY);
+  if (savedDraft) {
+      if (confirm("You have an unsaved master schedule draft. Load it?")) {
+          dailySkeleton = JSON.parse(savedDraft);
+      } else {
+          // User said no, so clear the draft
+          clearDraftFromLocalStorage();
+      }
+  }
+  // --- END NEW ---
+
   container.innerHTML=`
     <div id="scheduler-template-ui" style="padding:15px;background:#f9f9f9;border:1px solid #ddd;border-radius:8px;margin-bottom:20px;"></div>
     <div id="scheduler-palette" style="padding:10px;background:#f4f4f4;border-radius:8px;margin-bottom:15px;display:flex;flex-wrap:wrap;gap:10px;"></div>
@@ -90,9 +128,51 @@ function renderTemplateUI(){
 
   const loadSel=document.getElementById("template-load-select");
   const saveName=document.getElementById("template-save-name");
-  loadSel.onchange=()=>{ const name=loadSel.value; if(name && saved[name]){ if(confirm(`Load "${name}"?`)){ loadSkeletonToBuilder(name); saveName.value=name; } else loadSel.value=""; } };
-  document.getElementById("template-save-btn").onclick=()=>{ const name=saveName.value.trim(); if(!name){ alert("Enter a name"); return; } if(confirm(`Save as "${name}"?`)){ window.saveSkeleton?.(name,dailySkeleton); alert("Template saved!"); renderTemplateUI(); } };
-  document.getElementById("template-delete-btn").onclick=()=>{ const name=loadSel.value; if(!name){ alert("Select a template to delete."); return; } if(confirm(`Delete "${name}"?`)){ window.deleteSkeleton?.(name); alert("Deleted!"); renderTemplateUI(); loadSkeletonToBuilder(null); } };
+
+  // --- NEW: Load draft name and save name on input ---
+  const savedDraftName = localStorage.getItem(SKELETON_DRAFT_NAME_KEY);
+  if (savedDraftName) {
+      saveName.value = savedDraftName;
+  }
+  saveName.oninput = () => {
+      localStorage.setItem(SKELETON_DRAFT_NAME_KEY, saveName.value.trim());
+  };
+  // --- END NEW ---
+
+  loadSel.onchange=()=>{ 
+    const name=loadSel.value; 
+    if(name && saved[name]){ 
+      if(confirm(`Load "${name}"?`)){ 
+        loadSkeletonToBuilder(name); 
+        saveName.value=name; 
+        // --- NEW: When we load, this becomes our new draft ---
+        saveDraftToLocalStorage();
+        localStorage.setItem(SKELETON_DRAFT_NAME_KEY, name);
+        // --- END NEW ---
+      } else loadSel.value=""; 
+    } 
+  };
+  document.getElementById("template-save-btn").onclick=()=>{ 
+    const name=saveName.value.trim(); 
+    if(!name){ alert("Enter a name"); return; } 
+    if(confirm(`Save as "${name}"?`)){ 
+      window.saveSkeleton?.(name,dailySkeleton); 
+      clearDraftFromLocalStorage(); // --- NEW: Clear draft on successful save ---
+      alert("Template saved!"); 
+      renderTemplateUI(); 
+    } 
+  };
+  document.getElementById("template-delete-btn").onclick=()=>{ 
+    const name=loadSel.value; 
+    if(!name){ alert("Select a template to delete."); return; } 
+    if(confirm(`Delete "${name}"?`)){ 
+      window.deleteSkeleton?.(name); 
+      clearDraftFromLocalStorage(); // --- NEW: Clear draft if we delete it ---
+      alert("Deleted!"); 
+      renderTemplateUI(); 
+      loadSkeletonToBuilder(null); 
+    } 
+  };
 
   const selects=ui.querySelectorAll('.assignments-container select');
   const namesWithNone = (sel,day)=>{
@@ -271,6 +351,7 @@ function addDropListeners(selector){
       }
 
       dailySkeleton.push(newEvent);
+      saveDraftToLocalStorage(); // --- NEW ---
       renderGrid();
     };
   });
@@ -285,6 +366,7 @@ function addRemoveListeners(selector){
       const ev=dailySkeleton.find(v=>v.id===id);
       if(confirm(`Remove "${ev?ev.event:'this event'}"?`)){
         dailySkeleton=dailySkeleton.filter(v=>v.id!==id);
+        saveDraftToLocalStorage(); // --- NEW ---
         renderGrid();
       }
     };
@@ -331,6 +413,7 @@ function loadSkeletonToBuilder(name){
     dailySkeleton=s? JSON.parse(JSON.stringify(s)): [];
   }
   renderGrid();
+  saveDraftToLocalStorage(); // --- NEW: When we load a template, it becomes the new draft ---
 }
 
 // time helpers
