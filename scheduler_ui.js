@@ -1,32 +1,38 @@
 // -------------------- scheduler_ui.js --------------------
 //
-// --- FEATURES ---
-// - Staggered (YKLI) view: one table per division
-// - League mirroring via _allMatchups list
-// - Post-generation editing for generated cells
-// - Dismissal / Snacks / custom tiles shown as fixed pin tiles
-// - Split blocks: first half of time A/B, second half B/A based on scheduleAssignments
-// - League counters (League Game 1, 2, 3...) persisted day-to-day
+// ... (previous changelog) ...
 //
-// --- YOUR NEW REQUEST (11/16) ---
-// - **FIXED (AGAIN):** Restored the `else if (eventBlock.type === "split")`
-//   block that was accidentally removed in the previous fix.
-// - All cells (generated, pinned, *and* split) are now
-//   correctly rendered AND editable.
+// --- "LEAGUE MIRRORING" FIX (11/13) ---
+// - **UPDATED:** The `renderStaggeredView` function for
+//   league blocks has been rewritten.
+// - It no longer tries to "find" games by looping
+//   over bunks in the division.
+// - It now gets the schedule entry for the *first bunk*
+//   and looks for the new `_allMatchups` list.
+// - If that list exists, it prints it. This ensures
+//   that all divisions in a league (e.g., Div 5 and Div 6)
+//   show the identical, complete, "mirrored" list of
+//   all games for that block.
 //
-// --- LATEST FIX ---
-// - Fixed typo `todaySpecialTypeCount` -> `todaySpecialtyCount`
-//   which was causing a rendering error.
+// --- NEW FEATURE (USER REQUEST): POST-GENERATION EDITING ---
+// - **NEW:** Added `findSlotsForRange` helper to find all unified slots in a block.
+// - **NEW:** Added `editCell` function. This is triggered by `onclick`.
+//   - It opens a `prompt()` to get a new activity name.
+//   - It overwrites the schedule for all slots in that block for that bunk.
+//   - The new entry is marked as `_fixed: true`.
+//   - It saves and re-renders the table.
+// - **UPDATED:** `renderStaggeredView` now adds an `onclick` handler to all
+//   individual (non-league) activity cells to trigger `editCell`.
 //
-// --- NEW FIX (11/16 - SPLIT "SWIM/ACTIVITY") ---
-// - **NORMALIZED:** Any block whose `type` *contains* "split"
-//   is normalized to `type: "split"` for the UI.
-// - **HEURISTIC:** Any event with a "/" in the name
-//   (e.g., "Swim/Activity") is treated as a split block if no
-//   explicit `type` is given, so the UI will render what the
-//   optimizer actually assigned (half Swim, half Activity,
-//   then flipped mid-way) instead of a raw "Swim/Activity"
-//   label across the whole division.
+// --- NEW FIX (Closest Slot) ---
+// - **FIXED:** `findFirstSlotForTime` now finds the 30-minute
+//   slot that is *closest* to the custom block's start time,
+//   preventing the "off-by-one" display bug.
+//
+// --- NEW FIX (Dismissal Handling) ---
+// - **NEW:** Blocks whose event is "Dismissal" are rendered as
+//   "Dismissal" for every bunk in that division, non-editable,
+//   and visually highlighted.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -68,9 +74,9 @@ function fmtTime(d) {
   if (typeof d === "string") {
     d = new Date(d);
   }
-  let h = d.getHours();
-  const m = d.getMinutes().toString().padStart(2, "0");
-  const ap = h >= 12 ? "PM" : "AM";
+  let h = d.getHours(),
+    m = d.getMinutes().toString().padStart(2, "0"),
+    ap = h >= 12 ? "PM" : "AM";
   h = h % 12 || 12;
   return `${h}:${m} ${ap}`;
 }
@@ -79,7 +85,7 @@ function fmtTime(d) {
  * Helper: Converts minutes (e.g., 740) to a 12-hour string (e.g., "12:20 PM")
  */
 function minutesToTimeLabel(min) {
-  if (min == null || Number.isNaN(min)) return "Invalid Time"; // safety check
+  if (min == null || Number.isNaN(min)) return "Invalid Time"; // <-- SAFETY CHECK
   let h = Math.floor(min / 60);
   const m = (min % 60).toString().padStart(2, "0");
   const ap = h >= 12 ? "PM" : "AM";
@@ -87,31 +93,10 @@ function minutesToTimeLabel(min) {
   return `${h}:${m} ${ap}`;
 }
 
-// ===== MATCH GENERATED EVENTS (mirror of core) =====
-const UI_GENERATED_EVENTS = new Set([
-  "activity",
-  "activities",
-  "general activity",
-  "general activity slot",
-  "sports",
-  "sport",
-  "sports slot",
-  "special activity",
-  "league game",
-  "specialty league",
-  "speciality league",
-  "swim"
-]);
-
-function uiIsGeneratedEventName(name) {
-  if (!name) return false;
-  return UI_GENERATED_EVENTS.has(String(name).trim().toLowerCase());
-}
-
-// ===== EDITING FUNCTIONS =====
+// ===== NEW EDITING FUNCTIONS =====
 
 /**
- * Helper: Finds all unified slot indices within a time range.
+ * NEW Helper: Finds all unified slot indices within a time range.
  */
 function findSlotsForRange(startMin, endMin) {
   const slots = [];
@@ -174,7 +159,7 @@ function editCell(bunkName, startMin, endMin, currentActivity) {
         continuation: idx > 0, // "Free" can also be a block
         _fixed: true, // Mark as manually set
         _h2h: false,
-        _activity: "Free"
+        _activity: "Free",
       };
     });
   } else {
@@ -187,7 +172,7 @@ function editCell(bunkName, startMin, endMin, currentActivity) {
         _fixed: true, // Mark as a manual override
         _h2h: false,
         vs: null,
-        _activity: finalActivityName
+        _activity: finalActivityName,
       };
     });
   }
@@ -198,7 +183,10 @@ function editCell(bunkName, startMin, endMin, currentActivity) {
 }
 
 // ===== Main updateTable function =====
-
+/**
+ * UPDATED: This function no longer checks for a toggle
+ * and *only* calls renderStaggeredView.
+ */
 function updateTable() {
   const container = document.getElementById("scheduleTable");
   if (!container) return;
@@ -224,18 +212,17 @@ function getEntry(bunk, slotIndex) {
 function formatEntry(entry) {
   if (!entry) return "";
 
-  // Safety: if core flagged it, force label
+  // 🔹 Dismissal safety: if core marked it as dismissal, show "Dismissal"
   if (entry._isDismissal) {
     return "Dismissal";
-  }
-  if (entry._isSnack) {
-    return "Snacks";
   }
 
   const label = fieldLabel(entry.field) || "";
 
   if (entry._h2h) {
-    // League game, 'sport' holds matchup label
+    // This is a league game, but being shown in an
+    // individual cell (e.g. split activity).
+    // The 'sport' field contains the full matchup label.
     return entry.sport || "League Game";
   } else if (entry._fixed) {
     // Fixed/pinned activities (Lunch, Learning, etc.)
@@ -252,7 +239,7 @@ function formatEntry(entry) {
  * that matches the start time of a custom block.
  */
 function findFirstSlotForTime(startMin) {
-  if (startMin === null || !window.unifiedTimes) return -1; // safety
+  if (startMin === null || !window.unifiedTimes) return -1; // <-- SAFETY CHECK
   for (let i = 0; i < window.unifiedTimes.length; i++) {
     const slot = window.unifiedTimes[i];
     const slotStart =
@@ -270,7 +257,7 @@ function findFirstSlotForTime(startMin) {
  * Renders the "Staggered" (YKLI) view
  * --- one table PER DIVISION ---
  * --- with LEAGUE MIRRORING & EDIT-ON-CLICK ---
- * --- and explicit Dismissal + Snacks + custom pin tiles ---
+ * --- and explicit Dismissal handling ---
  */
 function renderStaggeredView(container) {
   container.innerHTML = "";
@@ -282,7 +269,7 @@ function renderStaggeredView(container) {
   const dailyData = window.loadCurrentDailyData?.() || {};
   const manualSkeleton = dailyData.manualSkeleton || [];
 
-  // Load previous day's league counters
+  // --- NEW: Load previous day's counters ---
   const prevDailyData = window.loadPreviousDailyData?.() || {};
   const prevCounters = prevDailyData.leagueDayCounters || {};
   const todayCounters = {}; // This will be saved at the end
@@ -293,28 +280,28 @@ function renderStaggeredView(container) {
     return;
   }
 
-  // Wrapper for side-by-side styling
+  // --- NEW: Add a wrapper for side-by-side styling ---
   const wrapper = document.createElement("div");
   wrapper.className = "schedule-view-wrapper";
   container.appendChild(wrapper);
 
-  // 1. Loop over each division and create a separate table
+  // --- 1. Loop over each division and create a separate table ---
   availableDivisions.forEach((div) => {
     const bunks = (divisions[div]?.bunks || []).sort();
-    if (bunks.length === 0) return; // no bunks, no table
+    if (bunks.length === 0) return; // Don't render a table for a division with no bunks
 
     const table = document.createElement("table");
-    table.className = "schedule-division-table";
+    table.className = "schedule-division-table"; // NEW CLASS
     table.style.borderCollapse = "collapse";
 
-    // Header
+    // --- 2. Build Header for this division ---
     const thead = document.createElement("thead");
     const tr1 = document.createElement("tr"); // Division name
-    const tr2 = document.createElement("tr"); // Column titles
+    const tr2 = document.createElement("tr"); // Column titles (Time, Bunk 1, Bunk 2...)
 
     const thDiv = document.createElement("th");
     thDiv.colSpan = 1 + bunks.length; // 1 for Time, N for bunks
-    thDiv.textContent = div;
+    thDiv.textContent = div; // Division name
     thDiv.style.background = divisions[div]?.color || "#333";
     thDiv.style.color = "#fff";
     thDiv.style.border = "1px solid #999";
@@ -337,10 +324,10 @@ function renderStaggeredView(container) {
     thead.appendChild(tr2);
     table.appendChild(thead);
 
-    // Body
+    // --- 3. Build Body for this division (Event-based) ---
     const tbody = document.createElement("tbody");
 
-    // Pre-filter, validate, and sort blocks for this division
+    // --- Pre-filter, validate, and sort blocks for this division ---
     const tempSortedBlocks = [];
     manualSkeleton.forEach((item) => {
       if (item.division === div) {
@@ -348,7 +335,7 @@ function renderStaggeredView(container) {
         const endMin = parseTimeToMinutes(item.endTime);
 
         if (startMin === null || endMin === null) {
-          return; // invalid time
+          return; // Invalid time
         }
 
         const divData = divisions[div];
@@ -357,10 +344,10 @@ function renderStaggeredView(container) {
           const divEndMin = parseTimeToMinutes(divData.endTime);
 
           if (divStartMin !== null && endMin <= divStartMin) {
-            return; // too early
+            return; // Block too early
           }
           if (divEndMin !== null && startMin >= divEndMin) {
-            return; // too late
+            return; // Block too late
           }
         }
 
@@ -368,10 +355,10 @@ function renderStaggeredView(container) {
       }
     });
 
-    // Sort by start time
+    // Sort by start time, so counters are sequential
     tempSortedBlocks.sort((a, b) => a.startMin - b.startMin);
 
-    // Build final blocks with league/specialty counters
+    // --- Build final blocks WITH counters for leagues/specialty ---
     const prevDivCounts = prevCounters[div] || { league: 0, specialty: 0 };
     let todayLeagueCount = prevDivCounts.league;
     let todaySpecialtyCount = prevDivCounts.specialty;
@@ -381,49 +368,32 @@ function renderStaggeredView(container) {
     tempSortedBlocks.forEach((block) => {
       const { item, startMin, endMin } = block;
 
-      let eventName = item.event || "";
-      let blockType = item.type || "";
-      const eventLc = eventName.toLowerCase();
+      let eventName = item.event;
 
-      // Normalize any "split-like" types to "split"
-      if (blockType && typeof blockType === "string") {
-        if (blockType.toLowerCase().includes("split")) {
-          blockType = "split";
-        }
-      }
-
-      // League / Specialty counters
-      if (eventName === "League Game") {
+      // League & specialty counters only, do NOT change Dismissal
+      if (item.event === "League Game") {
         todayLeagueCount++;
         eventName = `League Game ${todayLeagueCount}`;
-      } else if (eventName === "Specialty League") {
+      } else if (item.event === "Specialty League") {
         todaySpecialtyCount++;
         eventName = `Specialty League ${todaySpecialtyCount}`;
-      }
-
-      // NEW HEURISTIC:
-      // If no explicit type, but the event name is a combo like "Swim/Activity",
-      // treat it as a split so we show what the optimizer actually assigned.
-      if (!blockType) {
-        if (eventName.includes("/")) {
-          blockType = "split";
-        }
       }
 
       divisionBlocks.push({
         label: `${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(
           endMin
         )}`,
-        startMin,
-        endMin,
+        startMin: startMin,
+        endMin: endMin,
         event: eventName,
-        type: blockType
+        type: item.type,
       });
     });
 
+    // Store the *final* new counts to be saved
     todayCounters[div] = {
       league: todayLeagueCount,
-      specialty: todaySpecialtyCount
+      specialty: todaySpecialtyCount,
     };
 
     const uniqueBlocks = divisionBlocks.filter(
@@ -431,7 +401,7 @@ function renderStaggeredView(container) {
         index === self.findIndex((t) => t.label === block.label)
     );
 
-    // Flatten split blocks into two half-blocks
+    // --- "Flatten" split blocks into two half-blocks ---
     const flattenedBlocks = [];
     uniqueBlocks.forEach((block) => {
       if (
@@ -451,7 +421,7 @@ function renderStaggeredView(container) {
           )}`,
           startMin: block.startMin,
           endMin: midMin,
-          splitPart: 1
+          splitPart: 1,
         });
         // Second half
         flattenedBlocks.push({
@@ -461,14 +431,14 @@ function renderStaggeredView(container) {
           )}`,
           startMin: midMin,
           endMin: block.endMin,
-          splitPart: 2
+          splitPart: 2,
         });
       } else {
         flattenedBlocks.push(block);
       }
     });
 
-    // Render rows
+    // --- 4. Render rows for this division ---
     if (flattenedBlocks.length === 0) {
       const tr = document.createElement("tr");
       const td = document.createElement("td");
@@ -483,7 +453,7 @@ function renderStaggeredView(container) {
     flattenedBlocks.forEach((eventBlock) => {
       const tr = document.createElement("tr");
 
-      // Time cell
+      // --- Add the TIME cell ---
       const tdTime = document.createElement("td");
       tdTime.style.border = "1px solid #ccc";
       tdTime.style.verticalAlign = "top";
@@ -491,29 +461,32 @@ function renderStaggeredView(container) {
       tdTime.textContent = eventBlock.label;
       tr.appendChild(tdTime);
 
-      // Activity cells
+      // --- Add ACTIVITY cells (Merged or Individual) ---
       if (
         eventBlock.event.startsWith("League Game") ||
         eventBlock.event.startsWith("Specialty League")
       ) {
-        // LEAGUE / SPECIALTY: merged cell with mirrored games
+        // === LEAGUE GAME / SPECIALTY LEAGUE: MERGED CELL ===
         const tdLeague = document.createElement("td");
         tdLeague.colSpan = bunks.length;
         tdLeague.style.verticalAlign = "top";
         tdLeague.style.textAlign = "left";
         tdLeague.style.padding = "5px 8px";
-        tdLeague.style.background = "#f0f8f0"; // light green
+        tdLeague.style.background = "#f0f8f0"; // Light green
 
         const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
         let allMatchups = [];
 
+        // Find the entry for the first bunk in this division's table
         if (bunks.length > 0) {
           const firstBunkEntry = getEntry(bunks[0], firstSlotIndex);
+          // Check if the "stamped" list exists
           if (firstBunkEntry && firstBunkEntry._allMatchups) {
             allMatchups = firstBunkEntry._allMatchups;
           }
         }
 
+        // Render the mirrored list
         let html = "";
         if (allMatchups.length === 0) {
           html = `<p class="muted" style="margin:0; padding: 4px;">${eventBlock.event}</p>`;
@@ -527,16 +500,32 @@ function renderStaggeredView(container) {
         }
         tdLeague.innerHTML = html;
         tr.appendChild(tdLeague);
+      } else {
+        // === REGULAR GAME / SPLIT GAME / DISMISSAL: INDIVIDUAL CELLS ===
+        const isDismissalBlock =
+          typeof eventBlock.event === "string" &&
+          eventBlock.event.toLowerCase().includes("dismissal");
 
-      } else if (eventBlock.type === "split") {
-        // SPLIT BLOCKS: show whatever each bunk actually has (A/B then B/A)
         bunks.forEach((bunk) => {
           const tdActivity = document.createElement("td");
           tdActivity.style.border = "1px solid #ccc";
           tdActivity.style.verticalAlign = "top";
 
           const startMin = eventBlock.startMin;
-          const endMin = eventBlock.endMin; // Use the half-block's end time
+          const endMin = eventBlock.endMin;
+
+          if (isDismissalBlock) {
+            // 🔹 Explicit Dismissal rendering: non-editable, visible everywhere
+            tdActivity.textContent = "Dismissal";
+            tdActivity.style.background = "#ffecec"; // light red/pink
+            tdActivity.style.fontWeight = "bold";
+            tdActivity.style.cursor = "default";
+            tdActivity.title = "Dismissal";
+            tr.appendChild(tdActivity);
+            return; // next bunk
+          }
+
+          // === Normal behavior for non-dismissal cells ===
           const slotIndex = findFirstSlotForTime(startMin);
           const entry = getEntry(bunk, slotIndex);
 
@@ -549,82 +538,15 @@ function renderStaggeredView(container) {
               tdActivity.style.background = "#e8f4ff";
               tdActivity.style.fontWeight = "bold";
             } else if (entry._fixed) {
-              tdActivity.style.background = "#fff8e1"; // fixed/pinned
+              tdActivity.style.background = "#fff8e1"; // Light yellow for fixed/pinned
             }
           }
 
-          // Allow editing split-block cells too
+          // Add the click handler
           tdActivity.style.cursor = "pointer";
           tdActivity.title = "Click to edit this activity";
           tdActivity.onclick = () =>
             editCell(bunk, startMin, endMin, currentActivity);
-
-          tr.appendChild(tdActivity);
-        });
-
-      } else {
-        // REGULAR / DISMISSAL / SNACKS / CUSTOM PINS: individual cells
-        const rawName = eventBlock.event || "";
-        const nameLc = rawName.toLowerCase();
-
-        const isDismissalBlock = nameLc.includes("dismiss");
-        const isSnackBlock = nameLc.includes("snack");
-        const isGeneratedBlock = uiIsGeneratedEventName(rawName);
-        const isPinBlock = !isGeneratedBlock; // everything else = pin tile (Lunch, Regroup, etc.)
-
-        bunks.forEach((bunk) => {
-          const tdActivity = document.createElement("td");
-          tdActivity.style.border = "1px solid #ccc";
-          tdActivity.style.verticalAlign = "top";
-
-          const startMin = eventBlock.startMin;
-          const endMin = eventBlock.endMin;
-
-          let cellActivityName = ""; // This will hold the text for the prompt
-
-          // Dismissal row
-          if (isDismissalBlock) {
-            cellActivityName = "Dismissal";
-            tdActivity.textContent = cellActivityName;
-            tdActivity.style.background = "#ffecec"; // light red/pink
-            tdActivity.style.fontWeight = "bold";
-          }
-          // Snacks row
-          else if (isSnackBlock) {
-            cellActivityName = "Snacks";
-            tdActivity.textContent = cellActivityName;
-            tdActivity.style.background = "#e8f5e9"; // light green-ish
-            tdActivity.style.fontWeight = "bold";
-          }
-          // Any other NON-GENERATED tile = PIN TILE
-          else if (isPinBlock) {
-            cellActivityName = rawName || "Pinned";
-            tdActivity.textContent = cellActivityName;
-            tdActivity.style.background = "#fff8e1"; // light yellow for pins
-            tdActivity.style.fontWeight = "bold";
-          }
-          // GENERATED SLOTS (Activity / Sports / Special Activity / Swim)
-          else {
-            const slotIndex = findFirstSlotForTime(startMin);
-            const entry = getEntry(bunk, slotIndex);
-
-            if (entry) {
-              cellActivityName = formatEntry(entry);
-              if (entry._h2h) {
-                tdActivity.style.background = "#e8f4ff";
-                tdActivity.style.fontWeight = "bold";
-              } else if (entry._fixed) {
-                tdActivity.style.background = "#fff8e1"; // fixed/pinned
-              }
-            }
-            tdActivity.textContent = cellActivityName;
-          }
-
-          // Apply the click handler to ALL cells in this block
-          tdActivity.style.cursor = "pointer";
-          tdActivity.title = "Click to edit this activity";
-          tdActivity.onclick = () =>
-            editCell(bunk, startMin, endMin, cellActivityName);
 
           tr.appendChild(tdActivity);
         });
@@ -634,10 +556,10 @@ function renderStaggeredView(container) {
     });
 
     table.appendChild(tbody);
-    wrapper.appendChild(table);
-  });
+    wrapper.appendChild(table); // Add table to wrapper
+  }); // --- End of main division loop ---
 
-  // Save league counters to today's data
+  // --- Save the new counters to today's data ---
   window.saveCurrentDailyData?.("leagueDayCounters", todayCounters);
 }
 
@@ -669,7 +591,7 @@ function reconcileOrRenderSaved() {
     window.unifiedTimes = savedTimes.map((slot) => ({
       ...slot,
       start: new Date(slot.start),
-      end: new Date(slot.end)
+      end: new Date(slot.end),
     }));
   } catch (e) {
     window.scheduleAssignments = {};
@@ -677,9 +599,12 @@ function reconcileOrRenderSaved() {
     window.unifiedTimes = [];
   }
 
-  updateTable();
+  updateTable(); // This will now call the correct renderer
 }
 
+/**
+ * Init: load saved data and render.
+ */
 function initScheduleSystem() {
   try {
     window.scheduleAssignments = window.scheduleAssignments || {};
