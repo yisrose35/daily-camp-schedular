@@ -515,15 +515,38 @@ function renderStaggeredView(container) {
             editCell(bunk, startMin, eventBlock.endMin, currentActivity);
           tr.appendChild(tdActivity);
         });
-      } else {
+            } else {
         // REGULAR / DISMISSAL / SNACKS / CUSTOM PINS: individual cells
         const rawName = eventBlock.event || "";
         const nameLc = rawName.toLowerCase();
 
         const isDismissalBlock = nameLc.includes("dismiss");
         const isSnackBlock = nameLc.includes("snack");
-        const isGeneratedBlock = uiIsGeneratedEventName(rawName);
-        const isPinBlock = !isGeneratedBlock; // everything else = pin tile (Lunch, Regroup, etc.)
+
+        // NEW: treat "Swim / Activity" (and similar) as GENERATED, not a pin
+        let isGeneratedBlock = uiIsGeneratedEventName(rawName);
+        if (!isGeneratedBlock && rawName.includes("/")) {
+          const parts = rawName.split("/").map((s) => s.trim().toLowerCase());
+          const anyGeneratedPart = parts.some((p) =>
+            UI_GENERATED_EVENTS.has(p)
+          );
+          if (anyGeneratedPart) {
+            isGeneratedBlock = true;
+          }
+        }
+
+        // Pin = NOT dismissal, NOT snack, NOT generated
+        const isPinBlock = !isGeneratedBlock && !isDismissalBlock && !isSnackBlock;
+
+        bunks.forEach((bunk) => {
+          const tdActivity = document.createElement("td");
+          tdActivity.style.border = "1px solid #ccc";
+          tdActivity.style.verticalAlign = "top";
+          const startMin = eventBlock.startMin;
+          const endMin = eventBlock.endMin;
+          ...
+
+        
 
         bunks.forEach((bunk) => {
           const tdActivity = document.createElement("td");
