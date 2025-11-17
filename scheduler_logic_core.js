@@ -1299,6 +1299,30 @@ function isTimeAvailable(slotIndex, fieldProps) {
     }
     return isAvailable;
 }
+// Compute the true start/end minutes for a block, even if slots are misaligned
+function getBlockTimeRange(block) {
+    let blockStartMin = (typeof block.startTime === "number") ? block.startTime : null;
+    let blockEndMin   = (typeof block.endTime === "number") ? block.endTime   : null;
+
+    // Fallback: infer from slots if start/end mins were not attached
+    if ((blockStartMin == null || blockEndMin == null) &&
+        window.unifiedTimes && Array.isArray(block.slots) && block.slots.length > 0) {
+
+        const minIndex = Math.min(...block.slots);
+        const maxIndex = Math.max(...block.slots);
+
+        const firstSlot = window.unifiedTimes[minIndex];
+        const lastSlot  = window.unifiedTimes[maxIndex];
+
+        const firstStart = new Date(firstSlot.start);
+        const lastStart  = new Date(lastSlot.start);
+
+        blockStartMin = firstStart.getHours() * 60 + firstStart.getMinutes();
+        blockEndMin   = lastStart.getHours() * 60 + lastStart.getMinutes() + INCREMENT_MINS;
+    }
+
+    return { blockStartMin, blockEndMin };
+}
 
 function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
     if (!fieldName) return false;
