@@ -3,10 +3,11 @@
 // --- FEATURES ---
 // - Staggered (YKLI) view: one table per division
 // - League mirroring via _allMatchups list
-// - Post-generation editing for generated cells
+// - Post-generation editing for ALL cells (generated + pins)
 // - Dismissal / Snacks / custom tiles shown as fixed pin tiles
-// - Split blocks: show whatever the optimizer actually scheduled (A/B then B/A)
+// - Split blocks: UI shows whatever the core actually scheduled
 // - League counters (League Game 1, 2, 3...) persisted day-to-day
+//
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -229,7 +230,7 @@ function formatEntry(entry) {
 
 /**
  * Helper: Finds the *first* 30-min slot index
- * that matches the start time of a block.
+ * that matches the start time of a custom block.
  */
 function findFirstSlotForTime(startMin) {
   if (startMin === null || !window.unifiedTimes) return -1; // safety
@@ -392,7 +393,8 @@ function renderStaggeredView(container) {
         index === self.findIndex((t) => t.label === block.label)
     );
 
-    // Flatten split blocks into two half-blocks
+    // Flatten split blocks into two half-blocks (UI-level time split;
+    // content comes from scheduleAssignments, not from this split)
     const flattenedBlocks = [];
     uniqueBlocks.forEach((block) => {
       if (
@@ -488,65 +490,29 @@ function renderStaggeredView(container) {
         }
         tdLeague.innerHTML = html;
         tr.appendChild(tdLeague);
-      } else if (eventBlock.type === "split") {
-        // SPLIT BLOCKS: show whatever each bunk actually has (A/B then B/A)
-        bunks.forEach((bunk) => {
-          const tdActivity = document.createElement("td");
-          tdActivity.style.border = "1px solid #ccc";
-          tdActivity.style.verticalAlign = "top";
-          const startMin = eventBlock.startMin;
-          const slotIndex = findFirstSlotForTime(startMin);
-          const entry = getEntry(bunk, slotIndex);
-          let currentActivity = "";
-          if (entry) {
-            currentActivity = formatEntry(entry);
-            tdActivity.textContent = currentActivity;
-            if (entry._h2h) {
-              tdActivity.style.background = "#e8f4ff";
-              tdActivity.style.fontWeight = "bold";
-            } else if (entry._fixed) {
-              tdActivity.style.background = "#fff8e1"; // fixed/pinned
-            }
-          }
-          // Allow editing split-block cells too
-          tdActivity.style.cursor = "pointer";
-          tdActivity.title = "Click to edit this activity";
-          tdActivity.onclick = () =>
-            editCell(bunk, startMin, eventBlock.endMin, currentActivity);
-          tr.appendChild(tdActivity);
-        });
-            } else {
-        // REGULAR / DISMISSAL / SNACKS / CUSTOM PINS: individual cells
+      } else {
+        // REGULAR / DISMISSAL / SNACKS / CUSTOM PINS / GENERATED / SPLIT
         const rawName = eventBlock.event || "";
         const nameLc = rawName.toLowerCase();
 
         const isDismissalBlock = nameLc.includes("dismiss");
         const isSnackBlock = nameLc.includes("snack");
 
-        // NEW: treat "Swim / Activity" (and similar) as GENERATED, not a pin
+        // GENERATED vs PIN logic:
+        // 1) If the whole name matches a known generated type (Activity, Swim, etc.)
+        // 2) OR if it's a combo like "Swim / Activity" where ANY part is generated
         let isGeneratedBlock = uiIsGeneratedEventName(rawName);
         if (!isGeneratedBlock && rawName.includes("/")) {
           const parts = rawName.split("/").map((s) => s.trim().toLowerCase());
-          const anyGeneratedPart = parts.some((p) =>
-            UI_GENERATED_EVENTS.has(p)
-          );
+          const anyGeneratedPart = parts.some((p) => UI_GENERATED_EVENTS.has(p));
           if (anyGeneratedPart) {
             isGeneratedBlock = true;
           }
         }
 
-        // Pin = NOT dismissal, NOT snack, NOT generated
-        const isPinBlock = !isGeneratedBlock && !isDismissalBlock && !isSnackBlock;
-
-        bunks.forEach((bunk) => {
-          const tdActivity = document.createElement("td");
-          tdActivity.style.border = "1px solid #ccc";
-          tdActivity.style.verticalAlign = "top";
-          const startMin = eventBlock.startMin;
-          const endMin = eventBlock.endMin;
-          
-
-        
+        // PIN = NOT dismissal, NOT snack, NOT generated
+        const isPinBlock =
+          !isGeneratedBlock && !isDismissalBlock && !isSnackBlock;
 
         bunks.forEach((bunk) => {
           const tdActivity = document.createElement("td");
@@ -555,64 +521,58 @@ function renderStaggeredView(container) {
 
           const startMin = eventBlock.startMin;
           const endMin = eventBlock.endMin;
+
+          // This string is what will go into the prompt on click
+          let cellActivityName = "";
 
           // Dismissal row
           if (isDismissalBlock) {
-            tdActivity.textContent = "Dismissal";
+            cellActivityName = "Dismissal";
+            tdActivity.textContent = cellActivityName;
             tdActivity.style.background = "#ffecec"; // light red/pink
             tdActivity.style.fontWeight = "bold";
-            tdActivity.style.cursor = "default";
-            tdActivity.title = "Dismissal";
-            tr.appendChild(tdActivity);
-            return;
           }
-
           // Snacks row
-          if (isSnackBlock) {
-            tdActivity.textContent = "Snacks";
+          else if (isSnackBlock) {
+            cellActivityName = "Snacks";
+            tdActivity.textContent = cellActivityName;
             tdActivity.style.background = "#e8f5e9"; // light green-ish
             tdActivity.style.fontWeight = "bold";
-            tdActivity.style.cursor = "default";
-            tdActivity.title = "Snacks";
-            tr.appendChild(tdActivity);
-            return;
           }
-
           // Any other NON-GENERATED tile = PIN TILE
           // (Lunch, Regroup, Lineup, Cleanup, etc.)
-          if (isPinBlock) {
-            tdActivity.textContent = rawName || "Pinned";
+          else if (isPinBlock) {
+            cellActivityName = rawName || "Pinned";
+            tdActivity.textContent = cellActivityName;
             tdActivity.style.background = "#fff8e1"; // light yellow for pins
             tdActivity.style.fontWeight = "bold";
-            tdActivity.style.cursor = "default";
-            tdActivity.title = rawName || "Pinned";
-            tr.appendChild(tdActivity);
-            return;
           }
-
-          // GENERATED SLOTS (Activity / Sports / Special Activity / Swim)
+          // GENERATED SLOTS (Activity / Sports / Special Activity / Swim / Split)
           // -> show whatever the scheduler actually picked
-          const slotIndex = findFirstSlotForTime(startMin);
-          const entry = getEntry(bunk, slotIndex);
+          else {
+            const slotIndex = findFirstSlotForTime(startMin);
+            const entry = getEntry(bunk, slotIndex);
 
-          let currentActivity = "";
-          if (entry) {
-            currentActivity = formatEntry(entry);
-            tdActivity.textContent = currentActivity;
-
-            if (entry._h2h) {
-              tdActivity.style.background = "#e8f4ff";
-              tdActivity.style.fontWeight = "bold";
-            } else if (entry._fixed) {
-              tdActivity.style.background = "#fff8e1"; // fixed/pinned
+            if (entry) {
+              cellActivityName = formatEntry(entry);
+              if (entry._h2h) {
+                tdActivity.style.background = "#e8f4ff";
+                tdActivity.style.fontWeight = "bold";
+              } else if (entry._fixed) {
+                tdActivity.style.background = "#fff8e1"; // fixed/pinned
+              }
+            } else {
+              // fallback so prompt isn't empty
+              cellActivityName = rawName;
             }
+            tdActivity.textContent = cellActivityName;
           }
 
-          // Generated cells remain editable
+          // Apply the click handler to ALL cells (pins + generated)
           tdActivity.style.cursor = "pointer";
           tdActivity.title = "Click to edit this activity";
           tdActivity.onclick = () =>
-            editCell(bunk, startMin, endMin, currentActivity);
+            editCell(bunk, startMin, endMin, cellActivityName);
 
           tr.appendChild(tdActivity);
         });
@@ -680,5 +640,6 @@ function initScheduleSystem() {
 
 // ===== Exports =====
 window.updateTable = window.updateTable || updateTable;
-window.initScheduleSystem = window.initScheduleSystem || initScheduleSystem;
+window.initScheduleSystem =
+  window.initScheduleSystem || initScheduleSystem;
 window.saveSchedule = window.saveSchedule || saveSchedule;
