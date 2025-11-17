@@ -17,6 +17,16 @@
 // --- LATEST FIX ---
 // - Fixed typo `todaySpecialTypeCount` -> `todaySpecialtyCount`
 //   which was causing a rendering error.
+//
+// --- NEW FIX (11/16 - SPLIT "SWIM/ACTIVITY") ---
+// - **NORMALIZED:** Any block whose `type` *contains* "split"
+//   is normalized to `type: "split"` for the UI.
+// - **HEURISTIC:** Any event with a "/" in the name
+//   (e.g., "Swim/Activity") is treated as a split block if no
+//   explicit `type` is given, so the UI will render what the
+//   optimizer actually assigned (half Swim, half Activity,
+//   then flipped mid-way) instead of a raw "Swim/Activity"
+//   label across the whole division.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -371,16 +381,33 @@ function renderStaggeredView(container) {
     tempSortedBlocks.forEach((block) => {
       const { item, startMin, endMin } = block;
 
-      let eventName = item.event;
+      let eventName = item.event || "";
+      let blockType = item.type || "";
+      const eventLc = eventName.toLowerCase();
 
-      if (item.event === "League Game") {
+      // Normalize any "split-like" types to "split"
+      if (blockType && typeof blockType === "string") {
+        if (blockType.toLowerCase().includes("split")) {
+          blockType = "split";
+        }
+      }
+
+      // League / Specialty counters
+      if (eventName === "League Game") {
         todayLeagueCount++;
         eventName = `League Game ${todayLeagueCount}`;
-      } else if (item.event === "Specialty League") {
-        // --- THIS WAS THE TYPO ---
-        todaySpecialtyCount++; 
-        // --- END FIX ---
+      } else if (eventName === "Specialty League") {
+        todaySpecialtyCount++;
         eventName = `Specialty League ${todaySpecialtyCount}`;
+      }
+
+      // NEW HEURISTIC:
+      // If no explicit type, but the event name is a combo like "Swim/Activity",
+      // treat it as a split so we show what the optimizer actually assigned.
+      if (!blockType) {
+        if (eventName.includes("/")) {
+          blockType = "split";
+        }
       }
 
       divisionBlocks.push({
@@ -390,7 +417,7 @@ function renderStaggeredView(container) {
         startMin,
         endMin,
         event: eventName,
-        type: item.type
+        type: blockType
       });
     });
 
@@ -500,7 +527,7 @@ function renderStaggeredView(container) {
         }
         tdLeague.innerHTML = html;
         tr.appendChild(tdLeague);
-      
+
       } else if (eventBlock.type === "split") {
         // SPLIT BLOCKS: show whatever each bunk actually has (A/B then B/A)
         bunks.forEach((bunk) => {
@@ -552,7 +579,7 @@ function renderStaggeredView(container) {
 
           const startMin = eventBlock.startMin;
           const endMin = eventBlock.endMin;
-          
+
           let cellActivityName = ""; // This will hold the text for the prompt
 
           // Dismissal row
