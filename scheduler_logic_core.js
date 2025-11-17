@@ -1545,17 +1545,30 @@ function loadAndFilterData() {
         );
     }
 
-    function parseTimeRule(rule) {
-    if (!rule || !rule.type) return null;
+        function parseTimeRule(rule) {
+        if (!rule || !rule.type) return null;
 
-    // 1) If the rule already has numeric minutes, trust them
-    if (typeof rule.startMin === "number" && typeof rule.endMin === "number") {
+        // Case 1: UI already stored numeric minute values (most likely for daily overrides)
+        if (typeof rule.startMin === "number" && typeof rule.endMin === "number") {
+            return {
+                type: rule.type,
+                startMin: rule.startMin,
+                endMin: rule.endMin
+            };
+        }
+
+        // Case 2: Legacy / master config using "start" / "end" time strings like "1:20 PM"
+        const startMin = parseTimeToMinutes(rule.start);
+        const endMin   = parseTimeToMinutes(rule.end);
+        if (startMin == null || endMin == null) return null;
+
         return {
             type: rule.type,
-            startMin: rule.startMin,
-            endMin: rule.endMin
+            startMin,
+            endMin
         };
     }
+
 
     // 2) Otherwise, try to parse "start" / "end" strings like "1:20 PM"
     const startMin = parseTimeToMinutes(rule.start);
