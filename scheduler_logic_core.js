@@ -1665,7 +1665,7 @@ function loadAndFilterData() {
         leagues: yesterdayData.leagueAssignments || {}
     };
 
-    return {
+        return {
         divisions,
         availableDivisions,
         activityProperties,
@@ -1679,6 +1679,9 @@ function loadAndFilterData() {
         disabledLeagues,
         disabledSpecialtyLeagues
     };
-}
+} // <-- closes loadAndFilterData()
+
+})(); // <-- closes the entire IIFE at the top of the file
+
 
 
