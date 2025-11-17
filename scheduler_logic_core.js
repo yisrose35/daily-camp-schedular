@@ -12,6 +12,11 @@
 // - Rotation history (bunks + leagues + per-team sport counts)
 // - Strong time-rule enforcement (Available/Unavailable windows)
 // - No fake fields when nothing is actually available
+// ---
+// UPDATED (Sharing Fix):
+// - 'markFieldUsage' and 'fillBlock' now store the activity a bunk is doing.
+// - 'canBlockFit' now checks if a 'proposedActivity' matches the
+//   'existingActivity' on a shared field, enforcing same-activity rule.
 // ============================================================================
 
 (function() {
@@ -464,16 +469,21 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     const timestamp = Date.now();
 
     // ===== PASS 1: Build unified time grid =====
-    const globalSettings = window.loadGlobalSettings?.() || {};
-    const app1Data = globalSettings.app1 || {};
-    const globalStart = app1Data.globalStartTime || "9:00 AM";
-    const globalEnd   = app1Data.globalEndTime   || "4:00 PM";
+    // --- THIS LOGIC WAS REMOVED ---
+    // It now uses division start/end times from app1.js
 
-    let earliestMin = parseTimeToMinutes(globalStart);
-    let latestMin   = parseTimeToMinutes(globalEnd);
+    let earliestMin = null;
+    let latestMin = null;
 
-    if (earliestMin == null) earliestMin = 540;
-    if (latestMin   == null) latestMin   = 960;
+    Object.values(divisions).forEach(div => {
+        const s = parseTimeToMinutes(div.startTime);
+        const e = parseTimeToMinutes(div.endTime);
+        if (s !== null && (earliestMin === null || s < earliestMin)) earliestMin = s;
+        if (e !== null && (latestMin === null || e > latestMin)) latestMin = e;
+    });
+
+    if (earliestMin === null) earliestMin = 540; // 9:00am
+    if (latestMin === null) latestMin = 960; // 4:00pm
     if (latestMin <= earliestMin) latestMin = earliestMin + 60;
 
     const baseDate = new Date(1970, 0, 1, 0, 0, 0);
@@ -893,7 +903,7 @@ if (normalizeLeague(item.event)) {
             let label;
             if (chosenField) {
                 label = `${teamA} vs ${teamB} (${chosenSport}) @ ${chosenField}`;
-                markFieldUsage(blockBase, chosenField, fieldUsageBySlot);
+                markFieldUsage({ ...blockBase, _activity: chosenSport }, chosenField, fieldUsageBySlot); // --- MODIFIED: Pass activity ---
             } else {
                 label = `${teamA} vs ${teamB} (${chosenSport}) (No Field)`;
             }
@@ -960,14 +970,14 @@ if (normalizeLeague(item.event)) {
                 pick,
                 fieldUsageBySlot,
                 yesterdayHistory,
-                true
+                true // isLeagueFill = true
             );
             fillBlock(
                 { slots, bunk: bunkB, divName: bunkBDiv, startTime: group.startTime, endTime: group.startTime + INCREMENT_MINS * slots.length },
                 pick,
                 fieldUsageBySlot,
                 yesterdayHistory,
-                true
+                true // isLeagueFill = true
             );
         });
 
@@ -982,7 +992,7 @@ if (normalizeLeague(item.event)) {
                 noGamePick,
                 fieldUsageBySlot,
                 yesterdayHistory,
-                true
+                true // isLeagueFill = true
             );
         }
     });
@@ -1066,7 +1076,7 @@ if (normalizeLeague(item.event)) {
                         vs: null,
                         _activity: sport
                     };
-                    markFieldUsage(blockBase, fieldName, fieldUsageBySlot);
+                    markFieldUsage({ ...blockBase, _activity: sport }, fieldName, fieldUsageBySlot); // --- MODIFIED: Pass activity ---
                 } else {
                     fullLabel = `${baseLabel} (No Field)`;
                     pick = {
@@ -1100,7 +1110,7 @@ if (normalizeLeague(item.event)) {
                 pickToAssign,
                 fieldUsageBySlot,
                 yesterdayHistory,
-                true
+                true // isLeagueFill = true
             );
         });
     });
@@ -1240,6 +1250,9 @@ function findSlotsForRange(startMin, endMin) {
     return slots;
 }
 
+/**
+ * --- MODIFIED: 'usage' object now includes 'bunks' ---
+ */
 function markFieldUsage(block, fieldName, fieldUsageBySlot) {
     if (!fieldName || fieldName === "No Field" || !window.allSchedulableNames.includes(fieldName)) {
         return;
@@ -1247,11 +1260,17 @@ function markFieldUsage(block, fieldName, fieldUsageBySlot) {
     for (const slotIndex of block.slots || []) {
         if (slotIndex === undefined) continue;
         fieldUsageBySlot[slotIndex] = fieldUsageBySlot[slotIndex] || {};
-        const usage = fieldUsageBySlot[slotIndex][fieldName] || { count: 0, divisions: [] };
+        const usage = fieldUsageBySlot[slotIndex][fieldName] || { count: 0, divisions: [], bunks: {} }; // --- MODIFIED ---
         usage.count++;
         if (!usage.divisions.includes(block.divName)) {
             usage.divisions.push(block.divName);
         }
+        // --- NEW: Store bunk and activity ---
+        const blockActivity = block._activity || block.sport || (block.event === 'League Game' ? 'League' : block.event);
+        if (block.bunk && blockActivity) {
+            usage.bunks[block.bunk] = blockActivity;
+        }
+        // --- END NEW ---
         fieldUsageBySlot[slotIndex][fieldName] = usage;
     }
 }
@@ -1320,7 +1339,10 @@ function getBlockTimeRange(block) {
     return { blockStartMin, blockEndMin };
 }
 
-function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
+/**
+ * --- MODIFIED: Added 'proposedActivity' arg and sharing logic ---
+ */
+function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot, proposedActivity) { // --- NEW ARG ---
     if (!fieldName) return false;
     const props = activityProperties[fieldName];
     if (!props) {
@@ -1386,16 +1408,53 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
 
         for (const slotIndex of block.slots || []) {
             if (slotIndex === undefined) return false;
-            const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+            const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [], bunks: {} }; // --- MODIFIED ---
             if (usage.count >= limit) return false;
+
+            // --- NEW: Add activity check from filler ---
+            if (usage.count > 0) {
+                if (!usage.divisions.includes(block.divName)) {
+                    return false; // Can't share across divisions
+                }
+                let existingActivity = null;
+                for (const bunkName in usage.bunks) {
+                    if (usage.bunks[bunkName]) {
+                        existingActivity = usage.bunks[bunkName];
+                        break;
+                    }
+                }
+                if (existingActivity && proposedActivity && existingActivity !== proposedActivity) {
+                    return false; // Mismatched activity
+                }
+            }
+            // --- END NEW ---
+
             if (!isTimeAvailable(slotIndex, props)) return false;
         }
     } else {
         if (!props.available) return false;
         for (const slotIndex of block.slots || []) {
             if (slotIndex === undefined) return false;
-            const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+            const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [], bunks: {} }; // --- MODIFIED ---
             if (usage.count >= limit) return false;
+
+            // --- NEW: Add activity check from filler ---
+            if (usage.count > 0) {
+                if (!usage.divisions.includes(block.divName)) {
+                    return false; // Can't share across divisions
+                }
+                let existingActivity = null;
+                for (const bunkName in usage.bunks) {
+                    if (usage.bunks[bunkName]) {
+                        existingActivity = usage.bunks[bunkName];
+                        break;
+                    }
+                }
+                if (existingActivity && proposedActivity && existingActivity !== proposedActivity) {
+                    return false; // Mismatched activity
+                }
+            }
+            // --- END NEW ---
         }
     }
 
@@ -1480,6 +1539,9 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
 }
 
 // Validate a chosen pick against block + field rules
+/**
+ * --- MODIFIED: Pass pick._activity to canBlockFit ---
+ */
 function isPickValidForBlock(block, pick, activityProperties, fieldUsageBySlot) {
     if (!pick) return false;
 
@@ -1491,9 +1553,12 @@ function isPickValidForBlock(block, pick, activityProperties, fieldUsageBySlot) 
         return true;
     }
 
-    return canBlockFit(block, fname, activityProperties, fieldUsageBySlot);
+    return canBlockFit(block, fname, activityProperties, fieldUsageBySlot, pick._activity); // --- MODIFIED ---
 }
 
+/**
+ * --- MODIFIED: 'usage' object now includes 'bunks' ---
+ */
 function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill = false) {
     const fieldName = fieldLabel(pick.field);
     const sport     = pick.sport;
@@ -1515,11 +1580,16 @@ function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill
 
             if (!isLeagueFill && fieldName && window.allSchedulableNames.includes(fieldName)) {
                 fieldUsageBySlot[slotIndex] = fieldUsageBySlot[slotIndex] || {};
-                const usage = fieldUsageBySlot[slotIndex][fieldName] || { count: 0, divisions: [] };
+                const usage = fieldUsageBySlot[slotIndex][fieldName] || { count: 0, divisions: [], bunks: {} }; // --- MODIFIED ---
                 usage.count++;
                 if (!usage.divisions.includes(block.divName)) {
                     usage.divisions.push(block.divName);
                 }
+                // --- NEW: Store bunk and activity ---
+                if (block.bunk && pick._activity) {
+                    usage.bunks[block.bunk] = pick._activity;
+                }
+                // --- END NEW ---
                 fieldUsageBySlot[slotIndex][fieldName] = usage;
             }
         }
