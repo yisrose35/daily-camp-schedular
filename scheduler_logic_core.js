@@ -1,22 +1,19 @@
 // ============================================================================
 // scheduler_logic_core.js
 //
-// "SUPERCOMPUTER" / "QUANTUM-ISH" LEAGUE SCHEDULER + SMART GRID
-// - Global unified time grid
-// - Bunk-specific overrides
-// - Pinned / split / slot skeleton handling
-// - League mirroring across divisions
-// - Quantum-ish multi-criteria sport optimizer for leagues
-// - Specialty League pass
-// - Smart filler for remaining blocks
-// - Rotation history (bunks + leagues + per-team sport counts)
-// - Strong time-rule enforcement (Available/Unavailable windows)
-// - No fake fields when nothing is actually available
+// ... (changelog) ...
+//
 // ---
 // UPDATED (Sharing Fix):
 // - 'markFieldUsage' and 'fillBlock' now store the activity a bunk is doing.
 // - 'canBlockFit' now checks if a 'proposedActivity' matches the
 //   'existingActivity' on a shared field, enforcing same-activity rule.
+//
+// UPDATED (Specialty League Fix):
+// - PASS 3.5 no longer incorrectly checks `fieldsBySport`.
+// - PASS 3.5 now correctly uses the `bestSport` variable (from the finder)
+//   instead of the original `sport` variable when creating labels
+//   and pick objects.
 // ============================================================================
 
 (function() {
@@ -469,9 +466,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     const timestamp = Date.now();
 
     // ===== PASS 1: Build unified time grid =====
-    // --- THIS LOGIC WAS REMOVED ---
-    // It now uses division start/end times from app1.js
-
     let earliestMin = null;
     let latestMin = null;
 
@@ -903,7 +897,7 @@ if (normalizeLeague(item.event)) {
             let label;
             if (chosenField) {
                 label = `${teamA} vs ${teamB} (${chosenSport}) @ ${chosenField}`;
-                markFieldUsage({ ...blockBase, _activity: chosenSport }, chosenField, fieldUsageBySlot); // --- MODIFIED: Pass activity ---
+                markFieldUsage({ ...blockBase, _activity: chosenSport, bunk: 'league' }, chosenField, fieldUsageBySlot); // --- MODIFIED: Pass activity ---
             } else {
                 label = `${teamA} vs ${teamB} (${chosenSport}) (No Field)`;
             }
@@ -1035,7 +1029,8 @@ if (normalizeLeague(item.event)) {
         rotationHistory.leagues[leagueName] = leagueHistory;
 
         const sport = leagueEntry.sport;
-        if (!sport || !fieldsBySport[sport]) return;
+        // --- FIX 1: Remove !fieldsBySport[sport] check ---
+        if (!sport) return;
 
         const bestSport = window.findBestSportForBunks
             ? window.findBestSportForBunks(allBunksInGroup, [sport], leagueHistory)
@@ -1064,7 +1059,9 @@ if (normalizeLeague(item.event)) {
 
                 const fieldIndex = Math.floor(i / gamesPerField);
                 const fieldName = leagueFields[fieldIndex % leagueFields.length];
-                const baseLabel = `${teamA} vs ${teamB} (${sport})`;
+                
+                // --- FIX 2: Use bestSport variable ---
+                const baseLabel = `${teamA} vs ${teamB} (${bestSport})`;
 
                 let pick, fullLabel;
                 if (fieldName && canLeagueGameFit(blockBase, fieldName, fieldUsageBySlot, activityProperties)) {
@@ -1074,9 +1071,9 @@ if (normalizeLeague(item.event)) {
                         sport: baseLabel,
                         _h2h: true,
                         vs: null,
-                        _activity: sport
+                        _activity: bestSport // --- FIX 3: Use bestSport ---
                     };
-                    markFieldUsage({ ...blockBase, _activity: sport }, fieldName, fieldUsageBySlot); // --- MODIFIED: Pass activity ---
+                    markFieldUsage({ ...blockBase, _activity: bestSport, bunk: 'league' }, fieldName, fieldUsageBySlot); // --- MODIFIED: Pass activity ---
                 } else {
                     fullLabel = `${baseLabel} (No Field)`;
                     pick = {
@@ -1084,7 +1081,7 @@ if (normalizeLeague(item.event)) {
                         sport: baseLabel,
                         _h2h: true,
                         vs: null,
-                        _activity: sport
+                        _activity: bestSport // --- FIX 3: Use bestSport ---
                     };
                 }
 
@@ -1098,7 +1095,7 @@ if (normalizeLeague(item.event)) {
             field: "No Game",
             sport: null,
             _h2h: true,
-            _activity: sport,
+            _activity: bestSport, // --- FIX 4: Use bestSport ---
             _allMatchups: allMatchupLabels
         };
 
@@ -1732,7 +1729,7 @@ function loadAndFilterData() {
                     sport: act
                 }))
             )
-            .filter(a => !a.sport || !dailyDisabledSportsByField[a.field]?.includes(a.sport)),
+            .filter(a => !a.sport || !a.field || !dailyDisabledSportsByField[a.field]?.includes(a.sport)),
         ...availSpecials.map(sa => ({ type: "special", field: sa.name, sport: null }))
     ];
 
