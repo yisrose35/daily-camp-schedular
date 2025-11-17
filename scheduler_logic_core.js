@@ -554,36 +554,63 @@ function normalizeLeague(name) {
     return null;
 }
 
-  // =================================================================
+ // =================================================================
 // PASS 2 — Pinned / Split / Slot Skeleton Blocks
 // =================================================================
 const schedulableSlotBlocks = [];
 
 /**
- * Normalizes event names such as:
- *   "general activity", "general activyt", "activity", "activty",
- *   "gen act", "ga", "general activity slot"
- *
- * to a canonical: "General Activity Slot"
+ * Normalize ANY spelling of General Activity → "General Activity Slot"
  */
 function normalizeGA(name) {
     if (!name) return null;
     const s = String(name).toLowerCase().replace(/\s+/g, '');
 
-    const gaKeywords = [
-        "generalactivity",
-        "generalactivyt",
-        "activity",
-        "activyt",
-        "activityslot",
-        "generalactivityslot",
-        "genactivity",
-        "genact",
-        "ga"
+    const keys = [
+        "generalactivity", "generalactivyt",
+        "activity", "activyty", "activty", "activyt",
+        "activityslot", "generalactivityslot",
+        "genactivity", "genact", "ga"
     ];
 
-    if (gaKeywords.some(k => s.includes(k))) {
+    if (keys.some(k => s.includes(k))) {
         return "General Activity Slot";
+    }
+    return null;
+}
+
+/**
+ * Normalize ANY spelling of League Game → "League Game"
+ */
+function normalizeLeague(name) {
+    if (!name) return null;
+    const s = String(name).toLowerCase().replace(/\s+/g, '');
+
+    const keys = [
+        "leaguegame", "leaguegameslot",
+        "league", "leagame", "lg", "lgame"
+    ];
+
+    if (keys.some(k => s.includes(k))) {
+        return "League Game";
+    }
+    return null;
+}
+
+/**
+ * Normalize ANY spelling of Specialty League → "Specialty League"
+ */
+function normalizeSpecialtyLeague(name) {
+    if (!name) return null;
+    const s = String(name).toLowerCase().replace(/\s+/g, '');
+
+    const keys = [
+        "specialtyleague", "specialityleague",
+        "specleague", "specialleague", "sleauge"
+    ];
+
+    if (keys.some(k => s.includes(k))) {
+        return "Specialty League";
     }
     return null;
 }
@@ -595,18 +622,31 @@ manualSkeleton.forEach(item => {
 
     const startMin = parseTimeToMinutes(item.startTime);
     const endMin   = parseTimeToMinutes(item.endTime);
+
     const allSlots = findSlotsForRange(startMin, endMin);
     if (allSlots.length === 0) return;
 
-    // Determine whether the event is schedulable
+    // Normalize everything
+    const normGA       = normalizeGA(item.event);
+    const normLeague   = normalizeLeague(item.event);
+    const normSpecLg   = normalizeSpecialtyLeague(item.event);
+
+    const finalEventName =
+        normGA ||
+        normLeague ||
+        normSpecLg ||
+        item.event;
+
     const isGeneratedEvent =
-        GENERATED_EVENTS.includes(item.event) ||
-        normalizeGA(item.event) === "General Activity Slot";
+        GENERATED_EVENTS.includes(finalEventName) ||
+        normGA === "General Activity Slot" ||
+        normLeague === "League Game" ||
+        normSpecLg === "Specialty League";
 
     // -------------------------------------------------------------
-    // 1. PURE PINNED (Lunch, Cleanup, Snacks, Regroup, Custom…)
+    // 1. PURE PINNED — Lunch, Cleanup, Dismissal, Snacks, Custom
     // -------------------------------------------------------------
-    if (item.type === "pinned" || !isGeneratedEvent) {
+    if (item.type === 'pinned' || !isGeneratedEvent) {
         allBunks.forEach(bunk => {
             allSlots.forEach((slotIndex, idx) => {
                 if (!window.scheduleAssignments[bunk][slotIndex]) {
@@ -627,14 +667,18 @@ manualSkeleton.forEach(item => {
     // -------------------------------------------------------------
     // 2. SPLIT BLOCK — FULLY GENERATED GA + PINNED SWIM
     // -------------------------------------------------------------
-    else if (item.type === "split") {
+    else if (item.type === 'split') {
 
         if (!item.subEvents || item.subEvents.length < 2) return;
 
-        // Force canonical names
+        // Swim is ALWAYS pinned
         const swimLabel = "Swim";
-        const gaLabel   =
-            normalizeGA(item.subEvents[1].event) || "General Activity Slot";
+
+        // Normalize GA half
+        const rawGAEvent = item.subEvents[1].event;
+        const gaLabel =
+            normalizeGA(rawGAEvent) ||
+            "General Activity Slot";
 
         // --- Split bunks ---
         const mid = Math.ceil(allBunks.length / 2);
@@ -646,14 +690,14 @@ manualSkeleton.forEach(item => {
         const slotsFirst  = allSlots.slice(0, slotMid);
         const slotsSecond = allSlots.slice(slotMid);
 
-        // --- PIN Swim helper ---
-        function pinSwim(bunkList, slots) {
-            bunkList.forEach(bunk => {
+        // ---- PIN SWIM ----
+        function pinSwim(bunks, slots) {
+            bunks.forEach(bunk => {
                 slots.forEach((slotIndex, idx) => {
                     window.scheduleAssignments[bunk][slotIndex] = {
                         field: { name: swimLabel },
                         sport: null,
-                        continuation: idx > 0,
+                        continuation: (idx > 0),
                         _fixed: true,
                         _h2h: false,
                         vs: null,
@@ -663,13 +707,13 @@ manualSkeleton.forEach(item => {
             });
         }
 
-        // --- GA generated helper ---
-        function pushGA(bunkList, slots) {
-            bunkList.forEach(bunk => {
+        // ---- GA GENERATED ----
+        function pushGA(bunks, slots) {
+            bunks.forEach(bunk => {
                 schedulableSlotBlocks.push({
                     divName:   item.division,
                     bunk:      bunk,
-                    event:     gaLabel,     // THIS IS WHAT TRIGGERS GENERATION
+                    event:     gaLabel,
                     startTime: startMin,
                     endTime:   endMin,
                     slots
@@ -677,35 +721,31 @@ manualSkeleton.forEach(item => {
             });
         }
 
-        // --------------------------
         // FIRST HALF
-        //   Top → Swim
-        //   Bottom → GA (generated)
-        // --------------------------
         pinSwim(bunksTop, slotsFirst);
         pushGA(bunksBottom, slotsFirst);
 
-        // --------------------------
         // SECOND HALF
-        //   Top → GA (generated)
-        //   Bottom → Swim
-        // --------------------------
         pushGA(bunksTop, slotsSecond);
         pinSwim(bunksBottom, slotsSecond);
     }
 
     // -------------------------------------------------------------
-    // 3. NORMAL GENERATED SLOTS (Sports Slot, Special Activity, GA)
+    // 3. NORMAL GENERATED SLOTS
     // -------------------------------------------------------------
-    else if (item.type === "slot" && isGeneratedEvent) {
-        const gaLabelNormalized =
-            normalizeGA(item.event) || item.event;
+    else if (item.type === 'slot' && isGeneratedEvent) {
+
+        const normalizedEvent =
+            normalizeGA(item.event) ||
+            normalizeLeague(item.event) ||
+            normalizeSpecialtyLeague(item.event) ||
+            item.event;
 
         allBunks.forEach(bunk => {
             schedulableSlotBlocks.push({
                 divName:   item.division,
                 bunk:      bunk,
-                event:     gaLabelNormalized,
+                event:     normalizedEvent,
                 startTime: startMin,
                 endTime:   endMin,
                 slots:     allSlots
@@ -713,7 +753,7 @@ manualSkeleton.forEach(item => {
         });
     }
 
-}); // END manualSkeleton.forEach
+});  // END manualSkeleton.forEach
 
     // =================================================================
     // PASS 3 — LEAGUE PASS (Quantum-ish sports + mirroring)
