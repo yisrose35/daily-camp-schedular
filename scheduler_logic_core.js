@@ -1410,7 +1410,8 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
     const limit = 1; // league games never sharable
 
     // ===== DIVISION FILTER (respects explicit division list only) =====
-    if (props &&
+    if (
+        props &&
         Array.isArray(props.allowedDivisions) &&
         props.allowedDivisions.length > 0 &&
         !props.allowedDivisions.includes(block.divName)
@@ -1423,14 +1424,45 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
         if (!limitRules.divisions[block.divName]) {
             return false;
         }
+        // (we usually don't do per-bunk filtering for leagues)
     }
 
-    for (const slotIndex of block.slots) {
-        if (slotIndex === undefined) return false;
-        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
-        if (usage.count >= limit) return false;
-        if (!isTimeAvailable(slotIndex, props)) return false;
+    // ===== NEW: block-level time-window check for leagues too =====
+    const { blockStartMin, blockEndMin } = getBlockTimeRange(block);
+    const rules = props.timeRules || [];
+
+    if (rules.length > 0) {
+        if (!props.available) return false;
+
+        // Block cannot overlap any Unavailable rule
+        if (blockStartMin != null && blockEndMin != null) {
+            for (const rule of rules) {
+                if (rule.type === 'Unavailable') {
+                    if (
+                        blockStartMin < rule.endMin &&
+                        blockEndMin   > rule.startMin
+                    ) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        for (const slotIndex of block.slots || []) {
+            if (slotIndex === undefined) return false;
+            const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+            if (usage.count >= limit) return false;
+            if (!isTimeAvailable(slotIndex, props)) return false;
+        }
+    } else {
+        if (!props.available) return false;
+        for (const slotIndex of block.slots || []) {
+            if (slotIndex === undefined) return false;
+            const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+            if (usage.count >= limit) return false;
+        }
     }
+
     return true;
 }
 
