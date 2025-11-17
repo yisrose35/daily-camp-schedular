@@ -1525,6 +1525,7 @@ function loadAndFilterData() {
         bunks: rotationHistoryRaw.bunks || {},
         leagues: rotationHistoryRaw.leagues || {},
         leagueTeamSports: rotationHistoryRaw.leagueTeamSports || {}
+        // NOTE: leagueTeamLastSport is created lazily in the league pass
     };
 
     const overrides = {
@@ -1545,10 +1546,11 @@ function loadAndFilterData() {
         );
     }
 
-        function parseTimeRule(rule) {
+    // ---- FIXED: parseTimeRule now supports numeric startMin/endMin and string times ----
+    function parseTimeRule(rule) {
         if (!rule || !rule.type) return null;
 
-        // Case 1: UI already stored numeric minute values (most likely for daily overrides)
+        // Case 1: UI already stored numeric minute values (daily overrides, etc.)
         if (typeof rule.startMin === "number" && typeof rule.endMin === "number") {
             return {
                 type: rule.type,
@@ -1569,21 +1571,6 @@ function loadAndFilterData() {
         };
     }
 
-
-    // 2) Otherwise, try to parse "start" / "end" strings like "1:20 PM"
-    const startMin = parseTimeToMinutes(rule.start);
-    const endMin   = parseTimeToMinutes(rule.end);
-
-    if (startMin == null || endMin == null) return null;
-
-    return {
-        type: rule.type,
-        startMin,
-        endMin
-    };
-}
-
-
     const activityProperties = {};
     const allMasterActivities = [
         ...masterFields.filter(f => !disabledFields.includes(f.name)),
@@ -1602,7 +1589,7 @@ function loadAndFilterData() {
 
         const isMasterAvailable = f.available !== false;
 
-        // 🔧 FIXED LOGIC FOR allowedDivisions:
+        // 🔧 LOGIC FOR allowedDivisions:
         // - If a custom list exists, use it EXACTLY.
         // - If not, leave it null (no extra division restriction).
         const hasCustomDivList =
@@ -1665,7 +1652,7 @@ function loadAndFilterData() {
         leagues: yesterdayData.leagueAssignments || {}
     };
 
-        return {
+    return {
         divisions,
         availableDivisions,
         activityProperties,
@@ -1679,9 +1666,10 @@ function loadAndFilterData() {
         disabledLeagues,
         disabledSpecialtyLeagues
     };
-} // <-- closes loadAndFilterData()
+}
 
-})(); // <-- closes the entire IIFE at the top of the file
+// END OF FILE IIFE WRAPPER
+})();
 
 
 
