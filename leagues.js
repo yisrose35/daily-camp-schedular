@@ -1,7 +1,16 @@
-
 // ===================================================================
-// leagues.js — CLEAN, ERROR-FREE EDITION (Nov 2025)
-// Works with: scheduler_logic_core.js (Ultimate Rotation Edition)
+// leagues.js
+//
+// UPDATED (11/16):
+// - **REMOVED:** Removed "GENERATE ULTIMATE ROTATION" button and
+//   the "ultimate-preview" panel, as requested.
+// - **NEW:** Added a division chip picker to the `editLeague`
+//   view, allowing selection of divisions (e.g., grades) for
+//   each league. It pulls divisions from `window.availableDivisions`.
+// - **NEW:** Replaced the sports `<select>` box with the same
+//   "activity-button" chip interface from fields.js.
+// - **NEW:** Added an "Add new sport" input that calls
+//   `window.addGlobalSport()` and re-renders the editor.
 // ===================================================================
 
 (function () {
@@ -31,11 +40,8 @@
     }
 
     function saveRoundState() {
-        if (window.saveCurrentDailyData) {
-            const data = window.loadCurrentDailyData() || {};
-            data.leagueRoundState = leagueRoundState;
-            window.saveCurrentDailyData(data);
-        }
+        // Note: This is saved by scheduler_logic_core.js now.
+        // This function is kept for potential future use.
     }
 
     // ---------------------------------------------------------------
@@ -64,12 +70,13 @@
     // Main init
     // ---------------------------------------------------------------
     window.initLeagues = function () {
-        loadRoundState();
+        loadLeaguesData(); // Load league setup first
+        loadRoundState(); // Then load daily state
         renderLeaguesTab();
     };
 
     // ---------------------------------------------------------------
-    // MAIN TAB RENDERER
+    // MAIN TAB RENDERER (UPDATED)
     // ---------------------------------------------------------------
     function renderLeaguesTab() {
         const container = document.getElementById("leagues");
@@ -77,8 +84,8 @@
 
         container.innerHTML = `
             <div style="padding:20px; font-family:Arial;">
-                <h1 style="color:#1a5fb4;">Ultimate League Manager</h1>
-                <p style="color:#444;">Create and optimize leagues with perfect matchups and perfect sport rotation.</p>
+                <h1 style="color:#1a5fb4;">League Manager</h1>
+                <p style="color:#444;">Create and manage leagues for the scheduler.</p>
 
                 <button id="new-league-btn"
                     style="padding:10px 20px; background:#1a5fb4; color:white;
@@ -95,20 +102,7 @@
                            border-radius:10px; background:#f8faff; display:none;">
                 </div>
 
-                <div id="ultimate-preview"
-                    style="margin-top:40px; padding:25px; border:3px solid #00d4aa;
-                           border-radius:12px; background:#f0fffa; display:none;">
-                    <h2 style="color:#00a085;">Perfect Rotation Generated!</h2>
-                    <div id="preview-table" style="overflow-x:auto;"></div>
-
-                    <button id="save-ultimate-schedule"
-                        style="margin-top:20px; padding:14px 32px; font-size:1.2em;
-                               background:#00d4aa; color:white; border:none;
-                               border-radius:8px; cursor:pointer;">
-                        Save & Apply Schedule
-                    </button>
                 </div>
-            </div>
         `;
 
         document.getElementById("new-league-btn").onclick = () => createNewLeague();
@@ -139,6 +133,7 @@
                     <h3 style="margin:0 0 8px 0; color:#1a5fb4;">${name}</h3>
                     <p style="margin:0; color:#555;">Teams: ${l.teams?.length || 0}</p>
                     <p style="margin:0; color:#555;">Sports: ${l.sports?.length || 0}</p>
+                    <p style="margin:0; color:#555;">Divisions: ${l.divisions?.length || 0}</p>
                 </div>
             `;
         }).join("");
@@ -161,7 +156,8 @@
             teams: [],
             sports: [],
             divisions: [],
-            standings: {}
+            standings: {},
+            enabled: true // Added for consistency
         };
 
         saveLeaguesData();
@@ -170,7 +166,7 @@
     }
 
     // ---------------------------------------------------------------
-    // EDIT LEAGUE UI
+    // EDIT LEAGUE UI (HEAVILY UPDATED)
     // ---------------------------------------------------------------
     window.editLeague = function (name) {
         const league = leaguesByName[name];
@@ -179,7 +175,9 @@
 
         editor.style.display = "block";
 
+        // --- Get data from other modules ---
         const allSports = window.getAllGlobalSports?.() || [];
+        const allDivisions = window.availableDivisions || [];
 
         editor.innerHTML = `
             <h2 style="color:#1a5fb4;">Editing: ${name}</h2>
@@ -189,65 +187,124 @@
                 Delete
             </button>
 
+            <h3 style="margin-top:20px;">Divisions:</h3>
+            <p class="muted" style="font-size: 0.9em; margin: 0 0 8px 0;">Select which divisions this league applies to.</p>
+            <div id="league-division-picker" class="chips"></div>
+
             <h3 style="margin-top:20px;">Teams:</h3>
             <div id="team-picker"></div>
 
             <h3 style="margin-top:20px;">Sports:</h3>
-            <select id="sport-selector" multiple size="8"
-                style="width:100%; padding:10px; border-radius:6px;">
-                ${allSports.map(s => `<option value="${s}">${s}</option>`).join("")}
-            </select>
+            <p class="muted" style="font-size: 0.9em; margin: 0 0 8px 0;">Select which sports are playable in this league.</p>
+            <div id="sport-button-wrapper" style="display: flex; flex-wrap: wrap; gap: 5px;">
+                </div>
+            <input id="sport-add-new" placeholder="Add new sport type" style="margin-top: 8px;">
 
-            <button id="generate-ultimate-btn"
-                style="margin-top:30px; padding:16px 30px; background:#00d4aa;
-                       color:white; border:none; border-radius:10px; cursor:pointer;
-                       font-size:1.2em;">
-                GENERATE ULTIMATE ROTATION
-            </button>
-        `;
+            `;
 
-        renderTeamPicker(name, league.teams);
-
-        const sportSel = document.getElementById("sport-selector");
-        (league.sports || []).forEach(s => {
-            const opt = sportSel.querySelector(`option[value="${s}"]`);
-            if (opt) opt.selected = true;
+        // --- Render Division Chips ---
+        const divisionPicker = document.getElementById("league-division-picker");
+        allDivisions.forEach(divName => {
+            const chip = createChip(divName, league.divisions.includes(divName));
+            chip.onclick = () => {
+                toggleArrayItem(league.divisions, divName);
+                saveLeaguesData();
+                editLeague(name); // Re-render to update chip state
+            };
+            divisionPicker.appendChild(chip);
         });
 
-        document.getElementById("generate-ultimate-btn").onclick = () => {
-            const selectedTeams = getSelectedTeams();
-            const selectedSports = Array.from(sportSel.selectedOptions).map(o => o.value);
+        // --- Render Team Picker (Unchanged) ---
+        renderTeamPicker(name, league.teams);
 
-            if (selectedTeams.length < 2) return alert("Select at least 2 teams.");
-            if (selectedSports.length === 0) return alert("Select at least 1 sport.");
+        // --- Render Sports Picker ---
+        const sportWrapper = document.getElementById("sport-button-wrapper");
+        allSports.forEach(act => {
+            const b = document.createElement("button"); 
+            b.textContent = act; 
+            b.className = "activity-button";
+            if (league.sports.includes(act)) b.classList.add("active");
+            b.onclick = () => {
+                toggleArrayItem(league.sports, act);
+                saveLeaguesData(); 
+                editLeague(name); // Re-render to update chip state
+            };
+            sportWrapper.appendChild(b);
+        });
 
-            const schedule = window.generateUltimateLeagueRotation(
-                name,
-                selectedTeams,
-                selectedSports,
-                window.fieldsBySport || {},
-                { slots: [0,1,2,3,4,5,6,7] }
-            );
-
-            showUltimatePreview(schedule, name);
+        // --- Hook up "Add new sport" input ---
+        const otherSportInput = document.getElementById("sport-add-new");
+        otherSportInput.onkeyup = e => {
+            if (e.key === "Enter" && otherSportInput.value.trim()) {
+                const newSport = otherSportInput.value.trim();
+                
+                // 1. Register the sport globally
+                window.addGlobalSport?.(newSport);
+                
+                // 2. Add it to this league's list
+                if (!league.sports.includes(newSport)) {
+                    league.sports.push(newSport);
+                    saveLeaguesData();
+                }
+                
+                // 3. Clear input and re-render
+                otherSportInput.value = "";
+                editLeague(name);
+            }
         };
+
+        // --- "GENERATE" button handler REMOVED ---
     };
 
     // ---------------------------------------------------------------
-    // TEAM PICKER
+    // UI HELPERS
+    // ---------------------------------------------------------------
+
+    /**
+     * Helper: Creates a toggle chip
+     */
+    function createChip(name, isActive, activeColor = "#007BFF") {
+        const chip = document.createElement("span");
+        chip.textContent = name;
+        chip.style.padding = "4px 8px";
+        chip.style.borderRadius = "12px";
+        chip.style.cursor = "pointer";
+        chip.style.border = "1px solid #ccc";
+        chip.style.backgroundColor = isActive ? activeColor : "#f0f0f0";
+        chip.style.color = isActive ? "white" : "black";
+        chip.style.borderColor = isActive ? activeColor : "#ccc";
+        return chip;
+    }
+
+    /**
+     * Helper: Toggles an item in an array
+     */
+    function toggleArrayItem(arr, item) {
+        const idx = arr.indexOf(item);
+        if (idx > -1) {
+            arr.splice(idx, 1);
+        } else {
+            arr.push(item);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // TEAM PICKER (Unchanged)
     // ---------------------------------------------------------------
     function renderTeamPicker(leagueName, selectedTeams) {
         const container = document.getElementById("team-picker");
-        container.innerHTML = "";
+        container.innerHTML = ""; // Clear
 
-        selectedTeams.forEach(team => {
+        (selectedTeams || []).forEach(team => {
             const btn = document.createElement("button");
             btn.textContent = team;
             btn.style.padding = "6px 12px";
             btn.style.margin = "3px";
             btn.style.borderRadius = "6px";
             btn.style.border = "1px solid #555";
+            btn.style.background = "#fff";
             btn.style.cursor = "pointer";
+            btn.title = "Click to remove team";
 
             btn.onclick = () => {
                 leaguesByName[leagueName].teams =
@@ -266,6 +323,9 @@
             if (e.key === "Enter") {
                 const val = input.value.trim();
                 if (!val) return;
+                if (!leaguesByName[leagueName].teams) {
+                    leaguesByName[leagueName].teams = [];
+                }
                 if (!leaguesByName[leagueName].teams.includes(val)) {
                     leaguesByName[leagueName].teams.push(val);
                     saveLeaguesData();
@@ -276,75 +336,22 @@
         container.appendChild(input);
     }
 
-    function getSelectedTeams() {
-        return Array.from(document.querySelectorAll("#team-picker button"))
-            .map(btn => btn.textContent);
-    }
-
     // ---------------------------------------------------------------
     // DELETE LEAGUE
     // ---------------------------------------------------------------
     window.deleteLeague = function (name) {
-        if (!confirm(`Delete "${name}"?`)) return;
+        if (!confirm(`Are you sure you want to delete "${name}"?`)) return;
 
         delete leaguesByName[name];
         saveLeaguesData();
         renderLeagueList();
         document.getElementById("league-editor").style.display = "none";
-        document.getElementById("ultimate-preview").style.display = "none";
     };
 
     // ---------------------------------------------------------------
-    // PREVIEW TABLE
+    // PREVIEW TABLE (REMOVED)
     // ---------------------------------------------------------------
-    function showUltimatePreview(schedule, leagueName) {
-        const block = document.getElementById("ultimate-preview");
-        const tableDiv = document.getElementById("preview-table");
-
-        block.style.display = "block";
-
-        let html = `
-            <table style="width:100%; border-collapse:collapse;">
-                <thead>
-                    <tr style="background:#00a085; color:white;">
-                        <th>Round</th>
-                        <th>Team A</th>
-                        <th></th>
-                        <th>Team B</th>
-                        <th>Sport</th>
-                        <th>Field</th>
-                    </tr>
-                </thead>
-                <tbody>
-        `;
-
-        schedule.forEach(m => {
-            if (!m.isBye) {
-                html += `
-                    <tr style="background:#f8f9fa;">
-                        <td>${m.round}</td>
-                        <td>${m.teamA}</td>
-                        <td style="text-align:center;font-weight:bold;">VS</td>
-                        <td>${m.teamB}</td>
-                        <td>${m.sport}</td>
-                        <td>${m.field}</td>
-                    </tr>
-                `;
-            }
-        });
-
-        html += "</tbody></table>";
-        tableDiv.innerHTML = html;
-
-        document.getElementById("save-ultimate-schedule").onclick = () => {
-            const data = window.loadCurrentDailyData() || {};
-            data.ultimateLeagueSchedules = data.ultimateLeagueSchedules || {};
-            data.ultimateLeagueSchedules[leagueName] = schedule;
-            window.saveCurrentDailyData(data);
-
-            alert("Perfect rotation saved!");
-        };
-    }
+    // function showUltimatePreview(...) REMOVED
 
     // ---------------------------------------------------------------
     // SAVE / LOAD LEAGUES
@@ -359,6 +366,15 @@
     function loadLeaguesData() {
         const global = window.loadGlobalSettings?.() || {};
         leaguesByName = global.leaguesByName || {};
+        
+        // Ensure new properties exist on old data
+        Object.values(leaguesByName).forEach(l => {
+            l.divisions = l.divisions || [];
+            l.sports = l.sports || [];
+            l.teams = l.teams || [];
+            l.enabled = l.enabled !== false;
+        });
+        
         window.leaguesByName = leaguesByName;
     }
 
