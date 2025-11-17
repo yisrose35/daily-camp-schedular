@@ -7,129 +7,154 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body>
-    <h1>🏕️ Camp Scheduler</h1>
 
-    <div style="padding: 10px 15px; background: #f4f4f4; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ddd;">
-        <label for="calendar-date-picker" style="font-weight: bold; margin-right: 10px; font-size: 1.1em;">Current Schedule Date:</label>
-        <input type="date" id="calendar-date-picker" style="font-size: 1.1em; padding: 5px;">
+    <!-- 
+      NEW WELCOME SCREEN 
+      This is hidden by default and shown by welcome.js if needed.
+    -->
+    <div id="welcome-screen" style="display: none;">
+        <img src="Gemini_Generated_Image_arabc9arabc9arab.jpg" alt="Camp Scheduler Logo" class="welcome-logo">
+        <h2 id="welcome-title">Welcome to The Camp Scheduler</h2>
+        <p>Please enter your camp's name to get started.</p>
+        <input type="text" id="camp-name-input" placeholder="E.g., Camp Adventure">
+        <button id="begin-btn">Begin</button>
     </div>
 
-    <div class="tabs">
-        <button class="tab-button active" onclick="showTab('setup')">Setup (Bunks/Divisions)</button>
-        <button class="tab-button" onclick="showTab('fields'); window.initFieldsTab?.();">Fields</button>
-        <button class="tab-button" onclick="showTab('special_activities'); window.initSpecialActivitiesTab?.();">Special Activities</button>
-        
-        <button class="tab-button" onclick="showTab('master-scheduler'); window.initMasterScheduler?.();">
-            🗓️ Master Scheduler (Templates)
-        </button>
-        <button class="tab-button" onclick="showTab('schedule')">Daily Schedule (View)</button>
-        <button class="tab-button" onclick="showTab('leagues'); window.initLeagues?.();">Leagues</button>
-        <button class="tab-button" onclick="showTab('specialty-leagues'); window.initSpecialtyLeagues?.();">🏆 Specialty Leagues</button>
-        <button class="tab-button" onclick="showTab('daily-adjustments'); window.initDailyAdjustments?.();">Daily Adjustments</button>
-        <button class="tab-button" onclick="showTab('report'); window.initReportTab?.();">Report</button>
-    </div>
+    <!-- 
+      MAIN APP CONTAINER
+      This is hidden by default and shown by welcome.js after setup.
+    -->
+    <div id="main-app-container" style="display: none;">
+        <h1>🏕️ Camp Scheduler</h1>
 
-    <div id="setup" class="tab-content active">
-        <h3>Add Bunks</h3>
-        <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
-        <button id="addBunkBtn">Add Bunk</button>
-        <div id="unassignedBunks" class="bunk-container"></div>
-
-        <h3>Add Divisions</h3>
-        <p style="font-size: 0.9em; color: #555;">
-            Add divisions, then set the start and end time for each division.
-        </p>
-        <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
-        <button id="addDivisionBtn">Add Division</button>
-        <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable Colors</label>
-        <div id="divisionButtons" style="margin-top:8px;"></div>
-        
-        <hr style="margin: 20px 0;">
-        
-        <h3>Clear Schedules & History</h3>
-        <p>Use these buttons to clear saved schedule data.
-        Your Setup (bunks, fields, etc.) will NOT be affected.</p>
-
-        <button id="eraseTodayBtn"
-            style="background: #db7a00; color: #fff; padding: 8px 12px; border: none; border-radius: 4px;
-            cursor: pointer; margin-right: 8px;"
-            onclick="if(confirm('Are you sure you want to delete the schedule for today?')) window.eraseCurrentDailyData?.();">
-            Delete ONLY This Day's Schedule
-        </button>
-
-        <button id="eraseAllSchedulesBtn"
-            style="background: #c0392b;
-            color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;"
-            onclick="if(confirm('Are you sure you want to delete ALL saved schedules for ALL days? Your setup will be kept.')) window.eraseAllDailyData?.();">
-            Delete ALL Daily Schedules
-        </button>
-        
-        <button id="eraseHistoryBtn"
-            style="background: #5e35b1;
-            color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;"
-            onclick="if(confirm('Are you sure you want to reset all activity rotation history? This will make all activities &quot;fresh&quot; again for the Smart Scheduler.')) window.eraseRotationHistory?.();">
-            Reset Activity History
-        </button>
-
-        <hr style="margin: 20px 0;">
-
-        <h3>Backup & Restore</h3>
-        <p>Save all your setup (Fields, Bunks, Leagues, Templates, etc.) to a file, or restore it from a backup.</p>
-        <button id="exportBackupBtn"
-            style="background: #007bff; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;">
-            Export All Data to File
-        </button>
-        <button id="importBackupBtn"
-            style="background: #28a745; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;">
-            Import Data from File
-        </button>
-        <input type="file" id="importFileInput" accept=".json" style="display: none;">
-
-        <hr style="margin: 20px 0;">
-
-        <h3>Erase All Data</h3>
-        <p><strong>⚠️ Warning:</strong> This deletes everything.
-        It deletes all schedules, all history, AND all of your setup (bunks, divisions, fields, leagues, etc.).</p>
-
-        <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">
-            Erase All Camp Data (Reset Application)
-        </button>
-    </div> 
-    
-    <div id="fields" class="tab-content">
+        <div style="padding: 10px 15px; background: #f4f4f4; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ddd;">
+            <label for="calendar-date-picker" style="font-weight: bold; margin-right: 10px; font-size: 1.1em;">Current Schedule Date:</label>
+            <input type="date" id="calendar-date-picker" style="font-size: 1.1em; padding: 5px;">
         </div>
-    <div id="special_activities" class="tab-content">
+
+        <div class="tabs">
+            <button class="tab-button active" onclick="showTab('setup')">Setup (Bunks/Divisions)</button>
+            <button class="tab-button" onclick="showTab('fields'); window.initFieldsTab?.();">Fields</button>
+            <button class="tab-button" onclick="showTab('special_activities'); window.initSpecialActivitiesTab?.();">Special Activities</button>
+            
+            <button class="tab-button" onclick="showTab('master-scheduler'); window.initMasterScheduler?.();">
+                🗓️ Master Scheduler (Templates)
+            </button>
+            <button class="tab-button" onclick="showTab('schedule')">Daily Schedule (View)</button>
+            <button class="tab-button" onclick="showTab('leagues'); window.initLeagues?.();">Leagues</button>
+            <button class="tab-button" onclick="showTab('specialty-leagues'); window.initSpecialtyLeagues?.();">🏆 Specialty Leagues</button>
+            <button class="tab-button" onclick="showTab('daily-adjustments'); window.initDailyAdjustments?.();">Daily Adjustments</button>
+            <button class="tab-button" onclick="showTab('report'); window.initReportTab?.();">Report</button>
         </div>
-    
-    <div id="master-scheduler" class="tab-content">
-        <div id="master-scheduler-content">
-            </div>
-    </div>
-    
-    <div id="schedule" class="tab-content">
-        <h3>Daily Schedule (View)</h3>
-        <p>This tab shows the final, "filled-in" schedule. To build or edit the day's layout, use the "Master Scheduler" or "Daily Adjustments" tab.</p>
-        <div id="scheduleTable"></div>
-    </div>
 
-    <div id="leagues" class="tab-content">
-        <div id="leaguesContainer"></div>
-    </div>
+        <div id="setup" class="tab-content active">
+            <h3>Add Bunks</h3>
+            <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
+            <button id="addBunkBtn">Add Bunk</button>
+            <div id="unassignedBunks" class="bunk-container"></div>
 
-    <div id="specialty-leagues" class="tab-content">
-        <h2>🏆 Specialty Leagues</h2>
-        <div id="specialtyLeaguesContainer"></div>
-    </div>
+            <h3>Add Divisions</h3>
+            <p style="font-size: 0.9em; color: #555;">
+                Add divisions, then set the start and end time for each division.
+            </p>
+            <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
+            <button id="addDivisionBtn">Add Division</button>
+            <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable Colors</label>
+            <div id="divisionButtons" style="margin-top:8px;"></div>
+            
+            <hr style="margin: 20px 0;">
+            
+            <h3>Clear Schedules & History</h3>
+            <p>Use these buttons to clear saved schedule data.
+            Your Setup (bunks, fields, etc.) will NOT be affected.</p>
 
-    <div id="daily-adjustments" class="tab-content">
-        <div id="daily-adjustments-content">
+            <button id="eraseTodayBtn"
+                style="background: #db7a00; color: #fff; padding: 8px 12px; border: none; border-radius: 4px;
+                cursor: pointer; margin-right: 8px;"
+                onclick="if(confirm('Are you sure you want to delete the schedule for today?')) window.eraseCurrentDailyData?.();">
+                Delete ONLY This Day's Schedule
+            </button>
+
+            <button id="eraseAllSchedulesBtn"
+                style="background: #c0392b;
+                color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;"
+                onclick="if(confirm('Are you sure you want to delete ALL saved schedules for ALL days? Your setup will be kept.')) window.eraseAllDailyData?.();">
+                Delete ALL Daily Schedules
+            </button>
+            
+            <button id="eraseHistoryBtn"
+                style="background: #5e35b1;
+                color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;"
+                onclick="if(confirm('Are you sure you want to reset all activity rotation history? This will make all activities &quot;fresh&quot; again for the Smart Scheduler.')) window.eraseRotationHistory?.();">
+                Reset Activity History
+            </button>
+
+            <hr style="margin: 20px 0;">
+
+            <h3>Backup & Restore</h3>
+            <p>Save all your setup (Fields, Bunks, Leagues, Templates, etc.) to a file, or restore it from a backup.</p>
+            <button id="exportBackupBtn"
+                style="background: #007bff; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;">
+                Export All Data to File
+            </button>
+            <button id="importBackupBtn"
+                style="background: #28a745; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;">
+                Import Data from File
+            </button>
+            <input type="file" id="importFileInput" accept=".json" style="display: none;">
+
+            <hr style="margin: 20px 0;">
+
+            <h3>Erase All Data</h3>
+            <p><strong>⚠️ Warning:</strong> This deletes everything.
+            It deletes all schedules, all history, AND all of your setup (bunks, divisions, fields, leagues, etc.).</p>
+
+            <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">
+                Erase All Camp Data (Reset Application)
+            </button>
+        </div> 
+        
+        <div id="fields" class="tab-content">
             </div>
-    </div>
-    
-    <div id="report" class="tab-content">
-        <div id="report-content">
+        <div id="special_activities" class="tab-content">
             </div>
-    </div>
+        
+        <div id="master-scheduler" class="tab-content">
+            <div id="master-scheduler-content">
+                </div>
+        </div>
+        
+        <div id="schedule" class="tab-content">
+            <h3>Daily Schedule (View)</h3>
+            <p>This tab shows the final, "filled-in" schedule. To build or edit the day's layout, use the "Master Scheduler" or "Daily Adjustments" tab.</p>
+            <div id="scheduleTable"></div>
+        </div>
+
+        <div id="leagues" class="tab-content">
+            <div id="leaguesContainer"></div>
+        </div>
+
+        <div id="specialty-leagues" class="tab-content">
+            <h2>🏆 Specialty Leagues</h2>
+            <div id="specialtyLeaguesContainer"></div>
+        </div>
+
+        <div id="daily-adjustments" class="tab-content">
+            <div id="daily-adjustments-content">
+                </div>
+        </div>
+        
+        <div id="report" class="tab-content">
+            <div id="report-content">
+                </div>
+        </div>
+    </div> <!-- End of #main-app-container -->
+
+    <!-- 
+      SCRIPTS
+      welcome.js MUST come first as it controls the boot process.
+    -->
+    <script src="welcome.js" defer></script>
 
     <script src="calendar.js" defer></script>
     <script src="app1.js" defer></script>
@@ -145,6 +170,7 @@
     <script src="analytics.js" defer></script>
 
     <script>
+        // This function is still needed for the tabs to work
         function showTab(id) {
             document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -171,39 +197,8 @@
             }
         }
 
-        document.addEventListener("DOMContentLoaded", boot);
-
-        function boot() {
-            // 1. Init Calendar (loads date, save/load fns, migration)
-            if (window.initCalendar) {
-                window.initCalendar();
-            } else {
-                console.error("Fatal: calendar.js init not found.");
-                return;
-            }
-
-            // 2. Init App1 (loads bunks, divisions)
-            if (window.initApp1) {
-                window.initApp1();
-            } else {
-                console.error("Fatal: app1.js init not found.");
-                return;
-            }
-
-            // 3. Init Leagues (loads league data, renders tab)
-            if (window.initLeagues) {
-                window.initLeagues();
-            } else {
-                console.warn("Leagues.js init not found.");
-            }
-
-            // 4. Init Schedule System (loads today's schedule)
-            if (window.initScheduleSystem) {
-                window.initScheduleSystem();
-            } else {
-                console.warn("initScheduleSystem not found.");
-            }
-        }
+        // The main DOMContentLoaded listener and boot() function
+        // have been MOVED to welcome.js to control startup.
     </script>
 </body>
 </html>
