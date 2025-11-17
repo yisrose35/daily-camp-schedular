@@ -9,10 +9,10 @@
 // - League counters (League Game 1, 2, 3...) persisted day-to-day
 //
 // --- YOUR NEW REQUEST (11/16) ---
-// - **FIXED:** `renderStaggeredView` now attaches the
-//   `editCell` onclick handler to *all* cells, including
-//   pinned tiles (Lunch, Snacks, Dismissal, etc.),
-//   not just generated ones.
+// - **FIXED (AGAIN):** Restored the `else if (eventBlock.type === "split")`
+//   block that was accidentally removed in the previous fix.
+// - All cells (generated, pinned, *and* split) are now
+//   correctly rendered AND editable.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -373,7 +373,7 @@ function renderStaggeredView(container) {
         todayLeagueCount++;
         eventName = `League Game ${todayLeagueCount}`;
       } else if (item.event === "Specialty League") {
-        todaySpecialtyCount++;
+        todaySpecialTypeCount++;
         eventName = `Specialty League ${todaySpecialtyCount}`;
       }
 
@@ -494,8 +494,45 @@ function renderStaggeredView(container) {
         }
         tdLeague.innerHTML = html;
         tr.appendChild(tdLeague);
+      
+      // --- THIS IS THE RESTORED BLOCK ---
+      } else if (eventBlock.type === "split") {
+        // SPLIT BLOCKS: show whatever each bunk actually has (A/B then B/A)
+        bunks.forEach((bunk) => {
+          const tdActivity = document.createElement("td");
+          tdActivity.style.border = "1px solid #ccc";
+          tdActivity.style.verticalAlign = "top";
+
+          const startMin = eventBlock.startMin;
+          const endMin = eventBlock.endMin; // Use the half-block's end time
+          const slotIndex = findFirstSlotForTime(startMin);
+          const entry = getEntry(bunk, slotIndex);
+
+          let currentActivity = "";
+          if (entry) {
+            currentActivity = formatEntry(entry);
+            tdActivity.textContent = currentActivity;
+
+            if (entry._h2h) {
+              tdActivity.style.background = "#e8f4ff";
+              tdActivity.style.fontWeight = "bold";
+            } else if (entry._fixed) {
+              tdActivity.style.background = "#fff8e1"; // fixed/pinned
+            }
+          }
+
+          // Allow editing split-block cells too
+          tdActivity.style.cursor = "pointer";
+          tdActivity.title = "Click to edit this activity";
+          tdActivity.onclick = () =>
+            editCell(bunk, startMin, endMin, currentActivity);
+
+          tr.appendChild(tdActivity);
+        });
+      // --- END OF RESTORED BLOCK ---
+
       } else {
-        // REGULAR / SPLIT / DISMISSAL / SNACKS / CUSTOM PINS: individual cells
+        // REGULAR / DISMISSAL / SNACKS / CUSTOM PINS: individual cells
         const rawName = eventBlock.event || "";
         const nameLc = rawName.toLowerCase();
 
@@ -512,8 +549,7 @@ function renderStaggeredView(container) {
           const startMin = eventBlock.startMin;
           const endMin = eventBlock.endMin;
           
-          // --- FIX: This variable will hold the text for the prompt ---
-          let cellActivityName = "";
+          let cellActivityName = ""; // This will hold the text for the prompt
 
           // Dismissal row
           if (isDismissalBlock) {
@@ -536,7 +572,7 @@ function renderStaggeredView(container) {
             tdActivity.style.background = "#fff8e1"; // light yellow for pins
             tdActivity.style.fontWeight = "bold";
           }
-          // GENERATED SLOTS (Activity / Sports / Special Activity / Swim / Split)
+          // GENERATED SLOTS (Activity / Sports / Special Activity / Swim)
           else {
             const slotIndex = findFirstSlotForTime(startMin);
             const entry = getEntry(bunk, slotIndex);
@@ -553,7 +589,7 @@ function renderStaggeredView(container) {
             tdActivity.textContent = cellActivityName;
           }
 
-          // --- FIX: Apply the click handler to ALL cells ---
+          // Apply the click handler to ALL cells in this block
           tdActivity.style.cursor = "pointer";
           tdActivity.title = "Click to edit this activity";
           tdActivity.onclick = () =>
