@@ -1456,15 +1456,30 @@ function loadAndFilterData() {
     }
 
     function parseTimeRule(rule) {
-        const startMin = parseTimeToMinutes(rule.start);
-        const endMin   = parseTimeToMinutes(rule.end);
-        if (startMin == null || endMin == null) return null;
+    if (!rule || !rule.type) return null;
+
+    // 1) If the rule already has numeric minutes, trust them
+    if (typeof rule.startMin === "number" && typeof rule.endMin === "number") {
         return {
             type: rule.type,
-            startMin,
-            endMin
+            startMin: rule.startMin,
+            endMin: rule.endMin
         };
     }
+
+    // 2) Otherwise, try to parse "start" / "end" strings like "1:20 PM"
+    const startMin = parseTimeToMinutes(rule.start);
+    const endMin   = parseTimeToMinutes(rule.end);
+
+    if (startMin == null || endMin == null) return null;
+
+    return {
+        type: rule.type,
+        startMin,
+        endMin
+    };
+}
+
 
     const activityProperties = {};
     const allMasterActivities = [
