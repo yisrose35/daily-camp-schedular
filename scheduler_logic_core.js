@@ -533,6 +533,26 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     } catch (e) {
         console.error("Error placing bunk-specific overrides:", e);
     }
+function normalizeLeague(name) {
+    if (!name) return null;
+
+    const s = String(name).toLowerCase().replace(/\s+/g, '');
+
+    const keys = [
+        "leaguegame",
+        "league",
+        "leaguegameslot",
+        "leagame",
+        "lg", 
+        "lgame"
+    ];
+
+    if (keys.some(k => s.includes(k))) {
+        return "League Game";
+    }
+
+    return null;
+}
 
   // =================================================================
 // PASS 2 — Pinned / Split / Slot Skeleton Blocks
