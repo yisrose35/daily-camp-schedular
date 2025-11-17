@@ -26,6 +26,11 @@
 //   now *only* uses the "League Brain".
 // - This completely separates the logic for general
 //   activities and league activities, as requested.
+// ---
+// UPDATED (Sharing Fix):
+// - 'canBlockFit' now checks if a 'proposedActivity' matches the
+//   'existingActivity' on a shared field, enforcing same-activity rule.
+// - All `findBest...` functions now pass `pick._activity` to `canBlockFit`.
 // =================================================================
 
 (function() {
@@ -104,8 +109,9 @@ function isTimeAvailable(slotIndex, fieldProps) {
 /**
  * --- UPDATED: THIS IS THE FIX (Hard Rule) ---
  * Now checks *which* division is using a sharable field.
+ * --- NEW: Added proposedActivity argument ---
  */
-function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
+function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot, proposedActivity) { // --- NEW ARG ---
     if (!fieldName) return false; // Can't fit a null field
     
     const props = activityProperties[fieldName];
@@ -141,7 +147,7 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
         if (slotIndex === undefined) { return false; } // Invalid block
         
         // --- NEW SHARING LOGIC (Check 3) ---
-        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [], bunks: {} }; // --- MODIFIED: added bunks ---
         
         if (usage.count >= limit) {
             return false; // Already full
@@ -152,8 +158,24 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot) {
             if (!usage.divisions.includes(block.divName)) {
                 return false; // Can't share across divisions
             }
+
+            // --- NEW HARD RULE ---
+            // It's the same division. Check if the activity matches.
+            // Get the activity being done by *any* other bunk on this field.
+            let existingActivity = null;
+            for (const bunkName in usage.bunks) {
+                if (usage.bunks[bunkName]) {
+                    existingActivity = usage.bunks[bunkName];
+                    break;
+                }
+            }
+
+            if (existingActivity && proposedActivity && existingActivity !== proposedActivity) {
+                // Another bunk is using this field for a different activity.
+                return false;
+            }
+            // --- END NEW HARD RULE ---
         }
-        // --- END NEW SHARING LOGIC ---
         
         // Check 4: NEW: Time-based availability
         if (!isTimeAvailable(slotIndex, props)) {
@@ -305,6 +327,7 @@ window.findBestSportForBunks = function(bunkNames, availableSports, leagueHistor
 /**
  * Finds the best-available special activity (special-only).
  * --- UPDATED: Now uses the "General Brain" ---
+ * --- UPDATED: Passes pick._activity to canBlockFit ---
  */
 window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     const specials = allActivities
@@ -322,7 +345,7 @@ window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yester
 
     // 1. Find all specials that *can* fit this slot
     const availablePicks = specials.filter(pick => 
-        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot) &&
+        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot, pick._activity) && // --- MODIFIED ---
         !activitiesDoneToday.has(pick._activity) // <-- CRITICAL FIX
     );
     
@@ -369,6 +392,7 @@ window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yester
 /**
  * NEW: Finds the best-available sport activity (sports-only).
  * --- UPDATED: Now uses the "General Brain" ---
+ * --- UPDATED: Passes pick._activity to canBlockFit ---
  */
 window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     const sports = allActivities
@@ -386,7 +410,7 @@ window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, 
 
     // 1. Find all sports that *can* fit this slot
     const availablePicks = sports.filter(pick => 
-        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot) &&
+        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot, pick._activity) && // --- MODIFIED ---
         !activitiesDoneToday.has(pick._activity) // <-- CRITICAL FIX
     );
     
@@ -431,6 +455,7 @@ window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, 
 /**
  * Finds the best-available general activity (hybrid: sports OR special).
  * --- UPDATED: Now uses the "General Brain" ---
+ * --- UPDATED: Passes pick._activity to canBlockFit ---
  */
 window.findBestGeneralActivity = function(block, allActivities, h2hActivities, fieldUsageBySlot, yesterdayHistory, activityProperties, rotationHistory, divisions) {
     
@@ -451,7 +476,7 @@ window.findBestGeneralActivity = function(block, allActivities, h2hActivities, f
 
     // 1. Find all activities that *can* fit this slot
     const availablePicks = allPossiblePicks.filter(pick => 
-        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot) &&
+        canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot, pick._activity) && // --- MODIFIED ---
         !activitiesDoneToday.has(pick._activity) // <-- CRITICAL FIX
     );
 
