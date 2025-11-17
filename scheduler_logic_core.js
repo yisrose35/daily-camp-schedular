@@ -539,7 +539,37 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 // =================================================================
 const schedulableSlotBlocks = [];
 
+/**
+ * Normalizes event names such as:
+ *   "general activity", "general activyt", "activity", "activty",
+ *   "gen act", "ga", "general activity slot"
+ *
+ * to a canonical: "General Activity Slot"
+ */
+function normalizeGA(name) {
+    if (!name) return null;
+    const s = String(name).toLowerCase().replace(/\s+/g, '');
+
+    const gaKeywords = [
+        "generalactivity",
+        "generalactivyt",
+        "activity",
+        "activyt",
+        "activityslot",
+        "generalactivityslot",
+        "genactivity",
+        "genact",
+        "ga"
+    ];
+
+    if (gaKeywords.some(k => s.includes(k))) {
+        return "General Activity Slot";
+    }
+    return null;
+}
+
 manualSkeleton.forEach(item => {
+
     const allBunks = divisions[item.division]?.bunks || [];
     if (!allBunks || allBunks.length === 0) return;
 
@@ -548,12 +578,15 @@ manualSkeleton.forEach(item => {
     const allSlots = findSlotsForRange(startMin, endMin);
     if (allSlots.length === 0) return;
 
-    const isGeneratedEvent = GENERATED_EVENTS.includes(item.event);
+    // Determine whether the event is schedulable
+    const isGeneratedEvent =
+        GENERATED_EVENTS.includes(item.event) ||
+        normalizeGA(item.event) === "General Activity Slot";
 
     // -------------------------------------------------------------
-    //  PURE PINNED (Lunch, Dismissal, Snacks, Cleanup, Custom, etc.)
+    // 1. PURE PINNED (Lunch, Cleanup, Snacks, Regroup, Custom…)
     // -------------------------------------------------------------
-    if (item.type === 'pinned' || !isGeneratedEvent) {
+    if (item.type === "pinned" || !isGeneratedEvent) {
         allBunks.forEach(bunk => {
             allSlots.forEach((slotIndex, idx) => {
                 if (!window.scheduleAssignments[bunk][slotIndex]) {
@@ -572,60 +605,51 @@ manualSkeleton.forEach(item => {
     }
 
     // -------------------------------------------------------------
-    //  **NEW FULLY-GENERATED SPLIT BLOCK LOGIC**
+    // 2. SPLIT BLOCK — FULLY GENERATED GA + PINNED SWIM
     // -------------------------------------------------------------
-    else if (item.type === 'split') {
+    else if (item.type === "split") {
 
-        // Must have two subEvents (e.g., Swim + GA)
         if (!item.subEvents || item.subEvents.length < 2) return;
 
-        const swimEvent = item.subEvents[0];   // FIRST half's swim definition
-        const gaEvent   = item.subEvents[1];   // fully generated GA definition
+        // Force canonical names
+        const swimLabel = "Swim";
+        const gaLabel   =
+            normalizeGA(item.subEvents[1].event) || "General Activity Slot";
 
-        // ----------------------------
-        // Split bunks Top / Bottom
-        // ----------------------------
-        const splitCount = Math.ceil(allBunks.length / 2);
-        const bunksTop    = allBunks.slice(0, splitCount);
-        const bunksBottom = allBunks.slice(splitCount);
+        // --- Split bunks ---
+        const mid = Math.ceil(allBunks.length / 2);
+        const bunksTop    = allBunks.slice(0, mid);
+        const bunksBottom = allBunks.slice(mid);
 
-        // ----------------------------
-        // Split TIME First Half / Second Half
-        // ----------------------------
-        const slotMidpoint = Math.ceil(allSlots.length / 2);
-        const slotsFirst   = allSlots.slice(0, slotMidpoint);
-        const slotsSecond  = allSlots.slice(slotMidpoint);
+        // --- Split time ---
+        const slotMid = Math.ceil(allSlots.length / 2);
+        const slotsFirst  = allSlots.slice(0, slotMid);
+        const slotsSecond = allSlots.slice(slotMid);
 
-        // ----------------------------
-        // Helper: assign SWIM (PINNED)
-        // ----------------------------
-        function assignSwim(bunks, slots) {
-            bunks.forEach(bunk => {
+        // --- PIN Swim helper ---
+        function pinSwim(bunkList, slots) {
+            bunkList.forEach(bunk => {
                 slots.forEach((slotIndex, idx) => {
-                    if (!window.scheduleAssignments[bunk][slotIndex]) {
-                        window.scheduleAssignments[bunk][slotIndex] = {
-                            field: { name: "Swim" },
-                            sport: null,
-                            continuation: (idx > 0),
-                            _fixed: true,
-                            _h2h: false,
-                            vs: null,
-                            _activity: "Swim"
-                        };
-                    }
+                    window.scheduleAssignments[bunk][slotIndex] = {
+                        field: { name: swimLabel },
+                        sport: null,
+                        continuation: idx > 0,
+                        _fixed: true,
+                        _h2h: false,
+                        vs: null,
+                        _activity: swimLabel
+                    };
                 });
             });
         }
 
-        // ----------------------------
-        // Helper: push GA blocks to optimizer (FULLY GENERATED)
-        // ----------------------------
-        function assignGA(bunks, slots) {
-            bunks.forEach(bunk => {
+        // --- GA generated helper ---
+        function pushGA(bunkList, slots) {
+            bunkList.forEach(bunk => {
                 schedulableSlotBlocks.push({
                     divName:   item.division,
                     bunk:      bunk,
-                    event:     gaEvent.event,   // MUST be "General Activity Slot"
+                    event:     gaLabel,     // THIS IS WHAT TRIGGERS GENERATION
                     startTime: startMin,
                     endTime:   endMin,
                     slots
@@ -633,32 +657,35 @@ manualSkeleton.forEach(item => {
             });
         }
 
-        // ---------------------------------------
-        //  HALF 1 — FIRST TIME HALF
-        //    Top bunks: SWIM
-        //    Bottom bunks: GENERATED GA
-        // ---------------------------------------
-        assignSwim(bunksTop, slotsFirst);
-        assignGA(bunksBottom, slotsFirst);
+        // --------------------------
+        // FIRST HALF
+        //   Top → Swim
+        //   Bottom → GA (generated)
+        // --------------------------
+        pinSwim(bunksTop, slotsFirst);
+        pushGA(bunksBottom, slotsFirst);
 
-        // ---------------------------------------
-        //  HALF 2 — SECOND TIME HALF
-        //    Top bunks: GENERATED GA
-        //    Bottom bunks: SWIM
-        // ---------------------------------------
-        assignGA(bunksTop, slotsSecond);
-        assignSwim(bunksBottom, slotsSecond);
+        // --------------------------
+        // SECOND HALF
+        //   Top → GA (generated)
+        //   Bottom → Swim
+        // --------------------------
+        pushGA(bunksTop, slotsSecond);
+        pinSwim(bunksBottom, slotsSecond);
     }
 
     // -------------------------------------------------------------
-    //  NORMAL GENERATED SLOTS (Sports Slot, GA Slot, Special Activity)
+    // 3. NORMAL GENERATED SLOTS (Sports Slot, Special Activity, GA)
     // -------------------------------------------------------------
-    else if (item.type === 'slot' && isGeneratedEvent) {
+    else if (item.type === "slot" && isGeneratedEvent) {
+        const gaLabelNormalized =
+            normalizeGA(item.event) || item.event;
+
         allBunks.forEach(bunk => {
             schedulableSlotBlocks.push({
                 divName:   item.division,
                 bunk:      bunk,
-                event:     item.event,
+                event:     gaLabelNormalized,
                 startTime: startMin,
                 endTime:   endMin,
                 slots:     allSlots
@@ -666,7 +693,7 @@ manualSkeleton.forEach(item => {
         });
     }
 
-});  // end manualSkeleton.forEach
+}); // END manualSkeleton.forEach
 
     // =================================================================
     // PASS 3 — LEAGUE PASS (Quantum-ish sports + mirroring)
