@@ -10,6 +10,11 @@
 //   `renderDetailPane`, etc.) now call
 //   `window.saveGlobalSpecialActivities(specialActivities)`
 //   to safely save the data via app1.js.
+//
+// UPDATED (BUG FIX):
+// - `renderAllowedBunksControls`:
+//   - **FIXED BUG:** Clicking an enabled division chip (in "All" or
+//     "Specific" mode) will now correctly disable (unchoose) it.
 // =================================================================
 
 (function() {
@@ -593,23 +598,27 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
             
             // Division-level chip
             const divChip = createLimitChip(divName, isAllowed, true);
+            
+            // --- THIS IS THE FIX ---
             divChip.onclick = () => {
                 if (isAllowed) {
-                    const bunksInDiv = (window.divisions[divName]?.bunks || []);
-                    if (bunksInDiv.length > 0 && allowedBunks.length === 0) { 
-                        rules.divisions[divName] = []; 
-                    } else {
-                        delete rules.divisions[divName];
-                    }
+                    // If it IS allowed (in "All" or "Specific" mode),
+                    // clicking it again will disable (unchoose) it.
+                    delete rules.divisions[divName];
                 } else {
+                    // If it's NOT allowed, clicking it
+                    // enables it for ALL bunks in that division
                     rules.divisions[divName] = []; // Empty array = all bunks
                 }
                 onSave();
                 onRerender();
             };
+            // --- END FIX ---
+            
             divWrapper.appendChild(divChip);
 
             // Bunk-level chips (if in bunk-specific mode, i.e., array exists)
+            // --- THIS LOGIC IS NOW CORRECT, NO CHANGE NEEDED ---
             if (isAllowed) {
                 const bunkList = document.createElement("div");
                 bunkList.style.display = "flex";
