@@ -1124,6 +1124,7 @@ rotationHistory.leagueTeamLastSport[leagueName] = updatedLastSports;
     });
 
     // =================================================================
+        // =================================================================
     // PASS 4 — Remaining Schedulable Slots (Smart Activities)
     // =================================================================
     remainingBlocks.sort((a, b) => a.startTime - b.startTime);
@@ -1135,6 +1136,7 @@ rotationHistory.leagueTeamLastSport[leagueName] = updatedLastSports;
 
         let pick = null;
 
+        // 1) Try the specific buckets first
         if (block.event === 'Special Activity') {
             pick = window.findBestSpecial?.(
                 block,
@@ -1159,6 +1161,7 @@ rotationHistory.leagueTeamLastSport[leagueName] = updatedLastSports;
             pick = { field: "Swim", sport: null, _activity: "Swim" };
         }
 
+        // 2) Fallback to general activity
         if (!pick) {
             pick = window.findBestGeneralActivity?.(
                 block,
@@ -1172,53 +1175,20 @@ rotationHistory.leagueTeamLastSport[leagueName] = updatedLastSports;
             );
         }
 
+        // 3) NEW: If the chosen pick is a *real field* but it actually
+        //        cannot fit this block (no availability, time conflict,
+        //        over limit, etc.), treat it as "nothing available".
+        if (pick && !isPickValidForBlock(block, pick, activityProperties, fieldUsageBySlot)) {
+            pick = null;
+        }
+
+        // 4) Final assignment: either the valid pick, or "Free" if literally nothing works
         if (pick) {
             fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, false);
         } else {
-            fillBlock(block, { field: "Free", sport: null }, fieldUsageBySlot, yesterdayHistory, false);
+            // No valid fields/activities can be scheduled here → show no field.
+            fillBlock(block, { field: "Free", sport: null, _activity: "Free" }, fieldUsageBySlot, yesterdayHistory, false);
         }
-    }
-
-    // =================================================================
-    // PASS 5 — Update Rotation History
-    // =================================================================
-    try {
-        const historyToSave = rotationHistory;
-
-        availableDivisions.forEach(divName => {
-            (divisions[divName]?.bunks || []).forEach(bunk => {
-                const schedule = window.scheduleAssignments[bunk] || [];
-                let lastActivity = null;
-
-                for (const entry of schedule) {
-                    if (entry && entry._activity && entry._activity !== lastActivity) {
-                        const activityName = entry._activity;
-                        lastActivity = activityName;
-
-                        historyToSave.bunks[bunk] = historyToSave.bunks[bunk] || {};
-                        historyToSave.bunks[bunk][activityName] = timestamp;
-
-                        if (entry._h2h && entry._activity !== "League" && entry._activity !== "No Game") {
-                            const leagueEntry = Object.entries(masterLeagues).find(([name, l]) =>
-                                l.enabled && l.divisions.includes(divName)
-                            );
-                            if (leagueEntry) {
-                                const lgName = leagueEntry[0];
-                                historyToSave.leagues[lgName] = historyToSave.leagues[lgName] || {};
-                                historyToSave.leagues[lgName][entry._activity] = timestamp;
-                            }
-                        }
-                    } else if (entry && !entry.continuation) {
-                        lastActivity = null;
-                    }
-                }
-            });
-        });
-
-        window.saveRotationHistory?.(historyToSave);
-        console.log("Smart Scheduler: Rotation history updated.");
-    } catch (e) {
-        console.error("Smart Scheduler: Failed to update rotation history.", e);
     }
 
     // =================================================================
