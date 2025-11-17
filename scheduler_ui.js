@@ -457,7 +457,7 @@ function renderStaggeredView(container) {
 
       // Time cell
       const tdTime = document.createElement("td");
-      tdTime.style.border = "1px solid "#ccc";
+      tdTime.style.border = "1px solid #ccc";
       tdTime.style.verticalAlign = "top";
       tdTime.style.fontWeight = "bold";
       tdTime.textContent = eventBlock.label;
