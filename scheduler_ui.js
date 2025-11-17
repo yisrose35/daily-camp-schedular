@@ -13,6 +13,10 @@
 //   block that was accidentally removed in the previous fix.
 // - All cells (generated, pinned, *and* split) are now
 //   correctly rendered AND editable.
+//
+// --- LATEST FIX ---
+// - Fixed typo `todaySpecialTypeCount` -> `todaySpecialtyCount`
+//   which was causing a rendering error.
 // -----------------------------------------------------------------
 
 // ===== HELPERS =====
@@ -373,7 +377,9 @@ function renderStaggeredView(container) {
         todayLeagueCount++;
         eventName = `League Game ${todayLeagueCount}`;
       } else if (item.event === "Specialty League") {
-        todaySpecialTypeCount++;
+        // --- THIS WAS THE TYPO ---
+        todaySpecialtyCount++; 
+        // --- END FIX ---
         eventName = `Specialty League ${todaySpecialtyCount}`;
       }
 
@@ -495,7 +501,6 @@ function renderStaggeredView(container) {
         tdLeague.innerHTML = html;
         tr.appendChild(tdLeague);
       
-      // --- THIS IS THE RESTORED BLOCK ---
       } else if (eventBlock.type === "split") {
         // SPLIT BLOCKS: show whatever each bunk actually has (A/B then B/A)
         bunks.forEach((bunk) => {
@@ -529,7 +534,6 @@ function renderStaggeredView(container) {
 
           tr.appendChild(tdActivity);
         });
-      // --- END OF RESTORED BLOCK ---
 
       } else {
         // REGULAR / DISMISSAL / SNACKS / CUSTOM PINS: individual cells
