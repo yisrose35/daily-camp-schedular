@@ -544,7 +544,7 @@ function renderStaggeredView(container) {
           tdActivity.style.verticalAlign = "top";
           const startMin = eventBlock.startMin;
           const endMin = eventBlock.endMin;
-          ...
+          
 
         
 
