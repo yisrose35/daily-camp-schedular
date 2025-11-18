@@ -736,13 +736,17 @@ manualSkeleton.forEach(item => {
 
         let normalizedEvent = null;
 
-if (normalizeLeague(item.event)) {
-    normalizedEvent = "League Game";          // FORCE EXACT
-} else if (normalizeSpecialtyLeague(item.event)) {
-    normalizedEvent = "Specialty League";     // FORCE EXACT
-} else if (normalizeGA(item.event)) {
+if (normalizeGA(item.event)) {
+    // Any spelling of "general activity" / "activity" → GA slot
     normalizedEvent = "General Activity Slot";
+} else if (normalizeSpecialtyLeague(item.event)) {
+    // Any spelling of "specialty league" → Specialty League
+    normalizedEvent = "Specialty League";
+} else if (normalizeLeague(item.event)) {
+    // Plain leagues (League Game, LG, etc.) → League Game
+    normalizedEvent = "League Game";
 } else {
+    // Anything else stays as-is (pinned/custom events)
     normalizedEvent = item.event;
 }
 
