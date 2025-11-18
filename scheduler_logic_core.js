@@ -1,26 +1,20 @@
 // ============================================================================
 // scheduler_logic_core.js
 //
-// "SUPERCOMPUTER" / "QUANTUM-ISH" LEAGUE SCHEDULER + SMART GRID
-// - Global unified time grid
-// - Bunk-specific overrides
-// - Pinned / split / slot skeleton handling
-// - League mirroring across divisions
-// - Quantum-ish multi-criteria sport optimizer for leagues
-// - Specialty League pass
-// - Smart filler for remaining blocks
-// - Rotation history (bunks + leagues + per-team sport counts)
-// - Strong time-rule enforcement (Available/Unavailable windows)
-// - No fake fields when nothing is actually available
-// ---
-// UPDATED (Sharing Fix):
-// - 'markFieldUsage' and 'fillBlock' now store the activity a bunk is doing.
-// - 'canBlockFit' now checks if a 'proposedActivity' matches the
-//   'existingActivity' on a shared field, enforcing same-activity rule.
-// UPDATED (League Fallback Fix):
-// - If a 'League Game' or 'Specialty League' block "falls through" to PASS 4,
-//   it is assigned as 'Unassigned League' instead of being filled by general
-//   activity logic.
+// UPDATED (League Fallback + Specialty Priority Fix):
+// - Normal leagues and specialty leagues BOTH show matchups.
+// - Detection priority:
+//      General Activity  → "General Activity Slot"
+//      Specialty League  → "Specialty League"
+//      Regular League    → "League Game"
+//      Raw Text          → untouched
+// - Fixed normalization so "Specialty League" is NOT accidentally swallowed
+//   by regular "League" detection.
+// - Specialty leagues are hard-locked to a single sport (leagueEntry.sport).
+// - League/Specialty blocks that fall through are shown as
+//   "Unassigned League" instead of random activities.
+// - Field sharing obeys same-activity rule.
+//
 // ============================================================================
 
 (function() {
@@ -546,9 +540,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     }
 
     // =================================================================
-    // PASS 2 — Pinned / Split / Slot Skeleton Blocks
+    // NORMALIZATION HELPERS (GA / LEAGUE / SPECIALTY LEAGUE)
     // =================================================================
-    const schedulableSlotBlocks = [];
 
     /**
      * Normalize ANY spelling of General Activity → "General Activity Slot"
@@ -572,14 +565,18 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
     /**
      * Normalize ANY spelling of League Game → "League Game"
+     * (does NOT match plain "specialty league" text)
      */
     function normalizeLeague(name) {
         if (!name) return null;
         const s = String(name).toLowerCase().replace(/\s+/g, '');
 
         const keys = [
-            "leaguegame", "leaguegameslot",
-            "league", "leagame", "lg", "lgame"
+            "leaguegame",      // "League Game", "League Game 1"
+            "leaguegameslot",  // "League Game Slot"
+            "leagame",         // typos
+            "lg",              // "LG 1", etc.
+            "lgame"            // more typos
         ];
 
         if (keys.some(k => s.includes(k))) {
@@ -606,6 +603,11 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         return null;
     }
 
+    // =================================================================
+    // PASS 2 — Pinned / Split / Slot Skeleton Blocks
+    // =================================================================
+    const schedulableSlotBlocks = [];
+
     manualSkeleton.forEach(item => {
 
         const allBunks = divisions[item.division]?.bunks || [];
@@ -624,8 +626,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
         const finalEventName =
             normGA ||
+            normSpecLg ||   // ✅ SPECIALTY FIRST
             normLeague ||
-            normSpecLg ||
             item.event;
 
         const isGeneratedEvent =
@@ -728,10 +730,11 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
             let normalizedEvent = null;
 
-            if (normalizeLeague(item.event)) {
-                normalizedEvent = "League Game";          // FORCE EXACT
-            } else if (normalizeSpecialtyLeague(item.event)) {
-                normalizedEvent = "Specialty League";     // FORCE EXACT
+            // ✅ SPECIALTY FIRST, then Regular League, then GA
+            if (normalizeSpecialtyLeague(item.event)) {
+                normalizedEvent = "Specialty League";     // Specialty leagues
+            } else if (normalizeLeague(item.event)) {
+                normalizedEvent = "League Game";          // Regular leagues
             } else if (normalizeGA(item.event)) {
                 normalizedEvent = "General Activity Slot";
             } else {
@@ -884,11 +887,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             let label;
             if (chosenField) {
                 label = `${teamA} vs ${teamB} (${chosenSport}) @ ${chosenField}`;
-                markFieldUsage(
-                    { ...blockBase, _activity: chosenSport },
-                    chosenField,
-                    fieldUsageBySlot
-                ); // pass activity
+                markFieldUsage({ ...blockBase, _activity: chosenSport, bunk: 'league' }, chosenField, fieldUsageBySlot);
             } else {
                 label = `${teamA} vs ${teamB} (${chosenSport}) (No Field)`;
             }
@@ -983,7 +982,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
     });
 
     // =================================================================
-    // PASS 3.5 — SPECIALTY LEAGUES (mirroring)  **FROM SECOND CORE**
+    // PASS 3.5 — SPECIALTY LEAGUES (mirroring, hard-locked sport)
     // =================================================================
     const specialtyLeagueGroups = {};
     specialtyLeagueBlocks.forEach(block => {
@@ -1022,7 +1021,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         const sport = leagueEntry.sport;
         if (!sport) return;
 
-        // HARD LOCK: specialty league = exactly this sport, no optimizer
+        // 🔒 HARD LOCK: specialty league = exactly this sport, no optimizer
         const bestSport = sport;
 
         const allMatchupLabels = [];
@@ -1053,9 +1052,9 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
                 const baseLabel = `${teamA} vs ${teamB} (${bestSport})`;
 
-                // Inline availability check
                 let isFieldAvailable = true;
                 const slotIndex = group.slots[i % slotCount];
+
                 if (fieldUsageBySlot[slotIndex]?.[fieldName]?.count >= 1) {
                     isFieldAvailable = false;
                 }
@@ -1063,7 +1062,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                     isFieldAvailable = false;
                 }
 
-                // Time/division rules if this field is a main field
                 const props = activityProperties[fieldName];
                 if (props) {
                     if (!isTimeAvailable(slotIndex, props)) {
@@ -1132,8 +1130,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
     // =================================================================
     // PASS 4 — Remaining Schedulable Slots (Smart Activities)
-    //  (with League Fallback Fix)
-// =================================================================
+    // =================================================================
     remainingBlocks.sort((a, b) => a.startTime - b.startTime);
 
     for (const block of remainingBlocks) {
@@ -1143,12 +1140,13 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
         let pick = null;
 
-        // --- League Fallback Fix ---
+        // --- NEW FIX ---
         // If a league block falls through (e.g., no teams/fields assigned),
         // do NOT let it be filled by findBestGeneralActivity.
         if (block.event === 'League Game' || block.event === 'Specialty League') {
             pick = { field: "Unassigned League", sport: null, _activity: "Free" };
         }
+        // --- END NEW FIX ---
 
         // 1) Specific buckets
         else if (block.event === 'Special Activity') {
@@ -1189,8 +1187,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             );
         }
 
-        // 3) Validate the pick: if it's a real field but cannot actually fit,
-        // treat it as "nothing available"
+        // 3) Validate the pick
         if (pick && !isPickValidForBlock(block, pick, activityProperties, fieldUsageBySlot)) {
             pick = null;
         }
@@ -1200,7 +1197,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, false);
         } else {
             // No valid fields/activities -> Free
-            fillBlock(block, { field: "Free", sport: null, _activity: "Free" }, fieldUsageBySlot, yesterdayHistory, false);
+            fillBlock(block, { field: "Free", sport: null, _activity: "Free" }, fieldUsageBySlot, false);
         }
     }
 
@@ -1288,7 +1285,6 @@ function markFieldUsage(block, fieldName, fieldUsageBySlot) {
         if (!usage.divisions.includes(block.divName)) {
             usage.divisions.push(block.divName);
         }
-        // Store bunk and activity
         const blockActivity = block._activity || block.sport || (block.event === 'League Game' ? 'League' : block.event);
         if (block.bunk && blockActivity) {
             usage.bunks[block.bunk] = blockActivity;
@@ -1303,7 +1299,17 @@ function isTimeAvailable(slotIndex, fieldProps) {
     const slotStartMin = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
     const slotEndMin   = slotStartMin + INCREMENT_MINS;
 
-    const rules = fieldProps.timeRules || [];
+    // fieldProps.timeRules from loadAndFilterData already have numeric mins,
+    // but some callers may still use .start/.end, so we normalize here.
+    const rules = (fieldProps.timeRules || []).map(r => {
+        if (typeof r.startMin === "number" && typeof r.endMin === "number") return r;
+        return {
+            ...r,
+            startMin: parseTimeToMinutes(r.start),
+            endMin: parseTimeToMinutes(r.end)
+        };
+    });
+
     if (rules.length === 0) {
         return fieldProps.available;
     }
@@ -1316,6 +1322,7 @@ function isTimeAvailable(slotIndex, fieldProps) {
 
     for (const rule of rules) {
         if (rule.type === 'Available') {
+            if (rule.startMin == null || rule.endMin == null) continue;
             if (slotStartMin >= rule.startMin && slotEndMin <= rule.endMin) {
                 isAvailable = true;
                 break;
@@ -1324,6 +1331,7 @@ function isTimeAvailable(slotIndex, fieldProps) {
     }
     for (const rule of rules) {
         if (rule.type === 'Unavailable') {
+            if (rule.startMin == null || rule.endMin == null) continue;
             if (slotStartMin < rule.endMin && slotEndMin > rule.startMin) {
                 isAvailable = false;
                 break;
@@ -1395,7 +1403,14 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot, pro
     }
 
     const { blockStartMin, blockEndMin } = getBlockTimeRange(block);
-    const rules = props.timeRules || [];
+    const rules = (props.timeRules || []).map(r => {
+        if (typeof r.startMin === "number" && typeof r.endMin === "number") return r;
+        return {
+            ...r,
+            startMin: parseTimeToMinutes(r.start),
+            endMin: parseTimeToMinutes(r.end)
+        };
+    });
 
     if (rules.length > 0) {
         if (!props.available) return false;
@@ -1406,7 +1421,7 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot, pro
             if (hasAvailableRules) {
                 let insideAvailable = false;
                 for (const rule of rules) {
-                    if (rule.type !== 'Available') continue;
+                    if (rule.type !== 'Available' || rule.startMin == null || rule.endMin == null) continue;
                     if (blockStartMin >= rule.startMin && blockEndMin <= rule.endMin) {
                         insideAvailable = true;
                         break;
@@ -1418,7 +1433,7 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot, pro
             }
 
             for (const rule of rules) {
-                if (rule.type !== 'Unavailable') continue;
+                if (rule.type !== 'Unavailable' || rule.startMin == null || rule.endMin == null) continue;
                 if (
                     blockStartMin < rule.endMin &&
                     blockEndMin   > rule.startMin
@@ -1433,7 +1448,7 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot, pro
             const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [], bunks: {} };
             if (usage.count >= limit) return false;
 
-            // Sharing fix: if already used, must share same activity and same division
+            // Sharing rules
             if (usage.count > 0) {
                 if (!usage.divisions.includes(block.divName)) {
                     return false; // Can't share across divisions
@@ -1506,7 +1521,14 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
     }
 
     const { blockStartMin, blockEndMin } = getBlockTimeRange(block);
-    const rules = props.timeRules || [];
+    const rules = (props.timeRules || []).map(r => {
+        if (typeof r.startMin === "number" && typeof r.endMin === "number") return r;
+        return {
+            ...r,
+            startMin: parseTimeToMinutes(r.start),
+            endMin: parseTimeToMinutes(r.end)
+        };
+    });
 
     if (rules.length > 0) {
         if (!props.available) return false;
@@ -1517,7 +1539,7 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
             if (hasAvailableRules) {
                 let insideAvailable = false;
                 for (const rule of rules) {
-                    if (rule.type !== 'Available') continue;
+                    if (rule.type !== 'Available' || rule.startMin == null || rule.endMin == null) continue;
                     if (blockStartMin >= rule.startMin && blockEndMin <= rule.endMin) {
                         insideAvailable = true;
                         break;
@@ -1529,7 +1551,7 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
             }
 
             for (const rule of rules) {
-                if (rule.type !== 'Unavailable') continue;
+                if (rule.type !== 'Unavailable' || rule.startMin == null || rule.endMin == null) continue;
                 if (
                     blockStartMin < rule.endMin &&
                     blockEndMin   > rule.startMin
@@ -1611,7 +1633,7 @@ function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill
 }
 
 // =====================================================================
-// DATA LOADER / FILTER  (from first core, which worked for leagues)
+// DATA LOADER / FILTER
 // =====================================================================
 function loadAndFilterData() {
     const globalSettings = window.loadGlobalSettings?.() || {};
@@ -1676,7 +1698,9 @@ function loadAndFilterData() {
         return {
             type: rule.type,
             startMin,
-            endMin
+            endMin,
+            start: rule.start,
+            end: rule.end
         };
     }
 
@@ -1746,7 +1770,7 @@ function loadAndFilterData() {
                     sport: act
                 }))
             )
-            .filter(a => !a.sport || !dailyDisabledSportsByField[a.field]?.includes(a.sport)),
+            .filter(a => !a.field || !a.sport || !dailyDisabledSportsByField[a.field]?.includes(a.sport)),
         ...availSpecials.map(sa => ({ type: "special", field: sa.name, sport: null }))
     ];
 
