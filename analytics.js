@@ -4,12 +4,14 @@ fileName: "yisrose35/daily-camp-schedular/daily-camp-schedular-a06297415476e0977
 fullContent: `// =================================================================
 // analytics.js
 //
-// --- UPDATED (ROBUST & BOLSTERED) ---
-// 1. Fixed "Blank Tab" Issue: Added safety checks for data sorting.
-// 2. Field Availability:
-//    - Checks ALL entry types (Leagues, Specialty, Pinned, etc).
-//    - Strict "X" if usage > 0.
-//    - added Inline Styles for immediate Red/Green feedback.
+// --- UPDATED (FIXED & BOLSTERED) ---
+// 1. Fixed syntax error preventing tab load.
+// 2. Field Availability Grid:
+//    - STRICT CHECK: Any usage (League, Specialty, Pin) > 0 = X.
+//    - Only completely empty slots = Checkmark.
+//    - Filters added for easier viewing.
+// 3. Bunk Report:
+//    - Added "Scheduled Today?" column.
 // =================================================================
 
 (function() {
@@ -27,6 +29,7 @@ function parseTimeToMinutes(str) {
     return null;
   }
   
+  // Regex for HH:MM
   const m = s.match(/^(\\d{1,2})\\s*:\\s*(\\d{2})$/);
   if (!m) return null;
   let hh = parseInt(m[1], 10);
@@ -129,22 +132,23 @@ function initReportTab() {
 
         // Tab Switcher Logic
         const select = document.getElementById("report-view-select");
-        select.onchange = (e) => {
-            const selected = e.target.value;
-            const rotationPane = document.getElementById("report-rotation-content");
-            const availabilityPane = document.getElementById("report-availability-content");
-            
-            if (selected === 'rotation') {
-                rotationPane.style.display = "block";
-                availabilityPane.style.display = "none";
-                // Refresh data
-                if(divisionSelect && divisionSelect.value) onDivisionSelect(); 
-            } else {
-                rotationPane.style.display = "none";
-                availabilityPane.style.display = "block";
-                renderFieldAvailabilityGrid(); 
-            }
-        };
+        if (select) {
+            select.onchange = (e) => {
+                const selected = e.target.value;
+                const rotationPane = document.getElementById("report-rotation-content");
+                const availabilityPane = document.getElementById("report-availability-content");
+                
+                if (selected === 'rotation') {
+                    rotationPane.style.display = "block";
+                    availabilityPane.style.display = "none";
+                    if(divisionSelect && divisionSelect.value) onDivisionSelect(); 
+                } else {
+                    rotationPane.style.display = "none";
+                    availabilityPane.style.display = "block";
+                    renderFieldAvailabilityGrid(); 
+                }
+            };
+        }
     } catch (e) {
         console.error("Error initializing report tab:", e);
         if (container) container.innerHTML = \`<p style="color:red; padding:20px;">Error loading report: \${e.message}</p>\`;
@@ -212,7 +216,6 @@ function loadMasterData() {
             if(item.name) uniqueMap.set(item.name, item.type);
         });
         
-        // SAFETY FIX: Ensure names exist before sorting
         allActivities = Array.from(uniqueMap.entries())
             .map(([name, type]) => ({name, type}))
             .sort((a,b) => (a.name || "").localeCompare(b.name || ""));
@@ -359,7 +362,7 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
         const actName = actObj.name;
         const data = report[actName];
         const isNeed = data.count === 0 && !data.isToday;
-        const bg = isNeed ? "#e3f2fd" : "white"; // Inline fallback for 'report-row-fresh'
+        const bg = isNeed ? "#e3f2fd" : "white"; 
         
         const checkMark = data.isToday ? '<span style="color:green;font-weight:bold;">YES</span>' : '<span style="color:#ccc;">-</span>';
         
@@ -411,7 +414,6 @@ function renderFieldAvailabilityGrid() {
     const availabilityContainer = document.getElementById("report-availability-content");
     if (!availabilityContainer) return;
 
-    // 1. Setup Filter if not exists
     if (!document.getElementById("avail-filter-controls")) {
         availabilityContainer.innerHTML = \`
             <div id="avail-filter-controls" style="margin-bottom:15px; display:flex; gap:15px; align-items:center; flex-wrap:wrap;">
@@ -429,21 +431,22 @@ function renderFieldAvailabilityGrid() {
             </div>
             <div id="avail-grid-wrapper"></div>
         \`;
-        document.getElementById("avail-type-filter").onchange = renderFieldAvailabilityGrid;
+        const filter = document.getElementById("avail-type-filter");
+        if(filter) filter.onchange = renderFieldAvailabilityGrid;
     }
     
     const gridWrapper = document.getElementById("avail-grid-wrapper");
-    gridWrapper.innerHTML = "";
+    if (gridWrapper) gridWrapper.innerHTML = "";
     
-    const filterType = document.getElementById("avail-type-filter").value; 
+    const filterEl = document.getElementById("avail-type-filter");
+    const filterType = filterEl ? filterEl.value : "all";
 
-    // 2. Load Data
     const dailyData = window.loadCurrentDailyData?.() || {};
     const scheduleAssignments = dailyData.scheduleAssignments || {};
     const unifiedTimes = window.unifiedTimes || dailyData.unifiedTimes || [];
 
     if (unifiedTimes.length === 0) {
-        gridWrapper.innerHTML = \`<p class="report-muted" style="padding:20px; background:#f0f0f0; text-align:center;">No schedule generated yet.</p>\`;
+        if(gridWrapper) gridWrapper.innerHTML = \`<p class="report-muted" style="padding:20px; background:#f0f0f0; text-align:center;">No schedule generated yet.</p>\`;
         return;
     }
 
@@ -457,21 +460,16 @@ function renderFieldAvailabilityGrid() {
     
     resourcesToShow.sort((a,b) => a.name.localeCompare(b.name));
 
-    // 3. Compile Usage (STRICT & COMPREHENSIVE)
+    // 3. Compile Usage (STRICT)
     const fieldUsageBySlot = {}; 
     
     for (const bunk in scheduleAssignments) {
         const schedule = scheduleAssignments[bunk] || [];
         for (let i = 0; i < schedule.length; i++) {
             const entry = schedule[i];
+            // Count ANY entry that occupies a resource
             if (entry) {
                 const fieldName = fieldLabel(entry.field);
-                
-                // Check for ANY valid usage. 
-                // We deliberately exclude 'Free', 'No Field', 'No Game'.
-                // 'Unassigned League' typically implies the league slot exists but no field is taken yet? 
-                // Actually, unassigned leagues don't consume a field resource, so they shouldn't block.
-                
                 if (fieldName && 
                     fieldName !== "Free" && 
                     fieldName !== "No Field" && 
@@ -485,7 +483,6 @@ function renderFieldAvailabilityGrid() {
         }
     }
 
-    // 4. Compile Properties
     const fieldProperties = {};
     resourcesToShow.forEach(f => {
         fieldProperties[f.name] = {
@@ -494,8 +491,6 @@ function renderFieldAvailabilityGrid() {
         };
     });
 
-    // 5. Build Grid
-    // Use inline styles for availability to ensure color visibility even if CSS fails
     const styleCheck = "font-size:1.2em; color:#2e7d32; font-weight:900; background-color:#e8f5e9;";
     const styleX = "font-size:1.2em; color:#c62828; font-weight:700; background-color:#ffebee;";
     const styleXClosed = "font-size:1.2em; color:#b71c1c; font-weight:700; background-color:#ffcdd2;";
@@ -510,13 +505,10 @@ function renderFieldAvailabilityGrid() {
     unifiedTimes.forEach((slot, i) => {
         let timeLabel = "Invalid Time";
         try {
-            // Robust date parsing
             let d = new Date(slot.start);
             if(isNaN(d.getTime())) {
-                 // Try basic string parse if unifiedTimes came raw from JSON
                  d = new Date();
-                 const [h,m] = String(slot.start).split(":"); // Fallback if string "09:00"
-                 // This fallback is rarely needed if scheduler logic works, but prevents crash
+                 const [h,m] = String(slot.start).split(":");
             }
             
             let h = d.getHours(), m = d.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; 
@@ -544,7 +536,7 @@ function renderFieldAvailabilityGrid() {
     });
     
     tableHtml += \`</tbody></table></div>\`;
-    gridWrapper.innerHTML = tableHtml;
+    if(gridWrapper) gridWrapper.innerHTML = tableHtml;
 }
 
 
