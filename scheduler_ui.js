@@ -455,57 +455,71 @@ function renderStaggeredView(container) {
       tr.appendChild(tdTime);
 
       // Activity cells
-      if (
-  eventBlock.event.startsWith("League Game") ||
-  eventBlock.event.startsWith("Specialty League")
-) {
-  const tdLeague = document.createElement("td");
-  tdLeague.colSpan = bunks.length;
-  tdLeague.style.verticalAlign = "top";
-  tdLeague.style.textAlign = "left";
-  tdLeague.style.padding = "5px 8px";
-  tdLeague.style.background = "#f0f8f0";
+           if (
+        eventBlock.event.startsWith("League Game") ||
+        eventBlock.event.startsWith("Specialty League")
+      ) {
+        const tdLeague = document.createElement("td");
+        tdLeague.colSpan = bunks.length;
+        tdLeague.style.verticalAlign = "top";
+        tdLeague.style.textAlign = "left";
+        tdLeague.style.padding = "5px 8px";
+        tdLeague.style.background = "#f0f8f0";
 
-  const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
-  let allMatchups = [];
+        // --- NEW: use the same range logic as the core ---
+        const slotIndices = findSlotsForRange(eventBlock.startMin, eventBlock.endMin);
+        let allMatchups = [];
 
-  // 1) Try to read _allMatchups from ANY bunk
-  if (bunks.length > 0 && firstSlotIndex >= 0) {
-    for (const bunk of bunks) {
-      const entry = getEntry(bunk, firstSlotIndex);
-      if (entry && Array.isArray(entry._allMatchups) && entry._allMatchups.length > 0) {
-        allMatchups = entry._allMatchups;
-        break;
-      }
-    }
-  }
+        // 1) Try to read _allMatchups from ANY bunk, ANY slot in this block
+        if (bunks.length > 0 && slotIndices.length > 0) {
+          outerLoop:
+          for (const slotIndex of slotIndices) {
+            for (const bunk of bunks) {
+              const entry = getEntry(bunk, slotIndex);
+              if (
+                entry &&
+                Array.isArray(entry._allMatchups) &&
+                entry._allMatchups.length > 0
+              ) {
+                allMatchups = entry._allMatchups;
+                break outerLoop;
+              }
+            }
+          }
+        }
 
-  // 2) If missing, rebuild from each bunk’s entry.sport (the actual matchup label)
-  if (allMatchups.length === 0 && bunks.length > 0 && firstSlotIndex >= 0) {
-    const matchupSet = new Set();
-    for (const bunk of bunks) {
-      const entry = getEntry(bunk, firstSlotIndex);
-      if (entry && entry._h2h && entry.sport) {
-        matchupSet.add(entry.sport);
-      }
-    }
-    allMatchups = Array.from(matchupSet);
-  }
+        // 2) If still missing, rebuild from each bunk's entry.sport
+        if (allMatchups.length === 0 && bunks.length > 0 && slotIndices.length > 0) {
+          const matchupSet = new Set();
+          for (const slotIndex of slotIndices) {
+            for (const bunk of bunks) {
+              const entry = getEntry(bunk, slotIndex);
+              if (entry && entry._h2h && entry.sport) {
+                matchupSet.add(entry.sport); // full “1 vs 2 (Sport) @ Field” label
+              }
+            }
+          }
+          allMatchups = Array.from(matchupSet);
+        }
 
-  // 3) Render it
-  let html = "";
-  if (allMatchups.length === 0) {
-    html = `<p class="muted" style="margin:0; padding:4px;">${eventBlock.event}</p>`;
-  } else {
-    html = `<p style="margin:2px 0 5px 4px; font-weight:bold;">${eventBlock.event}</p>`;
-    html += '<ul style="margin:0; padding-left:18px;">';
-    allMatchups.forEach(label => html += `<li>${label}</li>`);
-    html += '</ul>';
-  }
+        // 3) Render it
+        let html = "";
+        if (allMatchups.length === 0) {
+          // No matchups found at all; show just the label
+          html = `<p class="muted" style="margin:0; padding:4px;">${eventBlock.event}</p>`;
+        } else {
+          html = `<p style="margin:2px 0 5px 4px; font-weight:bold;">${eventBlock.event}</p>`;
+          html += '<ul style="margin:0; padding-left:18px;">';
+          allMatchups.forEach((label) => {
+            html += `<li>${label}</li>`;
+          });
+          html += "</ul>";
+        }
 
-  tdLeague.innerHTML = html;
-  tr.appendChild(tdLeague);
- } else {
+        tdLeague.innerHTML = html;
+        tr.appendChild(tdLeague);
+      } else {
+
         // REGULAR / DISMISSAL / SNACKS / CUSTOM PINS / GENERATED / SPLIT
         const rawName = eventBlock.event || "";
         const nameLc = rawName.toLowerCase();
