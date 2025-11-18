@@ -1,30 +1,25 @@
-// =================================================================
+{
+type: "uploaded file",
+fileName: "yisrose35/daily-camp-schedular/daily-camp-schedular-a06297415476e09773a64453edeaba22e822d2fb/analytics.js",
+fullContent: `// =================================================================
 // analytics.js
 //
-// --- UPDATED (MAJOR REFACTOR) ---
-// - Renamed "Rotation Report" to "Report".
-// - `initRotationReport` is now `initReportTab`.
-// - `initReportTab` creates a dropdown to select one of two reports:
-//   1. "Bunk Rotation Report" (the original report).
-//   2. "Field Availability Grid" (the new report).
-// - Both reports are hidden by default, per your request.
+// --- UPDATED (BOLSTERED REPORTING) ---
+// 1. Field Availability Grid:
+//    - STRICT RULE applied: If usage > 0, it is 'X'.
+//    - '✓' only appears if the slot is completely empty.
+//    - Added filters (All / Fields / Specials).
 //
-// - **NEW:** `renderBunkRotationUI` contains the UI logic for
-//   the original rotation report.
-// - **NEW:** `renderFieldAvailabilityGrid` builds the new
-//   grid you specified, showing `✓` (Available) or `X` (Used/Unavailable).
-//
-// --- BUG FIX (11/12) ---
-// - Re-added `let reportContainer = null;` to the global
-//   variables. Its omission caused a ReferenceError in strict mode.
-// - Copied helper functions from other files to support
-//   the new availability grid.
+// 2. Bunk Rotation Report:
+//    - Added "Scheduled Today" column.
+//    - Better sorting (Least recently used at the top).
+//    - Visual improvements.
 // =================================================================
 
 (function() {
 'use strict';
 
-// --- Copied Helpers (needed for Field Availability) ---
+// --- Helpers ---
 function parseTimeToMinutes(str) {
   if (!str || typeof str !== "string") return null;
   let s = str.trim().toLowerCase();
@@ -33,10 +28,10 @@ function parseTimeToMinutes(str) {
     mer = s.endsWith("am") ? "am" : "pm";
     s = s.replace(/am|pm/g, "").trim();
   } else {
-    return null; // REQUIRE am/pm
+    return null;
   }
   
-  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+  const m = s.match(/^(\\d{1,2})\\s*:\\s*(\\d{2})$/);
   if (!m) return null;
   let hh = parseInt(m[1], 10);
   const mm = parseInt(m[2], 10);
@@ -54,13 +49,7 @@ function fieldLabel(f) {
     return "";
 }
 
-/**
- * Checks if a field is available for a specific time slot,
- * respecting the new timeRules array.
- * (Copied from scheduler_logic_fillers.js)
- */
 function isTimeAvailable(slotIndex, fieldProps) {
-    // Use 30 mins as a fallback for window.INCREMENT_MINS
     const INCREMENT_MINS = window.INCREMENT_MINS || 30;
 
     if (!window.unifiedTimes || !window.unifiedTimes[slotIndex]) return false;
@@ -71,13 +60,8 @@ function isTimeAvailable(slotIndex, fieldProps) {
     
     const rules = fieldProps.timeRules || [];
     
-    if (rules.length === 0) {
-        return fieldProps.available;
-    }
-    
-    if (!fieldProps.available) {
-        return false;
-    }
+    if (rules.length === 0) return fieldProps.available;
+    if (!fieldProps.available) return false;
 
     const hasAvailableRules = rules.some(r => r.type === 'Available');
     let isAvailable = !hasAvailableRules;
@@ -110,47 +94,43 @@ function isTimeAvailable(slotIndex, fieldProps) {
     
     return isAvailable;
 }
-// --- End of Copied Helpers ---
 
-
+// --- Globals for this module ---
 let container = null;
-let allActivities = []; // For Bunk Report
+let allActivities = []; 
 let divisions = {};
 let availableDivisions = [];
 
-// Keep track of DOM elements
 let divisionSelect = null;
 let bunkSelect = null;
-let reportContainer = null; // <-- **THE FIX: Re-added this line**
+let reportContainer = null;
+let availabilityFilterSelect = null;
 
 /**
- * --- NEW: Main entry point, called by index.html tab click ---
+ * Main entry point
  */
 function initReportTab() {
     container = document.getElementById("report-content");
     if (!container) return;
 
-    // 1. Build the new navigation UI
-    container.innerHTML = `
-        <div class="league-nav"> <label for="report-view-select">Select Report:</label>
+    container.innerHTML = \`
+        <div class="league-nav" style="background: #e3f2fd; border-color: #90caf9;"> 
+            <label for="report-view-select" style="color: #1565c0;">Select Report:</label>
             <select id="report-view-select">
-                <option value="">-- Select View --</option>
-                <option value="rotation">Bunk Rotation Report</option>
                 <option value="availability">Field Availability Grid</option>
+                <option value="rotation">Bunk Rotation Report</option>
             </select>
         </div>
         
-        <div id="report-rotation-content" class="league-content-pane">
-            </div>
-        <div id="report-availability-content" class="league-content-pane">
-            </div>
-    `;
+        <div id="report-availability-content" class="league-content-pane active"></div>
+        <div id="report-rotation-content" class="league-content-pane"></div>
+    \`;
 
-    // 2. Render the (hidden) content for both panes
-    renderBunkRotationUI();
+    // Initial Render
     renderFieldAvailabilityGrid();
+    renderBunkRotationUI();
 
-    // 3. Hook up the dropdown
+    // Tab Switcher Logic
     document.getElementById("report-view-select").onchange = (e) => {
         const selected = e.target.value;
         const rotationPane = document.getElementById("report-rotation-content");
@@ -159,43 +139,38 @@ function initReportTab() {
         if (selected === 'rotation') {
             rotationPane.classList.add("active");
             availabilityPane.classList.remove("active");
-        } else if (selected === 'availability') {
-            rotationPane.classList.remove("active");
-            availabilityPane.classList.add("active");
+            // Refresh rotation data when tab is opened
+            const currentDiv = divisionSelect ? divisionSelect.value : "";
+            if(currentDiv) onDivisionSelect(); 
         } else {
             rotationPane.classList.remove("active");
-            availabilityPane.classList.remove("active");
+            availabilityPane.classList.add("active");
+            renderFieldAvailabilityGrid(); // Refresh grid when tab is opened
         }
     };
 }
 
 // =================================================================
-// --- 1. BUNK ROTATION REPORT (Original Report) ---
+// --- 1. BUNK ROTATION REPORT ---
 // =================================================================
 
-/**
- * --- NEW: Renders the Bunk Rotation Report UI ---
- * (This is the old initRotationReport, refactored)
- */
 function renderBunkRotationUI() {
     const rotationContainer = document.getElementById("report-rotation-content");
     if (!rotationContainer) return;
 
-    // 1. Load the data we need
     loadMasterData();
     
-    // 2. Build the UI
-    rotationContainer.innerHTML = `
+    rotationContainer.innerHTML = \`
         <h2 class="report-title">Bunk Rotation Report</h2>
-        <p>See how many times each bunk has done a "regular" (non-league, non-pinned) activity in the past 7 days.</p>
+        <p>Analyze activity frequency over the last 7 days + today's schedule.</p>
         
         <div class="report-controls">
             <div>
-                <label for="report-division-select">1. Select a Division:</label>
+                <label for="report-division-select">Division:</label>
                 <select id="report-division-select" class="report-select"></select>
             </div>
             <div>
-                <label for="report-bunk-select">2. Select a Bunk (Optional):</label>
+                <label for="report-bunk-select">Bunk (Optional):</label>
                 <select id="report-bunk-select" class="report-select" disabled></select>
             </div>
         </div>
@@ -203,65 +178,51 @@ function renderBunkRotationUI() {
         <div id="report-table-container" class="report-container">
             <p class="report-muted">Please select a division to view its report.</p>
         </div>
-    `;
+    \`;
     
-    // 3. Get element references
-    // These assign to the global variables declared at the top
     divisionSelect = document.getElementById("report-division-select");
     bunkSelect = document.getElementById("report-bunk-select");
-    reportContainer = document.getElementById("report-table-container"); // This is the inner container
+    reportContainer = document.getElementById("report-table-container");
 
-    // 4. Populate the division dropdown
     let divOptions = '<option value="">-- Select a division --</option>';
     availableDivisions.forEach(divName => {
-        divOptions += `<option value="${divName}">${divName}</option>`;
+        divOptions += \`<option value="\${divName}">\${divName}</option>\`;
     });
     divisionSelect.innerHTML = divOptions;
     
-    // 5. Hook up event listeners
     divisionSelect.onchange = onDivisionSelect;
     bunkSelect.onchange = onBunkSelect;
 }
 
-/**
- * Loads the master list of all bunks and activities
- */
 function loadMasterData() {
     const app1Data = window.loadGlobalSettings?.().app1 || {};
-    
-    // Get division and bunk structure
     divisions = window.divisions || {};
     availableDivisions = (window.availableDivisions || []).sort();
     
-    // Get all activities (fields + specials)
     const fields = app1Data.fields || [];
     const specials = app1Data.specialActivities || [];
     
-    // We only care about sports/activities that can be *in* a rotation
     const sportActivities = fields.flatMap(f => f.activities || []);
     const specialActivities = specials.map(s => s.name);
     
     allActivities = Array.from(new Set([...sportActivities, ...specialActivities])).sort();
 }
 
-/**
- * Handles when the user selects a division.
- */
 function onDivisionSelect() {
     const divName = divisionSelect.value;
-    reportContainer.innerHTML = ""; // Clear old report
+    reportContainer.innerHTML = "";
     
     if (!divName) {
         bunkSelect.innerHTML = "";
         bunkSelect.disabled = true;
-        reportContainer.innerHTML = `<p class="report-muted">Please select a division to view its report.</p>`;
+        reportContainer.innerHTML = \`<p class="report-muted">Please select a division.</p>\`;
         return;
     }
     
     const bunksInDiv = (divisions[divName]?.bunks || []).sort();
-    let bunkOptions = `<option value="">--- Show All ${divName} Bunks ---</option>`;
+    let bunkOptions = \`<option value="">--- Show All \${divName} Bunks ---</option>\`;
     bunksInDiv.forEach(bunk => {
-        bunkOptions += `<option value="${bunk}">${bunk}</option>`;
+        bunkOptions += \`<option value="\${bunk}">\${bunk}</option>\`;
     });
     bunkSelect.innerHTML = bunkOptions;
     bunkSelect.disabled = false;
@@ -269,9 +230,6 @@ function onDivisionSelect() {
     renderDivisionReport(divName, bunksInDiv);
 }
 
-/**
- * Handles when the user selects a specific bunk.
- */
 function onBunkSelect() {
     const bunkName = bunkSelect.value;
     const divName = divisionSelect.value;
@@ -284,51 +242,49 @@ function onBunkSelect() {
     }
 }
 
-/**
- * Renders a report for ALL bunks in a division.
- */
 function renderDivisionReport(divName, bunks) {
-    reportContainer.innerHTML = ""; // Clear container
-    
+    reportContainer.innerHTML = "";
     if (bunks.length === 0) {
-        reportContainer.innerHTML = `<p class="report-muted">No bunks found in ${divName}.</p>`;
+        reportContainer.innerHTML = \`<p class="report-muted">No bunks found in \${divName}.</p>\`;
         return;
     }
-    
     const history = window.loadScheduleHistory(7);
-
     bunks.forEach(bunkName => {
         const bunkHeader = document.createElement('h3');
         bunkHeader.textContent = bunkName;
         bunkHeader.className = "report-bunk-header";
-        
         const tableDiv = document.createElement('div');
         tableDiv.className = "report-bunk-table-wrapper";
-        
         reportContainer.appendChild(bunkHeader);
         reportContainer.appendChild(tableDiv);
-        
         renderBunkReport(bunkName, tableDiv, false, history);
     });
 }
 
-
-/**
- * Renders the report table for a SINGLE bunk.
- */
 function renderBunkReport(bunkName, targetContainer, clearContainer = true, preloadedHistory = null) {
     if (clearContainer) {
-        targetContainer.innerHTML = `<p class="report-loading">Loading report for ${bunkName}...</p>`;
+        targetContainer.innerHTML = \`<p class="report-loading">Loading...</p>\`;
     }
 
     const history = preloadedHistory || window.loadScheduleHistory(7);
     const historyDays = Object.keys(history).sort().reverse();
     
+    // 1. Get Today's Schedule
+    const todaySchedule = window.scheduleAssignments?.[bunkName] || [];
+    const todayActivities = new Set();
+    todaySchedule.forEach(entry => {
+        if(entry && entry._activity && !entry._h2h && !entry._fixed) {
+             todayActivities.add(entry._activity);
+        }
+    });
+
+    // 2. Build Stats
     const report = {};
     allActivities.forEach(act => {
         report[act] = {
             count: 0,
-            lastDone: "7+ days ago"
+            lastDone: "7+ days ago",
+            isToday: todayActivities.has(act)
         };
     });
 
@@ -339,9 +295,7 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
 
         daySchedule.forEach(entry => {
             if (!entry) return;
-            if (entry._h2h || entry._fixed || !entry.sport) {
-                return;
-            }
+            if (entry._h2h || entry._fixed || !entry.sport) return;
             
             let activityName = entry._activity;
             if (!activityName) {
@@ -351,55 +305,59 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
             
             if (activityName && report[activityName]) {
                 report[activityName].count++;
-                
                 if (report[activityName].lastDone === "7+ days ago") {
-                    report[activityName].lastDone = (daysAgo === 1) ? "1 day ago" : `${daysAgo} days ago`;
+                    report[activityName].lastDone = (daysAgo === 1) ? "1 day ago" : \`\${daysAgo} days ago\`;
                 }
             }
         });
     }
     
-    let tableHtml = `
+    let tableHtml = \`
         <table class="report-table">
             <thead>
                 <tr>
                     <th>Activity</th>
-                    <th>Times (Last 7 Days)</th>
+                    <th>Scheduled Today?</th>
+                    <th>Count (Last 7 Days)</th>
                     <th>Last Done</th>
                 </tr>
             </thead>
             <tbody>
-    `;
+    \`;
     
+    // Sort: Today -> Count (ascending) -> Alphabetical
     const sortedActivities = allActivities.sort((a, b) => {
-        if (report[a].count !== report[b].count) {
-            return report[a].count - report[b].count; 
-        }
+        const rA = report[a];
+        const rB = report[b];
+
+        if (rA.isToday !== rB.isToday) return rB.isToday - rA.isToday; // True first
+        if (rA.count !== rB.count) return rA.count - rB.count; // Low count first
         return a.localeCompare(b); 
     });
     
     sortedActivities.forEach(actName => {
         const data = report[actName];
-        const isFresh = data.count === 0;
-        const rowClass = isFresh ? "report-row-fresh" : "";
+        // Highlight if fresh (0 count) and NOT scheduled today
+        const isNeed = data.count === 0 && !data.isToday;
+        const rowClass = isNeed ? "report-row-fresh" : "";
         
-        tableHtml += `
-            <tr class="${rowClass}">
-                <td>${actName} ${isFresh ? '🌟' : ''}</td>
-                <td>${data.count}</td>
-                <td>${data.lastDone}</td>
+        const checkMark = data.isToday ? '<span style="color:green;font-weight:bold;">YES</span>' : '<span style="color:#ccc;">-</span>';
+
+        tableHtml += \`
+            <tr class="\${rowClass}">
+                <td>\${actName}</td>
+                <td style="text-align:center;">\${checkMark}</td>
+                <td>\${data.count}</td>
+                <td>\${data.lastDone}</td>
             </tr>
-        `;
+        \`;
     });
     
-    tableHtml += `</tbody></table>`;
+    tableHtml += \`</tbody></table>\`;
     targetContainer.innerHTML = tableHtml;
 }
 
 
-/**
- * Helper: Loads the last N days of schedule data for analysis
- */
 window.loadScheduleHistory = function(daysToLoad) {
     const allData = window.loadAllDailyData?.() || {};
     const today = new Date(window.currentScheduleDate);
@@ -412,7 +370,7 @@ window.loadScheduleHistory = function(daysToLoad) {
         const y = d.getFullYear();
         const m = String(d.getMonth() + 1).padStart(2, '0');
         const dayStr = String(d.getDate()).padStart(2, '0');
-        const dateKey = `${y}-${m}-${dayStr}`;
+        const dateKey = \`\${y}-\${m}-\${dayStr}\`;
         
         if (allData[dateKey] && allData[dateKey].scheduleAssignments) {
             history[dateKey] = allData[dateKey].scheduleAssignments;
@@ -422,43 +380,65 @@ window.loadScheduleHistory = function(daysToLoad) {
 }
 
 // =================================================================
-// --- 2. FIELD AVAILABILITY GRID (New Report) ---
+// --- 2. FIELD AVAILABILITY GRID (BOLSTERED) ---
 // =================================================================
 
-/**
- * --- NEW: Renders the Field Availability Grid ---
- */
 function renderFieldAvailabilityGrid() {
     const availabilityContainer = document.getElementById("report-availability-content");
     if (!availabilityContainer) return;
 
-    availabilityContainer.innerHTML = ""; // Clear
+    // 1. Setup Filter if not exists
+    if (!document.getElementById("avail-filter-controls")) {
+        availabilityContainer.innerHTML = \`
+            <div id="avail-filter-controls" style="margin-bottom:15px; display:flex; gap:15px; align-items:center;">
+                <h2 class="report-title" style="margin:0; border:none;">Field Availability</h2>
+                <select id="avail-type-filter" style="padding:5px; font-size:1rem;">
+                    <option value="all">Show All Resources</option>
+                    <option value="field">Fields Only</option>
+                    <option value="special">Special Activities Only</option>
+                </select>
+            </div>
+            <p><strong>Key:</strong> <span class="avail-check">✓</span> = Completely Empty (30min). <span class="avail-x">X</span> = In use by at least 1 bunk OR Closed.</p>
+            <div id="avail-grid-wrapper"></div>
+        \`;
+        document.getElementById("avail-type-filter").onchange = renderFieldAvailabilityGrid;
+    }
     
-    // 1. Load Data
+    const gridWrapper = document.getElementById("avail-grid-wrapper");
+    gridWrapper.innerHTML = "";
+    
+    const filterType = document.getElementById("avail-type-filter").value; // 'all', 'field', 'special'
+
+    // 2. Load Data
     const dailyData = window.loadCurrentDailyData?.() || {};
     const scheduleAssignments = dailyData.scheduleAssignments || {};
-    // **Use the unifiedTimes from the *window* object, not dailyData**
-    // This allows the check to work even if the schedule isn't saved yet
     const unifiedTimes = window.unifiedTimes || dailyData.unifiedTimes || [];
 
     if (unifiedTimes.length === 0) {
-        availabilityContainer.innerHTML = `<p class="report-muted">No schedule has been generated for this day. Please go to the "Daily Adjustments" tab and click "Run Optimizer" first.</p>`;
+        gridWrapper.innerHTML = \`<p class="report-muted">No schedule generated yet.</p>\`;
         return;
     }
 
     const app1Data = window.loadGlobalSettings?.().app1 || {};
-    const allFields = app1Data.fields || [];
-    const allSpecials = app1Data.specialActivities || [];
-    const allResources = [...allFields, ...allSpecials].sort((a,b) => a.name.localeCompare(b.name));
+    const allFields = (app1Data.fields || []).map(f => ({...f, type: 'field'}));
+    const allSpecials = (app1Data.specialActivities || []).map(s => ({...s, type: 'special'}));
+    
+    // Filter Resources
+    let resourcesToShow = [...allFields, ...allSpecials];
+    if (filterType === 'field') resourcesToShow = allFields;
+    if (filterType === 'special') resourcesToShow = allSpecials;
+    
+    resourcesToShow.sort((a,b) => a.name.localeCompare(b.name));
 
-    // 2. Compile Field Usage
-    const fieldUsageBySlot = {}; // { slotIndex: { fieldName: count } }
+    // 3. Compile Usage
+    const fieldUsageBySlot = {}; 
     for (const bunk in scheduleAssignments) {
         const schedule = scheduleAssignments[bunk] || [];
         for (let i = 0; i < schedule.length; i++) {
             const entry = schedule[i];
-            // We only count non-continuing, non-fixed, non-league entries
-            if (entry && !entry.continuation && !entry._fixed && !entry._h2h) {
+            // Count EVERYTHING except pure 'Free' slots.
+            // Even pinned items, leagues, etc count as usage.
+            if (entry && !entry.continuation) {
                 const fieldName = fieldLabel(entry.field);
                 if (fieldName && fieldName !== "Free" && fieldName !== "No Field") {
                     fieldUsageBySlot[i] = fieldUsageBySlot[i] || {};
@@ -468,66 +448,58 @@ function renderFieldAvailabilityGrid() {
         }
     }
 
-    // 3. Compile Field Properties
+    // 4. Compile Properties
     const fieldProperties = {};
-    allResources.forEach(f => {
-        // Use the rules from the object directly.
-        // The isTimeAvailable function will parse them.
+    resourcesToShow.forEach(f => {
         fieldProperties[f.name] = {
             available: f.available !== false,
-            sharable: f.sharableWith?.type === 'all' || f.sharableWith?.type === 'custom',
-            timeRules: f.timeRules || [] // Pass the raw rules
+            timeRules: f.timeRules || []
         };
     });
 
-    // 4. Build the Grid
-    let tableHtml = `<h2 class="report-title">Field & Activity Availability</h2>`;
-    tableHtml += `<p>This grid shows the real-time availability of all fields and special activities for the <b>${window.currentScheduleDate}</b> schedule. It accounts for time rules and schedule capacity.</p>`
-    tableHtml += `<div class="schedule-view-wrapper"> `;
-    tableHtml += `<table class="availability-grid"><thead><tr><th>Time</th>`;
+    // 5. Build Grid
+    let tableHtml = \`<div class="schedule-view-wrapper"><table class="availability-grid"><thead><tr><th>Time</th>\`;
     
-    allResources.forEach(r => {
-        tableHtml += `<th>${r.name}</th>`;
+    resourcesToShow.forEach(r => {
+        tableHtml += \`<th>\${r.name}</th>\`;
     });
-    tableHtml += `</tr></thead><tbody>`;
+    tableHtml += \`</tr></thead><tbody>\`;
 
     unifiedTimes.forEach((slot, i) => {
-        // Re-create the label just in case it's missing
         const start = new Date(slot.start);
         const end = new Date(slot.end);
         let h = start.getHours(), m = start.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12;
-        const startLabel = `${h}:${m} ${ap}`;
-        h = end.getHours(), m = end.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12;
-        const endLabel = `${h}:${m} ${ap}`;
+        const timeLabel = \`\${h}:\${m} \${ap}\`;
         
-        const timeLabel = slot.label || `${startLabel} - ${endLabel}`;
-        tableHtml += `<tr><td>${timeLabel}</td>`;
+        tableHtml += \`<tr><td>\${timeLabel}</td>\`;
 
-        allResources.forEach(r => {
+        resourcesToShow.forEach(r => {
             const props = fieldProperties[r.name];
-            const limit = props.sharable ? 2 : 1;
-            const used = fieldUsageBySlot[i]?.[r.name] || 0;
-            
-            // Pass the index `i` and the pre-compiled props
+            const usedCount = fieldUsageBySlot[i]?.[r.name] || 0;
             const timeAvail = isTimeAvailable(i, props);
             
+            // --- STRICT LOGIC ---
             if (!timeAvail) {
-                tableHtml += `<td class="avail-x" title="${r.name} is unavailable at this time due to a time rule.">X</td>`; // Unavailable by time rule
-            } else if (used >= limit) {
-                tableHtml += `<td class="avail-x" title="${r.name} is in use. (Used: ${used}, Limit: ${limit})">X</td>`; // Used to capacity
+                // Closed by rule
+                tableHtml += \`<td class="avail-x" style="background:#fce4ec;" title="Closed by Time Rule">X</td>\`;
+            } else if (usedCount > 0) {
+                // Used by ANYONE (even 1 bunk) -> X
+                tableHtml += \`<td class="avail-x" title="Occupied by \${usedCount} bunk(s)">X</td>\`;
             } else {
-                tableHtml += `<td class="avail-check" title="${r.name} is available. (Used: ${used}, Limit: ${limit})">✓</td>`; // Available
+                // Completely empty -> Check
+                tableHtml += \`<td class="avail-check" title="Available">✓</td>\`;
             }
         });
-        tableHtml += `</tr>`;
+        tableHtml += \`</tr>\`;
     });
     
-    tableHtml += `</tbody></table></div>`;
-    availabilityContainer.innerHTML = tableHtml;
+    tableHtml += \`</tbody></table></div>\`;
+    gridWrapper.innerHTML = tableHtml;
 }
 
 
-// Expose the new init function
 window.initReportTab = initReportTab;
 
 })();
+`
+}
