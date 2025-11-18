@@ -1,30 +1,14 @@
 // ============================================================================
 // scheduler_logic_core.js
 //
-// "SUPERCOMPUTER" / "QUANTUM-ISH" LEAGUE SCHEDULER + SMART GRID
-// - Global unified time grid
-// - Bunk-specific overrides
-// - Pinned / split / slot skeleton handling
-// - League mirroring across divisions
-// - Quantum-ish multi-criteria sport optimizer for leagues
-// - Specialty League pass
-// - Smart filler for remaining blocks
-// - Rotation history (bunks + leagues + per-team sport counts)
-// - Strong time-rule enforcement (Available/Unavailable windows)
-// - No fake fields when nothing is actually available
-// ---
-// UPDATED (Sharing Fix):
-// - 'markFieldUsage' and 'fillBlock' now store the activity a bunk is doing.
-// - 'canBlockFit' now checks if a 'proposedActivity' matches the
-//   'existingActivity' on a shared field, enforcing same-activity rule.
+// ... (previous changelog) ...
 //
-// UPDATED (Specialty League Fix):
-// - PASS 3.5 (Specialty Leagues) was incorrectly checking fields against
-//   activityProperties (the main fields list), causing "No Field" errors.
-// - REPLACED 'canLeagueGameFit' check with a simple, inline check
-//   that only verifies the field isn't already in use.
-// - FIXED 6 instances where the generic 'sport' variable was used
-//   instead of 'bestSport', which could cause other sports to be scheduled.
+// UPDATED (League Fallback Fix):
+// - Added a check in PASS 4. If a 'League Game' or 'Specialty League'
+//   block "falls through" (due to missing teams/fields), it is now
+//   assigned as 'Unassigned League' instead of being incorrectly
+//   filled by the general activity finder. This prevents random
+//   sports from appearing in league slots.
 // ============================================================================
 
 (function() {
@@ -1163,8 +1147,16 @@ if (normalizeLeague(item.event)) {
 
         let pick = null;
 
+        // --- NEW FIX ---
+        // If a league block falls through (e.g., no teams/fields assigned),
+        // do NOT let it be filled by findBestGeneralActivity.
+        if (block.event === 'League Game' || block.event === 'Specialty League') {
+            pick = { field: "Unassigned League", sport: null, _activity: "Free" };
+        }
+        // --- END NEW FIX ---
+
         // 1) Specific buckets
-        if (block.event === 'Special Activity') {
+        else if (block.event === 'Special Activity') { // --- MODIFIED: added 'else' ---
             pick = window.findBestSpecial?.(
                 block,
                 allActivities,
