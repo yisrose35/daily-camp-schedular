@@ -663,3 +663,33 @@ label.override-checkbox span {
 #begin-btn:hover {
     background: #0056b3;
 }
+/* Add to styles.css */
+
+/* Availability Grid Colors */
+.avail-check {
+  font-size: 1.4em;
+  color: #2e7d32; /* Strong Green */
+  font-weight: 900;
+  background-color: #e8f5e9; /* Light Green Background */
+}
+.avail-x {
+  font-size: 1.2em;
+  color: #c62828; /* Strong Red */
+  font-weight: 700;
+  background-color: #ffebee; /* Light Red Background */
+}
+
+/* Bunk Report Styles */
+.report-row-fresh {
+  background-color: #e3f2fd; /* Light Blue highlight for 'Need to do' */
+}
+.report-row-fresh td {
+    color: #0d47a1;
+    font-weight: 600;
+}
+.report-table th {
+    position: sticky;
+    top: 0;
+    background: #f1f1f1;
+    z-index: 5;
+}
