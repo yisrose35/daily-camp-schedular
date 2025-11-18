@@ -456,40 +456,46 @@ function renderStaggeredView(container) {
 
       // Activity cells
       if (
-        eventBlock.event.startsWith("League Game") ||
-        eventBlock.event.startsWith("Specialty League")
-      ) {
-        // LEAGUE / SPECIALTY: merged cell with mirrored games
-        const tdLeague = document.createElement("td");
-        tdLeague.colSpan = bunks.length;
-        tdLeague.style.verticalAlign = "top";
-        tdLeague.style.textAlign = "left";
-        tdLeague.style.padding = "5px 8px";
-        tdLeague.style.background = "#f0f8f0"; // light green
+  eventBlock.event.startsWith("League Game") ||
+  eventBlock.event.startsWith("Specialty League")
+) {
+  // LEAGUE / SPECIALTY: merged cell with mirrored games
+  const tdLeague = document.createElement("td");
+  tdLeague.colSpan = bunks.length;
+  tdLeague.style.verticalAlign = "top";
+  tdLeague.style.textAlign = "left";
+  tdLeague.style.padding = "5px 8px";
+  tdLeague.style.background = "#f0f8f0"; // light green
 
-        const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
-        let allMatchups = [];
+  const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
+  let allMatchups = [];
 
-        if (bunks.length > 0) {
-          const firstBunkEntry = getEntry(bunks[0], firstSlotIndex);
-          if (firstBunkEntry && firstBunkEntry._allMatchups) {
-            allMatchups = firstBunkEntry._allMatchups;
-          }
-        }
+  // 🔍 NEW: scan all bunks until we find one that has _allMatchups
+  if (bunks.length > 0 && firstSlotIndex >= 0) {
+    for (const bunk of bunks) {
+      const entry = getEntry(bunk, firstSlotIndex);
+      if (entry && Array.isArray(entry._allMatchups) && entry._allMatchups.length > 0) {
+        allMatchups = entry._allMatchups;
+        break;
+      }
+    }
+  }
 
-        let html = "";
-        if (allMatchups.length === 0) {
-          html = `<p class="muted" style="margin:0; padding: 4px;">${eventBlock.event}</p>`;
-        } else {
-          html = `<p style="margin:2px 0 5px 4px; font-weight: bold;">${eventBlock.event}</p>`;
-          html += '<ul style="margin: 0; padding-left: 18px;">';
-          allMatchups.forEach((matchupLabel) => {
-            html += `<li>${matchupLabel}</li>`;
-          });
-          html += "</ul>";
-        }
-        tdLeague.innerHTML = html;
-        tr.appendChild(tdLeague);
+  let html = "";
+  if (allMatchups.length === 0) {
+    // No games actually scheduled in core for this block
+    html = `<p class="muted" style="margin:0; padding: 4px;">${eventBlock.event}</p>`;
+  } else {
+    html = `<p style="margin:2px 0 5px 4px; font-weight: bold;">${eventBlock.event}</p>`;
+    html += '<ul style="margin: 0; padding-left: 18px;">';
+    allMatchups.forEach((matchupLabel) => {
+      html += `<li>${matchupLabel}</li>`;
+    });
+    html += "</ul>";
+  }
+
+  tdLeague.innerHTML = html;
+  tr.appendChild(tdLeague);
       } else {
         // REGULAR / DISMISSAL / SNACKS / CUSTOM PINS / GENERATED / SPLIT
         const rawName = eventBlock.event || "";
