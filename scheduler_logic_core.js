@@ -881,17 +881,6 @@ leagueBlocks.forEach(block => {
 
         // determine a base division for field rules (original logic was here)
         const blockBase = { slots, divName: baseDivName };
-        // determine a base division for field rules
-        let baseDivName = null;
-        {
-            const firstBunk = allBunksInGroup[0];
-            baseDivName = Object.keys(divisions).find(div =>
-                (divisions[div].bunks || []).includes(firstBunk)
-            );
-        }
-        if (!baseDivName) return;
-
-        const blockBase = { slots, divName: baseDivName };
 
         const sports = (league.sports || []).filter(s => fieldsBySport[s]);
         if (sports.length === 0) return;
