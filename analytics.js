@@ -1,16 +1,16 @@
 // =================================================================
 // analytics.js
 //
-// --- UPDATED FOR PARTIAL AVAILABILITY ---
-// 1. Detects if a field becomes free mid-block (e.g., 12:20 in a 12:30 block).
-// 2. Displays "Avail @ HH:MM" if usable time remains.
-// 3. Maintains strict checking for full overlaps.
+// --- UPDATED FOR 2-WAY PARTIAL AVAILABILITY ---
+// 1. "Avail @ HH:MM" -> Field starts blocked, opens later.
+// 2. "Unavail @ HH:MM" -> Field starts free, gets blocked later.
+// 3. MIN_USABLE_MINUTES = 1 (shows all gaps).
 // =================================================================
 
 (function() {
 'use strict';
 
-const MIN_USABLE_MINUTES = 10; // Minimum minutes required to show as "Available"
+const MIN_USABLE_MINUTES = 1; // Threshold to consider a gap "usable"
 
 // --- Helpers ---
 function parseTimeToMinutes(str) {
@@ -22,7 +22,6 @@ function parseTimeToMinutes(str) {
     s = s.replace(/am|pm/g, "").trim();
   } else {
     // Attempt to handle 24h or raw HH:MM if passed without AM/PM
-    // checking purely for HH:MM pattern
   }
   
   // Regex for HH:MM
@@ -440,7 +439,7 @@ function renderFieldAvailabilityGrid() {
                     <strong>Key:</strong> 
                     <span style="color:#2e7d32; background:#e8f5e9; padding:0 4px; font-weight:bold;">✓</span> = Empty. 
                     <span style="color:#c62828; background:#ffebee; padding:0 4px; font-weight:bold;">X</span> = Used/Closed.
-                    <span style="color:#856404; background:#fff3cd; padding:0 4px; font-weight:bold;">Avail @</span> = Partial.
+                    <span style="color:#856404; background:#fff3cd; padding:0 4px; font-weight:bold;">Partial</span> = Partial Avail.
                 </div>
             </div>
             <div id="avail-grid-wrapper"></div>
@@ -476,14 +475,12 @@ function renderFieldAvailabilityGrid() {
     resourcesToShow.sort((a,b) => a.name.localeCompare(b.name));
 
     // 3. Compile Usage (STRICT + TIMED)
-    // Structure: fieldBookingsBySlot[slotIndex][fieldName] = [{start: "HH:MM", end: "HH:MM"}, ...]
     const fieldBookingsBySlot = {}; 
     
     for (const bunk in scheduleAssignments) {
         const schedule = scheduleAssignments[bunk] || [];
         for (let i = 0; i < schedule.length; i++) {
             const entry = schedule[i];
-            // Count ANY entry that occupies a resource
             if (entry) {
                 const fieldName = fieldLabel(entry.field);
                 if (fieldName && 
@@ -495,19 +492,13 @@ function renderFieldAvailabilityGrid() {
                     fieldBookingsBySlot[i] = fieldBookingsBySlot[i] || {};
                     if (!fieldBookingsBySlot[i][fieldName]) fieldBookingsBySlot[i][fieldName] = [];
                     
-                    // Capture specific times if available, else fallback to slot times
-                    // The slot object for index i is unifiedTimes[i]
                     const slotObj = unifiedTimes[i];
                     
                     // IMPORTANT: Use entry.start/end if they exist, otherwise assume full slot
                     let s = entry.start;
                     let e = entry.end;
                     
-                    // Fallback if entry doesn't have explicit times (legacy data)
-                    // We assume it takes the whole slot
                     if (!s && slotObj) s = slotObj.start; 
-                    
-                    // Calculate end based on increment if missing
                     if (!e && s) {
                         const startMin = parseTimeToMinutes(s);
                         e = minutesToTime(startMin + INCREMENT_MINS);
@@ -529,6 +520,7 @@ function renderFieldAvailabilityGrid() {
 
     const styleCheck = "font-size:1.2em; color:#2e7d32; font-weight:900; background-color:#e8f5e9;";
     const styleX = "font-size:1.2em; color:#c62828; font-weight:700; background-color:#ffebee;";
+    // Partial style used for both "Avail @" and "Unavail @"
     const stylePartial = "font-size:0.75em; color:#856404; font-weight:700; background-color:#fff3cd; white-space:nowrap;";
     const styleXClosed = "font-size:1.2em; color:#b71c1c; font-weight:700; background-color:#ffcdd2;";
 
@@ -547,7 +539,6 @@ function renderFieldAvailabilityGrid() {
         try {
             let d = new Date(slot.start);
             if(isNaN(d.getTime())) {
-                 // handle string "12:00" format if Date fails
                  const parts = String(slot.start).split(":");
                  d = new Date();
                  d.setHours(parts[0], parts[1], 0);
@@ -570,58 +561,89 @@ function renderFieldAvailabilityGrid() {
             const bookings = fieldBookingsBySlot[i]?.[r.name] || [];
             const timeAvail = isTimeAvailable(i, props);
             
-            // --- RENDER LOGIC ---
             if (!timeAvail) {
-                // CLOSED BY RULE
                 tableHtml += `<td style="${styleXClosed}; border:1px solid #999; text-align:center;" title="Closed by Time Rule">X</td>`;
             } 
             else if (bookings.length === 0) {
-                // COMPLETELY EMPTY
                 tableHtml += `<td style="${styleCheck}; border:1px solid #999; text-align:center;" title="Available">✓</td>`;
             } 
             else {
-                // IT HAS BOOKINGS - CHECK IF FULLY BLOCKED OR PARTIAL
-                
-                // Find the latest time occupied within this block
-                // We start assuming the block is free from slotStartMin
-                let maxBlockedUntil = slotStartMin;
-                let fullBlock = false;
+                // Sort bookings by start time to determine timeline
+                bookings.sort((a, b) => parseTimeToMinutes(a.start) - parseTimeToMinutes(b.start));
 
+                // Analysis Variables
+                let isStartBlocked = false;
+                let maxBlockedUntil = slotStartMin; 
+                let earliestConflictStart = slotEndMin;
+
+                // 1. Analyze the block
                 bookings.forEach(b => {
                     const bStart = parseTimeToMinutes(b.start);
                     const bEnd = parseTimeToMinutes(b.end);
                     
                     if (bStart !== null && bEnd !== null) {
-                         // If booking covers entire slot (or more)
-                         if (bStart <= slotStartMin && bEnd >= slotEndMin) {
-                             fullBlock = true;
+                         // Does this booking cover the very start of the slot?
+                         if (bStart <= slotStartMin && bEnd > slotStartMin) {
+                             isStartBlocked = true;
+                             if (bEnd > maxBlockedUntil) maxBlockedUntil = bEnd;
                          }
-                         // If booking starts before/at start, track how late it goes
-                         else if (bStart <= slotStartMin && bEnd > maxBlockedUntil) {
-                             maxBlockedUntil = bEnd;
+                         
+                         // Track the FIRST time a conflict starts inside the slot (for Unavail @ case)
+                         if (bStart > slotStartMin && bStart < earliestConflictStart) {
+                             earliestConflictStart = bStart;
                          }
-                         // Note: If booking starts *later* in the block (e.g. 12:15-12:30), 
-                         // currently simpler logic just marks X or handles gap at end. 
-                         // For now we focus on "When does it become available?"
-                    } else {
-                        // If time parse fails, assume full block for safety
-                        fullBlock = true;
                     }
                 });
 
-                if (fullBlock || maxBlockedUntil >= slotEndMin) {
-                    // FULLY BLOCKED
-                    tableHtml += `<td style="${styleX}; border:1px solid #999; text-align:center;" title="Occupied">X</td>`;
-                } else {
-                    // PARTIAL? Check remaining time
-                    const remaining = slotEndMin - maxBlockedUntil;
-                    if (remaining < MIN_USABLE_MINUTES) {
-                        // Not enough time left
-                        tableHtml += `<td style="${styleX}; border:1px solid #999; text-align:center;" title="Less than ${MIN_USABLE_MINUTES} mins left">X</td>`;
+                // 2. Determine Display
+                if (isStartBlocked) {
+                    // CASE A: Starts Blocked. 
+                    // We need to see when it frees up.
+                    // Extend maxBlockedUntil if there are overlapping chains (e.g. 12:00-12:10, 12:05-12:15 -> 12:15)
+                    let extended = true;
+                    while(extended) {
+                        extended = false;
+                        bookings.forEach(b => {
+                             const s = parseTimeToMinutes(b.start);
+                             const e = parseTimeToMinutes(b.end);
+                             if (s !== null && e !== null) {
+                                 // If booking starts before current blocked period ends, and extends it
+                                 if (s <= maxBlockedUntil && e > maxBlockedUntil) {
+                                     maxBlockedUntil = e;
+                                     extended = true;
+                                 }
+                             }
+                        });
+                    }
+
+                    if (maxBlockedUntil >= slotEndMin) {
+                        // Fully Blocked
+                        tableHtml += `<td style="${styleX}; border:1px solid #999; text-align:center;" title="Occupied">X</td>`;
                     } else {
-                        // SHOW PARTIAL
-                        const availTimeStr = minutesToTime(maxBlockedUntil);
-                        tableHtml += `<td style="${stylePartial}; border:1px solid #999; text-align:center;" title="Partially Occupied">Avail @ ${availTimeStr}</td>`;
+                        const remaining = slotEndMin - maxBlockedUntil;
+                        if (remaining < MIN_USABLE_MINUTES) {
+                             tableHtml += `<td style="${styleX}; border:1px solid #999; text-align:center;" title="Not enough time left">X</td>`;
+                        } else {
+                             // Partial Available
+                             const tStr = minutesToTime(maxBlockedUntil);
+                             tableHtml += `<td style="${stylePartial}; border:1px solid #999; text-align:center;" title="Opens later">Avail @ ${tStr}</td>`;
+                        }
+                    }
+
+                } else {
+                    // CASE B: Starts Free.
+                    // When does it get blocked?
+                    if (earliestConflictStart >= slotEndMin) {
+                        // Effectively free inside this slot (bookings might be touching edges)
+                        tableHtml += `<td style="${styleCheck}; border:1px solid #999; text-align:center;" title="Available">✓</td>`;
+                    } else {
+                        const usable = earliestConflictStart - slotStartMin;
+                        if (usable < MIN_USABLE_MINUTES) {
+                            tableHtml += `<td style="${styleX}; border:1px solid #999; text-align:center;" title="Not enough time at start">X</td>`;
+                        } else {
+                             const tStr = minutesToTime(earliestConflictStart);
+                             tableHtml += `<td style="${stylePartial}; border:1px solid #999; text-align:center;" title="Closes soon">Unavail @ ${tStr}</td>`;
+                        }
                     }
                 }
             }
