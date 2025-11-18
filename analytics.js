@@ -1,18 +1,16 @@
 // =================================================================
 // analytics.js
 //
-// --- UPDATED (FIXED & BOLSTERED) ---
-// 1. Fixed syntax error preventing tab load.
-// 2. Field Availability Grid:
-//    - STRICT CHECK: Any usage (League, Specialty, Pin) > 0 = X.
-//    - Only completely empty slots = Checkmark.
-//    - Filters added for easier viewing.
-// 3. Bunk Report:
-//    - Added "Scheduled Today?" column.
+// --- UPDATED FOR PARTIAL AVAILABILITY ---
+// 1. Detects if a field becomes free mid-block (e.g., 12:20 in a 12:30 block).
+// 2. Displays "Avail @ HH:MM" if usable time remains.
+// 3. Maintains strict checking for full overlaps.
 // =================================================================
 
 (function() {
 'use strict';
+
+const MIN_USABLE_MINUTES = 10; // Minimum minutes required to show as "Available"
 
 // --- Helpers ---
 function parseTimeToMinutes(str) {
@@ -23,7 +21,8 @@ function parseTimeToMinutes(str) {
     mer = s.endsWith("am") ? "am" : "pm";
     s = s.replace(/am|pm/g, "").trim();
   } else {
-    return null;
+    // Attempt to handle 24h or raw HH:MM if passed without AM/PM
+    // checking purely for HH:MM pattern
   }
   
   // Regex for HH:MM
@@ -32,11 +31,23 @@ function parseTimeToMinutes(str) {
   let hh = parseInt(m[1], 10);
   const mm = parseInt(m[2], 10);
   if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
+  
   if (mer) {
     if (hh === 12) hh = mer === "am" ? 0 : 12; 
     else if (mer === "pm") hh += 12; 
   }
   return hh * 60 + mm;
+}
+
+// Convert minutes back to HH:MM AM/PM string
+function minutesToTime(totalMinutes) {
+    let h = Math.floor(totalMinutes / 60);
+    let m = totalMinutes % 60;
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12;
+    h = h ? h : 12; // the hour '0' should be '12'
+    const mStr = m < 10 ? '0' + m : m;
+    return `${h}:${mStr} ${ampm}`;
 }
 
 function fieldLabel(f) {
@@ -52,7 +63,9 @@ function isTimeAvailable(slotIndex, fieldProps) {
     if (!window.unifiedTimes || !window.unifiedTimes[slotIndex]) return false;
     
     const slot = window.unifiedTimes[slotIndex];
-    const slotStartMin = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+    // Normalize slot start
+    const d = new Date(slot.start);
+    const slotStartMin = d.getHours() * 60 + d.getMinutes();
     const slotEndMin = slotStartMin + INCREMENT_MINS; 
     
     const rules = fieldProps.timeRules || [];
@@ -60,9 +73,11 @@ function isTimeAvailable(slotIndex, fieldProps) {
     if (rules.length === 0) return fieldProps.available;
     if (!fieldProps.available) return false;
 
+    // Logic: Default is unavailable if "Available" rules exist, else default is available
     const hasAvailableRules = rules.some(r => r.type === 'Available');
     let isAvailable = !hasAvailableRules;
 
+    // Check "Available" whitelist rules
     for (const rule of rules) {
         if (rule.type === 'Available') {
             const startMin = parseTimeToMinutes(rule.start);
@@ -76,6 +91,7 @@ function isTimeAvailable(slotIndex, fieldProps) {
         }
     }
 
+    // Check "Unavailable" blacklist rules
     for (const rule of rules) {
         if (rule.type === 'Unavailable') {
             const startMin = parseTimeToMinutes(rule.start);
@@ -424,6 +440,7 @@ function renderFieldAvailabilityGrid() {
                     <strong>Key:</strong> 
                     <span style="color:#2e7d32; background:#e8f5e9; padding:0 4px; font-weight:bold;">✓</span> = Empty. 
                     <span style="color:#c62828; background:#ffebee; padding:0 4px; font-weight:bold;">X</span> = Used/Closed.
+                    <span style="color:#856404; background:#fff3cd; padding:0 4px; font-weight:bold;">Avail @</span> = Partial.
                 </div>
             </div>
             <div id="avail-grid-wrapper"></div>
@@ -441,6 +458,7 @@ function renderFieldAvailabilityGrid() {
     const dailyData = window.loadCurrentDailyData?.() || {};
     const scheduleAssignments = dailyData.scheduleAssignments || {};
     const unifiedTimes = window.unifiedTimes || dailyData.unifiedTimes || [];
+    const INCREMENT_MINS = window.INCREMENT_MINS || 30;
 
     if (unifiedTimes.length === 0) {
         if(gridWrapper) gridWrapper.innerHTML = `<p class="report-muted" style="padding:20px; background:#f0f0f0; text-align:center;">No schedule generated yet.</p>`;
@@ -457,8 +475,9 @@ function renderFieldAvailabilityGrid() {
     
     resourcesToShow.sort((a,b) => a.name.localeCompare(b.name));
 
-    // 3. Compile Usage (STRICT)
-    const fieldUsageBySlot = {}; 
+    // 3. Compile Usage (STRICT + TIMED)
+    // Structure: fieldBookingsBySlot[slotIndex][fieldName] = [{start: "HH:MM", end: "HH:MM"}, ...]
+    const fieldBookingsBySlot = {}; 
     
     for (const bunk in scheduleAssignments) {
         const schedule = scheduleAssignments[bunk] || [];
@@ -473,8 +492,28 @@ function renderFieldAvailabilityGrid() {
                     fieldName !== "No Game" && 
                     fieldName !== "Unassigned League") {
                     
-                    fieldUsageBySlot[i] = fieldUsageBySlot[i] || {};
-                    fieldUsageBySlot[i][fieldName] = (fieldUsageBySlot[i][fieldName] || 0) + 1;
+                    fieldBookingsBySlot[i] = fieldBookingsBySlot[i] || {};
+                    if (!fieldBookingsBySlot[i][fieldName]) fieldBookingsBySlot[i][fieldName] = [];
+                    
+                    // Capture specific times if available, else fallback to slot times
+                    // The slot object for index i is unifiedTimes[i]
+                    const slotObj = unifiedTimes[i];
+                    
+                    // IMPORTANT: Use entry.start/end if they exist, otherwise assume full slot
+                    let s = entry.start;
+                    let e = entry.end;
+                    
+                    // Fallback if entry doesn't have explicit times (legacy data)
+                    // We assume it takes the whole slot
+                    if (!s && slotObj) s = slotObj.start; 
+                    
+                    // Calculate end based on increment if missing
+                    if (!e && s) {
+                        const startMin = parseTimeToMinutes(s);
+                        e = minutesToTime(startMin + INCREMENT_MINS);
+                    }
+
+                    fieldBookingsBySlot[i][fieldName].push({ start: s, end: e });
                 }
             }
         }
@@ -490,6 +529,7 @@ function renderFieldAvailabilityGrid() {
 
     const styleCheck = "font-size:1.2em; color:#2e7d32; font-weight:900; background-color:#e8f5e9;";
     const styleX = "font-size:1.2em; color:#c62828; font-weight:700; background-color:#ffebee;";
+    const stylePartial = "font-size:0.75em; color:#856404; font-weight:700; background-color:#fff3cd; white-space:nowrap;";
     const styleXClosed = "font-size:1.2em; color:#b71c1c; font-weight:700; background-color:#ffcdd2;";
 
     let tableHtml = `<div class="schedule-view-wrapper"><table class="availability-grid" style="border-collapse:collapse; width:100%;"><thead><tr><th style="background:#f4f4f4; border:1px solid #999; padding:8px; position:sticky; top:0; z-index:5;">Time</th>`;
@@ -501,32 +541,89 @@ function renderFieldAvailabilityGrid() {
 
     unifiedTimes.forEach((slot, i) => {
         let timeLabel = "Invalid Time";
+        let slotStartMin = 0;
+        let slotEndMin = 0;
+
         try {
             let d = new Date(slot.start);
             if(isNaN(d.getTime())) {
+                 // handle string "12:00" format if Date fails
+                 const parts = String(slot.start).split(":");
                  d = new Date();
-                 const [h,m] = String(slot.start).split(":");
+                 d.setHours(parts[0], parts[1], 0);
             }
             
-            let h = d.getHours(), m = d.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; 
+            let h = d.getHours(), m = d.getMinutes();
+            slotStartMin = h * 60 + m;
+            slotEndMin = slotStartMin + INCREMENT_MINS;
+
+            let ap = h >= 12 ? "PM" : "AM"; 
             h = h % 12 || 12;
-            timeLabel = `${h}:${m} ${ap}`;
+            let mStr = m.toString().padStart(2,"0");
+            timeLabel = `${h}:${mStr} ${ap}`;
         } catch(e) { timeLabel = slot.label || "Time?"; }
         
         tableHtml += `<tr><td style="border:1px solid #999; padding:6px; font-weight:bold; background:#fdfdfd; position:sticky; left:0; border-right:2px solid #ccc;">${timeLabel}</td>`;
 
         resourcesToShow.forEach(r => {
             const props = fieldProperties[r.name];
-            const usedCount = fieldUsageBySlot[i]?.[r.name] || 0;
+            const bookings = fieldBookingsBySlot[i]?.[r.name] || [];
             const timeAvail = isTimeAvailable(i, props);
             
-            // --- STRICT LOGIC ---
+            // --- RENDER LOGIC ---
             if (!timeAvail) {
+                // CLOSED BY RULE
                 tableHtml += `<td style="${styleXClosed}; border:1px solid #999; text-align:center;" title="Closed by Time Rule">X</td>`;
-            } else if (usedCount > 0) {
-                tableHtml += `<td style="${styleX}; border:1px solid #999; text-align:center;" title="Occupied by ${usedCount} bunk(s)">X</td>`;
-            } else {
+            } 
+            else if (bookings.length === 0) {
+                // COMPLETELY EMPTY
                 tableHtml += `<td style="${styleCheck}; border:1px solid #999; text-align:center;" title="Available">✓</td>`;
+            } 
+            else {
+                // IT HAS BOOKINGS - CHECK IF FULLY BLOCKED OR PARTIAL
+                
+                // Find the latest time occupied within this block
+                // We start assuming the block is free from slotStartMin
+                let maxBlockedUntil = slotStartMin;
+                let fullBlock = false;
+
+                bookings.forEach(b => {
+                    const bStart = parseTimeToMinutes(b.start);
+                    const bEnd = parseTimeToMinutes(b.end);
+                    
+                    if (bStart !== null && bEnd !== null) {
+                         // If booking covers entire slot (or more)
+                         if (bStart <= slotStartMin && bEnd >= slotEndMin) {
+                             fullBlock = true;
+                         }
+                         // If booking starts before/at start, track how late it goes
+                         else if (bStart <= slotStartMin && bEnd > maxBlockedUntil) {
+                             maxBlockedUntil = bEnd;
+                         }
+                         // Note: If booking starts *later* in the block (e.g. 12:15-12:30), 
+                         // currently simpler logic just marks X or handles gap at end. 
+                         // For now we focus on "When does it become available?"
+                    } else {
+                        // If time parse fails, assume full block for safety
+                        fullBlock = true;
+                    }
+                });
+
+                if (fullBlock || maxBlockedUntil >= slotEndMin) {
+                    // FULLY BLOCKED
+                    tableHtml += `<td style="${styleX}; border:1px solid #999; text-align:center;" title="Occupied">X</td>`;
+                } else {
+                    // PARTIAL? Check remaining time
+                    const remaining = slotEndMin - maxBlockedUntil;
+                    if (remaining < MIN_USABLE_MINUTES) {
+                        // Not enough time left
+                        tableHtml += `<td style="${styleX}; border:1px solid #999; text-align:center;" title="Less than ${MIN_USABLE_MINUTES} mins left">X</td>`;
+                    } else {
+                        // SHOW PARTIAL
+                        const availTimeStr = minutesToTime(maxBlockedUntil);
+                        tableHtml += `<td style="${stylePartial}; border:1px solid #999; text-align:center;" title="Partially Occupied">Avail @ ${availTimeStr}</td>`;
+                    }
+                }
             }
         });
         tableHtml += `</tr>`;
