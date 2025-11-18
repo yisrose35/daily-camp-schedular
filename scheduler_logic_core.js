@@ -1079,15 +1079,9 @@ specialtyLeagueBlocks.forEach(block => {
     specialtyLeagueGroups[key].bunks.add(block.bunk);
 });
 
+// ... inside PASS 3.5 ...
 Object.values(specialtyLeagueGroups).forEach(group => {
-    const leagueEntry = Object.values(masterSpecialtyLeagues).find(l =>
-        l.enabled &&
-        !disabledSpecialtyLeagues.includes(l.name) &&
-        l.divisions.includes(group.divName)
-    );
-    if (!leagueEntry) return;
-
-    const allBunksInGroup = Array.from(group.bunks);
+    const allBunksInGroup = Array.from(group.bunks); // <-- MOVED UP
     const blockBase = {
         slots: group.slots,
         divName: group.divName,
@@ -1095,24 +1089,59 @@ Object.values(specialtyLeagueGroups).forEach(group => {
         endTime: group.startTime + INCREMENT_MINS * group.slots.length
     };
 
+    const leagueEntry = Object.values(masterSpecialtyLeagues).find(l =>
+        l.enabled &&
+        !disabledSpecialtyLeagues.includes(l.name) &&
+        l.divisions.includes(group.divName)
+    );
+
+    // --- FIX 1: No league configured ---
+    if (!leagueEntry) {
+        const noGamePick = { field: "No Game", sport: null, _h2h: true, _activity: "Specialty League", _allMatchups: ["Unassigned (No league configured for this division)"] };
+        allBunksInGroup.forEach(bunk => {
+            fillBlock({ ...blockBase, bunk }, noGamePick, fieldUsageBySlot, yesterdayHistory, true);
+        });
+        return; // Next group
+    }
+    // --- END FIX 1 ---
+
     const leagueName = leagueEntry.name;
     const leagueHistory = rotationHistory.leagues[leagueName] || {};
     rotationHistory.leagues[leagueName] = leagueHistory;
 
     const sport = leagueEntry.sport;
-    if (!sport) return;
 
-    // 🔒 HARD LOCK: specialty league = exactly this sport, no optimizer
+    // --- FIX 2: League has no sport defined ---
+    if (!sport) {
+        const noGamePick = { field: "No Game", sport: null, _h2h: true, _activity: "Specialty League", _allMatchups: [`Unassigned (${leagueName} has no sport)`] };
+        allBunksInGroup.forEach(bunk => {
+            fillBlock({ ...blockBase, bunk }, noGamePick, fieldUsageBySlot, yesterdayHistory, true);
+        });
+        return; // Next group
+    }
+    // --- END FIX 2 ---
+
     const bestSport = sport;
-
     const allMatchupLabels = [];
     const picksByTeam = {};
 
-    if (bestSport) {
-        const leagueFields = leagueEntry.fields || [];
-        const leagueTeams = (leagueEntry.teams || []).map(t => String(t).trim()).filter(Boolean);
-        if (leagueFields.length === 0 || leagueTeams.length < 2) return;
+    const leagueFields = leagueEntry.fields || [];
+    const leagueTeams = (leagueEntry.teams || []).map(t => String(t).trim()).filter(Boolean);
 
+    // --- FIX 3: League has no fields or no teams ---
+    if (leagueFields.length === 0 || leagueTeams.length < 2) {
+        const reason = leagueFields.length === 0 ? "has no fields" : "has < 2 teams";
+        const noGamePick = { field: "No Game", sport: null, _h2h: true, _activity: bestSport, _allMatchups: [`Unassigned (${leagueName} ${reason})`] };
+        allBunksInGroup.forEach(bunk => {
+            fillBlock({ ...blockBase, bunk }, noGamePick, fieldUsageBySlot, yesterdayHistory, true);
+        });
+        return; // Next group
+    }
+    // --- END FIX 3 ---
+
+    // (Rest of the function is now safe)
+    if (bestSport) {
+        // ... (original logic) ...
         let matchups = [];
         if (typeof window.getLeagueMatchups === 'function') {
             matchups = window.getLeagueMatchups(leagueEntry.name, leagueTeams) || [];
