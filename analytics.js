@@ -7,13 +7,14 @@ fullContent: `// ===============================================================
 // --- UPDATED (BOLSTERED REPORTING) ---
 // 1. Field Availability Grid:
 //    - STRICT RULE applied: If usage > 0, it is 'X'.
+//    - Now INCLUDES Leagues, Specialty Leagues, and Pinned items.
+//    - Now INCLUDES Continuations (checks every slot, not just start).
 //    - '✓' only appears if the slot is completely empty.
 //    - Added filters (All / Fields / Specials).
 //
 // 2. Bunk Rotation Report:
 //    - Added "Scheduled Today" column.
 //    - Better sorting (Least recently used at the top).
-//    - Visual improvements.
 // =================================================================
 
 (function() {
@@ -104,7 +105,6 @@ let availableDivisions = [];
 let divisionSelect = null;
 let bunkSelect = null;
 let reportContainer = null;
-let availabilityFilterSelect = null;
 
 /**
  * Main entry point
@@ -202,10 +202,17 @@ function loadMasterData() {
     const fields = app1Data.fields || [];
     const specials = app1Data.specialActivities || [];
     
-    const sportActivities = fields.flatMap(f => f.activities || []);
-    const specialActivities = specials.map(s => s.name);
+    // Map to objects to track type
+    const sportActivities = fields.flatMap(f => (f.activities || []).map(a => ({name: a, type: 'sport'})));
+    const specialActivities = specials.map(s => ({name: s.name, type: 'special'}));
     
-    allActivities = Array.from(new Set([...sportActivities, ...specialActivities])).sort();
+    // Deduplicate by name
+    const uniqueMap = new Map();
+    [...sportActivities, ...specialActivities].forEach(item => {
+        uniqueMap.set(item.name, item.type);
+    });
+    
+    allActivities = Array.from(uniqueMap.entries()).map(([name, type]) => ({name, type})).sort((a,b) => a.name.localeCompare(b.name));
 }
 
 function onDivisionSelect() {
@@ -273,18 +280,20 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
     const todaySchedule = window.scheduleAssignments?.[bunkName] || [];
     const todayActivities = new Set();
     todaySchedule.forEach(entry => {
-        if(entry && entry._activity && !entry._h2h && !entry._fixed) {
+        if(entry && entry._activity) {
+             // We include leagues here too, so you know if they played Soccer in a league today
              todayActivities.add(entry._activity);
         }
     });
 
     // 2. Build Stats
     const report = {};
-    allActivities.forEach(act => {
-        report[act] = {
+    allActivities.forEach(actObj => {
+        report[actObj.name] = {
             count: 0,
             lastDone: "7+ days ago",
-            isToday: todayActivities.has(act)
+            isToday: todayActivities.has(actObj.name),
+            type: actObj.type
         };
     });
 
@@ -295,12 +304,15 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
 
         daySchedule.forEach(entry => {
             if (!entry) return;
+            // For historical count, we usually exclude leagues if we want a pure "rotation" count,
+            // but users often want to know if they played the sport at all.
+            // Let's keep the exclusion for now to match "Activity" rotation logic.
             if (entry._h2h || entry._fixed || !entry.sport) return;
             
             let activityName = entry._activity;
             if (!activityName) {
-                if (allActivities.includes(entry.sport)) activityName = entry.sport;
-                else if (allActivities.includes(entry.field)) activityName = entry.field;
+                if (allActivities.some(a=>a.name===entry.sport)) activityName = entry.sport;
+                else if (allActivities.some(a=>a.name===entry.field)) activityName = entry.field;
             }
             
             if (activityName && report[activityName]) {
@@ -325,27 +337,35 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
             <tbody>
     \`;
     
-    // Sort: Today -> Count (ascending) -> Alphabetical
-    const sortedActivities = allActivities.sort((a, b) => {
+    // Sort: Today -> Count (ascending) -> Type (Sport first) -> Alphabetical
+    const sortedActivities = allActivities.sort((aObj, bObj) => {
+        const a = aObj.name;
+        const b = bObj.name;
         const rA = report[a];
         const rB = report[b];
 
         if (rA.isToday !== rB.isToday) return rB.isToday - rA.isToday; // True first
         if (rA.count !== rB.count) return rA.count - rB.count; // Low count first
+        if (rA.type !== rB.type) return rA.type === 'sport' ? -1 : 1; // Sports first
         return a.localeCompare(b); 
     });
     
-    sortedActivities.forEach(actName => {
+    sortedActivities.forEach(actObj => {
+        const actName = actObj.name;
         const data = report[actName];
         // Highlight if fresh (0 count) and NOT scheduled today
         const isNeed = data.count === 0 && !data.isToday;
         const rowClass = isNeed ? "report-row-fresh" : "";
         
         const checkMark = data.isToday ? '<span style="color:green;font-weight:bold;">YES</span>' : '<span style="color:#ccc;">-</span>';
+        
+        const typePill = data.type === 'sport' 
+            ? '<span style="font-size:0.8em; background:#e3f2fd; color:#1565c0; padding:2px 6px; border-radius:4px;">Sport</span>'
+            : '<span style="font-size:0.8em; background:#f3e5f5; color:#7b1fa2; padding:2px 6px; border-radius:4px;">Special</span>';
 
         tableHtml += \`
             <tr class="\${rowClass}">
-                <td>\${actName}</td>
+                <td>\${actName} \${typePill}</td>
                 <td style="text-align:center;">\${checkMark}</td>
                 <td>\${data.count}</td>
                 <td>\${data.lastDone}</td>
@@ -436,11 +456,11 @@ function renderFieldAvailabilityGrid() {
         const schedule = scheduleAssignments[bunk] || [];
         for (let i = 0; i < schedule.length; i++) {
             const entry = schedule[i];
-            // Count EVERYTHING except pure 'Free' slots.
-            // Even pinned items, leagues, etc count as usage.
-            if (entry && !entry.continuation) {
+            // MODIFIED: Check EVERYTHING. 
+            // If 'entry' exists, and it has a valid field name, it counts as usage.
+            if (entry) {
                 const fieldName = fieldLabel(entry.field);
-                if (fieldName && fieldName !== "Free" && fieldName !== "No Field") {
+                if (fieldName && fieldName !== "Free" && fieldName !== "No Field" && fieldName !== "No Game") {
                     fieldUsageBySlot[i] = fieldUsageBySlot[i] || {};
                     fieldUsageBySlot[i][fieldName] = (fieldUsageBySlot[i][fieldName] || 0) + 1;
                 }
@@ -467,7 +487,6 @@ function renderFieldAvailabilityGrid() {
 
     unifiedTimes.forEach((slot, i) => {
         const start = new Date(slot.start);
-        const end = new Date(slot.end);
         let h = start.getHours(), m = start.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12;
         const timeLabel = \`\${h}:\${m} \${ap}\`;
         
@@ -479,11 +498,10 @@ function renderFieldAvailabilityGrid() {
             const timeAvail = isTimeAvailable(i, props);
             
             // --- STRICT LOGIC ---
+            // X if closed by rule OR usage > 0
             if (!timeAvail) {
-                // Closed by rule
-                tableHtml += \`<td class="avail-x" style="background:#fce4ec;" title="Closed by Time Rule">X</td>\`;
+                tableHtml += \`<td class="avail-x" style="background:#fce4ec; color:#b71c1c;" title="Closed by Time Rule">X</td>\`;
             } else if (usedCount > 0) {
-                // Used by ANYONE (even 1 bunk) -> X
                 tableHtml += \`<td class="avail-x" title="Occupied by \${usedCount} bunk(s)">X</td>\`;
             } else {
                 // Completely empty -> Check
