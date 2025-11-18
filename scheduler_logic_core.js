@@ -1320,31 +1320,31 @@ Object.values(specialtyLeagueGroups).forEach(group => {
     });
 });
 
-    // =================================================================
+        // =================================================================
     // PASS 4 — Remaining Schedulable Slots (Smart Activities)
     // =================================================================
     remainingBlocks.sort((a, b) => a.startTime - b.startTime);
 
-           // --- NEW FIX ---
-        // If a league block falls through (e.g., no teams/fields assigned),
-        // mark it as a league with a clear "Unassigned" message so the UI
-        // can still show a proper league panel with _allMatchups.
+    for (const block of remainingBlocks) {
+        if (!block.slots || block.slots.length === 0) continue;
+        if (!window.scheduleAssignments[block.bunk]) continue;
+        if (window.scheduleAssignments[block.bunk][block.slots[0]]) continue; // already filled
+
+        let pick = null;
+
+        // --- PROTECT LEAGUE BLOCKS ---
+        // If a league block "falls through" (no teams/fields/etc),
+        // do NOT let it be filled by findBestGeneralActivity.
         if (block.event === 'League Game' || block.event === 'Specialty League') {
             pick = {
-                field: "No Game",
+                field: "Unassigned League",
                 sport: null,
-                _h2h: true,
-                vs: null,
-                _activity: "League",
-                _allMatchups: [
-                    "Unassigned League (no configured league / teams / playable fields)"
-                ]
+                _activity: "Free"
             };
         }
-        // --- END NEW FIX ---
 
         // 1) Specific buckets
-        else if (block.event === 'Special Activity') { // --- MODIFIED: added 'else' ---
+        else if (block.event === 'Special Activity') {
             pick = window.findBestSpecial?.(
                 block,
                 allActivities,
@@ -1365,10 +1365,14 @@ Object.values(specialtyLeagueGroups).forEach(group => {
                 divisions
             );
         } else if (block.event === 'Swim') {
-            pick = { field: "Swim", sport: null, _activity: "Swim" };
+            pick = {
+                field: "Swim",
+                sport: null,
+                _activity: "Swim"
+            };
         }
 
-        // 2) Fallback to general
+        // 2) Fallback to general activity
         if (!pick) {
             pick = window.findBestGeneralActivity?.(
                 block,
@@ -1393,7 +1397,13 @@ Object.values(specialtyLeagueGroups).forEach(group => {
             fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, false);
         } else {
             // No valid fields/activities -> Free
-            fillBlock(block, { field: "Free", sport: null, _activity: "Free" }, fieldUsageBySlot, yesterdayHistory, false);
+            fillBlock(
+                block,
+                { field: "Free", sport: null, _activity: "Free" },
+                fieldUsageBySlot,
+                yesterdayHistory,
+                false
+            );
         }
     }
 
@@ -1401,6 +1411,7 @@ Object.values(specialtyLeagueGroups).forEach(group => {
     // PASS 5 — Update Rotation History
     // =================================================================
     try {
+        // rotationHistory comes from loadAndFilterData() at the top of this function
         const historyToSave = rotationHistory;
 
         availableDivisions.forEach(divName => {
@@ -1416,17 +1427,24 @@ Object.values(specialtyLeagueGroups).forEach(group => {
                         historyToSave.bunks[bunk] = historyToSave.bunks[bunk] || {};
                         historyToSave.bunks[bunk][activityName] = timestamp;
 
-                        if (entry._h2h && entry._activity !== "League" && entry._activity !== "No Game") {
-                            const leagueEntry = Object.entries(masterLeagues).find(([name, l]) =>
-                                l.enabled && l.divisions.includes(divName)
+                        // League-specific history (for sport balancing)
+                        if (
+                            entry._h2h &&
+                            entry._activity !== "League" &&
+                            entry._activity !== "No Game"
+                        ) {
+                            const leagueEntry = Object.entries(masterLeagues).find(
+                                ([name, l]) => l.enabled && l.divisions.includes(divName)
                             );
                             if (leagueEntry) {
                                 const lgName = leagueEntry[0];
-                                historyToSave.leagues[lgName] = historyToSave.leagues[lgName] || {};
+                                historyToSave.leagues[lgName] =
+                                    historyToSave.leagues[lgName] || {};
                                 historyToSave.leagues[lgName][entry._activity] = timestamp;
                             }
                         }
                     } else if (entry && !entry.continuation) {
+                        // Reset "lastActivity" at the start of a new block
                         lastActivity = null;
                     }
                 }
@@ -1447,6 +1465,7 @@ Object.values(specialtyLeagueGroups).forEach(group => {
     window.saveSchedule?.();
 
     return true;
+}; // <-- END window.runSkeletonOptimizer
 
 
 // =====================================================================
