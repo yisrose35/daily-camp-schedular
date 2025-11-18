@@ -1447,7 +1447,7 @@ Object.values(specialtyLeagueGroups).forEach(group => {
     window.saveSchedule?.();
 
     return true;
-};
+
 
 // =====================================================================
 // HELPER FUNCTIONS USED BY PASSES
