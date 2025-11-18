@@ -631,10 +631,10 @@ manualSkeleton.forEach(item => {
     const normSpecLg   = normalizeSpecialtyLeague(item.event);
 
     const finalEventName =
-        normGA ||
-        normLeague ||
-        normSpecLg ||
-        item.event;
+    normGA ||
+    normSpecLg ||   // SPECIALTY FIRST
+    normLeague ||
+    item.event;
 
     const isGeneratedEvent =
         GENERATED_EVENTS.includes(finalEventName) ||
