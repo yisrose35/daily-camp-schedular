@@ -898,13 +898,64 @@ leagueBlocks.forEach(block => {
         rotationHistory.leagueTeamLastSport[leagueName] = leagueTeamLastSport;
 
         // Get round-robin matchups from league_scheduling.js if available,
-        // otherwise fall back to our own engine
-        let rawMatchups = [];
-        if (typeof window.getLeagueMatchups === "function") {
-            rawMatchups = window.getLeagueMatchups(leagueName, leagueTeams) || [];
-        } else {
-            rawMatchups = coreGetNextLeagueRound(leagueName, leagueTeams) || [];
-        }
+// and ALWAYS fall back to our own engine if it returns nothing.
+let rawMatchups = [];
+
+// 1) Try external engine (league_scheduling.js)
+if (typeof window.getLeagueMatchups === "function") {
+    try {
+        rawMatchups = window.getLeagueMatchups(leagueName, leagueTeams) || [];
+    } catch (e) {
+        console.error(
+            "getLeagueMatchups failed for",
+            leagueName,
+            "– falling back to core engine:",
+            e
+        );
+        rawMatchups = [];
+    }
+}
+
+// 2) Guaranteed fallback to internal round-robin if nothing came back
+if (!rawMatchups || !rawMatchups.length) {
+    rawMatchups = coreGetNextLeagueRound(leagueName, leagueTeams) || [];
+}
+
+// 3) Final safety: if still empty, treat as “no matchups”
+if (!rawMatchups || !rawMatchups.length) {
+    const noGamePick = {
+        field: "No Game",
+        sport: null,
+        _h2h: true,
+        _activity: "League",
+        _allMatchups: ["Unassigned (matchup engine returned no pairs)"]
+    };
+
+    const { slots } = group;
+    const blockEndTime = group.startTime + INCREMENT_MINS * slots.length;
+
+    allBunksInGroup.forEach(bunk => {
+        const bunkDivName = Object.keys(divisions).find(div =>
+            (divisions[div].bunks || []).includes(bunk)
+        ) || baseDivName;
+
+        fillBlock(
+            {
+                slots,
+                bunk,
+                divName: bunkDivName,
+                startTime: group.startTime,
+                endTime: blockEndTime
+            },
+            noGamePick,
+            fieldUsageBySlot,
+            yesterdayHistory,
+            true // isLeagueFill
+        );
+    });
+
+    return; // Skip the rest of the PASS-3 logic for this group
+}
 
         const nonByeMatchups = rawMatchups.filter(p => p && p[0] !== "BYE" && p[1] !== "BYE");
 
