@@ -1,50 +1,71 @@
 // =================================================================
 // analytics.js
 //
-// --- UPDATED FOR SPECIFIC PARTIAL LOGIC ---
-// 1. Starts Blocked -> Shows "X" (Red) + "Avail @ [Time]"
-// 2. Starts Free -> Shows "✓" (Green) + "Unavail @ [Time]"
-// 3. Strict logic: If blocked at start, it's an X. If free at start, it's a check.
+// --- UPDATED FOR ROBUST PARTIAL AVAILABILITY (v3) ---
+// 1. Logic:
+//    - If gap at start < 5 mins: Mark as "X" (Unavailable).
+//    - If gap at start >= 5 mins: Mark as "✓" (Start Free).
+// 2. Data: checks start/startTime/s to ensure we catch the times.
 // =================================================================
 
 (function() {
 'use strict';
 
-const MIN_USABLE_MINUTES = 1; // Threshold to consider a gap "usable"
+console.log("--- Analytics Module Loaded (Partial Avail v3) ---");
+
+const MIN_USABLE_GAP = 5; // Gaps smaller than this are ignored (treated as blocked)
 
 // --- Helpers ---
-function parseTimeToMinutes(str) {
-  if (!str || typeof str !== "string") return null;
-  let s = str.trim().toLowerCase();
-  let mer = null;
-  if (s.endsWith("am") || s.endsWith("pm")) {
-    mer = s.endsWith("am") ? "am" : "pm";
-    s = s.replace(/am|pm/g, "").trim();
-  } else {
-    // Attempt to handle 24h or raw HH:MM if passed without AM/PM
-  }
+function parseTimeToMinutes(val) {
+  if (!val) return null;
   
-  // Regex for HH:MM
-  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-  if (!m) return null;
-  let hh = parseInt(m[1], 10);
-  const mm = parseInt(m[2], 10);
-  if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-  
-  if (mer) {
-    if (hh === 12) hh = mer === "am" ? 0 : 12; 
-    else if (mer === "pm") hh += 12; 
+  // Handle Date objects directly
+  if (val instanceof Date) {
+      return val.getHours() * 60 + val.getMinutes();
   }
-  return hh * 60 + mm;
+
+  // Handle Strings
+  if (typeof val === "string") {
+      let s = val.trim().toLowerCase();
+      
+      // Check for ISO string or full date string
+      if (s.includes("t") || s.includes("-")) {
+          const d = new Date(val);
+          if (!isNaN(d.getTime())) {
+              return d.getHours() * 60 + d.getMinutes();
+          }
+      }
+
+      // Handle HH:MM am/pm
+      let mer = null;
+      if (s.endsWith("am") || s.endsWith("pm")) {
+        mer = s.endsWith("am") ? "am" : "pm";
+        s = s.replace(/am|pm/g, "").trim();
+      }
+      
+      const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+      if (!m) return null;
+      
+      let hh = parseInt(m[1], 10);
+      const mm = parseInt(m[2], 10);
+      
+      if (Number.isNaN(hh) || Number.isNaN(mm)) return null;
+      
+      if (mer) {
+        if (hh === 12) hh = mer === "am" ? 0 : 12; 
+        else if (mer === "pm") hh += 12; 
+      }
+      return hh * 60 + mm;
+  }
+  return null;
 }
 
-// Convert minutes back to HH:MM AM/PM string
 function minutesToTime(totalMinutes) {
     let h = Math.floor(totalMinutes / 60);
     let m = totalMinutes % 60;
     const ampm = h >= 12 ? 'PM' : 'AM';
     h = h % 12;
-    h = h ? h : 12; // the hour '0' should be '12'
+    h = h ? h : 12; 
     const mStr = m < 10 ? '0' + m : m;
     return `${h}:${mStr} ${ampm}`;
 }
@@ -56,13 +77,31 @@ function fieldLabel(f) {
     return "";
 }
 
+// Helper to safely extract start/end from any data shape
+function getEntryTimes(entry, slotObj, increment) {
+    // Try various property names
+    let s = entry.start || entry.startTime || entry.s || entry.time;
+    let e = entry.end || entry.endTime || entry.e;
+
+    // Fallback to slot time if missing
+    if (!s && slotObj) s = slotObj.start;
+    
+    // Fallback to calculate end if missing
+    if (s && !e) {
+        const sMin = parseTimeToMinutes(s);
+        if (sMin !== null) {
+            e = minutesToTime(sMin + increment);
+        }
+    }
+    return { start: s, end: e };
+}
+
 function isTimeAvailable(slotIndex, fieldProps) {
     const INCREMENT_MINS = window.INCREMENT_MINS || 30;
 
     if (!window.unifiedTimes || !window.unifiedTimes[slotIndex]) return false;
     
     const slot = window.unifiedTimes[slotIndex];
-    // Normalize slot start
     const d = new Date(slot.start);
     const slotStartMin = d.getHours() * 60 + d.getMinutes();
     const slotEndMin = slotStartMin + INCREMENT_MINS; 
@@ -72,17 +111,14 @@ function isTimeAvailable(slotIndex, fieldProps) {
     if (rules.length === 0) return fieldProps.available;
     if (!fieldProps.available) return false;
 
-    // Logic: Default is unavailable if "Available" rules exist, else default is available
     const hasAvailableRules = rules.some(r => r.type === 'Available');
     let isAvailable = !hasAvailableRules;
 
-    // Check "Available" whitelist rules
     for (const rule of rules) {
         if (rule.type === 'Available') {
             const startMin = parseTimeToMinutes(rule.start);
             const endMin = parseTimeToMinutes(rule.end);
             if (startMin === null || endMin === null) continue;
-            
             if (slotStartMin >= startMin && slotEndMin <= endMin) {
                 isAvailable = true;
                 break;
@@ -90,36 +126,30 @@ function isTimeAvailable(slotIndex, fieldProps) {
         }
     }
 
-    // Check "Unavailable" blacklist rules
     for (const rule of rules) {
         if (rule.type === 'Unavailable') {
             const startMin = parseTimeToMinutes(rule.start);
             const endMin = parseTimeToMinutes(rule.end);
             if (startMin === null || endMin === null) continue;
-
             if (slotStartMin < endMin && slotEndMin > startMin) {
                 isAvailable = false;
                 break;
             }
         }
     }
-    
     return isAvailable;
 }
 
-// --- Globals for this module ---
+// --- Globals ---
 let container = null;
 let allActivities = []; 
 let divisions = {};
 let availableDivisions = [];
-
 let divisionSelect = null;
 let bunkSelect = null;
 let reportContainer = null;
 
-/**
- * Main entry point
- */
+// --- Main Init ---
 function initReportTab() {
     try {
         container = document.getElementById("report-content");
@@ -133,16 +163,13 @@ function initReportTab() {
                     <option value="rotation">Bunk Rotation Report</option>
                 </select>
             </div>
-            
             <div id="report-availability-content" class="league-content-pane active"></div>
             <div id="report-rotation-content" class="league-content-pane" style="display:none;"></div>
         `;
 
-        // Initial Render
         renderFieldAvailabilityGrid();
         renderBunkRotationUI();
 
-        // Tab Switcher Logic
         const select = document.getElementById("report-view-select");
         if (select) {
             select.onchange = (e) => {
@@ -179,8 +206,6 @@ function renderBunkRotationUI() {
     
     rotationContainer.innerHTML = `
         <h2 class="report-title" style="border-bottom: 2px solid #007BFF; padding-bottom: 10px;">Bunk Rotation Report</h2>
-        <p>Analyze activity frequency over the last 7 days + today's schedule.</p>
-        
         <div class="report-controls" style="background:#f9f9f9; padding:15px; border-radius:8px; display:flex; gap:20px; align-items:flex-end; margin-bottom:20px;">
             <div>
                 <label for="report-division-select" style="display:block; font-weight:bold; margin-bottom:5px;">Division:</label>
@@ -191,7 +216,6 @@ function renderBunkRotationUI() {
                 <select id="report-bunk-select" class="report-select" style="padding:5px; min-width:150px;" disabled></select>
             </div>
         </div>
-        
         <div id="report-table-container" class="report-container">
             <p class="report-muted" style="padding:20px; background:#f0f0f0; text-align:center; color:#666;">Please select a division to view its report.</p>
         </div>
@@ -206,7 +230,6 @@ function renderBunkRotationUI() {
         divOptions += `<option value="${divName}">${divName}</option>`;
     });
     divisionSelect.innerHTML = divOptions;
-    
     divisionSelect.onchange = onDivisionSelect;
     bunkSelect.onchange = onBunkSelect;
 }
@@ -216,22 +239,17 @@ function loadMasterData() {
         const app1Data = window.loadGlobalSettings?.().app1 || {};
         divisions = window.divisions || {};
         availableDivisions = (window.availableDivisions || []).sort();
-        
         const fields = app1Data.fields || [];
         const specials = app1Data.specialActivities || [];
-        
         const sportActivities = fields.flatMap(f => (f.activities || []).map(a => ({name: a, type: 'sport'})));
         const specialActivities = specials.map(s => ({name: s.name, type: 'special'}));
-        
         const uniqueMap = new Map();
         [...sportActivities, ...specialActivities].forEach(item => {
             if(item.name) uniqueMap.set(item.name, item.type);
         });
-        
         allActivities = Array.from(uniqueMap.entries())
             .map(([name, type]) => ({name, type}))
             .sort((a,b) => (a.name || "").localeCompare(b.name || ""));
-            
     } catch(e) {
         console.error("Error loading master data:", e);
         allActivities = [];
@@ -241,14 +259,12 @@ function loadMasterData() {
 function onDivisionSelect() {
     const divName = divisionSelect.value;
     reportContainer.innerHTML = "";
-    
     if (!divName) {
         bunkSelect.innerHTML = "";
         bunkSelect.disabled = true;
         reportContainer.innerHTML = `<p class="report-muted" style="padding:20px; background:#f0f0f0; text-align:center; color:#666;">Please select a division.</p>`;
         return;
     }
-    
     const bunksInDiv = (divisions[divName]?.bunks || []).sort();
     let bunkOptions = `<option value="">--- Show All ${divName} Bunks ---</option>`;
     bunksInDiv.forEach(bunk => {
@@ -256,14 +272,12 @@ function onDivisionSelect() {
     });
     bunkSelect.innerHTML = bunkOptions;
     bunkSelect.disabled = false;
-    
     renderDivisionReport(divName, bunksInDiv);
 }
 
 function onBunkSelect() {
     const bunkName = bunkSelect.value;
     const divName = divisionSelect.value;
-    
     if (!bunkName) {
         const bunksInDiv = (divisions[divName]?.bunks || []).sort();
         renderDivisionReport(divName, bunksInDiv);
@@ -283,10 +297,8 @@ function renderDivisionReport(divName, bunks) {
         const bunkHeader = document.createElement('h3');
         bunkHeader.textContent = bunkName;
         bunkHeader.style.cssText = "background:#eee; padding:10px; margin:20px 0 0 0; border:1px solid #ccc; border-bottom:none; border-radius:5px 5px 0 0;";
-        
         const tableDiv = document.createElement('div');
         tableDiv.style.cssText = "border:1px solid #ccc; border-top:none; margin-bottom:20px; overflow-x:auto;";
-        
         reportContainer.appendChild(bunkHeader);
         reportContainer.appendChild(tableDiv);
         renderBunkReport(bunkName, tableDiv, false, history);
@@ -294,23 +306,15 @@ function renderDivisionReport(divName, bunks) {
 }
 
 function renderBunkReport(bunkName, targetContainer, clearContainer = true, preloadedHistory = null) {
-    if (clearContainer) {
-        targetContainer.innerHTML = `<p class="report-loading">Loading...</p>`;
-    }
-
+    if (clearContainer) targetContainer.innerHTML = `<p class="report-loading">Loading...</p>`;
     const history = preloadedHistory || window.loadScheduleHistory(7);
     const historyDays = Object.keys(history).sort().reverse();
-    
-    // 1. Get Today's Schedule
     const todaySchedule = window.scheduleAssignments?.[bunkName] || [];
     const todayActivities = new Set();
     todaySchedule.forEach(entry => {
-        if(entry && entry._activity) {
-             todayActivities.add(entry._activity);
-        }
+        if(entry && entry._activity) todayActivities.add(entry._activity);
     });
 
-    // 2. Build Stats
     const report = {};
     allActivities.forEach(actObj => {
         report[actObj.name] = {
@@ -325,17 +329,14 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
         const day = historyDays[i];
         const daySchedule = history[day][bunkName] || [];
         const daysAgo = i + 1;
-
         daySchedule.forEach(entry => {
             if (!entry) return;
             if (entry._h2h || entry._fixed || !entry.sport) return;
-            
             let activityName = entry._activity;
             if (!activityName) {
                 if (allActivities.some(a=>a.name===entry.sport)) activityName = entry.sport;
                 else if (allActivities.some(a=>a.name===entry.field)) activityName = entry.field;
             }
-            
             if (activityName && report[activityName]) {
                 report[activityName].count++;
                 if (report[activityName].lastDone === "7+ days ago") {
@@ -363,7 +364,6 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
         const b = bObj.name;
         const rA = report[a];
         const rB = report[b];
-
         if (rA.isToday !== rB.isToday) return rB.isToday - rA.isToday;
         if (rA.count !== rB.count) return rA.count - rB.count; 
         if (rA.type !== rB.type) return rA.type === 'sport' ? -1 : 1; 
@@ -375,9 +375,7 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
         const data = report[actName];
         const isNeed = data.count === 0 && !data.isToday;
         const bg = isNeed ? "#e3f2fd" : "white"; 
-        
         const checkMark = data.isToday ? '<span style="color:green;font-weight:bold;">YES</span>' : '<span style="color:#ccc;">-</span>';
-        
         const typePill = data.type === 'sport' 
             ? '<span style="font-size:0.8em; background:#e3f2fd; color:#1565c0; padding:2px 6px; border-radius:4px;">Sport</span>'
             : '<span style="font-size:0.8em; background:#f3e5f5; color:#7b1fa2; padding:2px 6px; border-radius:4px;">Special</span>';
@@ -391,26 +389,21 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
             </tr>
         `;
     });
-    
     tableHtml += `</tbody></table>`;
     targetContainer.innerHTML = tableHtml;
 }
-
 
 window.loadScheduleHistory = function(daysToLoad) {
     const allData = window.loadAllDailyData?.() || {};
     const today = new Date(window.currentScheduleDate);
     const history = {};
-    
     for (let i = 1; i <= daysToLoad; i++) {
         const d = new Date(today);
         d.setDate(today.getDate() - i);
-        
         const y = d.getFullYear();
         const m = String(d.getMonth() + 1).padStart(2, '0');
         const dayStr = String(d.getDate()).padStart(2, '0');
         const dateKey = `${y}-${m}-${dayStr}`;
-        
         if (allData[dateKey] && allData[dateKey].scheduleAssignments) {
             history[dateKey] = allData[dateKey].scheduleAssignments;
         }
@@ -419,7 +412,7 @@ window.loadScheduleHistory = function(daysToLoad) {
 }
 
 // =================================================================
-// --- 2. FIELD AVAILABILITY GRID (BOLSTERED) ---
+// --- 2. FIELD AVAILABILITY GRID (FINALIZED) ---
 // =================================================================
 
 function renderFieldAvailabilityGrid() {
@@ -437,8 +430,8 @@ function renderFieldAvailabilityGrid() {
                 </select>
                 <div style="font-size:0.9em; color:#555;">
                     <strong>Key:</strong> 
-                    <span style="color:#2e7d32; background:#e8f5e9; padding:0 4px; font-weight:bold;">✓</span> = Start Free. 
-                    <span style="color:#c62828; background:#ffebee; padding:0 4px; font-weight:bold;">X</span> = Start Blocked.
+                    <span style="color:#2e7d32; background:#e8f5e9; padding:0 4px; font-weight:bold;">✓</span> = Starts Free (Checks only if > ${MIN_USABLE_GAP} min gap). 
+                    <span style="color:#c62828; background:#ffebee; padding:0 4px; font-weight:bold;">X</span> = Blocked or Small Gap (< ${MIN_USABLE_GAP} mins).
                 </div>
             </div>
             <div id="avail-grid-wrapper"></div>
@@ -452,7 +445,6 @@ function renderFieldAvailabilityGrid() {
     
     const filterEl = document.getElementById("avail-type-filter");
     const filterType = filterEl ? filterEl.value : "all";
-
     const dailyData = window.loadCurrentDailyData?.() || {};
     const scheduleAssignments = dailyData.scheduleAssignments || {};
     const unifiedTimes = window.unifiedTimes || dailyData.unifiedTimes || [];
@@ -473,7 +465,7 @@ function renderFieldAvailabilityGrid() {
     
     resourcesToShow.sort((a,b) => a.name.localeCompare(b.name));
 
-    // 3. Compile Usage (STRICT + TIMED)
+    // 3. Compile Usage
     const fieldBookingsBySlot = {}; 
     
     for (const bunk in scheduleAssignments) {
@@ -492,18 +484,8 @@ function renderFieldAvailabilityGrid() {
                     if (!fieldBookingsBySlot[i][fieldName]) fieldBookingsBySlot[i][fieldName] = [];
                     
                     const slotObj = unifiedTimes[i];
-                    
-                    // IMPORTANT: Use entry.start/end if they exist, otherwise assume full slot
-                    let s = entry.start;
-                    let e = entry.end;
-                    
-                    if (!s && slotObj) s = slotObj.start; 
-                    if (!e && s) {
-                        const startMin = parseTimeToMinutes(s);
-                        e = minutesToTime(startMin + INCREMENT_MINS);
-                    }
-
-                    fieldBookingsBySlot[i][fieldName].push({ start: s, end: e });
+                    const times = getEntryTimes(entry, slotObj, INCREMENT_MINS);
+                    fieldBookingsBySlot[i][fieldName].push(times);
                 }
             }
         }
@@ -517,18 +499,11 @@ function renderFieldAvailabilityGrid() {
         };
     });
 
-    // STYLES
-    // styleCheck: Pure Green Background
+    // Styles
     const styleCheck = "font-size:1.2em; color:#2e7d32; font-weight:900; background-color:#e8f5e9;";
-    // styleX: Pure Red Background
     const styleX = "font-size:1.2em; color:#c62828; font-weight:700; background-color:#ffebee;";
-    
-    // stylePartialCheck: Green Background + Smaller Text
     const stylePartialCheck = "color:#2e7d32; font-weight:900; background-color:#e8f5e9; line-height:1.1;";
-    
-    // stylePartialX: Red Background + Smaller Text
     const stylePartialX = "color:#c62828; font-weight:700; background-color:#ffebee; line-height:1.1;";
-
     const styleXClosed = "font-size:1.2em; color:#b71c1c; font-weight:700; background-color:#ffcdd2;";
 
     let tableHtml = `<div class="schedule-view-wrapper"><table class="availability-grid" style="border-collapse:collapse; width:100%;"><thead><tr><th style="background:#f4f4f4; border:1px solid #999; padding:8px; position:sticky; top:0; z-index:5;">Time</th>`;
@@ -542,24 +517,21 @@ function renderFieldAvailabilityGrid() {
         let timeLabel = "Invalid Time";
         let slotStartMin = 0;
         let slotEndMin = 0;
+        let d = new Date(slot.start);
 
-        try {
-            let d = new Date(slot.start);
-            if(isNaN(d.getTime())) {
-                 const parts = String(slot.start).split(":");
-                 d = new Date();
-                 d.setHours(parts[0], parts[1], 0);
-            }
-            
-            let h = d.getHours(), m = d.getMinutes();
-            slotStartMin = h * 60 + m;
-            slotEndMin = slotStartMin + INCREMENT_MINS;
-
-            let ap = h >= 12 ? "PM" : "AM"; 
-            h = h % 12 || 12;
-            let mStr = m.toString().padStart(2,"0");
-            timeLabel = `${h}:${mStr} ${ap}`;
-        } catch(e) { timeLabel = slot.label || "Time?"; }
+        if(isNaN(d.getTime())) {
+             const parts = String(slot.start).split(":");
+             d = new Date();
+             d.setHours(parts[0], parts[1], 0);
+        }
+        
+        let h = d.getHours(), m = d.getMinutes();
+        slotStartMin = h * 60 + m;
+        slotEndMin = slotStartMin + INCREMENT_MINS;
+        let ap = h >= 12 ? "PM" : "AM"; 
+        h = h % 12 || 12;
+        let mStr = m.toString().padStart(2,"0");
+        timeLabel = `${h}:${mStr} ${ap}`;
         
         tableHtml += `<tr><td style="border:1px solid #999; padding:6px; font-weight:bold; background:#fdfdfd; position:sticky; left:0; border-right:2px solid #ccc;">${timeLabel}</td>`;
 
@@ -572,11 +544,10 @@ function renderFieldAvailabilityGrid() {
                 tableHtml += `<td style="${styleXClosed}; border:1px solid #999; text-align:center;" title="Closed by Time Rule">X</td>`;
             } 
             else if (bookings.length === 0) {
-                // FULLY FREE
                 tableHtml += `<td style="${styleCheck}; border:1px solid #999; text-align:center;" title="Available">✓</td>`;
             } 
             else {
-                // HAS BOOKINGS
+                // Sort bookings chronologically
                 bookings.sort((a, b) => parseTimeToMinutes(a.start) - parseTimeToMinutes(b.start));
 
                 let isStartBlocked = false;
@@ -588,23 +559,28 @@ function renderFieldAvailabilityGrid() {
                     const bEnd = parseTimeToMinutes(b.end);
                     
                     if (bStart !== null && bEnd !== null) {
-                         // Does this booking block the START?
-                         if (bStart <= slotStartMin && bEnd > slotStartMin) {
+                         // START CHECK:
+                         // If booking overlaps the start OR starts very shortly after start (e.g. 11:03)
+                         // We use a strict threshold. If gap is < MIN_USABLE_GAP, consider it blocked.
+                         const gapAtStart = bStart - slotStartMin;
+                         
+                         // It blocks start if it starts <= start OR gap is too small
+                         if (gapAtStart < MIN_USABLE_GAP) { 
                              isStartBlocked = true;
                              if (bEnd > maxBlockedUntil) maxBlockedUntil = bEnd;
                          }
                          
-                         // When is the FIRST conflict?
-                         if (bStart > slotStartMin && bStart < earliestConflictStart) {
-                             earliestConflictStart = bStart;
+                         // Track First Conflict (ignoring if it's the one blocking start)
+                         if (bStart > slotStartMin) {
+                             if (bStart < earliestConflictStart) earliestConflictStart = bStart;
                          }
                     }
                 });
 
-                // RENDER LOGIC
                 if (isStartBlocked) {
-                    // --- SCENARIO 1: Starts Blocked (Red X) ---
-                    // Logic: Extend maxBlockedUntil if overlaps exist
+                    // --- RED X CASE ---
+                    // Must see if it opens up later.
+                    // Extend maxBlockedUntil if there are subsequent overlapping bookings
                     let extended = true;
                     while(extended) {
                         extended = false;
@@ -612,6 +588,7 @@ function renderFieldAvailabilityGrid() {
                              const s = parseTimeToMinutes(b.start);
                              const e = parseTimeToMinutes(b.end);
                              if (s !== null && e !== null) {
+                                 // If this booking starts before or right when current block ends
                                  if (s <= maxBlockedUntil && e > maxBlockedUntil) {
                                      maxBlockedUntil = e;
                                      extended = true;
@@ -621,10 +598,8 @@ function renderFieldAvailabilityGrid() {
                     }
 
                     if (maxBlockedUntil >= slotEndMin) {
-                        // Fully Blocked
                         tableHtml += `<td style="${styleX}; border:1px solid #999; text-align:center;" title="Occupied">X</td>`;
                     } else {
-                        // Partial (Starts X, Opens Later)
                         const tStr = minutesToTime(maxBlockedUntil);
                         tableHtml += `<td style="${stylePartialX}; border:1px solid #999; text-align:center; vertical-align:middle;" title="Opens later">
                             <span style="font-size:1.2em;">X</span><br>
@@ -632,12 +607,12 @@ function renderFieldAvailabilityGrid() {
                         </td>`;
                     }
                 } else {
-                    // --- SCENARIO 2: Starts Free (Green Check) ---
+                    // --- GREEN CHECK CASE ---
+                    // It started free (gap >= MIN_USABLE_GAP).
+                    // When does it close?
                     if (earliestConflictStart >= slotEndMin) {
-                        // Effectively free (bookings just touch edges)
                         tableHtml += `<td style="${styleCheck}; border:1px solid #999; text-align:center;" title="Available">✓</td>`;
                     } else {
-                        // Partial (Starts Check, Closes Later)
                         const tStr = minutesToTime(earliestConflictStart);
                         tableHtml += `<td style="${stylePartialCheck}; border:1px solid #999; text-align:center; vertical-align:middle;" title="Closes soon">
                             <span style="font-size:1.2em;">✓</span><br>
@@ -653,7 +628,6 @@ function renderFieldAvailabilityGrid() {
     tableHtml += `</tbody></table></div>`;
     if(gridWrapper) gridWrapper.innerHTML = tableHtml;
 }
-
 
 window.initReportTab = initReportTab;
 
