@@ -764,17 +764,49 @@ if (normalizeGA(item.event)) {
 
 });  // END manualSkeleton.forEach
 
-    // =================================================================
-    // PASS 3 — LEAGUE PASS (Quantum-ish sports + mirroring)
-    // =================================================================
-    const leagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'League Game');
-    const specialtyLeagueBlocks = schedulableSlotBlocks.filter(b => b.event === 'Specialty League');
-    const remainingBlocks = schedulableSlotBlocks.filter(
-        b => b.event !== 'League Game' && b.event !== 'Specialty League'
-    );
+   // =================================================================
+// PASS 3 — LEAGUE PASS (Quantum-ish sports + mirroring)
+// =================================================================
 
-    const leagueGroups = {};
-    leagueBlocks.forEach(block => {
+const leagueBlocks = [];
+const specialtyLeagueBlocks = [];
+const remainingBlocks = []; // This will include unassigned/orphaned league blocks
+
+// --- FIXED: Smartly sort all schedulable blocks ---
+schedulableSlotBlocks.forEach(block => {
+    if (block.event === 'League Game') {
+        // Check if a league *actually exists* for this block
+        const leagueEntry = Object.entries(masterLeagues).find(([name, l]) =>
+            l.enabled &&
+            !disabledLeagues.includes(name) &&
+            l.divisions.includes(block.divName)
+        );
+        if (leagueEntry) {
+            leagueBlocks.push(block); // Good, process in PASS 3
+        } else {
+            remainingBlocks.push(block); // No league, process in PASS 4
+        }
+    } else if (block.event === 'Specialty League') {
+        // Check if a specialty league *actually exists*
+        const leagueEntry = Object.values(masterSpecialtyLeagues).find(l =>
+            l.enabled &&
+            !disabledSpecialtyLeagues.includes(l.name) &&
+            l.divisions.includes(block.divName)
+        );
+        if (leagueEntry) {
+            specialtyLeagueBlocks.push(block); // Good, process in PASS 3.5
+        } else {
+            remainingBlocks.push(block); // No league, process in PASS 4
+        }
+    } else {
+        remainingBlocks.push(block); // Not a league block, process in PASS 4
+    }
+});
+// --- END FIX ---
+
+
+const leagueGroups = {};
+leagueBlocks.forEach(block => {
         const leagueEntry = Object.entries(masterLeagues).find(([name, l]) =>
             l.enabled &&
             !disabledLeagues.includes(name) &&
