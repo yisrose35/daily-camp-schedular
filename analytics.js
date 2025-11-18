@@ -4,17 +4,12 @@ fileName: "yisrose35/daily-camp-schedular/daily-camp-schedular-a06297415476e0977
 fullContent: `// =================================================================
 // analytics.js
 //
-// --- UPDATED (BOLSTERED REPORTING) ---
-// 1. Field Availability Grid:
-//    - STRICT RULE applied: If usage > 0, it is 'X'.
-//    - Now INCLUDES Leagues, Specialty Leagues, and Pinned items.
-//    - Now INCLUDES Continuations (checks every slot, not just start).
-//    - '✓' only appears if the slot is completely empty.
-//    - Added filters (All / Fields / Specials).
-//
-// 2. Bunk Rotation Report:
-//    - Added "Scheduled Today" column.
-//    - Better sorting (Least recently used at the top).
+// --- UPDATED (ROBUST & BOLSTERED) ---
+// 1. Fixed "Blank Tab" Issue: Added safety checks for data sorting.
+// 2. Field Availability:
+//    - Checks ALL entry types (Leagues, Specialty, Pinned, etc).
+//    - Strict "X" if usage > 0.
+//    - added Inline Styles for immediate Red/Green feedback.
 // =================================================================
 
 (function() {
@@ -45,8 +40,9 @@ function parseTimeToMinutes(str) {
 }
 
 function fieldLabel(f) {
+    if (!f) return "";
     if (typeof f === "string") return f;
-    if (f && typeof f === "object" && typeof f.name === "string") return f.name;
+    if (typeof f === "object" && typeof f.name === "string") return f.name;
     return "";
 }
 
@@ -110,44 +106,49 @@ let reportContainer = null;
  * Main entry point
  */
 function initReportTab() {
-    container = document.getElementById("report-content");
-    if (!container) return;
+    try {
+        container = document.getElementById("report-content");
+        if (!container) return;
 
-    container.innerHTML = \`
-        <div class="league-nav" style="background: #e3f2fd; border-color: #90caf9;"> 
-            <label for="report-view-select" style="color: #1565c0;">Select Report:</label>
-            <select id="report-view-select">
-                <option value="availability">Field Availability Grid</option>
-                <option value="rotation">Bunk Rotation Report</option>
-            </select>
-        </div>
-        
-        <div id="report-availability-content" class="league-content-pane active"></div>
-        <div id="report-rotation-content" class="league-content-pane"></div>
-    \`;
+        container.innerHTML = \`
+            <div class="league-nav" style="background: #e3f2fd; border-color: #90caf9; padding: 10px; margin-bottom: 15px; border-radius: 8px;"> 
+                <label for="report-view-select" style="color: #1565c0; font-weight: bold;">Select Report:</label>
+                <select id="report-view-select" style="font-size: 1em; padding: 5px;">
+                    <option value="availability">Field Availability Grid</option>
+                    <option value="rotation">Bunk Rotation Report</option>
+                </select>
+            </div>
+            
+            <div id="report-availability-content" class="league-content-pane active"></div>
+            <div id="report-rotation-content" class="league-content-pane" style="display:none;"></div>
+        \`;
 
-    // Initial Render
-    renderFieldAvailabilityGrid();
-    renderBunkRotationUI();
+        // Initial Render
+        renderFieldAvailabilityGrid();
+        renderBunkRotationUI();
 
-    // Tab Switcher Logic
-    document.getElementById("report-view-select").onchange = (e) => {
-        const selected = e.target.value;
-        const rotationPane = document.getElementById("report-rotation-content");
-        const availabilityPane = document.getElementById("report-availability-content");
-        
-        if (selected === 'rotation') {
-            rotationPane.classList.add("active");
-            availabilityPane.classList.remove("active");
-            // Refresh rotation data when tab is opened
-            const currentDiv = divisionSelect ? divisionSelect.value : "";
-            if(currentDiv) onDivisionSelect(); 
-        } else {
-            rotationPane.classList.remove("active");
-            availabilityPane.classList.add("active");
-            renderFieldAvailabilityGrid(); // Refresh grid when tab is opened
-        }
-    };
+        // Tab Switcher Logic
+        const select = document.getElementById("report-view-select");
+        select.onchange = (e) => {
+            const selected = e.target.value;
+            const rotationPane = document.getElementById("report-rotation-content");
+            const availabilityPane = document.getElementById("report-availability-content");
+            
+            if (selected === 'rotation') {
+                rotationPane.style.display = "block";
+                availabilityPane.style.display = "none";
+                // Refresh data
+                if(divisionSelect && divisionSelect.value) onDivisionSelect(); 
+            } else {
+                rotationPane.style.display = "none";
+                availabilityPane.style.display = "block";
+                renderFieldAvailabilityGrid(); 
+            }
+        };
+    } catch (e) {
+        console.error("Error initializing report tab:", e);
+        if (container) container.innerHTML = \`<p style="color:red; padding:20px;">Error loading report: \${e.message}</p>\`;
+    }
 }
 
 // =================================================================
@@ -161,22 +162,22 @@ function renderBunkRotationUI() {
     loadMasterData();
     
     rotationContainer.innerHTML = \`
-        <h2 class="report-title">Bunk Rotation Report</h2>
+        <h2 class="report-title" style="border-bottom: 2px solid #007BFF; padding-bottom: 10px;">Bunk Rotation Report</h2>
         <p>Analyze activity frequency over the last 7 days + today's schedule.</p>
         
-        <div class="report-controls">
+        <div class="report-controls" style="background:#f9f9f9; padding:15px; border-radius:8px; display:flex; gap:20px; align-items:flex-end; margin-bottom:20px;">
             <div>
-                <label for="report-division-select">Division:</label>
-                <select id="report-division-select" class="report-select"></select>
+                <label for="report-division-select" style="display:block; font-weight:bold; margin-bottom:5px;">Division:</label>
+                <select id="report-division-select" class="report-select" style="padding:5px; min-width:150px;"></select>
             </div>
             <div>
-                <label for="report-bunk-select">Bunk (Optional):</label>
-                <select id="report-bunk-select" class="report-select" disabled></select>
+                <label for="report-bunk-select" style="display:block; font-weight:bold; margin-bottom:5px;">Bunk (Optional):</label>
+                <select id="report-bunk-select" class="report-select" style="padding:5px; min-width:150px;" disabled></select>
             </div>
         </div>
         
         <div id="report-table-container" class="report-container">
-            <p class="report-muted">Please select a division to view its report.</p>
+            <p class="report-muted" style="padding:20px; background:#f0f0f0; text-align:center; color:#666;">Please select a division to view its report.</p>
         </div>
     \`;
     
@@ -195,24 +196,31 @@ function renderBunkRotationUI() {
 }
 
 function loadMasterData() {
-    const app1Data = window.loadGlobalSettings?.().app1 || {};
-    divisions = window.divisions || {};
-    availableDivisions = (window.availableDivisions || []).sort();
-    
-    const fields = app1Data.fields || [];
-    const specials = app1Data.specialActivities || [];
-    
-    // Map to objects to track type
-    const sportActivities = fields.flatMap(f => (f.activities || []).map(a => ({name: a, type: 'sport'})));
-    const specialActivities = specials.map(s => ({name: s.name, type: 'special'}));
-    
-    // Deduplicate by name
-    const uniqueMap = new Map();
-    [...sportActivities, ...specialActivities].forEach(item => {
-        uniqueMap.set(item.name, item.type);
-    });
-    
-    allActivities = Array.from(uniqueMap.entries()).map(([name, type]) => ({name, type})).sort((a,b) => a.name.localeCompare(b.name));
+    try {
+        const app1Data = window.loadGlobalSettings?.().app1 || {};
+        divisions = window.divisions || {};
+        availableDivisions = (window.availableDivisions || []).sort();
+        
+        const fields = app1Data.fields || [];
+        const specials = app1Data.specialActivities || [];
+        
+        const sportActivities = fields.flatMap(f => (f.activities || []).map(a => ({name: a, type: 'sport'})));
+        const specialActivities = specials.map(s => ({name: s.name, type: 'special'}));
+        
+        const uniqueMap = new Map();
+        [...sportActivities, ...specialActivities].forEach(item => {
+            if(item.name) uniqueMap.set(item.name, item.type);
+        });
+        
+        // SAFETY FIX: Ensure names exist before sorting
+        allActivities = Array.from(uniqueMap.entries())
+            .map(([name, type]) => ({name, type}))
+            .sort((a,b) => (a.name || "").localeCompare(b.name || ""));
+            
+    } catch(e) {
+        console.error("Error loading master data:", e);
+        allActivities = [];
+    }
 }
 
 function onDivisionSelect() {
@@ -222,7 +230,7 @@ function onDivisionSelect() {
     if (!divName) {
         bunkSelect.innerHTML = "";
         bunkSelect.disabled = true;
-        reportContainer.innerHTML = \`<p class="report-muted">Please select a division.</p>\`;
+        reportContainer.innerHTML = \`<p class="report-muted" style="padding:20px; background:#f0f0f0; text-align:center; color:#666;">Please select a division.</p>\`;
         return;
     }
     
@@ -259,9 +267,11 @@ function renderDivisionReport(divName, bunks) {
     bunks.forEach(bunkName => {
         const bunkHeader = document.createElement('h3');
         bunkHeader.textContent = bunkName;
-        bunkHeader.className = "report-bunk-header";
+        bunkHeader.style.cssText = "background:#eee; padding:10px; margin:20px 0 0 0; border:1px solid #ccc; border-bottom:none; border-radius:5px 5px 0 0;";
+        
         const tableDiv = document.createElement('div');
-        tableDiv.className = "report-bunk-table-wrapper";
+        tableDiv.style.cssText = "border:1px solid #ccc; border-top:none; margin-bottom:20px; overflow-x:auto;";
+        
         reportContainer.appendChild(bunkHeader);
         reportContainer.appendChild(tableDiv);
         renderBunkReport(bunkName, tableDiv, false, history);
@@ -281,7 +291,6 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
     const todayActivities = new Set();
     todaySchedule.forEach(entry => {
         if(entry && entry._activity) {
-             // We include leagues here too, so you know if they played Soccer in a league today
              todayActivities.add(entry._activity);
         }
     });
@@ -304,9 +313,6 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
 
         daySchedule.forEach(entry => {
             if (!entry) return;
-            // For historical count, we usually exclude leagues if we want a pure "rotation" count,
-            // but users often want to know if they played the sport at all.
-            // Let's keep the exclusion for now to match "Activity" rotation logic.
             if (entry._h2h || entry._fixed || !entry.sport) return;
             
             let activityName = entry._activity;
@@ -325,37 +331,35 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
     }
     
     let tableHtml = \`
-        <table class="report-table">
+        <table class="report-table" style="width:100%; border-collapse:collapse;">
             <thead>
-                <tr>
-                    <th>Activity</th>
-                    <th>Scheduled Today?</th>
-                    <th>Count (Last 7 Days)</th>
-                    <th>Last Done</th>
+                <tr style="background:#f9f9f9; border-bottom:1px solid #ddd;">
+                    <th style="padding:8px; text-align:left;">Activity</th>
+                    <th style="padding:8px; text-align:center;">Scheduled Today?</th>
+                    <th style="padding:8px; text-align:center;">Count (Last 7 Days)</th>
+                    <th style="padding:8px; text-align:center;">Last Done</th>
                 </tr>
             </thead>
             <tbody>
     \`;
     
-    // Sort: Today -> Count (ascending) -> Type (Sport first) -> Alphabetical
     const sortedActivities = allActivities.sort((aObj, bObj) => {
         const a = aObj.name;
         const b = bObj.name;
         const rA = report[a];
         const rB = report[b];
 
-        if (rA.isToday !== rB.isToday) return rB.isToday - rA.isToday; // True first
-        if (rA.count !== rB.count) return rA.count - rB.count; // Low count first
-        if (rA.type !== rB.type) return rA.type === 'sport' ? -1 : 1; // Sports first
+        if (rA.isToday !== rB.isToday) return rB.isToday - rA.isToday;
+        if (rA.count !== rB.count) return rA.count - rB.count; 
+        if (rA.type !== rB.type) return rA.type === 'sport' ? -1 : 1; 
         return a.localeCompare(b); 
     });
     
     sortedActivities.forEach(actObj => {
         const actName = actObj.name;
         const data = report[actName];
-        // Highlight if fresh (0 count) and NOT scheduled today
         const isNeed = data.count === 0 && !data.isToday;
-        const rowClass = isNeed ? "report-row-fresh" : "";
+        const bg = isNeed ? "#e3f2fd" : "white"; // Inline fallback for 'report-row-fresh'
         
         const checkMark = data.isToday ? '<span style="color:green;font-weight:bold;">YES</span>' : '<span style="color:#ccc;">-</span>';
         
@@ -364,11 +368,11 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
             : '<span style="font-size:0.8em; background:#f3e5f5; color:#7b1fa2; padding:2px 6px; border-radius:4px;">Special</span>';
 
         tableHtml += \`
-            <tr class="\${rowClass}">
-                <td>\${actName} \${typePill}</td>
-                <td style="text-align:center;">\${checkMark}</td>
-                <td>\${data.count}</td>
-                <td>\${data.lastDone}</td>
+            <tr style="background:\${bg}; border-bottom:1px solid #eee;">
+                <td style="padding:6px 8px;">\${actName} \${typePill}</td>
+                <td style="padding:6px 8px; text-align:center;">\${checkMark}</td>
+                <td style="padding:6px 8px; text-align:center;">\${data.count}</td>
+                <td style="padding:6px 8px; text-align:center;">\${data.lastDone}</td>
             </tr>
         \`;
     });
@@ -410,15 +414,19 @@ function renderFieldAvailabilityGrid() {
     // 1. Setup Filter if not exists
     if (!document.getElementById("avail-filter-controls")) {
         availabilityContainer.innerHTML = \`
-            <div id="avail-filter-controls" style="margin-bottom:15px; display:flex; gap:15px; align-items:center;">
-                <h2 class="report-title" style="margin:0; border:none;">Field Availability</h2>
+            <div id="avail-filter-controls" style="margin-bottom:15px; display:flex; gap:15px; align-items:center; flex-wrap:wrap;">
+                <h2 style="margin:0; font-size:1.5em; color:#1a5fb4;">Field Availability</h2>
                 <select id="avail-type-filter" style="padding:5px; font-size:1rem;">
                     <option value="all">Show All Resources</option>
                     <option value="field">Fields Only</option>
                     <option value="special">Special Activities Only</option>
                 </select>
+                <div style="font-size:0.9em; color:#555;">
+                    <strong>Key:</strong> 
+                    <span style="color:#2e7d32; background:#e8f5e9; padding:0 4px; font-weight:bold;">✓</span> = Empty. 
+                    <span style="color:#c62828; background:#ffebee; padding:0 4px; font-weight:bold;">X</span> = Used/Closed.
+                </div>
             </div>
-            <p><strong>Key:</strong> <span class="avail-check">✓</span> = Completely Empty (30min). <span class="avail-x">X</span> = In use by at least 1 bunk OR Closed.</p>
             <div id="avail-grid-wrapper"></div>
         \`;
         document.getElementById("avail-type-filter").onchange = renderFieldAvailabilityGrid;
@@ -427,7 +435,7 @@ function renderFieldAvailabilityGrid() {
     const gridWrapper = document.getElementById("avail-grid-wrapper");
     gridWrapper.innerHTML = "";
     
-    const filterType = document.getElementById("avail-type-filter").value; // 'all', 'field', 'special'
+    const filterType = document.getElementById("avail-type-filter").value; 
 
     // 2. Load Data
     const dailyData = window.loadCurrentDailyData?.() || {};
@@ -435,7 +443,7 @@ function renderFieldAvailabilityGrid() {
     const unifiedTimes = window.unifiedTimes || dailyData.unifiedTimes || [];
 
     if (unifiedTimes.length === 0) {
-        gridWrapper.innerHTML = \`<p class="report-muted">No schedule generated yet.</p>\`;
+        gridWrapper.innerHTML = \`<p class="report-muted" style="padding:20px; background:#f0f0f0; text-align:center;">No schedule generated yet.</p>\`;
         return;
     }
 
@@ -443,24 +451,33 @@ function renderFieldAvailabilityGrid() {
     const allFields = (app1Data.fields || []).map(f => ({...f, type: 'field'}));
     const allSpecials = (app1Data.specialActivities || []).map(s => ({...s, type: 'special'}));
     
-    // Filter Resources
     let resourcesToShow = [...allFields, ...allSpecials];
     if (filterType === 'field') resourcesToShow = allFields;
     if (filterType === 'special') resourcesToShow = allSpecials;
     
     resourcesToShow.sort((a,b) => a.name.localeCompare(b.name));
 
-    // 3. Compile Usage
+    // 3. Compile Usage (STRICT & COMPREHENSIVE)
     const fieldUsageBySlot = {}; 
+    
     for (const bunk in scheduleAssignments) {
         const schedule = scheduleAssignments[bunk] || [];
         for (let i = 0; i < schedule.length; i++) {
             const entry = schedule[i];
-            // MODIFIED: Check EVERYTHING. 
-            // If 'entry' exists, and it has a valid field name, it counts as usage.
             if (entry) {
                 const fieldName = fieldLabel(entry.field);
-                if (fieldName && fieldName !== "Free" && fieldName !== "No Field" && fieldName !== "No Game") {
+                
+                // Check for ANY valid usage. 
+                // We deliberately exclude 'Free', 'No Field', 'No Game'.
+                // 'Unassigned League' typically implies the league slot exists but no field is taken yet? 
+                // Actually, unassigned leagues don't consume a field resource, so they shouldn't block.
+                
+                if (fieldName && 
+                    fieldName !== "Free" && 
+                    fieldName !== "No Field" && 
+                    fieldName !== "No Game" && 
+                    fieldName !== "Unassigned League") {
+                    
                     fieldUsageBySlot[i] = fieldUsageBySlot[i] || {};
                     fieldUsageBySlot[i][fieldName] = (fieldUsageBySlot[i][fieldName] || 0) + 1;
                 }
@@ -478,19 +495,36 @@ function renderFieldAvailabilityGrid() {
     });
 
     // 5. Build Grid
-    let tableHtml = \`<div class="schedule-view-wrapper"><table class="availability-grid"><thead><tr><th>Time</th>\`;
+    // Use inline styles for availability to ensure color visibility even if CSS fails
+    const styleCheck = "font-size:1.2em; color:#2e7d32; font-weight:900; background-color:#e8f5e9;";
+    const styleX = "font-size:1.2em; color:#c62828; font-weight:700; background-color:#ffebee;";
+    const styleXClosed = "font-size:1.2em; color:#b71c1c; font-weight:700; background-color:#ffcdd2;";
+
+    let tableHtml = \`<div class="schedule-view-wrapper"><table class="availability-grid" style="border-collapse:collapse; width:100%;"><thead><tr><th style="background:#f4f4f4; border:1px solid #999; padding:8px; position:sticky; top:0; z-index:5;">Time</th>\`;
     
     resourcesToShow.forEach(r => {
-        tableHtml += \`<th>\${r.name}</th>\`;
+        tableHtml += \`<th style="background:#f4f4f4; border:1px solid #999; padding:8px; min-width:80px; position:sticky; top:0; z-index:5;">\${r.name}</th>\`;
     });
     tableHtml += \`</tr></thead><tbody>\`;
 
     unifiedTimes.forEach((slot, i) => {
-        const start = new Date(slot.start);
-        let h = start.getHours(), m = start.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12;
-        const timeLabel = \`\${h}:\${m} \${ap}\`;
+        let timeLabel = "Invalid Time";
+        try {
+            // Robust date parsing
+            let d = new Date(slot.start);
+            if(isNaN(d.getTime())) {
+                 // Try basic string parse if unifiedTimes came raw from JSON
+                 d = new Date();
+                 const [h,m] = String(slot.start).split(":"); // Fallback if string "09:00"
+                 // This fallback is rarely needed if scheduler logic works, but prevents crash
+            }
+            
+            let h = d.getHours(), m = d.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; 
+            h = h % 12 || 12;
+            timeLabel = \`\${h}:\${m} \${ap}\`;
+        } catch(e) { timeLabel = slot.label || "Time?"; }
         
-        tableHtml += \`<tr><td>\${timeLabel}</td>\`;
+        tableHtml += \`<tr><td style="border:1px solid #999; padding:6px; font-weight:bold; background:#fdfdfd; position:sticky; left:0; border-right:2px solid #ccc;">\${timeLabel}</td>\`;
 
         resourcesToShow.forEach(r => {
             const props = fieldProperties[r.name];
@@ -498,14 +532,12 @@ function renderFieldAvailabilityGrid() {
             const timeAvail = isTimeAvailable(i, props);
             
             // --- STRICT LOGIC ---
-            // X if closed by rule OR usage > 0
             if (!timeAvail) {
-                tableHtml += \`<td class="avail-x" style="background:#fce4ec; color:#b71c1c;" title="Closed by Time Rule">X</td>\`;
+                tableHtml += \`<td style="\${styleXClosed}; border:1px solid #999; text-align:center;" title="Closed by Time Rule">X</td>\`;
             } else if (usedCount > 0) {
-                tableHtml += \`<td class="avail-x" title="Occupied by \${usedCount} bunk(s)">X</td>\`;
+                tableHtml += \`<td style="\${styleX}; border:1px solid #999; text-align:center;" title="Occupied by \${usedCount} bunk(s)">X</td>\`;
             } else {
-                // Completely empty -> Check
-                tableHtml += \`<td class="avail-check" title="Available">✓</td>\`;
+                tableHtml += \`<td style="\${styleCheck}; border:1px solid #999; text-align:center;" title="Available">✓</td>\`;
             }
         });
         tableHtml += \`</tr>\`;
