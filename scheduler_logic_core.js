@@ -1325,18 +1325,21 @@ Object.values(specialtyLeagueGroups).forEach(group => {
     // =================================================================
     remainingBlocks.sort((a, b) => a.startTime - b.startTime);
 
-    for (const block of remainingBlocks) {
-        if (!block.slots || block.slots.length === 0) continue;
-        if (!window.scheduleAssignments[block.bunk]) continue;
-        if (window.scheduleAssignments[block.bunk][block.slots[0]]) continue; // already filled
-
-        let pick = null;
-
-        // --- NEW FIX ---
+           // --- NEW FIX ---
         // If a league block falls through (e.g., no teams/fields assigned),
-        // do NOT let it be filled by findBestGeneralActivity.
+        // mark it as a league with a clear "Unassigned" message so the UI
+        // can still show a proper league panel with _allMatchups.
         if (block.event === 'League Game' || block.event === 'Specialty League') {
-            pick = { field: "Unassigned League", sport: null, _activity: "Free" };
+            pick = {
+                field: "No Game",
+                sport: null,
+                _h2h: true,
+                vs: null,
+                _activity: "League",
+                _allMatchups: [
+                    "Unassigned League (no configured league / teams / playable fields)"
+                ]
+            };
         }
         // --- END NEW FIX ---
 
