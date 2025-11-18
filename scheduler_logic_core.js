@@ -832,15 +832,55 @@ leagueBlocks.forEach(block => {
 
     const sortedLeagueGroups = Object.values(leagueGroups).sort((a, b) => a.startTime - b.startTime);
 
+    // ... inside PASS 3 ...
     sortedLeagueGroups.forEach(group => {
         const { leagueName, league, slots } = group;
+        const allBunksInGroup = Array.from(group.bunks).sort(); // <-- MOVED UP
+
+        // Get base division name *before* checking teams
+        let baseDivName = null;
+        if (allBunksInGroup.length > 0) {
+            const firstBunk = allBunksInGroup[0];
+            baseDivName = Object.keys(divisions).find(div =>
+                (divisions[div].bunks || []).includes(firstBunk)
+            );
+        }
+        if (!baseDivName) baseDivName = allBunksInGroup[0]?.divName || "unknown"; // Fallback
 
         const leagueTeams = (league.teams || []).map(t => String(t).trim()).filter(Boolean);
-        if (leagueTeams.length < 2) return;
 
-        const allBunksInGroup = Array.from(group.bunks).sort();
-        if (allBunksInGroup.length === 0) return;
+        // --- THIS IS THE FIX ---
+        // If league has no teams, fill all bunks with "No Game" / "Unassigned"
+        if (leagueTeams.length < 2) {
+            const noGamePick = {
+                field: "No Game",
+                sport: null,
+                _h2h: true, // Make it a league block
+                _activity: "League",
+                _allMatchups: ["Unassigned (League has no teams)"] // UI will show this
+            };
+            
+            allBunksInGroup.forEach(bunk => {
+                const bunkDivName = Object.keys(divisions).find(div =>
+                    (divisions[div].bunks || []).includes(bunk)
+                ) || baseDivName;
 
+                fillBlock(
+                    { slots, bunk: bunk, divName: bunkDivName, startTime: group.startTime, endTime: group.startTime + INCREMENT_MINS * slots.length },
+                    noGamePick,
+                    fieldUsageBySlot,
+                    yesterdayHistory,
+                    true // isLeagueFill = true
+                );
+            });
+            return; // Go to the next group
+        }
+        // --- END FIX ---
+        
+        if (allBunksInGroup.length === 0) return; // Still need this check
+
+        // determine a base division for field rules (original logic was here)
+        const blockBase = { slots, divName: baseDivName };
         // determine a base division for field rules
         let baseDivName = null;
         {
