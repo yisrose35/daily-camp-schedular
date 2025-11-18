@@ -873,6 +873,47 @@ leagueBlocks.forEach(block => {
                     true // isLeagueFill = true
                 );
             });
+                // =================================================================
+    // PASS 3.9 — SAFETY: Ensure all League Game blocks have something
+    //              in scheduleAssignments, so UI can show _allMatchups
+    // =================================================================
+    leagueBlocks.forEach(block => {
+        const slots = block.slots || [];
+        if (!slots.length) return;
+        const bunk = block.bunk;
+        if (!window.scheduleAssignments[bunk]) return;
+
+        const firstSlot = slots[0];
+
+        // If PASS 3 never filled this bunk/slot, force an "Unassigned League"
+        if (!window.scheduleAssignments[bunk][firstSlot]) {
+            const fallbackPick = {
+                field: "No Game",
+                sport: null,
+                _h2h: true,
+                vs: null,
+                _activity: "League",
+                _allMatchups: [
+                    "Unassigned League (fallback – no matchups or fields applied)"
+                ]
+            };
+
+            fillBlock(
+                {
+                    slots,
+                    bunk,
+                    divName: block.divName,
+                    startTime: block.startTime,
+                    endTime: block.endTime || (block.startTime + INCREMENT_MINS * slots.length)
+                },
+                fallbackPick,
+                fieldUsageBySlot,
+                yesterdayHistory,
+                true // isLeagueFill
+            );
+        }
+    });
+
             return; // Go to the next group
         }
         // --- END FIX ---
