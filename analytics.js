@@ -1,7 +1,4 @@
-{
-type: "uploaded file",
-fileName: "yisrose35/daily-camp-schedular/daily-camp-schedular-a06297415476e09773a64453edeaba22e822d2fb/analytics.js",
-fullContent: `// =================================================================
+// =================================================================
 // analytics.js
 //
 // --- UPDATED (FIXED & BOLSTERED) ---
@@ -30,7 +27,7 @@ function parseTimeToMinutes(str) {
   }
   
   // Regex for HH:MM
-  const m = s.match(/^(\\d{1,2})\\s*:\\s*(\\d{2})$/);
+  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
   if (!m) return null;
   let hh = parseInt(m[1], 10);
   const mm = parseInt(m[2], 10);
@@ -113,7 +110,7 @@ function initReportTab() {
         container = document.getElementById("report-content");
         if (!container) return;
 
-        container.innerHTML = \`
+        container.innerHTML = `
             <div class="league-nav" style="background: #e3f2fd; border-color: #90caf9; padding: 10px; margin-bottom: 15px; border-radius: 8px;"> 
                 <label for="report-view-select" style="color: #1565c0; font-weight: bold;">Select Report:</label>
                 <select id="report-view-select" style="font-size: 1em; padding: 5px;">
@@ -124,7 +121,7 @@ function initReportTab() {
             
             <div id="report-availability-content" class="league-content-pane active"></div>
             <div id="report-rotation-content" class="league-content-pane" style="display:none;"></div>
-        \`;
+        `;
 
         // Initial Render
         renderFieldAvailabilityGrid();
@@ -151,7 +148,7 @@ function initReportTab() {
         }
     } catch (e) {
         console.error("Error initializing report tab:", e);
-        if (container) container.innerHTML = \`<p style="color:red; padding:20px;">Error loading report: \${e.message}</p>\`;
+        if (container) container.innerHTML = `<p style="color:red; padding:20px;">Error loading report: ${e.message}</p>`;
     }
 }
 
@@ -165,7 +162,7 @@ function renderBunkRotationUI() {
 
     loadMasterData();
     
-    rotationContainer.innerHTML = \`
+    rotationContainer.innerHTML = `
         <h2 class="report-title" style="border-bottom: 2px solid #007BFF; padding-bottom: 10px;">Bunk Rotation Report</h2>
         <p>Analyze activity frequency over the last 7 days + today's schedule.</p>
         
@@ -183,7 +180,7 @@ function renderBunkRotationUI() {
         <div id="report-table-container" class="report-container">
             <p class="report-muted" style="padding:20px; background:#f0f0f0; text-align:center; color:#666;">Please select a division to view its report.</p>
         </div>
-    \`;
+    `;
     
     divisionSelect = document.getElementById("report-division-select");
     bunkSelect = document.getElementById("report-bunk-select");
@@ -191,7 +188,7 @@ function renderBunkRotationUI() {
 
     let divOptions = '<option value="">-- Select a division --</option>';
     availableDivisions.forEach(divName => {
-        divOptions += \`<option value="\${divName}">\${divName}</option>\`;
+        divOptions += `<option value="${divName}">${divName}</option>`;
     });
     divisionSelect.innerHTML = divOptions;
     
@@ -233,14 +230,14 @@ function onDivisionSelect() {
     if (!divName) {
         bunkSelect.innerHTML = "";
         bunkSelect.disabled = true;
-        reportContainer.innerHTML = \`<p class="report-muted" style="padding:20px; background:#f0f0f0; text-align:center; color:#666;">Please select a division.</p>\`;
+        reportContainer.innerHTML = `<p class="report-muted" style="padding:20px; background:#f0f0f0; text-align:center; color:#666;">Please select a division.</p>`;
         return;
     }
     
     const bunksInDiv = (divisions[divName]?.bunks || []).sort();
-    let bunkOptions = \`<option value="">--- Show All \${divName} Bunks ---</option>\`;
+    let bunkOptions = `<option value="">--- Show All ${divName} Bunks ---</option>`;
     bunksInDiv.forEach(bunk => {
-        bunkOptions += \`<option value="\${bunk}">\${bunk}</option>\`;
+        bunkOptions += `<option value="${bunk}">${bunk}</option>`;
     });
     bunkSelect.innerHTML = bunkOptions;
     bunkSelect.disabled = false;
@@ -263,7 +260,7 @@ function onBunkSelect() {
 function renderDivisionReport(divName, bunks) {
     reportContainer.innerHTML = "";
     if (bunks.length === 0) {
-        reportContainer.innerHTML = \`<p class="report-muted">No bunks found in \${divName}.</p>\`;
+        reportContainer.innerHTML = `<p class="report-muted">No bunks found in ${divName}.</p>`;
         return;
     }
     const history = window.loadScheduleHistory(7);
@@ -283,7 +280,7 @@ function renderDivisionReport(divName, bunks) {
 
 function renderBunkReport(bunkName, targetContainer, clearContainer = true, preloadedHistory = null) {
     if (clearContainer) {
-        targetContainer.innerHTML = \`<p class="report-loading">Loading...</p>\`;
+        targetContainer.innerHTML = `<p class="report-loading">Loading...</p>`;
     }
 
     const history = preloadedHistory || window.loadScheduleHistory(7);
@@ -327,13 +324,13 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
             if (activityName && report[activityName]) {
                 report[activityName].count++;
                 if (report[activityName].lastDone === "7+ days ago") {
-                    report[activityName].lastDone = (daysAgo === 1) ? "1 day ago" : \`\${daysAgo} days ago\`;
+                    report[activityName].lastDone = (daysAgo === 1) ? "1 day ago" : `${daysAgo} days ago`;
                 }
             }
         });
     }
     
-    let tableHtml = \`
+    let tableHtml = `
         <table class="report-table" style="width:100%; border-collapse:collapse;">
             <thead>
                 <tr style="background:#f9f9f9; border-bottom:1px solid #ddd;">
@@ -344,7 +341,7 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
                 </tr>
             </thead>
             <tbody>
-    \`;
+    `;
     
     const sortedActivities = allActivities.sort((aObj, bObj) => {
         const a = aObj.name;
@@ -370,17 +367,17 @@ function renderBunkReport(bunkName, targetContainer, clearContainer = true, prel
             ? '<span style="font-size:0.8em; background:#e3f2fd; color:#1565c0; padding:2px 6px; border-radius:4px;">Sport</span>'
             : '<span style="font-size:0.8em; background:#f3e5f5; color:#7b1fa2; padding:2px 6px; border-radius:4px;">Special</span>';
 
-        tableHtml += \`
-            <tr style="background:\${bg}; border-bottom:1px solid #eee;">
-                <td style="padding:6px 8px;">\${actName} \${typePill}</td>
-                <td style="padding:6px 8px; text-align:center;">\${checkMark}</td>
-                <td style="padding:6px 8px; text-align:center;">\${data.count}</td>
-                <td style="padding:6px 8px; text-align:center;">\${data.lastDone}</td>
+        tableHtml += `
+            <tr style="background:${bg}; border-bottom:1px solid #eee;">
+                <td style="padding:6px 8px;">${actName} ${typePill}</td>
+                <td style="padding:6px 8px; text-align:center;">${checkMark}</td>
+                <td style="padding:6px 8px; text-align:center;">${data.count}</td>
+                <td style="padding:6px 8px; text-align:center;">${data.lastDone}</td>
             </tr>
-        \`;
+        `;
     });
     
-    tableHtml += \`</tbody></table>\`;
+    tableHtml += `</tbody></table>`;
     targetContainer.innerHTML = tableHtml;
 }
 
@@ -397,7 +394,7 @@ window.loadScheduleHistory = function(daysToLoad) {
         const y = d.getFullYear();
         const m = String(d.getMonth() + 1).padStart(2, '0');
         const dayStr = String(d.getDate()).padStart(2, '0');
-        const dateKey = \`\${y}-\${m}-\${dayStr}\`;
+        const dateKey = `${y}-${m}-${dayStr}`;
         
         if (allData[dateKey] && allData[dateKey].scheduleAssignments) {
             history[dateKey] = allData[dateKey].scheduleAssignments;
@@ -415,7 +412,7 @@ function renderFieldAvailabilityGrid() {
     if (!availabilityContainer) return;
 
     if (!document.getElementById("avail-filter-controls")) {
-        availabilityContainer.innerHTML = \`
+        availabilityContainer.innerHTML = `
             <div id="avail-filter-controls" style="margin-bottom:15px; display:flex; gap:15px; align-items:center; flex-wrap:wrap;">
                 <h2 style="margin:0; font-size:1.5em; color:#1a5fb4;">Field Availability</h2>
                 <select id="avail-type-filter" style="padding:5px; font-size:1rem;">
@@ -430,7 +427,7 @@ function renderFieldAvailabilityGrid() {
                 </div>
             </div>
             <div id="avail-grid-wrapper"></div>
-        \`;
+        `;
         const filter = document.getElementById("avail-type-filter");
         if(filter) filter.onchange = renderFieldAvailabilityGrid;
     }
@@ -446,7 +443,7 @@ function renderFieldAvailabilityGrid() {
     const unifiedTimes = window.unifiedTimes || dailyData.unifiedTimes || [];
 
     if (unifiedTimes.length === 0) {
-        if(gridWrapper) gridWrapper.innerHTML = \`<p class="report-muted" style="padding:20px; background:#f0f0f0; text-align:center;">No schedule generated yet.</p>\`;
+        if(gridWrapper) gridWrapper.innerHTML = `<p class="report-muted" style="padding:20px; background:#f0f0f0; text-align:center;">No schedule generated yet.</p>`;
         return;
     }
 
@@ -495,12 +492,12 @@ function renderFieldAvailabilityGrid() {
     const styleX = "font-size:1.2em; color:#c62828; font-weight:700; background-color:#ffebee;";
     const styleXClosed = "font-size:1.2em; color:#b71c1c; font-weight:700; background-color:#ffcdd2;";
 
-    let tableHtml = \`<div class="schedule-view-wrapper"><table class="availability-grid" style="border-collapse:collapse; width:100%;"><thead><tr><th style="background:#f4f4f4; border:1px solid #999; padding:8px; position:sticky; top:0; z-index:5;">Time</th>\`;
+    let tableHtml = `<div class="schedule-view-wrapper"><table class="availability-grid" style="border-collapse:collapse; width:100%;"><thead><tr><th style="background:#f4f4f4; border:1px solid #999; padding:8px; position:sticky; top:0; z-index:5;">Time</th>`;
     
     resourcesToShow.forEach(r => {
-        tableHtml += \`<th style="background:#f4f4f4; border:1px solid #999; padding:8px; min-width:80px; position:sticky; top:0; z-index:5;">\${r.name}</th>\`;
+        tableHtml += `<th style="background:#f4f4f4; border:1px solid #999; padding:8px; min-width:80px; position:sticky; top:0; z-index:5;">${r.name}</th>`;
     });
-    tableHtml += \`</tr></thead><tbody>\`;
+    tableHtml += `</tr></thead><tbody>`;
 
     unifiedTimes.forEach((slot, i) => {
         let timeLabel = "Invalid Time";
@@ -513,10 +510,10 @@ function renderFieldAvailabilityGrid() {
             
             let h = d.getHours(), m = d.getMinutes().toString().padStart(2,"0"), ap = h >= 12 ? "PM" : "AM"; 
             h = h % 12 || 12;
-            timeLabel = \`\${h}:\${m} \${ap}\`;
+            timeLabel = `${h}:${m} ${ap}`;
         } catch(e) { timeLabel = slot.label || "Time?"; }
         
-        tableHtml += \`<tr><td style="border:1px solid #999; padding:6px; font-weight:bold; background:#fdfdfd; position:sticky; left:0; border-right:2px solid #ccc;">\${timeLabel}</td>\`;
+        tableHtml += `<tr><td style="border:1px solid #999; padding:6px; font-weight:bold; background:#fdfdfd; position:sticky; left:0; border-right:2px solid #ccc;">${timeLabel}</td>`;
 
         resourcesToShow.forEach(r => {
             const props = fieldProperties[r.name];
@@ -525,17 +522,17 @@ function renderFieldAvailabilityGrid() {
             
             // --- STRICT LOGIC ---
             if (!timeAvail) {
-                tableHtml += \`<td style="\${styleXClosed}; border:1px solid #999; text-align:center;" title="Closed by Time Rule">X</td>\`;
+                tableHtml += `<td style="${styleXClosed}; border:1px solid #999; text-align:center;" title="Closed by Time Rule">X</td>`;
             } else if (usedCount > 0) {
-                tableHtml += \`<td style="\${styleX}; border:1px solid #999; text-align:center;" title="Occupied by \${usedCount} bunk(s)">X</td>\`;
+                tableHtml += `<td style="${styleX}; border:1px solid #999; text-align:center;" title="Occupied by ${usedCount} bunk(s)">X</td>`;
             } else {
-                tableHtml += \`<td style="\${styleCheck}; border:1px solid #999; text-align:center;" title="Available">✓</td>\`;
+                tableHtml += `<td style="${styleCheck}; border:1px solid #999; text-align:center;" title="Available">✓</td>`;
             }
         });
-        tableHtml += \`</tr>\`;
+        tableHtml += `</tr>`;
     });
     
-    tableHtml += \`</tbody></table></div>\`;
+    tableHtml += `</tbody></table></div>`;
     if(gridWrapper) gridWrapper.innerHTML = tableHtml;
 }
 
@@ -543,5 +540,3 @@ function renderFieldAvailabilityGrid() {
 window.initReportTab = initReportTab;
 
 })();
-`
-}
