@@ -1,7 +1,8 @@
 // =================================================================
 // master_schedule_builder.js  (UPDATED)
-// - "Clear Grid" now resets the load dropdown to avoid confusion.
-// - Added a visual "glow" effect to the Load Template area after clearing.
+// - Renamed "Clear Grid" to "New Grid".
+// - Added safety prompt: "Do you want to save first?" before clearing.
+// - Retains auto-save draft logic.
 // =================================================================
 (function(){
 'use strict';
@@ -105,7 +106,7 @@ function renderTemplateUI(){
       <div class="template-group">
           <label>&nbsp;</label>
           <button id="template-save-btn" style="padding:8px 12px;background:#007bff;color:#fff;border:none;border-radius:5px;">Save</button>
-          <button id="template-clear-btn" style="padding:8px 12px;background:#ff9800;color:#fff;border:none;border-radius:5px;margin-left:8px;">Clear Grid</button>
+          <button id="template-clear-btn" style="padding:8px 12px;background:#ff9800;color:#fff;border:none;border-radius:5px;margin-left:8px;">New Grid</button>
       </div>
     </div>
     <details id="template-manage-details" style="margin-top:15px;">
@@ -163,38 +164,37 @@ function renderTemplateUI(){
     } 
   };
 
-  // --- NEW: Clear Grid Logic (With "Light Up" effect) ---
+  // --- NEW: "New Grid" Logic (With Save Prompt) ---
   document.getElementById("template-clear-btn").onclick=()=>{
-    if(confirm("Clear the entire grid to start over?\n(Your saved templates will NOT be deleted.)")){
-        dailySkeleton = [];
-        
-        // Reset Inputs
-        saveName.value = ""; 
-        loadSel.value = ""; // Visually reset the dropdown
-        
-        // Clear Storage
-        localStorage.removeItem(SKELETON_DRAFT_NAME_KEY); 
-        saveDraftToLocalStorage(); 
-        
-        renderGrid();
-
-        // --- Visual Effect: Flash the Load Template area ---
-        const loadGroup = document.getElementById('load-template-group');
-        if(loadGroup) {
-            // Add temporary styles for glow effect
-            loadGroup.style.transition = "all 0.5s ease";
-            loadGroup.style.boxShadow = "0 0 15px #ff9800"; // Orange glow
-            loadGroup.style.border = "1px solid #ff9800";
-            loadGroup.style.borderRadius = "5px";
-            loadGroup.style.padding = "5px"; // Add a little padding so it looks nice
-            
-            // Remove after 1.5 seconds
-            setTimeout(() => {
-                loadGroup.style.boxShadow = "";
-                loadGroup.style.border = "";
-                loadGroup.style.padding = "";
-            }, 1500);
+    if(dailySkeleton.length > 0) {
+        // PROMPT USER TO SAVE
+        if(!confirm("You have unsaved items on the grid.\n\nDo you want to discard them and start a new grid?\n\nClick OK to DISCARD and start new.\nClick Cancel to stay here and SAVE first.")) {
+            return; // User clicked Cancel, so they stay to save.
         }
+    }
+    
+    // Proceed to clear
+    dailySkeleton = [];
+    saveName.value = ""; 
+    loadSel.value = ""; 
+    localStorage.removeItem(SKELETON_DRAFT_NAME_KEY); 
+    saveDraftToLocalStorage(); 
+    renderGrid();
+
+    // --- Visual Effect: Flash the Load Template area ---
+    const loadGroup = document.getElementById('load-template-group');
+    if(loadGroup) {
+        loadGroup.style.transition = "all 0.5s ease";
+        loadGroup.style.boxShadow = "0 0 15px #ff9800"; // Orange glow
+        loadGroup.style.border = "1px solid #ff9800";
+        loadGroup.style.borderRadius = "5px";
+        loadGroup.style.padding = "5px"; 
+        
+        setTimeout(() => {
+            loadGroup.style.boxShadow = "";
+            loadGroup.style.border = "";
+            loadGroup.style.padding = "";
+        }, 1500);
     }
   };
 
