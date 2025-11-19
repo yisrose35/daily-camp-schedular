@@ -2,8 +2,7 @@
 // helper.js
 //
 // Provides a "Help & Guide" tab to explain the application's features.
-// - UPDATED: Moved Pro Tips to the top.
-// - UPDATED: Bolstered tips with more feature details.
+// - UPDATED: Added tip about left-clicking tiles for info.
 // =================================================================
 
 (function() {
@@ -20,6 +19,8 @@ function initHelperTab() {
             <div class="help-footer" style="margin-top: 0; margin-bottom: 30px; background: #e8f5e9; border-color: #c8e6c9;">
                 <h3 style="color: #2e7d32;">💡 Pro Tips & Key Features</h3>
                 <ul style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px 40px;">
+                    <li><strong>ℹ️ Tile Info:</strong> In the Master Scheduler, <strong>Left-Click</strong> on any draggable tile (e.g., "Activity", "Sports") to see a popup explaining exactly what that tile does and how the optimizer treats it.</li>
+
                     <li><strong>🧠 Smart Optimizer Logic:</strong> The scheduler isn't random. It remembers what activities each bunk played yesterday and over the last 7 days. It actively tries to provide variety and avoid repeating the same sport two days in a row.</li>
                     
                     <li><strong>⚡ Priority Scheduling:</strong> "Specialty Leagues" (e.g., 5th Grade Basketball) get <strong>Priority #1</strong>. The system locks down the necessary fields for these games <em>before</em> scheduling any general activities.</li>
