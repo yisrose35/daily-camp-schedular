@@ -96,6 +96,12 @@
             </button>
             <input type="file" id="importFileInput" accept=".json" style="display: none;">
 
+            <button id="restoreAutoSaveBtn" 
+                style="background: #6c757d; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;"
+                onclick="window.restoreAutoSave?.()">
+                Recall Last Auto-Save
+            </button>
+
             <hr style="margin: 20px 0;">
 
             <h3>Erase All Data</h3>
@@ -191,9 +197,6 @@
                 window.initHelperTab?.();
             }
         }
-
-        // The main DOMContentLoaded listener and boot() function
-        // have been MOVED to welcome.js to control startup.
     </script>
 </body>
 </html>
