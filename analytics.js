@@ -1,17 +1,20 @@
 // =================================================================
 // analytics.js
 //
-// --- UPDATED FOR ROBUST PARTIAL AVAILABILITY (v3) ---
+// --- UPDATED FOR ROBUST PARTIAL AVAILABILITY (v4) ---
 // 1. Logic:
-//    - If gap at start < 5 mins: Mark as "X" (Unavailable).
-//    - If gap at start >= 5 mins: Mark as "✓" (Start Free).
-// 2. Data: checks start/startTime/s to ensure we catch the times.
+//    - "X" + "Avail @ [Time]" (Red) -> If blocked at start.
+//    - "✓" + "Unavail @ [Time]" (Green) -> If free at start.
+// 2. Data Improvements:
+//    - Now checks 'duration'/'length' to calculate end time if missing.
+//    - Prevents defaulting to full 30-min block if shorter duration found.
+// 3. Visuals: Larger text for partial times.
 // =================================================================
 
 (function() {
 'use strict';
 
-console.log("--- Analytics Module Loaded (Partial Avail v3) ---");
+console.log("--- Analytics Module Loaded (Partial Avail v4) ---");
 
 const MIN_USABLE_GAP = 5; // Gaps smaller than this are ignored (treated as blocked)
 
@@ -23,6 +26,9 @@ function parseTimeToMinutes(val) {
   if (val instanceof Date) {
       return val.getHours() * 60 + val.getMinutes();
   }
+
+  // Handle Numbers (raw minutes or excel dates) - unlikely but safe
+  if (typeof val === "number") return val;
 
   // Handle Strings
   if (typeof val === "string") {
@@ -79,18 +85,28 @@ function fieldLabel(f) {
 
 // Helper to safely extract start/end from any data shape
 function getEntryTimes(entry, slotObj, increment) {
-    // Try various property names
+    // Try various property names for Start
     let s = entry.start || entry.startTime || entry.s || entry.time;
+    // Try various property names for End
     let e = entry.end || entry.endTime || entry.e;
+    // Try duration
+    let dur = entry.duration || entry.length || entry.dur; // in minutes
 
-    // Fallback to slot time if missing
+    // Fallback to slot time if start is missing
     if (!s && slotObj) s = slotObj.start;
     
-    // Fallback to calculate end if missing
+    // Calculate End if missing
     if (s && !e) {
         const sMin = parseTimeToMinutes(s);
         if (sMin !== null) {
-            e = minutesToTime(sMin + increment);
+            // If we have a duration, use it!
+            if (dur && !isNaN(dur)) {
+                e = minutesToTime(sMin + parseInt(dur));
+            } else {
+                // If no duration, we MUST assume full slot (increment)
+                // This is where "11:20" fails if the data doesn't say "Ends at 11:20"
+                e = minutesToTime(sMin + increment);
+            }
         }
     }
     return { start: s, end: e };
@@ -502,8 +518,11 @@ function renderFieldAvailabilityGrid() {
     // Styles
     const styleCheck = "font-size:1.2em; color:#2e7d32; font-weight:900; background-color:#e8f5e9;";
     const styleX = "font-size:1.2em; color:#c62828; font-weight:700; background-color:#ffebee;";
+    
+    // Increased font size here for partial text (0.85em) and bolded
     const stylePartialCheck = "color:#2e7d32; font-weight:900; background-color:#e8f5e9; line-height:1.1;";
     const stylePartialX = "color:#c62828; font-weight:700; background-color:#ffebee; line-height:1.1;";
+    
     const styleXClosed = "font-size:1.2em; color:#b71c1c; font-weight:700; background-color:#ffcdd2;";
 
     let tableHtml = `<div class="schedule-view-wrapper"><table class="availability-grid" style="border-collapse:collapse; width:100%;"><thead><tr><th style="background:#f4f4f4; border:1px solid #999; padding:8px; position:sticky; top:0; z-index:5;">Time</th>`;
@@ -560,8 +579,7 @@ function renderFieldAvailabilityGrid() {
                     
                     if (bStart !== null && bEnd !== null) {
                          // START CHECK:
-                         // If booking overlaps the start OR starts very shortly after start (e.g. 11:03)
-                         // We use a strict threshold. If gap is < MIN_USABLE_GAP, consider it blocked.
+                         // If booking overlaps the start OR starts very shortly after start
                          const gapAtStart = bStart - slotStartMin;
                          
                          // It blocks start if it starts <= start OR gap is too small
@@ -579,8 +597,6 @@ function renderFieldAvailabilityGrid() {
 
                 if (isStartBlocked) {
                     // --- RED X CASE ---
-                    // Must see if it opens up later.
-                    // Extend maxBlockedUntil if there are subsequent overlapping bookings
                     let extended = true;
                     while(extended) {
                         extended = false;
@@ -588,7 +604,7 @@ function renderFieldAvailabilityGrid() {
                              const s = parseTimeToMinutes(b.start);
                              const e = parseTimeToMinutes(b.end);
                              if (s !== null && e !== null) {
-                                 // If this booking starts before or right when current block ends
+                                 // If booking starts before or exactly when current block ends
                                  if (s <= maxBlockedUntil && e > maxBlockedUntil) {
                                      maxBlockedUntil = e;
                                      extended = true;
@@ -603,20 +619,18 @@ function renderFieldAvailabilityGrid() {
                         const tStr = minutesToTime(maxBlockedUntil);
                         tableHtml += `<td style="${stylePartialX}; border:1px solid #999; text-align:center; vertical-align:middle;" title="Opens later">
                             <span style="font-size:1.2em;">X</span><br>
-                            <span style="font-size:0.7em; font-weight:normal;">Avail @ ${tStr}</span>
+                            <span style="font-size:0.85em; font-weight:normal;">Avail @ ${tStr}</span>
                         </td>`;
                     }
                 } else {
                     // --- GREEN CHECK CASE ---
-                    // It started free (gap >= MIN_USABLE_GAP).
-                    // When does it close?
                     if (earliestConflictStart >= slotEndMin) {
                         tableHtml += `<td style="${styleCheck}; border:1px solid #999; text-align:center;" title="Available">✓</td>`;
                     } else {
                         const tStr = minutesToTime(earliestConflictStart);
                         tableHtml += `<td style="${stylePartialCheck}; border:1px solid #999; text-align:center; vertical-align:middle;" title="Closes soon">
                             <span style="font-size:1.2em;">✓</span><br>
-                            <span style="font-size:0.7em; font-weight:normal;">Unavail @ ${tStr}</span>
+                            <span style="font-size:0.85em; font-weight:normal;">Unavail @ ${tStr}</span>
                         </td>`;
                     }
                 }
