@@ -2,8 +2,8 @@
 // fields.js
 //
 // RESTORED: Original UI layout (Header, Status Box, Chip Pickers).
-// UPDATED: Combined "Priority & Preferences" with "Allowed Divisions & Bunks"
-//          into a smoother, more appealing UI flow.
+// FIXED: Uncaught ReferenceError by correctly accessing window.availableDivisions.
+// ENHANCED: Merged Priority and Restriction UIs into one clean, organized panel.
 // =================================================================
 
 (function() {
@@ -624,17 +624,18 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
         const customPanel = document.createElement("div");
         customPanel.style.padding = "15px 0";
         customPanel.style.borderTop = "1px solid #f0f0f0";
-
-        // --- Priority and Exclusive Toggle ---
+        
+        // --- 2. Priority and Exclusive Toggle ---
         const prioritySettings = document.createElement("div");
         prioritySettings.style.cssText = "background:#f9f9f9; padding:10px; border-radius:5px; margin-bottom:15px;";
         
+        // Exclusive Mode
         const exclDiv = document.createElement("div");
         const exclLabel = document.createElement("label");
         exclLabel.style.cursor = "pointer";
         exclLabel.style.display = "flex";
         exclLabel.style.alignItems = "center";
-        exclLabel.innerHTML = `<input type="checkbox" ${!!prefs.exclusive ? 'checked' : ''} style="margin-right:6px;"> <strong>Exclusive Mode:</strong> Only Divisions listed below can use this field.`;
+        exclLabel.innerHTML = `<input type="checkbox" ${!!prefs.exclusive ? 'checked' : ''} style="margin-right:6px;"> <strong>Exclusive Mode:</strong> Only Divisions/Bunks listed below can use this field.`;
         exclLabel.querySelector("input").onchange = (e) => {
             prefs.exclusive = e.target.checked;
             onSave();
@@ -719,18 +720,20 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
         priorityAddRow.appendChild(select);
         priorityAddRow.appendChild(addBtn);
         prioritySettings.appendChild(priorityAddRow);
-
-
+        
         customPanel.appendChild(prioritySettings);
 
-        // --- Allowed Divisions & Bunks Header ---
+        // --- 3. Allowed Divisions/Bunks Chips ---
         const allowedHeader = document.createElement("div");
         allowedHeader.style.cssText = "margin-top:15px; font-weight:600; border-top:1px solid #eee; padding-top:15px;";
-        allowedHeader.textContent = "Allowed Divisions & Per-Bunk Restrictions:";
+        allowedHeader.textContent = "Select Allowed Divisions & Per-Bunk Restrictions:";
         customPanel.appendChild(allowedHeader);
         
+        // This line caused the crash because window.availableDivisions is accessed later (via getBunks)
+        const availableDivisions = window.availableDivisions || []; 
+
         // --- Division/Bunk Chips ---
-        allDivisions.forEach(divName => {
+        availableDivisions.forEach(divName => {
             const divWrapper = document.createElement("div");
             divWrapper.style.marginTop = "8px";
             
