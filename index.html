@@ -8,10 +8,6 @@
 </head>
 <body>
 
-    <!-- 
-      NEW WELCOME SCREEN 
-      This is hidden by default and shown by welcome.js if needed.
-    -->
     <div id="welcome-screen" style="display: none;">
         <img src="https://placehold.co/150x150/007bff/ffffff?text=TCS&font=arial" alt="Camp Scheduler Logo" class="welcome-logo">
         <h2 id="welcome-title">Welcome to The Camp Scheduler</h2>
@@ -20,10 +16,6 @@
         <button id="begin-btn">Begin</button>
     </div>
 
-    <!-- 
-      MAIN APP CONTAINER
-      This is hidden by default and shown by welcome.js after setup.
-    -->
     <div id="main-app-container" style="display: none;">
         <h1>🏕️ Camp Scheduler</h1>
 
@@ -45,6 +37,7 @@
             <button class="tab-button" onclick="showTab('specialty-leagues'); window.initSpecialtyLeagues?.();">🏆 Specialty Leagues</button>
             <button class="tab-button" onclick="showTab('daily-adjustments'); window.initDailyAdjustments?.();">Daily Adjustments</button>
             <button class="tab-button" onclick="showTab('report'); window.initReportTab?.();">Report</button>
+            <button class="tab-button" onclick="showTab('helper'); window.initHelperTab?.();">Help & Guide</button>
         </div>
 
         <div id="setup" class="tab-content active">
@@ -148,13 +141,12 @@
             <div id="report-content">
                 </div>
         </div>
-    </div> <!-- End of #main-app-container -->
 
-    <!-- 
-      SCRIPTS
-      welcome.js MUST come first as it controls the boot process.
-    -->
-    <script src="welcome.js" defer></script>
+        <div id="helper" class="tab-content">
+            <div id="helper-content">
+            </div>
+        </div>
+    </div> <script src="welcome.js" defer></script>
 
     <script src="calendar.js" defer></script>
     <script src="app1.js" defer></script>
@@ -168,6 +160,7 @@
     <script src="scheduler_logic_fillers.js" defer></script>
     <script src="scheduler_ui.js" defer></script>
     <script src="analytics.js" defer></script>
+    <script src="helper.js" defer></script>
 
     <script>
         // This function is still needed for the tabs to work
@@ -192,8 +185,10 @@
                 window.initSpecialActivitiesTab?.();
             } else if (id === 'daily-adjustments') {
                 window.initDailyAdjustments?.();
-            } else if (id === 'report') { // UPDATED
-                window.initReportTab?.(); // UPDATED
+            } else if (id === 'report') { 
+                window.initReportTab?.(); 
+            } else if (id === 'helper') {
+                window.initHelperTab?.();
             }
         }
 
