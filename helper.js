@@ -84,6 +84,8 @@ function initHelperTab() {
                 <h3>💡 Pro Tips</h3>
                 <ul>
                     <li><strong>The Optimizer is Smart:</strong> It looks at what bunks did yesterday and over the last week to avoid repeating activities.</li>
+                    <li><strong>Auto-Save & Manual Save:</strong> Your work is automatically saved every 10 minutes. You can also use the "Save Now" button in the Setup tab to save immediately at any time.</li>
+                    <li><strong>Backup & Offline:</strong> Use the "Export" button in the Setup tab to save a file to your computer. This allows you to keep offline backups or transfer your work. You can "Import" this file later to restore everything.</li>
                     <li><strong>Availability Grid:</strong> If you need to squeeze in a last-minute game, check the "Report" tab's Availability Grid to find a free 30-minute slot.</li>
                     <li><strong>Locking Activities:</strong> In "Daily Adjustments", you can add "Bunk Specific" pins to force a specific bunk to do a specific activity at a specific time.</li>
                 </ul>
