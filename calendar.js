@@ -3,13 +3,9 @@
 //
 // ... (previous changelogs) ...
 //
-// --- NEW FEATURE (11/13) ---
-// - Added `exportAllData` function to save all three
-//   main localstorage keys into a single JSON file.
-// - Added `handleFileSelect` function to read a backup
-//   JSON file and overwrite all data.
-// - Updated `initCalendar` to hook up the new
-//   "Export" and "Import" buttons from index.html.
+// --- NEW FEATURE (Auto-Save) ---
+// - Added automatic saving every 10 minutes to 'campAutoSave_v1'.
+// - Added 'restoreAutoSave' function to revert to the last auto-save.
 // =================================================================
 
 (function() {
@@ -18,7 +14,8 @@
     // --- 1. DEFINE STORAGE KEYS ---
     const GLOBAL_SETTINGS_KEY = "campGlobalSettings_v1";
     const DAILY_DATA_KEY = "campDailyData_v1";
-    const ROTATION_HISTORY_KEY = "campRotationHistory_v1"; // NEW: For Smart Scheduler
+    const ROTATION_HISTORY_KEY = "campRotationHistory_v1";
+    const AUTO_SAVE_KEY = "campAutoSave_v1"; // NEW
 
     /**
      * Helper function to get a date in YYYY-MM-DD format.
@@ -65,7 +62,6 @@
             if (newData) {
                 return JSON.parse(newData);
             }
-            // ... (Migration logic omitted for brevity, assumed safe) ...
             return {};
         } catch (e) {
             console.error("Failed to load/migrate global settings:", e);
@@ -93,10 +89,6 @@
         }
     }
     
-    /**
-     * --- UPDATED with leagueDayCounters ---
-     * --- REMOVED leagueSportRotation ---
-     */
     window.loadCurrentDailyData = function() {
         const allData = window.loadAllDailyData();
         const date = window.currentScheduleDate;
@@ -106,13 +98,11 @@
                 scheduleAssignments: {},
                 leagueAssignments: {},
                 leagueRoundState: {},
-                // leagueSportRotation: {}, // <-- REMOVED
-                leagueDayCounters: {}, // <-- RESTORED
+                leagueDayCounters: {},
                 overrides: { fields: [], bunks: [], leagues: [] } 
             };
         }
         
-        // Ensure it exists on older data
         allData[date].leagueDayCounters = allData[date].leagueDayCounters || {};
         
         window.currentDailyData = allData[date];
@@ -127,9 +117,8 @@
             const yesterdayString = getTodayString(currentDate);
             
             const allData = window.loadAllDailyData();
-            // Initialize with default if yesterday doesn't exist
             return allData[yesterdayString] || { 
-                leagueDayCounters: {}, // <-- RESTORED
+                leagueDayCounters: {}, 
                 leagueRoundState: {} 
             };
         } catch (e) {
@@ -156,18 +145,13 @@
         }
     }
 
-    // --- 4. NEW: ROTATION HISTORY API (Smart Scheduler) ---
+    // --- 4. ROTATION HISTORY API ---
 
-    /**
-     * Loads the persistent rotation history.
-     * Structure: { bunks: { "Bunk 1": { "Basketball": timestamp } }, leagues: { "League A": { "Soccer": timestamp } } }
-     */
     window.loadRotationHistory = function() {
         try {
             const data = localStorage.getItem(ROTATION_HISTORY_KEY);
             const history = data ? JSON.parse(data) : {};
             
-            // Ensure the top-level structure exists
             history.bunks = history.bunks || {};
             history.leagues = history.leagues || {};
             
@@ -178,9 +162,6 @@
         }
     }
 
-    /**
-     * Saves the entire rotation history object.
-     */
     window.saveRotationHistory = function(history) {
         try {
             if (!history || !history.bunks || !history.leagues) {
@@ -193,9 +174,6 @@
         }
     }
     
-    /**
-     * Erases all rotation history.
-     */
     window.eraseRotationHistory = function() {
         try {
             localStorage.removeItem(ROTATION_HISTORY_KEY);
@@ -206,8 +184,7 @@
         }
     }
 
-    
-    // --- 5. ERASE ALL DATA (Hook into app1.js button) ---
+    // --- 5. ERASE ALL DATA ---
     function setupEraseAll() {
         const eraseBtn = document.getElementById("eraseAllBtn");
         if (eraseBtn) {
@@ -215,8 +192,10 @@
                 if (confirm("Erase ALL camp data?\nThis includes ALL settings, ALL saved daily schedules, and ALL activity rotation history.")) {
                     localStorage.removeItem(GLOBAL_SETTINGS_KEY);
                     localStorage.removeItem(DAILY_DATA_KEY);
-                    localStorage.removeItem(ROTATION_HISTORY_KEY); // NEW
+                    localStorage.removeItem(ROTATION_HISTORY_KEY);
+                    localStorage.removeItem(AUTO_SAVE_KEY);
                     
+                    // Clear legacy keys just in case
                     localStorage.removeItem("campSchedulerData");
                     localStorage.removeItem("fixedActivities_v2");
                     localStorage.removeItem("leagues");
@@ -257,26 +236,15 @@
     window.eraseAllDailyData = function() {
         try {
             localStorage.removeItem(DAILY_DATA_KEY);
-            
-            localStorage.removeItem("scheduleAssignments");
-            localStorage.removeItem("leagueAssignments");
-            localStorage.removeItem("camp_league_round_state");
-            localStorage.removeItem("camp_league_sport_rotation");
-
             console.log("Erased ALL daily schedules.");
-            
             window.location.reload();
-            
         } catch (e) {
             console.error("Failed to erase all daily data:", e);
         }
     }
 
-    // --- 8. NEW: BACKUP & RESTORE FUNCTIONS ---
+    // --- 8. BACKUP & RESTORE FUNCTIONS ---
 
-    /**
-     * Gathers all data from localstorage and downloads it as a JSON file.
-     */
     function exportAllData() {
         console.log("Exporting all data...");
         const backupData = {};
@@ -310,15 +278,11 @@
         }
     }
 
-    /**
-     * Handles the file input change event for importing.
-     */
     function handleFileSelect(event) {
         const file = event.target.files[0];
         if (!file) return;
 
         if (!confirm("Are you sure you want to import this file?\nThis will OVERWRITE all existing data (setup, schedules, etc.) with the contents of the backup file.\nThis action cannot be undone.")) {
-            // Clear the file input so the same file can be selected again
             event.target.value = null;
             return;
         }
@@ -333,7 +297,6 @@
                     throw new Error("Invalid backup file. Missing 'globalSettings'.");
                 }
 
-                // Restore all data from the backup
                 localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(backupData.globalSettings || {}));
                 localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(backupData.dailyData || {}));
                 localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify(backupData.rotationHistory || {}));
@@ -345,26 +308,73 @@
                 console.error("Failed to import file:", err);
                 alert(`Error importing file: ${err.message}`);
             } finally {
-                // Clear the file input
                 event.target.value = null;
             }
         };
         reader.readAsText(file);
     }
+
+    // --- 9. NEW: AUTO-SAVE LOGIC ---
+
+    function performAutoSave() {
+        try {
+            const snapshot = {
+                timestamp: Date.now(),
+                [GLOBAL_SETTINGS_KEY]: localStorage.getItem(GLOBAL_SETTINGS_KEY),
+                [DAILY_DATA_KEY]: localStorage.getItem(DAILY_DATA_KEY),
+                [ROTATION_HISTORY_KEY]: localStorage.getItem(ROTATION_HISTORY_KEY)
+            };
+            localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(snapshot));
+            console.log("Auto-save completed at " + new Date().toLocaleTimeString());
+        } catch (e) {
+            console.error("Auto-save failed:", e);
+        }
+    }
+
+    window.restoreAutoSave = function() {
+        try {
+            const raw = localStorage.getItem(AUTO_SAVE_KEY);
+            if (!raw) {
+                alert("No auto-saved data found.");
+                return;
+            }
+            
+            const snapshot = JSON.parse(raw);
+            const dateStr = new Date(snapshot.timestamp).toLocaleString();
+            
+            if (confirm(`Restore auto-save from: ${dateStr}?\n\nThis will overwrite all current data with the state from that time. Continue?`)) {
+                if (snapshot[GLOBAL_SETTINGS_KEY]) localStorage.setItem(GLOBAL_SETTINGS_KEY, snapshot[GLOBAL_SETTINGS_KEY]);
+                if (snapshot[DAILY_DATA_KEY]) localStorage.setItem(DAILY_DATA_KEY, snapshot[DAILY_DATA_KEY]);
+                if (snapshot[ROTATION_HISTORY_KEY]) localStorage.setItem(ROTATION_HISTORY_KEY, snapshot[ROTATION_HISTORY_KEY]);
+                
+                alert("Auto-save restored. Reloading...");
+                window.location.reload();
+            }
+        } catch(e) {
+            console.error("Error restoring auto-save", e);
+            alert("Error restoring auto-save.");
+        }
+    }
+
+    function startAutoSaveTimer() {
+        // Trigger every 10 minutes (600,000 ms)
+        setInterval(performAutoSave, 600000); 
+        console.log("Auto-save timer started (10 min interval).");
+        // Perform one initial save shortly after load to ensure we have a baseline
+        setTimeout(performAutoSave, 5000); 
+    }
     
+    // ----------------------------------
 
     function initCalendar() {
       datePicker = document.getElementById("calendar-date-picker");
       if (datePicker) {
         datePicker.value = window.currentScheduleDate;
         datePicker.addEventListener("change", onDateChanged);
-      } else {
-        console.error("CRITICAL: calendar-date-picker element not found in index.html");
       }
     
       setupEraseAll();
 
-      // --- NEW: Hook up Backup/Restore buttons ---
       const exportBtn = document.getElementById('exportBackupBtn');
       const importBtn = document.getElementById('importBackupBtn');
       const importInput = document.getElementById('importFileInput');
@@ -376,7 +386,11 @@
           importBtn.addEventListener('click', () => importInput.click());
           importInput.addEventListener('change', handleFileSelect);
       }
+
+      // Start the auto-save timer
+      startAutoSaveTimer();
     }
+    
     window.initCalendar = initCalendar;
 
 })();
