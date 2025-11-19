@@ -1,20 +1,9 @@
 // ============================================================================
 // scheduler_logic_core.js
 //
-// UPDATED (League Fallback + Specialty Priority Fix):
-// - Normal leagues and specialty leagues BOTH show matchups.
-// - Detection priority:
-//      General Activity  → "General Activity Slot"
-//      Specialty League  → "Specialty League"
-//      Regular League    → "League Game"
-//      Raw Text          → untouched
-// - Fixed normalization so "Specialty League" is NOT accidentally swallowed
-//   by regular "League" detection.
-// - Specialty leagues are hard-locked to a single sport (leagueEntry.sport).
-// - League/Specialty blocks that fall through are shown as
-//   "Unassigned League" instead of random activities.
-// - Field sharing obeys same-activity rule.
-//
+// UPDATED (Field Preference Update):
+// - canBlockFit: Checks Field Preferences (Exclusive Mode).
+// - canLeagueGameFit: Checks Field Preferences (Exclusive Mode).
 // ============================================================================
 
 (function() {
@@ -529,7 +518,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                             _fixed: true,
                             _h2h: false,
                             vs: null,
-                            _activity: override.activity
+                            _activity: override.activity,
+                            _endTime: endMin 
                         };
                     }
                 });
@@ -650,7 +640,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                             _fixed: true,
                             _h2h: false,
                             vs: null,
-                            _activity: item.event
+                            _activity: item.event,
+                            _endTime: endMin 
                         };
                     }
                 });
@@ -772,6 +763,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             specialtyLeagueGroups[key] = {
                 divName: block.divName,
                 startTime: block.startTime,
+                endTime: block.endTime, // --- NEW: Capture End Time
                 slots: block.slots,
                 bunks: new Set()
             };
@@ -792,7 +784,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             slots: group.slots,
             divName: group.divName,
             startTime: group.startTime,
-            endTime: group.startTime + INCREMENT_MINS * group.slots.length
+            endTime: group.endTime
         };
 
         const leagueName = leagueEntry.name;
@@ -848,6 +840,15 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                     if (!isTimeAvailable(slotIndex, props)) {
                         isFieldAvailable = false;
                     }
+                    
+                    // --- UPDATED: Exclusive Preference Check ---
+                    if (props.preferences && props.preferences.enabled && props.preferences.exclusive) {
+                        if (!props.preferences.list.includes(group.divName)) {
+                             isFieldAvailable = false;
+                        }
+                    }
+                    // -------------------------------------------
+
                     if (props.limitUsage && props.limitUsage.enabled) {
                         if (!props.limitUsage.divisions[group.divName]) {
                             isFieldAvailable = false;
@@ -930,6 +931,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                 leagueName,
                 league,
                 startTime: block.startTime,
+                endTime: block.endTime, // --- NEW: Capture End Time
                 slots: block.slots,
                 bunks: new Set()
             };
@@ -958,7 +960,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         }
         if (!baseDivName) return;
 
-        const blockBase = { slots, divName: baseDivName };
+        const blockBase = { slots, divName: baseDivName, endTime: group.endTime };
 
         const sports = (league.sports || []).filter(s => fieldsBySport[s]);
         if (sports.length === 0) return;
@@ -1098,14 +1100,14 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             ) || baseDivName;
 
             fillBlock(
-                { slots, bunk: bunkA, divName: bunkADiv, startTime: group.startTime, endTime: group.startTime + INCREMENT_MINS * slots.length },
+                { slots, bunk: bunkA, divName: bunkADiv, startTime: group.startTime, endTime: group.endTime + INCREMENT_MINS * slots.length },
                 pick,
                 fieldUsageBySlot,
                 yesterdayHistory,
                 true // isLeagueFill = true
             );
             fillBlock(
-                { slots, bunk: bunkB, divName: bunkBDiv, startTime: group.startTime, endTime: group.startTime + INCREMENT_MINS * slots.length },
+                { slots, bunk: bunkB, divName: bunkBDiv, startTime: group.startTime, endTime: group.endTime + INCREMENT_MINS * slots.length },
                 pick,
                 fieldUsageBySlot,
                 yesterdayHistory,
@@ -1120,7 +1122,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             ) || baseDivName;
 
             fillBlock(
-                { slots, bunk: leftoverBunk, divName: bunkDivName, startTime: group.startTime, endTime: group.startTime + INCREMENT_MINS * slots.length },
+                { slots, bunk: leftoverBunk, divName: bunkDivName, startTime: group.startTime, endTime: group.endTime + INCREMENT_MINS * slots.length },
                 noGamePick,
                 fieldUsageBySlot,
                 yesterdayHistory,
@@ -1377,6 +1379,16 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot, pro
         console.warn(`No properties found for field: ${fieldName}`);
         return false;
     }
+
+    // --- NEW: Preference Exclusivity Check ---
+    // If preferences are enabled AND exclusive, we strictly block non-listed divisions.
+    if (props.preferences && props.preferences.enabled && props.preferences.exclusive) {
+        if (!props.preferences.list.includes(block.divName)) {
+            return false; 
+        }
+    }
+    // ----------------------------------------
+
     const limit = (props && props.sharable) ? 2 : 1;
 
     // Division filter
@@ -1501,6 +1513,14 @@ function canLeagueGameFit(block, fieldName, fieldUsageBySlot, activityProperties
         return false;
     }
     const limit = 1; // leagues never sharable
+
+    // --- NEW: Preference Exclusivity Check ---
+    if (props.preferences && props.preferences.enabled && props.preferences.exclusive) {
+        if (!props.preferences.list.includes(block.divName)) {
+            return false; 
+        }
+    }
+    // ----------------------------------------
 
     if (
         props &&
@@ -1733,6 +1753,7 @@ function loadAndFilterData() {
                 ? f.sharableWith.divisions.slice()
                 : null,
             limitUsage: f.limitUsage || { enabled: false, divisions: {} },
+            preferences: f.preferences || { enabled: false, exclusive: false, list: [] }, // --- NEW
             timeRules: finalRules
         };
 
