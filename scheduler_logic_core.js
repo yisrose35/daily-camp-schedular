@@ -1,8 +1,10 @@
-
 // ============================================================================
 // scheduler_logic_core.js
 //
-// UPDATED (Field Preference Update):
+// UPDATED (Smart League Field Fallback):
+// - If the optimized sport has no fields available, the system now
+//   iterates through ALL other allowed sports for that league to find
+//   an open field before defaulting to "(No Field)".
 // - canBlockFit: Checks Field Preferences (Exclusive Mode).
 // - canLeagueGameFit: Checks Field Preferences (Exclusive Mode).
 // - loadAndFilterData: Loads 'preferences' from field data.
@@ -520,7 +522,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                             _fixed: true,
                             _h2h: false,
                             vs: null,
-                            _activity: override.activity
+                            _activity: override.activity,
+                            _endTime: endMin 
                         };
                     }
                 });
@@ -641,7 +644,8 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                             _fixed: true,
                             _h2h: false,
                             vs: null,
-                            _activity: item.event
+                            _activity: item.event,
+                            _endTime: endMin 
                         };
                     }
                 });
@@ -763,6 +767,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             specialtyLeagueGroups[key] = {
                 divName: block.divName,
                 startTime: block.startTime,
+                endTime: block.endTime, // --- NEW: Capture End Time
                 slots: block.slots,
                 bunks: new Set()
             };
@@ -783,7 +788,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             slots: group.slots,
             divName: group.divName,
             startTime: group.startTime,
-            endTime: group.startTime + INCREMENT_MINS * group.slots.length
+            endTime: group.endTime
         };
 
         const leagueName = leagueEntry.name;
@@ -839,13 +844,14 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                     if (!isTimeAvailable(slotIndex, props)) {
                         isFieldAvailable = false;
                     }
-                    // --- NEW: Preference Exclusivity Check ---
+                    
+                    // --- UPDATED: Exclusive Preference Check ---
                     if (props.preferences && props.preferences.enabled && props.preferences.exclusive) {
                         if (!props.preferences.list.includes(group.divName)) {
                              isFieldAvailable = false;
                         }
                     }
-                    // ----------------------------------------
+                    // -------------------------------------------
 
                     if (props.limitUsage && props.limitUsage.enabled) {
                         if (!props.limitUsage.divisions[group.divName]) {
@@ -929,6 +935,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                 leagueName,
                 league,
                 startTime: block.startTime,
+                endTime: block.endTime, // --- NEW: Capture End Time
                 slots: block.slots,
                 bunks: new Set()
             };
@@ -957,7 +964,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         }
         if (!baseDivName) return;
 
-        const blockBase = { slots, divName: baseDivName };
+        const blockBase = { slots, divName: baseDivName, endTime: group.endTime };
 
         const sports = (league.sports || []).filter(s => fieldsBySport[s]);
         if (sports.length === 0) return;
@@ -1008,43 +1015,67 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
 
         nonByeMatchups.forEach((pair, idx) => {
             const [teamA, teamB] = pair;
-            const chosenSport = assignments[idx]?.sport || sports[idx % sports.length];
+            
+            // 1. Determine preference order: Optimizer pick -> Round Robin fallback -> All other sports
+            const preferredSport = assignments[idx]?.sport || sports[idx % sports.length];
+            
+            // Set of all sports available to this league
+            const candidateSports = [preferredSport];
+            sports.forEach(s => {
+                if (s !== preferredSport) candidateSports.push(s);
+            });
 
-            const possibleFields = fieldsBySport[chosenSport] || [];
+            let finalSport = preferredSport;
+            let finalField = null;
             let slotIdx = idx % slotCount;
-            let chosenField = null;
 
-            for (const f of possibleFields) {
-                if (!usedFieldsPerSlot[slotIdx].has(f) &&
-                    canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
-                    chosenField = f;
-                    usedFieldsPerSlot[slotIdx].add(f);
-                    break;
+            // 2. Try to find a field for the preferred sport, then fallbacks
+            for (const s of candidateSports) {
+                const possibleFields = fieldsBySport[s] || [];
+                let found = null;
+
+                // A. Try unused fields first
+                for (const f of possibleFields) {
+                    if (!usedFieldsPerSlot[slotIdx].has(f) &&
+                        canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
+                        found = f;
+                        break;
+                    }
+                }
+
+                // B. If no unused, try to squeeze in (if logic permits)
+                if (!found && possibleFields.length > 0) {
+                    const f = possibleFields[usedFieldsPerSlot[slotIdx].size % possibleFields.length];
+                    if (canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
+                        found = f;
+                    }
+                }
+
+                if (found) {
+                    finalSport = s;
+                    finalField = found;
+                    usedFieldsPerSlot[slotIdx].add(found);
+                    break; // Success!
                 }
             }
 
-            if (!chosenField && possibleFields.length > 0) {
-                const f = possibleFields[usedFieldsPerSlot[slotIdx].size % possibleFields.length];
-                if (canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
-                    chosenField = f;
-                    usedFieldsPerSlot[slotIdx].add(f);
-                }
-            }
-
+            // 3. Construct label
             let label;
-            if (chosenField) {
-                label = `${teamA} vs ${teamB} (${chosenSport}) @ ${chosenField}`;
-                markFieldUsage({ ...blockBase, _activity: chosenSport, bunk: 'league' }, chosenField, fieldUsageBySlot);
+            if (finalField) {
+                label = `${teamA} vs ${teamB} (${finalSport}) @ ${finalField}`;
+                markFieldUsage({ ...blockBase, _activity: finalSport, bunk: 'league' }, finalField, fieldUsageBySlot);
             } else {
-                label = `${teamA} vs ${teamB} (${chosenSport}) (No Field)`;
+                // If absolutely no fields for ANY sport, we must flag it
+                label = `${teamA} vs ${teamB} (No Field)`;
             }
 
-            leagueHistory[chosenSport] = Date.now();
+            // Update history for the sport we actually chose
+            leagueHistory[finalSport] = Date.now();
 
             usedForAssignments.push({
                 label,
-                sport: chosenSport,
-                field: chosenField || "No Field",
+                sport: finalSport,
+                field: finalField || "No Field",
                 teamA,
                 teamB
             });
@@ -1097,14 +1128,14 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             ) || baseDivName;
 
             fillBlock(
-                { slots, bunk: bunkA, divName: bunkADiv, startTime: group.startTime, endTime: group.startTime + INCREMENT_MINS * slots.length },
+                { slots, bunk: bunkA, divName: bunkADiv, startTime: group.startTime, endTime: group.endTime + INCREMENT_MINS * slots.length },
                 pick,
                 fieldUsageBySlot,
                 yesterdayHistory,
                 true // isLeagueFill = true
             );
             fillBlock(
-                { slots, bunk: bunkB, divName: bunkBDiv, startTime: group.startTime, endTime: group.startTime + INCREMENT_MINS * slots.length },
+                { slots, bunk: bunkB, divName: bunkBDiv, startTime: group.startTime, endTime: group.endTime + INCREMENT_MINS * slots.length },
                 pick,
                 fieldUsageBySlot,
                 yesterdayHistory,
@@ -1119,7 +1150,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             ) || baseDivName;
 
             fillBlock(
-                { slots, bunk: leftoverBunk, divName: bunkDivName, startTime: group.startTime, endTime: group.startTime + INCREMENT_MINS * slots.length },
+                { slots, bunk: leftoverBunk, divName: bunkDivName, startTime: group.startTime, endTime: group.endTime + INCREMENT_MINS * slots.length },
                 noGamePick,
                 fieldUsageBySlot,
                 yesterdayHistory,
