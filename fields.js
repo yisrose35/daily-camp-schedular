@@ -2,7 +2,7 @@
 // fields.js
 //
 // RESTORED: Original UI layout (Header, Status Box, Chip Pickers).
-// ADDED: "Priority & Preferences" section inserted into the original layout.
+// UPDATED: Combined "Priority & Preferences" with "Allowed Divisions & Bunks".
 // =================================================================
 
 (function() {
@@ -103,8 +103,7 @@ function loadData() {
         f.timeRules = f.timeRules || [];
         f.sharableWith = f.sharableWith || { type: 'not_sharable', divisions: [] };
         f.limitUsage = f.limitUsage || { enabled: false, divisions: {} };
-        
-        // --- NEW: Preferences ---
+        // Keep preferences object, but UI is now merged into Allowed Divisions/Bunks
         f.preferences = f.preferences || { enabled: false, exclusive: false, list: [] };
     });
 }
@@ -245,6 +244,7 @@ function renderDetailPane() {
     bw.style.flexWrap = 'wrap';
     bw.style.gap = '5px';
     
+    item.activities = item.activities || [];
     allSports.forEach(act => {
         const b = document.createElement("button"); 
         b.textContent = act; 
@@ -282,22 +282,18 @@ function renderDetailPane() {
     actSection.appendChild(other);
     detailPaneEl.appendChild(actSection);
 
-    // --- 4. Preferences (NEW: Inserted here) ---
-    const prefControls = renderPreferenceUI(item, saveData, renderDetailPane);
-    detailPaneEl.appendChild(prefControls);
-
-    // --- 5. Sharable ---
+    // --- 4. Sharable ---
     const sharableControls = renderSharableControls(item, saveData, renderDetailPane);
     sharableControls.style.borderTop = '1px solid #eee';
     sharableControls.style.paddingTop = '15px';
     sharableControls.style.marginTop = '15px';
     detailPaneEl.appendChild(sharableControls);
     
-    // --- 6. Allowed Bunks ---
+    // --- 5. Allowed Divisions/Bunks + Priority/Exclusive (COMBINED) ---
     const limitControls = renderAllowedBunksControls(item, saveData, renderDetailPane);
     detailPaneEl.appendChild(limitControls);
     
-    // --- 7. Time Rules ---
+    // --- 6. Time Rules ---
     const timeRuleControls = renderTimeRulesUI(item, saveData, renderDetailPane);
     timeRuleControls.style.marginTop = "10px";
     timeRuleControls.style.paddingTop = "10px";
@@ -327,154 +323,6 @@ function addField() {
     selectedItemId = `field-${n}`;
     renderMasterLists();
     renderDetailPane();
-}
-
-// =================================================================
-// ===== NEW: Preference UI (Matches Original Style) =====
-// =================================================================
-function renderPreferenceUI(item, onSave, onRerender) {
-    const container = document.createElement("div");
-    container.style.marginTop = "15px";
-    container.style.paddingTop = "15px";
-    container.style.borderTop = "1px solid #eee";
-    
-    const header = document.createElement("strong");
-    header.textContent = "Priority & Preferences:";
-    container.appendChild(header);
-
-    if (!item.preferences) item.preferences = { enabled: false, exclusive: false, list: [] };
-    const prefs = item.preferences;
-
-    // Enable Toggle
-    const togDiv = document.createElement("div");
-    togDiv.style.marginTop = "8px";
-    const togLabel = document.createElement("label");
-    togLabel.style.cursor = "pointer";
-    togLabel.style.display = "flex";
-    togLabel.style.alignItems = "center";
-    
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = prefs.enabled;
-    cb.style.marginRight = "8px";
-    cb.onchange = (e) => {
-        prefs.enabled = e.target.checked;
-        onSave();
-        onRerender();
-    };
-    
-    togLabel.appendChild(cb);
-    togLabel.appendChild(document.createTextNode("Enable Division Preferences"));
-    togDiv.appendChild(togLabel);
-    container.appendChild(togDiv);
-
-    if (prefs.enabled) {
-        const panel = document.createElement("div");
-        panel.style.marginTop = "10px";
-        panel.style.padding = "10px";
-        panel.style.background = "#f9f9f9";
-        panel.style.border = "1px solid #eee";
-        panel.style.borderRadius = "5px";
-
-        // Exclusive Mode
-        const exclDiv = document.createElement("div");
-        exclDiv.style.marginBottom = "10px";
-        const exclLabel = document.createElement("label");
-        exclLabel.style.cursor = "pointer";
-        const exclCb = document.createElement("input");
-        exclCb.type = "checkbox";
-        exclCb.checked = prefs.exclusive;
-        exclCb.style.marginRight = "5px";
-        exclCb.onchange = (e) => {
-            prefs.exclusive = e.target.checked;
-            onSave();
-        };
-        exclLabel.appendChild(exclCb);
-        
-        const bText = document.createElement("strong");
-        bText.textContent = "Exclusive Mode: ";
-        exclLabel.appendChild(bText);
-        exclLabel.appendChild(document.createTextNode("Only listed divisions can use this."));
-        
-        exclDiv.appendChild(exclLabel);
-        panel.appendChild(exclDiv);
-
-        // Priority List
-        const listHeader = document.createElement("div");
-        listHeader.textContent = "Priority List (Highest to Lowest):";
-        listHeader.style.marginBottom = "5px";
-        listHeader.style.fontSize = "0.9em";
-        listHeader.style.color = "#555";
-        panel.appendChild(listHeader);
-
-        if (prefs.list.length === 0) {
-            const emptyMsg = document.createElement("div");
-            emptyMsg.textContent = "No divisions added yet.";
-            emptyMsg.style.fontStyle = "italic";
-            emptyMsg.style.color = "#999";
-            emptyMsg.style.marginBottom = "8px";
-            panel.appendChild(emptyMsg);
-        } else {
-            const ol = document.createElement("ol");
-            ol.style.paddingLeft = "25px";
-            ol.style.marginTop = "0";
-            prefs.list.forEach((divName, idx) => {
-                const li = document.createElement("li");
-                li.style.marginBottom = "4px";
-                li.innerHTML = `<span style="font-weight:600;">${divName}</span> `;
-                
-                const remBtn = document.createElement("button");
-                remBtn.textContent = "x";
-                remBtn.style.marginLeft = "10px";
-                remBtn.style.color = "red";
-                remBtn.style.border = "none";
-                remBtn.style.background = "transparent";
-                remBtn.style.cursor = "pointer";
-                remBtn.onclick = () => {
-                    prefs.list.splice(idx, 1);
-                    onSave();
-                    onRerender();
-                };
-                li.appendChild(remBtn);
-                ol.appendChild(li);
-            });
-            panel.appendChild(ol);
-        }
-
-        // Add Division
-        const addDiv = document.createElement("div");
-        addDiv.style.display = "flex";
-        addDiv.style.gap = "5px";
-        
-        const select = document.createElement("select");
-        select.innerHTML = `<option value="">-- Add Division --</option>`;
-        (window.availableDivisions || []).forEach(d => {
-            if (!prefs.list.includes(d)) {
-                const opt = document.createElement("option");
-                opt.value = d;
-                opt.textContent = d;
-                select.appendChild(opt);
-            }
-        });
-        
-        const addBtn = document.createElement("button");
-        addBtn.textContent = "Add";
-        addBtn.onclick = () => {
-            if (select.value) {
-                prefs.list.push(select.value);
-                onSave();
-                onRerender();
-            }
-        };
-
-        addDiv.appendChild(select);
-        addDiv.appendChild(addBtn);
-        panel.appendChild(addDiv);
-
-        container.appendChild(panel);
-    }
-
-    return container;
 }
 
 // =================================================================
@@ -705,12 +553,20 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
     container.style.marginTop = "10px";
     container.style.paddingTop = "10px";
     container.style.borderTop = "1px solid #eee";
-    container.innerHTML = `<strong>Allowed Divisions & Bunks:</strong>`;
+    container.innerHTML = `<strong>Allowed Divisions & Bunks / Priority:</strong>`;
 
     if (!item.limitUsage) {
         item.limitUsage = { enabled: false, divisions: {} };
     }
+    if (!item.preferences) {
+        item.preferences = { enabled: false, exclusive: false, list: [] };
+    }
+
     const rules = item.limitUsage;
+    const prefs = item.preferences;
+
+    // Sync "enabled" concept: if we are in specific mode, prefs are considered enabled
+    prefs.enabled = !!rules.enabled;
 
     const modeLabel = document.createElement("label");
     modeLabel.style.display = "flex";
@@ -736,13 +592,14 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
     });
     toggleTrack.appendChild(toggleKnob);
     const textLimit = document.createElement("span");
-    textLimit.textContent = "Specific Divisions/Bunks";
+    textLimit.textContent = "Specific Divisions/Bunks (with Priority)";
     
     textAll.style.fontWeight = rules.enabled ? 'normal' : 'bold';
     textLimit.style.fontWeight = rules.enabled ? 'bold' : 'normal';
     
     modeLabel.onclick = () => {
         rules.enabled = !rules.enabled;
+        prefs.enabled = rules.enabled;
         onSave();
         onRerender();
     };
@@ -762,6 +619,7 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
             customPanel.innerHTML += `<p class="muted">No divisions found. Add divisions in Setup.</p>`;
         }
 
+        // --- Division-level chips + per-bunk restrictions ---
         allDivisions.forEach(divName => {
             const divWrapper = document.createElement("div");
             divWrapper.style.marginTop = "8px";
@@ -774,6 +632,8 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
             divChip.onclick = () => {
                 if (isAllowed) {
                     delete rules.divisions[divName];
+                    // Also drop from priority list
+                    prefs.list = prefs.list.filter(d => d !== divName);
                 } else {
                     rules.divisions[divName] = []; 
                 }
@@ -827,6 +687,159 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
             }
             customPanel.appendChild(divWrapper);
         });
+
+        // --- Combined Priority & Exclusive panel (uses prefs) ---
+        // Clean priority list: only keep divisions that are still allowed
+        prefs.list = (prefs.list || []).filter(divName => rules.divisions.hasOwnProperty(divName));
+
+        const prHeader = document.createElement("div");
+        prHeader.style.marginTop = "15px";
+        prHeader.style.fontWeight = "600";
+        prHeader.textContent = "Priority & Exclusive Settings:";
+        customPanel.appendChild(prHeader);
+
+        // Exclusive (field can be used ONLY by these divisions/bunks)
+        const exclDiv = document.createElement("div");
+        exclDiv.style.marginTop = "6px";
+        const exclLabel = document.createElement("label");
+        exclLabel.style.cursor = "pointer";
+        exclLabel.style.display = "flex";
+        exclLabel.style.alignItems = "center";
+
+        const exclCb = document.createElement("input");
+        exclCb.type = "checkbox";
+        exclCb.checked = !!prefs.exclusive;
+        exclCb.style.marginRight = "6px";
+        exclCb.onchange = (e) => {
+            prefs.exclusive = e.target.checked;
+            onSave();
+        };
+        exclLabel.appendChild(exclCb);
+
+        const exclStrong = document.createElement("strong");
+        exclStrong.textContent = "Exclusive Mode: ";
+        exclLabel.appendChild(exclStrong);
+        exclLabel.appendChild(document.createTextNode("Only the listed divisions/bunks may use this field."));
+        exclDiv.appendChild(exclLabel);
+        customPanel.appendChild(exclDiv);
+
+        // Priority List
+        const listHeader = document.createElement("div");
+        listHeader.textContent = "Division Priority (Highest to Lowest):";
+        listHeader.style.marginTop = "8px";
+        listHeader.style.marginBottom = "4px";
+        listHeader.style.fontSize = "0.9em";
+        listHeader.style.color = "#555";
+        customPanel.appendChild(listHeader);
+
+        if (!prefs.list || prefs.list.length === 0) {
+            const emptyMsg = document.createElement("div");
+            emptyMsg.textContent = "No divisions in the priority list.";
+            emptyMsg.style.fontStyle = "italic";
+            emptyMsg.style.color = "#999";
+            emptyMsg.style.marginBottom = "6px";
+            customPanel.appendChild(emptyMsg);
+        } else {
+            const ol = document.createElement("ol");
+            ol.style.paddingLeft = "25px";
+            ol.style.marginTop = "0";
+            prefs.list.forEach((divName, idx) => {
+                const li = document.createElement("li");
+                li.style.marginBottom = "4px";
+
+                const nameSpan = document.createElement("span");
+                nameSpan.style.fontWeight = "600";
+                nameSpan.textContent = divName;
+                li.appendChild(nameSpan);
+
+                // Move Up / Down buttons
+                const moveUp = document.createElement("button");
+                moveUp.textContent = "↑";
+                moveUp.style.marginLeft = "8px";
+                moveUp.style.border = "none";
+                moveUp.style.background = "transparent";
+                moveUp.style.cursor = "pointer";
+                moveUp.disabled = (idx === 0);
+                moveUp.onclick = () => {
+                    if (idx > 0) {
+                        const tmp = prefs.list[idx - 1];
+                        prefs.list[idx - 1] = prefs.list[idx];
+                        prefs.list[idx] = tmp;
+                        onSave();
+                        onRerender();
+                    }
+                };
+                li.appendChild(moveUp);
+
+                const moveDown = document.createElement("button");
+                moveDown.textContent = "↓";
+                moveDown.style.marginLeft = "2px";
+                moveDown.style.border = "none";
+                moveDown.style.background = "transparent";
+                moveDown.style.cursor = "pointer";
+                moveDown.disabled = (idx === prefs.list.length - 1);
+                moveDown.onclick = () => {
+                    if (idx < prefs.list.length - 1) {
+                        const tmp = prefs.list[idx + 1];
+                        prefs.list[idx + 1] = prefs.list[idx];
+                        prefs.list[idx] = tmp;
+                        onSave();
+                        onRerender();
+                    }
+                };
+                li.appendChild(moveDown);
+
+                const remBtn = document.createElement("button");
+                remBtn.textContent = "x";
+                remBtn.style.marginLeft = "6px";
+                remBtn.style.color = "red";
+                remBtn.style.border = "none";
+                remBtn.style.background = "transparent";
+                remBtn.style.cursor = "pointer";
+                remBtn.onclick = () => {
+                    prefs.list.splice(idx, 1);
+                    onSave();
+                    onRerender();
+                };
+                li.appendChild(remBtn);
+
+                ol.appendChild(li);
+            });
+            customPanel.appendChild(ol);
+        }
+
+        // Add division to priority list (from allowed ones)
+        const priorityAddRow = document.createElement("div");
+        priorityAddRow.style.display = "flex";
+        priorityAddRow.style.gap = "5px";
+        priorityAddRow.style.marginTop = "5px";
+        priorityAddRow.style.alignItems = "center";
+
+        const select = document.createElement("select");
+        select.innerHTML = `<option value="">-- Add Division to Priority --</option>`;
+        Object.keys(rules.divisions).forEach(divName => {
+            if (!prefs.list.includes(divName)) {
+                const opt = document.createElement("option");
+                opt.value = divName;
+                opt.textContent = divName;
+                select.appendChild(opt);
+            }
+        });
+
+        const addBtn = document.createElement("button");
+        addBtn.textContent = "Add";
+        addBtn.onclick = () => {
+            if (select.value) {
+                prefs.list.push(select.value);
+                onSave();
+                onRerender();
+            }
+        };
+
+        priorityAddRow.appendChild(select);
+        priorityAddRow.appendChild(addBtn);
+        customPanel.appendChild(priorityAddRow);
+
         container.appendChild(customPanel);
     }
     return container;
