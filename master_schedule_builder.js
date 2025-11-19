@@ -1,8 +1,7 @@
 // =================================================================
 // master_schedule_builder.js  (UPDATED)
-// - Added "Clear Grid" button to allow starting a fresh schedule
-//   without deleting saved templates.
-// - Retains auto-save draft logic.
+// - "Clear Grid" now resets the load dropdown to avoid confusion.
+// - Added a visual "glow" effect to the Load Template area after clearing.
 // =================================================================
 (function(){
 'use strict';
@@ -97,10 +96,9 @@ function renderTemplateUI(){
   const assignments=window.getSkeletonAssignments?.()||{};
   let loadOptions=names.map(n=>`<option value="${n}">${n}</option>`).join('');
   
-  // --- UPDATED UI: Added Clear Grid button ---
   ui.innerHTML=`
     <div class="template-toolbar" style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-end;">
-      <div class="template-group"><label>Load Template</label>
+      <div class="template-group" id="load-template-group"><label>Load Template</label>
         <select id="template-load-select"><option value="">-- Select template --</option>${loadOptions}</select>
       </div>
       <div class="template-group"><label>Save Current Grid as</label><input type="text" id="template-save-name" placeholder="e.g., Friday Short Day"></div>
@@ -165,14 +163,38 @@ function renderTemplateUI(){
     } 
   };
 
-  // --- NEW: Clear Grid Logic ---
+  // --- NEW: Clear Grid Logic (With "Light Up" effect) ---
   document.getElementById("template-clear-btn").onclick=()=>{
     if(confirm("Clear the entire grid to start over?\n(Your saved templates will NOT be deleted.)")){
         dailySkeleton = [];
-        saveName.value = ""; // clear input
-        localStorage.removeItem(SKELETON_DRAFT_NAME_KEY); // clear draft name
-        saveDraftToLocalStorage(); // clear draft skeleton
+        
+        // Reset Inputs
+        saveName.value = ""; 
+        loadSel.value = ""; // Visually reset the dropdown
+        
+        // Clear Storage
+        localStorage.removeItem(SKELETON_DRAFT_NAME_KEY); 
+        saveDraftToLocalStorage(); 
+        
         renderGrid();
+
+        // --- Visual Effect: Flash the Load Template area ---
+        const loadGroup = document.getElementById('load-template-group');
+        if(loadGroup) {
+            // Add temporary styles for glow effect
+            loadGroup.style.transition = "all 0.5s ease";
+            loadGroup.style.boxShadow = "0 0 15px #ff9800"; // Orange glow
+            loadGroup.style.border = "1px solid #ff9800";
+            loadGroup.style.borderRadius = "5px";
+            loadGroup.style.padding = "5px"; // Add a little padding so it looks nice
+            
+            // Remove after 1.5 seconds
+            setTimeout(() => {
+                loadGroup.style.boxShadow = "";
+                loadGroup.style.border = "";
+                loadGroup.style.padding = "";
+            }, 1500);
+        }
     }
   };
 
@@ -427,6 +449,7 @@ function loadSkeletonToBuilder(name){
   saveDraftToLocalStorage();
 }
 
+// time helpers
 function parseTimeToMinutes(str){
   if(!str||typeof str!=='string') return null;
   let s=str.trim().toLowerCase(), mer=null;
