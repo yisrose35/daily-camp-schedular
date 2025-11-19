@@ -1,7 +1,6 @@
 // =================================================================
 // master_schedule_builder.js  (UPDATED)
-// - Renamed "Clear Grid" to "New Grid".
-// - Added safety prompt: "Do you want to save first?" before clearing.
+// - Updated "New Grid" prompt to be clearer about saving.
 // - Retains auto-save draft logic.
 // =================================================================
 (function(){
@@ -164,12 +163,12 @@ function renderTemplateUI(){
     } 
   };
 
-  // --- NEW: "New Grid" Logic (With Save Prompt) ---
+  // --- UPDATED: "New Grid" Prompt ---
   document.getElementById("template-clear-btn").onclick=()=>{
     if(dailySkeleton.length > 0) {
-        // PROMPT USER TO SAVE
-        if(!confirm("You have unsaved items on the grid.\n\nDo you want to discard them and start a new grid?\n\nClick OK to DISCARD and start new.\nClick Cancel to stay here and SAVE first.")) {
-            return; // User clicked Cancel, so they stay to save.
+        // Use the custom prompt requested
+        if(!confirm("Make sure to save your work!\n\nClick OK to continue to generating a new grid.\nPush Cancel to go back and save first.")) {
+            return; // User cancelled to save
         }
     }
     
