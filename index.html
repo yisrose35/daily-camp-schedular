@@ -37,6 +37,7 @@
             <button class="tab-button" onclick="showTab('specialty-leagues'); window.initSpecialtyLeagues?.();">🏆 Specialty Leagues</button>
             <button class="tab-button" onclick="showTab('daily-adjustments'); window.initDailyAdjustments?.();">Daily Adjustments</button>
             <button class="tab-button" onclick="showTab('report'); window.initReportTab?.();">Report</button>
+            <button class="tab-button" onclick="showTab('updates'); window.initUpdatesTab?.();">Updates</button>
             <button class="tab-button" onclick="showTab('helper'); window.initHelperTab?.();">Help & Guide</button>
         </div>
 
@@ -58,8 +59,7 @@
             <hr style="margin: 20px 0;">
             
             <h3>Clear Schedules & History</h3>
-            <p>Use these buttons to clear saved schedule data.
-            Your Setup (bunks, fields, etc.) will NOT be affected.</p>
+            <p>Use these buttons to clear saved schedule data. Your Setup will NOT be affected.</p>
 
             <button id="eraseTodayBtn"
                 style="background: #db7a00; color: #fff; padding: 8px 12px; border: none; border-radius: 4px;
@@ -78,14 +78,14 @@
             <button id="eraseHistoryBtn"
                 style="background: #5e35b1;
                 color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;"
-                onclick="if(confirm('Are you sure you want to reset all activity rotation history? This will make all activities &quot;fresh&quot; again for the Smart Scheduler.')) window.eraseRotationHistory?.();">
+                onclick="if(confirm('Are you sure you want to reset all activity rotation history?')) window.eraseRotationHistory?.();">
                 Reset Activity History
             </button>
 
             <hr style="margin: 20px 0;">
 
             <h3>Backup & Restore</h3>
-            <p>Save all your setup (Fields, Bunks, Leagues, Templates, etc.) to a file, or restore it from a backup.</p>
+            <p>Save all your setup to a file, or restore it from a backup.</p>
             <button id="exportBackupBtn"
                 style="background: #007bff; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;">
                 Export All Data to File
@@ -111,27 +111,23 @@
             <hr style="margin: 20px 0;">
 
             <h3>Erase All Data</h3>
-            <p><strong>⚠️ Warning:</strong> This deletes everything.
-            It deletes all schedules, all history, AND all of your setup (bunks, divisions, fields, leagues, etc.).</p>
+            <p><strong>⚠️ Warning:</strong> This deletes everything (Schedules, History, Setup).</p>
 
             <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">
                 Erase All Camp Data (Reset Application)
             </button>
         </div> 
         
-        <div id="fields" class="tab-content">
-            </div>
-        <div id="special_activities" class="tab-content">
-            </div>
+        <div id="fields" class="tab-content"></div>
+        <div id="special_activities" class="tab-content"></div>
         
         <div id="master-scheduler" class="tab-content">
-            <div id="master-scheduler-content">
-                </div>
+            <div id="master-scheduler-content"></div>
         </div>
         
         <div id="schedule" class="tab-content">
             <h3>Daily Schedule (View)</h3>
-            <p>This tab shows the final, "filled-in" schedule. To build or edit the day's layout, use the "Master Scheduler" or "Daily Adjustments" tab.</p>
+            <p>This tab shows the final, "filled-in" schedule.</p>
             <div id="scheduleTable"></div>
         </div>
 
@@ -145,21 +141,23 @@
         </div>
 
         <div id="daily-adjustments" class="tab-content">
-            <div id="daily-adjustments-content">
-                </div>
+            <div id="daily-adjustments-content"></div>
         </div>
         
         <div id="report" class="tab-content">
-            <div id="report-content">
-                </div>
+            <div id="report-content"></div>
+        </div>
+
+        <div id="updates" class="tab-content">
+            <div id="updates-content"></div>
         </div>
 
         <div id="helper" class="tab-content">
-            <div id="helper-content">
-            </div>
+            <div id="helper-content"></div>
         </div>
-    </div> <script src="welcome.js" defer></script>
+    </div> 
 
+    <script src="welcome.js" defer></script>
     <script src="calendar.js" defer></script>
     <script src="app1.js" defer></script>
     <script src="daily_adjustments.js" defer></script>
@@ -173,35 +171,23 @@
     <script src="scheduler_ui.js" defer></script>
     <script src="analytics.js" defer></script>
     <script src="helper.js" defer></script>
-
-    <script>
-        // This function is still needed for the tabs to work
+    <script src="updates.js" defer></script> <script>
         function showTab(id) {
             document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             document.getElementById(id).classList.add('active');
             document.querySelector(`.tab-button[onclick^="showTab('${id}')"]`)?.classList.add('active');
 
-            // --- Init-on-click logic ---
-            if (id === 'schedule') {
-                window.updateTable?.();
-            } else if (id === 'leagues') {
-                window.initLeagues?.();
-            } else if (id === 'specialty-leagues') {
-                window.initSpecialtyLeagues?.();
-            } else if (id === 'master-scheduler') {
-                window.initMasterScheduler?.();
-            } else if (id === 'fields') {
-                window.initFieldsTab?.();
-            } else if (id === 'special_activities') {
-                window.initSpecialActivitiesTab?.();
-            } else if (id === 'daily-adjustments') {
-                window.initDailyAdjustments?.();
-            } else if (id === 'report') { 
-                window.initReportTab?.(); 
-            } else if (id === 'helper') {
-                window.initHelperTab?.();
-            }
+            if (id === 'schedule') window.updateTable?.();
+            else if (id === 'leagues') window.initLeagues?.();
+            else if (id === 'specialty-leagues') window.initSpecialtyLeagues?.();
+            else if (id === 'master-scheduler') window.initMasterScheduler?.();
+            else if (id === 'fields') window.initFieldsTab?.();
+            else if (id === 'special_activities') window.initSpecialActivitiesTab?.();
+            else if (id === 'daily-adjustments') window.initDailyAdjustments?.();
+            else if (id === 'report') window.initReportTab?.(); 
+            else if (id === 'helper') window.initHelperTab?.();
+            else if (id === 'updates') window.initUpdatesTab?.(); // NEW
         }
     </script>
 </body>
