@@ -40,7 +40,7 @@ function initUpdatesTab() {
                 <div class="help-card">
                     <h3>🗓️ Master Scheduler</h3>
                     <ul>
-                        <li><strong>Clear Grid Button:</strong> Safely wipe the grid to build a new template (e.g., Short Day) without deleting your saved templates.</li>
+                        <li><strong>New Grid Button:</strong> Safely start a new template (e.g., Short Day). You will be prompted to save your current work first.</li>
                         <li><strong>Draft Saving:</strong> The editor now saves a local draft, so if you accidentally close the tab, your unsaved grid is waiting for you when you return.</li>
                         <li><strong>Visual Cues:</strong> The "Load Template" area highlights after clearing to remind you of your options.</li>
                     </ul>
