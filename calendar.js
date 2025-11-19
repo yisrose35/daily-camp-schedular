@@ -1,11 +1,9 @@
 // =================================================================
 // calendar.js
 //
-// ... (previous changelogs) ...
-//
-// --- NEW FEATURE (Auto-Save) ---
-// - Added automatic saving every 10 minutes to 'campAutoSave_v1'.
-// - Added 'restoreAutoSave' function to revert to the last auto-save.
+// --- UPDATED (Save Now) ---
+// - Added 'window.forceAutoSave' for manual saving.
+// - Updated 'performAutoSave' to show an alert when triggered manually.
 // =================================================================
 
 (function() {
@@ -15,7 +13,7 @@
     const GLOBAL_SETTINGS_KEY = "campGlobalSettings_v1";
     const DAILY_DATA_KEY = "campDailyData_v1";
     const ROTATION_HISTORY_KEY = "campRotationHistory_v1";
-    const AUTO_SAVE_KEY = "campAutoSave_v1"; // NEW
+    const AUTO_SAVE_KEY = "campAutoSave_v1"; 
 
     /**
      * Helper function to get a date in YYYY-MM-DD format.
@@ -34,9 +32,6 @@
     
     let datePicker; 
     
-    /**
-     * Fired when the user changes the date in the calendar.
-     */
     function onDateChanged() {
         const newDate = datePicker.value;
         if (!newDate) return;
@@ -48,7 +43,6 @@
         window.initScheduleSystem?.(); // Reloads schedule
         window.initDailyAdjustments?.();
         
-        // If the master scheduler is the active tab, re-init it
         if (document.getElementById('master-scheduler')?.classList.contains('active')) {
             window.initMasterScheduler?.();
         }
@@ -195,7 +189,6 @@
                     localStorage.removeItem(ROTATION_HISTORY_KEY);
                     localStorage.removeItem(AUTO_SAVE_KEY);
                     
-                    // Clear legacy keys just in case
                     localStorage.removeItem("campSchedulerData");
                     localStorage.removeItem("fixedActivities_v2");
                     localStorage.removeItem("leagues");
@@ -210,7 +203,6 @@
         }
     }
 
-    // Initial load on script start
     window.loadCurrentDailyData();
 
     // --- 6. ERASE CURRENT DAY FUNCTION ---
@@ -316,7 +308,8 @@
 
     // --- 9. NEW: AUTO-SAVE LOGIC ---
 
-    function performAutoSave() {
+    // Added 'silent' param. Defaults to true for timer, false for manual button.
+    function performAutoSave(silent = true) {
         try {
             const snapshot = {
                 timestamp: Date.now(),
@@ -326,10 +319,22 @@
             };
             localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(snapshot));
             console.log("Auto-save completed at " + new Date().toLocaleTimeString());
+            
+            if (!silent) {
+                alert("Work saved successfully!");
+            }
         } catch (e) {
             console.error("Auto-save failed:", e);
+            if (!silent) {
+                alert("Save failed. Check console.");
+            }
         }
     }
+    
+    // New global function for manual save
+    window.forceAutoSave = function() {
+        performAutoSave(false);
+    };
 
     window.restoreAutoSave = function() {
         try {
@@ -357,11 +362,11 @@
     }
 
     function startAutoSaveTimer() {
-        // Trigger every 10 minutes (600,000 ms)
-        setInterval(performAutoSave, 600000); 
+        // Trigger every 10 minutes (600,000 ms), silent mode
+        setInterval(() => performAutoSave(true), 600000); 
         console.log("Auto-save timer started (10 min interval).");
-        // Perform one initial save shortly after load to ensure we have a baseline
-        setTimeout(performAutoSave, 5000); 
+        // Perform initial save 5s after load
+        setTimeout(() => performAutoSave(true), 5000); 
     }
     
     // ----------------------------------
@@ -387,7 +392,6 @@
           importInput.addEventListener('change', handleFileSelect);
       }
 
-      // Start the auto-save timer
       startAutoSaveTimer();
     }
     
