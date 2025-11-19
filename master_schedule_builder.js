@@ -1,8 +1,8 @@
 // =================================================================
-// master_schedule_builder.js  (FIXED)
-// - Pinned creation includes SWIM
-// - Grid extends to latest pinned end so late "Dismissal" renders
-// - NEW: Added localStorage auto-save to prevent losing work
+// master_schedule_builder.js  (UPDATED)
+// - Added "Clear Grid" button to allow starting a fresh schedule
+//   without deleting saved templates.
+// - Retains auto-save draft logic.
 // =================================================================
 (function(){
 'use strict';
@@ -10,11 +10,11 @@
 let container=null, palette=null, grid=null;
 let dailySkeleton=[];
 
-// --- NEW: Constants for the auto-save draft ---
+// --- Constants for the auto-save draft ---
 const SKELETON_DRAFT_KEY = 'master-schedule-draft';
 const SKELETON_DRAFT_NAME_KEY = 'master-schedule-draft-name';
 
-// --- NEW: Function to save the current draft ---
+// --- Function to save the current draft ---
 function saveDraftToLocalStorage() {
     try {
         if (dailySkeleton && dailySkeleton.length > 0) {
@@ -27,7 +27,7 @@ function saveDraftToLocalStorage() {
     }
 }
 
-// --- NEW: Function to clear the draft (after successful save) ---
+// --- Function to clear the draft ---
 function clearDraftFromLocalStorage() {
     localStorage.removeItem(SKELETON_DRAFT_KEY);
     localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
@@ -66,17 +66,15 @@ function init(){
   if(!container) return;
   loadDailySkeleton();
 
-  // --- NEW: Load draft from localStorage ---
+  // --- Load draft from localStorage ---
   const savedDraft = localStorage.getItem(SKELETON_DRAFT_KEY);
   if (savedDraft) {
       if (confirm("You have an unsaved master schedule draft. Load it?")) {
           dailySkeleton = JSON.parse(savedDraft);
       } else {
-          // User said no, so clear the draft
           clearDraftFromLocalStorage();
       }
   }
-  // --- END NEW ---
 
   container.innerHTML=`
     <div id="scheduler-template-ui" style="padding:15px;background:#f9f9f9;border:1px solid #ddd;border-radius:8px;margin-bottom:20px;"></div>
@@ -98,13 +96,19 @@ function renderTemplateUI(){
   const names=Object.keys(saved).sort();
   const assignments=window.getSkeletonAssignments?.()||{};
   let loadOptions=names.map(n=>`<option value="${n}">${n}</option>`).join('');
+  
+  // --- UPDATED UI: Added Clear Grid button ---
   ui.innerHTML=`
     <div class="template-toolbar" style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-end;">
       <div class="template-group"><label>Load Template</label>
         <select id="template-load-select"><option value="">-- Select template --</option>${loadOptions}</select>
       </div>
       <div class="template-group"><label>Save Current Grid as</label><input type="text" id="template-save-name" placeholder="e.g., Friday Short Day"></div>
-      <div class="template-group"><label>&nbsp;</label><button id="template-save-btn" style="padding:8px 12px;background:#007bff;color:#fff;border:none;border-radius:5px;">Save</button></div>
+      <div class="template-group">
+          <label>&nbsp;</label>
+          <button id="template-save-btn" style="padding:8px 12px;background:#007bff;color:#fff;border:none;border-radius:5px;">Save</button>
+          <button id="template-clear-btn" style="padding:8px 12px;background:#ff9800;color:#fff;border:none;border-radius:5px;margin-left:8px;">Clear Grid</button>
+      </div>
     </div>
     <details id="template-manage-details" style="margin-top:15px;">
       <summary style="cursor:pointer;color:#007bff;font-weight:600;padding:5px;border-radius:5px;background:#f0f6ff;display:inline-block;">Manage Assignments & Delete...</summary>
@@ -129,7 +133,7 @@ function renderTemplateUI(){
   const loadSel=document.getElementById("template-load-select");
   const saveName=document.getElementById("template-save-name");
 
-  // --- NEW: Load draft name and save name on input ---
+  // --- Load draft name and save name on input ---
   const savedDraftName = localStorage.getItem(SKELETON_DRAFT_NAME_KEY);
   if (savedDraftName) {
       saveName.value = savedDraftName;
@@ -137,7 +141,6 @@ function renderTemplateUI(){
   saveName.oninput = () => {
       localStorage.setItem(SKELETON_DRAFT_NAME_KEY, saveName.value.trim());
   };
-  // --- END NEW ---
 
   loadSel.onchange=()=>{ 
     const name=loadSel.value; 
@@ -145,29 +148,40 @@ function renderTemplateUI(){
       if(confirm(`Load "${name}"?`)){ 
         loadSkeletonToBuilder(name); 
         saveName.value=name; 
-        // --- NEW: When we load, this becomes our new draft ---
         saveDraftToLocalStorage();
         localStorage.setItem(SKELETON_DRAFT_NAME_KEY, name);
-        // --- END NEW ---
       } else loadSel.value=""; 
     } 
   };
+  
   document.getElementById("template-save-btn").onclick=()=>{ 
     const name=saveName.value.trim(); 
     if(!name){ alert("Enter a name"); return; } 
     if(confirm(`Save as "${name}"?`)){ 
       window.saveSkeleton?.(name,dailySkeleton); 
-      clearDraftFromLocalStorage(); // --- NEW: Clear draft on successful save ---
+      clearDraftFromLocalStorage();
       alert("Template saved!"); 
       renderTemplateUI(); 
     } 
   };
+
+  // --- NEW: Clear Grid Logic ---
+  document.getElementById("template-clear-btn").onclick=()=>{
+    if(confirm("Clear the entire grid to start over?\n(Your saved templates will NOT be deleted.)")){
+        dailySkeleton = [];
+        saveName.value = ""; // clear input
+        localStorage.removeItem(SKELETON_DRAFT_NAME_KEY); // clear draft name
+        saveDraftToLocalStorage(); // clear draft skeleton
+        renderGrid();
+    }
+  };
+
   document.getElementById("template-delete-btn").onclick=()=>{ 
     const name=loadSel.value; 
     if(!name){ alert("Select a template to delete."); return; } 
     if(confirm(`Delete "${name}"?`)){ 
       window.deleteSkeleton?.(name); 
-      clearDraftFromLocalStorage(); // --- NEW: Clear draft if we delete it ---
+      clearDraftFromLocalStorage();
       alert("Deleted!"); 
       renderTemplateUI(); 
       loadSkeletonToBuilder(null); 
@@ -225,7 +239,6 @@ function renderGrid(){
   if(earliestMin===null) earliestMin=540;
   if(latestMin===null) latestMin=960;
 
-  // NEW: extend by latest pinned end so "Dismissal" shows
   const latestPinnedEnd=Math.max(
     -Infinity,
     ...dailySkeleton.filter(ev=>ev && ev.type==='pinned').map(ev=>parseTimeToMinutes(ev.endTime)??-Infinity)
@@ -331,7 +344,6 @@ function addDropListeners(selector){
         const e1=mapEventNameForOptimizer(n1), e2=mapEventNameForOptimizer(n2);
         newEvent={id:`evt_${Math.random().toString(36).slice(2,9)}`, type:'split', event:`${n1} / ${n2}`, division:divName, startTime:st, endTime:et, subEvents:[e1,e2]};
       
-      // --- THIS IS THE FIX ---
       } else if(['lunch','snacks','custom','dismissal','swim'].includes(tileData.type)){
         eventType='pinned';
         if(tileData.type==='custom'){
@@ -341,7 +353,6 @@ function addDropListeners(selector){
           eventName=tileData.name;
         }
       }
-      // --- END FIX ---
 
       if(!newEvent){
         let st,et,sm,em;
@@ -351,7 +362,7 @@ function addDropListeners(selector){
       }
 
       dailySkeleton.push(newEvent);
-      saveDraftToLocalStorage(); // --- NEW ---
+      saveDraftToLocalStorage();
       renderGrid();
     };
   });
@@ -366,7 +377,7 @@ function addRemoveListeners(selector){
       const ev=dailySkeleton.find(v=>v.id===id);
       if(confirm(`Remove "${ev?ev.event:'this event'}"?`)){
         dailySkeleton=dailySkeleton.filter(v=>v.id!==id);
-        saveDraftToLocalStorage(); // --- NEW ---
+        saveDraftToLocalStorage();
         renderGrid();
       }
     };
@@ -413,10 +424,9 @@ function loadSkeletonToBuilder(name){
     dailySkeleton=s? JSON.parse(JSON.stringify(s)): [];
   }
   renderGrid();
-  saveDraftToLocalStorage(); // --- NEW: When we load a template, it becomes the new draft ---
+  saveDraftToLocalStorage();
 }
 
-// time helpers
 function parseTimeToMinutes(str){
   if(!str||typeof str!=='string') return null;
   let s=str.trim().toLowerCase(), mer=null;
