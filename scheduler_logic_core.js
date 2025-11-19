@@ -4,6 +4,7 @@
 // UPDATED (Field Preference Update):
 // - canBlockFit: Checks Field Preferences (Exclusive Mode).
 // - canLeagueGameFit: Checks Field Preferences (Exclusive Mode).
+// - loadAndFilterData: Loads 'preferences' from field data.
 // ============================================================================
 
 (function() {
@@ -518,8 +519,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                             _fixed: true,
                             _h2h: false,
                             vs: null,
-                            _activity: override.activity,
-                            _endTime: endMin 
+                            _activity: override.activity
                         };
                     }
                 });
@@ -640,8 +640,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                             _fixed: true,
                             _h2h: false,
                             vs: null,
-                            _activity: item.event,
-                            _endTime: endMin 
+                            _activity: item.event
                         };
                     }
                 });
@@ -763,7 +762,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             specialtyLeagueGroups[key] = {
                 divName: block.divName,
                 startTime: block.startTime,
-                endTime: block.endTime, // --- NEW: Capture End Time
                 slots: block.slots,
                 bunks: new Set()
             };
@@ -784,7 +782,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             slots: group.slots,
             divName: group.divName,
             startTime: group.startTime,
-            endTime: group.endTime
+            endTime: group.startTime + INCREMENT_MINS * group.slots.length
         };
 
         const leagueName = leagueEntry.name;
@@ -840,14 +838,13 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                     if (!isTimeAvailable(slotIndex, props)) {
                         isFieldAvailable = false;
                     }
-                    
-                    // --- UPDATED: Exclusive Preference Check ---
+                    // --- NEW: Preference Exclusivity Check ---
                     if (props.preferences && props.preferences.enabled && props.preferences.exclusive) {
                         if (!props.preferences.list.includes(group.divName)) {
                              isFieldAvailable = false;
                         }
                     }
-                    // -------------------------------------------
+                    // ----------------------------------------
 
                     if (props.limitUsage && props.limitUsage.enabled) {
                         if (!props.limitUsage.divisions[group.divName]) {
@@ -931,7 +928,6 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
                 leagueName,
                 league,
                 startTime: block.startTime,
-                endTime: block.endTime, // --- NEW: Capture End Time
                 slots: block.slots,
                 bunks: new Set()
             };
@@ -960,7 +956,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
         }
         if (!baseDivName) return;
 
-        const blockBase = { slots, divName: baseDivName, endTime: group.endTime };
+        const blockBase = { slots, divName: baseDivName };
 
         const sports = (league.sports || []).filter(s => fieldsBySport[s]);
         if (sports.length === 0) return;
@@ -1100,14 +1096,14 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             ) || baseDivName;
 
             fillBlock(
-                { slots, bunk: bunkA, divName: bunkADiv, startTime: group.startTime, endTime: group.endTime + INCREMENT_MINS * slots.length },
+                { slots, bunk: bunkA, divName: bunkADiv, startTime: group.startTime, endTime: group.startTime + INCREMENT_MINS * slots.length },
                 pick,
                 fieldUsageBySlot,
                 yesterdayHistory,
                 true // isLeagueFill = true
             );
             fillBlock(
-                { slots, bunk: bunkB, divName: bunkBDiv, startTime: group.startTime, endTime: group.endTime + INCREMENT_MINS * slots.length },
+                { slots, bunk: bunkB, divName: bunkBDiv, startTime: group.startTime, endTime: group.startTime + INCREMENT_MINS * slots.length },
                 pick,
                 fieldUsageBySlot,
                 yesterdayHistory,
@@ -1122,7 +1118,7 @@ window.runSkeletonOptimizer = function(manualSkeleton) {
             ) || baseDivName;
 
             fillBlock(
-                { slots, bunk: leftoverBunk, divName: bunkDivName, startTime: group.startTime, endTime: group.endTime + INCREMENT_MINS * slots.length },
+                { slots, bunk: leftoverBunk, divName: bunkDivName, startTime: group.startTime, endTime: group.startTime + INCREMENT_MINS * slots.length },
                 noGamePick,
                 fieldUsageBySlot,
                 yesterdayHistory,
@@ -1379,17 +1375,15 @@ function canBlockFit(block, fieldName, activityProperties, fieldUsageBySlot, pro
         console.warn(`No properties found for field: ${fieldName}`);
         return false;
     }
+    const limit = (props && props.sharable) ? 2 : 1;
 
     // --- NEW: Preference Exclusivity Check ---
-    // If preferences are enabled AND exclusive, we strictly block non-listed divisions.
     if (props.preferences && props.preferences.enabled && props.preferences.exclusive) {
         if (!props.preferences.list.includes(block.divName)) {
             return false; 
         }
     }
     // ----------------------------------------
-
-    const limit = (props && props.sharable) ? 2 : 1;
 
     // Division filter
     if (
@@ -1753,7 +1747,7 @@ function loadAndFilterData() {
                 ? f.sharableWith.divisions.slice()
                 : null,
             limitUsage: f.limitUsage || { enabled: false, divisions: {} },
-            preferences: f.preferences || { enabled: false, exclusive: false, list: [] }, // --- NEW
+            preferences: f.preferences || { enabled: false, exclusive: false, list: [] }, // --- NEW: Load Preferences
             timeRules: finalRules
         };
 
