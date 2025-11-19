@@ -2,6 +2,8 @@
 // helper.js
 //
 // Provides a "Help & Guide" tab to explain the application's features.
+// - UPDATED: Moved Pro Tips to the top.
+// - UPDATED: Bolstered tips with more feature details.
 // =================================================================
 
 (function() {
@@ -15,6 +17,23 @@ function initHelperTab() {
         <div class="help-wrapper">
             <h1 style="color: #1a5fb4; border-bottom: 2px solid #ddd; padding-bottom: 10px;">Camp Scheduler Guide</h1>
             
+            <div class="help-footer" style="margin-top: 0; margin-bottom: 30px; background: #e8f5e9; border-color: #c8e6c9;">
+                <h3 style="color: #2e7d32;">💡 Pro Tips & Key Features</h3>
+                <ul style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px 40px;">
+                    <li><strong>🧠 Smart Optimizer Logic:</strong> The scheduler isn't random. It remembers what activities each bunk played yesterday and over the last 7 days. It actively tries to provide variety and avoid repeating the same sport two days in a row.</li>
+                    
+                    <li><strong>⚡ Priority Scheduling:</strong> "Specialty Leagues" (e.g., 5th Grade Basketball) get <strong>Priority #1</strong>. The system locks down the necessary fields for these games <em>before</em> scheduling any general activities.</li>
+                    
+                    <li><strong>🛡️ Auto-Save & Backup:</strong> Your work is saved automatically every 10 minutes. You can also "Export" your entire setup to a file on your computer for offline safekeeping or to transfer to another device.</li>
+                    
+                    <li><strong>⏱️ Precision Availability:</strong> The "Report" tab doesn't just show "Busy" or "Free". If a field is used for a short game (e.g., 20 mins), the grid will tell you exactly when it frees up (e.g., <span style="background:#fff9c4; padding:0 4px;">Avail 12:20 PM</span>).</li>
+                    
+                    <li><strong>📌 Strategic Pinning:</strong> Need to force a change? Use the "Bunk Specific" tab in Daily Adjustments to lock a specific bunk into a specific activity. This overrides all other rules and templates.</li>
+                    
+                    <li><strong>📂 Master Templates:</strong> Don't just build one schedule. Create templates for "Rainy Day", "Trip Day", or "Friday" in the Master Scheduler. You can load these instantly into any specific date.</li>
+                </ul>
+            </div>
+
             <div class="help-grid">
                 
                 <div class="help-card">
@@ -63,7 +82,7 @@ function initHelperTab() {
                     <h3>5. Leagues</h3>
                     <p><strong>Goal:</strong> Manage season-long competitions.</p>
                     <ul>
-                        <li><strong>Specialty Leagues:</strong> Dedicated leagues for one sport (e.g., "5th Grade Basketball League"). These get <strong>Priority #1</strong> for fields.</li>
+                        <li><strong>Specialty Leagues:</strong> Dedicated leagues for one sport (e.g., "5th Grade Basketball League").</li>
                         <li><strong>Regular Leagues:</strong> General inter-bunk games.</li>
                         <li><strong>Standings:</strong> Track Wins, Losses, and Ties directly in the app.</li>
                     </ul>
@@ -78,17 +97,6 @@ function initHelperTab() {
                     </ul>
                 </div>
 
-            </div>
-
-            <div class="help-footer">
-                <h3>💡 Pro Tips</h3>
-                <ul>
-                    <li><strong>The Optimizer is Smart:</strong> It looks at what bunks did yesterday and over the last week to avoid repeating activities.</li>
-                    <li><strong>Auto-Save & Manual Save:</strong> Your work is automatically saved every 10 minutes. You can also use the "Save Now" button in the Setup tab to save immediately at any time.</li>
-                    <li><strong>Backup & Offline:</strong> Use the "Export" button in the Setup tab to save a file to your computer. This allows you to keep offline backups or transfer your work. You can "Import" this file later to restore everything.</li>
-                    <li><strong>Availability Grid:</strong> If you need to squeeze in a last-minute game, check the "Report" tab's Availability Grid to find a free 30-minute slot.</li>
-                    <li><strong>Locking Activities:</strong> In "Daily Adjustments", you can add "Bunk Specific" pins to force a specific bunk to do a specific activity at a specific time.</li>
-                </ul>
             </div>
         </div>
     `;
