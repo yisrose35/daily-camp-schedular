@@ -23,13 +23,17 @@
         </div>
     </div>
 
+    <!-- Sidebar Overlay (Backdrop) -->
+    <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
     <!-- Main App Grid -->
     <div id="main-app-container" class="app-container" style="display: none;">
         
-        <!-- Sidebar -->
+        <!-- Sidebar (Hidden by default, toggled via Hamburger) -->
         <nav id="app-sidebar">
             <div class="logo-area">
                 <span>🏕️ Scheduler Pro</span>
+                <button class="close-sidebar-btn" onclick="toggleSidebar()">×</button>
             </div>
             <div class="nav-links">
                 <div class="nav-category">Configuration</div>
@@ -55,9 +59,20 @@
 
         <!-- Header -->
         <header id="app-header">
-            <div class="header-title">
-                <h2 id="page-title">Setup</h2>
+            <div style="display: flex; align-items: center; gap: 15px;">
+                <!-- Hamburger Menu Button -->
+                <button id="hamburger-btn" onclick="toggleSidebar()">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="3" y1="12" x2="21" y2="12"></line>
+                        <line x1="3" y1="6" x2="21" y2="6"></line>
+                        <line x1="3" y1="18" x2="21" y2="18"></line>
+                    </svg>
+                </button>
+                <div class="header-title">
+                    <h2 id="page-title">Setup</h2>
+                </div>
             </div>
+
             <div class="header-controls">
                 <div class="date-control-wrapper">
                     <label>Schedule Date:</label>
@@ -160,7 +175,30 @@
     <script src="updates.js" defer></script>
 
     <script>
+        // Sidebar Toggle Logic
+        function toggleSidebar() {
+            const sidebar = document.getElementById('app-sidebar');
+            const overlay = document.getElementById('sidebar-overlay');
+            const isOpen = sidebar.classList.contains('open');
+            
+            if (isOpen) {
+                sidebar.classList.remove('open');
+                overlay.classList.remove('active');
+            } else {
+                sidebar.classList.add('open');
+                overlay.classList.add('active');
+            }
+        }
+
         function showTab(id) {
+            // Close sidebar on mobile when a tab is selected
+            const sidebar = document.getElementById('app-sidebar');
+            const overlay = document.getElementById('sidebar-overlay');
+            if (window.innerWidth <= 1024) {
+                sidebar.classList.remove('open');
+                overlay.classList.remove('active');
+            }
+
             // Update Sidebar active state
             document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
             const activeBtn = Array.from(document.querySelectorAll('.nav-item')).find(b => b.getAttribute('onclick').includes(`'${id}'`));
