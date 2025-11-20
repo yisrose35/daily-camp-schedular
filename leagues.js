@@ -2,10 +2,9 @@
 // leagues.js
 //
 // UPDATED:
-// - Auto-calculates "League Game X" number based on history.
-// - Handles single game vs double-header days dynamically.
+// - FIX: Ignores 'continuation' slots so 1-hour games don't appear as double headers.
+// - FIX: Smarter "League Game X" counting (scans history for highest number).
 // - Default View: Standings.
-// - Config hidden behind "Edit Configuration" button.
 // ===================================================================
 
 (function () {
@@ -595,19 +594,21 @@
         const foundMatches = new Set(); 
         const saveButton = target.parentElement.querySelector("button[style*='background: rgb(40, 167, 69)']") || target.parentElement.lastElementChild;
 
-        // --- 1. Calculate Global Game Count (based on history) ---
-        let gamesPlayedSoFar = 0;
+        // --- 1. Determine Next "League Game X" Number ---
+        // We scan all past matches for the highest "League Game (\d+)" number.
+        let maxLeagueGameNum = 0;
         (league.games || []).forEach(g => {
-            // Count unique labels in this game set
-            const uniqueLabels = new Set();
-            if(g.matches && g.matches.length > 0) {
-                g.matches.forEach(m => {
-                    if(m.timeLabel) uniqueLabels.add(m.timeLabel);
-                });
-            }
-            // If unique labels found, add that count. If none (old data), assume 1.
-            if(uniqueLabels.size > 0) gamesPlayedSoFar += uniqueLabels.size;
-            else gamesPlayedSoFar++;
+            (g.matches || []).forEach(m => {
+                if(m.timeLabel) {
+                    const match = m.timeLabel.match(/League Game (\d+)/);
+                    if(match) {
+                        const num = parseInt(match[1]);
+                        if(num > maxLeagueGameNum) maxLeagueGameNum = num;
+                    }
+                }
+            });
+            // Fallback: If no labels found in history, count the game set itself as 1
+            if(maxLeagueGameNum === 0) maxLeagueGameNum = league.games.length;
         });
 
         // --- 2. Gather Today's Matches ---
@@ -616,7 +617,8 @@
         league.teams.forEach(team => {
             const schedule = assignments[team] || [];
             schedule.forEach((entry, slotIndex) => {
-                if (entry && entry._h2h) {
+                // FIX: Check !entry.continuation to avoid double counting 1-hour games
+                if (entry && entry._h2h && !entry.continuation) {
                     const label = entry.sport || ""; 
                     const match = label.match(/^(.*?) vs (.*?) \(/);
 
@@ -625,6 +627,7 @@
                         const t2 = match[2].trim();
 
                         if (league.teams.includes(t1) && league.teams.includes(t2)) {
+                            // Unique key includes slotIndex to allow true double headers
                             const uniqueKey = [t1, t2].sort().join(" vs ") + "::" + slotIndex;
                             
                             if (!foundMatches.has(uniqueKey)) {
@@ -645,10 +648,10 @@
             return;
         }
 
-        // --- 3. Render with Incremental Labels ---
+        // --- 3. Render Groups with Sequential Numbers ---
         sortedSlots.forEach((slotIdx, displayIndex) => {
-            // The calculation: Past Games + (Current Index + 1)
-            const gameNumber = gamesPlayedSoFar + displayIndex + 1;
+            // Start counting from the highest found + 1
+            const gameNumber = maxLeagueGameNum + displayIndex + 1;
             const gameLabel = `League Game ${gameNumber}`;
 
             const header = document.createElement("div");
