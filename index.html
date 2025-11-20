@@ -9,15 +9,16 @@
 <body>
 
     <div id="welcome-screen" style="display: none;">
-        <div style="background:white; padding:3rem; border-radius:16px; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1); width:100%; max-width:450px;">
-            <h2 id="welcome-title" style="margin-bottom:0.5rem;">Welcome</h2>
+        <div style="background:white; padding:3rem; border-radius:16px; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1); width:100%; max-width:450px; text-align:center;">
+            <img src="https://placehold.co/80x80/2563eb/ffffff?text=CS&font=roboto" style="border-radius:12px; margin-bottom:1rem;">
+            <h2 id="welcome-title" style="margin-bottom:0.5rem; font-size:1.5rem;">Welcome Back</h2>
             <p style="margin-bottom:2rem; color:#6b7280;">Enter your camp's name to access the dashboard.</p>
-            <input type="text" id="camp-name-input" placeholder="Camp Name">
-            <button id="begin-btn" style="width:100%; margin-top:1rem; padding:1rem; font-size:1.1rem; background:#2563eb;">Get Started</button>
+            <input type="text" id="camp-name-input" placeholder="Camp Name" style="text-align:center;">
+            <button id="begin-btn" style="width:100%; margin-top:1rem; padding:0.8rem; background:#2563eb; color:white; font-size:1rem; font-weight:600; border-radius:8px; border:none; cursor:pointer;">Get Started</button>
         </div>
     </div>
 
-    <div id="main-app-container" style="display: none; height: 100%; width: 100%;">
+    <div id="main-app-container" style="display: none;">
         
         <nav class="sidebar">
             <div class="app-logo">
@@ -25,36 +26,40 @@
             </div>
             
             <div class="tabs">
-                <div style="font-size:0.75rem; font-weight:700; color:#475569; text-transform:uppercase; padding:0 0.75rem; margin-bottom:0.5rem;">Core</div>
-                <button class="tab-button active" onclick="showTab('setup')">Setup & Bunks</button>
-                <button class="tab-button" onclick="showTab('fields'); window.initFieldsTab?.();">Fields & Locations</button>
-                <button class="tab-button" onclick="showTab('special_activities'); window.initSpecialActivitiesTab?.();">Special Activities</button>
+                <div style="font-size:0.7rem; font-weight:700; color:#475569; text-transform:uppercase; padding:0 0.75rem; margin-bottom:0.5rem; margin-top:1rem;">Core Setup</div>
+                <button class="tab-button active" onclick="showTab('setup')"><span>⚙️</span> Setup & Bunks</button>
+                <button class="tab-button" onclick="showTab('fields'); window.initFieldsTab?.();"><span>📍</span> Fields & Locations</button>
+                <button class="tab-button" onclick="showTab('special_activities'); window.initSpecialActivitiesTab?.();"><span>🎨</span> Special Activities</button>
                 
                 <div class="nav-divider"></div>
                 
-                <div style="font-size:0.75rem; font-weight:700; color:#475569; text-transform:uppercase; padding:0 0.75rem; margin-bottom:0.5rem;">Scheduling</div>
-                <button class="tab-button" onclick="showTab('master-scheduler'); window.initMasterScheduler?.();">Master Templates</button>
-                <button class="tab-button" onclick="showTab('daily-adjustments'); window.initDailyAdjustments?.();">Daily Builder</button>
-                <button class="tab-button" onclick="showTab('schedule')">Daily View</button>
-                
-                <div class="nav-divider"></div>
-
-                <div style="font-size:0.75rem; font-weight:700; color:#475569; text-transform:uppercase; padding:0 0.75rem; margin-bottom:0.5rem;">Leagues</div>
-                <button class="tab-button" onclick="showTab('leagues'); window.initLeagues?.();">League Manager</button>
-                <button class="tab-button" onclick="showTab('specialty-leagues'); window.initSpecialtyLeagues?.();">Specialty Leagues</button>
+                <div style="font-size:0.7rem; font-weight:700; color:#475569; text-transform:uppercase; padding:0 0.75rem; margin-bottom:0.5rem;">Daily Operations</div>
+                <button class="tab-button" onclick="showTab('master-scheduler'); window.initMasterScheduler?.();"><span>🗓️</span> Master Templates</button>
+                <button class="tab-button" onclick="showTab('daily-adjustments'); window.initDailyAdjustments?.();"><span>🔧</span> Daily Builder</button>
+                <button class="tab-button" onclick="showTab('schedule')"><span>📅</span> Daily View</button>
                 
                 <div class="nav-divider"></div>
 
-                <button class="tab-button" onclick="showTab('report'); window.initReportTab?.();">Analytics & Reports</button>
-                <button class="tab-button" onclick="showTab('print'); window.initPrintCenter?.();">Print Center</button>
-                <button class="tab-button" onclick="showTab('helper'); window.initHelperTab?.();">Help & Guide</button>
+                <div style="font-size:0.7rem; font-weight:700; color:#475569; text-transform:uppercase; padding:0 0.75rem; margin-bottom:0.5rem;">Leagues</div>
+                <button class="tab-button" onclick="showTab('leagues'); window.initLeagues?.();"><span>🏆</span> League Manager</button>
+                <button class="tab-button" onclick="showTab('specialty-leagues'); window.initSpecialtyLeagues?.();"><span>🏅</span> Specialty Leagues</button>
+                
+                <div class="nav-divider"></div>
+
+                <button class="tab-button" onclick="showTab('report'); window.initReportTab?.();"><span>📊</span> Reports</button>
+                <button class="tab-button" onclick="showTab('print'); window.initPrintCenter?.();"><span>🖨️</span> Print Center</button>
+                <button class="tab-button" onclick="showTab('updates'); window.initUpdatesTab?.();"><span>🔔</span> Updates</button>
+                <button class="tab-button" onclick="showTab('helper'); window.initHelperTab?.();"><span>❓</span> Help</button>
             </div>
         </nav>
 
         <header class="app-header">
-            <h3 id="page-title" style="margin:0; border:none; font-size:1.1rem;">Dashboard</h3>
+            <button id="menu-toggle" class="menu-toggle" title="Toggle Sidebar">
+                ☰
+            </button>
+            <h3 id="page-title" style="margin:0; border:none; font-size:1.1rem; margin-left:10px;">Dashboard</h3>
             
-            <div class="date-control">
+            <div class="date-control" style="margin-left:auto;">
                 <label for="calendar-date-picker">Active Date:</label>
                 <input type="date" id="calendar-date-picker">
             </div>
@@ -63,7 +68,7 @@
         <main class="main-viewport">
             
             <div id="setup" class="tab-content active">
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem;">
                     <div class="card">
                         <h3>Manage Bunks</h3>
                         <div style="display:flex; gap:10px; margin-bottom:1rem;">
@@ -163,23 +168,31 @@
     <script src="updates.js" defer></script>
 
     <script>
+        // Sidebar Toggle Logic
+        const menuToggle = document.getElementById('menu-toggle');
+        const appContainer = document.getElementById('main-app-container');
+        
+        if(menuToggle && appContainer) {
+            menuToggle.addEventListener('click', () => {
+                appContainer.classList.toggle('sidebar-closed');
+            });
+        }
+
         function showTab(id) {
             document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             document.getElementById(id).classList.add('active');
             
-            // Highlight sidebar button
             const btn = document.querySelector(`.tab-button[onclick^="showTab('${id}')"]`);
             if(btn) btn.classList.add('active');
             
-            // Update Header Title
             const titleMap = {
                 'setup': 'Camp Setup', 'fields': 'Fields & Locations', 'master-scheduler': 'Master Templates',
-                'daily-adjustments': 'Daily Schedule Builder', 'schedule': 'Schedule View', 'leagues': 'Leagues'
+                'daily-adjustments': 'Daily Schedule Builder', 'schedule': 'Schedule View', 'leagues': 'Leagues',
+                'specialty-leagues': 'Specialty Leagues', 'report': 'Analytics', 'print': 'Print Center'
             };
             document.getElementById('page-title').textContent = titleMap[id] || 'Dashboard';
 
-            // Trigger Init functions
             if (id === 'schedule') window.updateTable?.();
             else if (id === 'leagues') window.initLeagues?.();
             else if (id === 'specialty-leagues') window.initSpecialtyLeagues?.();
