@@ -129,7 +129,7 @@
                         <h3>Add Divisions</h3>
                         <p style="font-size: 0.9em; color: #555;">
                             Add divisions, then set the start and end time for each division.
-                            Under each division, add the bunks that belong to it.
+                            Under each division, you’ll add the bunks that belong there.
                         </p>
                         <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
                         <button id="addDivisionBtn">Add Division</button>
@@ -139,14 +139,17 @@
 
                         <div id="divisionButtons" style="margin-top:8px;"></div>
 
-                        <!-- Hidden legacy bunk UI so older JS doesn't break.
-                             We no longer show a separate "Add Bunks" area. -->
-                        <div id="legacy-bunks" style="display:none;">
-                            <h3>Add Bunks</h3>
-                            <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
-                            <button id="addBunkBtn">Add Bunk</button>
-                            <div id="unassignedBunks" class="bunk-container"></div>
-                        </div>
+                        <hr style="margin: 20px 0;">
+
+                        <!-- CLEAR “WHERE TO ADD BUNKS” SECTION -->
+                        <h3>Unassigned Bunks (Drag into a Division)</h3>
+                        <p style="font-size: 0.9em; color: #555;">
+                            These bunks are not yet placed. Drag them into the division cards above,
+                            or drag between divisions to rebalance. You can also create new bunks here.
+                        </p>
+                        <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
+                        <button id="addBunkBtn">Add Bunk</button>
+                        <div id="unassignedBunks" class="bunk-container"></div>
 
                         <hr style="margin: 20px 0;">
 
@@ -279,16 +282,18 @@
     <script src="updates.js" defer></script>
 
     <script>
-        // Build "Division → Bunks" UI INSIDE each division card.
-        // We piggyback on whatever app1.js creates in #divisionButtons.
+        // ============================
+        // BUNK UI: DRAG, DROP, SWAP
+        // ============================
         (function () {
-            const DIVISION_BUNK_SECTION_CLASS = 'division-bunks-section';
+            'use strict';
 
             let draggingBunk = null;
 
             function makeBunkDraggable(bunkEl) {
+                if (!bunkEl || bunkEl.dataset.dragEnhanced === 'true') return;
+                bunkEl.dataset.dragEnhanced = 'true';
                 bunkEl.setAttribute('draggable', 'true');
-                bunkEl.classList.add('master-bunk-pill'); // reuse pill style
 
                 bunkEl.addEventListener('dragstart', (e) => {
                     draggingBunk = bunkEl;
@@ -302,27 +307,32 @@
             }
 
             function setupDropZone(container) {
+                if (!container || container.dataset.dropEnhanced === 'true') return;
+                container.dataset.dropEnhanced = 'true';
+                container.classList.add('bunk-drop-zone');
+
                 container.addEventListener('dragover', (e) => {
+                    if (!draggingBunk) return;
                     e.preventDefault();
                     e.dataTransfer.dropEffect = 'move';
                 });
 
                 container.addEventListener('drop', (e) => {
-                    e.preventDefault();
                     if (!draggingBunk) return;
+                    e.preventDefault();
 
-                    const targetPill = e.target.closest('.master-bunk-pill');
+                    const targetPill = e.target.closest('.bunk-button');
                     const sourceParent = draggingBunk.parentNode;
 
                     if (targetPill && targetPill !== draggingBunk) {
-                        // SWAP: dragged bunk with target bunk (swap divisions)
+                        // SWAP between divisions / unassigned
                         const targetParent = targetPill.parentNode;
                         const afterTarget = targetPill.nextSibling;
 
                         targetParent.insertBefore(draggingBunk, afterTarget);
                         sourceParent.appendChild(targetPill);
                     } else {
-                        // Just move into this container
+                        // Just move into this zone
                         container.appendChild(draggingBunk);
                     }
                 });
@@ -332,9 +342,8 @@
                 if (!wrapper || wrapper.dataset.bunksEnhanced === 'true') return;
                 wrapper.dataset.bunksEnhanced = 'true';
 
-                const section = document.createElement('div');
-                section.className = DIVISION_BUNK_SECTION_CLASS;
-                section.style.marginTop = '10px';
+                const bunkSection = document.createElement('div');
+                bunkSection.style.marginTop = '10px';
 
                 const headerRow = document.createElement('div');
                 headerRow.style.display = 'flex';
@@ -342,11 +351,23 @@
                 headerRow.style.justifyContent = 'space-between';
                 headerRow.style.marginBottom = '6px';
 
+                const labelWrap = document.createElement('div');
+                labelWrap.style.display = 'flex';
+                labelWrap.style.flexDirection = 'column';
+
                 const label = document.createElement('span');
                 label.textContent = 'Bunks in this division';
                 label.style.fontSize = '0.8rem';
                 label.style.fontWeight = '600';
                 label.style.color = '#4b5563';
+
+                const sub = document.createElement('span');
+                sub.textContent = 'Drag from "Unassigned Bunks" or other divisions, or click "+ Add Bunk".';
+                sub.style.fontSize = '0.7rem';
+                sub.style.color = '#6b7280';
+
+                labelWrap.appendChild(label);
+                labelWrap.appendChild(sub);
 
                 const addBtn = document.createElement('button');
                 addBtn.type = 'button';
@@ -354,7 +375,7 @@
                 addBtn.style.fontSize = '0.75rem';
                 addBtn.style.padding = '4px 10px';
 
-                headerRow.appendChild(label);
+                headerRow.appendChild(labelWrap);
                 headerRow.appendChild(addBtn);
 
                 const bunkContainer = document.createElement('div');
@@ -362,6 +383,16 @@
                 bunkContainer.style.display = 'flex';
                 bunkContainer.style.flexWrap = 'wrap';
                 bunkContainer.style.gap = '6px';
+
+                // Move any bunk-buttons already inside this wrapper into the new container
+                const existing = wrapper.querySelectorAll('.bunk-button');
+                existing.forEach(b => {
+                    bunkContainer.appendChild(b);
+                });
+
+                bunkSection.appendChild(headerRow);
+                bunkSection.appendChild(bunkContainer);
+                wrapper.appendChild(bunkSection);
 
                 setupDropZone(bunkContainer);
 
@@ -372,35 +403,55 @@
                     if (!name) return;
 
                     const bunk = document.createElement('span');
+                    bunk.className = 'bunk-button';
                     bunk.textContent = name;
                     makeBunkDraggable(bunk);
                     bunkContainer.appendChild(bunk);
                 });
-
-                section.appendChild(headerRow);
-                section.appendChild(bunkContainer);
-                wrapper.appendChild(section);
             }
 
             function enhanceAllDivisions() {
-                const wrappers = document.querySelectorAll('#divisionButtons .divisionWrapper');
-                wrappers.forEach(enhanceDivisionWrapper);
+                document
+                    .querySelectorAll('#divisionButtons .divisionWrapper')
+                    .forEach(enhanceDivisionWrapper);
             }
 
-            // Expose so we can call on tab switch
-            window.enhanceDivisionBunkUI = enhanceAllDivisions;
+            function prepareAllBunks() {
+                document.querySelectorAll('.bunk-button').forEach(makeBunkDraggable);
+            }
 
-            // Also watch for changes to divisionButtons to auto-enhance new divisions
+            function setupUnassignedZone() {
+                const unassigned = document.getElementById('unassignedBunks');
+                if (!unassigned) return;
+                setupDropZone(unassigned);
+            }
+
+            // Public hook for showTab / external calls
+            window.refreshBunksUI = function () {
+                enhanceAllDivisions();
+                setupUnassignedZone();
+                prepareAllBunks();
+            };
+
+            // Observe changes: when divisions or bunks are added by app1.js, keep things wired
             const divisionButtons = document.getElementById('divisionButtons');
             if (divisionButtons && 'MutationObserver' in window) {
-                const observer = new MutationObserver(() => {
-                    enhanceAllDivisions();
+                const obs1 = new MutationObserver(() => {
+                    window.refreshBunksUI();
                 });
-                observer.observe(divisionButtons, {
-                    childList: true,
-                    subtree: true
-                });
+                obs1.observe(divisionButtons, { childList: true, subtree: true });
             }
+
+            const unassignedEl = document.getElementById('unassignedBunks');
+            if (unassignedEl && 'MutationObserver' in window) {
+                const obs2 = new MutationObserver(() => {
+                    prepareAllBunks();
+                });
+                obs2.observe(unassignedEl, { childList: true, subtree: true });
+            }
+
+            // Initial run (covers already-added bunks)
+            window.refreshBunksUI();
         })();
 
         function showTab(id) {
@@ -417,7 +468,7 @@
 
             // Tab-specific hooks
             if (id === 'setup') {
-                window.enhanceDivisionBunkUI?.();
+                window.refreshBunksUI?.();
             } else if (id === 'schedule') window.updateTable?.();
             else if (id === 'leagues') window.initLeagues?.();
             else if (id === 'specialty-leagues') window.initSpecialtyLeagues?.();
@@ -464,7 +515,7 @@
             }
 
             // initial enhancement for default tab
-            window.enhanceDivisionBunkUI?.();
+            window.refreshBunksUI?.();
         })();
     </script>
 </body>
