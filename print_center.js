@@ -3,15 +3,84 @@
 //
 // Handles generating printable schedules.
 // Features:
-// - Print Whole Schedule (All Divisions)
+// - Print Whole Schedule (All Divisions) - Layout matches Daily View
 // - Print Selected Divisions (Multi-select)
-// - Print Selected Bunks (Multi-select) - UPDATED
-// - Print Selected Locations (Multi-select) - UPDATED
-// - Shows full League Matchups on both Bunk and Field schedules
+// - Print Selected Bunks (Multi-select)
+// - Print Selected Locations (Multi-select)
+// - Export to Excel (.xls)
 // =================================================================
 
 (function() {
 'use strict';
+
+// --- Helpers Copied/Adapted from scheduler_ui.js for consistency ---
+const INCREMENT_MINS = 30;
+
+function parseTimeToMinutes(str) {
+  if (!str || typeof str !== "string") return null;
+  let s = str.trim().toLowerCase();
+  let mer = null;
+  if (s.endsWith("am") || s.endsWith("pm")) {
+    mer = s.endsWith("am") ? "am" : "pm";
+    s = s.replace(/am|pm/g, "").trim();
+  }
+  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+  if (!m) return null;
+  let hh = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  if (Number.isNaN(hh) || Number.isNaN(mm)) return null;
+  if (mer) {
+    if (hh === 12) hh = mer === "am" ? 0 : 12;
+    else if (mer === "pm") hh += 12;
+  }
+  return hh * 60 + mm;
+}
+
+function minutesToTimeLabel(min) {
+  let h = Math.floor(min / 60);
+  let m = min % 60;
+  let ap = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return `${h}:${m.toString().padStart(2, '0')} ${ap}`;
+}
+
+function findFirstSlotForTime(startMin) {
+  const times = window.unifiedTimes || [];
+  if (startMin === null || !times.length) return -1;
+  for (let i = 0; i < times.length; i++) {
+    const slot = times[i];
+    const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+    if (slotStart >= startMin && slotStart < startMin + INCREMENT_MINS) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function getEntry(bunk, slotIndex) {
+  const assignments = window.scheduleAssignments || {};
+  if (bunk && assignments[bunk] && assignments[bunk][slotIndex]) {
+    return assignments[bunk][slotIndex];
+  }
+  return null;
+}
+
+function formatEntry(entry) {
+  if (!entry) return "";
+  if (entry._isDismissal) return "Dismissal";
+  if (entry._isSnack) return "Snacks";
+  
+  let label = "";
+  if (typeof entry.field === 'string') label = entry.field;
+  else if (entry.field && entry.field.name) label = entry.field.name;
+
+  if (entry._h2h) return entry.sport || "League Game";
+  if (entry._fixed) return label || entry._activity || "";
+  if (entry.sport) return `${label} – ${entry.sport}`;
+  return label;
+}
+
+// -------------------------------------------------------------------
 
 function initPrintCenter() {
     const container = document.getElementById("print-content");
@@ -20,7 +89,7 @@ function initPrintCenter() {
     container.innerHTML = `
         <div class="print-dashboard">
             <h1 style="color:#1a5fb4;">🖨️ Print Center</h1>
-            <p class="no-print">Select the items you want to print. You can select multiple Bunks or Fields at once.</p>
+            <p class="no-print">Select what you want to print or export. The "Master Schedule" views now look exactly like the Daily Schedule screen.</p>
 
             <div class="print-cards no-print">
                 
@@ -28,15 +97,19 @@ function initPrintCenter() {
                     <h3>📅 Master Schedule</h3>
                     <p>Print grid views for divisions.</p>
                     
-                    <button onclick="window.printAllDivisions()" style="background:#28a745; margin-bottom:15px;">
-                        Print Whole Schedule (All Divisions)
-                    </button>
+                    <div style="display:flex; gap:10px; margin-bottom:15px;">
+                        <button onclick="window.printAllDivisions()" style="background:#28a745; flex:1;">Print All</button>
+                        <button onclick="window.exportAllDivisionsToExcel()" style="background:#217346; flex:1;">Export to Excel</button>
+                    </div>
 
                     <hr style="border-top:1px solid #ddd; margin:10px 0;">
                     
                     <label style="font-weight:bold; display:block; margin-bottom:5px;">Or Select Specific Divisions:</label>
                     <div id="print-div-list" class="print-list-box"></div>
-                    <button onclick="window.printSelectedDivisions()">Print Selected Divisions</button>
+                    <div style="display:flex; gap:10px;">
+                        <button onclick="window.printSelectedDivisions()" style="flex:1;">Print Selected</button>
+                        <button onclick="window.exportSelectedDivisionsToExcel()" style="background:#217346; flex:1;">Export Selected</button>
+                    </div>
                 </div>
 
                 <div class="print-card">
@@ -123,27 +196,83 @@ function populateSelectors() {
     });
 }
 
-// --- HELPERS ---
-
-function getDailyData() {
-    return window.loadCurrentDailyData?.() || {};
-}
-
-function getUnifiedTimes() {
-    return window.unifiedTimes || [];
-}
-
 // --- GENERATORS ---
 
-// 1. Division Grid HTML
+/**
+ * Generates the HTML for a Division using the "Daily View" logic (Timeline Blocks).
+ */
 function generateDivisionHTML(divName) {
-    const daily = getDailyData();
-    const times = getUnifiedTimes();
+    const daily = window.loadCurrentDailyData?.() || {};
+    const manualSkeleton = daily.manualSkeleton || [];
     const divisions = window.loadGlobalSettings?.().app1.divisions || {};
     const bunks = (divisions[divName]?.bunks || []).sort();
 
     if (bunks.length === 0) return "";
 
+    // --- 1. Build Blocks Logic (Ported from scheduler_ui.js) ---
+    const tempSortedBlocks = [];
+    manualSkeleton.forEach(item => {
+        if (item.division === divName) {
+            const startMin = parseTimeToMinutes(item.startTime);
+            const endMin = parseTimeToMinutes(item.endTime);
+            if (startMin === null || endMin === null) return;
+            tempSortedBlocks.push({ item, startMin, endMin });
+        }
+    });
+    tempSortedBlocks.sort((a, b) => a.startMin - b.startMin);
+
+    const divisionBlocks = [];
+    let leagueCounter = 0; 
+    let specialtyCounter = 0;
+
+    tempSortedBlocks.forEach(block => {
+        let eventName = block.item.event;
+        if (block.item.event === "League Game") {
+            leagueCounter++;
+            eventName = `League Game ${leagueCounter}`;
+        } else if (block.item.event === "Specialty League") {
+            specialtyCounter++;
+            eventName = `Specialty League ${specialtyCounter}`;
+        }
+
+        divisionBlocks.push({
+            label: `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(block.endMin)}`,
+            startMin: block.startMin,
+            endMin: block.endMin,
+            event: eventName,
+            type: block.item.type
+        });
+    });
+
+    // Filter duplicates and handle splits
+    const uniqueBlocks = divisionBlocks.filter((block, index, self) => 
+        index === self.findIndex((t) => t.label === block.label)
+    );
+
+    const flattenedBlocks = [];
+    uniqueBlocks.forEach((block) => {
+        if (block.type === "split" && block.startMin !== null && block.endMin !== null) {
+            const midMin = Math.round(block.startMin + (block.endMin - block.startMin) / 2);
+            flattenedBlocks.push({
+                ...block,
+                label: `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(midMin)}`,
+                startMin: block.startMin,
+                endMin: midMin,
+                splitPart: 1
+            });
+            flattenedBlocks.push({
+                ...block,
+                label: `${minutesToTimeLabel(midMin)} - ${minutesToTimeLabel(block.endMin)}`,
+                startMin: midMin,
+                endMin: block.endMin,
+                splitPart: 2
+            });
+        } else {
+            flattenedBlocks.push(block);
+        }
+    });
+
+    // --- 2. Build HTML Table ---
     let html = `
         <div class="print-page landscape">
             <div class="print-header">
@@ -153,54 +282,81 @@ function generateDivisionHTML(divName) {
             <table class="print-table grid-table">
                 <thead>
                     <tr>
-                        <th style="width:80px;">Time</th>
+                        <th style="width:130px;">Time</th>
                         ${bunks.map(b => `<th>${b}</th>`).join('')}
                     </tr>
                 </thead>
                 <tbody>
     `;
 
-    times.forEach((t, i) => {
-        html += `<tr><td class="time-col"><strong>${t.label}</strong></td>`;
-        bunks.forEach(b => {
-            const entry = daily.scheduleAssignments?.[b]?.[i];
-            let label = "";
-            let cssClass = "";
+    if (flattenedBlocks.length === 0) {
+        html += `<tr><td colspan="${bunks.length + 1}" style="text-align:center; padding:20px;">No schedule blocks found.</td></tr>`;
+    }
 
-            if (entry) {
-                if (entry.continuation) {
-                    label = "↓";
-                    cssClass = "continuation";
+    flattenedBlocks.forEach(eventBlock => {
+        html += `<tr>`;
+        // Time Cell
+        html += `<td class="time-col"><strong>${eventBlock.label}</strong></td>`;
+
+        // Activity Cells
+        const isLeague = eventBlock.event.startsWith("League Game") || eventBlock.event.startsWith("Specialty League");
+        
+        if (isLeague) {
+            // --- Merged Cell for League ---
+            // Calculate matchups
+            const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
+            let allMatchups = [];
+            if (bunks.length > 0) {
+                const entry = getEntry(bunks[0], firstSlotIndex);
+                if (entry && entry._allMatchups) allMatchups = entry._allMatchups;
+            }
+
+            let cellContent = `<strong>${eventBlock.event}</strong>`;
+            if (allMatchups.length > 0) {
+                cellContent += `<ul style="margin:0; padding-left:15px; text-align:left; font-size:0.9em;">`;
+                allMatchups.forEach(m => cellContent += `<li>${m}</li>`);
+                cellContent += `</ul>`;
+            } else {
+                cellContent += `<br><em>(No matchups found)</em>`;
+            }
+
+            html += `<td colspan="${bunks.length}" style="background:#e8f4ff; vertical-align:top; text-align:left;">${cellContent}</td>`;
+
+        } else {
+            // --- Standard Cells ---
+            bunks.forEach(bunk => {
+                const slotIndex = findFirstSlotForTime(eventBlock.startMin);
+                const entry = getEntry(bunk, slotIndex);
+                let text = "";
+                let bg = "";
+
+                if (entry) {
+                    text = formatEntry(entry);
+                    if (entry._fixed) bg = "#fff8e1"; // pinned color
                 } else {
-                    if (entry._h2h) {
-                        // For grid, keep it short, but maybe show sport
-                        label = entry.sport ? entry.sport.split('(')[1]?.split(')')[0] || "League" : "League";
-                        // Or if entry.sport has "1 vs 2", that's too long for grid.
-                        // Let's try to just show the Sport Name if possible
-                        if (entry._activity) label = entry._activity + " (League)";
-                        cssClass = "league-cell";
-                    } else if (entry._fixed) {
-                        label = (typeof entry.field === 'object') ? entry.field.name : entry.field;
-                        cssClass = "pinned-cell";
-                    } else {
-                        label = (typeof entry.field === 'object') ? entry.field.name : entry.field;
+                    // Fallback to the block name if nothing is scheduled yet (e.g. "Lunch")
+                    // but only if it's not a generated slot that failed to fill
+                    if (["Lunch","Snack","Dismissal","Swim"].some(k => eventBlock.event.includes(k))) {
+                        text = eventBlock.event;
+                        bg = "#fff8e1";
                     }
                 }
-            }
-            html += `<td class="${cssClass}">${label}</td>`;
-        });
+                
+                html += `<td style="background:${bg};">${text}</td>`;
+            });
+        }
         html += `</tr>`;
     });
 
-    html += `</tbody></table></div>`;
+    html += `</tbody></table></div><div class="page-break"></div>`;
     return html;
 }
 
-// 2. Individual Bunk HTML
+// --- 2. Individual Bunk HTML ---
 function generateBunkHTML(bunk) {
-    const daily = getDailyData();
+    const daily = window.loadCurrentDailyData?.() || {};
     const schedule = daily.scheduleAssignments?.[bunk] || [];
-    const times = getUnifiedTimes();
+    const times = window.unifiedTimes || [];
 
     let html = `
         <div class="print-page portrait">
@@ -217,7 +373,9 @@ function generateBunkHTML(bunk) {
         const entry = schedule[i];
         if (!entry || entry.continuation) return; 
 
-        let label = (typeof entry.field === 'object') ? entry.field.name : entry.field;
+        let label = "";
+        if (typeof entry.field === 'object') label = entry.field.name;
+        else label = entry.field;
         
         // SHOW FULL LEAGUE MATCHUP
         if (entry._h2h && entry.sport) {
@@ -234,10 +392,10 @@ function generateBunkHTML(bunk) {
     return html;
 }
 
-// 3. Location HTML
+// --- 3. Location HTML ---
 function generateLocationHTML(loc) {
-    const daily = getDailyData();
-    const times = getUnifiedTimes();
+    const daily = window.loadCurrentDailyData?.() || {};
+    const times = window.unifiedTimes || [];
     const assignments = daily.scheduleAssignments || {};
 
     let html = `
@@ -262,11 +420,9 @@ function generateLocationHTML(loc) {
                 if (fName === loc) {
                     if(!bunksHere.includes(b)) bunksHere.push(b);
                     
-                    // CHECK FOR LEAGUE MATCHUP LABEL
+                    // Check for league matchup label
                     if (entry._h2h && entry.sport && !leagueLabel) {
-                        // Only grab the matchup part "Team A vs Team B (Sport)"
-                        // The label usually comes as "A vs B (Sport) @ Field"
-                        // We want to strip the "@ Field" part since we are ON the field page.
+                        // Extract "A vs B (Sport)" from "A vs B (Sport) @ Field"
                         let matchStr = entry.sport;
                         if(matchStr.includes('@')) matchStr = matchStr.split('@')[0].trim();
                         leagueLabel = matchStr;
@@ -279,7 +435,6 @@ function generateLocationHTML(loc) {
         let style = "";
 
         if (leagueLabel) {
-            // It's a league game, show the matchup!
             content = `<strong>${leagueLabel}</strong> <br><span style="font-size:0.9em; color:#666;">(${bunksHere.join(", ")})</span>`;
         } else if (bunksHere.length > 0) {
             content = bunksHere.join(", ");
@@ -300,10 +455,14 @@ function generateLocationHTML(loc) {
 
 // --- ACTIONS ---
 
+function getSelectedDivisions() {
+    const checkboxes = document.querySelectorAll("#print-div-list input:checked");
+    return Array.from(checkboxes).map(cb => cb.value);
+}
+
 window.printAllDivisions = function() {
     const app1 = window.loadGlobalSettings?.().app1 || {};
     const allDivs = app1.availableDivisions || [];
-    
     if (allDivs.length === 0) return alert("No divisions found.");
     
     let fullHtml = "";
@@ -312,9 +471,7 @@ window.printAllDivisions = function() {
 };
 
 window.printSelectedDivisions = function() {
-    const checkboxes = document.querySelectorAll("#print-div-list input:checked");
-    const selected = Array.from(checkboxes).map(cb => cb.value);
-    
+    const selected = getSelectedDivisions();
     if (selected.length === 0) return alert("Please select at least one division.");
 
     let fullHtml = "";
@@ -322,11 +479,9 @@ window.printSelectedDivisions = function() {
     triggerPrint(fullHtml);
 };
 
-// NEW: Print multiple bunks
 window.printSelectedBunks = function() {
     const checkboxes = document.querySelectorAll("#print-bunk-list input:checked");
     const selected = Array.from(checkboxes).map(cb => cb.value);
-
     if (selected.length === 0) return alert("Please select at least one bunk.");
 
     let fullHtml = "";
@@ -334,16 +489,46 @@ window.printSelectedBunks = function() {
     triggerPrint(fullHtml);
 };
 
-// NEW: Print multiple locations
 window.printSelectedLocations = function() {
     const checkboxes = document.querySelectorAll("#print-loc-list input:checked");
     const selected = Array.from(checkboxes).map(cb => cb.value);
-
     if (selected.length === 0) return alert("Please select at least one location.");
 
     let fullHtml = "";
     selected.forEach(loc => { fullHtml += generateLocationHTML(loc); });
     triggerPrint(fullHtml);
+};
+
+// --- EXPORT TO EXCEL ---
+
+function downloadXLS(htmlContent, fileName) {
+    const blob = new Blob(['<html xmlns:x="urn:schemas-microsoft-com:office:excel">' + htmlContent + '</html>'], { type: 'application/vnd.ms-excel' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+window.exportAllDivisionsToExcel = function() {
+    const app1 = window.loadGlobalSettings?.().app1 || {};
+    const allDivs = app1.availableDivisions || [];
+    if (allDivs.length === 0) return alert("No divisions found.");
+
+    let fullHtml = "";
+    allDivs.forEach(div => fullHtml += generateDivisionHTML(div));
+    downloadXLS(fullHtml, `Schedule_All_${window.currentScheduleDate}.xls`);
+};
+
+window.exportSelectedDivisionsToExcel = function() {
+    const selected = getSelectedDivisions();
+    if (selected.length === 0) return alert("Please select at least one division.");
+
+    let fullHtml = "";
+    selected.forEach(div => fullHtml += generateDivisionHTML(div));
+    downloadXLS(fullHtml, `Schedule_Selected_${window.currentScheduleDate}.xls`);
 };
 
 function triggerPrint(content) {
