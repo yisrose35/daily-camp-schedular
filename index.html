@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Camp Scheduler</title>
+    <link rel="stylesheet" href="styles.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+
+    <div id="welcome-screen" style="display: none;">
+        <img src="https://placehold.co/150x150/007bff/ffffff?text=TCS&font=arial" alt="Camp Scheduler Logo" class="welcome-logo">
+        <h2 id="welcome-title">Welcome to The Camp Scheduler</h2>
+        <p>Please enter your camp's name to get started.</p>
+        <input type="text" id="camp-name-input" placeholder="E.g., Camp Adventure">
+        <button id="begin-btn">Begin</button>
+    </div>
+
+    <div id="main-app-container" style="display: none;">
+
+        <!-- APP SHELL -->
+        <div class="app-shell">
+            <!-- HEADER -->
+            <header class="app-header">
+                <div class="header-left">
+                    <!-- Hamburger -->
+                    <button class="hamburger-btn" id="hamburgerBtn" aria-label="Toggle navigation">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </button>
+
+                    <!-- Logo / Title -->
+                    <div class="app-title">
+                        <div class="app-logo-circle">CS</div>
+                        <div class="app-title-text">
+                            <div class="app-title-main">Camp Scheduler</div>
+                            <div class="app-title-sub">Smart daily scheduling</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="header-right">
+                    <label for="calendar-date-picker" class="header-date-label">
+                        Current Schedule Date:
+                    </label>
+                    <input type="date" id="calendar-date-picker" class="header-date-input">
+                </div>
+            </header>
+
+            <!-- MAIN AREA -->
+            <div class="app-main">
+                <!-- SIDEBAR -->
+                <aside class="sidebar" id="sidebar">
+                    <nav class="sidebar-nav">
+                        <div class="sidebar-label">Navigation</div>
+
+                        <button class="sidebar-item active" data-tab="setup">
+                            <span class="sidebar-dot"></span>
+                            Setup (Bunks/Divisions)
+                        </button>
+
+                        <button class="sidebar-item" data-tab="fields">
+                            <span class="sidebar-dot"></span>
+                            Fields
+                        </button>
+
+                        <button class="sidebar-item" data-tab="special_activities">
+                            <span class="sidebar-dot"></span>
+                            Special Activities
+                        </button>
+
+                        <button class="sidebar-item" data-tab="master-scheduler">
+                            <span class="sidebar-dot"></span>
+                            🗓️ Master Scheduler
+                        </button>
+
+                        <button class="sidebar-item" data-tab="schedule">
+                            <span class="sidebar-dot"></span>
+                            Daily Schedule (View)
+                        </button>
+
+                        <button class="sidebar-item" data-tab="leagues">
+                            <span class="sidebar-dot"></span>
+                            Leagues
+                        </button>
+
+                        <button class="sidebar-item" data-tab="specialty-leagues">
+                            <span class="sidebar-dot"></span>
+                            🏆 Specialty Leagues
+                        </button>
+
+                        <button class="sidebar-item" data-tab="daily-adjustments">
+                            <span class="sidebar-dot"></span>
+                            Daily Adjustments
+                        </button>
+
+                        <button class="sidebar-item" data-tab="report">
+                            <span class="sidebar-dot"></span>
+                            Report
+                        </button>
+
+                        <button class="sidebar-item" data-tab="print">
+                            <span class="sidebar-dot"></span>
+                            🖨️ Print Center
+                        </button>
+
+                        <button class="sidebar-item" data-tab="updates">
+                            <span class="sidebar-dot"></span>
+                            Updates
+                        </button>
+
+                        <button class="sidebar-item" data-tab="helper">
+                            <span class="sidebar-dot"></span>
+                            Help &amp; Guide
+                        </button>
+                    </nav>
+                </aside>
+
+                <!-- Backdrop for sidebar -->
+                <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+                <!-- MAIN CONTENT -->
+                <main class="app-content">
+                    <h1 class="app-page-title">🏕️ Camp Scheduler</h1>
+                    <!-- SETUP TAB -->
+                    <div id="setup" class="tab-content active">
+                        <h3>Add Divisions</h3>
+                        <p style="font-size: 0.9em; color: #555;">
+                            Add divisions, then set the start and end time for each division.
+                            Under each division, you’ll see the bunks that belong there.
+                        </p>
+                        <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
+                        <button id="addDivisionBtn">Add Division</button>
+                        <label style="margin-left:8px;">
+                            <input type="checkbox" id="enableColor" checked> Enable Colors
+                        </label>
+
+                        <div id="divisionButtons" style="margin-top:8px;"></div>
+
+                        <!-- Hidden legacy bunk controls. app1.js will still use these,
+                             and our script will move those bunks into their divisions. -->
+                        <div id="legacy-bunks" style="display:none;">
+                            <h3>Add Bunks</h3>
+                            <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
+                            <button id="addBunkBtn">Add Bunk</button>
+                            <div id="unassignedBunks" class="bunk-container"></div>
+                        </div>
+
+                        <hr style="margin: 20px 0;">
+
+                        <h3>Clear Schedules & History</h3>
+                        <p>Use these buttons to clear saved schedule data. Your Setup will NOT be affected.</p>
+
+                        <button id="eraseTodayBtn"
+                            style="background: #db7a00; color: #fff; padding: 8px 12px; border: none; border-radius: 4px;
+                            cursor: pointer; margin-right: 8px;"
+                            onclick="if(confirm('Are you sure you want to delete the schedule for today?')) window.eraseCurrentDailyData?.();">
+                            Delete ONLY This Day's Schedule
+                        </button>
+
+                        <button id="eraseAllSchedulesBtn"
+                            style="background: #c0392b;
+                            color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;"
+                            onclick="if(confirm('Are you sure you want to delete ALL saved schedules for ALL days? Your setup will be kept.')) window.eraseAllDailyData?.();">
+                            Delete ALL Daily Schedules
+                        </button>
+                        
+                        <button id="eraseHistoryBtn"
+                            style="background: #5e35b1;
+                            color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;"
+                            onclick="if(confirm('Are you sure you want to reset all activity rotation history?')) window.eraseRotationHistory?.();">
+                            Reset Activity History
+                        </button>
+
+                        <hr style="margin: 20px 0;">
+
+                        <h3>Backup & Restore</h3>
+                        <p>Save all your setup to a file, or restore it from a backup.</p>
+                        <button id="exportBackupBtn"
+                            style="background: #007bff; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;">
+                            Export All Data to File
+                        </button>
+                        <button id="importBackupBtn"
+                            style="background: #28a745; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;">
+                            Import Data from File
+                        </button>
+                        <input type="file" id="importFileInput" accept=".json" style="display: none;">
+
+                        <button id="restoreAutoSaveBtn" 
+                            style="background: #6c757d; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;"
+                            onclick="window.restoreAutoSave?.()">
+                            Recall Last Auto-Save
+                        </button>
+                        
+                        <button id="forceSaveBtn" 
+                            style="background: #17a2b8; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;"
+                            onclick="window.forceAutoSave?.()">
+                            Save Now
+                        </button>
+
+                        <hr style="margin: 20px 0;">
+
+                        <h3>Erase All Data</h3>
+                        <p><strong>⚠️ Warning:</strong> This deletes everything (Schedules, History, Setup).</p>
+
+                        <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">
+                            Erase All Camp Data (Reset Application)
+                        </button>
+                    </div> 
+                    
+                    <div id="fields" class="tab-content"></div>
+                    <div id="special_activities" class="tab-content"></div>
+                    
+                    <div id="master-scheduler" class="tab-content">
+                        <div id="master-scheduler-content"></div>
+                    </div>
+                    
+                    <div id="schedule" class="tab-content">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                            <h3>Daily Schedule (View)</h3>
+                            <button onclick="window.validateSchedule?.()" style="background:#ff9800; color:white; border:none; padding:8px 16px; border-radius:4px; cursor:pointer; font-weight:bold;">⚠️ Validate Schedule</button>
+                        </div>
+                        <p>This tab shows the final, "filled-in" schedule.</p>
+                        <div id="scheduleTable"></div>
+                    </div>
+
+                    <div id="leagues" class="tab-content">
+                        <div id="leaguesContainer"></div>
+                    </div>
+
+                    <div id="specialty-leagues" class="tab-content">
+                        <h2>🏆 Specialty
+                          Leagues</h2>
+                        <div id="specialtyLeaguesContainer"></div>
+                    </div>
+
+                    <div id="daily-adjustments" class="tab-content">
+                        <div id="daily-adjustments-content"></div>
+                    </div>
+                    
+                    <div id="report" class="tab-content">
+                        <div id="report-content"></div>
+                    </div>
+
+                    <div id="print" class="tab-content">
+                        <div id="print-content"></div>
+                    </div>
+
+                    <div id="updates" class="tab-content">
+                        <div id="updates-content"></div>
+                    </div>
+
+                    <div id="helper" class="tab-content">
+                        <div id="helper-content"></div>
+                    </div>
+                </main>
+            </div>
+        </div>
+        <!-- END APP SHELL -->
+    </div> 
+
+    <script src="welcome.js" defer></script>
+    <script src="calendar.js" defer></script>
+    <script src="app1.js" defer></script>
+    <script src="daily_adjustments.js" defer></script>
+    <script src="fields.js" defer></script>
+    <script src="special_activities.js" defer></script>
+    <script src="leagues.js" defer></script>
+    <script src="specialty_leagues.js" defer></script> 
+    <script src="master_schedule_builder.js" defer></script>
+    <script src="scheduler_logic_core.js" defer></script>
+    <script src="scheduler_logic_fillers.js" defer></script>
+    <script src="scheduler_ui.js" defer></script>
+    <script src="analytics.js" defer></script>
+    <script src="validator.js" defer></script>
+    <script src="print_center.js" defer></script>
+    <script src="helper.js" defer></script>
+    <script src="updates.js" defer></script>
+
+    <script>
+        // ============================
+        // Helpers for color parsing
+        // ============================
+        (function () {
+            'use strict';
+
+            function hexToRgb(hex) {
+                if (!hex) return null;
+                let h = hex.trim();
+                if (h[0] === '#') h = h.slice(1);
+                if (h.length === 3) {
+                    h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+                }
+                if (h.length !== 6) return null;
+                const r = parseInt(h.slice(0, 2), 16);
+                const g = parseInt(h.slice(2, 4), 16);
+                const b = parseInt(h.slice(4, 6), 16);
+                return { r, g, b };
+            }
+
+            function rgbStringToObj(str) {
+                if (!str) return null;
+                const m = str.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i);
+                if (!m) return null;
+                return {
+                    r: parseFloat(m[1]),
+                    g: parseFloat(m[2]),
+                    b: parseFloat(m[3])
+                };
+            }
+
+            function colorDistance(a, b) {
+                if (!a || !b) return Infinity;
+                const dr = a.r - b.r;
+                const dg = a.g - b.g;
+                const db = a.b - b.b;
+                return dr * dr + dg * dg + db * db;
+            }
+
+            // Expose for other script
+            window._csColorHelpers = { hexToRgb, rgbStringToObj, colorDistance };
+        })();
+
+        // ============================
+        // BUNK UI: DRAG, DROP, SWAP
+        // ============================
+        (function () {
+            'use strict';
+
+            const { hexToRgb, rgbStringToObj, colorDistance } = window._csColorHelpers || {};
+
+            let draggingBunk = null;
+
+            function makeBunkDraggable(bunkEl) {
+                if (!bunkEl || bunkEl.dataset.dragEnhanced === 'true') return;
+                bunkEl.dataset.dragEnhanced = 'true';
+                bunkEl.setAttribute('draggable', 'true');
+
+                bunkEl.addEventListener('dragstart', (e) => {
+                    draggingBunk = bunkEl;
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', bunkEl.textContent.trim());
+                });
+
+                bunkEl.addEventListener('dragend', () => {
+                    draggingBunk = null;
+                });
+            }
+
+            function setupDropZone(container) {
+                if (!container || container.dataset.dropEnhanced === 'true') return;
+                container.dataset.dropEnhanced = 'true';
+
+                container.addEventListener('dragover', (e) => {
+                    if (!draggingBunk) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                });
+
+                container.addEventListener('drop', (e) => {
+                    if (!draggingBunk) return;
+                    e.preventDefault();
+
+                    const targetPill = e.target.closest('.bunk-button');
+                    const sourceParent = draggingBunk.parentNode;
+
+                    if (targetPill && targetPill !== draggingBunk) {
+                        // SWAP between containers
+                        const targetParent = targetPill.parentNode;
+                        const afterTarget = targetPill.nextSibling;
+
+                        targetParent.insertBefore(draggingBunk, afterTarget);
+                        sourceParent.appendChild(targetPill);
+                    } else {
+                        // Simple move
+                        container.appendChild(draggingBunk);
+                    }
+                });
+            }
+
+            function getDivisionName(wrapper) {
+                const label =
+                    wrapper.querySelector('.divisionLabel')?.textContent?.trim() ||
+                    wrapper.getAttribute('data-division') ||
+                    wrapper.textContent.trim().split(/\s+/)[0] ||
+                    '';
+                return label;
+            }
+
+            function getDivisionColor(wrapper) {
+                // Try <input class="colorPicker" type="color">
+                const picker = wrapper.querySelector('.colorPicker');
+                if (picker && hexToRgb) {
+                    const rgb = hexToRgb(picker.value);
+                    if (rgb) return rgb;
+                }
+
+                // Fallback: any colored square inside wrapper
+                const swatch = wrapper.querySelector('.division-color, .divisionColorSwatch, .color-swatch');
+                if (swatch && rgbStringToObj) {
+                    const cs = getComputedStyle(swatch).backgroundColor;
+                    return rgbStringToObj(cs);
+                }
+
+                return null;
+            }
+
+            function enhanceDivisionWrapper(wrapper) {
+                if (!wrapper || wrapper.dataset.bunksEnhanced === 'true') return;
+                wrapper.dataset.bunksEnhanced = 'true';
+
+                const divisionName = getDivisionName(wrapper);
+
+                const bunkSection = document.createElement('div');
+                bunkSection.style.marginTop = '10px';
+              const headerRow = document.createElement('div');
+                headerRow.style.display = 'flex';
+                headerRow.style.alignItems = 'center';
+                headerRow.style.justifyContent = 'space-between';
+                headerRow.style.marginBottom = '6px';
+
+                const labelWrap = document.createElement('div');
+                labelWrap.style.display = 'flex';
+                labelWrap.style.flexDirection = 'column';
+
+                const label = document.createElement('span');
+                label.textContent = divisionName
+                    ? `Bunks in Division ${divisionName}`
+                    : 'Bunks in this division';
+                label.style.fontSize = '0.8rem';
+                label.style.fontWeight = '600';
+                label.style.color = '#4b5563';
+
+                const sub = document.createElement('span');
+                sub.textContent = 'Drag bunks between divisions, or click "+ Add Bunk".';
+                sub.style.fontSize = '0.7rem';
+                sub.style.color = '#6b7280';
+
+                labelWrap.appendChild(label);
+                labelWrap.appendChild(sub);
+
+                const addBtn = document.createElement('button');
+                addBtn.type = 'button';
+                addBtn.textContent = '+ Add Bunk';
+                addBtn.style.fontSize = '0.75rem';
+                addBtn.style.padding = '4px 10px';
+
+                headerRow.appendChild(labelWrap);
+                headerRow.appendChild(addBtn);
+
+                const bunkContainer = document.createElement('div');
+                bunkContainer.className = 'division-bunks-container';
+                bunkContainer.style.display = 'flex';
+                bunkContainer.style.flexWrap = 'wrap';
+                bunkContainer.style.gap = '6px';
+
+                bunkSection.appendChild(headerRow);
+                bunkSection.appendChild(bunkContainer);
+                wrapper.appendChild(bunkSection);
+
+                setupDropZone(bunkContainer);
+
+                addBtn.addEventListener('click', () => {
+                    const nameRaw = prompt(`Bunk name / number for Division ${divisionName || ''}`.trim());
+                    if (!nameRaw) return;
+                    const name = nameRaw.trim();
+                    if (!name) return;
+
+                    const bunk = document.createElement('span');
+                    bunk.className = 'bunk-button';
+                    bunk.textContent = name;
+                    makeBunkDraggable(bunk);
+                    bunkContainer.appendChild(bunk);
+                });
+            }
+
+            function enhanceAllDivisions() {
+                document
+                    .querySelectorAll('#divisionButtons .divisionWrapper')
+                    .forEach(enhanceDivisionWrapper);
+            }
+
+            function prepareAllBunks() {
+                document.querySelectorAll('.bunk-button').forEach(makeBunkDraggable);
+            }
+
+            function autoPlaceExistingBunksByColor() {
+                if (!hexToRgb || !rgbStringToObj || !colorDistance) return;
+
+                const divisionWrappers = Array.from(
+                    document.querySelectorAll('#divisionButtons .divisionWrapper')
+                );
+                if (!divisionWrappers.length) return;
+
+                const divisions = divisionWrappers.map(wrapper => {
+                    const color = getDivisionColor(wrapper);
+                    const bunkContainer =
+                        wrapper.querySelector('.division-bunks-container') || wrapper;
+                    setupDropZone(bunkContainer);
+                    return { wrapper, color, bunkContainer };
+                });
+
+                const unassigned = document.getElementById('unassignedBunks');
+                if (!unassigned) return;
+
+                const bunks = Array.from(unassigned.querySelectorAll('.bunk-button'));
+                bunks.forEach(bunk => {
+                    const cs = getComputedStyle(bunk).backgroundColor;
+                    const bunkRgb = rgbStringToObj(cs);
+                    let best = null;
+                    let bestDist = Infinity;
+
+                    divisions.forEach(div => {
+                        const dist = colorDistance(bunkRgb, div.color);
+                        if (dist < bestDist) {
+                            bestDist = dist;
+                            best = div;
+                        }
+                    });
+
+                    if (best && best.bunkContainer) {
+                        makeBunkDraggable(bunk);
+                        best.bunkContainer.appendChild(bunk);
+                    }
+                });
+              // After moving, clear the unassigned container so nothing is "floating"
+                unassigned.innerHTML = '';
+            }
+
+            // Public hook for tab switch / initial load
+            window.refreshBunksUI = function () {
+                enhanceAllDivisions();
+                prepareAllBunks();
+                autoPlaceExistingBunksByColor();
+            };
+
+            // Observe changes so we react to app1.js adding divisions/bunks
+            const divisionButtons = document.getElementById('divisionButtons');
+            if (divisionButtons && 'MutationObserver' in window) {
+                const obs1 = new MutationObserver(() => {
+                    window.refreshBunksUI();
+                });
+                obs1.observe(divisionButtons, { childList: true, subtree: true });
+            }
+
+            const unassignedEl = document.getElementById('unassignedBunks');
+            if (unassignedEl && 'MutationObserver' in window) {
+                const obs2 = new MutationObserver(() => {
+                    window.refreshBunksUI();
+                });
+                obs2.observe(unassignedEl, { childList: true, subtree: true });
+            }
+
+            // Initial run
+            window.refreshBunksUI();
+        })();
+
+        function showTab(id) {
+            // Hide all panes
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            const pane = document.getElementById(id);
+            if (pane) pane.classList.add('active');
+
+            // Sync sidebar active state
+            document.querySelectorAll('.sidebar-item').forEach(btn => {
+                const tab = btn.getAttribute('data-tab');
+                btn.classList.toggle('active', tab === id);
+            });
+
+            // Tab-specific hooks
+            if (id === 'setup') {
+                window.refreshBunksUI?.();
+            } else if (id === 'schedule') window.updateTable?.();
+            else if (id === 'leagues') window.initLeagues?.();
+            else if (id === 'specialty-leagues') window.initSpecialtyLeagues?.();
+            else if (id === 'master-scheduler') window.initMasterScheduler?.();
+            else if (id === 'fields') window.initFieldsTab?.();
+            else if (id === 'special_activities') window.initSpecialActivitiesTab?.();
+            else if (id === 'daily-adjustments') window.initDailyAdjustments?.();
+            else if (id === 'report') window.initReportTab?.(); 
+            else if (id === 'print') window.initPrintCenter?.();
+            else if (id === 'helper') window.initHelperTab?.();
+            else if (id === 'updates') window.initUpdatesTab?.();
+        }
+
+        // Hamburger + sidebar wiring + initial setup
+        (function () {
+            'use strict';
+            const hamburgerBtn = document.getElementById('hamburgerBtn');
+            const sidebar = document.getElementById('sidebar');
+            const backdrop = document.getElementById('sidebarBackdrop');
+
+            if (hamburgerBtn) {
+                hamburgerBtn.addEventListener('click', function () {
+                    document.body.classList.toggle('sidebar-open');
+                });
+            }
+
+            if (backdrop) {
+                backdrop.addEventListener('click', function () {
+                    document.body.classList.remove('sidebar-open');
+                });
+            }
+
+            if (sidebar) {
+                const items = sidebar.querySelectorAll('.sidebar-item');
+                items.forEach(btn => {
+                    btn.addEventListener('click', function () {
+                        const tabId = btn.getAttribute('data-tab');
+                        if (tabId) {
+                            showTab(tabId);
+                        }
+                        document.body.classList.remove('sidebar-open');
+                    });
+                });
+            }
+
+            // initial enhancement for default tab
+            window.refreshBunksUI?.();
+        })();
+    </script>
+</body>
+</html>
