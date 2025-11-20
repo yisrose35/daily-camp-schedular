@@ -2,8 +2,10 @@
 // leagues.js
 //
 // MERGED VERSION:
-// - Framework: Master/Detail UI from "Current" version.
-// - Logic: Matchups, Standings, Import, and Scoring from "Working" version.
+// - Framework: Master/Detail UI.
+// - Logic: Matchups, Standings, Import.
+// - UPDATE: Handles multiple games per day (Double headers).
+// - UPDATE: Groups imports by Time Slot / Period.
 // ===================================================================
 
 (function () {
@@ -115,11 +117,12 @@
                 .chip { padding: 4px 8px; border-radius: 12px; border: 1px solid #ccc; cursor: pointer; }
                 .staging-row { transition: background 0.2s; }
                 .staging-row:hover { background: #f9f9f9; }
-                .time-badge { font-size: 0.8em; background: #e2e6ea; padding: 2px 6px; border-radius: 4px; color: #555; margin-right: 10px; min-width: 65px; text-align: center; display: inline-block; }
+                .time-badge { font-size: 0.75em; background: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; margin-right: 8px; min-width: 60px; text-align: center; display: inline-block; }
                 .league-standings-table { width: 100%; border-collapse: collapse; }
                 .league-standings-table th, .league-standings-table td { padding: 8px; text-align: center; border-bottom: 1px solid #eee; }
                 .league-standings-table th { background: #f0f0f0; text-align: left; }
                 .league-standings-table td:first-child, .league-standings-table th:first-child { text-align: left; }
+                .group-header { background: #e9ecef; padding: 5px 10px; font-weight: bold; font-size: 0.9em; color: #495057; border-radius: 4px; margin-top: 10px; margin-bottom: 5px; }
             </style>
         `;
 
@@ -261,7 +264,7 @@
                 activeSubView = null;
             } else {
                 standingsContainer.style.display = 'block';
-                renderGameResultsUI(league, standingsContainer); // CALLING THE TRANSPLANTED FUNCTION
+                renderGameResultsUI(league, standingsContainer);
                 standingsBtn.textContent = "Close Standings";
                 activeSubView = 'standings';
             }
@@ -368,8 +371,7 @@
 
 
     // ===================================================================
-    // TRANSPLANTED LOGIC FROM "WORKING" VERSION
-    // (Adapted to work with the Master/Detail layout)
+    // GAME RESULTS & STANDINGS LOGIC
     // ===================================================================
 
     function renderGameResultsUI(league, container) {
@@ -395,7 +397,7 @@
         tabNav.querySelector("#tab-standings").onclick = () => {
             standingsDiv.style.display = "block";
             gamesDiv.style.display = "none";
-            renderStandingsTable(league, standingsDiv); // Refresh
+            renderStandingsTable(league, standingsDiv); 
         };
         tabNav.querySelector("#tab-games").onclick = () => {
             standingsDiv.style.display = "none";
@@ -481,6 +483,8 @@
         importBtn.style.cursor = "pointer";
 
         const matchContainer = document.createElement("div");
+        matchContainer.style.maxHeight = "400px";
+        matchContainer.style.overflowY = "auto";
         
         importBtn.onclick = () => importGamesFromSchedule(league, matchContainer);
 
@@ -521,12 +525,14 @@
             if (!game) return;
 
             game.matches.forEach(m => {
-                addMatchRow(target, m.teamA, m.teamB, m.scoreA, m.scoreB, saveButton);
+                // Add time label if it exists in saved data
+                addMatchRow(target, m.teamA, m.teamB, m.scoreA, m.scoreB, saveButton, m.timeLabel);
             });
         }
     }
 
-    function addMatchRow(target, teamA, teamB, scoreA = "", scoreB = "", saveButton) {
+    // ADDED: "timeLabel" parameter to persist "Game 1", "Game 2", "10:00 AM", etc.
+    function addMatchRow(target, teamA, teamB, scoreA = "", scoreB = "", saveButton, timeLabel = "") {
         const row = document.createElement("div");
         row.className = "match-row"; 
         row.style.display = "flex";
@@ -537,7 +543,14 @@
         row.style.background = "#f9f9f9";
         row.style.border = "1px solid #eee";
 
+        // Time Badge UI
+        let timeHtml = "";
+        if (timeLabel) {
+            timeHtml = `<span class="time-badge">${timeLabel}</span>`;
+        }
+
         row.innerHTML = `
+            ${timeHtml}
             <strong style="min-width:100px; text-align:right;">${teamA}</strong>
             <input type="number" class="score-a" value="${scoreA}" style="width:50px; padding:5px;">
             <span>vs</span>
@@ -545,9 +558,10 @@
             <strong style="min-width:100px;">${teamB}</strong>
         `;
 
-        // Store teams in dataset for saving
+        // Store teams & time in dataset for saving
         row.dataset.teamA = teamA;
         row.dataset.teamB = teamB;
+        if(timeLabel) row.dataset.timeLabel = timeLabel;
 
         target.appendChild(row);
         if(saveButton) saveButton.style.display = "inline-block";
@@ -557,13 +571,17 @@
         target.innerHTML = "";
         const daily = window.loadCurrentDailyData?.() || {};
         const assignments = daily.scheduleAssignments || {};
+        const times = window.unifiedTimes || []; // Access global time definitions
 
         const foundMatches = new Set(); 
         const saveButton = target.parentElement.querySelector("button[style*='background: rgb(40, 167, 69)']") || target.parentElement.lastElementChild;
 
+        // Temporary storage for grouping by time
+        const groupedMatches = {};
+
         league.teams.forEach(team => {
             const schedule = assignments[team] || [];
-            schedule.forEach(entry => {
+            schedule.forEach((entry, slotIndex) => {
                 if (entry && entry._h2h) {
                     const label = entry.sport || ""; 
                     const match = label.match(/^(.*?) vs (.*?) \(/);
@@ -574,10 +592,14 @@
 
                         // Check if both teams are in this league
                         if (league.teams.includes(t1) && league.teams.includes(t2)) {
-                            const key = [t1, t2].sort().join(" vs ");
-                            if (!foundMatches.has(key)) {
-                                foundMatches.add(key);
-                                addMatchRow(target, t1, t2, "", "", saveButton);
+                            // Create a unique key that INCLUDES the slotIndex to allow double headers
+                            const uniqueKey = [t1, t2].sort().join(" vs ") + "::" + slotIndex;
+                            
+                            if (!foundMatches.has(uniqueKey)) {
+                                foundMatches.add(uniqueKey);
+                                
+                                if(!groupedMatches[slotIndex]) groupedMatches[slotIndex] = [];
+                                groupedMatches[slotIndex].push({ t1, t2 });
                             }
                         }
                     }
@@ -585,9 +607,32 @@
             });
         });
 
-        if (foundMatches.size === 0) {
+        // Render Grouped Results
+        const sortedSlots = Object.keys(groupedMatches).sort((a,b) => parseInt(a) - parseInt(b));
+        
+        if (sortedSlots.length === 0) {
             target.innerHTML = "<p class='muted'>No scheduled games found for today.</p>";
+            return;
         }
+
+        sortedSlots.forEach(slotIdx => {
+            // Determine Label (e.g., "10:00 AM" or "Period 1")
+            let timeLabel = `Game/Period ${parseInt(slotIdx) + 1}`;
+            if (times[slotIdx] && times[slotIdx].label) {
+                timeLabel = times[slotIdx].label;
+            }
+
+            // Add Header
+            const header = document.createElement("div");
+            header.className = "group-header";
+            header.textContent = timeLabel;
+            target.appendChild(header);
+
+            // Add Matches for this slot
+            groupedMatches[slotIdx].forEach(m => {
+                addMatchRow(target, m.t1, m.t2, "", "", saveButton, timeLabel);
+            });
+        });
     }
 
     function saveGameResults(league, gameId, container) {
@@ -597,6 +642,7 @@
         rows.forEach(row => {
             const tA = row.dataset.teamA;
             const tB = row.dataset.teamB;
+            const tLabel = row.dataset.timeLabel || ""; // Capture time label
             const sA = parseInt(row.querySelector(".score-a").value) || 0;
             const sB = parseInt(row.querySelector(".score-b").value) || 0;
 
@@ -605,7 +651,14 @@
             else if (sB > sA) winner = tB;
             else winner = "tie";
 
-            results.push({ teamA: tA, teamB: tB, scoreA: sA, scoreB: sB, winner: winner });
+            results.push({ 
+                teamA: tA, 
+                teamB: tB, 
+                scoreA: sA, 
+                scoreB: sB, 
+                winner: winner,
+                timeLabel: tLabel // Save label to history
+            });
         });
 
         if (results.length === 0) return;
@@ -615,7 +668,7 @@
             league.games.push({
                 id: Date.now(),
                 date: window.currentScheduleDate || new Date().toLocaleDateString(),
-                name: `Game ${league.games.length + 1}`,
+                name: `Game Set ${league.games.length + 1}`,
                 matches: results
             });
         } else {
