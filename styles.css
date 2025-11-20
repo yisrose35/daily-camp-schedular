@@ -10,44 +10,70 @@ body {
   color: #111827;
 }
 
-/* Tabs (top row under title) */
+/* Generic buttons */
 
-.tabs {
-  margin-bottom: 14px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid #e5e7eb;
-  overflow-x: auto;
-  white-space: nowrap;
+button {
+  font-family: inherit;
+  font-size: 0.85rem;
+  border-radius: 999px;
+  border: 1px solid #d1d5db;
+  padding: 6px 14px;
+  background: #ffffff;
+  color: #111827;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
+    box-shadow 0.15s ease, transform 0.08s ease;
 }
 
-.tab-button {
-  padding: 8px 16px;
-  margin-right: 6px;
+button:hover {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+  box-shadow: 0 4px 8px rgba(15, 23, 42, 0.08);
+  transform: translateY(-0.5px);
+}
+
+/* let destructive buttons styled inline keep their colors */
+button[style] {
+  border-radius: 4px;
+}
+
+/* Inputs */
+
+input[type="text"],
+input[type="time"],
+input[type="date"],
+input[type="number"],
+select {
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 6px 10px;
   border-radius: 999px;
   border: 1px solid #d1d5db;
   background: #ffffff;
-  color: #374151;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
-    box-shadow 0.15s ease;
+  color: #111827;
+  box-sizing: border-box;
 }
 
-.tab-button:hover {
-  background: #f3f4f6;
-  border-color: #9ca3af;
+input[type="text"]:focus,
+input[type="time"]:focus,
+input[type="date"]:focus,
+input[type="number"]:focus,
+select:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.35);
 }
 
-.tab-button.active {
-  background: #2563eb;
-  border-color: #1d4ed8;
-  color: #ffffff;
-  font-weight: 600;
-  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.35);
-}
+/* Tab panels (each main section) */
 
 .tab-content {
   display: none;
+  margin-top: 16px;
+  background: #ffffff;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  padding: 1rem 1.25rem 1.25rem;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
 }
 
 .tab-content.active {
@@ -83,20 +109,27 @@ caption {
 }
 
 /* ========================= */
-/* EXISTING FUNCTIONAL STYLES */
+/* SETUP: Bunks / Divisions */
 /* ========================= */
 
 .bunk-button {
   margin: 2px;
-  padding: 5px 10px;
+  padding: 4px 10px;
   cursor: pointer;
-  border: 1px solid #333;
-  border-radius: 4px;
-  display: inline-block;
+  border: none; /* color handled by JS inline styles */
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #ffffff;
+  box-shadow: 0 3px 6px rgba(15, 23, 42, 0.25);
 }
 
 .selected {
-  outline: 3px solid #90caf9;
+  outline: 3px solid #0ea5e9;
 }
 
 #unassignedBunks {
@@ -106,9 +139,11 @@ caption {
 .divisionWrapper {
   display: inline-block;
   margin: 6px;
-  padding: 6px;
-  border: 1px dashed #ccc;
-  border-radius: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.06);
 }
 
 .colorPicker {
@@ -118,13 +153,18 @@ caption {
   cursor: pointer;
   vertical-align: middle;
   margin-left: 6px;
+  border-radius: 8px;
 }
 
+/* Fields & activities */
+
 .fieldWrapper {
-  border: 1px solid #ccc;
-  padding: 10px;
+  border: 1px solid #e5e7eb;
+  padding: 10px 12px;
   margin: 10px 0;
-  border-radius: 6px;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.05);
 }
 
 .fieldWrapper.unavailable {
@@ -139,15 +179,18 @@ caption {
 
 .activity-button {
   margin: 2px;
-  padding: 4px 8px;
-  border: 1px solid #333;
-  border-radius: 3px;
+  padding: 4px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
   cursor: pointer;
+  background: #f8fafc;
+  font-size: 0.8rem;
 }
 
 .activity-button.active {
-  background: #007bff;
+  background: #2563eb;
   color: white;
+  border-color: #1d4ed8;
 }
 
 /* Fixed Activities List Items */
@@ -274,7 +317,7 @@ input:checked + .slider:before {
 }
 
 /* =============================== */
-/* Daily Overrides Tab / Rotation */
+/* Daily Overrides / Rotation     */
 /* =============================== */
 
 .override-section {
@@ -969,7 +1012,7 @@ label.override-checkbox span {
   min-height: 0;
 }
 
-/* Sidebar: off-canvas by default, slides in when body.sidebar-open */
+/* Sidebar: off-canvas, slides in with body.sidebar-open */
 
 .sidebar {
   position: fixed;
