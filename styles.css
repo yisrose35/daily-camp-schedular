@@ -1,23 +1,31 @@
 /* =========================================
-   1. VARIABLES & THEME
+   1. VARIABLES & THEME (Clean Light Theme)
    ========================================= */
 :root {
-    --primary: #2563eb;       
+    /* Brand Colors - Professional Blue */
+    --primary: #2563eb;       /* Royal Blue */
     --primary-hover: #1d4ed8;
-    --bg-app: #f3f4f6;        
-    --bg-sidebar: #0f172a;    
-    --bg-surface: #ffffff;    
-    --bg-header: rgba(255, 255, 255, 0.9);
-    --text-main: #111827;     
-    --text-muted: #6b7280;    
-    --text-sidebar: #94a3b8;  
+    --primary-light: #eff6ff; /* Very light blue for active backgrounds */
+    
+    /* Backgrounds */
+    --bg-body: #f3f4f6;       /* Light Gray Page Background */
+    --bg-surface: #ffffff;    /* White Cards/Sidebar */
+    
+    /* Text Colors */
+    --text-main: #111827;     /* Near Black */
+    --text-muted: #6b7280;    /* Gray */
+    --text-light: #9ca3af;    /* Light Gray */
+    
+    /* Borders & Shadows */
     --border: #e5e7eb;
-    --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    
+    /* Dimensions */
+    --sidebar-width: 260px;
+    --header-height: 64px;
     --radius: 8px;
     --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    
-    /* Sidebar Width Variable for animation */
-    --sidebar-width: 260px; 
 }
 
 /* =========================================
@@ -27,162 +35,163 @@
 
 body {
     font-family: var(--font-sans);
-    background-color: var(--bg-app);
+    background-color: var(--bg-body);
     color: var(--text-main);
     margin: 0;
     padding: 0;
     height: 100vh;
     width: 100vw;
-    overflow: hidden; /* App container handles scrolling */
+    overflow: hidden; /* Prevent page scroll, we scroll inner areas */
 }
 
 /* =========================================
-   3. APP SHELL LAYOUT (Collapsible Grid)
+   3. FLEXBOX LAYOUT ENGINE (Robust)
    ========================================= */
 #main-app-container {
-    display: grid;
-    /* Sidebar width depends on state */
-    grid-template-columns: var(--sidebar-width) 1fr; 
-    grid-template-rows: 60px 1fr;     /* Header | Main */
-    grid-template-areas: 
-        "sidebar header"
-        "sidebar main";
+    display: flex;
+    flex-direction: row; /* Side by Side */
     height: 100%;
     width: 100%;
-    transition: grid-template-columns 0.3s ease;
 }
 
-/* When sidebar is closed */
-#main-app-container.sidebar-closed {
-    --sidebar-width: 0px;
-}
-
-/* =========================================
-   4. SIDEBAR NAVIGATION
-   ========================================= */
+/* Sidebar (Fixed Width) */
 .sidebar {
-    grid-area: sidebar;
-    background-color: var(--bg-sidebar);
-    color: white;
+    width: var(--sidebar-width);
+    background-color: var(--bg-surface);
+    border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    padding: 1.5rem 1rem;
-    border-right: 1px solid #1e293b;
-    overflow-y: auto;
-    overflow-x: hidden; /* Hide content when collapsing */
-    white-space: nowrap; /* Prevent text wrapping during transition */
-    transition: padding 0.3s, opacity 0.3s;
+    flex-shrink: 0; /* Don't shrink */
+    z-index: 20;
+    transition: transform 0.3s ease;
 }
 
-#main-app-container.sidebar-closed .sidebar {
-    padding: 0; /* Remove padding when closed to fully hide */
-    opacity: 0;
+/* Content Wrapper (Fills remaining space) */
+.app-content-wrapper {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0; /* Prevents flex items from overflowing */
+    height: 100%;
 }
 
-.app-logo {
-    font-size: 1.25rem;
-    font-weight: 800;
-    margin-bottom: 2rem;
-    padding-left: 0.5rem;
-    color: white;
-    display: flex; align-items: center; gap: 0.5rem;
-}
-
-.tabs { display: flex; flex-direction: column; gap: 0.25rem; }
-
-.tab-button {
-    background: transparent;
-    border: none;
-    text-align: left;
-    padding: 0.75rem;
-    border-radius: 6px;
-    color: var(--text-sidebar);
-    font-weight: 500;
-    font-size: 0.9rem;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex; align-items: center; gap: 10px;
-}
-
-.tab-button:hover { background-color: rgba(255, 255, 255, 0.05); color: white; }
-.tab-button.active { background-color: var(--primary); color: white; font-weight: 600; }
-
-.nav-divider { height: 1px; background: #334155; margin: 1rem 0; }
-
-/* =========================================
-   5. TOP HEADER (With Hamburger)
-   ========================================= */
+/* Header (Fixed Height) */
 .app-header {
-    grid-area: header;
-    background-color: var(--bg-header);
-    backdrop-filter: blur(10px);
+    height: var(--header-height);
+    background-color: var(--bg-surface);
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
-    padding: 0 1.5rem;
-    gap: 1rem;
-    z-index: 20;
+    justify-content: space-between;
+    padding: 0 2rem;
+    flex-shrink: 0;
+    z-index: 10;
 }
 
-/* The Hamburger Button */
-.menu-toggle {
+/* Main Viewport (Scrolls independently) */
+.main-viewport {
+    flex: 1;
+    overflow-y: auto; /* Enable scrolling here */
+    padding: 2rem;
+    background-color: var(--bg-body);
+}
+
+/* =========================================
+   4. SIDEBAR STYLING
+   ========================================= */
+.app-logo {
+    height: var(--header-height);
+    display: flex;
+    align-items: center;
+    padding: 0 1.5rem;
+    font-size: 1.1rem;
+    font-weight: 800;
+    color: var(--primary);
+    border-bottom: 1px solid var(--border);
+}
+
+.tabs {
+    padding: 1.5rem 1rem;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.nav-group-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text-light);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 1.5rem 0 0.5rem 0.75rem;
+}
+.nav-group-title:first-child { margin-top: 0; }
+
+.tab-button {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 0.6rem 0.75rem;
+    margin-bottom: 2px;
+    border: none;
     background: transparent;
-    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    font-weight: 500;
     border-radius: 6px;
     cursor: pointer;
-    font-size: 1.2rem;
-    padding: 0.4rem 0.6rem;
+    transition: all 0.2s;
+    text-align: left;
+}
+
+.tab-button:hover {
+    background-color: #f9fafb;
     color: var(--text-main);
-    display: flex; align-items: center; justify-content: center;
-    transition: background 0.2s;
-}
-.menu-toggle:hover { background: #f3f4f6; }
-
-.header-title {
-    font-size: 1.1rem;
-    font-weight: 700;
-    margin-right: auto; /* Pushes date control to right */
 }
 
-.date-control { display: flex; align-items: center; gap: 0.5rem; }
-.date-control label { font-size: 0.85rem; font-weight: 600; color: var(--text-muted); display: none; /* Hide label on small screens */ }
-@media (min-width: 768px) { .date-control label { display: block; } }
+.tab-button.active {
+    background-color: var(--primary-light);
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.tab-button span { margin-right: 10px; font-size: 1.1em; }
+
+/* =========================================
+   5. HEADER CONTROLS
+   ========================================= */
+.menu-toggle {
+    display: none; /* Hidden on desktop */
+    background: none; border: none; font-size: 1.2rem; cursor: pointer;
+}
+
+.header-right { display: flex; align-items: center; gap: 1.5rem; }
+
+.date-control { display: flex; align-items: center; gap: 0.75rem; }
+.date-control label { font-size: 0.85rem; font-weight: 500; color: var(--text-muted); }
 
 input[type="date"] {
-    background: white;
     border: 1px solid var(--border);
-    padding: 0.4rem 0.8rem;
     border-radius: 6px;
+    padding: 0.4rem 0.8rem;
     font-family: inherit;
-    font-weight: 500;
     color: var(--text-main);
+    background: #fff;
+    cursor: pointer;
 }
 
 /* =========================================
-   6. MAIN CONTENT VIEWPORT
+   6. CARDS & CONTENT
    ========================================= */
-.main-viewport {
-    grid-area: main;
-    overflow-y: auto; /* Enables vertical scrolling */
-    padding: 1.5rem;
-    height: 100%;
-    width: 100%;
-}
-
 .tab-content {
     display: none;
-    max-width: 1400px;
+    max-width: 1200px; /* Restrain width for readability */
     margin: 0 auto;
-    padding-bottom: 4rem; /* Extra scroll space */
-    animation: fadeUp 0.3s ease-out;
+    padding-bottom: 3rem;
 }
-.tab-content.active { display: block; }
+.tab-content.active { display: block; animation: fadeIn 0.3s ease; }
 
-@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
-/* =========================================
-   7. CARDS & UI ELEMENTS
-   ========================================= */
 .card, .override-section, .detail-pane, .print-card, .help-card {
     background: var(--bg-surface);
     border: 1px solid var(--border);
@@ -192,59 +201,133 @@ input[type="date"] {
     margin-bottom: 1.5rem;
 }
 
-/* Common Inputs */
+h1, h2, h3 { margin-top: 0; color: var(--text-main); }
+h2 { font-size: 1.5rem; font-weight: 700; margin-bottom: 1rem; }
+h3 { font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+p { color: var(--text-muted); line-height: 1.6; margin-bottom: 1rem; }
+
+/* =========================================
+   7. UI ELEMENTS (Buttons, Inputs, Grids)
+   ========================================= */
 input[type="text"], input[type="number"], select {
     width: 100%; padding: 0.6rem; border: 1px solid var(--border);
     border-radius: 6px; font-size: 0.95rem; background: #fff;
+    transition: border-color 0.2s;
 }
-input:focus, select:focus { border-color: var(--primary); outline: none; }
+input:focus, select:focus { border-color: var(--primary); outline: none; box-shadow: 0 0 0 3px var(--primary-light); }
 
-/* Buttons */
 button, .btn {
     display: inline-flex; align-items: center; justify-content: center;
-    padding: 0.6rem 1.2rem; border-radius: 6px; font-weight: 600;
+    padding: 0.6rem 1.2rem; border-radius: 6px; font-weight: 500; font-size: 0.9rem;
     cursor: pointer; transition: all 0.2s; border: 1px solid transparent;
 }
 
-/* Colors */
-button.primary, #run-optimizer-btn, #addBunkBtn, #addDivisionBtn { background: var(--primary); color: white; }
-button.primary:hover { background: var(--primary-hover); }
-button.danger { background: white; border-color: #fecaca; color: #dc2626; }
-
-/* =========================================
-   8. GRIDS & LISTS
-   ========================================= */
-.da-tabs-nav {
-    background: #e5e7eb; padding: 4px; border-radius: 8px;
-    display: inline-flex; gap: 4px; margin-bottom: 20px; flex-wrap: wrap;
+button.primary, #run-optimizer-btn, #addBunkBtn, #addDivisionBtn, #add-field-btn, #add-special-btn {
+    background-color: var(--primary); color: white;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
 }
-.da-tabs-nav .tab-button { color: #64748b; padding: 6px 12px; font-size: 0.9rem; }
-.da-tabs-nav .tab-button.active { background: white; color: #0f172a; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+button.primary:hover { background-color: var(--primary-hover); transform: translateY(-1px); }
 
-.schedule-view-wrapper, #scheduler-grid {
-    background: white; border: 1px solid var(--border);
-    border-radius: 12px; overflow: auto;
-    max-height: 75vh; /* Prevent it from being taller than screen */
+.btn-secondary { background: white; border: 1px solid var(--border); color: var(--text-main); }
+.btn-secondary:hover { background: #f9fafb; border-color: #d1d5db; }
+
+button.danger, #eraseAllBtn, #l-delete-btn {
+    background: #fff1f2; color: #e11d48; border: 1px solid #fecdd3;
 }
+button.danger:hover { background: #ffe4e6; }
 
-/* Chips */
+/* Chips & Lists */
+.chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .bunk-button {
     background: white; border: 1px solid var(--border);
-    padding: 4px 12px; border-radius: 99px; cursor: pointer;
-    margin: 2px; display: inline-block;
+    padding: 4px 12px; border-radius: 100px; font-size: 0.85rem;
+    color: var(--text-main); cursor: pointer; transition: all 0.2s;
 }
+.bunk-button:hover { border-color: var(--primary); color: var(--primary); }
 .bunk-button.selected { background: var(--primary); color: white; border-color: var(--primary); }
 
+/* Tables & Grids */
+.schedule-view-wrapper, #scheduler-grid {
+    background: white; border: 1px solid var(--border);
+    border-radius: 8px; overflow: auto;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);
+}
+
+table { width: 100%; border-collapse: separate; border-spacing: 0; }
+th {
+    background: #f9fafb; color: var(--text-muted); font-size: 0.75rem;
+    text-transform: uppercase; letter-spacing: 0.05em; padding: 12px;
+    border-bottom: 1px solid var(--border); border-right: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10;
+}
+td {
+    border-bottom: 1px solid var(--border); border-right: 1px solid var(--border);
+    padding: 8px; font-size: 0.85rem; height: 45px; vertical-align: top;
+}
+td:first-child, th:first-child {
+    position: sticky; left: 0; z-index: 5; background: #f9fafb;
+    border-right: 2px solid var(--border); font-weight: 600; text-align: center; width: 80px;
+}
+
+/* Events */
+.grid-event {
+    border-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    font-size: 0.8rem; font-weight: 600; display: flex; flex-direction: column;
+    justify-content: center; align-items: center; border: none !important;
+}
+
+/* Event Colors */
+.tile-activity { background: #e0f2fe; color: #0369a1; border-left: 3px solid #0ea5e9 !important; }
+.tile-sports { background: #dcfce7; color: #15803d; border-left: 3px solid #22c55e !important; }
+.tile-special { background: #f3e8ff; color: #7e22ce; border-left: 3px solid #a855f7 !important; }
+.tile-swim { background: #eff6ff; color: #1d4ed8; border-left: 3px solid #3b82f6 !important; }
+.tile-lunch { background: #fff7ed; color: #c2410c; border-left: 3px solid #f97316 !important; }
+.tile-league { background: #faf5ff; color: #6b21a8; border-left: 3px solid #9333ea !important; }
+
 /* =========================================
-   9. WELCOME SCREEN
+   8. UTILITIES
    ========================================= */
+.master-list .list-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.75rem; margin-bottom: 0.5rem; background: white;
+    border: 1px solid var(--border); border-radius: 6px;
+}
+.master-list .list-item:hover { border-color: var(--primary); }
+.master-list .list-item.selected { border-color: var(--primary); background: var(--primary-light); }
+
+.da-tabs-nav {
+    display: flex; gap: 5px; background: #f3f4f6; padding: 4px;
+    border-radius: 8px; margin-bottom: 20px; display: inline-flex;
+}
+.da-tabs-nav .tab-button { margin: 0; padding: 6px 12px; color: var(--text-muted); }
+.da-tabs-nav .tab-button.active { background: white; color: var(--text-main); box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+
+.switch { position: relative; display: inline-block; width: 40px; height: 20px; margin-left: 10px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #e5e7eb; transition: .4s; border-radius: 34px; }
+.slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 2px; bottom: 2px; background-color: white; transition: .4s; border-radius: 50%; }
+input:checked + .slider { background-color: var(--primary); }
+input:checked + .slider:before { transform: translateX(20px); }
+
 #welcome-screen {
     position: fixed; top:0; left:0; width:100%; height:100%;
-    background: var(--bg-app); z-index: 9999;
-    display: flex; justify-content: center; align-items: center;
+    background: #f3f4f6; z-index: 9999; display: flex; justify-content: center; align-items: center;
+}
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+    #main-app-container { flex-direction: column; }
+    .sidebar {
+        position: fixed; left: -260px; top: 0; bottom: 0;
+        box-shadow: 2px 0 10px rgba(0,0,0,0.1); transition: left 0.3s ease;
+    }
+    .sidebar.open { left: 0; }
+    .menu-toggle { display: block; }
+    .app-content-wrapper { width: 100%; }
 }
 
 @media print {
-    #main-app-container { display: block; }
-    .sidebar, .app-header { display: none; }
+    .sidebar, .app-header, .no-print { display: none !important; }
+    .main-viewport { padding: 0; overflow: visible; }
+    .card { box-shadow: none; border: none; padding: 0; }
 }
