@@ -1,5 +1,5 @@
-
 // This script now controls the boot-up process for the entire application.
+// UPDATED: Added Passcode Authentication Gate.
 
 document.addEventListener("DOMContentLoaded", () => {
     // --- 1. Get DOM Elements ---
@@ -8,8 +8,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const campNameInput = document.getElementById('camp-name-input');
     const welcomeTitle = document.getElementById('welcome-title');
     const beginBtn = document.getElementById('begin-btn');
+    const welcomeText = welcomeScreen.querySelector('p');
 
-    // This is the main boot function, moved from index.html
+    // --- CONSTANTS ---
+    const AUTH_KEY = "camp_scheduler_auth_v1";
+    const PASSCODE = "campisawesome";
+
+    // --- BOOT FUNCTION (Preserved) ---
     function bootMainApp() {
         console.log("Booting main application...");
         // 1. Init Calendar (loads date, save/load fns, migration)
@@ -43,55 +48,117 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // --- 2. Check for Saved Camp Name ---
-    let app1Data = {};
-    let campName = "";
+    // --- APPLICATION FLOW LOGIC ---
+    function runAppFlow() {
+        // 1. Check for Saved Camp Name
+        let app1Data = {};
+        let campName = "";
 
-    if (window.loadGlobalSettings) {
-        const globalSettings = window.loadGlobalSettings();
-        app1Data = globalSettings.app1 || {};
-        campName = app1Data.campName || "";
-    }
-
-    if (campName) {
-        // Camp name exists, just run the app
-        mainAppContainer.style.display = 'block';
-        bootMainApp();
-    } else {
-        // No camp name, show the welcome screen
-        welcomeScreen.style.display = 'flex';
-    }
-
-    // --- 3. Add Listener for the Begin Button ---
-    beginBtn.addEventListener('click', () => {
-        const newCampName = campNameInput.value.trim();
-
-        if (newCampName === "") {
-            alert("Please enter your camp's name.");
-            return;
+        if (window.loadGlobalSettings) {
+            const globalSettings = window.loadGlobalSettings();
+            app1Data = globalSettings.app1 || {};
+            campName = app1Data.campName || "";
         }
 
-        // Save the new camp name
-        if (window.saveGlobalSettings) {
-            app1Data.campName = newCampName;
-            window.saveGlobalSettings('app1', app1Data);
+        if (campName) {
+            // Camp name exists, just run the app
+            welcomeScreen.style.display = 'none';
+            mainAppContainer.style.display = 'block';
+            bootMainApp();
         } else {
-            console.error("Could not save camp name. saveGlobalSettings not found.");
-            // Fallback to localStorage just in case
-            localStorage.setItem("temp_camp_name", newCampName);
+            // No camp name, show the Setup Screen
+            setupCampNameUI(app1Data);
         }
+    }
 
-        // Hide welcome, show app
-        welcomeScreen.style.display = 'none';
-        mainAppContainer.style.display = 'block';
+    function setupCampNameUI(app1Data) {
+        welcomeScreen.style.display = 'flex';
+        mainAppContainer.style.display = 'none';
+        
+        welcomeTitle.textContent = "Welcome to The Camp Scheduler";
+        welcomeText.textContent = "Please enter your camp's name to get started.";
+        
+        campNameInput.style.display = 'block';
+        campNameInput.type = 'text';
+        campNameInput.placeholder = "E.g., Camp Adventure";
+        campNameInput.value = ""; // Clear any previous input
+        
+        beginBtn.textContent = "Begin";
+        
+        // Remove old listeners by replacing the button node (cleanest way) is not strictly needed 
+        // if we use onclick assignment which overrides previous handlers.
+        beginBtn.onclick = () => {
+            const newCampName = campNameInput.value.trim();
 
-        // Now boot the main application
-        bootMainApp();
-    });
+            if (newCampName === "") {
+                alert("Please enter your camp's name.");
+                return;
+            }
 
-    // --- 4. Add listener for input (optional: save on edit) ---
-    // This part is for an existing camp name, allowing it to be edited.
-    // We can add an "Edit" button next to the camp name in the main app later.
-    // For now, this logic is complete for the welcome screen.
+            // Save the new camp name
+            if (window.saveGlobalSettings) {
+                app1Data.campName = newCampName;
+                window.saveGlobalSettings('app1', app1Data);
+            } else {
+                console.error("Could not save camp name. saveGlobalSettings not found.");
+                localStorage.setItem("temp_camp_name", newCampName);
+            }
+
+            // Hide welcome, show app
+            welcomeScreen.style.display = 'none';
+            mainAppContainer.style.display = 'block';
+
+            // Now boot the main application
+            bootMainApp();
+        };
+
+        // Allow Enter key
+        campNameInput.onkeyup = (e) => {
+            if (e.key === 'Enter') beginBtn.click();
+        };
+    }
+
+    // --- AUTHENTICATION UI ---
+    function setupAuthUI() {
+        welcomeScreen.style.display = 'flex';
+        mainAppContainer.style.display = 'none';
+
+        welcomeTitle.textContent = "Camp Scheduler Locked";
+        welcomeText.textContent = "This is a paid service. Please enter the passcode to continue.";
+        
+        campNameInput.style.display = 'block';
+        campNameInput.type = 'password';
+        campNameInput.placeholder = "Enter Passcode";
+        campNameInput.value = "";
+        
+        beginBtn.textContent = "Unlock";
+
+        beginBtn.onclick = () => {
+            const enteredCode = campNameInput.value;
+            if (enteredCode === PASSCODE) {
+                localStorage.setItem(AUTH_KEY, "true");
+                // Clear input and proceed
+                campNameInput.value = "";
+                runAppFlow();
+            } else {
+                alert("Incorrect passcode. Please try again.");
+                campNameInput.value = "";
+            }
+        };
+
+        // Allow Enter key
+        campNameInput.onkeyup = (e) => {
+            if (e.key === 'Enter') beginBtn.click();
+        };
+    }
+
+    // --- MAIN ENTRY POINT ---
+    const isAuthorized = localStorage.getItem(AUTH_KEY) === "true";
+
+    if (isAuthorized) {
+        runAppFlow();
+    } else {
+        setupAuthUI();
+    }
 
 });
