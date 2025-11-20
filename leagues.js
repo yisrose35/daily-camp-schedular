@@ -1,11 +1,10 @@
 // ===================================================================
 // leagues.js
 //
-// MERGED VERSION:
-// - Framework: Master/Detail UI.
-// - Logic: Matchups, Standings, Import.
-// - UPDATE: Handles multiple games per day (Double headers).
-// - UPDATE: Groups imports by Time Slot / Period.
+// UPDATED:
+// - Default View: Immediately shows Standings & Game Tabs.
+// - UI: Configuration (Divisions/Sports/Teams) is hidden by default.
+// - UI: Added "Edit Configuration" button to toggle settings.
 // ===================================================================
 
 (function () {
@@ -19,7 +18,10 @@
 
     // --- UI State Persistence ---
     let selectedLeagueName = null;
-    let activeSubView = null; // 'standings' or null
+    
+    // We don't need activeSubView anymore because Standings is default
+    // but we can track if we are on "Standings" or "Games" tab if desired.
+    // For now, we default to Standings on load.
 
     let listEl = null;
     let detailPaneEl = null;
@@ -115,14 +117,13 @@
                 .detail-pane { border: 1px solid #ccc; border-radius: 8px; padding: 20px; background: #fdfdfd; min-height: 400px; }
                 .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
                 .chip { padding: 4px 8px; border-radius: 12px; border: 1px solid #ccc; cursor: pointer; }
-                .staging-row { transition: background 0.2s; }
-                .staging-row:hover { background: #f9f9f9; }
-                .time-badge { font-size: 0.75em; background: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; margin-right: 8px; min-width: 60px; text-align: center; display: inline-block; }
+                .match-row { transition: background 0.2s; }
+                .match-row:hover { background: #f9f9f9; }
                 .league-standings-table { width: 100%; border-collapse: collapse; }
                 .league-standings-table th, .league-standings-table td { padding: 8px; text-align: center; border-bottom: 1px solid #eee; }
                 .league-standings-table th { background: #f0f0f0; text-align: left; }
                 .league-standings-table td:first-child, .league-standings-table th:first-child { text-align: left; }
-                .group-header { background: #e9ecef; padding: 5px 10px; font-weight: bold; font-size: 0.9em; color: #495057; border-radius: 4px; margin-top: 10px; margin-bottom: 5px; }
+                .group-header { background: #e9ecef; padding: 8px 12px; font-weight: bold; font-size: 0.95em; color: #495057; border-radius: 4px; margin-top: 15px; margin-bottom: 8px; border-left: 4px solid #007bff; }
             </style>
         `;
 
@@ -195,7 +196,7 @@
         const league = leaguesByName[selectedLeagueName];
         detailPaneEl.innerHTML = "";
 
-        // Header
+        // --- Header ---
         const header = document.createElement('div');
         header.style.display = 'flex';
         header.style.justifyContent = 'space-between';
@@ -203,6 +204,7 @@
         header.style.borderBottom = '2px solid #eee';
         header.style.paddingBottom = '10px';
 
+        // Title
         const title = document.createElement('h2');
         title.style.margin = '0';
         title.textContent = selectedLeagueName;
@@ -219,17 +221,29 @@
         });
         header.appendChild(title);
 
+        // Buttons
         const btnGroup = document.createElement('div');
-        const standingsBtn = document.createElement('button');
-        standingsBtn.textContent = "Manage Standings / Games";
-        standingsBtn.style.marginRight = "10px";
-        standingsBtn.style.background = "#28a745";
-        standingsBtn.style.color = "white";
         
+        // EDIT CONFIG BUTTON
+        const editConfigBtn = document.createElement('button');
+        editConfigBtn.textContent = "Edit Configuration";
+        editConfigBtn.style.marginRight = "10px";
+        editConfigBtn.style.background = "#6c757d"; // Gray
+        editConfigBtn.style.color = "white";
+        editConfigBtn.style.border = "none";
+        editConfigBtn.style.padding = "5px 10px";
+        editConfigBtn.style.borderRadius = "4px";
+        editConfigBtn.style.cursor = "pointer";
+
+        // DELETE BUTTON
         const delBtn = document.createElement('button');
         delBtn.textContent = "Delete";
-        delBtn.style.background = "#c0392b";
+        delBtn.style.background = "#c0392b"; // Red
         delBtn.style.color = "white";
+        delBtn.style.border = "none";
+        delBtn.style.padding = "5px 10px";
+        delBtn.style.borderRadius = "4px";
+        delBtn.style.cursor = "pointer";
         delBtn.onclick = () => {
             if(confirm("Delete league?")) {
                 delete leaguesByName[selectedLeagueName];
@@ -240,48 +254,48 @@
             }
         };
 
-        btnGroup.appendChild(standingsBtn);
+        btnGroup.appendChild(editConfigBtn);
         btnGroup.appendChild(delBtn);
         header.appendChild(btnGroup);
         detailPaneEl.appendChild(header);
 
-        // Standings Area
-        const standingsContainer = document.createElement("div");
-        standingsContainer.id = "league-standings-ui";
-        standingsContainer.style.display = "none";
-        standingsContainer.style.marginBottom = "20px";
-        standingsContainer.style.padding = "15px";
-        standingsContainer.style.border = "1px solid #ccc";
-        standingsContainer.style.background = "#fff";
-        standingsContainer.style.borderRadius = "8px";
-        detailPaneEl.appendChild(standingsContainer);
+        // --- Configuration Section (Hidden by Default) ---
+        const configContainer = document.createElement("div");
+        configContainer.id = "league-config-ui";
+        configContainer.style.display = "none"; // HIDDEN
+        configContainer.style.marginBottom = "20px";
+        configContainer.style.padding = "15px";
+        configContainer.style.border = "1px solid #eee";
+        configContainer.style.background = "#f8f9fa";
+        configContainer.style.borderRadius = "8px";
+        
+        renderConfigSections(league, configContainer);
+        detailPaneEl.appendChild(configContainer);
 
-        const toggleStandings = () => {
-            const isVisible = standingsContainer.style.display === 'block';
-            if (isVisible) {
-                standingsContainer.style.display = 'none';
-                standingsBtn.textContent = "Manage Standings / Games";
-                activeSubView = null;
+        // Toggle Config Logic
+        editConfigBtn.onclick = () => {
+            const isHidden = configContainer.style.display === "none";
+            if (isHidden) {
+                configContainer.style.display = "block";
+                editConfigBtn.textContent = "Close Configuration";
+                editConfigBtn.style.background = "#343a40"; // Darker
             } else {
-                standingsContainer.style.display = 'block';
-                renderGameResultsUI(league, standingsContainer);
-                standingsBtn.textContent = "Close Standings";
-                activeSubView = 'standings';
+                configContainer.style.display = "none";
+                editConfigBtn.textContent = "Edit Configuration";
+                editConfigBtn.style.background = "#6c757d"; // Gray
             }
         };
-        standingsBtn.onclick = toggleStandings;
 
-        if (activeSubView === 'standings') {
-             standingsContainer.style.display = 'block';
-             renderGameResultsUI(league, standingsContainer);
-             standingsBtn.textContent = "Close Standings";
-        }
-
-        // Configuration Sections
-        renderConfigSections(league);
+        // --- Main Content (Standings & Games) ---
+        // Rendered immediately, no button required.
+        const mainContent = document.createElement("div");
+        renderGameResultsUI(league, mainContent);
+        detailPaneEl.appendChild(mainContent);
     }
     
-    function renderConfigSections(league) {
+    function renderConfigSections(league, container) {
+        container.innerHTML = ""; // Clear existing if any
+
         // Divisions
         const divSec = document.createElement('div');
         divSec.innerHTML = `<strong>Divisions:</strong>`;
@@ -298,12 +312,13 @@
                 if (isActive) league.divisions = league.divisions.filter(d => d !== divName);
                 else league.divisions.push(divName);
                 saveLeaguesData();
-                renderDetailPane();
+                // Re-render just the config sections to update style
+                renderConfigSections(league, container);
             };
             divChips.appendChild(chip);
         });
         divSec.appendChild(divChips);
-        detailPaneEl.appendChild(divSec);
+        container.appendChild(divSec);
 
         // Sports
         const sportSec = document.createElement('div');
@@ -322,12 +337,12 @@
                 if (isActive) league.sports = league.sports.filter(s => s !== act);
                 else league.sports.push(act);
                 saveLeaguesData();
-                renderDetailPane();
+                renderConfigSections(league, container);
             };
             sportChips.appendChild(chip);
         });
         sportSec.appendChild(sportChips);
-        detailPaneEl.appendChild(sportSec);
+        container.appendChild(sportSec);
 
         // Teams
         const teamSec = document.createElement('div');
@@ -345,7 +360,10 @@
                 league.teams = league.teams.filter(t => t !== team);
                 delete league.standings[team];
                 saveLeaguesData();
-                renderDetailPane();
+                renderConfigSections(league, container);
+                // We also need to update the standings view if a team is removed
+                const parentPane = document.getElementById("league-detail-pane");
+                if(parentPane) renderDetailPane(); // Full refresh to update standings table
             };
             teamList.appendChild(chip);
         });
@@ -361,12 +379,15 @@
                     league.teams.push(t);
                     league.standings[t] = {w:0, l:0, t:0};
                     saveLeaguesData();
-                    renderDetailPane();
+                    renderConfigSections(league, container);
+                    // Update standings table immediately
+                    const parentPane = document.getElementById("league-detail-pane");
+                    if(parentPane) renderDetailPane();
                 }
             }
         };
         teamSec.appendChild(teamInput);
-        detailPaneEl.appendChild(teamSec);
+        container.appendChild(teamSec);
     }
 
 
@@ -381,8 +402,8 @@
         const tabNav = document.createElement("div");
         tabNav.style.marginBottom = "15px";
         tabNav.innerHTML = `
-            <button id="tab-standings" style="font-weight:bold; padding:8px; margin-right:5px;">Current Standings</button>
-            <button id="tab-games" style="padding:8px;">Game Results Entry</button>
+            <button id="tab-standings" style="font-weight:bold; padding:8px 15px; margin-right:5px; background:#007bff; color:white; border:none; border-radius:4px; cursor:pointer;">Current Standings</button>
+            <button id="tab-games" style="padding:8px 15px; background:#e9ecef; color:#333; border:none; border-radius:4px; cursor:pointer;">Game Results / History</button>
         `;
         container.appendChild(tabNav);
 
@@ -394,18 +415,25 @@
         container.appendChild(gamesDiv);
 
         // Tab Switching Logic
-        tabNav.querySelector("#tab-standings").onclick = () => {
+        const btnStd = tabNav.querySelector("#tab-standings");
+        const btnGms = tabNav.querySelector("#tab-games");
+
+        btnStd.onclick = () => {
             standingsDiv.style.display = "block";
             gamesDiv.style.display = "none";
+            btnStd.style.background = "#007bff"; btnStd.style.color = "white";
+            btnGms.style.background = "#e9ecef"; btnGms.style.color = "#333";
             renderStandingsTable(league, standingsDiv); 
         };
-        tabNav.querySelector("#tab-games").onclick = () => {
+        btnGms.onclick = () => {
             standingsDiv.style.display = "none";
             gamesDiv.style.display = "block";
+            btnStd.style.background = "#e9ecef"; btnStd.style.color = "#333";
+            btnGms.style.background = "#007bff"; btnGms.style.color = "white";
             renderGameEntryUI(league, gamesDiv);
         };
 
-        // Initial Render
+        // Initial Render (Default to Standings)
         renderStandingsTable(league, standingsDiv);
     }
 
@@ -524,14 +552,28 @@
             const game = league.games[gameIdx];
             if (!game) return;
 
+            // Group matches by their label (League Game 1, 2, etc.)
+            const groupedMatches = {};
             game.matches.forEach(m => {
-                // Add time label if it exists in saved data
-                addMatchRow(target, m.teamA, m.teamB, m.scoreA, m.scoreB, saveButton, m.timeLabel);
+                const label = m.timeLabel || "Matchups";
+                if(!groupedMatches[label]) groupedMatches[label] = [];
+                groupedMatches[label].push(m);
+            });
+
+            // Render Groups
+            Object.keys(groupedMatches).sort().forEach(label => {
+                const header = document.createElement("div");
+                header.className = "group-header";
+                header.textContent = label;
+                target.appendChild(header);
+
+                groupedMatches[label].forEach(m => {
+                    addMatchRow(target, m.teamA, m.teamB, m.scoreA, m.scoreB, saveButton, label);
+                });
             });
         }
     }
 
-    // ADDED: "timeLabel" parameter to persist "Game 1", "Game 2", "10:00 AM", etc.
     function addMatchRow(target, teamA, teamB, scoreA = "", scoreB = "", saveButton, timeLabel = "") {
         const row = document.createElement("div");
         row.className = "match-row"; 
@@ -542,15 +584,9 @@
         row.style.padding = "8px";
         row.style.background = "#f9f9f9";
         row.style.border = "1px solid #eee";
-
-        // Time Badge UI
-        let timeHtml = "";
-        if (timeLabel) {
-            timeHtml = `<span class="time-badge">${timeLabel}</span>`;
-        }
+        row.style.borderRadius = "4px";
 
         row.innerHTML = `
-            ${timeHtml}
             <strong style="min-width:100px; text-align:right;">${teamA}</strong>
             <input type="number" class="score-a" value="${scoreA}" style="width:50px; padding:5px;">
             <span>vs</span>
@@ -558,7 +594,7 @@
             <strong style="min-width:100px;">${teamB}</strong>
         `;
 
-        // Store teams & time in dataset for saving
+        // Store teams & label in dataset for saving
         row.dataset.teamA = teamA;
         row.dataset.teamB = teamB;
         if(timeLabel) row.dataset.timeLabel = timeLabel;
@@ -571,12 +607,11 @@
         target.innerHTML = "";
         const daily = window.loadCurrentDailyData?.() || {};
         const assignments = daily.scheduleAssignments || {};
-        const times = window.unifiedTimes || []; // Access global time definitions
 
         const foundMatches = new Set(); 
         const saveButton = target.parentElement.querySelector("button[style*='background: rgb(40, 167, 69)']") || target.parentElement.lastElementChild;
 
-        // Temporary storage for grouping by time
+        // Storage for grouping by time slot
         const groupedMatches = {};
 
         league.teams.forEach(team => {
@@ -592,7 +627,6 @@
 
                         // Check if both teams are in this league
                         if (league.teams.includes(t1) && league.teams.includes(t2)) {
-                            // Create a unique key that INCLUDES the slotIndex to allow double headers
                             const uniqueKey = [t1, t2].sort().join(" vs ") + "::" + slotIndex;
                             
                             if (!foundMatches.has(uniqueKey)) {
@@ -615,22 +649,18 @@
             return;
         }
 
-        sortedSlots.forEach(slotIdx => {
-            // Determine Label (e.g., "10:00 AM" or "Period 1")
-            let timeLabel = `Game/Period ${parseInt(slotIdx) + 1}`;
-            if (times[slotIdx] && times[slotIdx].label) {
-                timeLabel = times[slotIdx].label;
-            }
+        sortedSlots.forEach((slotIdx, displayIndex) => {
+            const gameLabel = `League Game ${displayIndex + 1}`;
 
             // Add Header
             const header = document.createElement("div");
             header.className = "group-header";
-            header.textContent = timeLabel;
+            header.textContent = gameLabel;
             target.appendChild(header);
 
-            // Add Matches for this slot
+            // Add Matches
             groupedMatches[slotIdx].forEach(m => {
-                addMatchRow(target, m.t1, m.t2, "", "", saveButton, timeLabel);
+                addMatchRow(target, m.t1, m.t2, "", "", saveButton, gameLabel);
             });
         });
     }
@@ -642,7 +672,7 @@
         rows.forEach(row => {
             const tA = row.dataset.teamA;
             const tB = row.dataset.teamB;
-            const tLabel = row.dataset.timeLabel || ""; // Capture time label
+            const tLabel = row.dataset.timeLabel || ""; 
             const sA = parseInt(row.querySelector(".score-a").value) || 0;
             const sB = parseInt(row.querySelector(".score-b").value) || 0;
 
@@ -657,14 +687,13 @@
                 scoreA: sA, 
                 scoreB: sB, 
                 winner: winner,
-                timeLabel: tLabel // Save label to history
+                timeLabel: tLabel 
             });
         });
 
         if (results.length === 0) return;
 
         if (gameId === "new") {
-            // Add new game
             league.games.push({
                 id: Date.now(),
                 date: window.currentScheduleDate || new Date().toLocaleDateString(),
@@ -672,14 +701,18 @@
                 matches: results
             });
         } else {
-            // Update existing
             league.games[gameId].matches = results;
         }
 
         recalcStandings(league); 
         saveLeaguesData();
         alert("Results saved and standings updated!");
-        renderDetailPane(); // Refresh UI
+        
+        // Refresh everything to show updated standings immediately
+        const selectEl = container.parentElement.querySelector("select");
+        if(selectEl) selectEl.value = "new"; // Reset dropdown to "new" or keep current? 
+        // Actually simpler to just re-render detail pane to show updated standings table
+        renderDetailPane(); 
     }
 
     function recalcStandings(league) {
