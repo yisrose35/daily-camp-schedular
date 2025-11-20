@@ -2,167 +2,146 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Camp Scheduler</title>
+    <title>Camp Scheduler Pro</title>
     <link rel="stylesheet" href="styles.css">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body>
 
     <div id="welcome-screen" style="display: none;">
-        <img src="https://placehold.co/150x150/007bff/ffffff?text=TCS&font=arial" alt="Camp Scheduler Logo" class="welcome-logo">
-        <h2 id="welcome-title">Welcome to The Camp Scheduler</h2>
-        <p>Please enter your camp's name to get started.</p>
-        <input type="text" id="camp-name-input" placeholder="E.g., Camp Adventure">
-        <button id="begin-btn">Begin</button>
+        <div style="background:white; padding:3rem; border-radius:16px; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1); width:100%; max-width:450px;">
+            <h2 id="welcome-title" style="margin-bottom:0.5rem;">Welcome</h2>
+            <p style="margin-bottom:2rem; color:#6b7280;">Enter your camp's name to access the dashboard.</p>
+            <input type="text" id="camp-name-input" placeholder="Camp Name">
+            <button id="begin-btn" style="width:100%; margin-top:1rem; padding:1rem; font-size:1.1rem; background:#2563eb;">Get Started</button>
+        </div>
     </div>
 
-    <div id="main-app-container" style="display: none;">
-        <h1>🏕️ Camp Scheduler</h1>
-
-        <div style="padding: 10px 15px; background: #f4f4f4; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ddd;">
-            <label for="calendar-date-picker" style="font-weight: bold; margin-right: 10px; font-size: 1.1em;">Current Schedule Date:</label>
-            <input type="date" id="calendar-date-picker" style="font-size: 1.1em; padding: 5px;">
-        </div>
-
-        <div class="tabs">
-            <button class="tab-button active" onclick="showTab('setup')">Setup (Bunks/Divisions)</button>
-            <button class="tab-button" onclick="showTab('fields'); window.initFieldsTab?.();">Fields</button>
-            <button class="tab-button" onclick="showTab('special_activities'); window.initSpecialActivitiesTab?.();">Special Activities</button>
-            
-            <button class="tab-button" onclick="showTab('master-scheduler'); window.initMasterScheduler?.();">
-                🗓️ Master Scheduler (Templates)
-            </button>
-            <button class="tab-button" onclick="showTab('schedule')">Daily Schedule (View)</button>
-            <button class="tab-button" onclick="showTab('leagues'); window.initLeagues?.();">Leagues</button>
-            <button class="tab-button" onclick="showTab('specialty-leagues'); window.initSpecialtyLeagues?.();">🏆 Specialty Leagues</button>
-            <button class="tab-button" onclick="showTab('daily-adjustments'); window.initDailyAdjustments?.();">Daily Adjustments</button>
-            <button class="tab-button" onclick="showTab('report'); window.initReportTab?.();">Report</button>
-            <button class="tab-button" onclick="showTab('print'); window.initPrintCenter?.();">🖨️ Print Center</button>
-            <button class="tab-button" onclick="showTab('updates'); window.initUpdatesTab?.();">Updates</button>
-            <button class="tab-button" onclick="showTab('helper'); window.initHelperTab?.();">Help & Guide</button>
-        </div>
-
-        <div id="setup" class="tab-content active">
-            <h3>Add Bunks</h3>
-            <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
-            <button id="addBunkBtn">Add Bunk</button>
-            <div id="unassignedBunks" class="bunk-container"></div>
-
-            <h3>Add Divisions</h3>
-            <p style="font-size: 0.9em; color: #555;">
-                Add divisions, then set the start and end time for each division.
-            </p>
-            <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
-            <button id="addDivisionBtn">Add Division</button>
-            <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable Colors</label>
-            <div id="divisionButtons" style="margin-top:8px;"></div>
-            
-            <hr style="margin: 20px 0;">
-            
-            <h3>Clear Schedules & History</h3>
-            <p>Use these buttons to clear saved schedule data. Your Setup will NOT be affected.</p>
-
-            <button id="eraseTodayBtn"
-                style="background: #db7a00; color: #fff; padding: 8px 12px; border: none; border-radius: 4px;
-                cursor: pointer; margin-right: 8px;"
-                onclick="if(confirm('Are you sure you want to delete the schedule for today?')) window.eraseCurrentDailyData?.();">
-                Delete ONLY This Day's Schedule
-            </button>
-
-            <button id="eraseAllSchedulesBtn"
-                style="background: #c0392b;
-                color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;"
-                onclick="if(confirm('Are you sure you want to delete ALL saved schedules for ALL days? Your setup will be kept.')) window.eraseAllDailyData?.();">
-                Delete ALL Daily Schedules
-            </button>
-            
-            <button id="eraseHistoryBtn"
-                style="background: #5e35b1;
-                color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;"
-                onclick="if(confirm('Are you sure you want to reset all activity rotation history?')) window.eraseRotationHistory?.();">
-                Reset Activity History
-            </button>
-
-            <hr style="margin: 20px 0;">
-
-            <h3>Backup & Restore</h3>
-            <p>Save all your setup to a file, or restore it from a backup.</p>
-            <button id="exportBackupBtn"
-                style="background: #007bff; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;">
-                Export All Data to File
-            </button>
-            <button id="importBackupBtn"
-                style="background: #28a745; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;">
-                Import Data from File
-            </button>
-            <input type="file" id="importFileInput" accept=".json" style="display: none;">
-
-            <button id="restoreAutoSaveBtn" 
-                style="background: #6c757d; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;"
-                onclick="window.restoreAutoSave?.()">
-                Recall Last Auto-Save
-            </button>
-            
-            <button id="forceSaveBtn" 
-                style="background: #17a2b8; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-left: 8px;"
-                onclick="window.forceAutoSave?.()">
-                Save Now
-            </button>
-
-            <hr style="margin: 20px 0;">
-
-            <h3>Erase All Data</h3>
-            <p><strong>⚠️ Warning:</strong> This deletes everything (Schedules, History, Setup).</p>
-
-            <button id="eraseAllBtn" style="background:#c0392b;color:#fff;">
-                Erase All Camp Data (Reset Application)
-            </button>
-        </div> 
+    <div id="main-app-container" style="display: none; height: 100%; width: 100%;">
         
-        <div id="fields" class="tab-content"></div>
-        <div id="special_activities" class="tab-content"></div>
-        
-        <div id="master-scheduler" class="tab-content">
-            <div id="master-scheduler-content"></div>
-        </div>
-        
-        <div id="schedule" class="tab-content">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                <h3>Daily Schedule (View)</h3>
-                <button onclick="window.validateSchedule?.()" style="background:#ff9800; color:white; border:none; padding:8px 16px; border-radius:4px; cursor:pointer; font-weight:bold;">⚠️ Validate Schedule</button>
+        <nav class="sidebar">
+            <div class="app-logo">
+                <span>🏕️</span> Scheduler Pro
             </div>
-            <p>This tab shows the final, "filled-in" schedule.</p>
-            <div id="scheduleTable"></div>
-        </div>
+            
+            <div class="tabs">
+                <div style="font-size:0.75rem; font-weight:700; color:#475569; text-transform:uppercase; padding:0 0.75rem; margin-bottom:0.5rem;">Core</div>
+                <button class="tab-button active" onclick="showTab('setup')">Setup & Bunks</button>
+                <button class="tab-button" onclick="showTab('fields'); window.initFieldsTab?.();">Fields & Locations</button>
+                <button class="tab-button" onclick="showTab('special_activities'); window.initSpecialActivitiesTab?.();">Special Activities</button>
+                
+                <div class="nav-divider"></div>
+                
+                <div style="font-size:0.75rem; font-weight:700; color:#475569; text-transform:uppercase; padding:0 0.75rem; margin-bottom:0.5rem;">Scheduling</div>
+                <button class="tab-button" onclick="showTab('master-scheduler'); window.initMasterScheduler?.();">Master Templates</button>
+                <button class="tab-button" onclick="showTab('daily-adjustments'); window.initDailyAdjustments?.();">Daily Builder</button>
+                <button class="tab-button" onclick="showTab('schedule')">Daily View</button>
+                
+                <div class="nav-divider"></div>
 
-        <div id="leagues" class="tab-content">
-            <div id="leaguesContainer"></div>
-        </div>
+                <div style="font-size:0.75rem; font-weight:700; color:#475569; text-transform:uppercase; padding:0 0.75rem; margin-bottom:0.5rem;">Leagues</div>
+                <button class="tab-button" onclick="showTab('leagues'); window.initLeagues?.();">League Manager</button>
+                <button class="tab-button" onclick="showTab('specialty-leagues'); window.initSpecialtyLeagues?.();">Specialty Leagues</button>
+                
+                <div class="nav-divider"></div>
 
-        <div id="specialty-leagues" class="tab-content">
-            <h2>🏆 Specialty Leagues</h2>
-            <div id="specialtyLeaguesContainer"></div>
-        </div>
+                <button class="tab-button" onclick="showTab('report'); window.initReportTab?.();">Analytics & Reports</button>
+                <button class="tab-button" onclick="showTab('print'); window.initPrintCenter?.();">Print Center</button>
+                <button class="tab-button" onclick="showTab('helper'); window.initHelperTab?.();">Help & Guide</button>
+            </div>
+        </nav>
 
-        <div id="daily-adjustments" class="tab-content">
-            <div id="daily-adjustments-content"></div>
-        </div>
-        
-        <div id="report" class="tab-content">
-            <div id="report-content"></div>
-        </div>
+        <header class="app-header">
+            <h3 id="page-title" style="margin:0; border:none; font-size:1.1rem;">Dashboard</h3>
+            
+            <div class="date-control">
+                <label for="calendar-date-picker">Active Date:</label>
+                <input type="date" id="calendar-date-picker">
+            </div>
+        </header>
 
-        <div id="print" class="tab-content">
-            <div id="print-content"></div>
-        </div>
+        <main class="main-viewport">
+            
+            <div id="setup" class="tab-content active">
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                    <div class="card">
+                        <h3>Manage Bunks</h3>
+                        <div style="display:flex; gap:10px; margin-bottom:1rem;">
+                            <input id="bunkInput" placeholder="Enter bunk name (e.g., Bunk 1)">
+                            <button id="addBunkBtn">Add</button>
+                        </div>
+                        <div id="unassignedBunks" class="chips"></div>
+                    </div>
 
-        <div id="updates" class="tab-content">
-            <div id="updates-content"></div>
-        </div>
+                    <div class="card">
+                        <h3>Manage Divisions</h3>
+                        <p style="font-size:0.9em;">Create divisions and assign bunks by clicking them.</p>
+                        <div style="display:flex; gap:10px; margin-bottom:1rem;">
+                            <input id="divisionInput" placeholder="Enter division (e.g., Juniors)">
+                            <button id="addDivisionBtn">Add</button>
+                        </div>
+                        <label style="font-size:0.9rem;"><input type="checkbox" id="enableColor" checked> Enable Colors</label>
+                        <div id="divisionButtons" class="chips" style="margin-top:1rem;"></div>
+                    </div>
+                </div>
 
-        <div id="helper" class="tab-content">
-            <div id="helper-content"></div>
-        </div>
+                <div class="card">
+                    <h3>Data Management</h3>
+                    <div style="display:flex; flex-wrap:wrap; gap:1rem;">
+                        <button id="eraseTodayBtn" class="danger">Clear Today's Schedule</button>
+                        <button id="eraseHistoryBtn" class="danger">Reset Rotation History</button>
+                        <button id="exportBackupBtn" class="btn-secondary" style="border:1px solid #ccc;">Export Backup</button>
+                        <button id="importBackupBtn" class="btn-secondary" style="border:1px solid #ccc;">Import Backup</button>
+                        <input type="file" id="importFileInput" accept=".json" style="display: none;">
+                        <button id="forceSaveBtn" class="primary">Save All Data Now</button>
+                        <button id="eraseAllBtn" class="danger" style="margin-left:auto;">Reset App</button>
+                    </div>
+                </div>
+            </div> 
+            
+            <div id="fields" class="tab-content"></div>
+            <div id="special_activities" class="tab-content"></div>
+            
+            <div id="master-scheduler" class="tab-content">
+                <div id="master-scheduler-content"></div>
+            </div>
+            
+            <div id="schedule" class="tab-content">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
+                    <h2 style="margin:0;">Daily Schedule</h2>
+                    <button onclick="window.validateSchedule?.()" class="btn-secondary" style="background:#fff7ed; color:#c2410c; border:1px solid #fdba74;">⚠️ Validate Schedule</button>
+                </div>
+                <div id="scheduleTable"></div>
+            </div>
+
+            <div id="leagues" class="tab-content">
+                <div id="leaguesContainer"></div>
+            </div>
+
+            <div id="specialty-leagues" class="tab-content">
+                <div id="specialtyLeaguesContainer"></div>
+            </div>
+
+            <div id="daily-adjustments" class="tab-content">
+                <div id="daily-adjustments-content"></div>
+            </div>
+            
+            <div id="report" class="tab-content">
+                <div id="report-content"></div>
+            </div>
+
+            <div id="print" class="tab-content">
+                <div id="print-content"></div>
+            </div>
+
+            <div id="updates" class="tab-content">
+                <div id="updates-content"></div>
+            </div>
+
+            <div id="helper" class="tab-content">
+                <div id="helper-content"></div>
+            </div>
+        </main>
     </div> 
 
     <script src="welcome.js" defer></script>
@@ -188,8 +167,19 @@
             document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             document.getElementById(id).classList.add('active');
-            document.querySelector(`.tab-button[onclick^="showTab('${id}')"]`)?.classList.add('active');
+            
+            // Highlight sidebar button
+            const btn = document.querySelector(`.tab-button[onclick^="showTab('${id}')"]`);
+            if(btn) btn.classList.add('active');
+            
+            // Update Header Title
+            const titleMap = {
+                'setup': 'Camp Setup', 'fields': 'Fields & Locations', 'master-scheduler': 'Master Templates',
+                'daily-adjustments': 'Daily Schedule Builder', 'schedule': 'Schedule View', 'leagues': 'Leagues'
+            };
+            document.getElementById('page-title').textContent = titleMap[id] || 'Dashboard';
 
+            // Trigger Init functions
             if (id === 'schedule') window.updateTable?.();
             else if (id === 'leagues') window.initLeagues?.();
             else if (id === 'specialty-leagues') window.initSpecialtyLeagues?.();
