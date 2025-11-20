@@ -1,6 +1,12 @@
+/* UPDATED: Base body style for app shell */
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f5f5f7;
+  color: #111827;
+}
 
-
-body { font-family: Arial, sans-serif; padding: 20px; }
+/* Existing styles (unchanged) */
 .tabs { margin-bottom: 20px; }
 .tab-button { padding: 10px 20px; cursor: pointer; border: 1px solid #ccc; background: #f0f0f0; margin-right: 5px; }
 .tab-button.active { background: #007BFF; color: white; font-weight: bold; }
@@ -26,11 +32,8 @@ caption { font-weight: bold; margin: 10px 0; }
 
 /* -------------------- FIXED ACTIVITIES LIST ITEM LAYOUT (The fix!) -------------------- */
 .item {
-  /* Use Flexbox for horizontal alignment */
   display: flex;
-  /* Space content to left (details) and right (controls) */
   justify-content: space-between;
-  /* Crucial for making the toggle and button line up with the text */
   align-items: center; 
   padding: 10px 0;
   border-bottom: 1px solid #eee;
@@ -48,7 +51,7 @@ caption { font-weight: bold; margin: 10px 0; }
   width: 40px; 
   height: 20px; 
   vertical-align: middle; 
-  margin: 0 8px 0 8px; /* Cleaned up spacing */
+  margin: 0 8px 0 8px;
 }
 .switch input { opacity: 0; width: 0; height: 0; }
 
@@ -64,7 +67,6 @@ caption { font-weight: bold; margin: 10px 0; }
   border-radius: 20px; 
 }
 
-/* Knob dimensions: 14px wide/high, with 3px top/bottom/left padding */
 .slider:before { 
   position: absolute; 
   content: ""; 
@@ -77,9 +79,8 @@ caption { font-weight: bold; margin: 10px 0; }
   border-radius: 50%; 
 }
 
-/* 40px container width - 3px left pad - 3px right pad - 14px knob width = 20px travel distance */
 input:checked + .slider { 
-  background-color: #4CAF50; /* Nice activation green */
+  background-color: #4CAF50;
 }
 input:checked + .slider:before { 
   transform: translateX(20px); 
@@ -211,7 +212,6 @@ label.override-checkbox span {
   border-top: none;
   border-radius: 0 0 8px 8px;
   margin-bottom: 25px;
-  /* Prevents table from overflowing wrapper */
   overflow: hidden; 
 }
 .report-bunk-table-wrapper .report-table {
@@ -223,8 +223,8 @@ label.override-checkbox span {
 .report-table {
   width: 100%;
   border-collapse: collapse;
-  border: 1px solid #ddd; /* For single-bunk view */
-  border-radius: 8px; /* For single-bunk view */
+  border: 1px solid #ddd;
+  border-radius: 8px;
 }
 .report-table th {
   background-color: #f0f0f0;
@@ -256,36 +256,32 @@ label.override-checkbox span {
 /* --- NEW: Daily Schedule View Styles --- */
 /* ----------------------------------- */
 
-/* This wrapper allows the tables to sit side-by-side */
 .schedule-view-wrapper {
   width: 100%;
-  overflow-x: auto; /* Adds horizontal scrollbar if needed */
+  overflow-x: auto;
   display: flex;
-  flex-direction: row; /* Aligns tables horizontally */
-  align-items: flex-start; /* Aligns tables to the top */
+  flex-direction: row;
+  align-items: flex-start;
 }
 
-/* This is each individual division's table */
 .schedule-division-table {
-  width: auto; /* Let the table size itself */
-  margin-right: -1px; /* Overlap borders to look like one grid */
+  width: auto;
+  margin-right: -1px;
   border-spacing: 0;
   border-collapse: collapse;
 }
 
-/* Ensure all tables share the same border style */
 .schedule-division-table th,
 .schedule-division-table td {
     border: 1px solid #999;
 }
 
-/* Remove the extra margin-bottom from the old single-table layout */
 #scheduleTable table {
   margin-bottom: 0;
 }
-/* --- Add to end of styles.css --- */
+/* (dup block in original; keeping as-is) */
 
-/* Styles for Daily Overrides Tab */
+/* Styles for Daily Overrides Tab (dup) */
 .override-section {
   margin-bottom: 25px;
   border: 1px solid #ddd;
@@ -316,10 +312,7 @@ label.override-checkbox span {
   vertical-align: middle;
 }
 
-/* ----------------------------------- */
-/* --- NEW: Rotation Report Styles --- */
-/* ----------------------------------- */
-
+/* Rotation report (dup – keep) */
 .report-title {
   border-bottom: 2px solid #007BFF;
   padding-bottom: 10px;
@@ -363,7 +356,7 @@ label.override-checkbox span {
   border-radius: 8px;
 }
 
-/* Card layout for Division Report */
+/* Card layout for Division Report (dup) */
 .report-bunk-header {
   background-color: #f4f4f4;
   padding: 12px 15px;
@@ -379,7 +372,6 @@ label.override-checkbox span {
   border-top: none;
   border-radius: 0 0 8px 8px;
   margin-bottom: 25px;
-  /* Prevents table from overflowing wrapper */
   overflow: hidden; 
 }
 .report-bunk-table-wrapper .report-table {
@@ -387,12 +379,11 @@ label.override-checkbox span {
   border: none;
 }
 
-/* Table Styles */
 .report-table {
   width: 100%;
   border-collapse: collapse;
-  border: 1px solid #ddd; /* For single-bunk view */
-  border-radius: 8px; /* For single-bunk view */
+  border: 1px solid #ddd;
+  border-radius: 8px;
 }
 .report-table th {
   background-color: #f0f0f0;
@@ -420,42 +411,32 @@ label.override-checkbox span {
   color: #1e4620;
 }
 
-/* ----------------------------------- */
-/* --- NEW: Daily Schedule View Styles --- */
-/* ----------------------------------- */
-
-/* This wrapper allows the tables to sit side-by-side */
+/* Daily schedule view (dup) */
 .schedule-view-wrapper {
   width: 100%;
-  overflow-x: auto; /* Adds horizontal scrollbar if needed */
+  overflow-x: auto;
   display: flex;
-  flex-direction: row; /* Aligns tables horizontally */
-  align-items: flex-start; /* Aligns tables to the top */
+  flex-direction: row;
+  align-items: flex-start;
 }
 
-/* This is each individual division's table */
 .schedule-division-table {
-  width: auto; /* Let the table size itself */
-  margin-right: -1px; /* Overlap borders to look like one grid */
+  width: auto;
+  margin-right: -1px;
   border-spacing: 0;
   border-collapse: collapse;
 }
 
-/* Ensure all tables share the same border style */
 .schedule-division-table th,
 .schedule-division-table td {
     border: 1px solid #999;
 }
 
-/* Remove the extra margin-bottom from the old single-table layout */
 #scheduleTable table {
   margin-bottom: 0;
 }
 
-/* ----------------------------------- */
-/* --- NEW: League Standings Styles --- */
-/* ----------------------------------- */
-
+/* League standings styles */
 .league-nav {
   padding: 10px 15px;
   background: #f1f1f1;
@@ -474,10 +455,10 @@ label.override-checkbox span {
 }
 
 .league-content-pane {
-  display: none; /* Hidden by default */
+  display: none;
 }
 .league-content-pane.active {
-  display: block; /* Shown by dropdown */
+  display: block;
 }
 
 .league-standings-wrapper {
@@ -516,7 +497,6 @@ label.override-checkbox span {
   border: 1px solid #ccc;
   border-radius: 4px;
 }
-/* Hide spin buttons on number inputs */
 .league-standings-grid input::-webkit-outer-spin-button,
 .league-standings-grid input::-webkit-inner-spin-button {
   -webkit-appearance: none;
@@ -525,7 +505,6 @@ label.override-checkbox span {
 .league-standings-grid input[type=number] {
   -moz-appearance: textfield;
 }
-
 .update-standings-btn {
   padding: 12px 20px;
   font-size: 1.1em;
@@ -540,12 +519,8 @@ label.override-checkbox span {
 .update-standings-btn:hover {
   background: #218838;
 }
-/* --- ADD THIS NEW BLOCK TO THE END OF YOUR styles.css --- */
 
-/* ----------------------------------- */
-/* --- NEW: Field Availability Grid Styles --- */
-/* ----------------------------------- */
-
+/* Field availability grid */
 .availability-grid {
   border-collapse: collapse;
   margin: 0;
@@ -569,7 +544,6 @@ label.override-checkbox span {
   min-width: 120px;
   position: sticky;
   left: 0;
-  /* Add a border to see it scroll over cells */
   border-right: 2px solid #ccc;
 }
 .avail-check {
@@ -582,27 +556,12 @@ label.override-checkbox span {
   color: #c0392b;
   font-weight: 700;
 }
-/* ----------------------------------- */
-/* --- NEW: Daily Adjustments Tabs --- */
-/* ----------------------------------- */
 
-/* Use league-nav style for the tab bar */
-.da-tabs-nav {
-  /* This class is already defined, 
-     but we note its use here */
-}
+/* Daily Adjustments Tabs */
+.da-tab-pane { display: none; }
+.da-tab-pane.active { display: block; }
 
-/* Hide tab panes by default */
-.da-tab-pane {
-  display: none;
-}
-
-/* Show the active one */
-.da-tab-pane.active {
-  display: block;
-}
-
-/* --- NEW: Welcome Screen Styles --- */
+/* Welcome Screen */
 #welcome-screen {
     position: fixed;
     top: 0;
@@ -665,25 +624,24 @@ label.override-checkbox span {
 #begin-btn:hover {
     background: #0056b3;
 }
-/* Add to styles.css */
 
-/* Availability Grid Colors */
+/* Availability Grid colors override */
 .avail-check {
   font-size: 1.4em;
-  color: #2e7d32; /* Strong Green */
+  color: #2e7d32;
   font-weight: 900;
-  background-color: #e8f5e9; /* Light Green Background */
+  background-color: #e8f5e9;
 }
 .avail-x {
   font-size: 1.2em;
-  color: #c62828; /* Strong Red */
+  color: #c62828;
   font-weight: 700;
-  background-color: #ffebee; /* Light Red Background */
+  background-color: #ffebee;
 }
 
-/* Bunk Report Styles */
+/* Bunk Report */
 .report-row-fresh {
-  background-color: #e3f2fd; /* Light Blue highlight for 'Need to do' */
+  background-color: #e3f2fd;
 }
 .report-row-fresh td {
     color: #0d47a1;
@@ -695,7 +653,8 @@ label.override-checkbox span {
     background: #f1f1f1;
     z-index: 5;
 }
-/* --- Help Tab Styles --- */
+
+/* Help Tab */
 .help-wrapper {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     padding: 10px;
@@ -758,7 +717,8 @@ label.override-checkbox span {
     margin-top: 0;
     color: #0d47a1;
 }
-/* --- PRINT CENTER STYLES --- */
+
+/* PRINT CENTER */
 .print-dashboard { padding: 20px; }
 .print-cards { display: flex; gap: 20px; flex-wrap: wrap; }
 .print-card { 
@@ -772,19 +732,16 @@ label.override-checkbox span {
     border: none; border-radius: 4px; cursor: pointer; 
 }
 
-/* PRINTABLE AREA (Hidden on screen) */
+/* Printable area */
 #printable-area { display: none; }
 
-/* PRINT MEDIA QUERY (Crucial) */
 @media print {
-    /* Hide everything that isn't the printable area */
     body * { visibility: hidden; }
     
     #printable-area, #printable-area * { 
         visibility: visible; 
     }
 
-    /* Position printable area at absolute top */
     #printable-area {
         display: block !important;
         position: absolute;
@@ -793,7 +750,6 @@ label.override-checkbox span {
         width: 100%;
     }
 
-    /* Table Styling for Paper */
     .print-table {
         width: 100%;
         border-collapse: collapse;
@@ -806,9 +762,263 @@ label.override-checkbox span {
         text-align: left;
     }
     .print-table th { background: #eee !important; -webkit-print-color-adjust: exact; }
-    
-    /* Landscape hint */
     .landscape { 
         width: 100%; 
     }
+}
+
+/* ========================= */
+/* NEW: APP SHELL + SIDEBAR */
+/* ========================= */
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1.25rem;
+  background: #ffffff;
+  border-bottom: 1px solid #d1d5db;
+  box-shadow: 0 2px 4px rgba(15, 23, 42, 0.06);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.header-date-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #4b5563;
+}
+
+.header-date-input {
+  padding: 0.3rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  font-size: 0.85rem;
+}
+
+/* HAMBURGER */
+
+.hamburger-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.9);
+  background: #f3f4f6;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 7px;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease, border-color 0.15s ease;
+}
+.hamburger-btn span {
+  height: 2px;
+  width: 100%;
+  border-radius: 999px;
+  background: #111827;
+}
+.hamburger-btn:hover {
+  background: #e5e7eb;
+  border-color: #3b82f6;
+  transform: translateY(-1px);
+}
+
+/* TITLE */
+
+.app-title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.app-logo-circle {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #0ea5e9, #3b82f6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: #ffffff;
+  box-shadow: 0 8px 18px rgba(59, 130, 246, 0.5);
+}
+
+.app-title-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.app-title-main {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+.app-title-sub {
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+.app-page-title {
+  margin: 0 0 14px 0;
+  font-size: 1.4rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+/* MAIN AREA */
+
+.app-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* SIDEBAR */
+
+.sidebar {
+  width: 235px;
+  background: #020617;
+  border-right: 1px solid #111827;
+  padding: 0.9rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6b7280;
+  margin-bottom: 0.35rem;
+  padding: 0 0.5rem;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+  margin-bottom: 0.15rem;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.08s ease, border-color 0.15s ease;
+}
+
+.sidebar-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #4b5563;
+}
+
+.sidebar-item:hover {
+  background: rgba(148, 163, 184, 0.12);
+  color: #e5e7eb;
+  transform: translateX(1px);
+}
+
+.sidebar-item.active {
+  background: radial-gradient(circle at top left, rgba(14, 165, 233, 0.3), rgba(37, 99, 235, 0.4));
+  border-color: rgba(59, 130, 246, 0.9);
+  color: #f9fafb;
+}
+
+.sidebar-item.active .sidebar-dot {
+  background: #22c55e;
+}
+
+/* SIDEBAR BACKDROP (MOBILE) */
+
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease-out;
+  z-index: 40;
+}
+
+/* CONTENT AREA */
+
+.app-content {
+  flex: 1;
+  padding: 1rem 1.4rem 1.4rem 1.4rem;
+  min-width: 0;
+}
+
+/* TABS ROW TWEAKS (so they fit new layout better) */
+.tabs {
+  margin-bottom: 14px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.tab-button {
+  font-size: 0.85rem;
+}
+
+/* RESPONSIVE: on smaller screens, sidebar slides in */
+
+@media (max-width: 900px) {
+  .sidebar {
+    position: fixed;
+    top: 56px;
+    left: 0;
+    bottom: 0;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease-out;
+  }
+
+  body.sidebar-open .sidebar {
+    transform: translateX(0);
+  }
+
+  body.sidebar-open .sidebar-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .app-content {
+    padding: 0.9rem 0.8rem 1.2rem 0.8rem;
+  }
+
+  .header-right {
+    gap: 0.3rem;
+  }
+
+  .header-date-label {
+    display: none; /* hide label text on tiny screens */
+  }
 }
