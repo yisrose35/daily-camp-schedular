@@ -1340,3 +1340,19 @@ body.sidebar-open .sidebar-backdrop {
   color: #6b7280;
   font-style: italic;
 }
+.bunk-dump-zone {
+  margin-top: 15px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px dashed #f87171;
+  background: #fef2f2;
+  font-size: 0.85rem;
+  color: #b91c1c;
+  text-align: center;
+}
+
+.bunk-dump-zone.active {
+  border-style: solid;
+  background: #fee2e2;
+}
+
