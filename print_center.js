@@ -5,8 +5,9 @@
 // Features:
 // - Print Whole Schedule (All Divisions)
 // - Print Selected Divisions (Multi-select)
-// - Print Individual Bunk
-// - Print Location (Field)
+// - Print Selected Bunks (Multi-select) - UPDATED
+// - Print Selected Locations (Multi-select) - UPDATED
+// - Shows full League Matchups on both Bunk and Field schedules
 // =================================================================
 
 (function() {
@@ -19,7 +20,7 @@ function initPrintCenter() {
     container.innerHTML = `
         <div class="print-dashboard">
             <h1 style="color:#1a5fb4;">🖨️ Print Center</h1>
-            <p class="no-print">Generate paper-friendly schedules for handouts or posting.</p>
+            <p class="no-print">Select the items you want to print. You can select multiple Bunks or Fields at once.</p>
 
             <div class="print-cards no-print">
                 
@@ -34,28 +35,52 @@ function initPrintCenter() {
                     <hr style="border-top:1px solid #ddd; margin:10px 0;">
                     
                     <label style="font-weight:bold; display:block; margin-bottom:5px;">Or Select Specific Divisions:</label>
-                    <div id="print-div-list" style="max-height:150px; overflow-y:auto; border:1px solid #ccc; padding:10px; background:white; margin-bottom:10px;">
-                        </div>
+                    <div id="print-div-list" class="print-list-box"></div>
                     <button onclick="window.printSelectedDivisions()">Print Selected Divisions</button>
                 </div>
 
                 <div class="print-card">
-                    <h3>👤 Individual Bunk</h3>
-                    <p>Print a list view for a single bunk.</p>
-                    <select id="print-bunk-select" style="width:100%; padding:8px; margin-bottom:10px;"></select>
-                    <button onclick="window.printBunkSchedule()">Generate & Print</button>
+                    <h3>👤 Individual Bunks</h3>
+                    <p>Print list views for specific bunks.</p>
+                    <div id="print-bunk-list" class="print-list-box"></div>
+                    <button onclick="window.printSelectedBunks()">Print Selected Bunks</button>
                 </div>
 
                 <div class="print-card">
-                    <h3>📍 Location / Field</h3>
-                    <p>Print a schedule for a specific field.</p>
-                    <select id="print-loc-select" style="width:100%; padding:8px; margin-bottom:10px;"></select>
-                    <button onclick="window.printLocationSchedule()">Generate & Print</button>
+                    <h3>📍 Locations / Fields</h3>
+                    <p>Print schedules for specific fields.</p>
+                    <div id="print-loc-list" class="print-list-box"></div>
+                    <button onclick="window.printSelectedLocations()">Print Selected Locations</button>
                 </div>
             </div>
 
             <div id="printable-area"></div>
         </div>
+        
+        <style>
+            .print-list-box {
+                max-height: 200px;
+                overflow-y: auto;
+                border: 1px solid #ccc;
+                padding: 10px;
+                background: white;
+                margin-bottom: 10px;
+                border-radius: 4px;
+            }
+            .print-list-group {
+                font-weight: bold;
+                margin-top: 5px;
+                margin-bottom: 3px;
+                color: #555;
+                background: #eee;
+                padding: 2px 5px;
+            }
+            .print-list-item {
+                display: block;
+                margin-left: 5px;
+                margin-bottom: 2px;
+            }
+        </style>
     `;
 
     populateSelectors();
@@ -63,8 +88,8 @@ function initPrintCenter() {
 
 function populateSelectors() {
     const divList = document.getElementById("print-div-list");
-    const bunkSel = document.getElementById("print-bunk-select");
-    const locSel = document.getElementById("print-loc-select");
+    const bunkList = document.getElementById("print-bunk-list");
+    const locList = document.getElementById("print-loc-list");
     
     const app1 = window.loadGlobalSettings?.().app1 || {};
     const divisions = app1.divisions || {};
@@ -75,38 +100,26 @@ function populateSelectors() {
     // 1. Divisions Checkboxes
     divList.innerHTML = "";
     availableDivisions.forEach(divName => {
-        const label = document.createElement("label");
-        label.style.display = "block";
-        label.style.marginBottom = "4px";
-        label.innerHTML = `<input type="checkbox" value="${divName}"> ${divName}`;
-        divList.appendChild(label);
+        divList.innerHTML += `<label class="print-list-item"><input type="checkbox" value="${divName}"> ${divName}</label>`;
     });
 
-    // 2. Bunks Dropdown
-    bunkSel.innerHTML = '<option value="">-- Select Bunk --</option>';
+    // 2. Bunks Checkboxes (Grouped by Division)
+    bunkList.innerHTML = "";
     availableDivisions.forEach(divName => {
         const bunks = (divisions[divName].bunks || []).sort();
         if (bunks.length > 0) {
-            const optgroup = document.createElement("optgroup");
-            optgroup.label = divName;
+            bunkList.innerHTML += `<div class="print-list-group">${divName}</div>`;
             bunks.forEach(b => {
-                const opt = document.createElement("option");
-                opt.value = b;
-                opt.textContent = b;
-                optgroup.appendChild(opt);
+                bunkList.innerHTML += `<label class="print-list-item"><input type="checkbox" value="${b}"> ${b}</label>`;
             });
-            bunkSel.appendChild(optgroup);
         }
     });
 
-    // 3. Locations Dropdown
-    locSel.innerHTML = '<option value="">-- Select Location --</option>';
+    // 3. Locations Checkboxes
+    locList.innerHTML = "";
     const allLocs = [...fields.map(f=>f.name), ...specials.map(s=>s.name)].sort();
     allLocs.forEach(loc => {
-        const opt = document.createElement("option");
-        opt.value = loc;
-        opt.textContent = loc;
-        locSel.appendChild(opt);
+        locList.innerHTML += `<label class="print-list-item"><input type="checkbox" value="${loc}"> ${loc}</label>`;
     });
 }
 
@@ -120,6 +133,9 @@ function getUnifiedTimes() {
     return window.unifiedTimes || [];
 }
 
+// --- GENERATORS ---
+
+// 1. Division Grid HTML
 function generateDivisionHTML(divName) {
     const daily = getDailyData();
     const times = getUnifiedTimes();
@@ -156,9 +172,12 @@ function generateDivisionHTML(divName) {
                     label = "↓";
                     cssClass = "continuation";
                 } else {
-                    // Format Label
                     if (entry._h2h) {
-                        label = entry.sport || "League Game";
+                        // For grid, keep it short, but maybe show sport
+                        label = entry.sport ? entry.sport.split('(')[1]?.split(')')[0] || "League" : "League";
+                        // Or if entry.sport has "1 vs 2", that's too long for grid.
+                        // Let's try to just show the Sport Name if possible
+                        if (entry._activity) label = entry._activity + " (League)";
                         cssClass = "league-cell";
                     } else if (entry._fixed) {
                         label = (typeof entry.field === 'object') ? entry.field.name : entry.field;
@@ -173,7 +192,109 @@ function generateDivisionHTML(divName) {
         html += `</tr>`;
     });
 
-    html += `</tbody></table></div><div class="page-break"></div>`;
+    html += `</tbody></table></div>`;
+    return html;
+}
+
+// 2. Individual Bunk HTML
+function generateBunkHTML(bunk) {
+    const daily = getDailyData();
+    const schedule = daily.scheduleAssignments?.[bunk] || [];
+    const times = getUnifiedTimes();
+
+    let html = `
+        <div class="print-page portrait">
+            <div class="print-header">
+                <h2>👤 Schedule: ${bunk}</h2>
+                <p>Date: ${window.currentScheduleDate}</p>
+            </div>
+            <table class="print-table">
+                <thead><tr><th style="width:120px;">Time</th><th>Activity / Location</th></tr></thead>
+                <tbody>
+    `;
+
+    times.forEach((t, i) => {
+        const entry = schedule[i];
+        if (!entry || entry.continuation) return; 
+
+        let label = (typeof entry.field === 'object') ? entry.field.name : entry.field;
+        
+        // SHOW FULL LEAGUE MATCHUP
+        if (entry._h2h && entry.sport) {
+            label = `<strong>${entry.sport}</strong>`;
+        }
+
+        html += `<tr>
+            <td class="time-col"><strong>${t.label}</strong></td>
+            <td>${label}</td>
+        </tr>`;
+    });
+
+    html += `</tbody></table></div>`;
+    return html;
+}
+
+// 3. Location HTML
+function generateLocationHTML(loc) {
+    const daily = getDailyData();
+    const times = getUnifiedTimes();
+    const assignments = daily.scheduleAssignments || {};
+
+    let html = `
+        <div class="print-page portrait">
+            <div class="print-header">
+                <h2>📍 Schedule: ${loc}</h2>
+                <p>Date: ${window.currentScheduleDate}</p>
+            </div>
+            <table class="print-table">
+                <thead><tr><th style="width:120px;">Time</th><th>Event / Bunks</th></tr></thead>
+                <tbody>
+    `;
+
+    times.forEach((t, i) => {
+        const bunksHere = [];
+        let leagueLabel = null;
+
+        Object.keys(assignments).forEach(b => {
+            const entry = assignments[b][i];
+            if (entry) {
+                const fName = (typeof entry.field === 'object') ? entry.field.name : entry.field;
+                if (fName === loc) {
+                    if(!bunksHere.includes(b)) bunksHere.push(b);
+                    
+                    // CHECK FOR LEAGUE MATCHUP LABEL
+                    if (entry._h2h && entry.sport && !leagueLabel) {
+                        // Only grab the matchup part "Team A vs Team B (Sport)"
+                        // The label usually comes as "A vs B (Sport) @ Field"
+                        // We want to strip the "@ Field" part since we are ON the field page.
+                        let matchStr = entry.sport;
+                        if(matchStr.includes('@')) matchStr = matchStr.split('@')[0].trim();
+                        leagueLabel = matchStr;
+                    }
+                }
+            }
+        });
+
+        let content = "";
+        let style = "";
+
+        if (leagueLabel) {
+            // It's a league game, show the matchup!
+            content = `<strong>${leagueLabel}</strong> <br><span style="font-size:0.9em; color:#666;">(${bunksHere.join(", ")})</span>`;
+        } else if (bunksHere.length > 0) {
+            content = bunksHere.join(", ");
+        } else {
+            content = "-- Free --";
+            style = "color:#999; font-style:italic;";
+        }
+
+        html += `<tr>
+            <td class="time-col"><strong>${t.label}</strong></td>
+            <td style="${style}">${content}</td>
+        </tr>`;
+    });
+
+    html += `</tbody></table></div>`;
     return html;
 }
 
@@ -186,9 +307,7 @@ window.printAllDivisions = function() {
     if (allDivs.length === 0) return alert("No divisions found.");
     
     let fullHtml = "";
-    allDivs.forEach(div => {
-        fullHtml += generateDivisionHTML(div);
-    });
+    allDivs.forEach(div => { fullHtml += generateDivisionHTML(div); });
     triggerPrint(fullHtml);
 };
 
@@ -199,97 +318,38 @@ window.printSelectedDivisions = function() {
     if (selected.length === 0) return alert("Please select at least one division.");
 
     let fullHtml = "";
-    selected.forEach(div => {
-        fullHtml += generateDivisionHTML(div);
-    });
+    selected.forEach(div => { fullHtml += generateDivisionHTML(div); });
     triggerPrint(fullHtml);
 };
 
-window.printBunkSchedule = function() {
-    const bunk = document.getElementById("print-bunk-select").value;
-    if (!bunk) return alert("Please select a bunk.");
-    
-    const daily = getDailyData();
-    const schedule = daily.scheduleAssignments?.[bunk] || [];
-    const times = getUnifiedTimes();
+// NEW: Print multiple bunks
+window.printSelectedBunks = function() {
+    const checkboxes = document.querySelectorAll("#print-bunk-list input:checked");
+    const selected = Array.from(checkboxes).map(cb => cb.value);
 
-    let html = `
-        <div class="print-page portrait">
-            <div class="print-header">
-                <h2>👤 Schedule: ${bunk}</h2>
-                <p>Date: ${window.currentScheduleDate}</p>
-            </div>
-            <table class="print-table">
-                <thead><tr><th style="width:100px;">Time</th><th>Activity</th></tr></thead>
-                <tbody>
-    `;
+    if (selected.length === 0) return alert("Please select at least one bunk.");
 
-    times.forEach((t, i) => {
-        const entry = schedule[i];
-        if (!entry || entry.continuation) return; 
-
-        let label = (typeof entry.field === 'object') ? entry.field.name : entry.field;
-        if (entry._h2h && entry.sport) label = entry.sport;
-
-        html += `<tr>
-            <td class="time-col"><strong>${t.label}</strong></td>
-            <td>${label}</td>
-        </tr>`;
-    });
-
-    html += `</tbody></table></div>`;
-    triggerPrint(html);
+    let fullHtml = "";
+    selected.forEach(bunk => { fullHtml += generateBunkHTML(bunk); });
+    triggerPrint(fullHtml);
 };
 
-window.printLocationSchedule = function() {
-    const loc = document.getElementById("print-loc-select").value;
-    if (!loc) return alert("Please select a location.");
+// NEW: Print multiple locations
+window.printSelectedLocations = function() {
+    const checkboxes = document.querySelectorAll("#print-loc-list input:checked");
+    const selected = Array.from(checkboxes).map(cb => cb.value);
 
-    const daily = getDailyData();
-    const times = getUnifiedTimes();
-    const assignments = daily.scheduleAssignments || {};
+    if (selected.length === 0) return alert("Please select at least one location.");
 
-    let html = `
-        <div class="print-page portrait">
-            <div class="print-header">
-                <h2>📍 Schedule: ${loc}</h2>
-                <p>Date: ${window.currentScheduleDate}</p>
-            </div>
-            <table class="print-table">
-                <thead><tr><th style="width:100px;">Time</th><th>Bunks / Activity</th></tr></thead>
-                <tbody>
-    `;
-
-    times.forEach((t, i) => {
-        const bunksHere = [];
-        Object.keys(assignments).forEach(b => {
-            const entry = assignments[b][i];
-            if (entry) {
-                const fName = (typeof entry.field === 'object') ? entry.field.name : entry.field;
-                if (fName === loc) {
-                    if(!bunksHere.includes(b)) bunksHere.push(b);
-                }
-            }
-        });
-
-        const content = bunksHere.length > 0 ? bunksHere.join(", ") : "-- Free --";
-        const style = bunksHere.length > 0 ? "" : "color:#999; font-style:italic;";
-
-        html += `<tr>
-            <td class="time-col"><strong>${t.label}</strong></td>
-            <td style="${style}">${content}</td>
-        </tr>`;
-    });
-
-    html += `</tbody></table></div>`;
-    triggerPrint(html);
+    let fullHtml = "";
+    selected.forEach(loc => { fullHtml += generateLocationHTML(loc); });
+    triggerPrint(fullHtml);
 };
 
 function triggerPrint(content) {
     const area = document.getElementById("printable-area");
     area.innerHTML = content;
     window.print();
-    // setTimeout(() => area.innerHTML = "", 1000); // Optional cleanup
 }
 
 window.initPrintCenter = initPrintCenter;
