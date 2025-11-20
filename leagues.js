@@ -1,10 +1,10 @@
 // ===================================================================
 // leagues.js
 //
-// FEATURES:
-// - Split View Layout.
-// - Auto-Saves settings/scores.
-// - Robust "New Game" entry with Schedule Import.
+// UPDATED:
+// - Fix: Import skips 'continuation' slots (prevents duplicates).
+// - UI: Game History is now collapsible.
+// - UI: Score inputs are text-based (no spinner arrows).
 // ===================================================================
 
 (function () {
@@ -22,6 +22,12 @@
 
     let listEl = null;
     let detailPaneEl = null;
+
+    function getPlaceSuffix(n) {
+        const s = ["th", "st", "nd", "rd"];
+        const v = n % 100;
+        return (s[(v - 20) % 10] || s[v] || s[0]);
+    }
 
     function loadRoundState() {
         try {
@@ -108,6 +114,9 @@
                 .detail-pane { border: 1px solid #ccc; border-radius: 8px; padding: 20px; background: #fdfdfd; min-height: 400px; }
                 .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
                 .chip { padding: 4px 8px; border-radius: 12px; border: 1px solid #ccc; cursor: pointer; }
+                .staging-row { transition: background 0.2s; }
+                .staging-row:hover { background: #f9f9f9; }
+                .time-badge { font-size: 0.8em; background: #e2e6ea; padding: 2px 6px; border-radius: 4px; color: #555; margin-right: 10px; min-width: 65px; text-align: center; display: inline-block; }
             </style>
         `;
 
@@ -427,6 +436,9 @@
                 <button id="btn-add-manual-row" style="background:#6c757d; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer;">
                     + Add Manual Matchup
                 </button>
+                <button id="btn-clear-list" style="background:#d40000; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer;">
+                    Clear List
+                </button>
             </div>
             <div id="new-game-rows-container" style="background:white; border:1px solid #ccc; padding:10px; border-radius:4px; min-height:50px; margin-bottom:10px;">
                 <p class="muted" id="new-game-placeholder" style="text-align:center; margin:0; padding:10px;">No matches added yet.</p>
@@ -442,8 +454,8 @@
         const rowsContainer = newGameSection.querySelector("#new-game-rows-container");
         const placeholder = newGameSection.querySelector("#new-game-placeholder");
         const commitBtn = newGameSection.querySelector("#btn-commit-new-game");
+        const clearBtn = newGameSection.querySelector("#btn-clear-list");
 
-        // --- NEW GAME LOGIC ---
         const createTeamSelect = (teams, selected) => {
             const s = document.createElement("select");
             s.style.width = "120px";
@@ -452,7 +464,7 @@
             return s;
         };
 
-        const addStagingRow = (teamA = "", teamB = "", scoreA = 0, scoreB = 0) => {
+        const addStagingRow = (teamA = "", teamB = "", scoreA = 0, scoreB = 0, timeLabel = "") => {
             if(placeholder) placeholder.style.display = "none";
             commitBtn.style.display = "inline-block";
 
@@ -465,10 +477,20 @@
             row.style.padding = "5px";
             row.style.borderBottom = "1px dashed #eee";
 
+            const timeHTML = timeLabel 
+                ? `<span class="time-badge">${timeLabel}</span>` 
+                : `<span class="time-badge" style="background:transparent;"></span>`;
+
             const selA = createTeamSelect(league.teams, teamA);
-            const inpA = document.createElement("input"); inpA.type = "number"; inpA.value = scoreA; inpA.style.width = "50px";
+            const inpA = document.createElement("input"); 
+            // NO ARROWS: type="text" + inputmode="numeric"
+            inpA.type = "text"; inpA.inputMode = "numeric"; inpA.value = scoreA; inpA.style.width = "50px";
+            
             const vs = document.createElement("span"); vs.textContent = "vs";
-            const inpB = document.createElement("input"); inpB.type = "number"; inpB.value = scoreB; inpB.style.width = "50px";
+            
+            const inpB = document.createElement("input"); 
+            inpB.type = "text"; inpB.inputMode = "numeric"; inpB.value = scoreB; inpB.style.width = "50px";
+            
             const selB = createTeamSelect(league.teams, teamB);
             
             const remBtn = document.createElement("button");
@@ -484,32 +506,47 @@
                     commitBtn.style.display = "none";
                 }
             };
+            
+            row.innerHTML = timeHTML;
             row.append(selA, inpA, vs, inpB, selB, remBtn);
             rowsContainer.appendChild(row);
         };
 
         newGameSection.querySelector("#btn-add-manual-row").onclick = () => addStagingRow();
+        clearBtn.onclick = () => {
+            rowsContainer.innerHTML = '';
+            rowsContainer.appendChild(placeholder);
+            placeholder.style.display = "block";
+            commitBtn.style.display = "none";
+        };
 
         newGameSection.querySelector("#btn-import-schedule").onclick = () => {
             const daily = window.loadCurrentDailyData?.() || {};
             const assignments = daily.scheduleAssignments || {};
+            const times = window.unifiedTimes || [];
             const foundPairs = new Set();
             let count = 0;
 
-            Object.values(assignments).forEach(slots => {
-                if(!slots) return;
-                slots.forEach(entry => {
-                    if(entry && entry._h2h) {
+            Object.keys(assignments).forEach(bunkName => {
+                const schedule = assignments[bunkName];
+                if(!schedule) return;
+
+                schedule.forEach((entry, slotIndex) => {
+                    // IMPORTANT FIX: SKIP CONTINUATIONS to avoid duplicate rows
+                    if(entry && entry._h2h && !entry.continuation) {
                         const matchStr = entry.sport || "";
                         const m = matchStr.match(/^(.*?) vs (.*?) \(/);
                         if(m) {
                             const t1 = m[1].trim();
                             const t2 = m[2].trim();
+                            
                             if(league.teams.includes(t1) && league.teams.includes(t2)) {
-                                const key = [t1,t2].sort().join("|||");
+                                const timeStr = times[slotIndex]?.label || "Unknown Time";
+                                const key = [t1, t2].sort().join("|||") + "::" + timeStr;
+                                
                                 if(!foundPairs.has(key)) {
                                     foundPairs.add(key);
-                                    addStagingRow(t1, t2);
+                                    addStagingRow(t1, t2, 0, 0, timeStr);
                                     count++;
                                 }
                             }
@@ -551,15 +588,26 @@
             }
         };
 
-        // --- EXISTING GAMES ---
-        const historyHeader = document.createElement("h4");
-        historyHeader.textContent = "History";
-        wrapper.appendChild(historyHeader);
+        // --- EXISTING GAMES (COLLAPSIBLE) ---
+        const historyDetails = document.createElement("details");
+        historyDetails.style.marginTop = "20px";
+        historyDetails.style.border = "1px solid #ccc";
+        historyDetails.style.borderRadius = "5px";
+        historyDetails.style.padding = "5px";
+        
+        const summary = document.createElement("summary");
+        summary.textContent = "View Game History";
+        summary.style.fontWeight = "bold";
+        summary.style.padding = "10px";
+        summary.style.cursor = "pointer";
+        historyDetails.appendChild(summary);
+        
+        const historyContent = document.createElement("div");
+        historyContent.style.padding = "10px";
+        historyDetails.appendChild(historyContent);
+        wrapper.appendChild(historyDetails);
 
         (league.games || []).slice().reverse().forEach((g, gIdx) => {
-            // Note: We reversed for display, but need real index for saving
-            const realIdx = (league.games.length - 1) - gIdx;
-            
             const gDiv = document.createElement("div");
             gDiv.style.border = "1px solid #eee";
             gDiv.style.marginBottom = "10px";
@@ -573,8 +621,15 @@
                 row.style.gap = "5px";
                 
                 const tA = document.createElement("span"); tA.textContent = m.teamA; tA.style.flex = "1"; tA.style.textAlign = "right";
-                const inA = document.createElement("input"); inA.type = "number"; inA.value = m.scoreA; inA.style.width = "40px";
-                const inB = document.createElement("input"); inB.type = "number"; inB.value = m.scoreB; inB.style.width = "40px";
+                
+                const inA = document.createElement("input"); 
+                inA.type = "text"; inA.inputMode = "numeric"; // No Arrows
+                inA.value = m.scoreA; inA.style.width = "40px";
+                
+                const inB = document.createElement("input"); 
+                inB.type = "text"; inB.inputMode = "numeric"; // No Arrows
+                inB.value = m.scoreB; inB.style.width = "40px";
+                
                 const tB = document.createElement("span"); tB.textContent = m.teamB; tB.style.flex = "1";
 
                 const doSave = () => {
@@ -591,7 +646,7 @@
                 row.append(tA, inA, document.createTextNode("-"), inB, tB);
                 gDiv.appendChild(row);
             });
-            wrapper.appendChild(gDiv);
+            historyContent.appendChild(gDiv);
         });
     }
 
