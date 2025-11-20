@@ -2,9 +2,7 @@
 // leagues.js
 //
 // UPDATED:
-// - Added Game Results Tracking (Scores, W/L/T).
-// - Added "Import from Schedule" to auto-fill matchups.
-// - Standings are now calculated dynamically from game history.
+// - Added "Save All Changes" button to the main dashboard.
 // ===================================================================
 
 (function () {
@@ -49,11 +47,18 @@
                 <h1 style="color:#1a5fb4;">League Manager</h1>
                 <p style="color:#444;">Create and manage leagues for the scheduler.</p>
 
-                <button id="new-league-btn"
-                    style="padding:10px 20px; background:#1a5fb4; color:white;
-                           border:none; border-radius:6px; cursor:pointer;">
-                    + Create New League
-                </button>
+                <div style="margin-bottom: 20px;">
+                    <button id="new-league-btn"
+                        style="padding:10px 20px; background:#1a5fb4; color:white;
+                               border:none; border-radius:6px; cursor:pointer; margin-right: 10px;">
+                        + Create New League
+                    </button>
+                    <button id="save-leagues-btn"
+                        style="padding:10px 20px; background:#28a745; color:white;
+                               border:none; border-radius:6px; cursor:pointer;">
+                        Save All Changes
+                    </button>
+                </div>
 
                 <div id="league-list"
                     style="margin-top:20px; display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:15px;">
@@ -67,6 +72,13 @@
         `;
 
         document.getElementById("new-league-btn").onclick = () => createNewLeague();
+        
+        // --- NEW SAVE BUTTON LISTENER ---
+        document.getElementById("save-leagues-btn").onclick = () => {
+            saveLeaguesData();
+            alert("All league data saved successfully!");
+        };
+
         renderLeagueList();
     }
 
@@ -113,7 +125,7 @@
             sports: [],
             divisions: [],
             standings: {}, 
-            games: [], // --- NEW: Game History
+            games: [], 
             enabled: true
         };
 
@@ -247,7 +259,7 @@
                 standingsBtn.textContent = 'Manage Standings / Games';
             } else {
                 standingsUI.innerHTML = ''; 
-                standingsUI.appendChild(renderGameResultsUI(name)); // --- UPDATED CALL
+                standingsUI.appendChild(renderGameResultsUI(name)); 
                 standingsUI.style.display = 'block';
                 standingsBtn.textContent = 'Close Standings';
             }
@@ -319,14 +331,13 @@
     }
 
     // ---------------------------------------------------------------
-    // GAME RESULTS UI & LOGIC (NEW)
+    // GAME RESULTS UI & LOGIC
     // ---------------------------------------------------------------
     
     function renderGameResultsUI(leagueName) {
         const league = leaguesByName[leagueName];
         const container = document.createElement("div");
 
-        // --- TABS: Standings vs Game Entry ---
         const tabNav = document.createElement("div");
         tabNav.style.marginBottom = "15px";
         tabNav.innerHTML = `
@@ -342,11 +353,10 @@
         container.appendChild(standingsDiv);
         container.appendChild(gamesDiv);
 
-        // Tab Switching Logic
         tabNav.querySelector("#tab-standings").onclick = () => {
             standingsDiv.style.display = "block";
             gamesDiv.style.display = "none";
-            renderStandingsTable(league, standingsDiv); // Refresh
+            renderStandingsTable(league, standingsDiv); 
         };
         tabNav.querySelector("#tab-games").onclick = () => {
             standingsDiv.style.display = "none";
@@ -354,13 +364,11 @@
             renderGameEntryUI(league, gamesDiv);
         };
 
-        // Initial Render
         renderStandingsTable(league, standingsDiv);
 
         return container;
     }
 
-    // --- Sub-component: Standings Table ---
     function renderStandingsTable(league, container) {
         container.innerHTML = "";
         if (!league.teams || league.teams.length === 0) {
@@ -368,17 +376,13 @@
             return;
         }
 
-        // Re-calculate standings from scratch before display
         recalcStandings(league); 
 
         const sortedTeams = [...league.teams].sort((a, b) => {
             const sA = league.standings[a] || {w:0, l:0, t:0};
             const sB = league.standings[b] || {w:0, l:0, t:0};
             
-            // 1. Wins
             if (sA.w !== sB.w) return sB.w - sA.w;
-            // 2. H2H (Simplified: just check direct wins in history)
-            // (For simplicity here, sticking to W/L/T sort, but H2H can be added to recalcStandings)
             if (sA.l !== sB.l) return sA.l - sB.l;
             if (sA.t !== sB.t) return sB.t - sA.t;
             return a.localeCompare(b);
@@ -404,11 +408,9 @@
         container.innerHTML = html;
     }
 
-    // --- Sub-component: Game Entry ---
     function renderGameEntryUI(league, container) {
         container.innerHTML = "";
 
-        // 1. Game Selection Dropdown
         const controls = document.createElement("div");
         controls.style.marginBottom = "15px";
         controls.style.display = "flex";
@@ -425,7 +427,6 @@
         
         controls.appendChild(select);
 
-        // "Import" Button (Only visible for New Game)
         const importBtn = document.createElement("button");
         importBtn.textContent = "Import from Today's Schedule";
         importBtn.style.padding = "6px 12px";
@@ -434,19 +435,16 @@
         controls.appendChild(importBtn);
         container.appendChild(controls);
 
-        // Container for the matchups list
         const matchContainer = document.createElement("div");
         container.appendChild(matchContainer);
 
-        // Save Button
         const saveBtn = document.createElement("button");
         saveBtn.textContent = "Save Game Results";
-        saveBtn.className = "update-standings-btn"; // Reuse green button style
-        saveBtn.style.display = "none"; // Hidden until matches exist
+        saveBtn.className = "update-standings-btn"; 
+        saveBtn.style.display = "none"; 
         saveBtn.onclick = () => saveGameResults(league, select.value, matchContainer);
         container.appendChild(saveBtn);
 
-        // Logic for Dropdown Change
         select.onchange = () => {
             matchContainer.innerHTML = "";
             if (select.value === "new") {
@@ -454,12 +452,11 @@
                 saveBtn.style.display = "none";
             } else {
                 importBtn.style.display = "none";
-                saveBtn.style.display = "inline-block"; // Allow editing past games
+                saveBtn.style.display = "inline-block"; 
                 loadExistingGame(league, select.value, matchContainer);
             }
         };
 
-        // Helper: Load Existing Game Data
         function loadExistingGame(league, gameIdx, target) {
             const game = league.games[gameIdx];
             if (!game) return;
@@ -469,10 +466,9 @@
             });
         }
 
-        // Helper: Add a single match row to the UI
         function addMatchRow(target, teamA, teamB, scoreA = "", scoreB = "") {
             const row = document.createElement("div");
-            row.className = "match-row"; // We can add css for this later
+            row.className = "match-row"; 
             row.style.display = "flex";
             row.style.alignItems = "center";
             row.style.gap = "10px";
@@ -489,7 +485,6 @@
                 <strong style="min-width:100px;">${teamB}</strong>
             `;
             
-            // Store teams in dataset for saving
             row.dataset.teamA = teamA;
             row.dataset.teamB = teamB;
             
@@ -497,34 +492,25 @@
             saveBtn.style.display = "inline-block";
         }
 
-        // Helper: Import Logic
         function importGamesFromSchedule(league, target) {
             target.innerHTML = "";
             const daily = window.loadCurrentDailyData?.() || {};
             const assignments = daily.scheduleAssignments || {};
             
-            // We need to find unique pairings involving this league's teams
-            // The core scheduler saves labels like "TeamA vs TeamB (Sport) @ Field"
-            // We can scan all bunks in this league.
-            
-            const foundMatches = new Set(); // To avoid duplicates
+            const foundMatches = new Set(); 
             
             league.teams.forEach(team => {
                 const schedule = assignments[team] || [];
                 schedule.forEach(entry => {
                     if (entry && entry._h2h) {
-                        // Parse label: "Team A vs Team B ..."
-                        // Regex: ^(.*?) vs (.*?) \(
-                        const label = entry.sport || ""; // "TeamA vs TeamB (Sport)..."
+                        const label = entry.sport || ""; 
                         const match = label.match(/^(.*?) vs (.*?) \(/);
                         
                         if (match) {
                             const t1 = match[1].trim();
                             const t2 = match[2].trim();
                             
-                            // Check if both teams are in this league (safety)
                             if (league.teams.includes(t1) && league.teams.includes(t2)) {
-                                // Create a unique key to dedup (sort names)
                                 const key = [t1, t2].sort().join(" vs ");
                                 if (!foundMatches.has(key)) {
                                     foundMatches.add(key);
@@ -563,7 +549,6 @@
         if (results.length === 0) return;
 
         if (gameId === "new") {
-            // Add new game
             league.games.push({
                 id: Date.now(),
                 date: window.currentScheduleDate,
@@ -571,34 +556,25 @@
                 matches: results
             });
         } else {
-            // Update existing
             league.games[gameId].matches = results;
         }
 
-        recalcStandings(league); // Recalculate everything based on history
+        recalcStandings(league); 
         saveLeaguesData();
         
         alert("Results saved and standings updated!");
         
-        // Refresh UI
         const editor = document.getElementById("league-editor");
         if(editor) {
-            // A bit hacky but simple: reload the editor
-            // We need to find the league name again? 
-            // Actually we are inside editLeague, so we can just re-render
-            // But 'name' var is in closure. 
-            // Let's just click the tab button to refresh standings view
             document.getElementById("tab-standings").click();
         }
     }
 
     function recalcStandings(league) {
-        // Reset
         league.teams.forEach(t => {
             league.standings[t] = { w: 0, l: 0, t: 0 };
         });
 
-        // Replay history
         league.games.forEach(g => {
             g.matches.forEach(m => {
                 if (m.winner === "tie") {
@@ -638,7 +614,7 @@
             l.teams = l.teams || [];
             l.enabled = l.enabled !== false;
             l.standings = l.standings || {};
-            l.games = l.games || []; // --- NEW: Ensure games array exists
+            l.games = l.games || []; 
             (l.teams || []).forEach(team => {
                 l.standings[team] = l.standings[team] || { w: 0, l: 0, t: 0 };
             });
