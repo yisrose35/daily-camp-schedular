@@ -380,13 +380,19 @@
             }
 
             function getDivisionName(wrapper) {
-                const label =
-                    wrapper.querySelector('.divisionLabel')?.textContent?.trim() ||
-                    wrapper.getAttribute('data-division') ||
-                    wrapper.textContent.trim().split(/\s+/)[0] ||
-                    '';
-                return label;
-            }
+    // Look ONLY for the division number label inside the button
+    const labelEl = wrapper.querySelector('.division-number, .divisionLabel, .division-name');
+    if (labelEl) {
+        return labelEl.textContent.trim().replace(/[^A-Za-z0-9]/g, '');
+    }
+
+    // Backup option: use stored dataset
+    const ds = wrapper.dataset.divisionName;
+    if (ds) return ds.trim();
+
+    return ''; // No fallback guesswork — prevents weird names
+}
+
 
             function getDivisionColor(wrapper) {
                 // Try <input class="colorPicker" type="color">
