@@ -2,9 +2,10 @@
 // leagues.js
 //
 // UPDATED:
-// - Default View: Immediately shows Standings & Game Tabs.
-// - UI: Configuration (Divisions/Sports/Teams) is hidden by default.
-// - UI: Added "Edit Configuration" button to toggle settings.
+// - Auto-calculates "League Game X" number based on history.
+// - Handles single game vs double-header days dynamically.
+// - Default View: Standings.
+// - Config hidden behind "Edit Configuration" button.
 // ===================================================================
 
 (function () {
@@ -18,11 +19,6 @@
 
     // --- UI State Persistence ---
     let selectedLeagueName = null;
-    
-    // We don't need activeSubView anymore because Standings is default
-    // but we can track if we are on "Standings" or "Games" tab if desired.
-    // For now, we default to Standings on load.
-
     let listEl = null;
     let detailPaneEl = null;
 
@@ -228,7 +224,7 @@
         const editConfigBtn = document.createElement('button');
         editConfigBtn.textContent = "Edit Configuration";
         editConfigBtn.style.marginRight = "10px";
-        editConfigBtn.style.background = "#6c757d"; // Gray
+        editConfigBtn.style.background = "#6c757d";
         editConfigBtn.style.color = "white";
         editConfigBtn.style.border = "none";
         editConfigBtn.style.padding = "5px 10px";
@@ -238,7 +234,7 @@
         // DELETE BUTTON
         const delBtn = document.createElement('button');
         delBtn.textContent = "Delete";
-        delBtn.style.background = "#c0392b"; // Red
+        delBtn.style.background = "#c0392b";
         delBtn.style.color = "white";
         delBtn.style.border = "none";
         delBtn.style.padding = "5px 10px";
@@ -278,23 +274,22 @@
             if (isHidden) {
                 configContainer.style.display = "block";
                 editConfigBtn.textContent = "Close Configuration";
-                editConfigBtn.style.background = "#343a40"; // Darker
+                editConfigBtn.style.background = "#343a40"; 
             } else {
                 configContainer.style.display = "none";
                 editConfigBtn.textContent = "Edit Configuration";
-                editConfigBtn.style.background = "#6c757d"; // Gray
+                editConfigBtn.style.background = "#6c757d"; 
             }
         };
 
         // --- Main Content (Standings & Games) ---
-        // Rendered immediately, no button required.
         const mainContent = document.createElement("div");
         renderGameResultsUI(league, mainContent);
         detailPaneEl.appendChild(mainContent);
     }
     
     function renderConfigSections(league, container) {
-        container.innerHTML = ""; // Clear existing if any
+        container.innerHTML = ""; 
 
         // Divisions
         const divSec = document.createElement('div');
@@ -312,7 +307,6 @@
                 if (isActive) league.divisions = league.divisions.filter(d => d !== divName);
                 else league.divisions.push(divName);
                 saveLeaguesData();
-                // Re-render just the config sections to update style
                 renderConfigSections(league, container);
             };
             divChips.appendChild(chip);
@@ -361,9 +355,8 @@
                 delete league.standings[team];
                 saveLeaguesData();
                 renderConfigSections(league, container);
-                // We also need to update the standings view if a team is removed
                 const parentPane = document.getElementById("league-detail-pane");
-                if(parentPane) renderDetailPane(); // Full refresh to update standings table
+                if(parentPane) renderDetailPane(); 
             };
             teamList.appendChild(chip);
         });
@@ -380,7 +373,6 @@
                     league.standings[t] = {w:0, l:0, t:0};
                     saveLeaguesData();
                     renderConfigSections(league, container);
-                    // Update standings table immediately
                     const parentPane = document.getElementById("league-detail-pane");
                     if(parentPane) renderDetailPane();
                 }
@@ -444,18 +436,13 @@
             return;
         }
 
-        // Re-calculate standings from scratch before display
         recalcStandings(league);
 
         const sortedTeams = [...league.teams].sort((a, b) => {
             const sA = league.standings[a] || {w:0, l:0, t:0};
             const sB = league.standings[b] || {w:0, l:0, t:0};
-
-            // 1. Wins
             if (sA.w !== sB.w) return sB.w - sA.w;
-            // 2. Losses
             if (sA.l !== sB.l) return sA.l - sB.l;
-            // 3. Ties
             if (sA.t !== sB.t) return sB.t - sA.t;
             return a.localeCompare(b);
         });
@@ -500,7 +487,7 @@
 
         controls.appendChild(select);
 
-        // "Import" Button (Only visible for New Game)
+        // "Import" Button
         const importBtn = document.createElement("button");
         importBtn.textContent = "Import from Today's Schedule";
         importBtn.style.padding = "6px 12px";
@@ -530,11 +517,11 @@
         saveBtn.style.padding = "8px 16px";
         saveBtn.style.borderRadius = "4px";
         saveBtn.style.cursor = "pointer";
-        saveBtn.style.display = "none"; // Hidden until matches exist
+        saveBtn.style.display = "none"; 
         saveBtn.onclick = () => saveGameResults(league, select.value, matchContainer);
         container.appendChild(saveBtn);
 
-        // Logic for Dropdown Change
+        // Dropdown Change
         select.onchange = () => {
             matchContainer.innerHTML = "";
             if (select.value === "new") {
@@ -542,17 +529,16 @@
                 saveBtn.style.display = "none";
             } else {
                 importBtn.style.display = "none";
-                saveBtn.style.display = "inline-block"; // Allow editing past games
+                saveBtn.style.display = "inline-block"; 
                 loadExistingGame(league, select.value, matchContainer, saveBtn);
             }
         };
 
-        // Helper: Load Existing Game Data
+        // Helper: Load Existing
         function loadExistingGame(league, gameIdx, target, saveButton) {
             const game = league.games[gameIdx];
             if (!game) return;
 
-            // Group matches by their label (League Game 1, 2, etc.)
             const groupedMatches = {};
             game.matches.forEach(m => {
                 const label = m.timeLabel || "Matchups";
@@ -560,7 +546,6 @@
                 groupedMatches[label].push(m);
             });
 
-            // Render Groups
             Object.keys(groupedMatches).sort().forEach(label => {
                 const header = document.createElement("div");
                 header.className = "group-header";
@@ -594,7 +579,6 @@
             <strong style="min-width:100px;">${teamB}</strong>
         `;
 
-        // Store teams & label in dataset for saving
         row.dataset.teamA = teamA;
         row.dataset.teamB = teamB;
         if(timeLabel) row.dataset.timeLabel = timeLabel;
@@ -611,7 +595,22 @@
         const foundMatches = new Set(); 
         const saveButton = target.parentElement.querySelector("button[style*='background: rgb(40, 167, 69)']") || target.parentElement.lastElementChild;
 
-        // Storage for grouping by time slot
+        // --- 1. Calculate Global Game Count (based on history) ---
+        let gamesPlayedSoFar = 0;
+        (league.games || []).forEach(g => {
+            // Count unique labels in this game set
+            const uniqueLabels = new Set();
+            if(g.matches && g.matches.length > 0) {
+                g.matches.forEach(m => {
+                    if(m.timeLabel) uniqueLabels.add(m.timeLabel);
+                });
+            }
+            // If unique labels found, add that count. If none (old data), assume 1.
+            if(uniqueLabels.size > 0) gamesPlayedSoFar += uniqueLabels.size;
+            else gamesPlayedSoFar++;
+        });
+
+        // --- 2. Gather Today's Matches ---
         const groupedMatches = {};
 
         league.teams.forEach(team => {
@@ -625,13 +624,11 @@
                         const t1 = match[1].trim();
                         const t2 = match[2].trim();
 
-                        // Check if both teams are in this league
                         if (league.teams.includes(t1) && league.teams.includes(t2)) {
                             const uniqueKey = [t1, t2].sort().join(" vs ") + "::" + slotIndex;
                             
                             if (!foundMatches.has(uniqueKey)) {
                                 foundMatches.add(uniqueKey);
-                                
                                 if(!groupedMatches[slotIndex]) groupedMatches[slotIndex] = [];
                                 groupedMatches[slotIndex].push({ t1, t2 });
                             }
@@ -641,7 +638,6 @@
             });
         });
 
-        // Render Grouped Results
         const sortedSlots = Object.keys(groupedMatches).sort((a,b) => parseInt(a) - parseInt(b));
         
         if (sortedSlots.length === 0) {
@@ -649,16 +645,17 @@
             return;
         }
 
+        // --- 3. Render with Incremental Labels ---
         sortedSlots.forEach((slotIdx, displayIndex) => {
-            const gameLabel = `League Game ${displayIndex + 1}`;
+            // The calculation: Past Games + (Current Index + 1)
+            const gameNumber = gamesPlayedSoFar + displayIndex + 1;
+            const gameLabel = `League Game ${gameNumber}`;
 
-            // Add Header
             const header = document.createElement("div");
             header.className = "group-header";
             header.textContent = gameLabel;
             target.appendChild(header);
 
-            // Add Matches
             groupedMatches[slotIdx].forEach(m => {
                 addMatchRow(target, m.t1, m.t2, "", "", saveButton, gameLabel);
             });
@@ -707,21 +704,14 @@
         recalcStandings(league); 
         saveLeaguesData();
         alert("Results saved and standings updated!");
-        
-        // Refresh everything to show updated standings immediately
-        const selectEl = container.parentElement.querySelector("select");
-        if(selectEl) selectEl.value = "new"; // Reset dropdown to "new" or keep current? 
-        // Actually simpler to just re-render detail pane to show updated standings table
         renderDetailPane(); 
     }
 
     function recalcStandings(league) {
-        // Reset
         league.teams.forEach(t => {
             league.standings[t] = { w: 0, l: 0, t: 0 };
         });
 
-        // Replay history
         league.games.forEach(g => {
             g.matches.forEach(m => {
                 if (m.winner === "tie") {
