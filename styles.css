@@ -1,813 +1,364 @@
+/* =========================================
+   1. VARIABLES & THEME
+   ========================================= */
+:root {
+    /* Modern Professional Palette */
+    --primary: #4f46e5;       /* Indigo-600 - Modern, trustworthy blue */
+    --primary-hover: #4338ca; /* Indigo-700 */
+    --secondary: #64748b;     /* Slate-500 - For secondary text/icons */
+    
+    --success: #10b981;       /* Emerald-500 - Soft, clear green */
+    --danger: #ef4444;        /* Red-500 - Clear but not harsh */
+    --warning: #f59e0b;       /* Amber-500 */
+    
+    --bg-app: #f1f5f9;        /* Slate-100 - The main background */
+    --bg-surface: #ffffff;    /* Pure white for cards */
+    --bg-subtle: #f8fafc;     /* Very light grey for headers/stripes */
+    
+    --border: #e2e8f0;        /* Slate-200 - Subtle borders */
+    --text-main: #0f172a;     /* Slate-900 - High contrast, readable */
+    --text-muted: #64748b;    /* Slate-500 - Secondary info */
+    
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    
+    --radius: 0.5rem;         /* 8px rounded corners */
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
 
-body { font-family: Arial, sans-serif; padding: 20px; }
-.tabs { margin-bottom: 20px; }
-.tab-button { padding: 10px 20px; cursor: pointer; border: 1px solid #ccc; background: #f0f0f0; margin-right: 5px; }
-.tab-button.active { background: #007BFF; color: white; font-weight: bold; }
-.tab-content { display: none; }
+/* =========================================
+   2. GLOBAL RESET & TYPOGRAPHY
+   ========================================= */
+body {
+    font-family: var(--font-sans);
+    background-color: var(--bg-app);
+    color: var(--text-main);
+    margin: 0;
+    padding: 20px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 {
+    font-weight: 700;
+    color: var(--text-main);
+    margin-top: 0;
+}
+
+h1 { font-size: 1.875rem; letter-spacing: -0.025em; }
+h2 { font-size: 1.5rem; letter-spacing: -0.025em; }
+h3 { font-size: 1.25rem; }
+
+p { color: var(--text-muted); margin-bottom: 1rem; }
+
+/* =========================================
+   3. LAYOUT & CARDS
+   ========================================= */
+/* Standard "Card" container for sections */
+.card, .override-section, .detail-pane, .print-card, .help-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.help-card:hover, .print-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+}
+
+/* Flex/Grid Containers */
+.flex-row { display: flex; gap: 1rem; align-items: center; }
+.flex-wrap { flex-wrap: wrap; }
+.grid-cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+
+/* =========================================
+   4. NAVIGATION TABS (The "Pill" Look)
+   ========================================= */
+.tabs, .da-tabs-nav {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    background: var(--bg-surface);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 20px;
+    overflow-x: auto; /* Scroll on mobile */
+    border: 1px solid var(--border);
+}
+
+.tab-button {
+    background: transparent;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: calc(var(--radius) - 2px);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.tab-button:hover {
+    background-color: var(--bg-app);
+    color: var(--primary);
+}
+
+.tab-button.active {
+    background-color: var(--primary);
+    color: white;
+    box-shadow: var(--shadow-sm);
+}
+
+.tab-content { display: none; animation: fadeIn 0.2s ease-out; }
 .tab-content.active { display: block; }
 
-table { border-collapse: collapse; margin-top: 20px; width: 100%; }
-th, td { border: 1px solid black; padding: 8px; text-align: center; min-width: 120px; }
-caption { font-weight: bold; margin: 10px 0; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
-.bunk-button { margin: 2px; padding: 5px 10px; cursor: pointer; border: 1px solid #333; border-radius: 4px; display: inline-block; }
-.selected { outline: 3px solid #90CAF9; }
-#unassignedBunks { margin-top: 10px; }
-.divisionWrapper { display: inline-block; margin: 6px; padding: 6px; border: 1px dashed #ccc; border-radius: 6px; }
-.colorPicker { width: 30px; height: 30px; border: none; cursor: pointer; vertical-align: middle; margin-left: 6px; }
-
-.fieldWrapper { border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 6px; }
-.fieldWrapper.unavailable { opacity: 0.5; }
-.fieldTitle { font-weight: 600; margin-right: 10px; cursor: pointer; }
-
-.activity-button { margin: 2px; padding: 4px 8px; border: 1px solid #333; border-radius: 3px; cursor: pointer; }
-.activity-button.active { background: #007BFF; color: white; }
-
-/* -------------------- FIXED ACTIVITIES LIST ITEM LAYOUT (The fix!) -------------------- */
-.item {
-  /* Use Flexbox for horizontal alignment */
-  display: flex;
-  /* Space content to left (details) and right (controls) */
-  justify-content: space-between;
-  /* Crucial for making the toggle and button line up with the text */
-  align-items: center; 
-  padding: 10px 0;
-  border-bottom: 1px solid #eee;
-}
-#fixedList .item:last-child {
-  border-bottom: none;
-}
-/* -------------------- END LIST ITEM LAYOUT -------------------- */
-
-
-/* -------------------- TOGGLE SWITCH STYLES (The visibility fix!) -------------------- */
-.switch { 
-  position: relative; 
-  display: inline-block; 
-  width: 40px; 
-  height: 20px; 
-  vertical-align: middle; 
-  margin: 0 8px 0 8px; /* Cleaned up spacing */
-}
-.switch input { opacity: 0; width: 0; height: 0; }
-
-.slider { 
-  position: absolute; 
-  cursor: pointer; 
-  top: 0; 
-  left: 0; 
-  right: 0; 
-  bottom: 0;
-  background-color: #ccc; 
-  transition: .4s; 
-  border-radius: 20px; 
-}
-
-/* Knob dimensions: 14px wide/high, with 3px top/bottom/left padding */
-.slider:before { 
-  position: absolute; 
-  content: ""; 
-  height: 14px; 
-  width: 14px; 
-  left: 3px; 
-  bottom: 3px;
-  background-color: white; 
-  transition: .4s; 
-  border-radius: 50%; 
-}
-
-/* 40px container width - 3px left pad - 3px right pad - 14px knob width = 20px travel distance */
-input:checked + .slider { 
-  background-color: #4CAF50; /* Nice activation green */
-}
-input:checked + .slider:before { 
-  transform: translateX(20px); 
-}
-/* -------------------- END TOGGLE SWITCH STYLES -------------------- */
-
-.continuation { opacity: 0.7; font-style: italic; }
-.league-pill { background:#4CAF50; color:#fff; padding:2px 6px; border-radius:12px; }
-.grey-cell { background:#eee; }
-/* Push-box chips */
-.chips { display:flex; flex-wrap:wrap; gap:6px; }
-.chip-toggle {
-  appearance:none;
-  border:1px solid #cbd5e1;
-  border-radius:12px;
-  padding:6px 10px;
-  font:inherit;
-  background:#f8fafc;
-  cursor:pointer;
-  user-select:none;
-  transition:transform .02s ease, background .15s ease, border-color .15s ease;
-}
-.chip-toggle:hover { border-color:#94a3b8; }
-.chip-toggle[aria-pressed="true"] {
-  background:#dbeafe;
-  border-color:#60a5fa;
-}
-.chip-actions { display:flex; gap:8px; margin-top:6px; }
-.chip-ghost {
-  background:#ffffff;
-  border:1px dashed #cbd5e1;
-  border-radius:10px;
-  padding:4px 8px;
-  cursor:pointer;
-}
-/* --- Add to end of styles.css --- */
-
-/* Styles for Daily Overrides Tab */
-.override-section {
-  margin-bottom: 25px;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  padding: 10px 20px;
-}
-
-.override-section h3 {
-  border-bottom: 2px solid #eee;
-  padding-bottom: 8px;
-}
-
-label.override-checkbox {
-  display: block;
-  margin: 8px 0;
-  font-size: 1.1em;
-  cursor: pointer;
-}
-
-label.override-checkbox input {
-  width: 16px;
-  height: 16px;
-  margin-right: 10px;
-  vertical-align: middle;
-}
-
-label.override-checkbox span {
-  vertical-align: middle;
-}
-
-/* ----------------------------------- */
-/* --- NEW: Rotation Report Styles --- */
-/* ----------------------------------- */
-
-.report-title {
-  border-bottom: 2px solid #007BFF;
-  padding-bottom: 10px;
-}
-
-.report-controls {
-  display: flex;
-  gap: 20px;
-  align-items: flex-end;
-  margin-bottom: 20px;
-  padding: 15px;
-  background-color: #f9f9f9;
-  border-radius: 8px;
-}
-.report-controls label {
-  font-weight: 600;
-  font-size: 0.9em;
-  display: block;
-  margin-bottom: 5px;
-}
-.report-select {
-  font-size: 1.05em;
-  padding: 8px 12px;
-  min-width: 220px;
-  border: 1px solid #ccc;
-  border-radius: 5px;
-  background-color: white;
-}
-
-.report-container {
-  margin-top: 20px;
-}
-
-.report-muted, .report-loading {
-  color: #555;
-  font-style: italic;
-  font-size: 1.1em;
-  padding: 20px;
-  text-align: center;
-  background: #fafafa;
-  border-radius: 8px;
-}
-
-/* Card layout for Division Report */
-.report-bunk-header {
-  background-color: #f4f4f4;
-  padding: 12px 15px;
-  margin-top: 25px;
-  margin-bottom: 0;
-  border: 1px solid #ddd;
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-}
-
-.report-bunk-table-wrapper {
-  border: 1px solid #ddd;
-  border-top: none;
-  border-radius: 0 0 8px 8px;
-  margin-bottom: 25px;
-  /* Prevents table from overflowing wrapper */
-  overflow: hidden; 
-}
-.report-bunk-table-wrapper .report-table {
-  margin-top: 0;
-  border: none;
-}
-
-/* Table Styles */
-.report-table {
-  width: 100%;
-  border-collapse: collapse;
-  border: 1px solid #ddd; /* For single-bunk view */
-  border-radius: 8px; /* For single-bunk view */
-}
-.report-table th {
-  background-color: #f0f0f0;
-  text-align: left;
-  padding: 10px 12px;
-  font-size: 0.9em;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  border: 1px solid #ddd;
-}
-.report-table td {
-  padding: 10px 12px;
-  border-bottom: 1px solid #eee;
-  border-left: 1px solid #eee;
-  border-right: 1px solid #eee;
-}
-.report-table tbody tr:hover {
-  background-color: #f9f9f9;
-}
-.report-row-fresh {
-  background-color: #e8f5e9;
-  font-weight: 600;
-}
-.report-row-fresh td {
-  color: #1e4620;
-}
-
-/* ----------------------------------- */
-/* --- NEW: Daily Schedule View Styles --- */
-/* ----------------------------------- */
-
-/* This wrapper allows the tables to sit side-by-side */
-.schedule-view-wrapper {
-  width: 100%;
-  overflow-x: auto; /* Adds horizontal scrollbar if needed */
-  display: flex;
-  flex-direction: row; /* Aligns tables horizontally */
-  align-items: flex-start; /* Aligns tables to the top */
-}
-
-/* This is each individual division's table */
-.schedule-division-table {
-  width: auto; /* Let the table size itself */
-  margin-right: -1px; /* Overlap borders to look like one grid */
-  border-spacing: 0;
-  border-collapse: collapse;
-}
-
-/* Ensure all tables share the same border style */
-.schedule-division-table th,
-.schedule-division-table td {
-    border: 1px solid #999;
-}
-
-/* Remove the extra margin-bottom from the old single-table layout */
-#scheduleTable table {
-  margin-bottom: 0;
-}
-/* --- Add to end of styles.css --- */
-
-/* Styles for Daily Overrides Tab */
-.override-section {
-  margin-bottom: 25px;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  padding: 10px 20px;
-}
-
-.override-section h3 {
-  border-bottom: 2px solid #eee;
-  padding-bottom: 8px;
-}
-
-label.override-checkbox {
-  display: block;
-  margin: 8px 0;
-  font-size: 1.1em;
-  cursor: pointer;
-}
-
-label.override-checkbox input {
-  width: 16px;
-  height: 16px;
-  margin-right: 10px;
-  vertical-align: middle;
-}
-
-label.override-checkbox span {
-  vertical-align: middle;
-}
-
-/* ----------------------------------- */
-/* --- NEW: Rotation Report Styles --- */
-/* ----------------------------------- */
-
-.report-title {
-  border-bottom: 2px solid #007BFF;
-  padding-bottom: 10px;
-}
-
-.report-controls {
-  display: flex;
-  gap: 20px;
-  align-items: flex-end;
-  margin-bottom: 20px;
-  padding: 15px;
-  background-color: #f9f9f9;
-  border-radius: 8px;
-}
-.report-controls label {
-  font-weight: 600;
-  font-size: 0.9em;
-  display: block;
-  margin-bottom: 5px;
-}
-.report-select {
-  font-size: 1.05em;
-  padding: 8px 12px;
-  min-width: 220px;
-  border: 1px solid #ccc;
-  border-radius: 5px;
-  background-color: white;
-}
-
-.report-container {
-  margin-top: 20px;
-}
-
-.report-muted, .report-loading {
-  color: #555;
-  font-style: italic;
-  font-size: 1.1em;
-  padding: 20px;
-  text-align: center;
-  background: #fafafa;
-  border-radius: 8px;
-}
-
-/* Card layout for Division Report */
-.report-bunk-header {
-  background-color: #f4f4f4;
-  padding: 12px 15px;
-  margin-top: 25px;
-  margin-bottom: 0;
-  border: 1px solid #ddd;
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-}
-
-.report-bunk-table-wrapper {
-  border: 1px solid #ddd;
-  border-top: none;
-  border-radius: 0 0 8px 8px;
-  margin-bottom: 25px;
-  /* Prevents table from overflowing wrapper */
-  overflow: hidden; 
-}
-.report-bunk-table-wrapper .report-table {
-  margin-top: 0;
-  border: none;
-}
-
-/* Table Styles */
-.report-table {
-  width: 100%;
-  border-collapse: collapse;
-  border: 1px solid #ddd; /* For single-bunk view */
-  border-radius: 8px; /* For single-bunk view */
-}
-.report-table th {
-  background-color: #f0f0f0;
-  text-align: left;
-  padding: 10px 12px;
-  font-size: 0.9em;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  border: 1px solid #ddd;
-}
-.report-table td {
-  padding: 10px 12px;
-  border-bottom: 1px solid #eee;
-  border-left: 1px solid #eee;
-  border-right: 1px solid #eee;
-}
-.report-table tbody tr:hover {
-  background-color: #f9f9f9;
-}
-.report-row-fresh {
-  background-color: #e8f5e9;
-  font-weight: 600;
-}
-.report-row-fresh td {
-  color: #1e4620;
-}
-
-/* ----------------------------------- */
-/* --- NEW: Daily Schedule View Styles --- */
-/* ----------------------------------- */
-
-/* This wrapper allows the tables to sit side-by-side */
-.schedule-view-wrapper {
-  width: 100%;
-  overflow-x: auto; /* Adds horizontal scrollbar if needed */
-  display: flex;
-  flex-direction: row; /* Aligns tables horizontally */
-  align-items: flex-start; /* Aligns tables to the top */
-}
-
-/* This is each individual division's table */
-.schedule-division-table {
-  width: auto; /* Let the table size itself */
-  margin-right: -1px; /* Overlap borders to look like one grid */
-  border-spacing: 0;
-  border-collapse: collapse;
-}
-
-/* Ensure all tables share the same border style */
-.schedule-division-table th,
-.schedule-division-table td {
-    border: 1px solid #999;
-}
-
-/* Remove the extra margin-bottom from the old single-table layout */
-#scheduleTable table {
-  margin-bottom: 0;
-}
-
-/* ----------------------------------- */
-/* --- NEW: League Standings Styles --- */
-/* ----------------------------------- */
-
-.league-nav {
-  padding: 10px 15px;
-  background: #f1f1f1;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  margin-bottom: 15px;
-}
-.league-nav label {
-  font-weight: 600;
-  margin-right: 8px;
-}
-.league-nav select {
-  font-size: 1.1em;
-  padding: 5px 8px;
-  border-radius: 5px;
-}
-
-.league-content-pane {
-  display: none; /* Hidden by default */
-}
-.league-content-pane.active {
-  display: block; /* Shown by dropdown */
-}
-
-.league-standings-wrapper {
-  margin-bottom: 25px;
-  border: 1px solid #ccc;
-  border-radius: 8px;
-  overflow: hidden;
-}
-.league-standings-wrapper h3 {
-  margin: 0;
-  padding: 12px 15px;
-  background: #f9f9f9;
-  border-bottom: 1px solid #ccc;
-}
-
-.league-standings-grid {
-  width: 100%;
-  border-collapse: collapse;
-}
-.league-standings-grid th,
-.league-standings-grid td {
-  border-bottom: 1px solid #ddd;
-  padding: 10px 12px;
-  text-align: left;
-}
-.league-standings-grid th {
-  background-color: #f0f0f0;
-}
-.league-standings-grid td:first-child {
-  font-weight: 600;
-}
-.league-standings-grid input[type="number"] {
-  width: 60px;
-  padding: 6px 8px;
-  font-size: 1em;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-}
-/* Hide spin buttons on number inputs */
-.league-standings-grid input::-webkit-outer-spin-button,
-.league-standings-grid input::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-.league-standings-grid input[type=number] {
-  -moz-appearance: textfield;
-}
-
-.update-standings-btn {
-  padding: 12px 20px;
-  font-size: 1.1em;
-  font-weight: 600;
-  background: #28a745;
-  color: white;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-  margin-top: 10px;
-}
-.update-standings-btn:hover {
-  background: #218838;
-}
-/* --- ADD THIS NEW BLOCK TO THE END OF YOUR styles.css --- */
-
-/* ----------------------------------- */
-/* --- NEW: Field Availability Grid Styles --- */
-/* ----------------------------------- */
-
-.availability-grid {
-  border-collapse: collapse;
-  margin: 0;
-}
-.availability-grid th,
-.availability-grid td {
-  border: 1px solid #999;
-  padding: 8px;
-  text-align: center;
-  min-width: 100px;
-}
-.availability-grid th {
-  background: #f4f4f4;
-  position: sticky;
-  top: 0;
-}
-.availability-grid td:first-child {
-  font-weight: 600;
-  background: #fdfdfd;
-  text-align: right;
-  min-width: 120px;
-  position: sticky;
-  left: 0;
-  /* Add a border to see it scroll over cells */
-  border-right: 2px solid #ccc;
-}
-.avail-check {
-  font-size: 1.2em;
-  color: #28a745;
-  font-weight: 700;
-}
-.avail-x {
-  font-size: 1.2em;
-  color: #c0392b;
-  font-weight: 700;
-}
-/* ----------------------------------- */
-/* --- NEW: Daily Adjustments Tabs --- */
-/* ----------------------------------- */
-
-/* Use league-nav style for the tab bar */
-.da-tabs-nav {
-  /* This class is already defined, 
-     but we note its use here */
-}
-
-/* Hide tab panes by default */
-.da-tab-pane {
-  display: none;
-}
-
-/* Show the active one */
-.da-tab-pane.active {
-  display: block;
-}
-
-/* --- NEW: Welcome Screen Styles --- */
-#welcome-screen {
-    position: fixed;
-    top: 0;
-    left: 0;
+/* =========================================
+   5. FORMS & INPUTS
+   ========================================= */
+input[type="text"], input[type="date"], input[type="number"], select {
+    padding: 0.6rem 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 0.95rem;
+    color: var(--text-main);
+    background: var(--bg-surface);
+    transition: border-color 0.15s, box-shadow 0.15s;
     width: 100%;
-    height: 100%;
-    background: #ffffff;
-    display: flex;
-    flex-direction: column;
+    box-sizing: border-box;
+}
+
+input:focus, select:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1); /* Primary with opacity */
+}
+
+/* Buttons */
+button, .btn {
+    padding: 0.6rem 1.2rem;
+    border-radius: var(--radius);
+    font-weight: 600;
+    font-size: 0.95rem;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.2s;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    z-index: 1000;
-    text-align: center;
-    padding: 20px;
-    box-sizing: border-box;
+    gap: 0.5rem;
 }
 
-.welcome-logo {
-    width: 150px;
-    height: auto;
-    margin-bottom: 20px;
-}
-
-#welcome-screen h2 {
-    font-size: 2em;
-    color: #333;
-    margin-bottom: 10px;
-}
-
-#welcome-screen p {
-    font-size: 1.1em;
-    color: #555;
-    margin-bottom: 25px;
-}
-
-#camp-name-input {
-    font-size: 1.2em;
-    padding: 12px 15px;
-    border-radius: 8px;
-    border: 1px solid #ccc;
-    width: 100%;
-    max-width: 350px;
-    box-sizing: border-box;
-    text-align: center;
-}
-
-#begin-btn {
-    font-size: 1.2em;
-    font-weight: bold;
-    padding: 12px 30px;
-    border-radius: 8px;
-    border: none;
-    background: #007BFF;
+/* Primary Action Button */
+button.primary, #run-optimizer-btn, #addBunkBtn, #addDivisionBtn, #add-field-btn, #add-special-btn, .update-standings-btn {
+    background-color: var(--primary);
     color: white;
-    cursor: pointer;
-    margin-top: 15px;
-    transition: background-color 0.2s;
+    box-shadow: var(--shadow-sm);
+}
+button.primary:hover, #run-optimizer-btn:hover {
+    background-color: var(--primary-hover);
+    box-shadow: var(--shadow-md);
 }
 
-#begin-btn:hover {
-    background: #0056b3;
+/* Danger Button */
+button.danger, #eraseAllBtn, #eraseTodayBtn, #l-delete-btn, #sl-delete-btn {
+    background-color: #fee2e2;
+    color: var(--danger);
+    border-color: #fecaca;
 }
-/* Add to styles.css */
+button.danger:hover { background-color: var(--danger); color: white; }
 
-/* Availability Grid Colors */
-.avail-check {
-  font-size: 1.4em;
-  color: #2e7d32; /* Strong Green */
-  font-weight: 900;
-  background-color: #e8f5e9; /* Light Green Background */
-}
-.avail-x {
-  font-size: 1.2em;
-  color: #c62828; /* Strong Red */
-  font-weight: 700;
-  background-color: #ffebee; /* Light Red Background */
+/* =========================================
+   6. SCHEDULE GRID (Clean & Modern)
+   ========================================= */
+/* The Scrollable Wrapper */
+.schedule-view-wrapper, #daily-skeleton-grid, #scheduler-grid {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: inset 0 2px 4px 0 rgb(0 0 0 / 0.02);
+    overflow: auto;
 }
 
-/* Bunk Report Styles */
-.report-row-fresh {
-  background-color: #e3f2fd; /* Light Blue highlight for 'Need to do' */
-}
-.report-row-fresh td {
-    color: #0d47a1;
+/* Tables inside the grid */
+table { width: 100%; border-collapse: separate; border-spacing: 0; }
+
+/* Headers */
+th {
+    background: var(--bg-subtle);
+    color: var(--text-muted);
     font-weight: 600;
-}
-.report-table th {
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
     position: sticky;
     top: 0;
-    background: #f1f1f1;
+    z-index: 10;
+}
+
+/* Cells */
+td {
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    padding: 0.5rem;
+    font-size: 0.9rem;
+    vertical-align: middle;
+    background: white;
+    color: var(--text-main);
+}
+
+/* Time Column */
+td:first-child, th:first-child {
+    background: var(--bg-subtle);
+    font-weight: 600;
+    color: var(--text-muted);
+    width: 80px;
+    text-align: center;
+    position: sticky;
+    left: 0;
     z-index: 5;
-}
-/* --- Help Tab Styles --- */
-.help-wrapper {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    padding: 10px;
-    max-width: 1200px;
-    margin: 0 auto;
+    border-right: 2px solid var(--border); /* Stronger divider */
 }
 
-.help-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 20px;
-    margin-top: 20px;
+/* Event "Pills" inside cells (when we switch to divs) */
+.grid-event {
+    border-radius: 4px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    border: none !important; /* Override inline styles */
+    font-size: 0.85rem;
+    font-weight: 600;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    transition: transform 0.1s;
+}
+.grid-event:hover { transform: scale(1.02); z-index: 20 !important; }
+
+/* =========================================
+   7. LISTS & CHIPS (Setup, Fields, Specials)
+   ========================================= */
+.master-list .list-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    transition: border-color 0.2s;
+}
+.master-list .list-item:hover { border-color: var(--primary); }
+.master-list .list-item.selected {
+    border-color: var(--primary);
+    background-color: #eff6ff; /* Light blue tint */
+    box-shadow: 0 0 0 1px var(--primary);
 }
 
-.help-card {
-    background: #fff;
-    border: 1px solid #ddd;
-    border-radius: 8px;
-    padding: 20px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+/* Chip Containers */
+.chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+/* The Chip Itself */
+.bunk-button {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.35rem 0.75rem;
+    border-radius: 9999px; /* Pill shape */
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    color: var(--text-main);
+    transition: all 0.2s;
+    box-shadow: var(--shadow-sm);
+}
+
+.bunk-button:hover { border-color: var(--primary); color: var(--primary); }
+
+.bunk-button.selected {
+    background-color: var(--primary) !important;
+    color: white !important;
+    border-color: var(--primary) !important;
+    box-shadow: var(--shadow-md);
+}
+
+/* =========================================
+   8. TOGGLE SWITCHES (Refined)
+   ========================================= */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: #cbd5e1;
+    transition: .4s;
+    border-radius: 34px;
+}
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 20px; width: 20px;
+    left: 2px; bottom: 2px;
+    background-color: white;
+    transition: .4s;
+    border-radius: 50%;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+input:checked + .slider { background-color: var(--success); }
+input:checked + .slider:before { transform: translateX(20px); }
+
+/* =========================================
+   9. ALERTS & MODALS
+   ========================================= */
+/* Validator Overlay */
+#validator-overlay > div {
+    border-radius: 12px !important;
+    box-shadow: var(--shadow-lg) !important;
+    border: none !important;
+}
+
+/* Report Table Rows */
+.report-row-fresh {
+    background-color: #ecfdf5 !important; /* Light emerald */
+    color: #065f46 !important;
+}
+
+/* Draggable Palette Items */
+.grid-tile-draggable {
+    background: white !important; /* Override inline */
+    border: 1px solid var(--border) !important;
+    box-shadow: var(--shadow-sm);
+    color: var(--text-main);
+    font-weight: 600;
+    border-left: 4px solid var(--primary) !important; /* Color indicator on left */
     transition: transform 0.2s;
 }
+.grid-tile-draggable:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
 
-.help-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-}
-
-.help-card h3 {
-    margin-top: 0;
-    color: #1a5fb4;
-    border-bottom: 1px solid #eee;
-    padding-bottom: 8px;
-}
-
-.help-card.highlight-card {
-    border-left: 5px solid #28a745;
-    background: #f9fff9;
-}
-
-.help-card ul, .help-card ol {
-    padding-left: 20px;
-    line-height: 1.5;
-    color: #444;
-}
-
-.help-card li {
-    margin-bottom: 6px;
-}
-
-.help-footer {
-    margin-top: 30px;
-    background: #e3f2fd;
-    border: 1px solid #90caf9;
-    border-radius: 8px;
-    padding: 20px;
-}
-
-.help-footer h3 {
-    margin-top: 0;
-    color: #0d47a1;
-}
-/* --- PRINT CENTER STYLES --- */
-.print-dashboard { padding: 20px; }
-.print-cards { display: flex; gap: 20px; flex-wrap: wrap; }
-.print-card { 
-    border: 1px solid #ddd; padding: 20px; border-radius: 8px; 
-    background: #f9f9f9; flex: 1; min-width: 250px;
-}
-.print-card h3 { margin-top: 0; color: #1a5fb4; }
-.print-card select { width: 100%; padding: 8px; margin: 10px 0; }
-.print-card button { 
-    width: 100%; padding: 10px; background: #1a5fb4; color: white; 
-    border: none; border-radius: 4px; cursor: pointer; 
-}
-
-/* PRINTABLE AREA (Hidden on screen) */
-#printable-area { display: none; }
-
-/* PRINT MEDIA QUERY (Crucial) */
+/* =========================================
+   10. PRINT STYLES (Preserve logic, clean look)
+   ========================================= */
 @media print {
-    /* Hide everything that isn't the printable area */
-    body * { visibility: hidden; }
-    
-    #printable-area, #printable-area * { 
-        visibility: visible; 
-    }
-
-    /* Position printable area at absolute top */
-    #printable-area {
-        display: block !important;
-        position: absolute;
-        left: 0;
-        top: 0;
-        width: 100%;
-    }
-
-    /* Table Styling for Paper */
-    .print-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 12pt;
-        font-family: Arial, sans-serif;
-    }
-    .print-table th, .print-table td {
-        border: 1px solid #000;
-        padding: 8px;
-        text-align: left;
-    }
-    .print-table th { background: #eee !important; -webkit-print-color-adjust: exact; }
-    
-    /* Landscape hint */
-    .landscape { 
-        width: 100%; 
-    }
+    body { background: white; padding: 0; }
+    .card, .tabs { box-shadow: none; border: none; }
+    /* Ensure background colors print */
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
 }
