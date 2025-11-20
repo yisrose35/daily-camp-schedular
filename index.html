@@ -126,33 +126,37 @@
 
                     <!-- SETUP TAB -->
                     <div id="setup" class="tab-content active">
+                        <div class="setup-grid">
+                            <!-- LEFT: DIVISIONS + MASTER VIEW -->
+                            <div class="setup-col setup-col-left">
+                                <h3>Add Divisions</h3>
+                                <p style="font-size: 0.9em; color: #555;">
+                                    Add divisions, then set the start and end time for each division.
+                                </p>
+                                <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
+                                <button id="addDivisionBtn">Add Division</button>
+                                <label style="margin-left:8px;">
+                                    <input type="checkbox" id="enableColor" checked> Enable Colors
+                                </label>
+                                <div id="divisionButtons" style="margin-top:8px;"></div>
 
-                        <!-- 🚩 DIVISIONS FIRST -->
-                        <h3>Add Divisions</h3>
-                        <p style="font-size: 0.9em; color: #555;">
-                            Add divisions, then set the start and end time for each division.
-                        </p>
-                        <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
-                        <button id="addDivisionBtn">Add Division</button>
-                        <label style="margin-left:8px;"><input type="checkbox" id="enableColor" checked> Enable Colors</label>
-                        <div id="divisionButtons" style="margin-top:8px;"></div>
+                                <hr style="margin: 20px 0;">
 
-                        <hr style="margin: 20px 0;">
+                                <h3>Division ↔ Bunks Master View</h3>
+                                <p style="font-size: 0.9em; color: #555;">
+                                    This shows each division and the bunks currently assigned to it.
+                                </p>
+                                <div id="division-bunk-master" class="master-view"></div>
+                            </div>
 
-                        <!-- 🚩 THEN BUNKS -->
-                        <h3>Add Bunks</h3>
-                        <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
-                        <button id="addBunkBtn">Add Bunk</button>
-                        <div id="unassignedBunks" class="bunk-container"></div>
-
-                        <hr style="margin: 20px 0;">
-
-                        <!-- 🚩 MASTER VIEW -->
-                        <h3>Division ↔ Bunks Master View</h3>
-                        <p style="font-size: 0.9em; color: #555;">
-                            This shows each division and the bunks currently assigned to it.
-                        </p>
-                        <div id="division-bunk-master" class="master-view"></div>
+                            <!-- RIGHT: BUNKS -->
+                            <div class="setup-col setup-col-right">
+                                <h3>Add Bunks</h3>
+                                <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
+                                <button id="addBunkBtn">Add Bunk</button>
+                                <div id="unassignedBunks" class="bunk-container"></div>
+                            </div>
+                        </div>
 
                         <hr style="margin: 20px 0;">
 
@@ -368,7 +372,7 @@
             else if (id === 'updates') window.initUpdatesTab?.();
         }
 
-        // Hamburger + sidebar wiring
+        // Hamburger + sidebar wiring + Master View observer
         (function () {
             'use strict';
             const hamburgerBtn = document.getElementById('hamburgerBtn');
@@ -397,6 +401,18 @@
                         }
                         document.body.classList.remove('sidebar-open');
                     });
+                });
+            }
+
+            // Keep Master View synced whenever divisions/bunks change
+            const divisionButtons = document.getElementById('divisionButtons');
+            if (divisionButtons && 'MutationObserver' in window) {
+                const observer = new MutationObserver(() => {
+                    window.renderDivisionBunkMaster?.();
+                });
+                observer.observe(divisionButtons, {
+                    childList: true,
+                    subtree: true
                 });
             }
 
