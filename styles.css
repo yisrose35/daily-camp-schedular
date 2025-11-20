@@ -47,44 +47,86 @@ body {
     background-color: var(--bg-app);
     color: var(--text-main);
     height: 100vh;
+    width: 100vw;
+    overflow: hidden; /* CRITICAL: Prevents the whole page body from scrolling */
     display: flex;
-    overflow: hidden; /* Prevent full page scroll, scroll content instead */
 }
 
-/* --- Layout Grid (Sidebar + Main) --- */
+/* --- Sidebar Overlay (Backdrop) --- */
+#sidebar-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 25; /* Below sidebar, above everything else */
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+#sidebar-overlay.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* --- Layout Grid (Modified for Off-Canvas Sidebar) --- */
 .app-container {
     display: grid;
-    grid-template-columns: 260px 1fr; /* Sidebar | Content */
+    /* Sidebar is NOT in the grid columns anymore, it overlays */
+    grid-template-columns: 1fr; 
     grid-template-rows: 64px 1fr;     /* Header  | Main */
     grid-template-areas: 
-        "sidebar header"
-        "sidebar main";
-    width: 100vw;
-    height: 100vh;
+        "header"
+        "main";
+    width: 100%;
+    height: 100%;
 }
 
-/* --- Sidebar Navigation --- */
+/* --- Sidebar Navigation (Drawer Style) --- */
 #app-sidebar {
-    grid-area: sidebar;
+    position: fixed;
+    top: 0;
+    left: -280px; /* Hidden off-screen by default */
+    width: 280px;
+    height: 100%;
     background-color: var(--bg-sidebar);
     color: var(--text-sidebar);
     display: flex;
     flex-direction: column;
     border-right: 1px solid #334155;
-    z-index: 20;
+    z-index: 30; /* Topmost */
+    transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 4px 0 10px rgba(0,0,0,0.1);
+}
+
+#app-sidebar.open {
+    left: 0; /* Slide in */
 }
 
 .logo-area {
     height: 64px;
     display: flex;
     align-items: center;
-    padding: 0 24px;
+    justify-content: space-between;
+    padding: 0 20px;
     font-size: 1.2rem;
     font-weight: 700;
     color: var(--text-inverted);
     border-bottom: 1px solid #334155;
     background: rgba(0,0,0,0.1);
 }
+
+.close-sidebar-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-sidebar);
+    font-size: 24px;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
+.close-sidebar-btn:hover { color: white; }
 
 .nav-links {
     padding: 16px 12px;
@@ -138,8 +180,23 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 32px;
+    padding: 0 24px;
     z-index: 10;
+}
+
+#hamburger-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--text-main);
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+#hamburger-btn:hover {
+    background-color: var(--bg-app);
 }
 
 .header-title h2 {
@@ -181,9 +238,10 @@ body {
 /* --- Main Content Area --- */
 #app-main {
     grid-area: main;
-    padding: 32px;
-    overflow-y: auto;
+    padding: 24px;
+    overflow-y: auto; /* Allows vertical scrolling ONLY here */
     background-color: var(--bg-app);
+    position: relative;
 }
 
 /* Fade in animation for tabs */
@@ -278,7 +336,7 @@ input:focus, select:focus {
 }
 
 /* Layout Utilities */
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 24px; }
 .flex-row { display: flex; gap: 12px; align-items: center; }
 .flex-between { display: flex; justify-content: space-between; align-items: center; }
 .mt-4 { margin-top: 16px; }
@@ -367,6 +425,7 @@ input:checked + .slider:before { transform: translateX(16px); }
     border-bottom: 1px solid var(--border-color);
     margin-bottom: 24px;
     padding-bottom: 0;
+    overflow-x: auto; /* Allow scrolling for small screens */
 }
 .tab-button, .league-nav button {
     background: transparent;
@@ -377,6 +436,7 @@ input:checked + .slider:before { transform: translateX(16px); }
     color: var(--text-muted);
     font-weight: 500;
     margin: 0;
+    white-space: nowrap;
 }
 .tab-button:hover { background: transparent; color: var(--text-main); }
 .tab-button.active, .league-nav button.active {
@@ -398,7 +458,15 @@ input:checked + .slider:before { transform: translateX(16px); }
 /* --- Print Override --- */
 @media print {
     .app-container { display: block; height: auto; overflow: visible; }
-    #app-sidebar, #app-header, .no-print { display: none !important; }
-    #app-main { padding: 0; background: white; }
+    #app-sidebar, #app-header, #sidebar-overlay, .no-print { display: none !important; }
+    #app-main { padding: 0; background: white; overflow: visible; }
     .card { border: none; shadow: none; padding: 0; }
+}
+
+/* --- Responsive Tweaks --- */
+@media (max-width: 768px) {
+    .header-controls { gap: 8px; }
+    .date-control-wrapper label { display: none; } /* Save space */
+    #app-header { padding: 0 16px; }
+    #app-main { padding: 16px; }
 }
