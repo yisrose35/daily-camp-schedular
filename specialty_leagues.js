@@ -1,46 +1,27 @@
 // =================================================================
 // specialty_leagues.js
 //
-// --- MAJOR REFACTOR (UI Overhaul) ---
-// - Rewrote the entire file to match the UI/UX of leagues.js.
-// - Removed the "Setup" / "Standings" dropdown.
-// - The main tab now shows a card list of specialty leagues.
-// - Clicking a league opens an editor pane, just like leagues.js.
-// - Added a "Manage Standings" button to each league's editor,
-//   which opens the standings grid in a modal-like view.
-// - Kept all existing logic for pickers (division, sport, field, team).
-// - Kept all existing logic for saving/loading standings data.
-//
-// --- FIX (Round-Robin) ---
-// - Kept the fix from last time (removed loadRoundState from
-//   getLeagueMatchups) to prevent round-robin resets.
+// UPDATED:
+// - Added Game Results Tracking (Scores, W/L/T).
+// - Added "Import from Schedule" to auto-fill matchups.
+// - Standings are now calculated dynamically from game history.
 // =================================================================
 
 (function() {
     'use strict';
 
-    /**
-     * Helper: Gets the suffix for a place number (1st, 2nd, 3rd)
-     */
     function getPlaceSuffix(n) {
         const s = ["th", "st", "nd", "rd"];
         const v = n % 100;
         return (s[(v - 20) % 10] || s[v] || s[0]);
     }
 
-    let specialtyLeagues = {}; // { "leagueId": { id, name, ..., teams, standings: { "Team A": {w,l,t} } } }
-    
-    // Data from app1
+    let specialtyLeagues = {}; 
     let allFields = [];
     let allDivisions = [];
     let fieldsBySport = {};
+    let leagueRoundState = {}; 
 
-    // Round-robin state variables
-    let leagueRoundState = {}; // { "League Name": { currentRound: 0 } }
-
-    /**
-     * Loads round-robin state
-     */
     function loadRoundState() {
         try {
             if (window.currentDailyData && window.currentDailyData.leagueRoundState) {
@@ -51,47 +32,33 @@
                 leagueRoundState = {};
             }
         } catch (e) {
-            console.error("Failed to load specialty league state:", e);
             leagueRoundState = {};
         }
     }
 
-    /**
-     * Saves round-robin state
-     */
     function saveRoundState() {
         try {
             window.saveCurrentDailyData?.("leagueRoundState", leagueRoundState);
-        } catch (e) {
-            console.error("Failed to save specialty league state:", e);
-        }
+        } catch (e) {}
     }
 
-
-    /**
-     * Loads all data from global settings
-     * (UPDATED to initialize standings)
-     */
     function loadData() {
         const globalSettings = window.loadGlobalSettings?.() || {};
         const app1Data = globalSettings.app1 || {};
 
-        // 1. Load our own data
         specialtyLeagues = globalSettings.specialtyLeagues || {};
         
-        // Initialize standings objects
         Object.values(specialtyLeagues).forEach(league => {
             league.standings = league.standings || {};
+            league.games = league.games || []; // --- NEW
             (league.teams || []).forEach(team => {
                 league.standings[team] = league.standings[team] || { w: 0, l: 0, t: 0 };
             });
         });
 
-        // 2. Load data from app1
         allFields = app1Data.fields || []; 
         allDivisions = app1Data.availableDivisions || [];
         
-        // 3. Process data for our UI
         fieldsBySport = {};
         allFields.forEach(f => {
             (f.activities || []).forEach(sport => {
@@ -100,32 +67,22 @@
             });
         });
         
-        // 4. Load round-robin state
         loadRoundState();
     }
 
-    /**
-     * Saves our data to global settings
-     */
     function saveData() {
         window.saveGlobalSettings?.("specialtyLeagues", specialtyLeagues);
     }
 
-    /**
-     * Generate a unique ID for a new league
-     */
     function uid() {
         return `sl_${Math.random().toString(36).slice(2, 9)}`;
     }
 
-    /**
-     * --- NEW: Main entry point, mimicking leagues.js ---
-     */
     function initSpecialtyLeagues() {
         const container = document.getElementById("specialtyLeaguesContainer");
         if (!container) return;
 
-        loadData(); // Load data once
+        loadData(); 
 
         container.innerHTML = `
             <div style="padding:20px; font-family:Arial;">
@@ -153,12 +110,9 @@
         renderLeagueList();
     }
     
-    /**
-     * --- NEW: Renders the list of league cards ---
-     */
     function renderLeagueList() {
         const list = document.getElementById("specialty-league-list");
-        if (!list) return; // Failsafe if tab isn't visible
+        if (!list) return; 
 
         const keys = Object.keys(specialtyLeagues);
 
@@ -179,17 +133,13 @@
                      onclick="window.editSpecialtyLeague('${l.id}')">
                     <h3 style="margin:0 0 8px 0; color:#1a5fb4;">${l.name}</h3>
                     <p style="margin:0; color:#555;"><strong>Sport:</strong> ${l.sport || 'None'}</p>
-                    <p style="margin:0; color:#555;"><strong>Divisions:</strong> ${l.divisions?.length || 0}</p>
-                    <p style="margin:0; color:#555;"><strong>Teams:</strong> ${l.teams?.length || 0}</p>
+                    <p style="margin:0; color:#555;"><strong>Games Played:</strong> ${l.games?.length || 0}</p>
                 </div>
             `).join("");
     }
     
-    /**
-     * --- NEW: Handles creating a new league ---
-     */
     function createNewLeague() {
-        const name = prompt("Enter specialty league name (e.g., 5th Grade Basketball):");
+        const name = prompt("Enter specialty league name:");
         if (!name || !name.trim()) return;
 
         const clean = name.trim();
@@ -207,17 +157,15 @@
             fields: [],
             teams: [],
             enabled: true,
-            standings: {} // NEW: Add standings object
+            standings: {},
+            games: [] // --- NEW
         };
 
         saveData();
         renderLeagueList();
-        window.editSpecialtyLeague(newId); // Open the editor
+        window.editSpecialtyLeague(newId); 
     }
 
-    /**
-     * --- NEW: Renders the main league editor pane ---
-     */
     window.editSpecialtyLeague = function (id) {
         const league = specialtyLeagues[id];
         if (!league) return;
@@ -231,7 +179,7 @@
                 <h2 style="color:#1a5fb4; margin-top:0;">Editing: ${league.name}</h2>
                 <div>
                     <button id="sl-standings-btn" style="padding:8px 12px; background:#28a745; color:white; border:none; border-radius:6px; cursor:pointer; margin-right: 10px;">
-                        Manage Standings
+                        Manage Standings / Games
                     </button>
                     <button id="sl-delete-btn" style="background:#d40000; color:white; padding:8px 12px; border:none; border-radius:6px; cursor:pointer;">
                         Delete
@@ -262,13 +210,12 @@
         }
         content.appendChild(renderTeamPicker(league));
         
-        // --- Hook up buttons ---
         document.getElementById("sl-delete-btn").onclick = () => deleteLeague(id);
         
         document.getElementById("sl-enabled-toggle").onchange = (e) => {
             league.enabled = e.target.checked;
             saveData();
-            renderLeagueList(); // Update opacity on card
+            renderLeagueList(); 
         };
         
         const standingsBtn = document.getElementById("sl-standings-btn");
@@ -278,136 +225,263 @@
             const isVisible = standingsUI.style.display === 'block';
             if (isVisible) {
                 standingsUI.style.display = 'none';
-                standingsBtn.textContent = 'Manage Standings';
+                standingsBtn.textContent = 'Manage Standings / Games';
             } else {
-                standingsUI.innerHTML = ''; // Clear
-                standingsUI.appendChild(renderSpecialtyLeagueStandingsUI(league)); // Render content
+                standingsUI.innerHTML = ''; 
+                standingsUI.appendChild(renderGameResultsUI(league)); // --- UPDATED CALL
                 standingsUI.style.display = 'block';
                 standingsBtn.textContent = 'Close Standings';
             }
         };
     }
 
-    /**
-     * --- NEW: Deletes a league ---
-     */
     function deleteLeague(id) {
         const league = specialtyLeagues[id];
         if (!league) return;
-        
         if (!confirm(`Are you sure you want to delete "${league.name}"?`)) return;
-
         delete specialtyLeagues[id];
         saveData();
         renderLeagueList();
-        
-        const editor = document.getElementById("specialty-league-editor");
-        if (editor) editor.style.display = "none";
+        document.getElementById("specialty-league-editor").style.display = "none";
     }
 
-    /**
-     * --- NEW: Renders the Standings UI *for one league* ---
-     */
-    function renderSpecialtyLeagueStandingsUI(league) {
+    // --- GAME RESULTS UI (NEW) ---
+    function renderGameResultsUI(league) {
         const container = document.createElement("div");
 
-        if (!league.teams || league.teams.length === 0) {
-            container.innerHTML = '<p class="muted" style="padding: 10px;">No teams found. Add teams in the editor below to manage standings.</p>';
-            return container;
-        }
-
-        // --- 1. Sort teams based on standings ---
-        const sortedTeams = [...league.teams].sort((a, b) => {
-            const standingA = league.standings[a];
-            const standingB = league.standings[b];
-            
-            if (standingA.w !== standingB.w) return standingB.w - standingA.w; // Wins (desc)
-            if (standingA.l !== standingB.l) return standingA.l - standingB.l; // Losses (asc)
-            if (standingA.t !== standingB.t) return standingB.t - standingA.t; // Ties (desc)
-            
-            return a.localeCompare(b); // Alphabetical
-        });
-
-        // --- 2. Create table ---
-        const table = document.createElement("table");
-        table.className = "league-standings-grid";
-        table.innerHTML = `
-            <thead>
-                <tr>
-                    <th>Place</th>
-                    <th>Team</th>
-                    <th>Win</th>
-                    <th>Loss</th>
-                    <th>Tie</th>
-                </tr>
-            </thead>
-            <tbody></tbody>
+        const tabNav = document.createElement("div");
+        tabNav.style.marginBottom = "15px";
+        tabNav.innerHTML = `
+            <button id="tab-standings" style="font-weight:bold; padding:8px; margin-right:5px;">Current Standings</button>
+            <button id="tab-games" style="padding:8px;">Game Results Entry</button>
         `;
-        
-        const tbody = table.querySelector("tbody");
-        
-        sortedTeams.forEach((teamName, index) => {
-            const teamData = league.standings[teamName];
-            const tr = document.createElement("tr");
-            
-            const place = index + 1;
-            const suffix = getPlaceSuffix(place);
-            
-            tr.innerHTML = `
-                <td>${place}${suffix}</td>
-                <td>${teamName}</td>
-                <td><input type="number" min="0" value="${teamData.w}" data-team="${teamName}" data-record="w"></td>
-                <td><input type="number" min="0" value="${teamData.l}" data-team="${teamName}" data-record="l"></td>
-                <td><input type="number" min="0" value="${teamData.t}" data-team="${teamName}" data-record="t"></td>
-            `;
-            tbody.appendChild(tr);
-        });
+        container.appendChild(tabNav);
 
-        container.appendChild(table);
-        
-        // --- 3. Add Update Button ---
-        const updateBtn = document.createElement("button");
-        updateBtn.textContent = "Update Standings";
-        updateBtn.className = "update-standings-btn";
-        updateBtn.style.marginTop = "10px";
-        
-        updateBtn.onclick = () => {
-            let changed = false;
-            container.querySelectorAll("input[type='number']").forEach(input => {
-                const teamName = input.dataset.team;
-                const recordType = input.dataset.record;
-                const value = parseInt(input.value, 10) || 0;
+        const standingsDiv = document.createElement("div");
+        const gamesDiv = document.createElement("div");
+        gamesDiv.style.display = "none";
 
-                if (league.standings[teamName] && league.standings[teamName][recordType] !== value) {
-                    league.standings[teamName][recordType] = value;
-                    changed = true;
-                }
-            });
+        container.appendChild(standingsDiv);
+        container.appendChild(gamesDiv);
 
-            if (changed) {
-                saveData();
-                // Re-render the standings UI
-                const standingsUI = document.getElementById("sl-standings-ui");
-                standingsUI.innerHTML = ''; // Clear
-                standingsUI.appendChild(renderSpecialtyLeagueStandingsUI(league)); // Re-render
-                alert(`Standings for ${league.name} updated and saved!`);
-            } else {
-                alert("No changes detected.");
-            }
+        tabNav.querySelector("#tab-standings").onclick = () => {
+            standingsDiv.style.display = "block";
+            gamesDiv.style.display = "none";
+            renderStandingsTable(league, standingsDiv);
         };
-        container.appendChild(updateBtn);
+        tabNav.querySelector("#tab-games").onclick = () => {
+            standingsDiv.style.display = "none";
+            gamesDiv.style.display = "block";
+            renderGameEntryUI(league, gamesDiv);
+        };
+
+        renderStandingsTable(league, standingsDiv);
         return container;
     }
 
+    function renderStandingsTable(league, container) {
+        container.innerHTML = "";
+        if (!league.teams || league.teams.length === 0) {
+            container.innerHTML = '<p class="muted">No teams to display.</p>';
+            return;
+        }
 
-    /**
-     * Renders the UI for a single league (in the Setup pane)
-     * (These are now modular helpers)
-     */
+        recalcStandings(league);
+
+        const sortedTeams = [...league.teams].sort((a, b) => {
+            const sA = league.standings[a] || {w:0,l:0,t:0};
+            const sB = league.standings[b] || {w:0,l:0,t:0};
+            if (sA.w !== sB.w) return sB.w - sA.w;
+            if (sA.l !== sB.l) return sA.l - sB.l;
+            if (sA.t !== sB.t) return sB.t - sA.t;
+            return a.localeCompare(b);
+        });
+
+        let html = `
+            <table class="league-standings-grid">
+                <thead><tr><th>Place</th><th>Team</th><th>W</th><th>L</th><th>T</th></tr></thead>
+                <tbody>
+        `;
+        
+        sortedTeams.forEach((team, idx) => {
+            const stats = league.standings[team] || {w:0,l:0,t:0};
+            html += `<tr>
+                <td>${idx + 1}${getPlaceSuffix(idx+1)}</td>
+                <td>${team}</td>
+                <td>${stats.w}</td>
+                <td>${stats.l}</td>
+                <td>${stats.t}</td>
+            </tr>`;
+        });
+        html += `</tbody></table>`;
+        container.innerHTML = html;
+    }
+
+    function renderGameEntryUI(league, container) {
+        container.innerHTML = "";
+
+        const controls = document.createElement("div");
+        controls.style.marginBottom = "15px";
+        controls.style.display = "flex";
+        controls.style.gap = "10px";
+        controls.style.alignItems = "center";
+
+        const select = document.createElement("select");
+        select.innerHTML = `<option value="new">-- Enter New Game Results --</option>`;
+        (league.games || []).forEach((g, idx) => {
+            select.innerHTML += `<option value="${idx}">${g.name || ('Game '+(idx+1))} (${g.date})</option>`;
+        });
+        controls.appendChild(select);
+
+        const importBtn = document.createElement("button");
+        importBtn.textContent = "Import from Today's Schedule";
+        importBtn.style.padding = "6px 12px";
+        importBtn.onclick = () => importGamesFromSchedule(league, matchContainer);
+        controls.appendChild(importBtn);
+        container.appendChild(controls);
+
+        const matchContainer = document.createElement("div");
+        container.appendChild(matchContainer);
+
+        const saveBtn = document.createElement("button");
+        saveBtn.textContent = "Save Game Results";
+        saveBtn.className = "update-standings-btn"; 
+        saveBtn.style.display = "none"; 
+        saveBtn.onclick = () => saveGameResults(league, select.value, matchContainer);
+        container.appendChild(saveBtn);
+
+        select.onchange = () => {
+            matchContainer.innerHTML = "";
+            if (select.value === "new") {
+                importBtn.style.display = "inline-block";
+                saveBtn.style.display = "none";
+            } else {
+                importBtn.style.display = "none";
+                saveBtn.style.display = "inline-block"; 
+                loadExistingGame(league, select.value, matchContainer);
+            }
+        };
+
+        function loadExistingGame(league, gameIdx, target) {
+            const game = league.games[gameIdx];
+            if (!game) return;
+            game.matches.forEach(m => {
+                addMatchRow(target, m.teamA, m.teamB, m.scoreA, m.scoreB);
+            });
+            saveBtn.style.display = "inline-block";
+        }
+
+        function addMatchRow(target, teamA, teamB, scoreA = "", scoreB = "") {
+            const row = document.createElement("div");
+            row.className = "match-row";
+            row.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:8px; padding:8px; background:#f9f9f9; border:1px solid #eee;";
+
+            row.innerHTML = `
+                <strong style="min-width:100px; text-align:right;">${teamA}</strong>
+                <input type="number" class="score-a" value="${scoreA}" style="width:50px; padding:5px;">
+                <span>vs</span>
+                <input type="number" class="score-b" value="${scoreB}" style="width:50px; padding:5px;">
+                <strong style="min-width:100px;">${teamB}</strong>
+            `;
+            row.dataset.teamA = teamA;
+            row.dataset.teamB = teamB;
+            target.appendChild(row);
+            saveBtn.style.display = "inline-block";
+        }
+
+        function importGamesFromSchedule(league, target) {
+            target.innerHTML = "";
+            const daily = window.loadCurrentDailyData?.() || {};
+            const assignments = daily.scheduleAssignments || {};
+            const foundMatches = new Set();
+
+            league.teams.forEach(team => {
+                const schedule = assignments[team] || [];
+                schedule.forEach(entry => {
+                    // Check if this schedule entry matches our league's sport (or is a generic league slot)
+                    // Specialty leagues usually have a fixed sport.
+                    const isMatch = entry._h2h && (entry._activity === league.sport || entry.sport.includes(league.sport));
+                    
+                    if (isMatch) {
+                        const label = entry.sport || "";
+                        const match = label.match(/^(.*?) vs (.*?) \(/);
+                        if (match) {
+                            const t1 = match[1].trim();
+                            const t2 = match[2].trim();
+                            if (league.teams.includes(t1) && league.teams.includes(t2)) {
+                                const key = [t1, t2].sort().join(" vs ");
+                                if (!foundMatches.has(key)) {
+                                    foundMatches.add(key);
+                                    addMatchRow(target, t1, t2);
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+
+            if (foundMatches.size === 0) {
+                target.innerHTML = "<p class='muted'>No games found today for this league's sport.</p>";
+            }
+        }
+    }
+
+    function saveGameResults(league, gameId, container) {
+        const rows = container.querySelectorAll(".match-row");
+        const results = [];
+
+        rows.forEach(row => {
+            const tA = row.dataset.teamA;
+            const tB = row.dataset.teamB;
+            const sA = parseInt(row.querySelector(".score-a").value) || 0;
+            const sB = parseInt(row.querySelector(".score-b").value) || 0;
+
+            let winner = null;
+            if (sA > sB) winner = tA;
+            else if (sB > sA) winner = tB;
+            else winner = "tie";
+
+            results.push({ teamA: tA, teamB: tB, scoreA: sA, scoreB: sB, winner: winner });
+        });
+
+        if (results.length === 0) return;
+
+        if (gameId === "new") {
+            league.games.push({
+                id: Date.now(),
+                date: window.currentScheduleDate,
+                name: `Game ${league.games.length + 1}`,
+                matches: results
+            });
+        } else {
+            league.games[gameId].matches = results;
+        }
+
+        recalcStandings(league);
+        saveData();
+        alert("Results saved!");
+        document.getElementById("tab-standings").click(); 
+    }
+
+    function recalcStandings(league) {
+        league.teams.forEach(t => { league.standings[t] = { w: 0, l: 0, t: 0 }; });
+        league.games.forEach(g => {
+            g.matches.forEach(m => {
+                if (m.winner === "tie") {
+                    if(league.standings[m.teamA]) league.standings[m.teamA].t++;
+                    if(league.standings[m.teamB]) league.standings[m.teamB].t++;
+                } else if (m.winner) {
+                    if(league.standings[m.winner]) league.standings[m.winner].w++;
+                    const loser = (m.winner === m.teamA) ? m.teamB : m.teamA;
+                    if(league.standings[loser]) league.standings[loser].l++;
+                }
+            });
+        });
+    }
+
     function renderDivisionPicker(league) {
         const wrapper = document.createElement("div");
         wrapper.innerHTML = `<label style="font-weight: 600; display:block; margin-bottom: 6px;">1. Select Divisions:</label>`;
-        
         const chipBox = document.createElement("div");
         chipBox.className = "chips";
         allDivisions.forEach(divName => {
@@ -415,7 +489,6 @@
             chip.onclick = () => {
                 toggleArrayItem(league.divisions, divName);
                 saveData();
-                // Just update chip, no full re-render
                 chip.style.backgroundColor = league.divisions.includes(divName) ? "#007BFF" : "#f0f0f0";
                 chip.style.color = league.divisions.includes(divName) ? "white" : "black";
             };
@@ -428,24 +501,20 @@
     function renderSportPicker(league) {
         const wrapper = document.createElement("div");
         wrapper.style.marginTop = "15px";
-
         const allSports = Object.keys(fieldsBySport).sort();
-        
         let options = `<option value="">-- 2. Select a Sport --</option>`;
         allSports.forEach(sport => {
             options += `<option value="${sport}" ${league.sport === sport ? "selected" : ""}>${sport}</option>`;
         });
-
         wrapper.innerHTML = `
             <label style="font-weight: 600; margin-right: 8px;">Sport:</label>
             <select>${options}</select>
         `;
-
         wrapper.querySelector("select").onchange = (e) => {
             league.sport = e.target.value || null;
-            league.fields = []; // Reset fields if sport changes
+            league.fields = []; 
             saveData();
-            window.editSpecialtyLeague(league.id); // Re-render editor
+            window.editSpecialtyLeague(league.id); 
         };
         return wrapper;
     }
@@ -453,16 +522,12 @@
     function renderFieldPicker(league) {
         const wrapper = document.createElement("div");
         wrapper.style.marginTop = "15px";
-        
         const availableFields = fieldsBySport[league.sport] || [];
-        
         wrapper.innerHTML = `<label style="font-weight: 600; display:block; margin-bottom: 6px;">3. Select Fields (Exclusive Lock):</label>`;
-        
         if (availableFields.length === 0) {
             wrapper.innerHTML += `<p class="muted">No fields are set up for "${league.sport}" in the Fields tab.</p>`;
             return wrapper;
         }
-
         const chipBox = document.createElement("div");
         chipBox.className = "chips";
         availableFields.forEach(fieldName => {
@@ -470,7 +535,6 @@
             chip.onclick = () => {
                 toggleArrayItem(league.fields, fieldName);
                 saveData();
-                // Just update the chip
                 chip.style.backgroundColor = league.fields.includes(fieldName) ? "#007BFF" : "#f0f0f0";
                 chip.style.color = league.fields.includes(fieldName) ? "white" : "black";
             };
@@ -480,16 +544,10 @@
         return wrapper;
     }
 
-    /**
-     * (UPDATED to manage standings object)
-     */
     function renderTeamPicker(league) {
         const wrapper = document.createElement("div");
         wrapper.style.marginTop = "15px";
-        
         wrapper.innerHTML = `<label style="font-weight: 600; display:block; margin-bottom: 6px;">4. Add Teams:</label>`;
-
-        // --- Add Team Input ---
         const addWrapper = document.createElement("div");
         const teamInput = document.createElement("input");
         teamInput.type = "text";
@@ -497,42 +555,34 @@
         const addBtn = document.createElement("button");
         addBtn.textContent = "Add Team";
         addBtn.style.marginLeft = "8px";
-
         addBtn.onclick = () => {
             const teamName = teamInput.value.trim();
             if (teamName && !league.teams.includes(teamName)) {
                 league.teams.push(teamName);
                 league.teams.sort();
-                // NEW: Add team to standings
                 league.standings[teamName] = league.standings[teamName] || { w: 0, l: 0, t: 0 };
                 saveData();
-                window.editSpecialtyLeague(league.id); // Re-render editor
+                window.editSpecialtyLeague(league.id);
             }
             teamInput.value = "";
         };
         teamInput.onkeypress = (e) => { if (e.key === "Enter") addBtn.click(); };
-
         addWrapper.appendChild(teamInput);
         addWrapper.appendChild(addBtn);
         wrapper.appendChild(addWrapper);
-
-        // --- Team List ---
         const chipBox = document.createElement("div");
         chipBox.className = "chips";
         chipBox.style.marginTop = "8px";
-        
         if (league.teams.length === 0) {
             chipBox.innerHTML = `<span class="muted" style="font-size:0.9em;">No teams added yet.</span>`;
         }
-        
         league.teams.forEach(teamName => {
-            const chip = createChip(`${teamName} ✖`, true, "#5bc0de"); // Light blue
+            const chip = createChip(`${teamName} ✖`, true, "#5bc0de"); 
             chip.onclick = () => {
-                // NEW: Remove from standings
                 delete league.standings[teamName];
-                toggleArrayItem(league.teams, teamName); // This removes it from the array
+                toggleArrayItem(league.teams, teamName); 
                 saveData();
-                window.editSpecialtyLeague(league.id); // Re-render editor
+                window.editSpecialtyLeague(league.id); 
             };
             chipBox.appendChild(chip);
         });
@@ -540,8 +590,6 @@
         return wrapper;
     }
 
-
-    // --- UI Helpers ---
     function createChip(name, isActive, activeColor = "#007BFF") {
         const chip = document.createElement("span");
         chip.textContent = name;
@@ -564,11 +612,6 @@
         }
     }
     
-    // --- Round-robin functions (copied from leagues.js) ---
-    
-    /**
-     * Generates a full round-robin tournament schedule.
-     */
     function generateRoundRobin(teamList) {
         if (!teamList || teamList.length < 2) return [];
         const teams = [...teamList];
@@ -590,25 +633,15 @@
         return hasBye ? schedule.map(r => r.filter(m => m[0] !== "BYE" && m[1] !== "BYE")) : schedule;
     }
 
-    /**
-     * Public function to get the *next* set of matchups for a league.
-     * (UPDATED: Removed loadRoundState())
-     */
     function getLeagueMatchups(leagueName, teams) {
         if (!leagueName || !teams || teams.length < 2) return [];
-        
-        // loadRoundState(); // <-- THIS LINE IS REMOVED
-        
         const state = leagueRoundState[leagueName] || { currentRound: 0 };
         const fullSchedule = generateRoundRobin(teams);
         if (fullSchedule.length === 0) return [];
-        
         const todayMatchups = fullSchedule[state.currentRound];
-        
         const nextRound = (state.currentRound + 1) % fullSchedule.length;
         leagueRoundState[leagueName] = { currentRound: nextRound };
         saveRoundState();
-        
         return todayMatchups;
     }
 
