@@ -5,9 +5,10 @@
 // Features:
 // - Print Whole Schedule (All Divisions) - Layout matches Daily View
 // - Print Selected Divisions (Multi-select)
-// - Print Selected Bunks (Multi-select)
-// - Print Selected Locations (Multi-select)
-// - Export to Excel (.xls)
+// - Print Selected Bunks (Multi-select) - Natural Sort & Excel
+// - Print Selected Locations (Multi-select) - Excel Export
+// - UPDATED: Bunk view shows FULL league schedule (all matchups).
+// - UPDATED: Field view shows ONLY the specific matchup on that field.
 // =================================================================
 
 (function() {
@@ -80,6 +81,11 @@ function formatEntry(entry) {
   return label;
 }
 
+// Natural Sort Helper
+function naturalSort(a, b) {
+    return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+}
+
 // -------------------------------------------------------------------
 
 function initPrintCenter() {
@@ -116,14 +122,20 @@ function initPrintCenter() {
                     <h3>👤 Individual Bunks</h3>
                     <p>Print list views for specific bunks.</p>
                     <div id="print-bunk-list" class="print-list-box"></div>
-                    <button onclick="window.printSelectedBunks()">Print Selected Bunks</button>
+                    <div style="display:flex; gap:10px;">
+                        <button onclick="window.printSelectedBunks()" style="flex:1;">Print Selected</button>
+                        <button onclick="window.exportSelectedBunksToExcel()" style="background:#217346; flex:1;">Export to Excel</button>
+                    </div>
                 </div>
 
                 <div class="print-card">
                     <h3>📍 Locations / Fields</h3>
                     <p>Print schedules for specific fields.</p>
                     <div id="print-loc-list" class="print-list-box"></div>
-                    <button onclick="window.printSelectedLocations()">Print Selected Locations</button>
+                    <div style="display:flex; gap:10px;">
+                        <button onclick="window.printSelectedLocations()" style="flex:1;">Print Selected</button>
+                        <button onclick="window.exportSelectedLocationsToExcel()" style="background:#217346; flex:1;">Export to Excel</button>
+                    </div>
                 </div>
             </div>
 
@@ -179,7 +191,7 @@ function populateSelectors() {
     // 2. Bunks Checkboxes (Grouped by Division)
     bunkList.innerHTML = "";
     availableDivisions.forEach(divName => {
-        const bunks = (divisions[divName].bunks || []).sort();
+        const bunks = (divisions[divName].bunks || []).sort(naturalSort);
         if (bunks.length > 0) {
             bunkList.innerHTML += `<div class="print-list-group">${divName}</div>`;
             bunks.forEach(b => {
@@ -190,7 +202,7 @@ function populateSelectors() {
 
     // 3. Locations Checkboxes
     locList.innerHTML = "";
-    const allLocs = [...fields.map(f=>f.name), ...specials.map(s=>s.name)].sort();
+    const allLocs = [...fields.map(f=>f.name), ...specials.map(s=>s.name)].sort(naturalSort);
     allLocs.forEach(loc => {
         locList.innerHTML += `<label class="print-list-item"><input type="checkbox" value="${loc}"> ${loc}</label>`;
     });
@@ -205,7 +217,7 @@ function generateDivisionHTML(divName) {
     const daily = window.loadCurrentDailyData?.() || {};
     const manualSkeleton = daily.manualSkeleton || [];
     const divisions = window.loadGlobalSettings?.().app1.divisions || {};
-    const bunks = (divisions[divName]?.bunks || []).sort();
+    const bunks = (divisions[divName]?.bunks || []).sort(naturalSort);
 
     if (bunks.length === 0) return "";
 
@@ -335,7 +347,6 @@ function generateDivisionHTML(divName) {
                     if (entry._fixed) bg = "#fff8e1"; // pinned color
                 } else {
                     // Fallback to the block name if nothing is scheduled yet (e.g. "Lunch")
-                    // but only if it's not a generated slot that failed to fill
                     if (["Lunch","Snack","Dismissal","Swim"].some(k => eventBlock.event.includes(k))) {
                         text = eventBlock.event;
                         bg = "#fff8e1";
@@ -377,9 +388,25 @@ function generateBunkHTML(bunk) {
         if (typeof entry.field === 'object') label = entry.field.name;
         else label = entry.field;
         
-        // SHOW FULL LEAGUE MATCHUP
-        if (entry._h2h && entry.sport) {
-            label = `<strong>${entry.sport}</strong>`;
+        // --- NEW: SHOW FULL LEAGUE SCHEDULE ---
+        // If it's a league game, we want to see ALL matchups occurring in that block
+        if (entry._h2h) {
+            if (entry._allMatchups && entry._allMatchups.length > 0) {
+                label = `<strong>${entry.sport || "League Game"}</strong><br>`;
+                label += `<ul style="margin:5px 0 0 15px; padding:0; font-size:0.9em; color:#555;">`;
+                entry._allMatchups.forEach(m => {
+                    // Highlight own game? Optional.
+                    if (entry.sport && m === entry.sport) {
+                         label += `<li><strong>${m}</strong></li>`;
+                    } else {
+                         label += `<li>${m}</li>`;
+                    }
+                });
+                label += `</ul>`;
+            } else {
+                // Fallback if no list
+                label = `<strong>${entry.sport}</strong>`;
+            }
         }
 
         html += `<tr>
@@ -421,10 +448,14 @@ function generateLocationHTML(loc) {
                     if(!bunksHere.includes(b)) bunksHere.push(b);
                     
                     // Check for league matchup label
-                    if (entry._h2h && entry.sport && !leagueLabel) {
-                        // Extract "A vs B (Sport)" from "A vs B (Sport) @ Field"
-                        let matchStr = entry.sport;
+                    if (entry._h2h && entry.sport) {
+                        // For fields, we ONLY want the specific game being played here.
+                        // The scheduler ensures entry.sport has the right label if assigned to this field.
+                        let matchStr = entry.sport; 
+                        // matchStr is usually "A vs B (Sport) @ Field"
+                        // We can strip "@ Field" since we are on the field page
                         if(matchStr.includes('@')) matchStr = matchStr.split('@')[0].trim();
+                        
                         leagueLabel = matchStr;
                     }
                 }
@@ -435,7 +466,7 @@ function generateLocationHTML(loc) {
         let style = "";
 
         if (leagueLabel) {
-            content = `<strong>${leagueLabel}</strong> <br><span style="font-size:0.9em; color:#666;">(${bunksHere.join(", ")})</span>`;
+            content = `<strong>${leagueLabel}</strong>`;
         } else if (bunksHere.length > 0) {
             content = bunksHere.join(", ");
         } else {
@@ -460,6 +491,16 @@ function getSelectedDivisions() {
     return Array.from(checkboxes).map(cb => cb.value);
 }
 
+function getSelectedBunks() {
+    const checkboxes = document.querySelectorAll("#print-bunk-list input:checked");
+    return Array.from(checkboxes).map(cb => cb.value);
+}
+
+function getSelectedLocations() {
+    const checkboxes = document.querySelectorAll("#print-loc-list input:checked");
+    return Array.from(checkboxes).map(cb => cb.value);
+}
+
 window.printAllDivisions = function() {
     const app1 = window.loadGlobalSettings?.().app1 || {};
     const allDivs = app1.availableDivisions || [];
@@ -480,8 +521,7 @@ window.printSelectedDivisions = function() {
 };
 
 window.printSelectedBunks = function() {
-    const checkboxes = document.querySelectorAll("#print-bunk-list input:checked");
-    const selected = Array.from(checkboxes).map(cb => cb.value);
+    const selected = getSelectedBunks();
     if (selected.length === 0) return alert("Please select at least one bunk.");
 
     let fullHtml = "";
@@ -490,8 +530,7 @@ window.printSelectedBunks = function() {
 };
 
 window.printSelectedLocations = function() {
-    const checkboxes = document.querySelectorAll("#print-loc-list input:checked");
-    const selected = Array.from(checkboxes).map(cb => cb.value);
+    const selected = getSelectedLocations();
     if (selected.length === 0) return alert("Please select at least one location.");
 
     let fullHtml = "";
@@ -528,7 +567,25 @@ window.exportSelectedDivisionsToExcel = function() {
 
     let fullHtml = "";
     selected.forEach(div => fullHtml += generateDivisionHTML(div));
-    downloadXLS(fullHtml, `Schedule_Selected_${window.currentScheduleDate}.xls`);
+    downloadXLS(fullHtml, `Schedule_Divisions_${window.currentScheduleDate}.xls`);
+};
+
+window.exportSelectedBunksToExcel = function() {
+    const selected = getSelectedBunks();
+    if (selected.length === 0) return alert("Please select at least one bunk.");
+
+    let fullHtml = "";
+    selected.forEach(bunk => fullHtml += generateBunkHTML(bunk));
+    downloadXLS(fullHtml, `Schedule_Bunks_${window.currentScheduleDate}.xls`);
+};
+
+window.exportSelectedLocationsToExcel = function() {
+    const selected = getSelectedLocations();
+    if (selected.length === 0) return alert("Please select at least one location.");
+
+    let fullHtml = "";
+    selected.forEach(loc => fullHtml += generateLocationHTML(loc));
+    downloadXLS(fullHtml, `Schedule_Locations_${window.currentScheduleDate}.xls`);
 };
 
 function triggerPrint(content) {
