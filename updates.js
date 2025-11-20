@@ -2,7 +2,6 @@
 // updates.js
 //
 // Displays a changelog of new features and improvements.
-// Uses the same CSS classes as helper.js for consistency.
 // =================================================================
 
 (function() {
@@ -21,54 +20,35 @@ function initUpdatesTab() {
                 <div class="help-card highlight-card">
                     <h3>🚀 Latest Features</h3>
                     <ul>
-                        <li><strong>Auto-Save System:</strong> Your work is now automatically saved every 10 minutes to prevent data loss.</li>
-                        <li><strong>"Save Now" Button:</strong> Added a manual save button in the Setup tab for peace of mind.</li>
-                        <li><strong>Recall Auto-Save:</strong> Accidentally messed up? You can now restore the last auto-save point.</li>
-                        <li><strong>Precise Availability:</strong> The Analytics grid now detects partial availability (e.g., "Avail 12:20 PM") if a scheduled block ends early.</li>
+                        <li><strong>🏆 League Game Results & Standings:</strong> You can now track actual game scores for both Regular and Specialty Leagues. 
+                            <ul>
+                                <li>Enter scores for any game.</li>
+                                <li>"Import from Schedule" automatically pulls today's matchups.</li>
+                                <li>Standings (Wins/Losses/Ties) are <strong>automatically calculated</strong> based on your game history.</li>
+                            </ul>
+                        </li>
+                        <li><strong>🖨️ Print Center:</strong> Generate beautiful, printer-friendly schedules for Bunks, Divisions, or specific Fields. Found in the new "Print Center" tab.</li>
+                        <li><strong>⚠️ Conflict Validator:</strong> Added a "Validate Schedule" button to the Daily Schedule view. It scans for double-bookings, missing lunches, and bunk exhaustion.</li>
                     </ul>
                 </div>
 
                 <div class="help-card">
-                    <h3>📊 Reports & Analytics</h3>
+                    <h3>🛡️ Saving & Backup</h3>
                     <ul>
-                        <li><strong>Bolstered Availability Grid:</strong> Stricter logic now marks a field with a red <strong>X</strong> if <em>anyone</em> is using it (League, Pin, or Activity). Green checks only appear if 100% free.</li>
-                        <li><strong>"Scheduled Today?" Column:</strong> The Bunk Rotation report now highlights if a bunk is already scheduled for an activity today (Green "YES").</li>
-                        <li><strong>Smart Filters:</strong> Filter the availability grid by "Fields Only" or "Specials Only".</li>
+                        <li><strong>Auto-Save System:</strong> Your work is now automatically saved every 10 minutes.</li>
+                        <li><strong>"Save Now" Button:</strong> Added a manual save button in the Setup tab.</li>
+                        <li><strong>Recall Auto-Save:</strong> Restore the last auto-save point if needed.</li>
+                        <li><strong>New Grid:</strong> Safely start a new Master Template with a prompt to save first.</li>
                     </ul>
                 </div>
 
                 <div class="help-card">
-                    <h3>🗓️ Master Scheduler</h3>
+                    <h3>📊 Analytics & Logic</h3>
                     <ul>
-                        <li><strong>New Grid Button:</strong> Safely start a new template (e.g., Short Day). You will be prompted to save your current work first.</li>
-                        <li><strong>Draft Saving:</strong> The editor now saves a local draft, so if you accidentally close the tab, your unsaved grid is waiting for you when you return.</li>
-                        <li><strong>Visual Cues:</strong> The "Load Template" area highlights after clearing to remind you of your options.</li>
-                    </ul>
-                </div>
-
-                <div class="help-card">
-                    <h3>🏆 Leagues & Specialty Leagues</h3>
-                    <ul>
-                        <li><strong>Standings Manager:</strong> Track Wins, Losses, and Ties directly inside the League Editor.</li>
-                        <li><strong>UI Overhaul:</strong> Leagues now use a modern, card-based interface with dedicated editors.</li>
-                        <li><strong>Priority Scheduling:</strong> Specialty Leagues now have Priority #1 for fields during auto-scheduling.</li>
-                    </ul>
-                </div>
-
-                <div class="help-card">
-                    <h3>⚡ Daily Adjustments</h3>
-                    <ul>
-                        <li><strong>Bunk Specific Overrides:</strong> You can now pin a specific activity for a specific bunk at a specific time (overriding the skeleton).</li>
-                        <li><strong>New Interface:</strong> Organized into sub-tabs (Skeleton, Trips, Bunk Specific, Resources) for a cleaner workflow.</li>
-                    </ul>
-                </div>
-
-                <div class="help-card">
-                    <h3>🛠️ General Improvements</h3>
-                    <ul>
-                        <li><strong>Backup & Restore:</strong> Export your entire database to a JSON file for offline backup. Import it on any computer to restore your work.</li>
-                        <li><strong>Welcome Screen:</strong> A new setup wizard for first-time users.</li>
-                        <li><strong>Smart "Super Placer":</strong> The scheduler's AI now separates League history from General Activity history to ensure better variety.</li>
+                        <li><strong>Bolstered Availability Grid:</strong> Stricter logic marks a field "X" if <em>anyone</em> is using it. Green checks only if 100% free.</li>
+                        <li><strong>Partial Availability:</strong> Detects if a field opens up early (e.g., "Avail 12:20 PM").</li>
+                        <li><strong>Smart "Super Placer":</strong> The scheduler AI now separates League history from General Activity history.</li>
+                        <li><strong>Field Preferences:</strong> Set fields as "Exclusive" to specific divisions or define a Priority Order.</li>
                     </ul>
                 </div>
 
