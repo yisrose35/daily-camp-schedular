@@ -3,7 +3,7 @@
 //
 // UPDATED:
 // - Fix: Import skips 'continuation' slots (prevents duplicates).
-// - UI: Game History is now collapsible.
+// - UI: Game History is now a DROPDOWN (hidden by default).
 // - UI: Score inputs are text-based (no spinner arrows).
 // ===================================================================
 
@@ -19,6 +19,7 @@
     // --- UI State Persistence ---
     let selectedLeagueName = null;
     let activeSubView = null; // 'standings' or null
+    let selectedHistoryGameId = null; // Track selected history game
 
     let listEl = null;
     let detailPaneEl = null;
@@ -532,7 +533,7 @@
                 if(!schedule) return;
 
                 schedule.forEach((entry, slotIndex) => {
-                    // IMPORTANT FIX: SKIP CONTINUATIONS to avoid duplicate rows
+                    // FIX: !entry.continuation
                     if(entry && entry._h2h && !entry.continuation) {
                         const matchStr = entry.sport || "";
                         const m = matchStr.match(/^(.*?) vs (.*?) \(/);
@@ -588,65 +589,112 @@
             }
         };
 
-        // --- EXISTING GAMES (COLLAPSIBLE) ---
-        const historyDetails = document.createElement("details");
-        historyDetails.style.marginTop = "20px";
-        historyDetails.style.border = "1px solid #ccc";
-        historyDetails.style.borderRadius = "5px";
-        historyDetails.style.padding = "5px";
-        
-        const summary = document.createElement("summary");
-        summary.textContent = "View Game History";
-        summary.style.fontWeight = "bold";
-        summary.style.padding = "10px";
-        summary.style.cursor = "pointer";
-        historyDetails.appendChild(summary);
-        
-        const historyContent = document.createElement("div");
-        historyContent.style.padding = "10px";
-        historyDetails.appendChild(historyContent);
-        wrapper.appendChild(historyDetails);
+        // --- EXISTING GAMES (DROPDOWN) ---
+        const historyContainer = document.createElement("div");
+        historyContainer.style.marginTop = "20px";
+        historyContainer.style.borderTop = "1px solid #ccc";
+        historyContainer.style.paddingTop = "15px";
 
-        (league.games || []).slice().reverse().forEach((g, gIdx) => {
-            const gDiv = document.createElement("div");
-            gDiv.style.border = "1px solid #eee";
-            gDiv.style.marginBottom = "10px";
-            gDiv.innerHTML = `<div style="background:#f9f9f9; padding:5px; font-size:0.9em;"><strong>${g.name}</strong> (${g.date})</div>`;
+        const historyLabel = document.createElement("label");
+        historyLabel.textContent = "Select Game to View/Edit Scores:";
+        historyLabel.style.fontWeight = "bold";
+        historyLabel.style.display = "block";
+        historyLabel.style.marginBottom = "5px";
+        
+        const historySelect = document.createElement("select");
+        historySelect.style.width = "100%";
+        historySelect.style.padding = "5px";
+        historySelect.style.marginBottom = "15px";
+        
+        let options = `<option value="">-- Select a Game --</option>`;
+        (league.games || []).slice().reverse().forEach((g, idx) => {
+             // Use ID for value
+             options += `<option value="${g.id}">${g.name || 'Game'} (${g.date}) - ${g.matches.length} matches</option>`;
+        });
+        historySelect.innerHTML = options;
+        
+        // Restore selection if state exists
+        if(selectedHistoryGameId) {
+            historySelect.value = selectedHistoryGameId;
+        }
+
+        const selectedGameContainer = document.createElement("div");
+        selectedGameContainer.style.background = "#f9f9f9";
+        selectedGameContainer.style.border = "1px solid #eee";
+        selectedGameContainer.style.padding = "10px";
+        selectedGameContainer.style.borderRadius = "5px";
+        selectedGameContainer.style.minHeight = "50px";
+        
+        historySelect.onchange = () => {
+            selectedHistoryGameId = historySelect.value;
+            renderSelectedHistoryGame(league, selectedHistoryGameId, selectedGameContainer);
+        };
+
+        historyContainer.appendChild(historyLabel);
+        historyContainer.appendChild(historySelect);
+        historyContainer.appendChild(selectedGameContainer);
+        
+        wrapper.appendChild(historyContainer);
+
+        // Initial render if selection exists
+        if(selectedHistoryGameId) {
+            renderSelectedHistoryGame(league, selectedHistoryGameId, selectedGameContainer);
+        }
+    }
+
+    function renderSelectedHistoryGame(league, gameId, container) {
+        container.innerHTML = "";
+        if(!gameId) {
+            container.innerHTML = `<p class="muted" style="text-align:center;">No game selected.</p>`;
+            return;
+        }
+
+        const game = league.games.find(g => String(g.id) === String(gameId));
+        if(!game) {
+             container.innerHTML = `<p class="muted" style="color:red;">Game not found.</p>`;
+             return;
+        }
+
+        const header = document.createElement("div");
+        header.innerHTML = `<strong>Editing: ${game.name} (${game.date})</strong>`;
+        header.style.marginBottom = "10px";
+        header.style.borderBottom = "1px solid #ddd";
+        header.style.paddingBottom = "5px";
+        container.appendChild(header);
+
+        game.matches.forEach((m) => {
+            const row = document.createElement("div");
+            row.style.display = "flex";
+            row.style.alignItems = "center";
+            row.style.padding = "5px";
+            row.style.gap = "5px";
+            row.style.borderBottom = "1px dashed #eee";
             
-            g.matches.forEach((m, mIdx) => {
-                const row = document.createElement("div");
-                row.style.display = "flex";
-                row.style.alignItems = "center";
-                row.style.padding = "5px";
-                row.style.gap = "5px";
-                
-                const tA = document.createElement("span"); tA.textContent = m.teamA; tA.style.flex = "1"; tA.style.textAlign = "right";
-                
-                const inA = document.createElement("input"); 
-                inA.type = "text"; inA.inputMode = "numeric"; // No Arrows
-                inA.value = m.scoreA; inA.style.width = "40px";
-                
-                const inB = document.createElement("input"); 
-                inB.type = "text"; inB.inputMode = "numeric"; // No Arrows
-                inB.value = m.scoreB; inB.style.width = "40px";
-                
-                const tB = document.createElement("span"); tB.textContent = m.teamB; tB.style.flex = "1";
+            const tA = document.createElement("span"); tA.textContent = m.teamA; tA.style.flex = "1"; tA.style.textAlign = "right";
+            
+            const inA = document.createElement("input"); 
+            inA.type = "text"; inA.inputMode = "numeric"; // No Arrows
+            inA.value = m.scoreA; inA.style.width = "40px";
+            
+            const inB = document.createElement("input"); 
+            inB.type = "text"; inB.inputMode = "numeric"; // No Arrows
+            inB.value = m.scoreB; inB.style.width = "40px";
+            
+            const tB = document.createElement("span"); tB.textContent = m.teamB; tB.style.flex = "1";
 
-                const doSave = () => {
-                    m.scoreA = parseInt(inA.value) || 0;
-                    m.scoreB = parseInt(inB.value) || 0;
-                    if(m.scoreA > m.scoreB) m.winner = m.teamA;
-                    else if(m.scoreB > m.scoreA) m.winner = m.teamB;
-                    else m.winner = 'tie';
-                    saveLeaguesData();
-                };
-                inA.oninput = doSave;
-                inB.oninput = doSave;
+            const doSave = () => {
+                m.scoreA = parseInt(inA.value) || 0;
+                m.scoreB = parseInt(inB.value) || 0;
+                if(m.scoreA > m.scoreB) m.winner = m.teamA;
+                else if(m.scoreB > m.scoreA) m.winner = m.teamB;
+                else m.winner = 'tie';
+                saveLeaguesData();
+            };
+            inA.oninput = doSave;
+            inB.oninput = doSave;
 
-                row.append(tA, inA, document.createTextNode("-"), inB, tB);
-                gDiv.appendChild(row);
-            });
-            historyContent.appendChild(gDiv);
+            row.append(tA, inA, document.createTextNode("-"), inB, tB);
+            container.appendChild(row);
         });
     }
 
