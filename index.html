@@ -126,36 +126,26 @@
 
                     <!-- SETUP TAB -->
                     <div id="setup" class="tab-content active">
-                        <div class="setup-grid">
-                            <!-- LEFT: DIVISIONS + MASTER VIEW -->
-                            <div class="setup-col setup-col-left">
-                                <h3>Add Divisions</h3>
-                                <p style="font-size: 0.9em; color: #555;">
-                                    Add divisions, then set the start and end time for each division.
-                                </p>
-                                <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
-                                <button id="addDivisionBtn">Add Division</button>
-                                <label style="margin-left:8px;">
-                                    <input type="checkbox" id="enableColor" checked> Enable Colors
-                                </label>
-                                <div id="divisionButtons" style="margin-top:8px;"></div>
+                        <h3>Add Divisions</h3>
+                        <p style="font-size: 0.9em; color: #555;">
+                            Add divisions, then set the start and end time for each division.
+                            Under each division, add the bunks that belong to it.
+                        </p>
+                        <input id="divisionInput" placeholder="Enter division name (e.g., 5th Grade)">
+                        <button id="addDivisionBtn">Add Division</button>
+                        <label style="margin-left:8px;">
+                            <input type="checkbox" id="enableColor" checked> Enable Colors
+                        </label>
 
-                                <hr style="margin: 20px 0;">
+                        <div id="divisionButtons" style="margin-top:8px;"></div>
 
-                                <h3>Division ↔ Bunks Master View</h3>
-                                <p style="font-size: 0.9em; color: #555;">
-                                    This shows each division and the bunks currently assigned to it.
-                                </p>
-                                <div id="division-bunk-master" class="master-view"></div>
-                            </div>
-
-                            <!-- RIGHT: BUNKS -->
-                            <div class="setup-col setup-col-right">
-                                <h3>Add Bunks</h3>
-                                <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
-                                <button id="addBunkBtn">Add Bunk</button>
-                                <div id="unassignedBunks" class="bunk-container"></div>
-                            </div>
+                        <!-- Hidden legacy bunk UI so older JS doesn't break.
+                             We no longer show a separate "Add Bunks" area. -->
+                        <div id="legacy-bunks" style="display:none;">
+                            <h3>Add Bunks</h3>
+                            <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
+                            <button id="addBunkBtn">Add Bunk</button>
+                            <div id="unassignedBunks" class="bunk-container"></div>
                         </div>
 
                         <hr style="margin: 20px 0;">
@@ -289,61 +279,129 @@
     <script src="updates.js" defer></script>
 
     <script>
-        // Master view: build "Division → Bunks" cards from current DOM state
-        window.renderDivisionBunkMaster = function () {
-            const container = document.getElementById('division-bunk-master');
-            if (!container) return;
-            container.innerHTML = '';
+        // Build "Division → Bunks" UI INSIDE each division card.
+        // We piggyback on whatever app1.js creates in #divisionButtons.
+        (function () {
+            const DIVISION_BUNK_SECTION_CLASS = 'division-bunks-section';
 
-            const wrappers = document.querySelectorAll('#divisionButtons .divisionWrapper');
-            if (!wrappers.length) {
-                container.innerHTML = '<p class="master-view-empty">No divisions yet. Add a division to see it here.</p>';
-                return;
-            }
+            let draggingBunk = null;
 
-            wrappers.forEach(wrapper => {
-                // Try to get division label from data attribute or from first child text
-                const divisionName =
-                    wrapper.getAttribute('data-division') ||
-                    (wrapper.querySelector('.divisionLabel')?.textContent?.trim()) ||
-                    wrapper.textContent.trim().split(/\s+/)[0] ||
-                    'Division';
+            function makeBunkDraggable(bunkEl) {
+                bunkEl.setAttribute('draggable', 'true');
+                bunkEl.classList.add('master-bunk-pill'); // reuse pill style
 
-                const bunkNames = [];
-                wrapper.querySelectorAll('.bunk-button').forEach(b => {
-                    const txt = b.textContent.trim();
-                    if (txt) bunkNames.push(txt);
+                bunkEl.addEventListener('dragstart', (e) => {
+                    draggingBunk = bunkEl;
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', bunkEl.textContent.trim());
                 });
 
-                const card = document.createElement('div');
-                card.className = 'master-card';
+                bunkEl.addEventListener('dragend', () => {
+                    draggingBunk = null;
+                });
+            }
 
-                const header = document.createElement('h4');
-                header.className = 'master-card-title';
-                header.textContent = divisionName;
+            function setupDropZone(container) {
+                container.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                });
 
-                const bunkWrap = document.createElement('div');
-                bunkWrap.className = 'master-card-bunks';
+                container.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    if (!draggingBunk) return;
 
-                if (bunkNames.length === 0) {
-                    const empty = document.createElement('div');
-                    empty.className = 'master-card-empty';
-                    empty.textContent = 'No bunks assigned yet.';
-                    bunkWrap.appendChild(empty);
-                } else {
-                    bunkNames.forEach(name => {
-                        const pill = document.createElement('span');
-                        pill.className = 'master-bunk-pill';
-                        pill.textContent = name;
-                        bunkWrap.appendChild(pill);
-                    });
-                }
+                    const targetPill = e.target.closest('.master-bunk-pill');
+                    const sourceParent = draggingBunk.parentNode;
 
-                card.appendChild(header);
-                card.appendChild(bunkWrap);
-                container.appendChild(card);
-            });
-        };
+                    if (targetPill && targetPill !== draggingBunk) {
+                        // SWAP: dragged bunk with target bunk (swap divisions)
+                        const targetParent = targetPill.parentNode;
+                        const afterTarget = targetPill.nextSibling;
+
+                        targetParent.insertBefore(draggingBunk, afterTarget);
+                        sourceParent.appendChild(targetPill);
+                    } else {
+                        // Just move into this container
+                        container.appendChild(draggingBunk);
+                    }
+                });
+            }
+
+            function enhanceDivisionWrapper(wrapper) {
+                if (!wrapper || wrapper.dataset.bunksEnhanced === 'true') return;
+                wrapper.dataset.bunksEnhanced = 'true';
+
+                const section = document.createElement('div');
+                section.className = DIVISION_BUNK_SECTION_CLASS;
+                section.style.marginTop = '10px';
+
+                const headerRow = document.createElement('div');
+                headerRow.style.display = 'flex';
+                headerRow.style.alignItems = 'center';
+                headerRow.style.justifyContent = 'space-between';
+                headerRow.style.marginBottom = '6px';
+
+                const label = document.createElement('span');
+                label.textContent = 'Bunks in this division';
+                label.style.fontSize = '0.8rem';
+                label.style.fontWeight = '600';
+                label.style.color = '#4b5563';
+
+                const addBtn = document.createElement('button');
+                addBtn.type = 'button';
+                addBtn.textContent = '+ Add Bunk';
+                addBtn.style.fontSize = '0.75rem';
+                addBtn.style.padding = '4px 10px';
+
+                headerRow.appendChild(label);
+                headerRow.appendChild(addBtn);
+
+                const bunkContainer = document.createElement('div');
+                bunkContainer.className = 'division-bunks-container';
+                bunkContainer.style.display = 'flex';
+                bunkContainer.style.flexWrap = 'wrap';
+                bunkContainer.style.gap = '6px';
+
+                setupDropZone(bunkContainer);
+
+                addBtn.addEventListener('click', () => {
+                    const nameRaw = prompt('Bunk name / number for this division?');
+                    if (!nameRaw) return;
+                    const name = nameRaw.trim();
+                    if (!name) return;
+
+                    const bunk = document.createElement('span');
+                    bunk.textContent = name;
+                    makeBunkDraggable(bunk);
+                    bunkContainer.appendChild(bunk);
+                });
+
+                section.appendChild(headerRow);
+                section.appendChild(bunkContainer);
+                wrapper.appendChild(section);
+            }
+
+            function enhanceAllDivisions() {
+                const wrappers = document.querySelectorAll('#divisionButtons .divisionWrapper');
+                wrappers.forEach(enhanceDivisionWrapper);
+            }
+
+            // Expose so we can call on tab switch
+            window.enhanceDivisionBunkUI = enhanceAllDivisions;
+
+            // Also watch for changes to divisionButtons to auto-enhance new divisions
+            const divisionButtons = document.getElementById('divisionButtons');
+            if (divisionButtons && 'MutationObserver' in window) {
+                const observer = new MutationObserver(() => {
+                    enhanceAllDivisions();
+                });
+                observer.observe(divisionButtons, {
+                    childList: true,
+                    subtree: true
+                });
+            }
+        })();
 
         function showTab(id) {
             // Hide all panes
@@ -358,8 +416,9 @@
             });
 
             // Tab-specific hooks
-            if (id === 'setup') window.renderDivisionBunkMaster?.();
-            else if (id === 'schedule') window.updateTable?.();
+            if (id === 'setup') {
+                window.enhanceDivisionBunkUI?.();
+            } else if (id === 'schedule') window.updateTable?.();
             else if (id === 'leagues') window.initLeagues?.();
             else if (id === 'specialty-leagues') window.initSpecialtyLeagues?.();
             else if (id === 'master-scheduler') window.initMasterScheduler?.();
@@ -372,7 +431,7 @@
             else if (id === 'updates') window.initUpdatesTab?.();
         }
 
-        // Hamburger + sidebar wiring + Master View observer
+        // Hamburger + sidebar wiring + initial setup
         (function () {
             'use strict';
             const hamburgerBtn = document.getElementById('hamburgerBtn');
@@ -404,20 +463,8 @@
                 });
             }
 
-            // Keep Master View synced whenever divisions/bunks change
-            const divisionButtons = document.getElementById('divisionButtons');
-            if (divisionButtons && 'MutationObserver' in window) {
-                const observer = new MutationObserver(() => {
-                    window.renderDivisionBunkMaster?.();
-                });
-                observer.observe(divisionButtons, {
-                    childList: true,
-                    subtree: true
-                });
-            }
-
-            // initial render for default tab
-            window.renderDivisionBunkMaster?.();
+            // initial enhancement for default tab
+            window.enhanceDivisionBunkUI?.();
         })();
     </script>
 </body>
