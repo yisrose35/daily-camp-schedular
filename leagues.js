@@ -2,7 +2,9 @@
 // leagues.js
 //
 // UPDATED:
-// - Added "Save All Changes" button to the main dashboard.
+// - Removed "Save All" button.
+// - Added State Persistence (remembers active league/view across tabs).
+// - Added Auto-Save for scores and settings.
 // ===================================================================
 
 (function () {
@@ -13,6 +15,10 @@
 
     let leagueRoundState = {};
     window.leagueRoundState = leagueRoundState;
+
+    // --- UI State Persistence Variables ---
+    let activeLeagueName = null; // Remembers which league is open
+    let activeSubView = null;    // Remembers if 'standings' is open
 
     function getPlaceSuffix(n) {
         const s = ["th", "st", "nd", "rd"];
@@ -36,6 +42,11 @@
         loadLeaguesData();
         loadRoundState();
         renderLeaguesTab();
+        
+        // --- RESTORE STATE ---
+        if (activeLeagueName && leaguesByName[activeLeagueName]) {
+            window.editLeague(activeLeagueName);
+        }
     };
 
     function renderLeaguesTab() {
@@ -45,18 +56,13 @@
         container.innerHTML = `
             <div style="padding:20px; font-family:Arial;">
                 <h1 style="color:#1a5fb4;">League Manager</h1>
-                <p style="color:#444;">Create and manage leagues for the scheduler.</p>
+                <p style="color:#444;">Create and manage leagues for the scheduler. Changes are saved automatically.</p>
 
                 <div style="margin-bottom: 20px;">
                     <button id="new-league-btn"
                         style="padding:10px 20px; background:#1a5fb4; color:white;
-                               border:none; border-radius:6px; cursor:pointer; margin-right: 10px;">
-                        + Create New League
-                    </button>
-                    <button id="save-leagues-btn"
-                        style="padding:10px 20px; background:#28a745; color:white;
                                border:none; border-radius:6px; cursor:pointer;">
-                        Save All Changes
+                        + Create New League
                     </button>
                 </div>
 
@@ -72,13 +78,6 @@
         `;
 
         document.getElementById("new-league-btn").onclick = () => createNewLeague();
-        
-        // --- NEW SAVE BUTTON LISTENER ---
-        document.getElementById("save-leagues-btn").onclick = () => {
-            saveLeaguesData();
-            alert("All league data saved successfully!");
-        };
-
         renderLeagueList();
     }
 
@@ -139,6 +138,9 @@
         const editor = document.getElementById("league-editor");
         if (!editor || !league) return;
 
+        // --- SET STATE ---
+        activeLeagueName = name;
+
         editor.style.display = "block";
 
         const allSports = window.getAllGlobalSports?.() || [];
@@ -152,13 +154,13 @@
                         Manage Standings / Games
                     </button>
                     <button id="l-delete-btn" style="background:#d40000; color:white; padding:8px 12px; border:none; border-radius:6px; cursor:pointer;">
-                        Delete
+                        Close / Back
                     </button>
                 </div>
             </div>
             
             <div id="l-standings-ui" style="display:none; margin-top:15px; padding:15px; border:1px solid #ccc; border-radius:8px; background:#fff;">
-                </div>
+            </div>
 
             <div style="display:flex; justify-content:space-between; align-items:center; margin-top:15px;">
                 <label style="font-weight:600;">Enabled:</label>
@@ -169,8 +171,8 @@
             </div>
             
             <div id="l-editor-content" style="margin-top:10px; padding-top:10px; border-top:1px solid #eee;">
-                </div>
-            `;
+            </div>
+        `;
 
         const content = document.getElementById("l-editor-content");
 
@@ -186,7 +188,9 @@
             chip.onclick = () => {
                 toggleArrayItem(league.divisions, divName);
                 saveLeaguesData();
-                editLeague(name); 
+                // Update UI immediately without full re-render to keep focus if needed
+                chip.style.backgroundColor = league.divisions.includes(divName) ? "#007BFF" : "#f0f0f0";
+                chip.style.color = league.divisions.includes(divName) ? "white" : "black";
             };
             divisionChipBox.appendChild(chip);
         });
@@ -217,7 +221,7 @@
             b.onclick = () => {
                 toggleArrayItem(league.sports, act);
                 saveLeaguesData(); 
-                editLeague(name); 
+                b.classList.toggle("active");
             };
             sportWrapper.appendChild(b);
         });
@@ -235,13 +239,19 @@
                     saveLeaguesData();
                 }
                 otherSportInput.value = "";
-                editLeague(name);
+                editLeague(name); // Re-render to show new sport button
             }
         };
         sportPicker.appendChild(otherSportInput);
         content.appendChild(sportPicker);
         
-        document.getElementById("l-delete-btn").onclick = () => deleteLeague(name);
+        // Back Button logic (Close editor)
+        document.getElementById("l-delete-btn").onclick = () => {
+            activeLeagueName = null;
+            activeSubView = null;
+            editor.style.display = "none";
+            renderLeagueList();
+        };
         
         document.getElementById("l-enabled-toggle").onchange = (e) => {
             league.enabled = e.target.checked;
@@ -252,18 +262,30 @@
         const standingsBtn = document.getElementById("l-standings-btn");
         const standingsUI = document.getElementById("l-standings-ui");
         
-        standingsBtn.onclick = () => {
+        const toggleStandings = () => {
             const isVisible = standingsUI.style.display === 'block';
             if (isVisible) {
                 standingsUI.style.display = 'none';
                 standingsBtn.textContent = 'Manage Standings / Games';
+                activeSubView = null;
             } else {
                 standingsUI.innerHTML = ''; 
                 standingsUI.appendChild(renderGameResultsUI(name)); 
                 standingsUI.style.display = 'block';
                 standingsBtn.textContent = 'Close Standings';
+                activeSubView = 'standings';
             }
         };
+
+        standingsBtn.onclick = toggleStandings;
+
+        // Restore Standings View if it was open
+        if (activeSubView === 'standings') {
+            standingsUI.innerHTML = ''; 
+            standingsUI.appendChild(renderGameResultsUI(name)); 
+            standingsUI.style.display = 'block';
+            standingsBtn.textContent = 'Close Standings';
+        }
     };
 
     function createChip(name, isActive, activeColor = "#007BFF") {
@@ -438,21 +460,40 @@
         const matchContainer = document.createElement("div");
         container.appendChild(matchContainer);
 
-        const saveBtn = document.createElement("button");
-        saveBtn.textContent = "Save Game Results";
-        saveBtn.className = "update-standings-btn"; 
-        saveBtn.style.display = "none"; 
-        saveBtn.onclick = () => saveGameResults(league, select.value, matchContainer);
-        container.appendChild(saveBtn);
+        // Create Game Button (Only for "New")
+        const createBtn = document.createElement("button");
+        createBtn.textContent = "Add Game to History";
+        createBtn.className = "update-standings-btn"; 
+        createBtn.style.display = "none"; 
+        
+        // Helper to save *new* games explicitly
+        createBtn.onclick = () => {
+            const result = gatherGameResults(matchContainer);
+            if (result.length === 0) return;
+            
+            league.games.push({
+                id: Date.now(),
+                date: window.currentScheduleDate,
+                name: `Game ${league.games.length + 1}`,
+                matches: result
+            });
+            recalcStandings(league);
+            saveLeaguesData();
+            alert("Game added!");
+            
+            // Refresh UI (go to new game in dropdown or reset)
+            renderGameEntryUI(league, container);
+        };
+        container.appendChild(createBtn);
 
         select.onchange = () => {
             matchContainer.innerHTML = "";
             if (select.value === "new") {
                 importBtn.style.display = "inline-block";
-                saveBtn.style.display = "none";
+                createBtn.style.display = "none"; // Hidden until matches exist
             } else {
                 importBtn.style.display = "none";
-                saveBtn.style.display = "inline-block"; 
+                createBtn.style.display = "none"; // No button for existing, auto-save instead
                 loadExistingGame(league, select.value, matchContainer);
             }
         };
@@ -461,12 +502,13 @@
             const game = league.games[gameIdx];
             if (!game) return;
 
-            game.matches.forEach(m => {
-                addMatchRow(target, m.teamA, m.teamB, m.scoreA, m.scoreB);
+            game.matches.forEach((m, matchIdx) => {
+                addMatchRow(target, m.teamA, m.teamB, m.scoreA, m.scoreB, true, gameIdx, matchIdx);
             });
         }
 
-        function addMatchRow(target, teamA, teamB, scoreA = "", scoreB = "") {
+        // addMatchRow modified to support Auto-Save for existing games
+        function addMatchRow(target, teamA, teamB, scoreA = "", scoreB = "", isExisting = false, gameIdx = null, matchIdx = null) {
             const row = document.createElement("div");
             row.className = "match-row"; 
             row.style.display = "flex";
@@ -488,8 +530,38 @@
             row.dataset.teamA = teamA;
             row.dataset.teamB = teamB;
             
+            // Auto-Save Logic
+            if (isExisting && gameIdx !== null && matchIdx !== null) {
+                const inputs = row.querySelectorAll("input");
+                inputs.forEach(inp => {
+                    inp.onchange = () => {
+                        // 1. Update Data Model
+                        const sA = parseInt(row.querySelector(".score-a").value) || 0;
+                        const sB = parseInt(row.querySelector(".score-b").value) || 0;
+                        
+                        let winner = null;
+                        if (sA > sB) winner = teamA;
+                        else if (sB > sA) winner = teamB;
+                        else winner = "tie";
+
+                        league.games[gameIdx].matches[matchIdx].scoreA = sA;
+                        league.games[gameIdx].matches[matchIdx].scoreB = sB;
+                        league.games[gameIdx].matches[matchIdx].winner = winner;
+                        
+                        // 2. Save & Recalc
+                        recalcStandings(league);
+                        saveLeaguesData();
+                        console.log("Auto-saved game result.");
+                    };
+                });
+            }
+
             target.appendChild(row);
-            saveBtn.style.display = "inline-block";
+            
+            // Show "Add" button only if it's a NEW game
+            if (!isExisting) {
+                createBtn.style.display = "inline-block";
+            }
         }
 
         function importGamesFromSchedule(league, target) {
@@ -528,10 +600,10 @@
         }
     }
 
-    function saveGameResults(league, gameId, container) {
+    // Helper to just gather data from DOM
+    function gatherGameResults(container) {
         const rows = container.querySelectorAll(".match-row");
         const results = [];
-
         rows.forEach(row => {
             const tA = row.dataset.teamA;
             const tB = row.dataset.teamB;
@@ -545,29 +617,7 @@
 
             results.push({ teamA: tA, teamB: tB, scoreA: sA, scoreB: sB, winner: winner });
         });
-
-        if (results.length === 0) return;
-
-        if (gameId === "new") {
-            league.games.push({
-                id: Date.now(),
-                date: window.currentScheduleDate,
-                name: `Game ${league.games.length + 1}`,
-                matches: results
-            });
-        } else {
-            league.games[gameId].matches = results;
-        }
-
-        recalcStandings(league); 
-        saveLeaguesData();
-        
-        alert("Results saved and standings updated!");
-        
-        const editor = document.getElementById("league-editor");
-        if(editor) {
-            document.getElementById("tab-standings").click();
-        }
+        return results;
     }
 
     function recalcStandings(league) {
@@ -592,6 +642,7 @@
     window.deleteLeague = function (name) {
         if (!confirm(`Are you sure you want to delete "${name}"?`)) return;
         delete leaguesByName[name];
+        activeLeagueName = null; // Reset state
         saveLeaguesData();
         renderLeagueList();
         document.getElementById("league-editor").style.display = "none";
