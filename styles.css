@@ -1,204 +1,315 @@
 /* =========================================
-   1. VARIABLES & THEME
+   1. VARIABLES & THEME (Apple/Linear Inspired)
    ========================================= */
 :root {
-    /* Modern Professional Palette */
-    --primary: #4f46e5;       /* Indigo-600 - Modern, trustworthy blue */
-    --primary-hover: #4338ca; /* Indigo-700 */
-    --secondary: #64748b;     /* Slate-500 - For secondary text/icons */
+    /* Brand Colors */
+    --primary: #2563eb;       /* High-trust Royal Blue */
+    --primary-hover: #1d4ed8;
+    --accent: #3b82f6;        /* Lighter blue for highlights */
     
-    --success: #10b981;       /* Emerald-500 - Soft, clear green */
-    --danger: #ef4444;        /* Red-500 - Clear but not harsh */
-    --warning: #f59e0b;       /* Amber-500 */
+    /* Semantic Colors */
+    --success-bg: #dcfce7; --success-text: #14532d;
+    --danger-bg: #fee2e2;  --danger-text: #7f1d1d;
+    --warning-bg: #fef3c7; --warning-text: #78350f;
     
-    --bg-app: #f1f5f9;        /* Slate-100 - The main background */
-    --bg-surface: #ffffff;    /* Pure white for cards */
-    --bg-subtle: #f8fafc;     /* Very light grey for headers/stripes */
+    /* Surface & Backgrounds */
+    --bg-app: #f3f4f6;        /* Light Gray/Blue background */
+    --bg-sidebar: #0f172a;    /* Dark Navy (Slack-like) */
+    --bg-surface: #ffffff;    /* Pure White */
+    --bg-header: rgba(255, 255, 255, 0.85); /* Glassmorphism */
     
-    --border: #e2e8f0;        /* Slate-200 - Subtle borders */
-    --text-main: #0f172a;     /* Slate-900 - High contrast, readable */
-    --text-muted: #64748b;    /* Slate-500 - Secondary info */
+    /* Typography & Borders */
+    --text-main: #111827;     /* Almost Black */
+    --text-muted: #6b7280;    /* Cool Gray */
+    --text-sidebar: #94a3b8;  /* Light Gray for dark bg */
+    --border: #e5e7eb;
     
-    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
-    
-    --radius: 0.5rem;         /* 8px rounded corners */
-    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    /* Effects */
+    --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+    --shadow-float: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+    --radius: 8px;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 /* =========================================
-   2. GLOBAL RESET & TYPOGRAPHY
+   2. APP SHELL LAYOUT (The "Dashboard" Structure)
    ========================================= */
 body {
     font-family: var(--font-sans);
     background-color: var(--bg-app);
     color: var(--text-main);
     margin: 0;
-    padding: 20px;
-    line-height: 1.5;
-    -webkit-font-smoothing: antialiased;
+    padding: 0;
+    height: 100vh;
+    overflow: hidden; /* Prevent body scroll, we scroll content areas */
+    display: grid;
+    grid-template-columns: 260px 1fr; /* Sidebar | Content */
+    grid-template-rows: 60px 1fr;     /* Header | Main */
+    grid-template-areas: 
+        "sidebar header"
+        "sidebar main";
 }
-
-h1, h2, h3, h4 {
-    font-weight: 700;
-    color: var(--text-main);
-    margin-top: 0;
-}
-
-h1 { font-size: 1.875rem; letter-spacing: -0.025em; }
-h2 { font-size: 1.5rem; letter-spacing: -0.025em; }
-h3 { font-size: 1.25rem; }
-
-p { color: var(--text-muted); margin-bottom: 1rem; }
 
 /* =========================================
-   3. LAYOUT & CARDS
+   3. SIDEBAR NAVIGATION
    ========================================= */
-/* Standard "Card" container for sections */
-.card, .override-section, .detail-pane, .print-card, .help-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow-sm);
-    padding: 1.5rem;
-    margin-bottom: 1.5rem;
-    transition: transform 0.2s, box-shadow 0.2s;
-}
-
-.help-card:hover, .print-card:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-md);
-}
-
-/* Flex/Grid Containers */
-.flex-row { display: flex; gap: 1rem; align-items: center; }
-.flex-wrap { flex-wrap: wrap; }
-.grid-cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
-
-/* =========================================
-   4. NAVIGATION TABS (The "Pill" Look)
-   ========================================= */
-.tabs, .da-tabs-nav {
+.sidebar {
+    grid-area: sidebar;
+    background-color: var(--bg-sidebar);
+    color: white;
     display: flex;
+    flex-direction: column;
+    padding: 1.5rem 1rem;
+    border-right: 1px solid #1e293b;
+    overflow-y: auto;
+}
+
+.app-logo {
+    font-size: 1.25rem;
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    margin-bottom: 2rem;
+    padding-left: 0.75rem;
+    color: white;
+    display: flex;
+    align-items: center;
     gap: 0.5rem;
-    padding: 0.5rem;
-    background: var(--bg-surface);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow-sm);
-    margin-bottom: 20px;
-    overflow-x: auto; /* Scroll on mobile */
-    border: 1px solid var(--border);
+}
+
+/* Transform the old .tabs container into a vertical list */
+.tabs {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
 }
 
 .tab-button {
     background: transparent;
     border: none;
-    padding: 0.5rem 1rem;
-    border-radius: calc(var(--radius) - 2px);
-    color: var(--text-muted);
-    font-weight: 600;
+    text-align: left;
+    padding: 0.75rem;
+    border-radius: 6px;
+    color: var(--text-sidebar);
+    font-weight: 500;
     font-size: 0.9rem;
     cursor: pointer;
     transition: all 0.2s;
-    white-space: nowrap;
+    width: 100%;
 }
 
 .tab-button:hover {
-    background-color: var(--bg-app);
-    color: var(--primary);
+    background-color: rgba(255, 255, 255, 0.05);
+    color: white;
 }
 
 .tab-button.active {
     background-color: var(--primary);
     color: white;
-    box-shadow: var(--shadow-sm);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+    font-weight: 600;
 }
 
-.tab-content { display: none; animation: fadeIn 0.2s ease-out; }
-.tab-content.active { display: block; }
-
-@keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+/* Separator for grouping */
+.nav-divider {
+    height: 1px;
+    background: #334155;
+    margin: 1rem 0;
+}
 
 /* =========================================
-   5. FORMS & INPUTS
+   4. TOP HEADER
    ========================================= */
-input[type="text"], input[type="date"], input[type="number"], select {
+.app-header {
+    grid-area: header;
+    background-color: var(--bg-header);
+    backdrop-filter: blur(12px); /* Apple-style blur */
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 2rem;
+    z-index: 20;
+}
+
+.date-control {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.date-control label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+input[type="date"] {
+    background: var(--bg-app);
+    border: 1px solid var(--border);
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    font-family: inherit;
+    font-weight: 500;
+    color: var(--text-main);
+    outline: none;
+}
+
+/* =========================================
+   5. MAIN CONTENT AREA
+   ========================================= */
+.main-viewport {
+    grid-area: main;
+    overflow-y: auto; /* Scrollable content */
+    padding: 2rem;
+}
+
+.tab-content {
+    display: none;
+    max-width: 1200px; /* Prevent stretching on ultra-wide */
+    margin: 0 auto;
+    animation: fadeUp 0.3s ease-out;
+}
+.tab-content.active { display: block; }
+
+@keyframes fadeUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* =========================================
+   6. CARDS & SURFACES
+   ========================================= */
+.card, .override-section, .detail-pane, .print-card, .help-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 12px; /* Softer corners */
+    box-shadow: var(--shadow-sm);
+    padding: 2rem;
+    margin-bottom: 2rem;
+}
+
+h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-main);
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border);
+}
+
+/* =========================================
+   7. MODERN CONTROLS (Inputs & Buttons)
+   ========================================= */
+input[type="text"], select {
+    width: 100%;
     padding: 0.6rem 0.8rem;
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: 6px;
     font-size: 0.95rem;
-    color: var(--text-main);
-    background: var(--bg-surface);
-    transition: border-color 0.15s, box-shadow 0.15s;
-    width: 100%;
-    box-sizing: border-box;
+    transition: border 0.2s, box-shadow 0.2s;
+    background: #fff;
 }
 
 input:focus, select:focus {
-    outline: none;
     border-color: var(--primary);
-    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1); /* Primary with opacity */
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+    outline: none;
 }
 
-/* Buttons */
-button, .btn {
-    padding: 0.6rem 1.2rem;
-    border-radius: var(--radius);
-    font-weight: 600;
-    font-size: 0.95rem;
-    cursor: pointer;
-    border: 1px solid transparent;
-    transition: all 0.2s;
+button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0.5rem;
+    padding: 0.6rem 1.2rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.2s ease;
 }
 
-/* Primary Action Button */
-button.primary, #run-optimizer-btn, #addBunkBtn, #addDivisionBtn, #add-field-btn, #add-special-btn, .update-standings-btn {
+/* Primary Button (Google Blue) */
+#run-optimizer-btn, button.primary, #addBunkBtn, #addDivisionBtn {
     background-color: var(--primary);
     color: white;
-    box-shadow: var(--shadow-sm);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
 }
-button.primary:hover, #run-optimizer-btn:hover {
+#run-optimizer-btn:hover, button.primary:hover {
     background-color: var(--primary-hover);
-    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
 }
 
-/* Danger Button */
-button.danger, #eraseAllBtn, #eraseTodayBtn, #l-delete-btn, #sl-delete-btn {
-    background-color: #fee2e2;
-    color: var(--danger);
-    border-color: #fecaca;
+/* Secondary/Ghost Buttons */
+.btn-secondary, .tab-button {
+    background: transparent;
+    color: var(--text-main);
 }
-button.danger:hover { background-color: var(--danger); color: white; }
+
+/* Danger Buttons */
+button.danger, #eraseAllBtn, #l-delete-btn {
+    background-color: white;
+    border: 1px solid var(--danger-bg);
+    color: var(--danger-text);
+}
+button.danger:hover {
+    background-color: var(--danger-bg);
+}
 
 /* =========================================
-   6. SCHEDULE GRID (Clean & Modern)
+   8. SEGMENTED CONTROLS (Daily Adjustments)
    ========================================= */
-/* The Scrollable Wrapper */
-.schedule-view-wrapper, #daily-skeleton-grid, #scheduler-grid {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: inset 0 2px 4px 0 rgb(0 0 0 / 0.02);
-    overflow: auto;
+/* This replaces the old buttons in Daily Adjustments */
+.da-tabs-nav {
+    background: #e5e7eb; /* Light gray track */
+    padding: 4px;
+    border-radius: 8px;
+    display: inline-flex;
+    gap: 4px;
+    margin-bottom: 20px;
 }
 
-/* Tables inside the grid */
+.da-tabs-nav .tab-button {
+    background: transparent;
+    color: var(--text-muted);
+    padding: 6px 16px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    box-shadow: none;
+}
+
+.da-tabs-nav .tab-button.active {
+    background: white;
+    color: var(--text-main);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+/* =========================================
+   9. SCHEDULE GRID (The "Calendar" Look)
+   ========================================= */
+.schedule-view-wrapper {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: auto;
+    box-shadow: var(--shadow-sm);
+}
+
 table { width: 100%; border-collapse: separate; border-spacing: 0; }
 
-/* Headers */
 th {
-    background: var(--bg-subtle);
+    background: var(--bg-app);
     color: var(--text-muted);
-    font-weight: 600;
-    text-transform: uppercase;
     font-size: 0.75rem;
+    text-transform: uppercase;
     letter-spacing: 0.05em;
-    padding: 0.75rem 1rem;
+    padding: 12px;
     border-bottom: 1px solid var(--border);
     border-right: 1px solid var(--border);
     position: sticky;
@@ -206,159 +317,86 @@ th {
     z-index: 10;
 }
 
-/* Cells */
 td {
     border-bottom: 1px solid var(--border);
     border-right: 1px solid var(--border);
-    padding: 0.5rem;
+    padding: 8px;
     font-size: 0.9rem;
-    vertical-align: middle;
-    background: white;
-    color: var(--text-main);
+    height: 40px;
+    vertical-align: top;
 }
 
 /* Time Column */
-td:first-child, th:first-child {
-    background: var(--bg-subtle);
-    font-weight: 600;
+td:first-child {
+    background: #fafafa;
     color: var(--text-muted);
-    width: 80px;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.8rem;
     text-align: center;
+    width: 80px;
     position: sticky;
     left: 0;
     z-index: 5;
-    border-right: 2px solid var(--border); /* Stronger divider */
+    border-right: 2px solid var(--border);
 }
 
-/* Event "Pills" inside cells (when we switch to divs) */
+/* Event "Chips" inside the grid */
 .grid-event {
     border-radius: 4px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-    border: none !important; /* Override inline styles */
-    font-size: 0.85rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    font-size: 0.8rem;
     font-weight: 600;
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    transition: transform 0.1s;
-}
-.grid-event:hover { transform: scale(1.02); z-index: 20 !important; }
-
-/* =========================================
-   7. LISTS & CHIPS (Setup, Fields, Specials)
-   ========================================= */
-.master-list .list-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0.75rem 1rem;
-    margin-bottom: 0.5rem;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    transition: border-color 0.2s;
-}
-.master-list .list-item:hover { border-color: var(--primary); }
-.master-list .list-item.selected {
-    border-color: var(--primary);
-    background-color: #eff6ff; /* Light blue tint */
-    box-shadow: 0 0 0 1px var(--primary);
-}
-
-/* Chip Containers */
-.chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-
-/* The Chip Itself */
-.bunk-button {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.35rem 0.75rem;
-    border-radius: 9999px; /* Pill shape */
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    border: 1px solid var(--border);
-    background: var(--bg-surface);
-    color: var(--text-main);
-    transition: all 0.2s;
-    box-shadow: var(--shadow-sm);
-}
-
-.bunk-button:hover { border-color: var(--primary); color: var(--primary); }
-
-.bunk-button.selected {
-    background-color: var(--primary) !important;
-    color: white !important;
-    border-color: var(--primary) !important;
-    box-shadow: var(--shadow-md);
-}
-
-/* =========================================
-   8. TOGGLE SWITCHES (Refined)
-   ========================================= */
-.switch {
-    position: relative;
-    display: inline-block;
-    width: 44px;
-    height: 24px;
-}
-.switch input { opacity: 0; width: 0; height: 0; }
-.slider {
-    position: absolute;
-    cursor: pointer;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background-color: #cbd5e1;
-    transition: .4s;
-    border-radius: 34px;
-}
-.slider:before {
-    position: absolute;
-    content: "";
-    height: 20px; width: 20px;
-    left: 2px; bottom: 2px;
-    background-color: white;
-    transition: .4s;
-    border-radius: 50%;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
-}
-input:checked + .slider { background-color: var(--success); }
-input:checked + .slider:before { transform: translateX(20px); }
-
-/* =========================================
-   9. ALERTS & MODALS
-   ========================================= */
-/* Validator Overlay */
-#validator-overlay > div {
-    border-radius: 12px !important;
-    box-shadow: var(--shadow-lg) !important;
     border: none !important;
 }
 
-/* Report Table Rows */
-.report-row-fresh {
-    background-color: #ecfdf5 !important; /* Light emerald */
-    color: #065f46 !important;
-}
-
-/* Draggable Palette Items */
-.grid-tile-draggable {
-    background: white !important; /* Override inline */
-    border: 1px solid var(--border) !important;
-    box-shadow: var(--shadow-sm);
-    color: var(--text-main);
-    font-weight: 600;
-    border-left: 4px solid var(--primary) !important; /* Color indicator on left */
-    transition: transform 0.2s;
-}
-.grid-tile-draggable:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+/* Event Colors */
+.tile-activity { background: #e0f2fe; color: #0369a1; border-left: 3px solid #0ea5e9 !important; }
+.tile-sports { background: #dcfce7; color: #15803d; border-left: 3px solid #22c55e !important; }
+.tile-special { background: #f3e8ff; color: #7e22ce; border-left: 3px solid #a855f7 !important; }
+.tile-swim { background: #eff6ff; color: #1d4ed8; border-left: 3px solid #3b82f6 !important; }
+.tile-lunch { background: #fff7ed; color: #c2410c; border-left: 3px solid #f97316 !important; }
+.tile-league { background: #faf5ff; color: #6b21a8; border-left: 3px solid #9333ea !important; }
 
 /* =========================================
-   10. PRINT STYLES (Preserve logic, clean look)
+   10. CHIPS & LISTS
    ========================================= */
-@media print {
-    body { background: white; padding: 0; }
-    .card, .tabs { box-shadow: none; border: none; }
-    /* Ensure background colors print */
-    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+.bunk-button {
+    background: white;
+    border: 1px solid var(--border);
+    padding: 4px 12px;
+    border-radius: 99px;
+    font-size: 0.85rem;
+    color: var(--text-main);
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
 }
+
+.bunk-button:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.bunk-button.selected {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+    box-shadow: 0 2px 4px rgba(37, 99, 235, 0.3);
+}
+
+/* Welcome Screen (Login Style) */
+#welcome-screen {
+    background: var(--bg-app);
+    z-index: 9999;
+}
+#welcome-screen h2 { font-size: 2rem; color: var(--text-main); }
+#camp-name-input {
+    max-width: 400px; padding: 1rem; font-size: 1.1rem;
+    border-radius: 8px; box-shadow: var(--shadow-md); border: 1px solid transparent;
+}
+#camp-name-input:focus { box-shadow: var(--shadow-float); }
