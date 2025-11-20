@@ -1,11 +1,11 @@
 /* =========================================
-   1. VARIABLES & THEME (Apple/Linear Inspired)
+   1. VARIABLES & THEME
    ========================================= */
 :root {
     /* Brand Colors */
-    --primary: #2563eb;       /* High-trust Royal Blue */
+    --primary: #2563eb;       /* Royal Blue */
     --primary-hover: #1d4ed8;
-    --accent: #3b82f6;        /* Lighter blue for highlights */
+    --accent: #3b82f6;        
     
     /* Semantic Colors */
     --success-bg: #dcfce7; --success-text: #14532d;
@@ -14,14 +14,14 @@
     
     /* Surface & Backgrounds */
     --bg-app: #f3f4f6;        /* Light Gray/Blue background */
-    --bg-sidebar: #0f172a;    /* Dark Navy (Slack-like) */
+    --bg-sidebar: #0f172a;    /* Dark Navy */
     --bg-surface: #ffffff;    /* Pure White */
-    --bg-header: rgba(255, 255, 255, 0.85); /* Glassmorphism */
+    --bg-header: rgba(255, 255, 255, 0.85);
     
     /* Typography & Borders */
-    --text-main: #111827;     /* Almost Black */
-    --text-muted: #6b7280;    /* Cool Gray */
-    --text-sidebar: #94a3b8;  /* Light Gray for dark bg */
+    --text-main: #111827;     
+    --text-muted: #6b7280;    
+    --text-sidebar: #94a3b8;  
     --border: #e5e7eb;
     
     /* Effects */
@@ -33,7 +33,7 @@
 }
 
 /* =========================================
-   2. APP SHELL LAYOUT (The "Dashboard" Structure)
+   2. APP SHELL LAYOUT (FIXED)
    ========================================= */
 body {
     font-family: var(--font-sans);
@@ -42,13 +42,19 @@ body {
     margin: 0;
     padding: 0;
     height: 100vh;
-    overflow: hidden; /* Prevent body scroll, we scroll content areas */
+    overflow: hidden; 
+}
+
+/* This is the fix: The Grid applies to the Container, not Body */
+#main-app-container {
     display: grid;
     grid-template-columns: 260px 1fr; /* Sidebar | Content */
     grid-template-rows: 60px 1fr;     /* Header | Main */
     grid-template-areas: 
         "sidebar header"
         "sidebar main";
+    height: 100%;
+    width: 100%;
 }
 
 /* =========================================
@@ -77,7 +83,6 @@ body {
     gap: 0.5rem;
 }
 
-/* Transform the old .tabs container into a vertical list */
 .tabs {
     display: flex;
     flex-direction: column;
@@ -110,7 +115,6 @@ body {
     font-weight: 600;
 }
 
-/* Separator for grouping */
 .nav-divider {
     height: 1px;
     background: #334155;
@@ -123,7 +127,7 @@ body {
 .app-header {
     grid-area: header;
     background-color: var(--bg-header);
-    backdrop-filter: blur(12px); /* Apple-style blur */
+    backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--border);
     display: flex;
@@ -163,13 +167,13 @@ input[type="date"] {
    ========================================= */
 .main-viewport {
     grid-area: main;
-    overflow-y: auto; /* Scrollable content */
+    overflow-y: auto;
     padding: 2rem;
 }
 
 .tab-content {
     display: none;
-    max-width: 1200px; /* Prevent stretching on ultra-wide */
+    max-width: 1200px;
     margin: 0 auto;
     animation: fadeUp 0.3s ease-out;
 }
@@ -186,10 +190,15 @@ input[type="date"] {
 .card, .override-section, .detail-pane, .print-card, .help-card {
     background: var(--bg-surface);
     border: 1px solid var(--border);
-    border-radius: 12px; /* Softer corners */
+    border-radius: 12px;
     box-shadow: var(--shadow-sm);
     padding: 2rem;
     margin-bottom: 2rem;
+}
+
+.help-card:hover, .print-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
 }
 
 h3 {
@@ -204,7 +213,7 @@ h3 {
 /* =========================================
    7. MODERN CONTROLS (Inputs & Buttons)
    ========================================= */
-input[type="text"], select {
+input[type="text"], input[type="number"], select {
     width: 100%;
     padding: 0.6rem 0.8rem;
     border: 1px solid var(--border);
@@ -212,6 +221,7 @@ input[type="text"], select {
     font-size: 0.95rem;
     transition: border 0.2s, box-shadow 0.2s;
     background: #fff;
+    box-sizing: border-box;
 }
 
 input:focus, select:focus {
@@ -220,7 +230,7 @@ input:focus, select:focus {
     outline: none;
 }
 
-button {
+button, .btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -233,8 +243,8 @@ button {
     transition: all 0.2s ease;
 }
 
-/* Primary Button (Google Blue) */
-#run-optimizer-btn, button.primary, #addBunkBtn, #addDivisionBtn {
+/* Primary Button */
+#run-optimizer-btn, button.primary, #addBunkBtn, #addDivisionBtn, #add-field-btn, #add-special-btn, .update-standings-btn {
     background-color: var(--primary);
     color: white;
     box-shadow: 0 1px 2px rgba(0,0,0,0.1);
@@ -245,14 +255,15 @@ button {
     box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
 }
 
-/* Secondary/Ghost Buttons */
-.btn-secondary, .tab-button {
+/* Secondary Buttons */
+.btn-secondary {
     background: transparent;
     color: var(--text-main);
+    border: 1px solid var(--border);
 }
 
 /* Danger Buttons */
-button.danger, #eraseAllBtn, #l-delete-btn {
+button.danger, #eraseAllBtn, #eraseTodayBtn, #l-delete-btn, #sl-delete-btn {
     background-color: white;
     border: 1px solid var(--danger-bg);
     color: var(--danger-text);
@@ -262,11 +273,10 @@ button.danger:hover {
 }
 
 /* =========================================
-   8. SEGMENTED CONTROLS (Daily Adjustments)
+   8. SEGMENTED CONTROLS & GRIDS
    ========================================= */
-/* This replaces the old buttons in Daily Adjustments */
 .da-tabs-nav {
-    background: #e5e7eb; /* Light gray track */
+    background: #e5e7eb;
     padding: 4px;
     border-radius: 8px;
     display: inline-flex;
@@ -290,15 +300,13 @@ button.danger:hover {
     box-shadow: 0 1px 2px rgba(0,0,0,0.1);
 }
 
-/* =========================================
-   9. SCHEDULE GRID (The "Calendar" Look)
-   ========================================= */
-.schedule-view-wrapper {
-    background: white;
+/* Schedule Grid Wrapper */
+.schedule-view-wrapper, #daily-skeleton-grid, #scheduler-grid {
+    background: var(--bg-surface);
     border: 1px solid var(--border);
     border-radius: 12px;
     overflow: auto;
-    box-shadow: var(--shadow-sm);
+    box-shadow: inset 0 2px 4px 0 rgb(0 0 0 / 0.02);
 }
 
 table { width: 100%; border-collapse: separate; border-spacing: 0; }
@@ -327,7 +335,7 @@ td {
 }
 
 /* Time Column */
-td:first-child {
+td:first-child, th:first-child {
     background: #fafafa;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
@@ -340,7 +348,48 @@ td:first-child {
     border-right: 2px solid var(--border);
 }
 
-/* Event "Chips" inside the grid */
+/* =========================================
+   9. LISTS & CHIPS
+   ========================================= */
+.master-list .list-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    transition: border-color 0.2s;
+}
+.master-list .list-item:hover { border-color: var(--primary); }
+.master-list .list-item.selected {
+    border-color: var(--primary);
+    background-color: #eff6ff;
+}
+
+.chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+.bunk-button {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.35rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    color: var(--text-main);
+    transition: all 0.15s;
+}
+.bunk-button.selected {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+}
+
+/* Events */
 .grid-event {
     border-radius: 4px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
@@ -353,7 +402,6 @@ td:first-child {
     border: none !important;
 }
 
-/* Event Colors */
 .tile-activity { background: #e0f2fe; color: #0369a1; border-left: 3px solid #0ea5e9 !important; }
 .tile-sports { background: #dcfce7; color: #15803d; border-left: 3px solid #22c55e !important; }
 .tile-special { background: #f3e8ff; color: #7e22ce; border-left: 3px solid #a855f7 !important; }
@@ -361,42 +409,52 @@ td:first-child {
 .tile-lunch { background: #fff7ed; color: #c2410c; border-left: 3px solid #f97316 !important; }
 .tile-league { background: #faf5ff; color: #6b21a8; border-left: 3px solid #9333ea !important; }
 
-/* =========================================
-   10. CHIPS & LISTS
-   ========================================= */
-.bunk-button {
-    background: white;
-    border: 1px solid var(--border);
-    padding: 4px 12px;
-    border-radius: 99px;
-    font-size: 0.85rem;
+/* Draggable Palette Items */
+.grid-tile-draggable {
+    background: white !important;
+    border: 1px solid var(--border) !important;
+    box-shadow: var(--shadow-sm);
     color: var(--text-main);
-    transition: all 0.15s;
-    display: inline-flex;
-    align-items: center;
-    cursor: pointer;
+    font-weight: 600;
+    border-left: 4px solid var(--primary) !important;
+    transition: transform 0.2s;
 }
 
-.bunk-button:hover {
-    border-color: var(--primary);
-    color: var(--primary);
-}
+/* =========================================
+   10. UTILS & MODALS
+   ========================================= */
+.flex-row { display: flex; gap: 1rem; align-items: center; }
+.flex-wrap { flex-wrap: wrap; }
+.grid-cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+.gap-2 { gap: 0.5rem; } .gap-3 { gap: 0.75rem; }
+.mb-3 { margin-bottom: 0.75rem; } .mb-4 { margin-bottom: 1rem; }
+.w-full { width: 100%; }
 
-.bunk-button.selected {
-    background: var(--primary);
-    color: white;
-    border-color: var(--primary);
-    box-shadow: 0 2px 4px rgba(37, 99, 235, 0.3);
-}
-
-/* Welcome Screen (Login Style) */
 #welcome-screen {
     background: var(--bg-app);
     z-index: 9999;
+    display: flex; 
+    justify-content: center; 
+    align-items: center;
 }
 #welcome-screen h2 { font-size: 2rem; color: var(--text-main); }
 #camp-name-input {
     max-width: 400px; padding: 1rem; font-size: 1.1rem;
     border-radius: 8px; box-shadow: var(--shadow-md); border: 1px solid transparent;
 }
-#camp-name-input:focus { box-shadow: var(--shadow-float); }
+
+/* Switch */
+.switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #cbd5e1; transition: .4s; border-radius: 34px; }
+.slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 2px; bottom: 2px; background-color: white; transition: .4s; border-radius: 50%; }
+input:checked + .slider { background-color: #10b981; }
+input:checked + .slider:before { transform: translateX(20px); }
+
+@media print {
+    body { background: white; height: auto; overflow: visible; display: block; }
+    .sidebar, .app-header { display: none; }
+    .main-viewport { padding: 0; margin: 0; }
+    .card { box-shadow: none; border: none; padding: 0; margin: 0; }
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+}
