@@ -2,9 +2,9 @@
 // leagues.js
 //
 // UPDATED:
-// - FIX: Ignores 'continuation' slots so 1-hour games don't appear as double headers.
-// - FIX: Smarter "League Game X" counting (scans history for highest number).
-// - Default View: Standings.
+// - PRIORITY FIX: Reads "League Game X" directly from the Schedule text.
+// - Fallback: If schedule text is generic, uses Auto-Count (History + 1).
+// - Ignores 'continuation' slots.
 // ===================================================================
 
 (function () {
@@ -594,8 +594,7 @@
         const foundMatches = new Set(); 
         const saveButton = target.parentElement.querySelector("button[style*='background: rgb(40, 167, 69)']") || target.parentElement.lastElementChild;
 
-        // --- 1. Determine Next "League Game X" Number ---
-        // We scan all past matches for the highest "League Game (\d+)" number.
+        // --- 1. Calculate Fallback Auto-Count ---
         let maxLeagueGameNum = 0;
         (league.games || []).forEach(g => {
             (g.matches || []).forEach(m => {
@@ -607,17 +606,18 @@
                     }
                 }
             });
-            // Fallback: If no labels found in history, count the game set itself as 1
             if(maxLeagueGameNum === 0) maxLeagueGameNum = league.games.length;
         });
 
-        // --- 2. Gather Today's Matches ---
+        // --- 2. Gather Matches ---
         const groupedMatches = {};
+        // Helper to track if we are using custom schedule labels or fallback
+        const slotsWithCustomLabels = new Set(); 
 
         league.teams.forEach(team => {
             const schedule = assignments[team] || [];
             schedule.forEach((entry, slotIndex) => {
-                // FIX: Check !entry.continuation to avoid double counting 1-hour games
+                // IGNORE CONTINUATIONS
                 if (entry && entry._h2h && !entry.continuation) {
                     const label = entry.sport || ""; 
                     const match = label.match(/^(.*?) vs (.*?) \(/);
@@ -627,13 +627,25 @@
                         const t2 = match[2].trim();
 
                         if (league.teams.includes(t1) && league.teams.includes(t2)) {
-                            // Unique key includes slotIndex to allow true double headers
                             const uniqueKey = [t1, t2].sort().join(" vs ") + "::" + slotIndex;
                             
                             if (!foundMatches.has(uniqueKey)) {
                                 foundMatches.add(uniqueKey);
-                                if(!groupedMatches[slotIndex]) groupedMatches[slotIndex] = [];
-                                groupedMatches[slotIndex].push({ t1, t2 });
+                                
+                                if(!groupedMatches[slotIndex]) groupedMatches[slotIndex] = { matches: [], label: null };
+                                groupedMatches[slotIndex].matches.push({ t1, t2 });
+
+                                // ** NEW: EXTRACT "League Game 5" from the schedule text **
+                                // Look for content inside parens: e.g. "(League Game 5)"
+                                const parenMatch = label.match(/\((.*?)\)$/);
+                                if (parenMatch) {
+                                    const textInParens = parenMatch[1];
+                                    // Check if it contains "Game" or "League" + number
+                                    if (textInParens.match(/Game \d+/i)) {
+                                        groupedMatches[slotIndex].label = textInParens; 
+                                        slotsWithCustomLabels.add(slotIndex);
+                                    }
+                                }
                             }
                         }
                     }
@@ -648,18 +660,26 @@
             return;
         }
 
-        // --- 3. Render Groups with Sequential Numbers ---
+        // --- 3. Render ---
         sortedSlots.forEach((slotIdx, displayIndex) => {
-            // Start counting from the highest found + 1
-            const gameNumber = maxLeagueGameNum + displayIndex + 1;
-            const gameLabel = `League Game ${gameNumber}`;
+            const group = groupedMatches[slotIdx];
+            let gameLabel = "";
+
+            // PRIORITY: Use label from schedule if it exists
+            if (group.label) {
+                gameLabel = group.label;
+            } else {
+                // FALLBACK: Use History + 1
+                const gameNumber = maxLeagueGameNum + displayIndex + 1;
+                gameLabel = `League Game ${gameNumber}`;
+            }
 
             const header = document.createElement("div");
             header.className = "group-header";
             header.textContent = gameLabel;
             target.appendChild(header);
 
-            groupedMatches[slotIdx].forEach(m => {
+            group.matches.forEach(m => {
                 addMatchRow(target, m.t1, m.t2, "", "", saveButton, gameLabel);
             });
         });
