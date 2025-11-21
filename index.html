@@ -118,13 +118,12 @@
                     </nav>
                 </aside>
 
-                <!-- Backdrop for sidebar on mobile -->
+                <!-- Backdrop for sidebar -->
                 <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
 
                 <!-- MAIN CONTENT -->
                 <main class="app-content">
                     <h1 class="app-page-title">🏕️ Camp Scheduler</h1>
-
                     <!-- SETUP TAB -->
                     <div id="setup" class="tab-content active">
                         <h3>Add Divisions</h3>
@@ -140,13 +139,8 @@
 
                         <div id="divisionButtons" style="margin-top:8px;"></div>
 
-                        <!-- Drag-to-dump zone for bunks -->
-                        <div id="bunkDumpZone" class="bunk-dump-zone">
-                            🗑️ Drag a bunk here to remove it from its division
-                        </div>
-
-                        <!-- Hidden legacy bunk controls; app1.js still uses these.
-                             Our script will auto-place bunks into divisions by color. -->
+                        <!-- Hidden legacy bunk controls. app1.js will still use these,
+                             and our script will move those bunks into their divisions. -->
                         <div id="legacy-bunks" style="display:none;">
                             <h3>Add Bunks</h3>
                             <input id="bunkInput" placeholder="Enter bunk (e.g., Bunk 1)">
@@ -237,7 +231,8 @@
                     </div>
 
                     <div id="specialty-leagues" class="tab-content">
-                        <h2>🏆 Specialty Leagues</h2>
+                        <h2>🏆 Specialty
+                          Leagues</h2>
                         <div id="specialtyLeaguesContainer"></div>
                     </div>
 
@@ -324,11 +319,12 @@
                 return dr * dr + dg * dg + db * db;
             }
 
+            // Expose for other script
             window._csColorHelpers = { hexToRgb, rgbStringToObj, colorDistance };
         })();
 
         // ============================
-        // BUNK + DIVISION HEADER UI
+        // BUNK UI: DRAG, DROP, SWAP
         // ============================
         (function () {
             'use strict';
@@ -336,22 +332,6 @@
             const { hexToRgb, rgbStringToObj, colorDistance } = window._csColorHelpers || {};
 
             let draggingBunk = null;
-
-            // --- BUNK PILL ENHANCER (label only, no X) ---
-            function enhanceBunkPill(bunkEl) {
-                if (!bunkEl || bunkEl.dataset.pillEnhanced === 'true') return;
-                bunkEl.dataset.pillEnhanced = 'true';
-
-                const text = bunkEl.textContent.trim();
-                bunkEl.innerHTML = '';
-                bunkEl.classList.add('bunk-pill');
-
-                const labelSpan = document.createElement('span');
-                labelSpan.className = 'bunk-label';
-                labelSpan.textContent = text;
-
-                bunkEl.appendChild(labelSpan);
-            }
 
             function makeBunkDraggable(bunkEl) {
                 if (!bunkEl || bunkEl.dataset.dragEnhanced === 'true') return;
@@ -366,18 +346,12 @@
 
                 bunkEl.addEventListener('dragend', () => {
                     draggingBunk = null;
-                    const dump = document.getElementById('bunkDumpZone');
-                    if (dump) dump.classList.remove('active');
                 });
             }
 
-            // targetContainer is where the bunk actually gets appended;
-            // container is the DOM area that listens for the drop.
-            function setupDropZone(container, targetContainer) {
+            function setupDropZone(container) {
                 if (!container || container.dataset.dropEnhanced === 'true') return;
                 container.dataset.dropEnhanced = 'true';
-
-                const dropTarget = targetContainer || container;
 
                 container.addEventListener('dragover', (e) => {
                     if (!draggingBunk) return;
@@ -391,7 +365,6 @@
 
                     const targetPill = e.target.closest('.bunk-button');
                     const sourceParent = draggingBunk.parentNode;
-                    const actualContainer = dropTarget || container;
 
                     if (targetPill && targetPill !== draggingBunk) {
                         // SWAP between containers
@@ -401,73 +374,24 @@
                         targetParent.insertBefore(draggingBunk, afterTarget);
                         sourceParent.appendChild(targetPill);
                     } else {
-                        // Simple move: drop anywhere in the division square
-                        actualContainer.appendChild(draggingBunk);
+                        // Simple move
+                        container.appendChild(draggingBunk);
                     }
-
-                    updateAllDivisionBunkCounts();
                 });
-            }
-
-            function setupDumpZone() {
-                const dump = document.getElementById('bunkDumpZone');
-                if (!dump || dump.dataset.dumpEnhanced === 'true') return;
-                dump.dataset.dumpEnhanced = 'true';
-
-                dump.addEventListener('dragover', (e) => {
-                    if (!draggingBunk) return;
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = 'move';
-                    dump.classList.add('active');
-                });
-
-                dump.addEventListener('dragleave', () => {
-                    dump.classList.remove('active');
-                });
-
-                dump.addEventListener('drop', (e) => {
-                    if (!draggingBunk) return;
-                    e.preventDefault();
-                    dump.classList.remove('active');
-
-                    const wrapper = draggingBunk.closest('.divisionWrapper');
-                    draggingBunk.remove();
-                    if (wrapper) updateDivisionBunkCount(wrapper);
-
-                    draggingBunk = null;
-                });
-            }
-
-            function updateDivisionBunkCount(wrapper) {
-                const container = wrapper.querySelector('.division-bunks-container');
-                const count = container ? container.querySelectorAll('.bunk-button').length : 0;
-                const sub = wrapper.querySelector('.division-header-sub');
-                if (sub) {
-                    sub.textContent = count === 1 ? '1 bunk' : count + ' bunks';
-                }
-            }
-
-            function updateAllDivisionBunkCounts() {
-                document
-                    .querySelectorAll('#divisionButtons .divisionWrapper')
-                    .forEach(updateDivisionBunkCount);
             }
 
             function getDivisionName(wrapper) {
-                // Prefer dedicated label elements only
-                const labelEl =
-                    wrapper.querySelector('.division-number, .divisionLabel, .division-name');
-                if (labelEl) {
-                    return labelEl.textContent.trim();
-                }
+    // Look ONLY for the division number label inside the button
+    const labelEl = wrapper.querySelector('.division-number, .divisionLabel, .division-name');
+    if (labelEl) {
+        return labelEl.textContent.trim().replace(/[^A-Za-z0-9]/g, '');
+    }
 
-                // Then any explicit data attribute
-                if (wrapper.dataset.divisionName) {
-                    return wrapper.dataset.divisionName.trim();
-                }
+    // Backup option: use stored dataset
+    const ds = wrapper.dataset.divisionName;
+    if (ds) return ds.trim();
 
-                // Fallback: nothing (prevents weird "1toUpdate" text)
-                return '';
+    return ''; // No fallback guesswork — prevents weird names
             }
 
             function getDivisionColor(wrapper) {
@@ -478,7 +402,7 @@
                     if (rgb) return rgb;
                 }
 
-                // Fallback: any colored square
+                // Fallback: any colored square inside wrapper
                 const swatch = wrapper.querySelector('.division-color, .divisionColorSwatch, .color-swatch');
                 if (swatch && rgbStringToObj) {
                     const cs = getComputedStyle(swatch).backgroundColor;
@@ -492,145 +416,30 @@
                 if (!wrapper || wrapper.dataset.bunksEnhanced === 'true') return;
                 wrapper.dataset.bunksEnhanced = 'true';
 
-                // ----- Div header at top -----
-                const baseName = getDivisionName(wrapper) || 'Division';
+                const divisionName = getDivisionName(wrapper);
 
-                let headerRow = wrapper.querySelector('.division-header-row');
-                if (!headerRow) {
-                    headerRow = document.createElement('div');
-                    headerRow.className = 'division-header-row';
-                    headerRow.style.display = 'flex';
-                    headerRow.style.alignItems = 'center';
-                    headerRow.style.justifyContent = 'space-between';
-                    headerRow.style.marginBottom = '6px';
-
-                    const left = document.createElement('div');
-                    left.style.display = 'flex';
-                    left.style.flexDirection = 'column';
-
-                    const nameEl = document.createElement('div');
-                    nameEl.className = 'division-header-name';
-                    nameEl.style.fontSize = '0.9rem';
-                    nameEl.style.fontWeight = '600';
-                    nameEl.style.color = '#111827';
-                    nameEl.textContent = baseName;
-
-                    const subEl = document.createElement('div');
-                    subEl.className = 'division-header-sub';
-                    subEl.style.fontSize = '0.75rem';
-                    subEl.style.color = '#6b7280';
-                    subEl.textContent = '0 bunks';
-
-                    left.appendChild(nameEl);
-                    left.appendChild(subEl);
-
-                    const rightControls = document.createElement('div');
-                    rightControls.style.display = 'flex';
-                    rightControls.style.alignItems = 'center';
-                    rightControls.style.gap = '6px';
-
-                    // Rename button
-                    const renameBtn = document.createElement('button');
-                    renameBtn.type = 'button';
-                    renameBtn.className = 'division-rename-btn';
-                    renameBtn.textContent = '✏️';
-                    renameBtn.title = 'Rename division';
-                    renameBtn.style.fontSize = '0.8rem';
-                    renameBtn.style.padding = '2px 6px';
-                    renameBtn.style.borderRadius = '999px';
-                    renameBtn.style.border = '1px solid #d1d5db';
-                    renameBtn.style.background = '#f9fafb';
-                    renameBtn.style.cursor = 'pointer';
-
-                    renameBtn.addEventListener('click', () => {
-                        const currentName = getDivisionName(wrapper) || 'Division';
-                        const newNameRaw = prompt('Rename this division:', currentName);
-                        if (!newNameRaw) return;
-                        const newName = newNameRaw.trim();
-                        if (!newName) return;
-
-                        const headerName = wrapper.querySelector('.division-header-name');
-                        if (headerName) headerName.textContent = newName;
-
-                        const labelEl =
-                            wrapper.querySelector('.division-number, .divisionLabel, .division-name');
-                        if (labelEl) labelEl.textContent = newName;
-
-                        wrapper.dataset.divisionName = newName;
-
-                        if (window.onDivisionRename) {
-                            try {
-                                window.onDivisionRename(wrapper, currentName, newName);
-                            } catch (e) {
-                                console.warn('onDivisionRename error', e);
-                            }
-                        }
-                    });
-
-                    // Delete division button
-                    const deleteBtn = document.createElement('button');
-                    deleteBtn.type = 'button';
-                    deleteBtn.className = 'division-delete-btn';
-                    deleteBtn.textContent = '🗑️';
-                    deleteBtn.title = 'Delete this division';
-                    deleteBtn.style.fontSize = '0.8rem';
-                    deleteBtn.style.padding = '2px 6px';
-                    deleteBtn.style.borderRadius = '999px';
-                    deleteBtn.style.border = '1px solid #fca5a5';
-                    deleteBtn.style.background = '#fef2f2';
-                    deleteBtn.style.cursor = 'pointer';
-
-                    deleteBtn.addEventListener('click', () => {
-                        const currentName = getDivisionName(wrapper) || 'this division';
-                        if (!confirm(`Delete ${currentName}? This will remove its bunks from this view (but not the entire camp data file).`)) {
-                            return;
-                        }
-
-                        if (window.onDivisionDelete) {
-                            try {
-                                window.onDivisionDelete(wrapper, currentName);
-                            } catch (e) {
-                                console.warn('onDivisionDelete error', e);
-                            }
-                        }
-
-                        wrapper.remove();
-                    });
-
-                    rightControls.appendChild(renameBtn);
-                    rightControls.appendChild(deleteBtn);
-
-                    headerRow.appendChild(left);
-                    headerRow.appendChild(rightControls);
-
-                    wrapper.insertBefore(headerRow, wrapper.firstChild);
-                } else {
-                    const nameEl = headerRow.querySelector('.division-header-name');
-                    if (nameEl) nameEl.textContent = baseName;
-                }
-
-                // ----- Bunks section inside division -----
                 const bunkSection = document.createElement('div');
                 bunkSection.style.marginTop = '10px';
-
-                const headerRow2 = document.createElement('div');
-                headerRow2.style.display = 'flex';
-                headerRow2.style.alignItems = 'center';
-                headerRow2.style.justifyContent = 'space-between';
-                headerRow2.style.marginBottom = '6px';
+              const headerRow = document.createElement('div');
+                headerRow.style.display = 'flex';
+                headerRow.style.alignItems = 'center';
+                headerRow.style.justifyContent = 'space-between';
+                headerRow.style.marginBottom = '6px';
 
                 const labelWrap = document.createElement('div');
                 labelWrap.style.display = 'flex';
                 labelWrap.style.flexDirection = 'column';
 
                 const label = document.createElement('span');
-                label.textContent = 'Bunks in this division';
+                label.textContent = divisionName
+                    ? `Bunks in Division ${divisionName}`
+                    : 'Bunks in this division';
                 label.style.fontSize = '0.8rem';
                 label.style.fontWeight = '600';
                 label.style.color = '#4b5563';
 
                 const sub = document.createElement('span');
-                sub.textContent = 'Drag bunks between divisions, or drag to the dump area to remove.';
+                sub.textContent = 'Drag bunks between divisions, or click "+ Add Bunk".';
                 sub.style.fontSize = '0.7rem';
                 sub.style.color = '#6b7280';
 
@@ -643,8 +452,8 @@
                 addBtn.style.fontSize = '0.75rem';
                 addBtn.style.padding = '4px 10px';
 
-                headerRow2.appendChild(labelWrap);
-                headerRow2.appendChild(addBtn);
+                headerRow.appendChild(labelWrap);
+                headerRow.appendChild(addBtn);
 
                 const bunkContainer = document.createElement('div');
                 bunkContainer.className = 'division-bunks-container';
@@ -652,28 +461,14 @@
                 bunkContainer.style.flexWrap = 'wrap';
                 bunkContainer.style.gap = '6px';
 
-                // Move any bunk-buttons already inside this wrapper into bunkContainer
-                const existing = wrapper.querySelectorAll('.bunk-button');
-                existing.forEach(b => {
-                    bunkContainer.appendChild(b);
-                });
-
-                bunkSection.appendChild(headerRow2);
+                bunkSection.appendChild(headerRow);
                 bunkSection.appendChild(bunkContainer);
                 wrapper.appendChild(bunkSection);
 
-                // Drop anywhere in the division "square" (wrapper),
-                // but add into the bunkContainer.
-                setupDropZone(bunkContainer, bunkContainer);
-                setupDropZone(wrapper, bunkContainer);
+                setupDropZone(bunkContainer);
 
                 addBtn.addEventListener('click', () => {
-                    const currentName = getDivisionName(wrapper) || '';
-                    const nameRaw = prompt(
-                        currentName
-                            ? `Bunk name / number for Division ${currentName}?`
-                            : 'Bunk name / number for this division?'
-                    );
+                    const nameRaw = prompt(`Bunk name / number for Division ${divisionName || ''}`.trim());
                     if (!nameRaw) return;
                     const name = nameRaw.trim();
                     if (!name) return;
@@ -681,13 +476,9 @@
                     const bunk = document.createElement('span');
                     bunk.className = 'bunk-button';
                     bunk.textContent = name;
-                    enhanceBunkPill(bunk);
                     makeBunkDraggable(bunk);
                     bunkContainer.appendChild(bunk);
-                    updateDivisionBunkCount(wrapper);
                 });
-
-                updateDivisionBunkCount(wrapper);
             }
 
             function enhanceAllDivisions() {
@@ -697,10 +488,7 @@
             }
 
             function prepareAllBunks() {
-                document.querySelectorAll('.bunk-button').forEach(b => {
-                    enhanceBunkPill(b);
-                    makeBunkDraggable(b);
-                });
+                document.querySelectorAll('.bunk-button').forEach(makeBunkDraggable);
             }
 
             function autoPlaceExistingBunksByColor() {
@@ -713,14 +501,9 @@
 
                 const divisions = divisionWrappers.map(wrapper => {
                     const color = getDivisionColor(wrapper);
-                    let bunkContainer = wrapper.querySelector('.division-bunks-container');
-                    if (!bunkContainer) {
-                        bunkContainer = document.createElement('div');
-                        bunkContainer.className = 'division-bunks-container';
-                        wrapper.appendChild(bunkContainer);
-                    }
-                    setupDropZone(bunkContainer, bunkContainer);
-                    setupDropZone(wrapper, bunkContainer);
+                    const bunkContainer =
+                        wrapper.querySelector('.division-bunks-container') || wrapper;
+                    setupDropZone(bunkContainer);
                     return { wrapper, color, bunkContainer };
                 });
 
@@ -743,15 +526,12 @@
                     });
 
                     if (best && best.bunkContainer) {
-                        enhanceBunkPill(bunk);
                         makeBunkDraggable(bunk);
                         best.bunkContainer.appendChild(bunk);
                     }
                 });
-
-                // Clear leftover unassigned container
+              // After moving, clear the unassigned container so nothing is "floating"
                 unassigned.innerHTML = '';
-                updateAllDivisionBunkCounts();
             }
 
             // Public hook for tab switch / initial load
@@ -759,8 +539,6 @@
                 enhanceAllDivisions();
                 prepareAllBunks();
                 autoPlaceExistingBunksByColor();
-                updateAllDivisionBunkCounts();
-                setupDumpZone();
             };
 
             // Observe changes so we react to app1.js adding divisions/bunks
