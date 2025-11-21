@@ -1,4 +1,3 @@
-
 // This script now controls the boot-up process for the entire application.
 // UPDATED: Added Passcode Authentication Gate.
 
