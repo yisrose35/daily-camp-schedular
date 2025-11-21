@@ -1356,3 +1356,165 @@ body.sidebar-open .sidebar-backdrop {
   border-style: solid;
   background: #fee2e2;
 }
+
+/* =============================== */
+/* Snappier Setup: Divisions UI   */
+/* =============================== */
+
+/* Cards: a bit more glassy & animated */
+#setup .setup-card {
+  border-radius: 18px;
+  background: radial-gradient(circle at top left, #f9fafb 0, #ffffff 55%, #f3f4f6 100%);
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.10);
+  transition: box-shadow 0.18s ease, transform 0.12s ease, border-color 0.18s ease;
+}
+
+#setup .setup-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.14);
+  border-color: #d1d5db;
+}
+
+/* Step pills a bit bolder */
+#setup .setup-step-pill {
+  background: linear-gradient(135deg, #2563eb, #0ea5e9);
+  color: #eff6ff;
+  box-shadow: 0 6px 12px rgba(37, 99, 235, 0.3);
+}
+
+#setup .setup-step-pill.setup-step-pill-muted {
+  background: linear-gradient(135deg, #6b7280, #4b5563);
+  color: #e5e7eb;
+  box-shadow: 0 4px 10px rgba(55, 65, 81, 0.35);
+}
+
+/* Divisions master list – pill rows, clearer hover + select state */
+#setup .master-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+#setup .master-list .list-item {
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #ffffff;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease,
+              box-shadow 0.18s ease, transform 0.08s ease;
+}
+
+/* generic “color bar” if you are rendering a small block in JS */
+#setup .master-list .list-item > .color-bar {
+  width: 6px;
+  border-radius: 999px;
+  align-self: stretch;
+}
+
+#setup .master-list .list-item-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+#setup .master-list .list-item:hover {
+  background: #f9fafb;
+  border-color: #c7d2fe;
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.16);
+  transform: translateY(-0.5px);
+}
+
+#setup .master-list .list-item.selected {
+  background: #eff6ff;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35),
+              0 12px 30px rgba(37, 99, 235, 0.22);
+}
+
+/* Division detail pane – more “panel” feeling */
+#setup #division-detail-pane.detail-pane {
+  border-radius: 18px;
+  border: 1px solid #e5e7eb;
+  background:
+    radial-gradient(circle at top left, #eff6ff 0, #ffffff 55%, #f9fafb 100%);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+}
+
+/* Header (title + delete button) */
+#setup #division-detail-pane > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+#setup #division-detail-pane h3 {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #111827;
+}
+
+/* Section labels inside detail pane */
+#setup #division-detail-pane strong {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+}
+
+/* Bunk chips inside Division Details */
+#setup #division-detail-pane .bunk-chip,
+#setup #division-detail-pane .bunk-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  margin: 3px 4px 0 0;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: #111827;
+  font-size: 0.8rem;
+  font-weight: 500;
+  border: 1px solid transparent;
+  transition: background 0.15s ease, transform 0.06s ease,
+              box-shadow 0.12s ease, border-color 0.12s ease;
+}
+
+#setup #division-detail-pane .bunk-chip:hover,
+#setup #division-detail-pane .bunk-pill:hover {
+  background: #dbeafe;
+  border-color: #60a5fa;
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.22);
+  transform: translateY(-0.5px);
+}
+
+/* Tiny “×” remove icon inside bunk chip (button or span) */
+#setup #division-detail-pane .bunk-chip button,
+#setup #division-detail-pane .bunk-pill button {
+  border: none;
+  background: transparent;
+  font-size: 0.8rem;
+  padding: 0 0 0 2px;
+  cursor: pointer;
+  color: #6b7280;
+}
+
+#setup #division-detail-pane .bunk-chip button:hover,
+#setup #division-detail-pane .bunk-pill button:hover {
+  color: #b91c1c;
+}
+
+/* Times row buttons a bit tighter */
+#setup #division-detail-pane .time-row button {
+  padding-inline: 12px;
+}
