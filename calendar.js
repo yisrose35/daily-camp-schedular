@@ -2,400 +2,400 @@
 // =================================================================
 // calendar.js
 //
-// --- UPDATED (Save Now) ---
-// - Added 'window.forceAutoSave' for manual saving.
-// - Updated 'performAutoSave' to show an alert when triggered manually.
+// --- UPDATED (Smart Logic Reset) ---
+// - eraseRotationHistory now clears ALL rotation systems:
+//   1. Regular Rotation History       → campRotationHistory_v1
+//   2. Legacy Smart Tile History      → smartTileHistory_v1
+//   3. NEW Smart Tile Special History → smartTileSpecialHistory_v1
+//   4. Manual Usage Offsets (Analytics)
+//
+// This guarantees SmartLogicAdapter V31 starts fresh.
 // =================================================================
 
 (function() {
     'use strict';
 
-    // --- 1. DEFINE STORAGE KEYS ---
+    // ==========================================================
+    // 1. STORAGE KEYS
+    // ==========================================================
     const GLOBAL_SETTINGS_KEY = "campGlobalSettings_v1";
     const DAILY_DATA_KEY = "campDailyData_v1";
     const ROTATION_HISTORY_KEY = "campRotationHistory_v1";
-    const AUTO_SAVE_KEY = "campAutoSave_v1"; 
+    const AUTO_SAVE_KEY = "campAutoSave_v1";
 
-    /**
-     * Helper function to get a date in YYYY-MM-DD format.
-     */
+    // legacy smart tile history (old versions)
+    const SMART_TILE_HISTORY_KEY = "smartTileHistory_v1";
+
+    // NEW Smart Tile rotation (SmartLogicAdapter V31)
+    const SMART_TILE_SPECIAL_HISTORY_KEY = "smartTileSpecialHistory_v1";
+
+    // ==========================================================
+    // Helper — formatted date YYYY-MM-DD
+    // ==========================================================
     function getTodayString(date = new Date()) {
-        date.setHours(12, 0, 0, 0); 
-        const year = date.getFullYear();
+        date.setHours(12, 0, 0, 0);
+        const year  = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
+        const day   = String(date.getDate()).padStart(2, '0');
         return `${year}-${month}-${day}`;
     }
 
-    // --- 2. INITIALIZE CALENDAR AND CURRENT DATE ---
-    
+    // ==========================================================
+    // 2. INITIALIZE CALENDAR
+    // ==========================================================
     window.currentScheduleDate = getTodayString();
-    
-    let datePicker; 
-    
+    let datePicker = null;
+
     function onDateChanged() {
         const newDate = datePicker.value;
         if (!newDate) return;
-        
-        console.log(`Date changed to: ${newDate}`);
+
         window.currentScheduleDate = newDate;
-        
+
         window.loadCurrentDailyData();
-        window.initScheduleSystem?.(); // Reloads schedule
+        window.initScheduleSystem?.();
         window.initDailyAdjustments?.();
-        
+
         if (document.getElementById('master-scheduler')?.classList.contains('active')) {
             window.initMasterScheduler?.();
         }
     }
 
-    // --- 3. GLOBAL DATA API ---
-
+    // ==========================================================
+    // 3. GLOBAL DATA API
+    // ==========================================================
     window.loadGlobalSettings = function() {
         try {
-            const newData = localStorage.getItem(GLOBAL_SETTINGS_KEY);
-            if (newData) {
-                return JSON.parse(newData);
-            }
-            return {};
-        } catch (e) {
-            console.error("Failed to load/migrate global settings:", e);
+            const d = localStorage.getItem(GLOBAL_SETTINGS_KEY);
+            return d ? JSON.parse(d) : {};
+        } catch {
             return {};
         }
-    }
+    };
 
-    window.saveGlobalSettings = function(key, data) {
+    window.saveGlobalSettings = function(key, value) {
         try {
             const settings = window.loadGlobalSettings();
-            settings[key] = data;
+            settings[key] = value;
             localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(settings));
         } catch (e) {
-            console.error(`Failed to save global setting "${key}":`, e);
+            console.error("Failed to save global settings:", e);
         }
-    }
+    };
 
     window.loadAllDailyData = function() {
         try {
-            const data = localStorage.getItem(DAILY_DATA_KEY);
-            return data ? JSON.parse(data) : {};
-        } catch (e) {
-            console.error("Failed to load all daily data:", e);
+            const raw = localStorage.getItem(DAILY_DATA_KEY);
+            return raw ? JSON.parse(raw) : {};
+        } catch {
             return {};
         }
-    }
-    
+    };
+
     window.loadCurrentDailyData = function() {
-        const allData = window.loadAllDailyData();
+        const all = window.loadAllDailyData();
         const date = window.currentScheduleDate;
-        
-        if (!allData[date]) {
-            allData[date] = {
+
+        if (!all[date]) {
+            all[date] = {
                 scheduleAssignments: {},
                 leagueAssignments: {},
                 leagueRoundState: {},
                 leagueDayCounters: {},
-                overrides: { fields: [], bunks: [], leagues: [] } 
+                overrides: { fields: [], bunks: [], leagues: [] }
             };
         }
-        
-        allData[date].leagueDayCounters = allData[date].leagueDayCounters || {};
-        
-        window.currentDailyData = allData[date];
+
+        all[date].leagueDayCounters =
+            all[date].leagueDayCounters || {};
+
+        window.currentDailyData = all[date];
         return window.currentDailyData;
-    }
+    };
 
     window.loadPreviousDailyData = function() {
         try {
-            const [year, month, day] = window.currentScheduleDate.split('-').map(Number);
-            const currentDate = new Date(year, month - 1, day, 12, 0, 0); 
-            currentDate.setDate(currentDate.getDate() - 1);
-            const yesterdayString = getTodayString(currentDate);
-            
-            const allData = window.loadAllDailyData();
-            return allData[yesterdayString] || { 
-                leagueDayCounters: {}, 
-                leagueRoundState: {} 
+            const [Y, M, D] = window.currentScheduleDate.split('-').map(Number);
+            const dt = new Date(Y, M - 1, D, 12, 0, 0);
+            dt.setDate(dt.getDate() - 1);
+
+            const yesterday = getTodayString(dt);
+            const all = window.loadAllDailyData();
+
+            return all[yesterday] || {
+                leagueDayCounters: {},
+                leagueRoundState: {}
             };
-        } catch (e) {
+
+        } catch {
             return {};
         }
-    }
+    };
 
-    window.saveCurrentDailyData = function(key, data) {
+    window.saveCurrentDailyData = function(key, value) {
         try {
-            const allData = window.loadAllDailyData();
+            const all = window.loadAllDailyData();
             const date = window.currentScheduleDate;
 
-            if (!allData[date]) {
-                allData[date] = {};
-            }
+            if (!all[date]) all[date] = {};
 
-            allData[date][key] = data;
-            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allData));
-            
-            window.currentDailyData = allData[date];
-            
+            all[date][key] = value;
+            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(all));
+
+            window.currentDailyData = all[date];
+
         } catch (e) {
-            console.error(`Failed to save daily data for ${date} with key "${key}":`, e);
+            console.error("Failed to save daily data:", e);
         }
-    }
+    };
 
-    // --- 4. ROTATION HISTORY API ---
-
+    // ==========================================================
+    // 4. ROTATION HISTORY SYSTEMS
+    // ==========================================================
     window.loadRotationHistory = function() {
         try {
-            const data = localStorage.getItem(ROTATION_HISTORY_KEY);
-            const history = data ? JSON.parse(data) : {};
-            
-            history.bunks = history.bunks || {};
-            history.leagues = history.leagues || {};
-            
-            return history;
-        } catch (e) {
-            console.error("Failed to load rotation history:", e);
+            const d = localStorage.getItem(ROTATION_HISTORY_KEY);
+            const hist = d ? JSON.parse(d) : {};
+            hist.bunks   = hist.bunks   || {};
+            hist.leagues = hist.leagues || {};
+            return hist;
+        } catch {
             return { bunks: {}, leagues: {} };
         }
-    }
+    };
 
-    window.saveRotationHistory = function(history) {
+    window.saveRotationHistory = function(hist) {
         try {
-            if (!history || !history.bunks || !history.leagues) {
-                console.error("Invalid history object passed to saveRotationHistory.", history);
-                return;
-            }
-            localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify(history));
+            if (!hist || !hist.bunks || !hist.leagues) return;
+            localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify(hist));
         } catch (e) {
             console.error("Failed to save rotation history:", e);
         }
-    }
-    
+    };
+
+    // ==========================================================
+    // ⭐  RESET ALL ACTIVITY / SPECIAL ROTATION
+    // ==========================================================
     window.eraseRotationHistory = function() {
         try {
+            // 1. Regular rotation history
             localStorage.removeItem(ROTATION_HISTORY_KEY);
-            console.log("Erased all activity rotation history.");
-            alert("Activity rotation history has been reset.");
-        } catch (e) {
-            console.error("Failed to erase rotation history:", e);
-        }
-    }
 
-    // --- 5. ERASE ALL DATA ---
-    function setupEraseAll() {
-        const eraseBtn = document.getElementById("eraseAllBtn");
-        if (eraseBtn) {
-            eraseBtn.onclick = () => {
-                if (confirm("Erase ALL camp data?\nThis includes ALL settings, ALL saved daily schedules, and ALL activity rotation history.")) {
-                    localStorage.removeItem(GLOBAL_SETTINGS_KEY);
-                    localStorage.removeItem(DAILY_DATA_KEY);
-                    localStorage.removeItem(ROTATION_HISTORY_KEY);
-                    localStorage.removeItem(AUTO_SAVE_KEY);
-                    
-                    localStorage.removeItem("campSchedulerData");
-                    localStorage.removeItem("fixedActivities_v2");
-                    localStorage.removeItem("leagues");
-                    localStorage.removeItem("camp_league_round_state");
-                    localStorage.removeItem("camp_league_sport_rotation");
-                    localStorage.removeItem("scheduleAssignments");
-                    localStorage.removeItem("leagueAssignments");
+            // 2. Legacy Smart Tile history
+            localStorage.removeItem(SMART_TILE_HISTORY_KEY);
 
-                    window.location.reload();
-                }
-            };
-        }
-    }
+            // ⭐ 3. NEW Smart Tile Special Rotation history (V31)
+            localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
 
-    window.loadCurrentDailyData();
-
-    // --- 6. ERASE CURRENT DAY FUNCTION ---
-    window.eraseCurrentDailyData = function() {
-        try {
-            const allData = window.loadAllDailyData();
-            const date = window.currentScheduleDate;
-
-            if (allData[date]) {
-                delete allData[date];
-                localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allData));
-                console.log(`Erased schedule data for ${date}.`);
-                
-                window.loadCurrentDailyData();
-                window.initScheduleSystem?.();
+            // 4. Manual offsets from analytics UI
+            const settings = window.loadGlobalSettings();
+            if (settings.manualUsageOffsets) {
+                delete settings.manualUsageOffsets;
+                localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(settings));
             }
-        } catch (e) {
-            console.error(`Failed to erase daily data for ${date}:`, e);
-        }
-    }
-    
-    // --- 7. ERASE ALL SCHEDULES FUNCTION ---
-    window.eraseAllDailyData = function() {
-        try {
-            localStorage.removeItem(DAILY_DATA_KEY);
-            console.log("Erased ALL daily schedules.");
+
+            console.log("All rotation histories cleared (regular + smart tile + special tile).");
+            alert("Activity & Smart Tile History reset successfully!");
+
             window.location.reload();
+
         } catch (e) {
-            console.error("Failed to erase all daily data:", e);
+            console.error("Failed to reset history:", e);
+            alert("Error resetting history. Check console.");
         }
+    };
+
+    // ==========================================================
+    // 5. ERASE ALL DATA BUTTON
+    // ==========================================================
+    function setupEraseAll() {
+        const btn = document.getElementById("eraseAllBtn");
+        if (!btn) return;
+
+        btn.onclick = function() {
+            if (!confirm("Erase ALL settings, schedules, and rotation histories?\nThis cannot be undone.")) return;
+
+            localStorage.removeItem(GLOBAL_SETTINGS_KEY);
+            localStorage.removeItem(DAILY_DATA_KEY);
+            localStorage.removeItem(ROTATION_HISTORY_KEY);
+            localStorage.removeItem(AUTO_SAVE_KEY);
+            localStorage.removeItem(SMART_TILE_HISTORY_KEY);
+            localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
+
+            localStorage.removeItem("campSchedulerData");
+            localStorage.removeItem("fixedActivities_v2");
+            localStorage.removeItem("leagues");
+            localStorage.removeItem("camp_league_round_state");
+            localStorage.removeItem("camp_league_sport_rotation");
+            localStorage.removeItem("scheduleAssignments");
+            localStorage.removeItem("leagueAssignments");
+
+            window.location.reload();
+        };
     }
 
-    // --- 8. BACKUP & RESTORE FUNCTIONS ---
+    // ==========================================================
+    // 6. ERASE CURRENT DAY
+    // ==========================================================
+    window.eraseCurrentDailyData = function() {
+        const all = window.loadAllDailyData();
+        const date = window.currentScheduleDate;
 
+        if (all[date]) {
+            delete all[date];
+            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(all));
+        }
+
+        window.loadCurrentDailyData();
+        window.initScheduleSystem?.();
+    };
+
+    // ==========================================================
+    // 7. ERASE ALL SCHEDULE DAYS
+    // ==========================================================
+    window.eraseAllDailyData = function() {
+        localStorage.removeItem(DAILY_DATA_KEY);
+        window.location.reload();
+    };
+
+    // ==========================================================
+    // 8. BACKUP / RESTORE
+    // ==========================================================
     function exportAllData() {
-        console.log("Exporting all data...");
-        const backupData = {};
-
         try {
-            const globalData = localStorage.getItem(GLOBAL_SETTINGS_KEY);
-            const dailyData = localStorage.getItem(DAILY_DATA_KEY);
-            const rotationData = localStorage.getItem(ROTATION_HISTORY_KEY);
+            const backup = {
+                globalSettings: JSON.parse(localStorage.getItem(GLOBAL_SETTINGS_KEY) || "{}"),
+                dailyData:      JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || "{}"),
+                rotationHistory:JSON.parse(localStorage.getItem(ROTATION_HISTORY_KEY) || "{}")
+            };
 
-            backupData.globalSettings = JSON.parse(globalData) || {};
-            backupData.dailyData = JSON.parse(dailyData) || {};
-            backupData.rotationHistory = JSON.parse(rotationData) || {};
-            
-            const jsonString = JSON.stringify(backupData, null, 2);
-            const blob = new Blob([jsonString], { type: "application/json" });
+            const json = JSON.stringify(backup, null, 2);
+            const blob = new Blob([json], { type: "application/json" });
             const url = URL.createObjectURL(blob);
-            
-            const a = document.createElement('a');
+
+            const a = document.createElement("a");
             a.href = url;
             a.download = `camp_scheduler_backup_${getTodayString()}.json`;
-            document.body.appendChild(a);
             a.click();
-            document.body.removeChild(a);
+
             URL.revokeObjectURL(url);
-            
-            console.log("Export successful.");
 
         } catch (e) {
-            console.error("Failed to export data:", e);
-            alert("Error exporting data. Check the console for details.");
+            console.error("Export error:", e);
+            alert("Export failed.");
         }
     }
 
-    function handleFileSelect(event) {
-        const file = event.target.files[0];
+    function handleFileSelect(e) {
+        const file = e.target.files[0];
         if (!file) return;
 
-        if (!confirm("Are you sure you want to import this file?\nThis will OVERWRITE all existing data (setup, schedules, etc.) with the contents of the backup file.\nThis action cannot be undone.")) {
-            event.target.value = null;
+        if (!confirm("Importing will overwrite ALL current data.\nProceed?")) {
+            e.target.value = "";
             return;
         }
 
         const reader = new FileReader();
-        reader.onload = function(e) {
+        reader.onload = function(evt) {
             try {
-                const text = e.target.result;
-                const backupData = JSON.parse(text);
+                const backup = JSON.parse(evt.target.result);
 
-                if (!backupData || !backupData.globalSettings) {
-                    throw new Error("Invalid backup file. Missing 'globalSettings'.");
-                }
+                localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(backup.globalSettings || {}));
+                localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(backup.dailyData || {}));
+                localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify(backup.rotationHistory || {}));
 
-                localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(backupData.globalSettings || {}));
-                localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(backupData.dailyData || {}));
-                localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify(backupData.rotationHistory || {}));
-
-                alert("Import successful! The application will now reload.");
+                alert("Import successful. Reloading...");
                 window.location.reload();
 
             } catch (err) {
-                console.error("Failed to import file:", err);
-                alert(`Error importing file: ${err.message}`);
-            } finally {
-                event.target.value = null;
+                console.error("Import failed:", err);
+                alert("Invalid backup file.");
             }
         };
         reader.readAsText(file);
     }
 
-    // --- 9. NEW: AUTO-SAVE LOGIC ---
-
-    // Added 'silent' param. Defaults to true for timer, false for manual button.
+    // ==========================================================
+    // 9. AUTO-SAVE SYSTEM
+    // ==========================================================
     function performAutoSave(silent = true) {
         try {
             const snapshot = {
                 timestamp: Date.now(),
                 [GLOBAL_SETTINGS_KEY]: localStorage.getItem(GLOBAL_SETTINGS_KEY),
-                [DAILY_DATA_KEY]: localStorage.getItem(DAILY_DATA_KEY),
-                [ROTATION_HISTORY_KEY]: localStorage.getItem(ROTATION_HISTORY_KEY)
+                [DAILY_DATA_KEY]:      localStorage.getItem(DAILY_DATA_KEY),
+                [ROTATION_HISTORY_KEY]:localStorage.getItem(ROTATION_HISTORY_KEY)
             };
+
             localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(snapshot));
-            console.log("Auto-save completed at " + new Date().toLocaleTimeString());
-            
-            if (!silent) {
-                alert("Work saved successfully!");
-            }
+
+            if (!silent) alert("Work saved!");
+
         } catch (e) {
             console.error("Auto-save failed:", e);
-            if (!silent) {
-                alert("Save failed. Check console.");
-            }
+            if (!silent) alert("Save failed.");
         }
     }
-    
-    // New global function for manual save
-    window.forceAutoSave = function() {
-        performAutoSave(false);
-    };
+
+    window.forceAutoSave = function() { performAutoSave(false); };
 
     window.restoreAutoSave = function() {
         try {
             const raw = localStorage.getItem(AUTO_SAVE_KEY);
-            if (!raw) {
-                alert("No auto-saved data found.");
-                return;
-            }
-            
-            const snapshot = JSON.parse(raw);
-            const dateStr = new Date(snapshot.timestamp).toLocaleString();
-            
-            if (confirm(`Restore auto-save from: ${dateStr}?\n\nThis will overwrite all current data with the state from that time. Continue?`)) {
-                if (snapshot[GLOBAL_SETTINGS_KEY]) localStorage.setItem(GLOBAL_SETTINGS_KEY, snapshot[GLOBAL_SETTINGS_KEY]);
-                if (snapshot[DAILY_DATA_KEY]) localStorage.setItem(DAILY_DATA_KEY, snapshot[DAILY_DATA_KEY]);
-                if (snapshot[ROTATION_HISTORY_KEY]) localStorage.setItem(ROTATION_HISTORY_KEY, snapshot[ROTATION_HISTORY_KEY]);
-                
-                alert("Auto-save restored. Reloading...");
-                window.location.reload();
-            }
-        } catch(e) {
-            console.error("Error restoring auto-save", e);
-            alert("Error restoring auto-save.");
+            if (!raw) return alert("No auto-save available.");
+
+            const snap = JSON.parse(raw);
+            const date = new Date(snap.timestamp).toLocaleString();
+
+            if (!confirm(`Restore auto-save from ${date}?\nThis will overwrite current data.`)) return;
+
+            localStorage.setItem(GLOBAL_SETTINGS_KEY, snap[GLOBAL_SETTINGS_KEY]);
+            localStorage.setItem(DAILY_DATA_KEY, snap[DAILY_DATA_KEY]);
+            localStorage.setItem(ROTATION_HISTORY_KEY, snap[ROTATION_HISTORY_KEY]);
+
+            alert("Auto-save restored. Reloading...");
+            window.location.reload();
+
+        } catch (e) {
+            console.error("Restore error:", e);
+            alert("Failed to restore backup.");
         }
-    }
+    };
 
     function startAutoSaveTimer() {
-        // Trigger every 10 minutes (600,000 ms), silent mode
-        setInterval(() => performAutoSave(true), 600000); 
-        console.log("Auto-save timer started (10 min interval).");
-        // Perform initial save 5s after load
-        setTimeout(() => performAutoSave(true), 5000); 
+        setInterval(() => performAutoSave(true), 300000);
+        setTimeout(() => performAutoSave(true), 5000);
     }
-    
-    // ----------------------------------
 
+    // ==========================================================
+    // 10. INIT CALENDAR
+    // ==========================================================
     function initCalendar() {
-      datePicker = document.getElementById("calendar-date-picker");
-      if (datePicker) {
-        datePicker.value = window.currentScheduleDate;
-        datePicker.addEventListener("change", onDateChanged);
-      }
-    
-      setupEraseAll();
+        datePicker = document.getElementById("calendar-date-picker");
 
-      const exportBtn = document.getElementById('exportBackupBtn');
-      const importBtn = document.getElementById('importBackupBtn');
-      const importInput = document.getElementById('importFileInput');
+        if (datePicker) {
+            datePicker.value = window.currentScheduleDate;
+            datePicker.addEventListener("change", onDateChanged);
+        }
 
-      if (exportBtn) {
-          exportBtn.addEventListener('click', exportAllData);
-      }
-      if (importBtn && importInput) {
-          importBtn.addEventListener('click', () => importInput.click());
-          importInput.addEventListener('change', handleFileSelect);
-      }
+        setupEraseAll();
 
-      startAutoSaveTimer();
+        const exportBtn = document.getElementById("exportBackupBtn");
+        const importBtn = document.getElementById("importBackupBtn");
+        const importInput = document.getElementById("importFileInput");
+
+        if (exportBtn) exportBtn.addEventListener("click", exportAllData);
+        if (importBtn && importInput) {
+            importBtn.addEventListener("click", () => importInput.click());
+            importInput.addEventListener("change", handleFileSelect);
+        }
+
+        startAutoSaveTimer();
     }
-    
+
     window.initCalendar = initCalendar;
+
+    // Load day immediately
+    window.loadCurrentDailyData();
 
 })();
