@@ -7,424 +7,445 @@
     <link rel="stylesheet" href="styles.css">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
+
 <body>
 
-    <!-- WELCOME SCREEN (unchanged) -->
-    <div id="welcome-screen" style="display: none;">
-        <img src="https://placehold.co/150x150/007bff/ffffff?text=TCS&font=arial" alt="Camp Scheduler Logo" class="welcome-logo">
-        <h2 id="welcome-title">Welcome to The Camp Scheduler</h2>
-        <p>Please enter your camp's name to get started.</p>
-        <input type="text" id="camp-name-input" placeholder="E.g., Camp Adventure">
-        <button id="begin-btn">Begin</button>
-    </div>
+<!-- =========================================================== -->
+<!-- WELCOME SCREEN -->
+<!-- =========================================================== -->
+<div id="welcome-screen" style="display:none;">
+    <img src="https://placehold.co/150x150/007bff/ffffff?text=TCS&font=arial"
+         alt="Camp Scheduler Logo"
+         class="welcome-logo">
+    <h2 id="welcome-title">Welcome to The Camp Scheduler</h2>
 
-    <!-- MAIN APP -->
-    <div id="main-app-container" style="display: none;">
+    <p>Please enter your camp's name to get started.</p>
+    <input type="text" id="camp-name-input" placeholder="E.g., Camp Adventure">
+    <button id="begin-btn">Begin</button>
+</div>
 
-        <div class="app-shell">
-            <!-- HEADER -->
-            <header class="app-header">
-                <div class="header-left">
-                    <!-- Hamburger -->
-                    <button class="hamburger-btn" id="hamburgerBtn" aria-label="Toggle navigation">
-                        <span></span>
-                        <span></span>
-                        <span></span>
+<!-- =========================================================== -->
+<!-- MAIN APP CONTAINER -->
+<!-- =========================================================== -->
+<div id="main-app-container" style="display:none;">
+
+    <div class="app-shell">
+
+        <!-- =================================================== -->
+        <!-- HEADER -->
+        <!-- =================================================== -->
+        <header class="app-header">
+
+            <div class="header-left">
+                <!-- Hamburger -->
+                <button id="hamburgerBtn" class="hamburger-btn" aria-label="Toggle Navigation">
+                    <span></span><span></span><span></span>
+                </button>
+
+                <!-- Logo / Title -->
+                <div class="app-title">
+                    <div class="app-logo-circle">CS</div>
+                    <div class="app-title-text">
+                        <div class="app-title-main">Camp Scheduler</div>
+                        <div class="app-title-sub">Smart Daily Scheduling</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="header-right">
+                <label class="header-date-label" for="calendar-date-picker">
+                    Current Schedule Date:
+                </label>
+                <input type="date" id="calendar-date-picker" class="header-date-input">
+            </div>
+
+        </header>
+
+        <div class="app-main">
+
+            <!-- =================================================== -->
+            <!-- SIDEBAR NAVIGATION -->
+            <!-- =================================================== -->
+            <aside id="sidebar" class="sidebar">
+
+                <nav class="sidebar-nav">
+                    <div class="sidebar-label">Configuration</div>
+
+                    <button class="sidebar-item active" data-tab="setup">
+                        <span class="sidebar-dot"></span> Setup (Bunks / Divisions)
                     </button>
 
-                    <!-- Logo / Title -->
-                    <div class="app-title">
-                        <div class="app-logo-circle">CS</div>
-                        <div class="app-title-text">
-                            <div class="app-title-main">Camp Scheduler</div>
-                            <div class="app-title-sub">Smart daily scheduling</div>
-                        </div>
-                    </div>
-                </div>
+                    <button class="sidebar-item" data-tab="fields">
+                        <span class="sidebar-dot"></span> Fields
+                    </button>
 
-                <div class="header-right">
-                    <label for="calendar-date-picker" class="header-date-label">
-                        Current Schedule Date:
-                    </label>
-                    <input type="date" id="calendar-date-picker" class="header-date-input">
-                </div>
-            </header>
+                    <button class="sidebar-item" data-tab="special_activities">
+                        <span class="sidebar-dot"></span> Special Activities
+                    </button>
 
-            <div class="app-main">
-                <!-- SIDEBAR NAV -->
-                <aside class="sidebar" id="sidebar">
-                    <nav class="sidebar-nav">
-    <div class="sidebar-label">Configuration</div>
+                    <button class="sidebar-item" data-tab="leagues">
+                        <span class="sidebar-dot"></span> Leagues
+                    </button>
 
-    <button class="sidebar-item active" data-tab="setup">
-        <span class="sidebar-dot"></span>
-        Setup (Bunks/Divisions)
-    </button>
-    <button class="sidebar-item" data-tab="fields">
-        <span class="sidebar-dot"></span>
-        Fields
-    </button>
-    <button class="sidebar-item" data-tab="special_activities">
-        <span class="sidebar-dot"></span>
-        Special Activities
-    </button>
-    <button class="sidebar-item" data-tab="leagues">
-        <span class="sidebar-dot"></span>
-        Leagues
-    </button>
-    <button class="sidebar-item" data-tab="specialty-leagues">
-        <span class="sidebar-dot"></span>
-        🏆 Specialty Leagues
-    </button>
+                    <button class="sidebar-item" data-tab="specialty-leagues">
+                        <span class="sidebar-dot"></span> 🏆 Specialty Leagues
+                    </button>
 
-    <div class="sidebar-label" style="margin-top: 12px;">Scheduling</div>
+                    <div class="sidebar-label" style="margin-top:12px;">Scheduling</div>
 
-    <button class="sidebar-item" data-tab="master-scheduler">
-        <span class="sidebar-dot"></span>
-        🗓️ Master Scheduler
-    </button>
-    <button class="sidebar-item" data-tab="daily-adjustments">
-        <span class="sidebar-dot"></span>
-        Daily Adjustments
-    </button>
-    <button class="sidebar-item" data-tab="schedule">
-        <span class="sidebar-dot"></span>
-        Daily Schedule (View)
-    </button>
+                    <button class="sidebar-item" data-tab="master-scheduler">
+                        <span class="sidebar-dot"></span> 🗓️ Master Scheduler
+                    </button>
 
-    <div class="sidebar-label" style="margin-top: 12px;">Output & Help</div>
+                    <button class="sidebar-item" data-tab="daily-adjustments">
+                        <span class="sidebar-dot"></span> Daily Adjustments
+                    </button>
 
-    <button class="sidebar-item" data-tab="report">
-        <span class="sidebar-dot"></span>
-        Report
-    </button>
-    <button class="sidebar-item" data-tab="print">
-        <span class="sidebar-dot"></span>
-        🖨️ Print Center
-    </button>
-    <button class="sidebar-item" data-tab="updates">
-        <span class="sidebar-dot"></span>
-        Updates
-    </button>
-    <button class="sidebar-item" data-tab="helper">
-        <span class="sidebar-dot"></span>
-        Help &amp; Guide
-    </button>
-</nav>
-                </aside>
+                    <button class="sidebar-item" data-tab="schedule">
+                        <span class="sidebar-dot"></span> Daily Schedule (View)
+                    </button>
 
-                <!-- Backdrop for mobile sidebar -->
-                <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+                    <div class="sidebar-label" style="margin-top:12px;">Output & Help</div>
 
-                <!-- MAIN CONTENT AREA -->
-                <main class="app-content">
-                    <h1 class="app-page-title">🏕️ Camp Scheduler</h1>
+                    <button class="sidebar-item" data-tab="report">
+                        <span class="sidebar-dot"></span> Report
+                    </button>
 
-                    <!-- ===================== -->
-                    <!-- SETUP TAB (MODERN UI) -->
-                    <!-- ===================== -->
-                    <div id="setup" class="tab-content active">
-                        <div class="setup-grid">
+                    <button class="sidebar-item" data-tab="print">
+                        <span class="sidebar-dot"></span> 🖨️ Print Center
+                    </button>
 
-                            <!-- Overview / Intro -->
-                            <section class="setup-card setup-card-wide">
-                                <div class="setup-card-header">
-                                    <div class="setup-step-pill setup-step-pill-muted">Setup</div>
-                                    <div class="setup-card-text">
-                                        <h3>Configure Your Camp Structure</h3>
-                                        <p>
-                                            Start by creating <strong>divisions</strong> (e.g., 4th Grade, 5th &amp; 6th)
-                                            and then assign <strong>bunks</strong> into each division. These settings
-                                            drive your Fields, Leagues, and daily schedule.
-                                        </p>
-                                    </div>
-                                </div>
-                            </section>
+                    <button class="sidebar-item" data-tab="updates">
+                        <span class="sidebar-dot"></span> Updates
+                    </button>
 
-                            <!-- Left card: Divisions list / add -->
-                            <section class="setup-card">
-                                <div class="setup-card-header">
-                                    <div class="setup-step-pill">Step 1</div>
-                                    <div class="setup-card-text">
-                                        <h3>Divisions</h3>
-                                        <p>Create and manage your divisions. Click one to edit its details.</p>
-                                    </div>
-                                </div>
+                    <button class="sidebar-item" data-tab="helper">
+                        <span class="sidebar-dot"></span> Help & Guide
+                    </button>
+                </nav>
 
-                                <div class="setup-field-row">
-                                    <input id="divisionInput"
-                                           placeholder="Enter division (e.g., 5th Grade)">
-                                    <button id="addDivisionBtn">Add Division</button>
-                                </div>
+            </aside>
 
-                                <label class="setup-inline-toggle">
-                                    <input type="checkbox" id="enableColor" checked>
-                                    <span>Enable automatic division colors</span>
-                                </label>
+            <!-- BACKDROP for mobile -->
+            <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
 
-                                <div class="setup-subtitle">All Divisions</div>
-                                <!-- Uses Fields-style master list styling -->
-                                <div id="divisionButtons" class="master-list"></div>
-                            </section>
+            <!-- =================================================== -->
+            <!-- MAIN CONTENT AREA -->
+            <!-- =================================================== -->
+            <main class="app-content">
 
-                            <!-- Right card: Division detail pane -->
-                            <section class="setup-card">
-                                <div class="setup-card-header">
-                                    <div class="setup-step-pill">Step 2</div>
-                                    <div class="setup-card-text">
-                                        <h3>Division Details &amp; Bunks</h3>
-                                        <p>
-                                            Click a division on the left to set its <strong>times</strong>,
-                                            <strong>color</strong>, and <strong>bunks</strong>.
-                                        </p>
-                                    </div>
-                                </div>
+                <h1 class="app-page-title">🏕️ Camp Scheduler</h1>
 
-                                <div id="division-detail-pane" class="detail-pane">
-                                    <p class="muted">
-                                        Select a division from the left to edit its details:
-                                        <br>• Set division <strong>start / end time</strong>
-                                        <br>• Add or remove <strong>bunks</strong>
-                                        <br>• Adjust its <strong>color</strong> so it matches the rest of your UI
+                <!-- ======================================================= -->
+                <!-- SETUP TAB -->
+                <!-- ======================================================= -->
+                <div id="setup" class="tab-content active">
+
+                    <div class="setup-grid">
+
+                        <!-- INTRO -->
+                        <section class="setup-card setup-card-wide">
+                            <div class="setup-card-header">
+                                <div class="setup-step-pill setup-step-pill-muted">Setup</div>
+                                <div class="setup-card-text">
+                                    <h3>Configure Your Camp Structure</h3>
+                                    <p>
+                                        Create <strong>divisions</strong> and assign <strong>bunks</strong>.  
+                                        These settings drive all scheduling logic.
                                     </p>
                                 </div>
-                            </section>
+                            </div>
+                        </section>
 
-                            <!-- Tools / Clear / Backup / Erase -->
-                            <section class="setup-card setup-card-wide">
-                                <div class="setup-card-header">
-                                    <div class="setup-step-pill setup-step-pill-muted">Tools</div>
-                                    <div class="setup-card-text">
-                                        <h3>Data &amp; Maintenance</h3>
-                                        <p>
-                                            Manage your schedules, history, and backups. These tools do <strong>not</strong>
-                                            change your division/bunk setup unless you choose a full reset.
-                                        </p>
-                                    </div>
+                        <!-- Left Panel -->
+                        <section class="setup-card">
+                            <div class="setup-card-header">
+                                <div class="setup-step-pill">Step 1</div>
+                                <div class="setup-card-text">
+                                    <h3>Divisions</h3>
+                                    <p>Create divisions and click one to edit.</p>
                                 </div>
+                            </div>
 
-                                <!-- Clear Schedules & History -->
-                                <div class="setup-group">
-                                    <h4>Clear Schedules &amp; History</h4>
-                                    <p class="setup-group-help">
-                                        Use these to clear saved schedule data. Your divisions, bunks, fields,
-                                        and other setup stay intact.
+                            <!-- Add Division -->
+                            <div class="setup-field-row">
+                                <input id="divisionInput" placeholder="Enter division…">
+                                <button id="addDivisionBtn">Add Division</button>
+                            </div>
+
+                            <label class="setup-inline-toggle">
+                                <input type="checkbox" id="enableColor" checked>
+                                <span>Enable automatic division colors</span>
+                            </label>
+
+                            <div class="setup-subtitle">All Divisions</div>
+                            <div id="divisionButtons" class="master-list"></div>
+                        </section>
+
+                        <!-- Right Panel: Division Details --><section class="setup-card">
+                            <div class="setup-card-header">
+                                <div class="setup-step-pill">Step 2</div>
+                                <div class="setup-card-text">
+                                    <h3>Division Details & Bunks</h3>
+                                    <p>
+                                        Select a division to configure its time, color, and bunks.
                                     </p>
-                                    <div class="setup-button-row">
-                                        <button id="eraseTodayBtn"
-                                            style="background: #db7a00; color: #fff; border: none;"
-                                            onclick="if(confirm('Are you sure you want to delete the schedule for today?')) window.eraseCurrentDailyData?.();">
-                                            Delete ONLY This Day&apos;s Schedule
-                                        </button>
-
-                                        <button id="eraseAllSchedulesBtn"
-                                            style="background: #c0392b; color: #fff; border: none;"
-                                            onclick="if(confirm('Are you sure you want to delete ALL saved schedules for ALL days? Your setup will be kept.')) window.eraseAllDailyData?.();">
-                                            Delete ALL Daily Schedules
-                                        </button>
-
-                                        <button id="eraseHistoryBtn"
-                                            style="background: #5e35b1; color: #fff; border: none;"
-                                            onclick="if(confirm('Are you sure you want to reset all activity rotation history?')) window.eraseRotationHistory?.();">
-                                            Reset Activity History
-                                        </button>
-                                    </div>
                                 </div>
+                            </div>
 
-                                <!-- Backup & Restore -->
-                                <div class="setup-group">
-                                    <h4>Backup &amp; Restore</h4>
-                                    <p class="setup-group-help">
-                                        Export or import a full backup of your camp data (setup, schedules, and history).
-                                        Perfect before major changes or moving to a new device.
-                                    </p>
-                                    <div class="setup-button-row">
-                                        <button id="exportBackupBtn"
-                                            style="background: #007bff; color: #fff; border: none;">
-                                            Export All Data to File
-                                        </button>
+                            <div id="division-detail-pane" class="detail-pane">
+                                <p class="muted">
+                                    Select a division to edit:
+                                    <br>– Times  
+                                    <br>– Color  
+                                    <br>– Bunks  
+                                </p>
+                            </div>
+                        </section>
 
-                                        <button id="importBackupBtn"
-                                            style="background: #28a745; color: #fff; border: none;">
-                                            Import Data from File
-                                        </button>
+                        <!-- Tools -->
+                        <section class="setup-card setup-card-wide">
+                            <div class="setup-card-header">
+                                <div class="setup-step-pill setup-step-pill-muted">Tools</div>
+                                <div class="setup-card-text">
+                                    <h3>Data & Maintenance</h3>
+                                    <p>Manage schedules, history & data backups.</p>
+                                </div>
+                            </div>
 
-                                        <input type="file" id="importFileInput" accept=".json" style="display: none;">
+                            <!-- Clear Schedules / History -->
+                            <div class="setup-group">
+                                <h4>Clear Schedules & History</h4>
+                                <p class="setup-group-help">Erase generated data without touching setup.</p>
 
-                                        <button id="restoreAutoSaveBtn"
-                                            style="background: #6c757d; color: #fff; border: none;"
+                                <div class="setup-button-row">
+                                    <button id="eraseTodayBtn"
+                                            style="background:#db7a00;color:#fff;border:none;"
+                                            onclick="if(confirm('Delete today’s schedule?')) window.eraseCurrentDailyData?.();">
+                                        Delete ONLY Today's Schedule
+                                    </button>
+
+                                    <button id="eraseAllSchedulesBtn"
+                                            style="background:#c0392b;color:#fff;border:none;"
+                                            onclick="if(confirm('Delete ALL schedules for ALL days?')) window.eraseAllDailyData?.();">
+                                        Delete ALL Daily Schedules
+                                    </button>
+
+                                    <button id="eraseHistoryBtn"
+                                            style="background:#5e35b1;color:#fff;border:none;"
+                                            onclick="if(confirm('Reset rotation history?')) window.eraseRotationHistory?.();">
+                                        Reset Activity History
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Backup -->
+                            <div class="setup-group">
+                                <h4>Backup & Restore</h4>
+                                <p class="setup-group-help">Download or upload full application data.</p>
+
+                                <div class="setup-button-row">
+                                    <button id="exportBackupBtn"
+                                            style="background:#007bff;color:#fff;border:none;">
+                                        Export Data to File
+                                    </button>
+
+                                    <button id="importBackupBtn"
+                                            style="background:#28a745;color:#fff;border:none;">
+                                        Import Data
+                                    </button>
+
+                                    <input type="file" id="importFileInput" accept=".json" style="display:none;">
+
+                                    <button id="restoreAutoSaveBtn"
+                                            style="background:#6c757d;color:#fff;border:none;"
                                             onclick="window.restoreAutoSave?.()">
-                                            Recall Last Auto-Save
-                                        </button>
+                                        Restore Last Auto-Save
+                                    </button>
 
-                                        <button id="forceSaveBtn"
-                                            style="background: #17a2b8; color: #fff; border: none;"
+                                    <button id="forceSaveBtn"
+                                            style="background:#17a2b8;color:#fff;border:none;"
                                             onclick="window.forceAutoSave?.()">
-                                            Save Now
-                                        </button>
-                                    </div>
+                                        Save Now
+                                    </button>
                                 </div>
+                            </div>
 
-                                <!-- Erase All Data -->
-                                <div class="setup-group setup-group-danger">
-                                    <h4>Erase All Data</h4>
-                                    <p class="setup-group-help">
-                                        <strong>⚠️ Warning:</strong> This deletes <em>everything</em> —
-                                        schedules, history, <strong>and</strong> setup. Use only when you want to
-                                        completely reset the application.
-                                    </p>
-                                    <div class="setup-button-row">
-                                        <button id="eraseAllBtn"
+                            <!-- Full Wipe -->
+                            <div class="setup-group setup-group-danger">
+                                <h4>Erase All Data</h4>
+                                <p class="setup-group-help">
+                                    ⚠️ This resets EVERYTHING – setup + schedules.
+                                </p>
+
+                                <div class="setup-button-row">
+                                    <button id="eraseAllBtn"
                                             style="background:#c0392b;color:#fff;border:none;">
-                                            Erase All Camp Data (Reset Application)
-                                        </button>
-                                    </div>
+                                        Erase All Camp Data
+                                    </button>
                                 </div>
-                            </section>
-                        </div>
-                    </div>
+                            </div>
 
-                    <!-- OTHER TABS (unchanged shells) -->
-                    <div id="fields" class="tab-content"></div>
-                    <div id="special_activities" class="tab-content"></div>
-                    
-                    <div id="master-scheduler" class="tab-content">
-                        <div id="master-scheduler-content"></div>
-                    </div>
-                    
-                    <div id="schedule" class="tab-content">
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                            <h3>Daily Schedule (View)</h3>
-                            <button onclick="window.validateSchedule?.()" style="background:#ff9800; color:white; border:none; padding:8px 16px; border-radius:4px; cursor:pointer; font-weight:bold;">⚠️ Validate Schedule</button>
-                        </div>
-                        <p>This tab shows the final, "filled-in" schedule.</p>
-                        <div id="scheduleTable"></div>
-                    </div>
+                        </section>
 
-                    <div id="leagues" class="tab-content">
-                        <div id="leaguesContainer"></div>
                     </div>
+                </div> <!-- /setup -->
 
-                    <div id="specialty-leagues" class="tab-content">
-                        <h2>🏆 Specialty Leagues</h2>
-                        <div id="specialtyLeaguesContainer"></div>
-                    </div>
+                <!-- ======================================================= -->
+                <!-- OTHER TABS -->
+                <!-- ======================================================= -->
+                <div id="fields" class="tab-content"></div>
+                <div id="special_activities" class="tab-content"></div>
+                <div id="leagues" class="tab-content"></div>
+                <div id="specialty-leagues" class="tab-content"></div>
 
-                    <div id="daily-adjustments" class="tab-content">
-                        <div id="daily-adjustments-content"></div>
-                    </div>
-                    
-                    <div id="report" class="tab-content">
-                        <div id="report-content"></div>
-                    </div>
+                <div id="master-scheduler" class="tab-content">
+                    <div id="master-scheduler-content"></div>
+                </div>
 
-                    <div id="print" class="tab-content">
-                        <div id="print-content"></div>
-                    </div>
+                <div id="daily-adjustments" class="tab-content">
+                    <div id="daily-adjustments-content"></div>
+                </div>
 
-                    <div id="updates" class="tab-content">
-                        <div id="updates-content"></div>
+                <div id="schedule" class="tab-content">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                        <h3>Daily Schedule (View)</h3>
+                        <button onclick="window.validateSchedule?.()"
+                                style="background:#ff9800;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;">
+                            ⚠️ Validate Schedule
+                        </button>
                     </div>
+                    <div id="scheduleTable"></div>
+                </div>
 
-                    <div id="helper" class="tab-content">
-                        <div id="helper-content"></div>
-                    </div>
-                </main>
-            </div>
-        </div>
-    </div> 
+                <div id="report" class="tab-content"><div id="report-content"></div></div>
+                <div id="print" class="tab-content"><div id="print-content"></div></div>
+                <div id="updates" class="tab-content"><div id="updates-content"></div></div>
+                <div id="helper" class="tab-content"><div id="helper-content"></div></div>
 
-    <!-- SCRIPTS -->
+            </main> <!-- /app-content -->
+
+        </div> <!-- /app-main -->
+
+    </div> <!-- /app-shell -->
+
+</div> <!-- /main-app-container -->
+
+<!-- =============================================================== -->
+<!-- SCRIPT LOADING ORDER (Corrected) -->
+<!-- =============================================================== -->
+
     <script src="welcome.js" defer></script>
-    <script src="calendar.js" defer></script>
-    <script src="app1.js" defer></script>
-    <script src="daily_adjustments.js" defer></script>
-    <script src="fields.js" defer></script>
-    <script src="special_activities.js" defer></script>
-    <script src="leagues.js" defer></script>
-    <script src="specialty_leagues.js" defer></script> 
-    <script src="master_schedule_builder.js" defer></script>
-    <script src="scheduler_logic_core.js" defer></script>
-    <script src="scheduler_logic_fillers.js" defer></script>
-    <script src="scheduler_ui.js" defer></script>
-    <script src="analytics.js" defer></script>
-    <script src="validator.js" defer></script>
-    <script src="print_center.js" defer></script>
-    <script src="helper.js" defer></script>
-    <script src="updates.js" defer></script>
+<script src="calendar.js" defer></script>
+<script src="app1.js" defer></script>
 
-    <script>
-        // Simple tab switcher wired to sidebar
-        function showTab(id) {
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            const pane = document.getElementById(id);
-            if (pane) pane.classList.add('active');
+<script src="daily_adjustments.js" defer></script>
+<script src="special_activities.js" defer></script>
+<script src="fields.js" defer></script>
+<script src="leagues.js" defer></script>
+<script src="specialty_leagues.js" defer></script>
+<script src="master_schedule_builder.js" defer></script>
 
-            document.querySelectorAll('.sidebar-item').forEach(btn => {
-                const tab = btn.getAttribute('data-tab');
-                btn.classList.toggle('active', tab === id);
-            });
+<!-- NOW load adapter (dependencies already exist) -->
+<script src="smart_logic_adapter.js" defer></script>
 
-            if (id === 'schedule') {
-                window.updateTable?.();
-            } else if (id === 'leagues') {
-                window.initLeagues?.();
-            } else if (id === 'specialty-leagues') {
-                window.initSpecialtyLeagues?.();
-            } else if (id === 'master-scheduler') {
-                window.initMasterScheduler?.();
-            } else if (id === 'fields') {
-                window.initFieldsTab?.();
-            } else if (id === 'special_activities') {
-                window.initSpecialActivitiesTab?.();
-            } else if (id === 'daily-adjustments') {
-                window.initDailyAdjustments?.();
-            } else if (id === 'report') {
-                window.initReportTab?.();
-            } else if (id === 'print') {
-                window.initPrintCenter?.();
-            } else if (id === 'helper') {
-                window.initHelperTab?.();
-            } else if (id === 'updates') {
-                window.initUpdatesTab?.();
-            } else if (id === 'setup') {
-                // Tie Setup tab into app1.js so divisions & bunks render
-                window.initApp1?.();
-            }
-        }
+<!-- Now load core -->
+    <script src="league_scheduling.js" defer></script>
 
-        // Hamburger + sidebar wiring
-        (function () {
-            'use strict';
-            const hamburgerBtn = document.getElementById('hamburgerBtn');
-            const sidebar = document.getElementById('sidebar');
-            const backdrop = document.getElementById('sidebarBackdrop');
+<script src="scheduler_logic_core.js" defer></script>
+<script src="scheduler_logic_fillers.js" defer></script>
 
-            if (hamburgerBtn) {
-                hamburgerBtn.addEventListener('click', function () {
-                    document.body.classList.toggle('sidebar-open');
-                });
-            }
+<script src="scheduler_ui.js" defer></script>
+<script src="analytics.js" defer></script>
+<script src="validator.js" defer></script>
+<script src="print_center.js" defer></script>
+<script src="helper.js" defer></script>
+<script src="updates.js" defer></script>
 
-            if (backdrop) {
-                backdrop.addEventListener('click', function () {
-                    document.body.classList.remove('sidebar-open');
-                });
-            }
 
-            if (sidebar) {
-                const items = sidebar.querySelectorAll('.sidebar-item');
-                items.forEach(btn => {
-                    btn.addEventListener('click', function () {
-                        const tabId = btn.getAttribute('data-tab');
-                        if (tabId) {
-                            showTab(tabId);
-                        }
-                        document.body.classList.remove('sidebar-open');
-                    });
-                });
-            }
-        })();
-    </script>
+<!-- ========== NEW GENERATE BUTTON BRIDGE (Corrected) ========== -->
+<script>
+window.runOptimizer = async function () {
+
+    // 1. Get master blocks
+    const blocks = window.getMasterSkeleton?.() || [];
+
+    // 2. Ask new engine to build context
+    const ctx = SchedulerCore.getFullContext?.();
+    if (!ctx) {
+        alert("Error: New engine context not ready.");
+        return;
+    }
+
+    try {
+        // 3. Run engine
+        const result = await SchedulerCore.run(blocks, ctx);
+
+        // 4. Save schedule + history
+        window.saveDailySchedule?.(result.schedule);
+        window.saveRotationHistory?.(result.rotationHistory);
+
+        // 5. Refresh daily view
+        window.updateTable?.();
+
+        alert("Schedule generated successfully!");
+    } catch (err) {
+        console.error(err);
+        alert("Engine Error: " + err.message);
+    }
+};
+</script>
+
+<!-- =============================================================== -->
+<!-- TAB NAVIGATION (unchanged) -->
+<!-- =============================================================== -->
+<script>
+function showTab(id) {
+    document.querySelectorAll('.tab-content').forEach(el =>
+        el.classList.remove('active')
+    );
+    document.getElementById(id)?.classList.add('active');
+
+    document.querySelectorAll('.sidebar-item').forEach(btn =>
+        btn.classList.toggle('active', btn.dataset.tab === id)
+    );
+
+    if (id === 'setup') window.initApp1?.();
+    if (id === 'fields') window.initFieldsTab?.();
+    if (id === 'special_activities') window.initSpecialActivitiesTab?.();
+    if (id === 'leagues') window.initLeagues?.();
+    if (id === 'specialty-leagues') window.initSpecialtyLeagues?.();
+    if (id === 'master-scheduler') window.initMasterScheduler?.();
+    if (id === 'daily-adjustments') window.initDailyAdjustments?.();
+    if (id === 'schedule') window.updateTable?.();
+    if (id === 'report') window.initReportTab?.();
+    if (id === 'print') window.initPrintCenter?.();
+    if (id === 'updates') window.initUpdatesTab?.();
+    if (id === 'helper') window.initHelperTab?.();
+}
+
+// Sidebar + hamburger
+(function () {
+    const hamburger = document.getElementById('hamburgerBtn');
+    const sidebar = document.getElementById('sidebar');
+    const backdrop = document.getElementById('sidebarBackdrop');
+
+    hamburger?.addEventListener('click', () =>
+        document.body.classList.toggle('sidebar-open')
+    );
+
+    backdrop?.addEventListener('click', () =>
+        document.body.classList.remove('sidebar-open')
+    );
+
+    sidebar?.querySelectorAll('.sidebar-item').forEach(btn => {
+        btn.addEventListener('click', () => {
+            showTab(btn.dataset.tab);
+            document.body.classList.remove('sidebar-open');
+        });
+    });
+})();
+</script>
+
 </body>
 </html>
