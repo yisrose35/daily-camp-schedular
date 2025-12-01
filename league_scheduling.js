@@ -1,128 +1,138 @@
 
-
 /**
  * =============================================================
  * LEAGUE SCHEDULING CORE (league_scheduling.js)
- * (UPDATED to use calendar.js save/load)
+ * (UPDATED: Global Persistence & Infinite Game Counter — FIXED)
  * =============================================================
  */
 
 (function () {
   'use strict';
 
-  // const LEAGUE_STATE_KEY = "camp_league_round_state"; // No longer used
-  let leagueRoundState = {}; // { "League Name": { currentRound: 0 } }
+  // GLOBAL SEASON STATE (PERSISTED cross-day)
+  let leagueRoundState = {};   // { "League Name": { currentRound: 0 } }
+  window.leagueRoundState = leagueRoundState;
 
   /**
-   * Loads the current round for all leagues from the *current day's* data.
+   * Load SEASON PERSISTENCE (never from daily!)
    */
   function loadRoundState() {
     try {
-      // UPDATED: Load from the globally scoped daily object
-      if (window.currentDailyData && window.currentDailyData.leagueRoundState) {
-        leagueRoundState = window.currentDailyData.leagueRoundState;
-      } else if (window.loadCurrentDailyData) {
-        // If it's the first load, loadCurrentDailyData will run and populate it
-        leagueRoundState = window.loadCurrentDailyData().leagueRoundState || {};
-      }
-      else {
-        leagueRoundState = {};
-      }
+      const global = window.loadGlobalSettings?.() || {};
+      leagueRoundState = global.leagueRoundState || {};
+      window.leagueRoundState = leagueRoundState;
     } catch (e) {
       console.error("Failed to load league state:", e);
       leagueRoundState = {};
+      window.leagueRoundState = leagueRoundState;
     }
   }
 
   /**
-   * Saves the current round for all leagues to the *current day's* data.
+   * Save SEASON PERSISTENCE (never to daily!)
    */
   function saveRoundState() {
     try {
-      // UPDATED: Save to the globally scoped daily object
-      window.saveCurrentDailyData?.("leagueRoundState", leagueRoundState);
+      window.saveGlobalSettings?.("leagueRoundState", leagueRoundState);
     } catch (e) {
       console.error("Failed to save league state:", e);
     }
   }
 
   /**
-   * Generates a full round-robin tournament schedule for a list of teams.
+   * Standard round-robin generator
    */
   function generateRoundRobin(teamList) {
-    if (!teamList || teamList.length < 2) {
-      return [];
-    }
-  
+    if (!teamList || teamList.length < 2) return [];
+
     const teams = [...teamList];
     let hasBye = false;
+
     if (teams.length % 2 !== 0) {
       teams.push("BYE");
       hasBye = true;
     }
-  
-    const numRounds = teams.length - 1;
+
     const schedule = [];
-  
-    const fixedTeam = teams[0];
-    const rotatingTeams = teams.slice(1);
-  
-    for (let round = 0; round < numRounds; round++) {
-      const currentRound = [];
-      
-      currentRound.push([fixedTeam, rotatingTeams[0]]);
-  
+    const numRounds = teams.length - 1;
+
+    const fixed = teams[0];
+    const rotating = teams.slice(1);
+
+    for (let r = 0; r < numRounds; r++) {
+      const round = [];
+      round.push([fixed, rotating[0]]);
+
       for (let i = 1; i < teams.length / 2; i++) {
-        const team1 = rotatingTeams[i];
-        const team2 = rotatingTeams[rotatingTeams.length - i];
-        currentRound.push([team1, team2]);
+        const t1 = rotating[i];
+        const t2 = rotating[rotating.length - i];
+        round.push([t1, t2]);
       }
-  
-      schedule.push(currentRound);
-      rotatingTeams.unshift(rotatingTeams.pop());
+
+      schedule.push(round);
+      rotating.unshift(rotating.pop());
     }
-  
-    if (hasBye) {
-      return schedule.map(round => 
-        round.filter(match => match[0] !== "BYE" && match[1] !== "BYE")
-      );
-    }
-  
-    return schedule;
+
+    if (!hasBye) return schedule;
+
+    return schedule.map(round =>
+      round.filter(m => m[0] !== "BYE" && m[1] !== "BYE")
+    );
   }
 
   /**
-   * Public function to get the *next* set of matchups for a league.
+   * === MAIN API ===
+   * Get TODAY'S matchups, automatically increments counter.
    */
   function getLeagueMatchups(leagueName, teams) {
-    if (!leagueName || !teams || teams.length < 2) {
-      return []; 
-    }
-  
+    if (!leagueName || !teams || teams.length < 2) return [];
+
+    // ensure season state is loaded
     loadRoundState();
-  
+
     const state = leagueRoundState[leagueName] || { currentRound: 0 };
     const fullSchedule = generateRoundRobin(teams);
-  
-    if (fullSchedule.length === 0) {
-      return []; 
-    }
-  
-    const todayMatchups = fullSchedule[state.currentRound];
-  
-    // Increment and save the round number for next time
-    const nextRound = (state.currentRound + 1) % fullSchedule.length;
-    leagueRoundState[leagueName] = { currentRound: nextRound };
+
+    if (fullSchedule.length === 0) return [];
+
+    // choose today's round using modulo
+    const roundIndex = state.currentRound % fullSchedule.length;
+    const matchups = fullSchedule[roundIndex];
+
+    // increment absolute counter
+    leagueRoundState[leagueName] = { currentRound: state.currentRound + 1 };
     saveRoundState();
-  
-    return todayMatchups;
+
+    return matchups;
   }
 
-  // --- Global Exposure and Initialization ---
+  /**
+   * Returns CURRENT absolute game number (Game X)
+   */
+  function getLeagueCurrentRound(leagueName) {
+    const state = leagueRoundState[leagueName];
+    const val = state ? state.currentRound : 0;
+    return val === 0 ? 1 : val;
+  }
+
+  /**
+   * Get matchups for **specific round index**
+   * without affecting the global season counter.
+   */
+  function getMatchupsForRound(teams, roundIndex) {
+    if (!teams || teams.length < 2) return [];
+    const schedule = generateRoundRobin(teams);
+    if (schedule.length === 0) return [];
+
+    return schedule[roundIndex % schedule.length] || [];
+  }
+
+  // expose API
   window.getLeagueMatchups = getLeagueMatchups;
-  
-  // IMPORTANT: Load state on script execution
-  // It will load the state for the current date set by calendar.js
-  loadRoundState(); 
-  
+  window.getLeagueCurrentRound = getLeagueCurrentRound;
+  window.getMatchupsForRound = getMatchupsForRound;
+
+  // load season state on script load
+  loadRoundState();
+
 })();
