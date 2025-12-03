@@ -1,17 +1,21 @@
 
-
-
 // =================================================================
 // scheduler_logic_fillers.js
 //
 // UPDATED:
-// - Added logic to check 'maxUsage' against 'historicalCounts'.
+// - Removed local 'canBlockFit' to prevent logic duplication.
+// - Now strictly uses window.SchedulerCoreUtils.canBlockFit.
+// - Uses SchedulerCoreUtils.fieldLabel for consistency.
+// - ADDED: Max Usage Limit check in findBestSpecial/General
 // =================================================================
 
 (function() {
 'use strict';
 
-function fieldLabel(f) { return (f && typeof f==='object' && f.name) ? f.name : f; }
+// Delegate to the central Utilities for field name resolution
+function fieldLabel(f) { 
+    return window.SchedulerCoreUtils ? window.SchedulerCoreUtils.fieldLabel(f) : (f && f.name ? f.name : f); 
+}
 
 function calculatePreferenceScore(fieldProps, divName) {
     if (!fieldProps?.preferences?.enabled) return 0;
@@ -34,9 +38,10 @@ function sortPicksByFreshness(possiblePicks, bunkHistory = {}, divName, activity
     });
 }
 
-// --- HELPER: Check Usage Limit ---
+// --- HELPER: Check Usage Limit (Safety Net for Generator) ---
 function isOverUsageLimit(activityName, bunk, activityProperties, historicalCounts, activitiesDoneToday) {
     const props = activityProperties[activityName];
+    // maxUsage comes from Utils.loadAndFilterData
     const max = props?.maxUsage || 0;
     
     // 0 means unlimited
@@ -48,10 +53,9 @@ function isOverUsageLimit(activityName, bunk, activityProperties, historicalCoun
     
     // If they already hit the limit in past days
     if (pastCount >= max) return true;
-    // ...
 
     // If they are at limit-1, and they already did it today, they can't do it again
-    if (activitiesDoneToday.has(activityName) && (pastCount + 1 >= max)) return true;
+    if (activitiesDoneToday.has(activityName) && (pastCount + 1 > max)) return true;
 
     return false;
 }
@@ -63,13 +67,14 @@ window.findBestSpecial = function(block, allActivities, fieldUsageBySlot, yester
 
     const availablePicks = specials.filter(pick => {
         const name = pick._activity;
-        // 1. Check standard constraints (time, sharing, field availability)
-        if (!window.findBestGeneralActivity.canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot, name)) return false;
         
-        // 2. Check Max Usage Limit
+        // 1. Check standard constraints (time, sharing, field availability) using CORE UTILS
+        if (!window.SchedulerCoreUtils.canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot, name)) return false;
+        
+        // 2. Check Max Usage Limit (The Safety Net)
         if (isOverUsageLimit(name, block.bunk, activityProperties, historicalCounts, activitiesDoneToday)) return false;
 
-        // 3. Check if done today (General rule: don't repeat same special twice in a day unless strictly allowed, but typically we block repeats)
+        // 3. Check if done today
         if (activitiesDoneToday.has(name)) return false;
 
         return true;
@@ -85,7 +90,7 @@ window.findBestSportActivity = function(block, allActivities, fieldUsageBySlot, 
     const activitiesDoneToday = getGeneralActivitiesDoneToday(block.bunk);
 
     const availablePicks = sports.filter(pick => 
-        window.findBestGeneralActivity.canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot, pick._activity) &&
+        window.SchedulerCoreUtils.canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot, pick._activity) &&
         !activitiesDoneToday.has(pick._activity)
     );
     
@@ -100,10 +105,11 @@ window.findBestGeneralActivity = function(block, allActivities, h2hActivities, f
 
     const availablePicks = allPossiblePicks.filter(pick => {
         const name = pick._activity;
-        if (!window.findBestGeneralActivity.canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot, name)) return false;
+        // Core validation
+        if (!window.SchedulerCoreUtils.canBlockFit(block, fieldLabel(pick.field), activityProperties, fieldUsageBySlot, name)) return false;
         
         // Check limits for specials here too if general picks a special
-        if (pick.field && !pick.sport) { // implies special
+        if (pick.field && !pick.sport) { 
              if (isOverUsageLimit(name, block.bunk, activityProperties, historicalCounts, activitiesDoneToday)) return false;
         }
 
@@ -113,37 +119,6 @@ window.findBestGeneralActivity = function(block, allActivities, h2hActivities, f
     const sortedPicks = sortPicksByFreshness(availablePicks, bunkHistory, block.divName, activityProperties);
     return sortedPicks[0] || { field: "Free", sport: null, _activity: "Free" };
 }
-
-// Re-include canBlockFit for standalone validity if needed
-window.findBestGeneralActivity.canBlockFit = function(block, fieldName, activityProperties, fieldUsageBySlot, proposedActivity) {
-    // (This logic mirrors scheduler_logic_core.js but is needed here for the 'filter' loop)
-    const props = activityProperties[fieldName];
-    if (!props) return false;
-    const limit = (props.sharable) ? 2 : 1;
-
-    if (props.preferences?.enabled && props.preferences.exclusive && !props.preferences.list.includes(block.divName)) return false;
-    if (props.allowedDivisions && props.allowedDivisions.length && !props.allowedDivisions.includes(block.divName)) return false;
-    
-    if (props.limitUsage?.enabled) {
-        if (!props.limitUsage.divisions[block.divName]) return false;
-        const allowedBunks = props.limitUsage.divisions[block.divName];
-        if (allowedBunks.length > 0 && block.bunk && !allowedBunks.includes(block.bunk)) return false;
-    }
-
-    for (const slotIndex of block.slots) {
-        if (slotIndex === undefined) return false;
-        const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [], bunks: {} };
-        if (usage.count >= limit) return false;
-        if (usage.count > 0) {
-            if (!usage.divisions.includes(block.divName)) return false;
-            let existingActivity = null;
-            for (const bunkName in usage.bunks) { if (usage.bunks[bunkName]) { existingActivity = usage.bunks[bunkName]; break; } }
-            if (existingActivity && proposedActivity && existingActivity !== proposedActivity) return false;
-        }
-        // Note: isTimeAvailable check skipped here for brevity, assumed handled or checked in core loop
-    }
-    return true;
-};
 
 function getGeneralActivitiesDoneToday(bunkName) {
     const activities = new Set();
