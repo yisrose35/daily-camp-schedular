@@ -232,10 +232,15 @@
                                     </button>
 
                                     <button id="eraseHistoryBtn"
-                                            style="background:#5e35b1;color:#fff;border:none;"
-                                            onclick="if(confirm('Reset rotation history?')) window.eraseRotationHistory?.();">
-                                        Reset Activity History
-                                    </button>
+        style="background:#5e35b1;color:#fff;border:none;"
+        onclick="if(confirm('Reset rotation history and League Game Counters?')) { 
+            window.eraseRotationHistory?.(); 
+            window.leagueRoundState = {}; 
+            window.saveGlobalSettings?.('leagueRoundState', {}); 
+            alert('Activity History and Game Counters have been reset!'); 
+        }">
+    Reset Activity History
+</button>
                                 </div>
                             </div>
 
@@ -332,10 +337,10 @@
 </div> <!-- /main-app-container -->
 
 <!-- =============================================================== -->
-<!-- SCRIPT LOADING ORDER (Corrected) -->
+<!-- SCRIPT LOADING ORDER (SPLIT CORE) -->
 <!-- =============================================================== -->
 
-    <script src="welcome.js" defer></script>
+<script src="welcome.js" defer></script>
 <script src="calendar.js" defer></script>
 <script src="app1.js" defer></script>
 
@@ -346,15 +351,19 @@
 <script src="specialty_leagues.js" defer></script>
 <script src="master_schedule_builder.js" defer></script>
 
-<!-- NOW load adapter (dependencies already exist) -->
+<!-- Smart Tile Adapter -->
 <script src="smart_logic_adapter.js" defer></script>
 
-<!-- Now load core -->
-    <script src="league_scheduling.js" defer></script>
+<!-- League Season State -->
+<script src="league_scheduling.js" defer></script>
 
-<script src="scheduler_logic_core.js" defer></script>
+<!-- CORE LOGIC SPLIT -->
+<script src="scheduler_core_utils.js" defer></script>
+<script src="scheduler_core_leagues.js" defer></script>
 <script src="scheduler_logic_fillers.js" defer></script>
+<script src="scheduler_core_main.js" defer></script>
 
+<!-- UI Components -->
 <script src="scheduler_ui.js" defer></script>
 <script src="analytics.js" defer></script>
 <script src="validator.js" defer></script>
@@ -362,42 +371,8 @@
 <script src="helper.js" defer></script>
 <script src="updates.js" defer></script>
 
-
-<!-- ========== NEW GENERATE BUTTON BRIDGE (Corrected) ========== -->
-<script>
-window.runOptimizer = async function () {
-
-    // 1. Get master blocks
-    const blocks = window.getMasterSkeleton?.() || [];
-
-    // 2. Ask new engine to build context
-    const ctx = SchedulerCore.getFullContext?.();
-    if (!ctx) {
-        alert("Error: New engine context not ready.");
-        return;
-    }
-
-    try {
-        // 3. Run engine
-        const result = await SchedulerCore.run(blocks, ctx);
-
-        // 4. Save schedule + history
-        window.saveDailySchedule?.(result.schedule);
-        window.saveRotationHistory?.(result.rotationHistory);
-
-        // 5. Refresh daily view
-        window.updateTable?.();
-
-        alert("Schedule generated successfully!");
-    } catch (err) {
-        console.error(err);
-        alert("Engine Error: " + err.message);
-    }
-};
-</script>
-
 <!-- =============================================================== -->
-<!-- TAB NAVIGATION (unchanged) -->
+<!-- TAB NAVIGATION -->
 <!-- =============================================================== -->
 <script>
 function showTab(id) {
@@ -424,7 +399,6 @@ function showTab(id) {
     if (id === 'helper') window.initHelperTab?.();
 }
 
-// Sidebar + hamburger
 (function () {
     const hamburger = document.getElementById('hamburgerBtn');
     const sidebar = document.getElementById('sidebar');
