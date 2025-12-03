@@ -1,4 +1,3 @@
-
 // ============================================================================
 // scheduler_core_utils.js
 // PART 1 of 3: THE FOUNDATION
@@ -6,10 +5,9 @@
 // Role:
 // - Data Loading
 // - Constraint Logic (canBlockFit)
-// - FIX: Refined "Lookback" logic to check specific end times.
-//        (Fixes 2:15 vs 2:20 gap while catching 2:30 vs 2:20 overlap)
-// - FIX: Removed syntax error (extra brace at end of file)
-// - FIX: Added missing parseTimeRule helper function
+// - FIX: DIVISION GUARD.
+//        Even if the game names match ("League Game 1"), different
+//        divisions are BLOCKED from sharing the field during leagues.
 // ============================================================================
 
 (function() {
@@ -68,8 +66,6 @@
         return d;
     };
 
-    // --- REVERTED: Standard Start-Time Logic ---
-    // This ensures contiguous blocks (9:45-10:30) don't double-book the 9:30 slot.
     Utils.findSlotsForRange = function(startMin, endMin) {
         const slots = [];
         if (!window.unifiedTimes || startMin == null || endMin == null) return slots;
@@ -77,8 +73,6 @@
             const slot = window.unifiedTimes[i];
             const d = new Date(slot.start);
             const slotStart = d.getHours() * 60 + d.getMinutes();
-            // Start Time Logic: Activity must START in the slot (or be exactly the slot)
-            // But we treat it as [inclusive, exclusive)
             if (slotStart >= startMin && slotStart < endMin) {
                 slots.push(i);
             }
@@ -154,7 +148,7 @@
         return isAvailable;
     };
 
-    // Main capacity check (UPDATED with Granular Lookback)
+    // Main capacity check
     Utils.canBlockFit = function(block, fieldName, activityProperties, fieldUsageBySlot, proposedActivity) {
         if (!fieldName) return false;
         const props = activityProperties[fieldName];
@@ -176,6 +170,7 @@
         // Preferences checks
         if (props.preferences && props.preferences.enabled && props.preferences.exclusive && !props.preferences.list.includes(block.divName)) return false;
         if (props && Array.isArray(props.allowedDivisions) && props.allowedDivisions.length > 0 && !props.allowedDivisions.includes(block.divName)) return false;
+        
         const limitRules = props.limitUsage;
         if (limitRules && limitRules.enabled) {
             if (!limitRules.divisions[block.divName]) return false;
@@ -214,58 +209,43 @@
             if (!props.available) return false;
         }
 
-        // --- NEW: PRE-SLOT LOOKBACK (Refined for exact time checks) ---
-        // If the activity starts BEFORE the assigned visual slot (e.g. 2:20 start for 2:30 slot),
-        // we check the previous slot (2:00-2:30).
+        // PRE-SLOT LOOKBACK (Standard)
         if (blockStartMin != null && block.slots && block.slots.length > 0) {
             const firstSlotIndex = block.slots[0];
             if (firstSlotIndex > 0) {
                 const firstSlotStart = new Date(window.unifiedTimes[firstSlotIndex].start).getHours() * 60 + 
                                        new Date(window.unifiedTimes[firstSlotIndex].start).getMinutes();
-                
-                // If Activity (2:20) starts BEFORE Slot (2:30), it "bleeds" into the previous slot
                 if (blockStartMin < firstSlotStart) {
                     const prevSlotIndex = firstSlotIndex - 1;
                     const prevUsage = fieldUsageBySlot[prevSlotIndex]?.[fieldName];
                     
                     if (prevUsage && prevUsage.count > 0) {
-                        // Check if the actual activities in previous slot END after our start time
                         let overlappingCount = 0;
                         const assignments = window.scheduleAssignments || {};
-                        
-                        // prevUsage.bunks is { "BunkName": "ActivityName" }
                         Object.keys(prevUsage.bunks).forEach(bunkName => {
                             const entry = assignments[bunkName]?.[prevSlotIndex];
                             if (entry) {
-                                // Default to slot boundary if _endTime is missing
                                 const entEnd = entry._endTime ?? firstSlotStart; 
-                                
-                                // Scenario 1: A ends 2:15. B starts 2:20. (2:15 > 2:20 is False). No Overlap.
-                                // Scenario 2: A ends 2:30. B starts 2:20. (2:30 > 2:20 is True). Overlap!
-                                if (entEnd > blockStartMin) {
-                                    overlappingCount++;
-                                }
+                                if (entEnd > blockStartMin) overlappingCount++;
                             } else {
-                                // Fallback: Assume full slot usage if we can't find entry
                                 overlappingCount++;
                             }
                         });
-
-                        if (overlappingCount >= limit) {
-                            return false; // Conflict found
-                        }
+                        if (overlappingCount >= limit) return false; 
                     }
                 }
             }
         }
 
-        // Standard Slot Usage Check
+        // --- MAIN SLOT LOOP ---
         for (const slotIndex of block.slots || []) {
             if (slotIndex === undefined) return false;
             const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [], bunks: {} };
             
+            // 1. BASIC CAPACITY
             if (usage.count >= limit) return false;
             
+            // 2. HEADCOUNT
             if (maxHeadcount !== Infinity) {
                 let currentHeadcount = 0;
                 Object.keys(usage.bunks).forEach(bName => {
@@ -275,6 +255,31 @@
             }
 
             if (usage.count > 0) {
+                // 3. LEAGUE GUARD (FIXED)
+                // If a league game is present, verify:
+                // A) Same Game Name
+                // B) Same Division (Prevents Div 2 vs Div 3 collisions)
+                for (const bKey in usage.bunks) {
+                    const existingActivity = usage.bunks[bKey];
+                    if (existingActivity && String(existingActivity).toLowerCase().includes("league game")) {
+                        
+                        // A) Name Check
+                        const existingStr = String(existingActivity).trim().toLowerCase();
+                        const proposedStr = String(proposedActivity || "").trim().toLowerCase();
+                        if (existingStr !== proposedStr) return false; 
+
+                        // B) Division Check (THE FIX)
+                        // If the field is currently used by a DIFFERENT division, block it.
+                        // (usage.divisions is an array of div names currently on the field)
+                        if (usage.divisions && usage.divisions.length > 0) {
+                            if (!usage.divisions.includes(block.divName)) {
+                                return false; // BLOCKED: Different division already here!
+                            }
+                        }
+                    }
+                }
+
+                // 4. Standard Activity Compatibility
                 let existingActivity = null;
                 for (const bunkName in usage.bunks) {
                     if (usage.bunks[bunkName]) {
@@ -282,14 +287,18 @@
                         break;
                     }
                 }
-                if (existingActivity && proposedActivity && existingActivity !== proposedActivity) return false;
+                const proposedIsLeague = String(proposedActivity).toLowerCase().includes("league game");
+                if (!proposedIsLeague) {
+                    if (existingActivity && proposedActivity && existingActivity !== proposedActivity) return false;
+                }
             }
+
             if (!Utils.isTimeAvailable(slotIndex, props)) return false;
         }
         return true;
     };
 
-    // League Check (Apply same Lookback fix)
+    // League Check (Apply same Division Guard)
     Utils.canLeagueGameFit = function(block, fieldName, fieldUsageBySlot, activityProperties) {
         if (!fieldName) return false;
         const props = activityProperties[fieldName];
@@ -306,48 +315,25 @@
 
         if (!props.available) return false;
 
-        // --- NEW: LEAGUE PRE-SLOT LOOKBACK (Refined) ---
         const { blockStartMin } = Utils.getBlockTimeRange(block);
-        if (blockStartMin != null && block.slots && block.slots.length > 0) {
-            const firstSlotIndex = block.slots[0];
-            if (firstSlotIndex > 0) {
-                const firstSlotStart = new Date(window.unifiedTimes[firstSlotIndex].start).getHours() * 60 + 
-                                       new Date(window.unifiedTimes[firstSlotIndex].start).getMinutes();
-                if (blockStartMin < firstSlotStart) {
-                    const prevSlotIndex = firstSlotIndex - 1;
-                    const prevUsage = fieldUsageBySlot[prevSlotIndex]?.[fieldName];
-                    
-                    if (prevUsage && prevUsage.count > 0) {
-                        let overlappingCount = 0;
-                        const assignments = window.scheduleAssignments || {};
-                        Object.keys(prevUsage.bunks).forEach(bunkName => {
-                            const entry = assignments[bunkName]?.[prevSlotIndex];
-                            if (entry) {
-                                const entEnd = entry._endTime ?? firstSlotStart;
-                                if (entEnd > blockStartMin) overlappingCount++;
-                            } else {
-                                overlappingCount++;
-                            }
-                        });
-                        if (overlappingCount >= limit) return false;
-                    }
-                }
-            }
-        }
-
+        
         for (const slotIndex of block.slots || []) {
             if (slotIndex === undefined) return false;
             const usage = fieldUsageBySlot[slotIndex]?.[fieldName] || { count: 0, divisions: [] };
+            
             if (usage.count >= limit) return false;
+
+            // Strict Division Guard
+            // If anyone else is here, it's a conflict unless it's empty.
+            // (League games generally need the whole field empty to start)
+            if (usage.count > 0) return false;
         }
         return true;
     };
 
     // =================================================================
-    // 3. DATA LOADER (Unchanged)
+    // 3. DATA LOADER
     // =================================================================
-    
-    // --- Helper for Time Rules ---
     function parseTimeRule(rule) {
         if (!rule) return null;
         if (typeof rule.startMin === "number" && typeof rule.endMin === "number") return rule;
