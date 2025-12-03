@@ -1,11 +1,9 @@
 
 // ============================================================================
-// SmartLogicAdapter V35
-// - SPECIAL COUNTS IGNORE FALLBACKS
-// - USES SPECIFIC SPECIAL NAME (Gameroom, Canteen, etc)
-// - LOCKED EVENTS so Core CANNOT overwrite Smart Tile results
-// - STRICT ROTATION: Perfect fairness, yesterday penalty, true history awareness
-// - Writes pre-history into __smartTileToday for scheduler core
+// SmartLogicAdapter V36 (UPDATED: GLOBAL MAX USAGE PRE-SCREEN)
+// - Checks if a bunk is "Fully Maxed Out" on ALL special activities.
+// - If maxed out, they are disqualified from the Special slot immediately.
+// - Forces maxed-out bunks to Open/Fallback activities to prevent wasted slots.
 // ============================================================================
 
 (function() {
@@ -70,7 +68,7 @@
         },
 
         // ---------------------------------------------------------
-        // GENERATE PERFECTLY FAIR ASSIGNMENTS (V35)
+        // GENERATE ASSIGNMENTS (With Global Eligibility Check)
         // ---------------------------------------------------------
         generateAssignments(bunks, job, historical={}, specialNames=[], activityProps={}, masterFields=[], dailyFieldAvailability={}, yesterdayHistory={}) {
 
@@ -78,7 +76,7 @@
             const main2 = job.main2.trim();
             const fbAct = job.fallbackActivity || "Sports";
 
-            // Identify the Special Act (LIMITED capacity)
+            // Identify the Special Act (The "Limited" resource)
             const fbFor = job.fallbackFor || "";
             let specialAct, openAct;
 
@@ -93,10 +91,45 @@
             }
 
             // ---------------------------------------------------------
-            // Yesterday Check (V35: specific special)
+            // 1. ELIGIBILITY PRE-SCREEN (Global Max Usage)
             // ---------------------------------------------------------
+            // We must check if the bunk has ANY valid special activity options left.
+            // If they are maxed out on EVERYTHING, do not give them a Special slot.
+            
             const allSpecials = window.getGlobalSpecialActivities ? window.getGlobalSpecialActivities() : [];
+            const eligibleBunks = [];
+            const forcedFallbackBunks = [];
 
+            bunks.forEach(b => {
+                let hasAtLeastOneOption = false;
+
+                if (allSpecials.length === 0) {
+                    // No specials defined? Assume unlimited/valid to prevent blocking.
+                    hasAtLeastOneOption = true; 
+                } else {
+                    // Check every special activity
+                    for (const s of allSpecials) {
+                        const limit = s.maxUsage || 0; // 0 = unlimited
+                        const count = historical[b]?.[s.name] || 0;
+
+                        if (limit === 0 || count < limit) {
+                            hasAtLeastOneOption = true;
+                            break; // Found one valid option, they are eligible for the slot
+                        }
+                    }
+                }
+
+                if (hasAtLeastOneOption) {
+                    eligibleBunks.push(b);
+                } else {
+                    // Bunk is maxed out on ALL specials.
+                    forcedFallbackBunks.push(b);
+                }
+            });
+
+            // ---------------------------------------------------------
+            // Helpers
+            // ---------------------------------------------------------
             function playedYesterday(bunk) {
                 const sched = yesterdayHistory.schedule?.[bunk] || [];
                 return sched.some(e => {
@@ -105,16 +138,11 @@
                 }) ? 1 : 0;
             }
 
-            // ---------------------------------------------------------
-            // Category History — fallback DOES NOT count
-            // ---------------------------------------------------------
             function getCategoryHistory(bunk, actName) {
                 if (!historical[bunk]) return 0;
                 let sum = 0;
-
                 const lower = actName.toLowerCase();
-
-                // Count ONLY true special names
+                // Count ONLY true special names if actName is generic
                 const spec = allSpecials.some(s => s.name.toLowerCase() === lower);
 
                 if (spec) {
@@ -124,22 +152,18 @@
                         }
                     });
                 }
-
                 return sum;
             }
 
-            // ---------------------------------------------------------
-            // Total History (fairness)
-            // ---------------------------------------------------------
             function getTotalHistory(bunk) {
                 if (!historical[bunk]) return 0;
                 return Object.values(historical[bunk]).reduce((a,b)=>a+b,0);
             }
 
             // ---------------------------------------------------------
-            // Sort bunks by strict fairness
+            // Sort ONLY ELIGIBLE bunks by fairness
             // ---------------------------------------------------------
-            const sorted = [...bunks].sort((a,b) => {
+            const sorted = [...eligibleBunks].sort((a,b) => {
                 const A = getCategoryHistory(a, specialAct);
                 const B = getCategoryHistory(b, specialAct);
                 if (A !== B) return A-B;
@@ -156,14 +180,12 @@
             });
 
             // ---------------------------------------------------------
-            // Determine Capacity of Special for the block
+            // Determine Capacity
             // ---------------------------------------------------------
             function calcCap(startMin, endMin) {
-                // Specific special
                 const sp = allSpecials.find(s => isSame(s.name, specialAct));
-                if (!sp) return 2; // default
-
-                // sharable capacity logic
+                if (!sp) return 2; 
+                // Capacity Logic
                 if (sp.sharableWith?.capacity) return parseInt(sp.sharableWith.capacity);
                 if (sp.sharableWith?.type === 'not_sharable') return 1;
                 if (sp.sharableWith?.type === 'all') return 2;
@@ -172,13 +194,14 @@
             }
 
             // ---------------------------------------------------------
-            // Block A assignment
+            // Block A Assignment
             // ---------------------------------------------------------
             const capA = calcCap(job.blockA.startMin, job.blockA.endMin);
             let countA = 0;
             const block1 = {};
             const winnersA = new Set();
 
+            // 1. Assign Eligible Bunks (Lottery)
             sorted.forEach(bunk => {
                 if (countA < capA) {
                     block1[bunk] = specialAct;
@@ -189,8 +212,13 @@
                 }
             });
 
+            // 2. Assign Forced Fallback Bunks (Maxed Out -> Open Act)
+            forcedFallbackBunks.forEach(bunk => {
+                block1[bunk] = openAct;
+            });
+
             // ---------------------------------------------------------
-            // Block B assignment
+            // Block B Assignment
             // ---------------------------------------------------------
             const block2 = {};
             if (job.blockB) {
@@ -198,17 +226,25 @@
                 let countB = 0;
 
                 const candidates = sorted.filter(b => !winnersA.has(b));
-                const forcedOpen = [...winnersA];
+                const forcedOpen = [...winnersA]; // Winners of A must do Open in B
 
+                // Winners of A -> Forced to Open in B
                 forcedOpen.forEach(b => block2[b] = openAct);
 
+                // Losers of A (Eligible) -> Try for Special in B
                 candidates.forEach(b => {
                     if (countB < capB) {
                         block2[b] = specialAct;
                         countB++;
                     } else {
-                        block2[b] = fbAct; // fallback does NOT count in fairness
+                        block2[b] = fbAct; // Eligible but no room -> Fallback
                     }
+                });
+
+                // Forced Fallback Bunks (Maxed Out) -> Must go to Fallback
+                // (They cannot take Special spots, and they just did Open in A)
+                forcedFallbackBunks.forEach(bunk => {
+                    block2[bunk] = fbAct;
                 });
             }
 
@@ -233,7 +269,7 @@
             if (job.blockB) lockBlock(block2, job.blockB);
 
             // ---------------------------------------------------------
-            // Pre-save history for today so Core Pass 5 can use it
+            // Pre-save history
             // ---------------------------------------------------------
             window.__smartTileToday = window.__smartTileToday || {};
             window.__smartTileToday[job.division] = {
@@ -242,7 +278,6 @@
                 block2
             };
 
-            // Final return
             return {
                 block1Assignments: block1,
                 block2Assignments: block2,
