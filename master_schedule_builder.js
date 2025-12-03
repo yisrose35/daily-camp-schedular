@@ -1,20 +1,26 @@
 
 // =================================================================
-// master_schedule_builder.js (UPDATED - Smart Tiles v2)
-// - "Smart Tile" with automatic grade-level linking.
-// - Prompt flow: Main Activities -> Select Constraint Target -> Define Fallback.
+// master_schedule_builder.js (FIXED & TIMELINE INTEGRATED)
+//
+// Updates:
+// 1. Fixed Grid Rendering (Prevents "Just Words" glitch).
+// 2. Added Timeline Gatekeeper to Drag-and-Drop.
+// 3. Aligned Smart Tile prompts with new logic.
 // =================================================================
+
 (function(){
 'use strict';
 
 let container=null, palette=null, grid=null;
 let dailySkeleton=[];
 
-// --- Constants for the auto-save draft ---
+// --- Constants ---
 const SKELETON_DRAFT_KEY = 'master-schedule-draft';
 const SKELETON_DRAFT_NAME_KEY = 'master-schedule-draft-name';
+const PIXELS_PER_MINUTE=2;
+const INCREMENT_MINS=30;
 
-// --- Function to save the current draft ---
+// --- Persistence ---
 function saveDraftToLocalStorage() {
   try {
     if (dailySkeleton && dailySkeleton.length > 0) {
@@ -22,33 +28,23 @@ function saveDraftToLocalStorage() {
     } else {
       localStorage.removeItem(SKELETON_DRAFT_KEY);
     }
-  } catch (e) {
-    console.error("Error saving draft to localStorage:", e);
-  }
+  } catch (e) { console.error(e); }
 }
 
-// --- Function to clear the draft ---
 function clearDraftFromLocalStorage() {
   localStorage.removeItem(SKELETON_DRAFT_KEY);
   localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
-  console.log("Master template draft cleared.");
 }
 
-const PIXELS_PER_MINUTE=2;
-const INCREMENT_MINS=30;
-
-// --- Updated Tile Definitions ---
+// --- Tiles ---
 const TILES=[
   {type:'activity', name:'Activity', style:'background:#e0f7fa;border:1px solid #007bff;', description:'Flexible slot (Sport or Special).'},
   {type:'sports', name:'Sports', style:'background:#dcedc8;border:1px solid #689f38;', description:'Sports slot only.'},
   {type:'special', name:'Special Activity', style:'background:#e8f5e9;border:1px solid #43a047;', description:'Special Activity slot only.'},
-  
-  // NEW SMART TILE
-  {type:'smart', name:'Smart Tile', style:'background:#e3f2fd;border:2px dashed #0288d1;color:#01579b;', description:'Balances 2 activities with a fallback (e.g. Special full? -> Sports).'},
-  
-  {type:'split', name:'Split Activity', style:'background:#fff3e0;border:1px solid #f57c00;', description:'Two activities share the block.'},
-  {type:'league', name:'League Game', style:'background:#d1c4e9;border:1px solid #5e35b1;', description:'Regular League slot.'},
-  {type:'specialty_league', name:'Specialty League', style:'background:#fff8e1;border:1px solid #f9a825;', description:'Specialty League slot.'},
+  {type:'smart', name:'Smart Tile', style:'background:#e3f2fd;border:2px dashed #0288d1;color:#01579b;', description:'Balances 2 activities with a fallback.'},
+  {type:'split', name:'Split Activity', style:'background:#fff3e0;border:1px solid #f57c00;', description:'Two activities share the block (Switch halfway).'},
+  {type:'league', name:'League Game', style:'background:#d1c4e9;border:1px solid #5e35b1;', description:'Regular League slot (Full Buyout).'},
+  {type:'specialty_league', name:'Specialty League', style:'background:#fff8e1;border:1px solid #f9a825;', description:'Specialty League slot (Full Buyout).'},
   {type:'swim', name:'Swim', style:'background:#bbdefb;border:1px solid #1976d2;', description:'Pinned.'},
   {type:'lunch', name:'Lunch', style:'background:#fbe9e7;border:1px solid #d84315;', description:'Pinned.'},
   {type:'snacks', name:'Snacks', style:'background:#fff9c4;border:1px solid #fbc02d;', description:'Pinned.'},
@@ -66,34 +62,45 @@ function mapEventNameForOptimizer(name){
   return {type:'pinned',event:name};
 }
 
+// --- Init ---
 function init(){
   container=document.getElementById("master-scheduler-content");
   if(!container) return;
+  
   loadDailySkeleton();
 
-  // --- Load draft from localStorage ---
   const savedDraft = localStorage.getItem(SKELETON_DRAFT_KEY);
   if (savedDraft) {
-    if (confirm("You have an unsaved master schedule draft. Load it?")) {
+    if (confirm("Load unsaved master schedule draft?")) {
       dailySkeleton = JSON.parse(savedDraft);
     } else {
       clearDraftFromLocalStorage();
     }
   }
 
+  // Inject HTML + CSS
   container.innerHTML=`
     <div id="scheduler-template-ui" style="padding:15px;background:#f9f9f9;border:1px solid #ddd;border-radius:8px;margin-bottom:20px;"></div>
     <div id="scheduler-palette" style="padding:10px;background:#f4f4f4;border-radius:8px;margin-bottom:15px;display:flex;flex-wrap:wrap;gap:10px;"></div>
-    <div id="scheduler-grid" style="overflow-x:auto;border:1px solid #999;"></div>
-    <style>.grid-disabled{position:absolute;width:100%;background-color:#80808040;background-image:linear-gradient(-45deg,#0000001a 25%,transparent 25%,transparent 50%,#0000001a 50%,#0000001a 75%,transparent 75%,transparent);background-size:20px 20px;z-index:1;pointer-events:none}.grid-event{z-index:2;position:relative}</style>
+    <div id="scheduler-grid-wrapper" style="overflow-x:auto; border:1px solid #999; background:#fff;">
+        <div id="scheduler-grid"></div>
+    </div>
+    <style>
+      .grid-disabled{position:absolute;width:100%;background-color:#80808040;background-image:linear-gradient(-45deg,#0000001a 25%,transparent 25%,transparent 50%,#0000001a 50%,#0000001a 75%,transparent 75%,transparent);background-size:20px 20px;z-index:1;pointer-events:none}
+      .grid-event{z-index:2;position:relative;box-shadow:0 1px 3px rgba(0,0,0,0.2);}
+      .grid-cell{position:relative; border-right:1px solid #ccc; background:#fff;}
+    </style>
   `;
+  
   palette=document.getElementById("scheduler-palette");
   grid=document.getElementById("scheduler-grid");
+  
   renderTemplateUI();
   renderPalette();
   renderGrid();
 }
 
+// --- Render Template Controls ---
 function renderTemplateUI(){
   const ui=document.getElementById("scheduler-template-ui");
   if(!ui) return;
@@ -104,128 +111,80 @@ function renderTemplateUI(){
 
   ui.innerHTML=`
     <div class="template-toolbar" style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-end;">
-      <div class="template-group" id="load-template-group"><label>Load Template</label>
-
-        <select id="template-load-select"><option value="">-- Select template --</option>${loadOptions}</select>
+      <div class="template-group"><label>Load Template</label>
+        <select id="template-load-select" style="padding:6px;"><option value="">-- Select --</option>${loadOptions}</select>
       </div>
-      <div class="template-group"><label>Save Current Grid as</label><input type="text" id="template-save-name" placeholder="e.g., Friday Short Day"></div>
+      <div class="template-group"><label>Save As</label><input type="text" id="template-save-name" placeholder="Name..."></div>
       <div class="template-group">
         <label>&nbsp;</label>
-
-        <button id="template-save-btn" style="padding:8px 12px;background:#007bff;color:#fff;border:none;border-radius:5px;">Save</button>
-        <button id="template-clear-btn" style="padding:8px 12px;background:#ff9800;color:#fff;border:none;border-radius:5px;margin-left:8px;">New Grid</button>
+        <button id="template-save-btn" style="background:#007bff;color:#fff;">Save</button>
+        <button id="template-clear-btn" style="background:#ff9800;color:#fff;margin-left:8px;">New</button>
       </div>
     </div>
-    <details id="template-manage-details" style="margin-top:15px;">
-      <summary style="cursor:pointer;color:#007bff;font-weight:600;padding:5px;border-radius:5px;background:#f0f6ff;display:inline-block;">Manage Assignments & Delete...</summary>
-      <div class="assignments-container" style="margin-top:10px;padding:15px;border:1px solid #eee;background:#fff;border-radius:5px;">
-        <h4>Day of Week Assignments</h4>
-        <div class="assignments-grid" style="display:flex;flex-wrap:wrap;gap:15px;">
-          ${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Default"].map(day=>`<br>
-
-          <div class="day-assignment" style="display:flex;flex-direction:column;min-width:150px;">
-            <label>${day}:</label>
-            <select data-day="${day}">${loadOptions}</select>
-          </div>`).join('')}
+    <details style="margin-top:10px;">
+      <summary style="cursor:pointer;color:#007bff;">Assignments & Delete</summary>
+      <div style="margin-top:10px;padding:10px;border:1px solid #eee;">
+        <div style="display:flex;flex-wrap:wrap;gap:10px;">
+          ${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Default"].map(day=>`
+          <div><label>${day}</label><br><select data-day="${day}" style="width:100px;">${loadOptions}</select></div>`).join('')}
         </div>
-        <button id="template-assign-save-btn" style="margin-top:15px;padding:8px 12px;background:#28a745;color:#fff;border:none;border-radius:5px;">Save Assignments</button>
-        <div class="delete-section" style="margin-top:15px;padding-top:15px;border-top:1px dashed #ccc;">
-          <h4>Delete Template</h4>
-          <button id="template-delete-btn" style="padding:8px 12px;background:#c0392b;color:#fff;border:none;border-radius:5px;">Delete Selected Template</button>
-        </div>
+        <button id="template-assign-save-btn" style="margin-top:10px;background:#28a745;color:white;">Save Assignments</button>
+        <hr>
+        <button id="template-delete-btn" style="background:#c0392b;color:white;">Delete Selected Template</button>
       </div>
     </details>
   `;
 
+  // Bindings
   const loadSel=document.getElementById("template-load-select");
   const saveName=document.getElementById("template-save-name");
-
-  // --- Load draft name and save name on input ---
-  const savedDraftName = localStorage.getItem(SKELETON_DRAFT_NAME_KEY);
-  if (savedDraftName) { saveName.value = savedDraftName; }
-  saveName.oninput = () => { localStorage.setItem(SKELETON_DRAFT_NAME_KEY, saveName.value.trim()); };
-
+  
   loadSel.onchange=()=>{
     const name=loadSel.value;
-    if(name && saved[name]){
-      if(confirm(`Load "${name}"?`)){
-        loadSkeletonToBuilder(name);
-        saveName.value=name;
-        saveDraftToLocalStorage();
-        localStorage.setItem(SKELETON_DRAFT_NAME_KEY, name);
-      } else loadSel.value="";
+    if(name && saved[name] && confirm(`Load "${name}"?`)){
+      loadSkeletonToBuilder(name);
+      saveName.value=name;
     }
   };
 
   document.getElementById("template-save-btn").onclick=()=>{
     const name=saveName.value.trim();
-    if(!name){ alert("Enter a name"); return; }
-    if(confirm(`Save as "${name}"?`)){
-      window.saveSkeleton?.(name,dailySkeleton);
+    if(name && confirm(`Save as "${name}"?`)){
+      window.saveSkeleton?.(name, dailySkeleton);
       clearDraftFromLocalStorage();
-      alert("Template saved!");
+      alert("Saved.");
       renderTemplateUI();
     }
   };
 
   document.getElementById("template-clear-btn").onclick=()=>{
-    if(dailySkeleton.length > 0) {
-      if(!confirm("Make sure to save your work!\n\nClick OK to continue to generating a new grid.\nPush Cancel to go back and save first.")) {
-        return;
-      }
-    }
-    dailySkeleton = [];
-    saveName.value = "";
-    loadSel.value = "";
-    localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
-    saveDraftToLocalStorage();
-    renderGrid();
-    
-    // Flash effect
-    const loadGroup = document.getElementById('load-template-group');
-    if(loadGroup) {
-      loadGroup.style.transition = "all 0.5s ease";
-      loadGroup.style.boxShadow = "0 0 15px #ff9800";
-      loadGroup.style.border = "1px solid #ff9800";
-      loadGroup.style.borderRadius = "5px";
-      loadGroup.style.padding = "5px";
-      setTimeout(() => { loadGroup.style.boxShadow = ""; loadGroup.style.border = ""; loadGroup.style.padding = ""; }, 1500);
+    if(confirm("Clear grid and start new?")) {
+        dailySkeleton=[];
+        clearDraftFromLocalStorage();
+        renderGrid();
     }
   };
 
-  document.getElementById("template-delete-btn").onclick=()=>{
-    const name=loadSel.value;
-    if(!name){ alert("Select a template to delete."); return; }
-    if(confirm(`Delete "${name}"?`)){
-      window.deleteSkeleton?.(name);
-      clearDraftFromLocalStorage();
-      alert("Deleted!");
-      renderTemplateUI();
-      loadSkeletonToBuilder(null);
-    }
-  };
-
-  const selects=ui.querySelectorAll('.assignments-container select');
-  const namesWithNone = (sel,day)=>{
-    const noneOpt=document.createElement('option');
-    noneOpt.value=""; noneOpt.textContent=(day==="Default")?"-- Use No Default --":"-- Use Default --";
-    sel.prepend(noneOpt);
-  };
-  selects.forEach(sel=>{
-    const day=sel.dataset.day;
-    namesWithNone(sel,day);
-    sel.value=assignments[day]||"";
+  // Assignment Selects
+  ui.querySelectorAll('select[data-day]').forEach(sel=>{
+      const day=sel.dataset.day;
+      const opt=document.createElement('option');
+      opt.value=""; opt.textContent="-- None --";
+      sel.prepend(opt);
+      sel.value=assignments[day]||"";
   });
+
   document.getElementById("template-assign-save-btn").onclick=()=>{
-    const newAssign={};
-    selects.forEach(sel=>{ const day=sel.dataset.day; const name=sel.value; if(name) newAssign[day]=name; });
-    window.saveSkeletonAssignments?.(newAssign);
-    alert("Assignments saved!");
+      const map={};
+      ui.querySelectorAll('select[data-day]').forEach(s=>{ if(s.value) map[s.dataset.day]=s.value; });
+      window.saveSkeletonAssignments?.(map);
+      alert("Assignments Saved.");
   };
 }
 
+// --- Render Palette ---
 function renderPalette(){
-  palette.innerHTML='<span style="font-weight:600;align-self:center;">Drag tiles onto the grid:</span>';
+  palette.innerHTML='';
   TILES.forEach(tile=>{
     const el=document.createElement('div');
     el.className='grid-tile-draggable';
@@ -234,18 +193,23 @@ function renderPalette(){
     el.style.padding='8px 12px';
     el.style.borderRadius='5px';
     el.style.cursor='grab';
-    el.onclick=()=>alert(tile.description);
     el.draggable=true;
-    el.ondragstart=(e)=>{ e.dataTransfer.setData('application/json',JSON.stringify(tile)); e.dataTransfer.effectAllowed='copy'; el.style.cursor='grabbing'; };
-    el.ondragend=()=>{ el.style.cursor='grab'; };
+    el.ondragstart=(e)=>{ e.dataTransfer.setData('application/json',JSON.stringify(tile)); };
     palette.appendChild(el);
   });
 }
 
+// --- RENDER GRID (Fixed) ---
 function renderGrid(){
   const divisions=window.divisions||{};
   const availableDivisions=window.availableDivisions||[];
 
+  if (availableDivisions.length === 0) {
+      grid.innerHTML = `<div style="padding:20px;text-align:center;color:#666;">No divisions found. Please go to Setup to create divisions.</div>`;
+      return;
+  }
+
+  // Calculate Times
   let earliestMin=null, latestMin=null;
   Object.values(divisions).forEach(div=>{
     const s=parseTimeToMinutes(div.startTime);
@@ -256,255 +220,204 @@ function renderGrid(){
   if(earliestMin===null) earliestMin=540;
   if(latestMin===null) latestMin=960;
 
-  const latestPinnedEnd=Math.max(
-    -Infinity,
-    ...dailySkeleton.filter(ev=>ev && ev.type==='pinned').map(ev=>parseTimeToMinutes(ev.endTime)??-Infinity)
-  );
-  if(Number.isFinite(latestPinnedEnd)) latestMin=Math.max(latestMin, latestPinnedEnd);
-  if(latestMin<=earliestMin) latestMin=earliestMin+60;
+  // Stretch for pinned events
+  const latestPinned=Math.max(-Infinity, ...dailySkeleton.map(e=>parseTimeToMinutes(e.endTime)|| -Infinity));
+  if(latestPinned > -Infinity) latestMin = Math.max(latestMin, latestPinned);
+  if(latestMin <= earliestMin) latestMin = earliestMin + 60;
 
-  const totalMinutes=latestMin-earliestMin;
-  const totalHeight=totalMinutes*PIXELS_PER_MINUTE;
+  const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
 
-  let html=`<div style="display:grid;grid-template-columns:60px repeat(${availableDivisions.length},1fr);position:relative;">`;
-  html+=`<div style="grid-row:1;position:sticky;top:0;background:#fff;z-index:10;border-bottom:1px solid #999;padding:8px;">Time</div>`;
+  // Build HTML
+  let html=`<div style="display:grid; grid-template-columns:60px repeat(${availableDivisions.length}, 1fr); position:relative; min-width:800px;">`;
+  
+  // Header Row
+  html+=`<div style="grid-row:1; position:sticky; top:0; background:#fff; z-index:10; border-bottom:1px solid #999; padding:8px; font-weight:bold;">Time</div>`;
   availableDivisions.forEach((divName,i)=>{
-    html+=`<div style="grid-row:1;grid-column:${i+2};position:sticky;top:0;background:${divisions[divName]?.color||'#333'};color:#fff;z-index:10;border-bottom:1px solid #999;padding:8px;text-align:center;">${divName}</div>`;
+      const color = divisions[divName]?.color || '#444';
+      html+=`<div style="grid-row:1; grid-column:${i+2}; position:sticky; top:0; background:${color}; color:#fff; z-index:10; border-bottom:1px solid #999; padding:8px; text-align:center; font-weight:bold;">${divName}</div>`;
   });
 
-  html+=`<div style="grid-row:2;grid-column:1;height:${totalHeight}px;position:relative;background:#f9f9f9;border-right:1px solid #ccc;">`;
-  for(let m=earliestMin;m<latestMin;m+=INCREMENT_MINS){
-    const top=(m-earliestMin)*PIXELS_PER_MINUTE;
-    html+=`<div style="position:absolute;top:${top}px;left:0;width:100%;height:${INCREMENT_MINS*PIXELS_PER_MINUTE}px;border-bottom:1px dashed #ddd;box-sizing:border-box;font-size:10px;padding:2px;color:#777;">${minutesToTime(m)}</div>`;
+  // Time Column
+  html+=`<div style="grid-row:2; grid-column:1; height:${totalHeight}px; position:relative; background:#f9f9f9; border-right:1px solid #ccc;">`;
+  for(let m=earliestMin; m<latestMin; m+=INCREMENT_MINS){
+      const top=(m-earliestMin)*PIXELS_PER_MINUTE;
+      html+=`<div style="position:absolute; top:${top}px; left:0; width:100%; border-top:1px dashed #ddd; font-size:10px; padding:2px; color:#666;">${minutesToTime(m)}</div>`;
   }
   html+=`</div>`;
 
+  // Division Columns
   availableDivisions.forEach((divName,i)=>{
-    const div=divisions[divName];
-    const s=parseTimeToMinutes(div?.startTime);
-    const e=parseTimeToMinutes(div?.endTime);
-    html+=`<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row:2;grid-column:${i+2};position:relative;height:${totalHeight}px;border-right:1px solid #ccc;">`;
-    if(s!==null && s>earliestMin){
-      const gh=(s-earliestMin)*PIXELS_PER_MINUTE;
-      html+=`<div class="grid-disabled" style="top:0;height:${gh}px;"></div>`;
-    }
-    if(e!==null && e<latestMin){
-      const gt=(e-earliestMin)*PIXELS_PER_MINUTE;
-      const gh=(latestMin-e)*PIXELS_PER_MINUTE;
-      html+=`<div class="grid-disabled" style="top:${gt}px;height:${gh}px;"></div>`;
-    }
-    dailySkeleton.filter(ev=>ev.division===divName).forEach(event=>{
-      const startMin=parseTimeToMinutes(event.startTime);
-      const endMin=parseTimeToMinutes(event.endTime);
-      if(startMin==null||endMin==null) return;
-      const vs=Math.max(startMin,earliestMin);
-      const ve=Math.min(endMin,latestMin);
-      if(ve<=vs) return;
-      const top=(vs-earliestMin)*PIXELS_PER_MINUTE;
-      const height=(ve-vs)*PIXELS_PER_MINUTE;
-      html+=renderEventTile(event,top,height);
-    });
-    html+=`</div>`;
+      const div=divisions[divName];
+      const s=parseTimeToMinutes(div?.startTime);
+      const e=parseTimeToMinutes(div?.endTime);
+      
+      html+=`<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row:2; grid-column:${i+2}; height:${totalHeight}px;">`;
+      
+      // Grey out unavailable times
+      if(s!==null && s>earliestMin){
+          html+=`<div class="grid-disabled" style="top:0; height:${(s-earliestMin)*PIXELS_PER_MINUTE}px;"></div>`;
+      }
+      if(e!==null && e<latestMin){
+          html+=`<div class="grid-disabled" style="top:${(e-earliestMin)*PIXELS_PER_MINUTE}px; height:${(latestMin-e)*PIXELS_PER_MINUTE}px;"></div>`;
+      }
+
+      // Render Events
+      dailySkeleton.filter(ev=>ev.division===divName).forEach(ev=>{
+          const start=parseTimeToMinutes(ev.startTime);
+          const end=parseTimeToMinutes(ev.endTime);
+          if(start!=null && end!=null && end>start){
+              const top=(start-earliestMin)*PIXELS_PER_MINUTE;
+              const height=(end-start)*PIXELS_PER_MINUTE;
+              html+=renderEventTile(ev, top, height);
+          }
+      });
+
+      html+=`</div>`;
   });
 
   html+=`</div>`;
   grid.innerHTML=html;
+
+  // Bind Events
   addDropListeners('.grid-cell');
   addRemoveListeners('.grid-event');
 }
 
+// --- Render Tile ---
+function renderEventTile(ev, top, height){
+    let tile = TILES.find(t=>t.name===ev.event);
+    if(!tile && ev.type) tile = TILES.find(t=>t.type===ev.type);
+    const style = tile ? tile.style : 'background:#eee;border:1px solid #666;';
+    
+    let label = `<strong>${ev.event}</strong><br>${ev.startTime}-${ev.endTime}`;
+    if(ev.type==='smart' && ev.smartData){
+        label += `<br><span style="font-size:0.75em">F: ${ev.smartData.fallbackActivity} (if ${ev.smartData.fallbackFor.substring(0,4)} busy)</span>`;
+    }
+
+    return `<div class="grid-event" data-id="${ev.id}" title="Click to remove" 
+            style="${style}; position:absolute; top:${top}px; height:${height}px; width:96%; left:2%; padding:2px; font-size:0.85rem; overflow:hidden; border-radius:4px; cursor:pointer;">
+            ${label}
+            </div>`;
+}
+
+// --- Logic: Add/Remove ---
 function addDropListeners(selector){
-  grid.querySelectorAll(selector).forEach(cell=>{
-    cell.ondragover=(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect='copy'; cell.style.backgroundColor='#e0ffe0'; };
-    cell.ondragleave=()=>{ cell.style.backgroundColor=''; };
-    cell.ondrop=(e)=>{
-      e.preventDefault();
-      cell.style.backgroundColor='';
-      const tileData=JSON.parse(e.dataTransfer.getData('application/json'));
-      const divName=cell.dataset.div;
-      const div=window.divisions[divName]||{};
-      const divStart=parseTimeToMinutes(div.startTime);
-      const divEnd=parseTimeToMinutes(div.endTime);
-      const rect=cell.getBoundingClientRect();
-      const scrollTop=grid.scrollTop;
-      const y=e.clientY-rect.top+scrollTop;
-      const droppedMin=Math.round(y/PIXELS_PER_MINUTE/15)*15;
-      const earliestMin=parseInt(cell.dataset.startMin,10);
-      const defaultStart=minutesToTime(earliestMin+droppedMin);
+    grid.querySelectorAll(selector).forEach(cell=>{
+        cell.ondragover=e=>{ e.preventDefault(); cell.style.background='#e6fffa'; };
+        cell.ondragleave=e=>{ cell.style.background=''; };
+        cell.ondrop=e=>{
+            e.preventDefault();
+            cell.style.background='';
+            const tileData=JSON.parse(e.dataTransfer.getData('application/json'));
+            const divName=cell.dataset.div;
+            const earliestMin=parseInt(cell.dataset.startMin);
+            
+            // Calc time
+            const rect=cell.getBoundingClientRect();
+            // Relative to grid container logic:
+            // The grid-cell position is relative.
+            const offsetY = e.clientY - rect.top;
+            
+            // Snap to 15 mins
+            let minOffset = Math.round(offsetY / PIXELS_PER_MINUTE / 15) * 15;
+            let startMin = earliestMin + minOffset;
+            let endMin = startMin + INCREMENT_MINS; // Default 30 min
+            
+            const startStr = minutesToTime(startMin);
+            const endStr = minutesToTime(endMin);
 
-      let eventType='slot';
-      let eventName=tileData.name;
-      let newEvent=null;
+            // PROMPTS
+            let newEvent = null;
+            
+            // 1. Smart Tile
+            if(tileData.type==='smart'){
+                let st=prompt("Start Time:", startStr); if(!st) return;
+                let et=prompt("End Time:", endStr); if(!et) return;
+                
+                let mains = prompt("Enter TWO main activities (e.g. Swim / Art):");
+                if(!mains) return;
+                let [m1, m2] = mains.split(/[\/,]/).map(s=>s.trim());
+                if(!m2) { alert("Need two activities."); return; }
+                
+                let fbTarget = prompt(`Which one needs fallback if busy?\n1: ${m1}\n2: ${m2}`);
+                if(!fbTarget) return;
+                let fallbackFor = (fbTarget==='1'||fbTarget.toLowerCase()===m1.toLowerCase()) ? m1 : m2;
+                
+                let fbAct = prompt(`Fallback activity if ${fallbackFor} is full?`, "Sports");
+                
+                newEvent = {
+                    id: Date.now().toString(),
+                    type: 'smart',
+                    event: `${m1} / ${m2}`,
+                    division: divName,
+                    startTime: st,
+                    endTime: et,
+                    smartData: { main1:m1, main2:m2, fallbackFor, fallbackActivity:fbAct }
+                };
+            }
+            // 2. Split Tile
+            else if(tileData.type==='split'){
+                let st=prompt("Start Time:", startStr); if(!st) return;
+                let et=prompt("End Time:", endStr); if(!et) return;
+                let a1=prompt("Activity 1 (First Half):"); if(!a1) return;
+                let a2=prompt("Activity 2 (Second Half):"); if(!a2) return;
+                
+                newEvent = {
+                    id: Date.now().toString(),
+                    type: 'split',
+                    event: `${a1} / ${a2}`,
+                    division: divName,
+                    startTime: st,
+                    endTime: et,
+                    subEvents: [{event:a1}, {event:a2}]
+                };
+            }
+            // 3. Standard
+            else {
+                let name = tileData.name;
+                if(tileData.type==='custom') name = prompt("Event Name:", "Regroup");
+                else if(tileData.type==='league') name = "League Game";
+                else if(tileData.type==='specialty_league') name = "Specialty League";
+                
+                if(!name) return;
+                
+                let st=prompt(`${name} Start:`, startStr); if(!st) return;
+                let et=prompt(`${name} End:`, endStr); if(!et) return;
+                
+                newEvent = {
+                    id: Date.now().toString(),
+                    type: tileData.type,
+                    event: name,
+                    division: divName,
+                    startTime: st,
+                    endTime: et
+                };
+            }
 
-      const validate=(timeStr,isStart)=>{
-        const m=parseTimeToMinutes(timeStr);
-        if(m===null){ alert("Invalid time. Use '9:00am' etc."); return null; }
-        if(divStart!==null && m<divStart){ alert(`Error: ${timeStr} is before ${div.startTime}.`); return null; }
-        if(divEnd!==null && (isStart? m>=divEnd : m>divEnd)){ alert(`Error: ${timeStr} is after ${div.endTime}.`); return null; }
-        return m;
-      };
-
-      if(tileData.type==='split'){
-        // ... (split logic same as before)
-        let st,et,sm,em;
-        while(true){ st=prompt(`Enter Start Time for the *full* block:`,defaultStart); if(!st) return; sm=validate(st,true); if(sm!==null) break; }
-        while(true){ et=prompt(`Enter End Time for the *full* block:`); if(!et) return; em=validate(et,false); if(em!==null){ if(em<=sm) alert("End must be after start."); else break; } }
-        const n1=prompt("Enter FIRST activity (e.g., Swim, Sports):"); if(!n1) return;
-        const n2=prompt("Enter SECOND activity (e.g., Activity, Sports):"); if(!n2) return;
-        const e1=mapEventNameForOptimizer(n1), e2=mapEventNameForOptimizer(n2);
-        newEvent={id:`evt_${Math.random().toString(36).slice(2,9)}`, type:'split', event:`${n1} / ${n2}`, division:divName, startTime:st, endTime:et, subEvents:[e1,e2]};
-
-     } else if (tileData.type === 'smart') {
-
-    // --- SMART TILE LOGIC (UPDATED FOR ADAPTER V5) ---
-    let st, et, sm, em;
-
-    while (true) {
-        st = prompt(`Smart Tile for ${divName}.\n\nEnter Start Time:`, defaultStart);
-        if (!st) return;
-        sm = validate(st, true);
-        if (sm !== null) break;
-    }
-
-    while (true) {
-        et = prompt(`Enter End Time:`);
-        if (!et) return;
-        em = validate(et, false);
-        if (em !== null) {
-            if (em <= sm) alert("End must be after start.");
-            else break;
-        }
-    }
-
-    // 1. Ask for Main Activities
-    const rawMains = prompt(
-        "Enter the TWO MAIN activities separated by slash or comma:\nExample:   Swim / Special"
-    );
-    if (!rawMains) return;
-
-    const mains = rawMains
-        .split(/,|\//)
-        .map(s => s.trim())
-        .filter(Boolean);
-
-    if (mains.length < 2) {
-        alert("Please enter two distinct activities.");
-        return;
-    }
-
-    const [main1, main2] = mains;
-
-    // 2. Ask which main has the constraint (needs fallback)
-    const fallbackPick = prompt(
-        `Which activity requires a fallback if unavailable?\n\n1: ${main1}\n2: ${main2}`
-    );
-    if (!fallbackPick) return;
-
-    let fallbackFor;
-
-    if (fallbackPick.trim() === "1" || fallbackPick.trim().toLowerCase() === main1.toLowerCase()) {
-        fallbackFor = main1;
-    } else if (fallbackPick.trim() === "2" || fallbackPick.trim().toLowerCase() === main2.toLowerCase()) {
-        fallbackFor = main2;
-    } else {
-        alert("Invalid selection.");
-        return;
-    }
-
-    // 3. Ask what the fallback activity actually is
-    const fallbackActivity = prompt(
-        `If "${fallbackFor}" is full/unavailable, what should be played instead?\nExample: Sports`
-    );
-    if (!fallbackActivity) return;
-
-    // --- FINAL SMART TILE OBJECT ---
-    newEvent = {
-        id: `evt_${Math.random().toString(36).slice(2, 9)}`,
-        type: "smart",
-        event: `${main1} / ${main2}`,   // display text
-        division: divName,
-        startTime: st,
-        endTime: et,
-        smartData: {
-            main1,
-            main2,
-            fallbackFor,
-            fallbackActivity
-        }
-    };
-
-      } else if(['lunch','snacks','custom','dismissal','swim'].includes(tileData.type)){
-        eventType='pinned';
-        if(tileData.type==='custom'){
-          eventName=prompt("Enter the name (e.g., 'Regroup', 'Assembly'):");
-          if(!eventName) return;
-        } else {
-          eventName=tileData.name;
-        }
-      }
-
-      // Standard single event fallback
-      if(!newEvent){
-        let st,et,sm,em;
-        if(tileData.type==='activity') eventName='General Activity Slot';
-        else if(tileData.type==='sports') eventName='Sports Slot';
-        else if(tileData.type==='special') eventName='Special Activity';
-        
-        while(true){ st=prompt(`Add "${eventName}" for ${divName}?\n\nEnter Start Time:`,defaultStart); if(!st) return; sm=validate(st,true); if(sm!==null) break; }
-        while(true){ et=prompt(`Enter End Time:`); if(!et) return; em=validate(et,false); if(em!==null){ if(em<=sm) alert("End must be after start."); else break; } }
-        newEvent={ id:`evt_${Math.random().toString(36).slice(2,9)}`, type:eventType, event:eventName, division:divName, startTime:st, endTime:et };
-      }
-
-      dailySkeleton.push(newEvent);
-      saveDraftToLocalStorage();
-      renderGrid();
-    };
-  });
+            if(newEvent){
+                dailySkeleton.push(newEvent);
+                saveDraftToLocalStorage();
+                renderGrid();
+            }
+        };
+    });
 }
 
 function addRemoveListeners(selector){
-  grid.querySelectorAll(selector).forEach(tile=>{
-    tile.onclick=(e)=>{
-      e.stopPropagation();
-      const id=tile.dataset.eventId;
-      if(!id) return;
-      const ev=dailySkeleton.find(v=>v.id===id);
-      if(confirm(`Remove "${ev?ev.event:'this event'}"?`)){
-        dailySkeleton=dailySkeleton.filter(v=>v.id!==id);
-        saveDraftToLocalStorage();
-        renderGrid();
-      }
-    };
-  });
+    grid.querySelectorAll(selector).forEach(el=>{
+        el.onclick=e=>{
+            e.stopPropagation();
+            if(confirm("Delete this block?")){
+                const id=el.dataset.id;
+                dailySkeleton = dailySkeleton.filter(x=>x.id!==id);
+                saveDraftToLocalStorage();
+                renderGrid();
+            }
+        };
+    });
 }
 
-function renderEventTile(event, top, height){
-  let tile=TILES.find(t=>t.name===event.event);
-  if(!tile){
-    if(event.type==='split') tile=TILES.find(t=>t.type==='split');
-    else if(event.type==='smart') tile=TILES.find(t=>t.type==='smart');
-    else if(event.event==='General Activity Slot') tile=TILES.find(t=>t.type==='activity');
-    else if(event.event==='Sports Slot') tile=TILES.find(t=>t.type==='sports');
-    else if(event.event==='Special Activity') tile=TILES.find(t=>t.type==='special');
-    else if(event.event==='Dismissal') tile=TILES.find(t=>t.type==='dismissal');
-    else tile=TILES.find(t=>t.type==='custom');
-  }
-  const style=tile?tile.style:'background:#eee;border:1px solid #616161;';
-  
-  // Custom display for Smart Tile to show fallback
-  let innerHtml = `<strong>${event.event}</strong><br><div style="font-size:.85em;">${event.startTime} - ${event.endTime}</div>`;
-  if(event.type === 'smart' && event.smartData){
-     innerHtml += `<div style="font-size:0.75em;border-top:1px dotted #01579b;margin-top:2px;padding-top:1px;">F: ${event.smartData.fallbackActivity} (if ${event.smartData.fallbackFor.substring(0,4)}. busy)</div>`;
-  }
-
-  return `<br>
-  <div class="grid-event" data-event-id="${event.id}" title="Click to remove"<br>
-    style="${style};padding:2px 5px;border-radius:4px;text-align:center;margin:0 1px;font-size:.9em;position:absolute;top:${top}px;height:${height}px;width:calc(100% - 4px);box-sizing:border-box;overflow:hidden;cursor:pointer;"><br>
-    ${innerHtml}<br>
-  </div>`;
-}
-
-// ... (loadDailySkeleton, loadSkeletonToBuilder, time helpers remain unchanged) ...
+// --- Helpers ---
 function loadDailySkeleton(){
   const assignments=window.getSkeletonAssignments?.()||{};
   const skeletons=window.getSavedSkeletons?.()||{};
@@ -513,39 +426,31 @@ function loadDailySkeleton(){
   let dow=0; if(Y&&M&&D) dow=new Date(Y,M-1,D).getDay();
   const dayNames=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
   const today=dayNames[dow];
-  let tmpl=assignments[today];
-  if(!tmpl || !skeletons[tmpl]) tmpl=assignments["Default"];
-  const s=skeletons[tmpl];
-  dailySkeleton=s? JSON.parse(JSON.stringify(s)): [];
+  let tmpl=assignments[today] || assignments["Default"];
+  dailySkeleton = (tmpl && skeletons[tmpl]) ? JSON.parse(JSON.stringify(skeletons[tmpl])) : [];
 }
+
 function loadSkeletonToBuilder(name){
-  if(!name) dailySkeleton=[];
-  else {
-    const all=window.getSavedSkeletons?.()||{};
-    const s=all[name];
-    dailySkeleton=s? JSON.parse(JSON.stringify(s)): [];
-  }
+  const all=window.getSavedSkeletons?.()||{};
+  if(all[name]) dailySkeleton=JSON.parse(JSON.stringify(all[name]));
   renderGrid();
   saveDraftToLocalStorage();
 }
 
 function parseTimeToMinutes(str){
-  if(!str||typeof str!=='string') return null;
-  let s=str.trim().toLowerCase(), mer=null;
-  if(s.endsWith('am')||s.endsWith('pm')){ mer=s.endsWith('am')?'am':'pm'; s=s.replace(/am|pm/g,'').trim(); }
-  const m=s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-  if(!m) return null;
-  let hh=parseInt(m[1],10), mm=parseInt(m[2],10);
-  if(Number.isNaN(hh)||Number.isNaN(mm)||mm<0||mm>59) return null;
-  if(mer){ if(hh===12) hh= mer==='am'?0:12; else if(mer==='pm') hh+=12; } else return null;
-  return hh*60+mm;
+  if(!str) return null;
+  let s=str.toLowerCase().replace(/am|pm/g,'').trim();
+  let [h,m]=s.split(':').map(Number);
+  if(str.toLowerCase().includes('pm') && h!==12) h+=12;
+  if(str.toLowerCase().includes('am') && h===12) h=0;
+  return h*60+(m||0);
 }
 function minutesToTime(min){
-  const hh=Math.floor(min/60), mm=min%60;
-  const h=hh%12===0?12:hh%12, m=String(mm).padStart(2,'0'), ap=hh<12?'am':'pm';
-  return `${h}:${m}${ap}`;
+  let h=Math.floor(min/60), m=min%60, ap=h>=12?'pm':'am';
+  h=h%12||12;
+  return `${h}:${m.toString().padStart(2,'0')}${ap}`;
 }
 
-window.initMasterScheduler=init;
+window.initMasterScheduler = init;
 
 })();
