@@ -1,4 +1,5 @@
 
+
 // ============================================================================
 // specialty_leagues.js — FULL THEMED VERSION (EMERALD CAMP THEME)
 // ----------------------------------------------------------------------------
@@ -663,5 +664,6 @@ function renderGamesEditor(league, wrapper) {
         </p>
     `;
 }
+window.masterSpecialtyLeagues = specialtyLeagues;
 
 })();
