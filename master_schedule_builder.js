@@ -6,6 +6,8 @@
 // 1. Fixed Grid Rendering (Prevents "Just Words" glitch).
 // 2. Added Timeline Gatekeeper to Drag-and-Drop.
 // 3. Aligned Smart Tile prompts with new logic.
+// 4. FIXED: Standardized Activity Types ('activity' -> 'slot')
+// 5. FIXED: Specialty League type typo & Added League Safety Check
 // =================================================================
 
 (function(){
@@ -372,21 +374,41 @@ function addDropListeners(selector){
                     subEvents: [{event:a1}, {event:a2}]
                 };
             }
-            // 3. Standard
+            // 3. Standard & League Types - FIXED FOR CORRECT TYPE
             else {
                 let name = tileData.name;
-                if(tileData.type==='custom') name = prompt("Event Name:", "Regroup");
-                else if(tileData.type==='league') name = "League Game";
-                else if(tileData.type==='specialty_league') name = "Specialty League";
+                let finalType = tileData.type;
+
+                // Standardize for Optimizer
+                if (tileData.type === 'activity') { name = "General Activity Slot"; finalType = 'slot'; }
+                else if (tileData.type === 'sports') { name = "Sports Slot"; finalType = 'slot'; }
+                else if (tileData.type === 'special') { name = "Special Activity"; finalType = 'slot'; }
+                
+                else if(tileData.type==='custom') { name = prompt("Event Name:", "Regroup"); finalType = 'pinned'; }
+                else if(tileData.type==='league') {
+                    name = "League Game";
+                    finalType = 'league';
+                }
+                
+                // FIX #2: Correctly spelled specialty_league
+                else if(tileData.type === 'specialty_league') { 
+                    name = "Specialty League"; 
+                    finalType = 'specialty_league'; 
+                }
                 
                 if(!name) return;
+
+                // FIX #3: Safety Auto-fix for League
+                if (/league/i.test(name) && finalType === 'slot') {
+                    finalType = 'league';
+                }
                 
                 let st=prompt(`${name} Start:`, startStr); if(!st) return;
                 let et=prompt(`${name} End:`, endStr); if(!et) return;
                 
                 newEvent = {
                     id: Date.now().toString(),
-                    type: tileData.type,
+                    type: finalType, // CORRECTED to 'slot' for schedulable items
                     event: name,
                     division: divName,
                     startTime: st,
