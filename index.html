@@ -2,47 +2,51 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
+    <meta charset="UTF-8" />
     <title>Camp Scheduler</title>
-    <link rel="stylesheet" href="styles.css">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    
+    <link rel="stylesheet" href="styles.css" />
 </head>
 
 <body>
 
-<!-- =========================================================== -->
+<!-- =============================================================== -->
 <!-- WELCOME SCREEN -->
-<!-- =========================================================== -->
+<!-- =============================================================== -->
 <div id="welcome-screen" style="display:none;">
-    <img src="https://placehold.co/150x150/007bff/ffffff?text=TCS&font=arial"
-         alt="Camp Scheduler Logo"
-         class="welcome-logo">
-    <h2 id="welcome-title">Welcome to The Camp Scheduler</h2>
+    <img
+        src="https://placehold.co/150x150/007bff/ffffff?text=TCS&font=arial"
+        alt="Camp Scheduler Logo"
+        class="welcome-logo"
+    />
 
+    <h2 id="welcome-title">Welcome to The Camp Scheduler</h2>
     <p>Please enter your camp's name to get started.</p>
-    <input type="text" id="camp-name-input" placeholder="E.g., Camp Adventure">
+
+    <input type="text" id="camp-name-input" placeholder="E.g., Camp Adventure" />
     <button id="begin-btn">Begin</button>
 </div>
 
-<!-- =========================================================== -->
-<!-- MAIN APP CONTAINER -->
-<!-- =========================================================== -->
-<div id="main-app-container" style="display:none;">
 
+
+<!-- =============================================================== -->
+<!-- MAIN APP WRAPPER -->
+<!-- =============================================================== -->
+<div id="main-app-container" style="display:none;">
     <div class="app-shell">
 
-        <!-- =================================================== -->
+        <!-- =========================================================== -->
         <!-- HEADER -->
-        <!-- =================================================== -->
+        <!-- =========================================================== -->
         <header class="app-header">
-
             <div class="header-left">
                 <!-- Hamburger -->
                 <button id="hamburgerBtn" class="hamburger-btn" aria-label="Toggle Navigation">
                     <span></span><span></span><span></span>
                 </button>
 
-                <!-- Logo / Title -->
+                <!-- App Title -->
                 <div class="app-title">
                     <div class="app-logo-circle">CS</div>
                     <div class="app-title-text">
@@ -56,23 +60,30 @@
                 <label class="header-date-label" for="calendar-date-picker">
                     Current Schedule Date:
                 </label>
-                <input type="date" id="calendar-date-picker" class="header-date-input">
+                <input type="date" id="calendar-date-picker" class="header-date-input" />
             </div>
-
         </header>
 
+
+
+        <!-- =========================================================== -->
+        <!-- APP MAIN LAYOUT -->
+        <!-- =========================================================== -->
         <div class="app-main">
 
-            <!-- =================================================== -->
+            <!-- ======================================================= -->
             <!-- SIDEBAR NAVIGATION -->
-            <!-- =================================================== -->
+            <!-- ======================================================= -->
             <aside id="sidebar" class="sidebar">
-
                 <nav class="sidebar-nav">
                     <div class="sidebar-label">Configuration</div>
 
                     <button class="sidebar-item active" data-tab="setup">
                         <span class="sidebar-dot"></span> Setup (Bunks / Divisions)
+                    </button>
+
+                    <button class="sidebar-item" data-tab="locations">
+                        <span class="sidebar-dot"></span> 🗺️ Location Zones
                     </button>
 
                     <button class="sidebar-item" data-tab="fields">
@@ -123,41 +134,42 @@
                         <span class="sidebar-dot"></span> Help & Guide
                     </button>
                 </nav>
-
             </aside>
 
-            <!-- BACKDROP for mobile -->
+            <!-- BACKDROP (Mobile) -->
             <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
 
-            <!-- =================================================== -->
-            <!-- MAIN CONTENT AREA -->
-            <!-- =================================================== -->
-            <main class="app-content">
 
+
+            <!-- ======================================================= -->
+            <!-- MAIN CONTENT -->
+            <!-- ======================================================= -->
+            <main class="app-content">
                 <h1 class="app-page-title">🏕️ Camp Scheduler</h1>
 
-                <!-- ======================================================= -->
-                <!-- SETUP TAB -->
-                <!-- ======================================================= -->
-                <div id="setup" class="tab-content active">
 
+                <!-- =================================================== -->
+                <!-- SETUP TAB -->
+                <!-- =================================================== -->
+                <div id="setup" class="tab-content active">
                     <div class="setup-grid">
 
-                        <!-- INTRO -->
+                        <!-- Intro Card -->
                         <section class="setup-card setup-card-wide">
                             <div class="setup-card-header">
                                 <div class="setup-step-pill setup-step-pill-muted">Setup</div>
                                 <div class="setup-card-text">
                                     <h3>Configure Your Camp Structure</h3>
                                     <p>
-                                        Create <strong>divisions</strong> and assign <strong>bunks</strong>.  
+                                        Create <strong>divisions</strong> and assign <strong>bunks</strong>.
                                         These settings drive all scheduling logic.
                                     </p>
                                 </div>
                             </div>
                         </section>
 
-                        <!-- Left Panel -->
+
+                        <!-- Left Panel: Divisions -->
                         <section class="setup-card">
                             <div class="setup-card-header">
                                 <div class="setup-step-pill">Step 1</div>
@@ -167,14 +179,13 @@
                                 </div>
                             </div>
 
-                            <!-- Add Division -->
                             <div class="setup-field-row">
-                                <input id="divisionInput" placeholder="Enter division…">
+                                <input id="divisionInput" placeholder="Enter division…" />
                                 <button id="addDivisionBtn">Add Division</button>
                             </div>
 
                             <label class="setup-inline-toggle">
-                                <input type="checkbox" id="enableColor" checked>
+                                <input type="checkbox" id="enableColor" checked />
                                 <span>Enable automatic division colors</span>
                             </label>
 
@@ -182,7 +193,10 @@
                             <div id="divisionButtons" class="master-list"></div>
                         </section>
 
-                        <!-- Right Panel: Division Details --><section class="setup-card">
+
+
+                        <!-- Right Panel: Division Details -->
+                        <section class="setup-card">
                             <div class="setup-card-header">
                                 <div class="setup-step-pill">Step 2</div>
                                 <div class="setup-card-text">
@@ -196,29 +210,34 @@
                             <div id="division-detail-pane" class="detail-pane">
                                 <p class="muted">
                                     Select a division to edit:
-                                    <br>– Times  
-                                    <br>– Color  
-                                    <br>– Bunks  
+                                    <br>– Times
+                                    <br>– Color
+                                    <br>– Bunks
                                 </p>
                             </div>
                         </section>
 
-                        <!-- Tools -->
+
+
+                        <!-- Tools & Maintenance -->
                         <section class="setup-card setup-card-wide">
                             <div class="setup-card-header">
                                 <div class="setup-step-pill setup-step-pill-muted">Tools</div>
                                 <div class="setup-card-text">
                                     <h3>Data & Maintenance</h3>
-                                    <p>Manage schedules, history & data backups.</p>
+                                    <p>Manage schedules, history & backups.</p>
                                 </div>
                             </div>
 
-                            <!-- Clear Schedules / History -->
+                            <!-- Clear History -->
                             <div class="setup-group">
                                 <h4>Clear Schedules & History</h4>
-                                <p class="setup-group-help">Erase generated data without touching setup.</p>
+                                <p class="setup-group-help">
+                                    Erase generated data without touching setup.
+                                </p>
 
                                 <div class="setup-button-row">
+
                                     <button id="eraseTodayBtn"
                                             style="background:#db7a00;color:#fff;border:none;"
                                             onclick="if(confirm('Delete today’s schedule?')) window.eraseCurrentDailyData?.();">
@@ -232,15 +251,18 @@
                                     </button>
 
                                     <button id="eraseHistoryBtn"
-        style="background:#5e35b1;color:#fff;border:none;"
-        onclick="if(confirm('Reset rotation history and League Game Counters?')) { 
-            window.eraseRotationHistory?.(); 
-            window.leagueRoundState = {}; 
-            window.saveGlobalSettings?.('leagueRoundState', {}); 
-            alert('Activity History and Game Counters have been reset!'); 
-        }">
-    Reset Activity History
-</button>
+                                            style="background:#5e35b1;color:#fff;border:none;"
+                                            onclick="
+                                                if(confirm('Reset rotation history and League counters?')) {
+                                                    window.eraseRotationHistory?.();
+                                                    window.leagueRoundState = {};
+                                                    window.saveGlobalSettings?.('leagueRoundState', {});
+                                                    alert('Activity History and Game Counters reset!');
+                                                }
+                                            ">
+                                        Reset Activity History
+                                    </button>
+
                                 </div>
                             </div>
 
@@ -260,7 +282,7 @@
                                         Import Data
                                     </button>
 
-                                    <input type="file" id="importFileInput" accept=".json" style="display:none;">
+                                    <input type="file" id="importFileInput" accept=".json" style="display:none;" />
 
                                     <button id="restoreAutoSaveBtn"
                                             style="background:#6c757d;color:#fff;border:none;"
@@ -279,9 +301,7 @@
                             <!-- Full Wipe -->
                             <div class="setup-group setup-group-danger">
                                 <h4>Erase All Data</h4>
-                                <p class="setup-group-help">
-                                    ⚠️ This resets EVERYTHING – setup + schedules.
-                                </p>
+                                <p class="setup-group-help">⚠️ This resets EVERYTHING – setup + schedules.</p>
 
                                 <div class="setup-button-row">
                                     <button id="eraseAllBtn"
@@ -290,15 +310,18 @@
                                     </button>
                                 </div>
                             </div>
-
                         </section>
 
                     </div>
-                </div> <!-- /setup -->
+                </div>
+                <!-- /setup -->
+
+
 
                 <!-- ======================================================= -->
                 <!-- OTHER TABS -->
                 <!-- ======================================================= -->
+                <div id="locations" class="tab-content"></div>
                 <div id="fields" class="tab-content"></div>
                 <div id="special_activities" class="tab-content"></div>
                 <div id="leagues" class="tab-content"></div>
@@ -315,11 +338,13 @@
                 <div id="schedule" class="tab-content">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
                         <h3>Daily Schedule (View)</h3>
+
                         <button onclick="window.validateSchedule?.()"
-                                style="background:#ff9800;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;">
+                            style="background:#ff9800;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;">
                             ⚠️ Validate Schedule
                         </button>
                     </div>
+
                     <div id="scheduleTable"></div>
                 </div>
 
@@ -328,94 +353,104 @@
                 <div id="updates" class="tab-content"><div id="updates-content"></div></div>
                 <div id="helper" class="tab-content"><div id="helper-content"></div></div>
 
-            </main> <!-- /app-content -->
+            </main>
+            <!-- /app-content -->
 
-        </div> <!-- /app-main -->
+        </div>
+        <!-- /app-main -->
 
-    </div> <!-- /app-shell -->
+    </div>
+    <!-- /app-shell -->
+</div>
+<!-- /main-app-container -->
 
-</div> <!-- /main-app-container -->
 
-<!-- =============================================================== -->
-<!-- SCRIPT LOADING ORDER (SPLIT CORE) -->
-<!-- =============================================================== -->
-
-<script src="welcome.js" defer></script>
-<script src="calendar.js" defer></script>
-<script src="app1.js" defer></script>
-
-<script src="daily_adjustments.js" defer></script>
-<script src="special_activities.js" defer></script>
-<script src="fields.js" defer></script>
-<script src="leagues.js" defer></script>
-<script src="specialty_leagues.js" defer></script>
-<script src="master_schedule_builder.js" defer></script>
-
-<!-- Smart Tile Adapter -->
-<script src="smart_logic_adapter.js" defer></script>
-
-<!-- League Season State -->
-<script src="league_scheduling.js" defer></script>
-
-<!-- CORE LOGIC SPLIT -->
-<script src="scheduler_core_utils.js" defer></script>
-<script src="scheduler_core_leagues.js" defer></script>
-<script src="scheduler_logic_fillers.js" defer></script>
-<script src="scheduler_core_main.js" defer></script>
-
-<!-- UI Components -->
-<script src="scheduler_ui.js" defer></script>
-<script src="analytics.js" defer></script>
-<script src="validator.js" defer></script>
-<script src="print_center.js" defer></script>
-<script src="helper.js" defer></script>
-<script src="updates.js" defer></script>
 
 <!-- =============================================================== -->
-<!-- TAB NAVIGATION -->
+<!-- SCRIPT LOADING (ORDER MATTERS) -->
+<!-- =============================================================== -->
+
+<script src="welcome.js"></script>
+<script src="calendar.js"></script>
+    <script src="app1.js"></script>
+<script src="locations.js"></script>
+
+<script src="daily_adjustments.js"></script>
+
+<script src="special_activities.js"></script>
+<script src="fields.js"></script>
+
+<script src="leagues.js"></script>
+<script src="specialty_leagues.js"></script>
+
+<script src="master_schedule_builder.js"></script>
+<script src="smart_logic_adapter.js"></script>
+
+<script src="scheduler_core_loader.js"></script>
+<script src="scheduler_core_utils.js"></script>
+<script src="total_solver_engine.js"></script> 
+<script src="scheduler_core_leagues.js"></script>
+<script src="scheduler_logic_fillers.js"></script>
+<script src="scheduler_core_main.js"></script>
+<script src="scheduler_ui.js"></script>
+<script src="analytics.js"></script>
+<script src="validator.js"></script>
+<script src="print_center.js"></script>
+<script src="helper.js"></script>
+<script src="updates.js"></script>
+
+
+
+
+<!-- =============================================================== -->
+<!-- TAB NAVIGATION & SIDEBAR HANDLING -->
 <!-- =============================================================== -->
 <script>
+/* TAB SWITCHING */
 function showTab(id) {
-    document.querySelectorAll('.tab-content').forEach(el =>
-        el.classList.remove('active')
-    );
-    document.getElementById(id)?.classList.add('active');
-
-    document.querySelectorAll('.sidebar-item').forEach(btn =>
-        btn.classList.toggle('active', btn.dataset.tab === id)
+    document.querySelectorAll(".tab-content").forEach(el =>
+        el.classList.remove("active")
     );
 
-    if (id === 'setup') window.initApp1?.();
-    if (id === 'fields') window.initFieldsTab?.();
-    if (id === 'special_activities') window.initSpecialActivitiesTab?.();
-    if (id === 'leagues') window.initLeagues?.();
-    if (id === 'specialty-leagues') window.initSpecialtyLeagues?.();
-    if (id === 'master-scheduler') window.initMasterScheduler?.();
-    if (id === 'daily-adjustments') window.initDailyAdjustments?.();
-    if (id === 'schedule') window.updateTable?.();
-    if (id === 'report') window.initReportTab?.();
-    if (id === 'print') window.initPrintCenter?.();
-    if (id === 'updates') window.initUpdatesTab?.();
-    if (id === 'helper') window.initHelperTab?.();
+    document.getElementById(id)?.classList.add("active");
+
+    document.querySelectorAll(".sidebar-item").forEach(btn =>
+        btn.classList.toggle("active", btn.dataset.tab === id)
+    );
+
+    if (id === "setup") window.initApp1?.();
+    if (id === "locations") window.initLocationsTab?.();
+    if (id === "fields") window.initFieldsTab?.();
+    if (id === "special_activities") window.initSpecialActivitiesTab?.();
+    if (id === "leagues") window.initLeagues?.();
+    if (id === "specialty-leagues") window.initSpecialtyLeagues?.();
+    if (id === "master-scheduler") window.initMasterScheduler?.();
+    if (id === "daily-adjustments") window.initDailyAdjustments?.();
+    if (id === "schedule") window.updateTable?.();
+    if (id === "report") window.initReportTab?.();
+    if (id === "print") window.initPrintCenter?.();
+    if (id === "updates") window.initUpdatesTab?.();
+    if (id === "helper") window.initHelperTab?.();
 }
 
+/* SIDEBAR (Mobile) */
 (function () {
-    const hamburger = document.getElementById('hamburgerBtn');
-    const sidebar = document.getElementById('sidebar');
-    const backdrop = document.getElementById('sidebarBackdrop');
+    const hamburger = document.getElementById("hamburgerBtn");
+    const sidebar = document.getElementById("sidebar");
+    const backdrop = document.getElementById("sidebarBackdrop");
 
-    hamburger?.addEventListener('click', () =>
-        document.body.classList.toggle('sidebar-open')
+    hamburger?.addEventListener("click", () =>
+        document.body.classList.toggle("sidebar-open")
     );
 
-    backdrop?.addEventListener('click', () =>
-        document.body.classList.remove('sidebar-open')
+    backdrop?.addEventListener("click", () =>
+        document.body.classList.remove("sidebar-open")
     );
 
-    sidebar?.querySelectorAll('.sidebar-item').forEach(btn => {
-        btn.addEventListener('click', () => {
+    sidebar?.querySelectorAll(".sidebar-item").forEach(btn => {
+        btn.addEventListener("click", () => {
             showTab(btn.dataset.tab);
-            document.body.classList.remove('sidebar-open');
+            document.body.classList.remove("sidebar-open");
         });
     });
 })();
