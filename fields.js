@@ -1,8 +1,9 @@
 
+
 // =================================================================
 // fields.js
 //
-// UPDATED: Added numeric input for sharing capacity (Bunks Limit).
+// UPDATED: Added Transition, Buffer Occupancy, Zone, and Min Duration.
 // =================================================================
 
 (function() {
@@ -238,6 +239,16 @@ function loadData() {
         
         f.limitUsage = f.limitUsage || { enabled: false, divisions: {} };
         f.preferences = f.preferences || { enabled: false, exclusive: false, list: [] };
+
+        // NEW: Transition fields
+        f.transition = f.transition || {
+            preMin: 0,
+            postMin: 0,
+            label: "Travel",
+            zone: window.DEFAULT_ZONE_NAME,
+            occupiesField: false,
+            minDurationMin: 0 // Issue 1: Minimum Viable Duration
+        };
     });
 }
 
@@ -275,6 +286,17 @@ function createMasterListItem(type, item) {
     const nameEl = document.createElement('span');
     nameEl.className = 'list-item-name';
     nameEl.textContent = item.name;
+    
+    // Show Transition status
+    if (item.transition.preMin > 0 || item.transition.postMin > 0) {
+        const span = document.createElement('span');
+        span.textContent = ` (${item.transition.preMin}m / ${item.transition.postMin}m)`;
+        span.style.fontSize = '0.7rem';
+        span.style.color = '#047857';
+        span.style.fontWeight = 'normal';
+        nameEl.appendChild(span);
+    }
+
     el.appendChild(nameEl);
 
     const tog = document.createElement("label"); 
@@ -400,7 +422,32 @@ function renderDetailPane() {
     const detailGrid = document.createElement("div");
     detailGrid.className = "field-detail-grid";
     detailPaneEl.appendChild(detailGrid);
+    
+    const onSave = () => saveData();
+    const onRerender = () => renderDetailPane();
 
+    // ========== CARD X: TRANSITION RULES (NEW) ==========
+    const transitionCard = document.createElement("div");
+    transitionCard.className = "field-section-card";
+    const transitionHeader = document.createElement("div");
+    transitionHeader.className = "field-section-header";
+    transitionHeader.innerHTML = `
+        <span class="field-section-title">Transition Rules</span>
+        <span class="field-section-tag">Travel & Setup</span>
+    `;
+    transitionCard.appendChild(transitionHeader);
+
+    const transitionHelp = document.createElement("p");
+    transitionHelp.className = "field-section-help";
+    transitionHelp.textContent = "Time buffers for travel or setup/cleanup. This time is added to the start/end of the block.";
+    transitionCard.appendChild(transitionHelp);
+    
+    // --- Transition Controls ---
+    const tControls = renderTransitionControls(item.transition, onSave, onRerender);
+    transitionCard.appendChild(tControls);
+
+    detailGrid.appendChild(transitionCard);
+    
     // ========== CARD 1: ACTIVITIES ==========
     const actCard = document.createElement("div");
     actCard.className = "field-section-card";
@@ -526,6 +573,78 @@ function renderDetailPane() {
     detailGrid.appendChild(timeCard);
 }
 
+// --- NEW FUNCTION: Render Transition Controls ---
+function renderTransitionControls(transition, onSave, onRerender) {
+    const container = document.createElement("div");
+    
+    // --- 1. Pre/Post Buffer Inputs ---
+    container.innerHTML = `
+        <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+            <label style="font-weight:600; font-size:0.85rem;">Pre-Activity (To):</label>
+            <input type="number" id="pre-min-input" value="${transition.preMin}" min="0" step="5" style="width:60px; padding:4px;">
+            <label style="font-weight:600; font-size:0.85rem;">Post-Activity (From):</label>
+            <input type="number" id="post-min-input" value="${transition.postMin}" min="0" step="5" style="width:60px; padding:4px;">
+        </div>
+        
+        <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
+            <label style="font-weight:600; font-size:0.85rem;">Label:</label>
+            <input type="text" id="buffer-label-input" value="${transition.label}" style="width:120px; padding:4px;">
+        </div>
+
+        <!-- Zone Selector (Issue 2/4) -->
+        <div style="margin-top:15px; border-top:1px dashed #E5E7EB; padding-top:10px;">
+            <label style="font-weight:600; font-size:0.85rem;">Location Zone:</label>
+            <select id="zone-select" style="width:100%; margin-top:5px; padding:6px;"></select>
+            <p class="muted" style="font-size:0.75rem; margin-top:5px;">Required for Buffer Merging and Transport Limits.</p>
+        </div>
+
+        <!-- Occupancy Toggle (Issue 5) -->
+        <label style="display:flex; align-items:center; gap:8px; margin-top:10px; cursor:pointer;">
+            <input type="checkbox" id="occupies-field-check" ${transition.occupiesField ? 'checked' : ''} style="width:16px; height:16px;">
+            <span style="font-size:0.85rem; font-weight:600;">Buffer Occupies Field (e.g., Setup/Change)</span>
+        </label>
+        <p class="muted" style="font-size:0.75rem; margin-top:2px; padding-left:25px;">
+            If unchecked (Travel), the field is available during transition time.
+        </p>
+
+        <!-- Minimum Duration (Issue 1) -->
+        <div style="margin-top:15px; border-top:1px dashed #E5E7EB; padding-top:10px;">
+            <label style="font-weight:600; font-size:0.85rem;">Min Activity Duration:</label>
+            <input type="number" id="min-duration-input" value="${transition.minDurationMin}" min="0" step="5" style="width:60px; padding:4px; margin-left:5px;">
+            <span class="muted" style="font-size:0.85rem;">minutes (if less, placement is rejected).</span>
+        </div>
+    `;
+    
+    // Populate Zones
+    const zones = window.getZones?.() || {};
+    const zoneSelect = container.querySelector('#zone-select');
+    Object.values(zones).forEach(z => {
+        const opt = document.createElement('option');
+        opt.value = z.name;
+        opt.textContent = z.name + (z.isDefault ? ' (Default)' : '');
+        if (z.name === transition.zone) opt.selected = true;
+        zoneSelect.appendChild(opt);
+    });
+
+    const updateTransition = () => {
+        transition.preMin = parseInt(container.querySelector('#pre-min-input').value) || 0;
+        transition.postMin = parseInt(container.querySelector('#post-min-input').value) || 0;
+        transition.label = container.querySelector('#buffer-label-input').value.trim() || "Transition";
+        transition.zone = container.querySelector('#zone-select').value;
+        transition.occupiesField = container.querySelector('#occupies-field-check').checked;
+        transition.minDurationMin = parseInt(container.querySelector('#min-duration-input').value) || 0;
+        onSave();
+        onRerender(); // Re-render master list to show buffer text
+    };
+
+    container.querySelectorAll('input, select').forEach(el => {
+        el.onchange = updateTransition;
+    });
+
+    return container;
+}
+
+
 // --- Add Field Function ---
 function addField() {
     const n = addFieldInput.value.trim();
@@ -541,7 +660,15 @@ function addField() {
         sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         limitUsage: { enabled: false, divisions: {} },
         preferences: { enabled: false, exclusive: false, list: [] }, // Default
-        timeRules: []
+        timeRules: [],
+        transition: { // NEW DEFAULT
+            preMin: 0,
+            postMin: 0,
+            label: "Travel",
+            zone: window.DEFAULT_ZONE_NAME,
+            occupiesField: false,
+            minDurationMin: 0
+        }
     });
     addFieldInput.value = "";
     saveData();
@@ -1104,5 +1231,6 @@ function createLimitChip(name, isActive, isDivision = true) {
 }
 
 window.initFieldsTab = initFieldsTab;
+window.fields = fields;
 
 })();
