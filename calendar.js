@@ -4,8 +4,8 @@
 //
 // --- UPDATED (Smart Logic Reset) ---
 // - eraseRotationHistory now clears ALL rotation systems:
-//   1. Regular Rotation History       → campRotationHistory_v1
-//   2. Legacy Smart Tile History      → smartTileHistory_v1
+//   1. Regular Rotation History → campRotationHistory_v1
+//   2. Legacy Smart Tile History → smartTileHistory_v1
 //   3. NEW Smart Tile Special History → smartTileSpecialHistory_v1
 //   4. Manual Usage Offsets (Analytics)
 //
@@ -34,9 +34,9 @@
     // ==========================================================
     function getTodayString(date = new Date()) {
         date.setHours(12, 0, 0, 0);
-        const year  = date.getFullYear();
+        const year = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day   = String(date.getDate()).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
         return `${year}-${month}-${day}`;
     }
 
@@ -102,7 +102,11 @@
                 leagueAssignments: {},
                 leagueRoundState: {},
                 leagueDayCounters: {},
-                overrides: { fields: [], bunks: [], leagues: [] }
+                overrides: {
+                    fields: [],
+                    bunks: [],
+                    leagues: []
+                }
             };
         }
 
@@ -156,11 +160,14 @@
         try {
             const d = localStorage.getItem(ROTATION_HISTORY_KEY);
             const hist = d ? JSON.parse(d) : {};
-            hist.bunks   = hist.bunks   || {};
+            hist.bunks = hist.bunks || {};
             hist.leagues = hist.leagues || {};
             return hist;
         } catch {
-            return { bunks: {}, leagues: {} };
+            return {
+                bunks: {},
+                leagues: {}
+            };
         }
     };
 
@@ -174,7 +181,7 @@
     };
 
     // ==========================================================
-    // ⭐  RESET ALL ACTIVITY / SPECIAL ROTATION
+    // ⭐ RESET ALL ACTIVITY / SPECIAL ROTATION
     // ==========================================================
     window.eraseRotationHistory = function() {
         try {
@@ -265,12 +272,14 @@
         try {
             const backup = {
                 globalSettings: JSON.parse(localStorage.getItem(GLOBAL_SETTINGS_KEY) || "{}"),
-                dailyData:      JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || "{}"),
-                rotationHistory:JSON.parse(localStorage.getItem(ROTATION_HISTORY_KEY) || "{}")
+                dailyData: JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || "{}"),
+                rotationHistory: JSON.parse(localStorage.getItem(ROTATION_HISTORY_KEY) || "{}")
             };
 
             const json = JSON.stringify(backup, null, 2);
-            const blob = new Blob([json], { type: "application/json" });
+            const blob = new Blob([json], {
+                type: "application/json"
+            });
             const url = URL.createObjectURL(blob);
 
             const a = document.createElement("a");
@@ -323,8 +332,8 @@
             const snapshot = {
                 timestamp: Date.now(),
                 [GLOBAL_SETTINGS_KEY]: localStorage.getItem(GLOBAL_SETTINGS_KEY),
-                [DAILY_DATA_KEY]:      localStorage.getItem(DAILY_DATA_KEY),
-                [ROTATION_HISTORY_KEY]:localStorage.getItem(ROTATION_HISTORY_KEY)
+                [DAILY_DATA_KEY]: localStorage.getItem(DAILY_DATA_KEY),
+                [ROTATION_HISTORY_KEY]: localStorage.getItem(ROTATION_HISTORY_KEY)
             };
 
             localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(snapshot));
@@ -337,7 +346,9 @@
         }
     }
 
-    window.forceAutoSave = function() { performAutoSave(false); };
+    window.forceAutoSave = function() {
+        performAutoSave(false);
+    };
 
     window.restoreAutoSave = function() {
         try {
