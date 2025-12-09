@@ -1,14 +1,9 @@
 
+
 // =================================================================
 // special_activities.js  — Modern Pro Camp THEMED VERSION
 //
-// ✦ Data still comes from:
-//      window.getGlobalSpecialActivities()
-//      window.saveGlobalSpecialActivities()
-//
-// ✦ NO LOGIC CHANGES — visual/UI theme only
-//
-// ✦ UPDATE: Max Usage now includes Frequency (Weeks)
+// ✦ UPDATE: Added Transition, Buffer Occupancy, Zone, and Min Duration.
 // =================================================================
 
 (function() {
@@ -40,6 +35,16 @@ function initSpecialActivitiesTab() {
         s.maxUsage = (s.maxUsage !== undefined && s.maxUsage !== "") ? s.maxUsage : null;
         // Ensure frequency is set (default 0 = lifetime/unlimited period)
         s.frequencyWeeks = s.frequencyWeeks || 0; 
+        
+        // NEW: Transition fields
+        s.transition = s.transition || {
+            preMin: 0,
+            postMin: 0,
+            label: "Change Time",
+            zone: window.DEFAULT_ZONE_NAME,
+            occupiesField: true, // Defaults to true for specials like Canteen/Pool
+            minDurationMin: 0 
+        };
     });
 
     // ==== THEMED HTML SHELL ====
@@ -176,6 +181,17 @@ function createMasterListItem(type, item) {
     const nameEl = document.createElement('span');
     nameEl.className = 'list-item-name';
     nameEl.textContent = item.name;
+    
+    // Show Transition status
+    if (item.transition.preMin > 0 || item.transition.postMin > 0) {
+        const span = document.createElement('span');
+        span.textContent = ` (${item.transition.preMin}m / ${item.transition.postMin}m)`;
+        span.style.fontSize = '0.7rem';
+        span.style.color = '#047857';
+        span.style.fontWeight = 'normal';
+        nameEl.appendChild(span);
+    }
+
     el.appendChild(nameEl);
 
     // switch
@@ -281,6 +297,30 @@ function renderDetailPane() {
     `;
     detailPaneEl.appendChild(avail);
 
+    /*******************************************************
+     * TRANSITION RULES (NEW)
+     *******************************************************/
+    const transitionCard = document.createElement('div');
+    Object.assign(transitionCard.style, {
+        background:"#ffffff",
+        border:"1px solid #e5e7eb",
+        borderRadius:"14px",
+        padding:"16px 16px",
+        marginBottom:"20px",
+        boxShadow:"0 8px 18px rgba(15,23,42,0.06)"
+    });
+
+    const transitionHeader = document.createElement('div');
+    transitionHeader.textContent = "Transition & Duration Rules";
+    transitionHeader.style.fontWeight = "600";
+    transitionHeader.style.marginBottom = "6px";
+    transitionHeader.style.fontSize = "0.9rem";
+    transitionCard.appendChild(transitionHeader);
+
+    const tControls = renderTransitionControls(item.transition, onSave, onRerender);
+    transitionCard.appendChild(tControls);
+    detailPaneEl.appendChild(transitionCard);
+    
     /*******************************************************
      * MAX USAGE CARD (FREQUENCY UPDATE)
      *******************************************************/
@@ -411,6 +451,7 @@ function renderDetailPane() {
 
     detailPaneEl.appendChild(maxCard);
 
+
     /*******************************************************
      * SHARABLE RULES
      *******************************************************/
@@ -435,6 +476,78 @@ function renderDetailPane() {
     detailPaneEl.appendChild(times);
 }
 
+// --- NEW FUNCTION: Render Transition Controls ---
+function renderTransitionControls(transition, onSave, onRerender) {
+    const container = document.createElement("div");
+    
+    // --- 1. Pre/Post Buffer Inputs ---
+    container.innerHTML = `
+        <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+            <label style="font-weight:600; font-size:0.85rem;">Pre-Activity (To):</label>
+            <input type="number" id="pre-min-input" value="${transition.preMin}" min="0" step="5" style="width:60px; padding:4px;">
+            <label style="font-weight:600; font-size:0.85rem;">Post-Activity (From):</label>
+            <input type="number" id="post-min-input" value="${transition.postMin}" min="0" step="5" style="width:60px; padding:4px;">
+        </div>
+        
+        <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
+            <label style="font-weight:600; font-size:0.85rem;">Label:</label>
+            <input type="text" id="buffer-label-input" value="${transition.label}" style="width:120px; padding:4px;">
+        </div>
+
+        <!-- Zone Selector (Issue 2/4) -->
+        <div style="margin-top:15px; border-top:1px dashed #E5E7EB; padding-top:10px;">
+            <label style="font-weight:600; font-size:0.85rem;">Location Zone:</label>
+            <select id="zone-select" style="width:100%; margin-top:5px; padding:6px;"></select>
+            <p class="muted" style="font-size:0.75rem; margin-top:5px;">Required for Buffer Merging and Transport Limits.</p>
+        </div>
+
+        <!-- Occupancy Toggle (Issue 5) -->
+        <label style="display:flex; align-items:center; gap:8px; margin-top:10px; cursor:pointer;">
+            <input type="checkbox" id="occupies-field-check" ${transition.occupiesField ? 'checked' : ''} style="width:16px; height:16px;">
+            <span style="font-size:0.85rem; font-weight:600;">Buffer Occupies Resource (e.g., Setup/Change)</span>
+        </label>
+        <p class="muted" style="font-size:0.75rem; margin-top:2px; padding-left:25px;">
+            If unchecked (Travel), the resource is available during transition time.
+        </p>
+
+        <!-- Minimum Duration (Issue 1) -->
+        <div style="margin-top:15px; border-top:1px dashed #E5E7EB; padding-top:10px;">
+            <label style="font-weight:600; font-size:0.85rem;">Min Activity Duration:</label>
+            <input type="number" id="min-duration-input" value="${transition.minDurationMin}" min="0" step="5" style="width:60px; padding:4px; margin-left:5px;">
+            <span class="muted" style="font-size:0.85rem;">minutes (if less, placement is rejected).</span>
+        </div>
+    `;
+    
+    // Populate Zones
+    const zones = window.getZones?.() || {};
+    const zoneSelect = container.querySelector('#zone-select');
+    Object.values(zones).forEach(z => {
+        const opt = document.createElement('option');
+        opt.value = z.name;
+        opt.textContent = z.name + (z.isDefault ? ' (Default)' : '');
+        if (z.name === transition.zone) opt.selected = true;
+        zoneSelect.appendChild(opt);
+    });
+
+    const updateTransition = () => {
+        transition.preMin = parseInt(container.querySelector('#pre-min-input').value) || 0;
+        transition.postMin = parseInt(container.querySelector('#post-min-input').value) || 0;
+        transition.label = container.querySelector('#buffer-label-input').value.trim() || "Transition";
+        transition.zone = container.querySelector('#zone-select').value;
+        transition.occupiesField = container.querySelector('#occupies-field-check').checked;
+        transition.minDurationMin = parseInt(container.querySelector('#min-duration-input').value) || 0;
+        onSave();
+        onRerender(); 
+    };
+
+    container.querySelectorAll('input, select').forEach(el => {
+        el.onchange = updateTransition;
+    });
+
+    return container;
+}
+
+
 /*********************************************************
  * ADD SPECIAL
  *********************************************************/
@@ -454,7 +567,15 @@ function addSpecial() {
         limitUsage: { enabled:false, divisions:{} },
         timeRules: [],
         maxUsage: null,
-        frequencyWeeks: 0
+        frequencyWeeks: 0,
+        transition: { // NEW DEFAULT
+            preMin: 0,
+            postMin: 0,
+            label: "Change Time",
+            zone: window.DEFAULT_ZONE_NAME,
+            occupiesField: true,
+            minDurationMin: 0
+        }
     });
 
     addSpecialInput.value = "";
@@ -869,5 +990,6 @@ function createLimitChip(text, active) {
 }
 
 window.initSpecialActivitiesTab = initSpecialActivitiesTab;
+window.specialActivities = specialActivities;
 
 })();
