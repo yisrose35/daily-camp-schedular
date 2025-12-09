@@ -87,16 +87,29 @@ const TILES = [
 ];
 
 function mapEventNameForOptimizer(name) {
-  if (!name) name = "Free";
-  const lowerName = name.toLowerCase().trim();
-  if (lowerName === 'activity')          return { type: 'slot',   event: 'General Activity Slot' };
-  if (lowerName === 'sports')           return { type: 'slot',   event: 'Sports Slot' };
-  if (lowerName === 'special activity' ||
-      lowerName === 'special')          return { type: 'slot',   event: 'Special Activity' };
-  if (['swim','lunch','snacks','dismissal'].includes(lowerName))
-                                        return { type: 'pinned', event: name };
-  return { type: 'pinned', event: name };
+    if (!name) name = "Free";
+    const lower = name.toLowerCase().trim();
+
+    // Core slots
+    if (lower === 'activity')           return { type: 'slot', event: 'General Activity Slot' };
+    if (lower === 'sports')             return { type: 'slot', event: 'Sports Slot' };
+    if (lower === 'special activity' ||
+        lower === 'special')            return { type: 'slot', event: 'Special Activity' };
+
+    // League handling — FIXED
+    if (lower.includes('specialty league'))
+        return { type: 'specialty_league', event: 'Specialty League' };
+
+    if (lower.includes('league'))
+        return { type: 'league', event: 'League Game' };
+
+    // Pinned by default
+    if (['swim','lunch','snacks','dismissal'].includes(lower))
+        return { type: 'pinned', event: name };
+
+    return { type: 'pinned', event: name };
 }
+
 
 function renderPalette(paletteContainer) {
   paletteContainer.innerHTML = '<span style="font-weight:600;align-self:center;">Drag tiles onto the grid:</span>';
@@ -393,6 +406,44 @@ function addDropListeners(gridContainer) {
           }
         };
 
+      // --- LEAGUE TILE HANDLER (Fix #1) ---
+      } else if (tileData.type === 'league') {
+        eventType = 'league';
+        eventName = 'League Game';
+
+        let startTime = prompt(`League Game start time:`, defaultStartTime);
+        if (!startTime) return;
+        let endTime = prompt(`League Game end time:`);
+        if (!endTime) return;
+
+        newEvent = {
+          id: `evt_${Math.random().toString(36).slice(2, 9)}`,
+          type: 'league',
+          event: 'League Game',
+          division: divName,
+          startTime,
+          endTime
+        };
+
+      // --- SPECIALTY LEAGUE TILE HANDLER (Fix #2) ---
+      } else if (tileData.type === 'specialty_league') {
+        eventType = 'specialty_league';
+        eventName = 'Specialty League';
+
+        let startTime = prompt(`Specialty League start time:`, defaultStartTime);
+        if (!startTime) return;
+        let endTime = prompt(`Specialty League end time:`);
+        if (!endTime) return;
+
+        newEvent = {
+          id: `evt_${Math.random().toString(36).slice(2, 9)}`,
+          type: 'specialty_league',
+          event: 'Specialty League',
+          division: divName,
+          startTime,
+          endTime
+        };
+
       // --- Pinned tiles ---
       } else if (['lunch','snacks','custom','dismissal','swim'].includes(tileData.type)) {
         eventType = 'pinned';
@@ -406,6 +457,11 @@ function addDropListeners(gridContainer) {
 
       // Standard single-event fallback (Activity / Sports / Special / generic slot)
       if (!newEvent) {
+        // SAFETY FIX: If the name contains "league", make sure type = league (Fix #3)
+        if (/league/i.test(eventName) && eventType === 'slot') {
+            eventType = 'league';
+        }
+
         let startTime, endTime, startMin, endMin;
 
         if (tileData.type === 'activity') eventName = 'General Activity Slot';
@@ -464,8 +520,8 @@ function addRemoveListeners(gridContainer) {
 function renderEventTile(event, top, height) {
   let tile = TILES.find(t => t.name === event.event);
   if (!tile) {
-    if (event.type === 'split')        tile = TILES.find(t => t.type === 'split');
-    else if (event.type === 'smart')   tile = TILES.find(t => t.type === 'smart');
+    if (event.type === 'split')         tile = TILES.find(t => t.type === 'split');
+    else if (event.type === 'smart')    tile = TILES.find(t => t.type === 'smart');
     else if (event.event === 'General Activity Slot') tile = TILES.find(t => t.type === 'activity');
     else if (event.event === 'Sports Slot')           tile = TILES.find(t => t.type === 'sports');
     else if (event.event === 'Special Activity')      tile = TILES.find(t => t.type === 'special');
@@ -484,11 +540,10 @@ function renderEventTile(event, top, height) {
     innerHtml += `<div style="font-size:0.75em;border-top:1px dotted #01579b;margin-top:2px;padding-top:1px;">F: ${event.smartData.fallbackActivity} (if ${event.smartData.fallbackFor.substring(0,4)}. busy)</div>`;
   }
   if (event.type === "smart" && event.smartData) {
-  innerHtml += `
-    <div style="font-size:0.75em;border-top:1px dotted #01579b;margin-top:2px;padding-top:1px;">
+  innerHtml += `<br>
+    <div style="font-size:0.75em;border-top:1px dotted #01579b;margin-top:2px;padding-top:1px;"><br>
       Fallback: ${event.smartData.fallbackActivity}
-      <br>
-
+      <br><br><br>
       For: ${event.smartData.fallbackFor}
     </div>
   `;
@@ -500,9 +555,9 @@ function renderEventTile(event, top, height) {
          data-event-id="${event.id}"
          title="Click to remove this event"
          style="${tripStyle || style};padding:2px 5px;border-radius:4px;text-align:center;
-                margin:0 1px;font-size:.9em;position:absolute;
-                top:${top}px;height:${height}px;width:calc(100% - 4px);
-                box-sizing:border-box;overflow:hidden;cursor:pointer;">
+                 margin:0 1px;font-size:.9em;position:absolute;
+                 top:${top}px;height:${height}px;width:calc(100% - 4px);
+                 box-sizing:border-box;overflow:hidden;cursor:pointer;">
       ${innerHtml}
     </div>`;
 }
@@ -790,12 +845,51 @@ function init() {
 function initDailySkeletonUI() {
   if (!skeletonContainer) return;
   loadDailySkeleton();
+
+  // --- NEW: Dropdown to load saved skeletons ---
+  const savedSkeletons = masterSettings.app1.savedSkeletons || {};
+  let optionsHtml = `<option value="">-- Select Saved Skeleton --</option>`;
+  Object.keys(savedSkeletons).sort().forEach(name => {
+    optionsHtml += `<option value="${name}">${name}</option>`;
+  });
+
   skeletonContainer.innerHTML = `
+    <div style="margin-bottom:15px; padding:10px; background:#e3f2fd; border:1px solid #90caf9; border-radius:5px; display:flex; align-items:center; gap:10px;">
+      <strong>Load Skeleton:</strong>
+      <select id="daily-skeleton-select" style="padding:6px; border-radius:4px; border:1px solid #ccc;">
+        ${optionsHtml}
+      </select>
+      <button id="daily-skeleton-load-btn" style="padding:6px 12px; background:#0277bd; color:white; border:none; border-radius:4px; cursor:pointer;">
+        Load
+      </button>
+      <span style="font-size:0.85em; color:#555;">(Overwrites current edits)</span>
+    </div>
+
     <div id="daily-skeleton-palette"
          style="padding:10px;background:#f4f4f4;border-radius:8px;margin-bottom:15px;display:flex;flex-wrap:wrap;gap:10px;"></div>
     <div id="daily-skeleton-grid"
          style="overflow-x:auto;border:1px solid #999;max-height:600px;overflow-y:auto;"></div>
   `;
+
+  // Add listener for load button
+  const loadBtn = document.getElementById("daily-skeleton-load-btn");
+  if (loadBtn) {
+    loadBtn.onclick = () => {
+      const select = document.getElementById("daily-skeleton-select");
+      const name = select.value;
+      if (!name) return;
+
+      if (confirm(`Load skeleton "${name}"? This will overwrite your current daily skeleton edits.`)) {
+        const skeletonData = savedSkeletons[name];
+        if (skeletonData) {
+          dailyOverrideSkeleton = JSON.parse(JSON.stringify(skeletonData));
+          saveDailySkeleton();
+          renderGrid(document.getElementById("daily-skeleton-grid"));
+        }
+      }
+    };
+  }
+
   const palette = document.getElementById("daily-skeleton-palette");
   const grid = document.getElementById("daily-skeleton-grid");
   renderPalette(palette);
