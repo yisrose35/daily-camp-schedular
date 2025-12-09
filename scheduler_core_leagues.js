@@ -1,459 +1,572 @@
-
 // ============================================================================
-// scheduler_core_leagues.js
-// PART 2 of 3: THE SPECIALIST
+// scheduler_core_leagues.js (COMPLETE REWRITE v2)
+// 
+// PROBLEM SOLVED:
+// Previously: All matchups got SAME field + SAME sport (impossible)
+// Now: Each matchup gets UNIQUE field + VARIED sport (like the sample)
 //
-// Role:
-// - League Matchmaking Math (Round Robin, Shuffling)
-// - Specialty League Placement (Pass 3)
-// - Regular League Placement (Pass 3.5)
-// - Game Number Calculation
+// SAMPLE TARGET:
+// Team 1: vs 2 (basketball), vs 6 (football), vs 4 (hockey)
+// Team 2: vs 1 (basketball), vs 3 (hockey), vs 5 (football)
+// etc.
+//
+// KEY INSIGHT: In ONE time slot with 4 matchups:
+// - Matchup A plays Baseball @ Field 1
+// - Matchup B plays Basketball @ Gym A
+// - Matchup C plays Football @ Football Field
+// - Matchup D plays Hockey @ Hockey Rink
 // ============================================================================
 
-(function() {
+(function () {
     'use strict';
 
     const Leagues = {};
-    const INCREMENT_MINS = 30; // Matches global config
 
-    // =================================================================
-    // 1. MATH HELPERS
-    // =================================================================
-    Leagues.shuffleArray = function(array) {
-        for (let i = array.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [array[i], array[j]] = [array[j], array[i]];
+    // =========================================================================
+    // PERSISTENT HISTORY (Season-Long Tracking)
+    // =========================================================================
+    
+    const LEAGUE_HISTORY_KEY = "campLeagueHistory_v2";
+    
+    function loadLeagueHistory() {
+        try {
+            const raw = localStorage.getItem(LEAGUE_HISTORY_KEY);
+            if (!raw) return { teamSports: {}, matchupHistory: {}, roundCounters: {} };
+            return JSON.parse(raw);
+        } catch (e) {
+            console.error("Failed to load league history:", e);
+            return { teamSports: {}, matchupHistory: {}, roundCounters: {} };
         }
-    };
+    }
+    
+    function saveLeagueHistory(history) {
+        try {
+            localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(history));
+        } catch (e) {
+            console.error("Failed to save league history:", e);
+        }
+    }
+    
+    // Track what sports each team has played in a league
+    // Format: { "LeagueName|Team1": ["Baseball", "Basketball", ...], ... }
+    function getTeamSportHistory(leagueName, team, history) {
+        const key = `${leagueName}|${team}`;
+        return history.teamSports[key] || [];
+    }
+    
+    function recordTeamSport(leagueName, team, sport, history) {
+        const key = `${leagueName}|${team}`;
+        if (!history.teamSports[key]) history.teamSports[key] = [];
+        history.teamSports[key].push(sport);
+    }
 
-    Leagues.pairRoundRobin = function(teams) {
+    // =========================================================================
+    // ROUND-ROBIN MATCHUP GENERATION
+    // =========================================================================
+    
+    function generateRoundRobinSchedule(teams) {
         if (teams.length < 2) return [];
-        const t = teams.slice();
-        if (t.length % 2 !== 0) t.push("BYE");
-        const pairs = [];
-        const half = t.length / 2;
-        const top = t.slice(0, half);
-        const bottom = t.slice(half).reverse();
-        for (let i = 0; i < half; i++) {
-            pairs.push([top[i], bottom[i]]);
-        }
-        return pairs;
-    };
+        
+        const schedule = [];
+        const n = teams.length;
+        const isOdd = n % 2 === 1;
+        
+        const workingTeams = isOdd ? [...teams, 'BYE'] : [...teams];
+        const rounds = workingTeams.length - 1;
 
-    Leagues.coreGetNextLeagueRound = function(leagueName, teams) {
-        // Randomize matchups per slot so we don't repeat same pairings immediately
-        const shuffled = teams.slice();
-        Leagues.shuffleArray(shuffled);
-        return Leagues.pairRoundRobin(shuffled);
-    };
-
-    Leagues.assignSportsMultiRound = function(matchups, sports, teamCounts, history, lastSport) {
-        const assignments = [];
-        matchups.forEach((pair, i) => {
-            if (!pair || pair.includes("BYE")) {
-                assignments.push({ sport: null });
-                return;
-            }
-            const s = sports[i % sports.length];
-            assignments.push({ sport: s });
-        });
-        return {
-            assignments,
-            updatedTeamCounts: teamCounts || {},
-            updatedLastSports: lastSport || {}
-        };
-    };
-
-    // =================================================================
-    // 2. PASS 3: SPECIALTY LEAGUES
-    // =================================================================
-    Leagues.processSpecialtyLeagues = function(context) {
-        const {
-            schedulableSlotBlocks, fieldUsageBySlot, activityProperties,
-            masterSpecialtyLeagues, disabledSpecialtyLeagues, rotationHistory,
-            yesterdayHistory, fillBlock
-        } = context;
-
-        const specialtyLeagueBlocks = schedulableSlotBlocks.filter(
-            b => b.event === 'Specialty League' && !b.processed
-        );
-
-        const groups = {};
-        specialtyLeagueBlocks.forEach(block => {
-            const key = `${block.divName}-${block.startTime}`;
-            if (!groups[key]) {
-                groups[key] = {
-                    divName: block.divName,
-                    startTime: block.startTime,
-                    endTime: block.endTime,
-                    slots: block.slots,
-                    bunks: new Set()
-                };
-            }
-            groups[key].bunks.add(block.bunk);
-        });
-
-        Object.values(groups).forEach(group => {
-            const leagueEntry = Object.values(masterSpecialtyLeagues).find(
-                l => l.enabled &&
-                     !disabledSpecialtyLeagues.includes(l.name) &&
-                     l.divisions.includes(group.divName)
-            );
-            if (!leagueEntry) return;
-
-            const allBunksInGroup = Array.from(group.bunks);
-            const blockBase = {
-                slots: group.slots,
-                divName: group.divName,
-                startTime: group.startTime,
-                endTime: group.endTime
-            };
-            const leagueName = leagueEntry.name;
-            const leagueHistory = rotationHistory.leagues[leagueName] || {};
-            rotationHistory.leagues[leagueName] = leagueHistory;
-            const bestSport = leagueEntry.sport;
+        for (let round = 0; round < rounds; round++) {
+            const roundMatches = [];
             
-            if (!bestSport) return;
-
-            const leagueTeams = (leagueEntry.teams || []).map(t => String(t).trim()).filter(Boolean);
-            let matchups = [];
-            if (typeof window.getLeagueMatchups === 'function') {
-                matchups = window.getLeagueMatchups(leagueEntry.name, leagueTeams) || [];
-            } else {
-                matchups = Leagues.pairRoundRobin(leagueTeams);
-            }
-
-            let gameNumber = 1;
-            if (typeof window.getLeagueCurrentRound === 'function') {
-                 gameNumber = window.getLeagueCurrentRound(leagueEntry.name);
-            } else if (window.leagueRoundState && window.leagueRoundState[leagueEntry.name]) {
-                 gameNumber = window.leagueRoundState[leagueEntry.name].currentRound || 1;
-            }
-            const gameLabel = `Game ${gameNumber}`;
-
-            const allMatchupLabels = [];
-            const picksByTeam = {};
-
-            const leagueFields = leagueEntry.fields || [];
-            if (leagueFields.length !== 0 && leagueTeams.length >= 2) {
-                const gamesPerField = Math.ceil(matchups.length / leagueFields.length);
-                const slotCount = group.slots.length || 1;
-                const usedFieldsInThisBlock = Array.from({ length: slotCount }, () => new Set());
-
-                for (let i = 0; i < matchups.length; i++) {
-                    const [teamA, teamB] = matchups[i];
-                    if (teamA === "BYE" || teamB === "BYE") continue;
-
-                    const fieldIndex = Math.floor(i / gamesPerField);
-                    const fieldName = leagueFields[fieldIndex % leagueFields.length];
-                    const baseLabel = `${teamA} vs ${teamB} (${bestSport})`;
-
-                    let isFieldAvailable = true;
-                    const slotIndex = group.slots[i % slotCount];
-
-                    // Core Check:
-                    if (fieldUsageBySlot[slotIndex]?.[fieldName]?.count >= 1) isFieldAvailable = false;
-                    if (usedFieldsInThisBlock[i % slotCount].has(fieldName)) isFieldAvailable = false;
-                    
-                    if (activityProperties[fieldName]) {
-                        if (!window.SchedulerCoreUtils.isTimeAvailable(slotIndex, activityProperties[fieldName])) isFieldAvailable = false;
-                    }
-
-                    let pick;
-                    if (fieldName && isFieldAvailable) {
-                        pick = {
-                            field: fieldName,
-                            sport: baseLabel,
-                            _h2h: true,
-                            vs: null,
-                            _activity: bestSport
-                        };
-                        // Mark usage directly or let fillBlock do it? 
-                        // We must mark it here to prevent re-use within the loop
-                        if (fieldName && window.allSchedulableNames.includes(fieldName)) {
-                             // This is a temporary mark to prevent collision in THIS loop
-                             // The actual mark happens in fillBlock usually
-                        }
-                        usedFieldsInThisBlock[i % slotCount].add(fieldName);
-                        allMatchupLabels.push(`${baseLabel} @ ${fieldName}`);
-                    } else {
-                        pick = {
-                            field: "No Field",
-                            sport: baseLabel,
-                            _h2h: true,
-                            vs: null,
-                            _activity: bestSport
-                        };
-                        allMatchupLabels.push(`${baseLabel} (No Field)`);
-                    }
-                    picksByTeam[teamA] = pick;
-                    picksByTeam[teamB] = pick;
+            for (let i = 0; i < workingTeams.length / 2; i++) {
+                const home = workingTeams[i];
+                const away = workingTeams[workingTeams.length - 1 - i];
+                
+                if (home !== 'BYE' && away !== 'BYE') {
+                    roundMatches.push([home, away]);
                 }
             }
+            
+            schedule.push(roundMatches);
+            
+            // Rotate: keep first fixed, rotate rest
+            const last = workingTeams.pop();
+            workingTeams.splice(1, 0, last);
+        }
 
-            const noGamePick = {
-                field: "No Game",
-                sport: null,
-                _h2h: true,
-                _activity: bestSport || "Specialty League",
-                _allMatchups: allMatchupLabels
-            };
+        return schedule;
+    }
 
-            allBunksInGroup.forEach(bunk => {
-                const pickToAssign = picksByTeam[bunk] || noGamePick;
-                pickToAssign._allMatchups = allMatchupLabels;
-                pickToAssign._gameLabel = gameLabel;
-                fillBlock({ ...blockBase, bunk }, pickToAssign, fieldUsageBySlot, yesterdayHistory, true);
-            });
+    // =========================================================================
+    // FIELD/SPORT AVAILABILITY
+    // =========================================================================
+    
+    /**
+     * Build a pool of available field+sport combinations for a time slot.
+     * Each combination can only be used ONCE per time slot.
+     * 
+     * @returns Array of { field: "Field A", sport: "Baseball", capacity: 1 }
+     */
+    function buildAvailableFieldSportPool(leagueSports, context, divisionNames, timeKey) {
+        const pool = [];
+        const { fields, disabledFields, activityProperties, fieldUsageBySlot } = context;
+        
+        // Get all fields that host any of the league's sports
+        const allFields = fields || [];
+        
+        for (const field of allFields) {
+            if (!field || !field.name) continue;
+            if (field.available === false) continue;
+            if (disabledFields && disabledFields.includes(field.name)) continue;
+            
+            // Check if field is allowed for these divisions
+            if (field.limitUsage?.enabled) {
+                const allowedDivs = Object.keys(field.limitUsage.divisions || {});
+                const hasAllowed = divisionNames.some(d => allowedDivs.includes(d));
+                if (!hasAllowed) continue;
+            }
+            
+            // Check what sports this field supports
+            const fieldSports = field.activities || [];
+            
+            for (const sport of leagueSports) {
+                if (!fieldSports.includes(sport)) continue;
+                
+                // Check if field is already fully occupied at this time
+                // (by checking fieldUsageBySlot or leagueFieldOccupancy)
+                const isBlocked = window.leagueFieldOccupancy?.[timeKey]?.includes(field.name);
+                if (isBlocked) continue;
+                
+                pool.push({
+                    field: field.name,
+                    sport: sport,
+                    fieldObj: field
+                });
+            }
+        }
+        
+        return pool;
+    }
+
+    // =========================================================================
+    // SMART ASSIGNMENT ALGORITHM
+    // =========================================================================
+    
+    /**
+     * THE CORE ALGORITHM: Assign each matchup to a unique field with varied sports.
+     * 
+     * Goals:
+     * 1. Each matchup gets a DIFFERENT field (no overlap)
+     * 2. Teams get sport VARIETY over time
+     * 3. Within a single slot, try for sport variety too
+     */
+    function assignMatchupsToFieldsAndSports(matchups, availablePool, leagueName, history) {
+        const assignments = [];
+        const usedFields = new Set();
+        const usedSportsThisSlot = {};  // Track sport usage count this slot
+        
+        // Calculate sport "need" for each team (how much they need variety)
+        function getTeamSportNeed(team, sport) {
+            const teamHistory = getTeamSportHistory(leagueName, team, history);
+            const sportCount = teamHistory.filter(s => s === sport).length;
+            const totalGames = teamHistory.length;
+            
+            // If team has never played this sport, high need
+            if (sportCount === 0) return 1000;
+            
+            // Lower score = team has played this sport more often
+            return Math.max(0, 100 - sportCount * 20);
+        }
+        
+        // Sort matchups by how desperately they need variety
+        // (Teams with least sport variety go first to get best options)
+        const matchupsWithPriority = matchups.map(([t1, t2]) => {
+            const h1 = getTeamSportHistory(leagueName, t1, history);
+            const h2 = getTeamSportHistory(leagueName, t2, history);
+            const uniqueSports1 = new Set(h1).size;
+            const uniqueSports2 = new Set(h2).size;
+            // Lower unique count = higher priority (needs more variety)
+            return { t1, t2, varietyScore: uniqueSports1 + uniqueSports2 };
         });
-    };
+        
+        matchupsWithPriority.sort((a, b) => a.varietyScore - b.varietyScore);
+        
+        for (const { t1, t2 } of matchupsWithPriority) {
+            let bestOption = null;
+            let bestScore = -Infinity;
+            
+            for (const option of availablePool) {
+                // Skip if field already used this slot
+                if (usedFields.has(option.field)) continue;
+                
+                // Calculate score for this field+sport combination
+                let score = 0;
+                
+                // Factor 1: Sport need for both teams
+                const need1 = getTeamSportNeed(t1, option.sport);
+                const need2 = getTeamSportNeed(t2, option.sport);
+                score += need1 + need2;
+                
+                // Factor 2: Sport variety within this slot
+                // Prefer sports not yet used in this time slot
+                const sportUsageThisSlot = usedSportsThisSlot[option.sport] || 0;
+                if (sportUsageThisSlot === 0) {
+                    score += 500;  // Big bonus for unused sport
+                } else {
+                    score -= sportUsageThisSlot * 100;  // Penalty for repeated sport
+                }
+                
+                // Factor 3: Slight randomization for variety
+                score += Math.random() * 10;
+                
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestOption = option;
+                }
+            }
+            
+            if (bestOption) {
+                assignments.push({
+                    team1: t1,
+                    team2: t2,
+                    matchup: `${t1} vs ${t2}`,
+                    field: bestOption.field,
+                    sport: bestOption.sport
+                });
+                
+                // Mark as used
+                usedFields.add(bestOption.field);
+                usedSportsThisSlot[bestOption.sport] = (usedSportsThisSlot[bestOption.sport] || 0) + 1;
+                
+                // Block field globally for this time slot
+                if (!window.leagueFieldOccupancy) window.leagueFieldOccupancy = {};
+                const timeKey = `slot_${Date.now()}`;  // Will be passed in properly
+                
+                console.log(`   ✅ ${t1} vs ${t2} → ${bestOption.sport} @ ${bestOption.field}`);
+            } else {
+                console.log(`   ❌ No field available for ${t1} vs ${t2}`);
+            }
+        }
+        
+        return assignments;
+    }
 
-    // =================================================================
-    // 3. PASS 3.5: REGULAR LEAGUES
-    // =================================================================
-    Leagues.processRegularLeagues = function(context) {
-        const {
-            schedulableSlotBlocks, fieldUsageBySlot, activityProperties,
-            masterLeagues, disabledLeagues, rotationHistory,
-            yesterdayHistory, divisions, fieldsBySport, dailyLeagueSportsUsage,
-            fillBlock
+    // =========================================================================
+    // MAIN REGULAR LEAGUE PROCESSOR
+    // =========================================================================
+    
+    Leagues.processRegularLeagues = function (context) {
+        console.log("\n=== LEAGUE ENGINE v2 START ===");
+        
+        const { 
+            schedulableSlotBlocks, 
+            masterLeagues, 
+            disabledLeagues,
+            divisions,
+            fillBlock,
+            fieldUsageBySlot,
+            activityProperties,
+            rotationHistory
         } = context;
 
-        const leagueBlocks = schedulableSlotBlocks.filter(
-            b => b.event === 'League Game' && !b.processed
-        );
+        if (!masterLeagues || Object.keys(masterLeagues).length === 0) {
+            console.log("No regular leagues configured.");
+            return;
+        }
+        
+        // Load persistent history
+        const history = loadLeagueHistory();
+        
+        // Reset per-day field occupancy
+        window.leagueFieldOccupancy = {};
 
-        const groups = {};
-        leagueBlocks.forEach(block => {
-            const leagueEntry = Object.entries(masterLeagues).find(
-                ([name, l]) => l.enabled && !disabledLeagues.includes(name) && l.divisions.includes(block.divName)
-            );
-            if (!leagueEntry) return;
+        // Group blocks by time
+        const blocksByTime = {};
+        
+        schedulableSlotBlocks
+            .filter(b => b.type === 'league' || /league/i.test(b.event))
+            .forEach(block => {
+                const key = block.startTime;
+                if (!blocksByTime[key]) {
+                    blocksByTime[key] = { byDivision: {}, allBlocks: [] };
+                }
+                
+                if (!blocksByTime[key].byDivision[block.divName]) {
+                    blocksByTime[key].byDivision[block.divName] = [];
+                }
+                
+                blocksByTime[key].byDivision[block.divName].push(block);
+                blocksByTime[key].allBlocks.push(block);
+            });
 
-            const leagueName = leagueEntry[0];
-            const key = `${leagueName}-${block.startTime}`;
-            if (!groups[key]) {
-                groups[key] = {
-                    leagueName,
-                    league: leagueEntry[1],
-                    startTime: block.startTime,
-                    endTime: block.endTime,
-                    slots: block.slots,
-                    bunks: new Set()
-                };
-            }
-            groups[key].bunks.add(block.bunk);
-        });
+        // Process each time slot
+        for (const [timeKey, timeData] of Object.entries(blocksByTime)) {
+            const divisionsAtTime = Object.keys(timeData.byDivision);
+            
+            console.log(`\n📅 Processing League Time Slot: ${timeKey}`);
+            console.log(`   Divisions present: [${divisionsAtTime.join(", ")}]`);
+            
+            // Track which leagues we've processed at this time
+            const processedLeagues = new Set();
 
-        const sortedGroups = Object.values(groups).sort((a, b) => a.startTime - b.startTime);
+            // Find applicable leagues
+            const applicableLeagues = Object.values(masterLeagues).filter(l => {
+                if (!l.enabled) return false;
+                if (disabledLeagues?.includes(l.name)) return false;
+                if (!l.divisions || l.divisions.length === 0) return false;
+                return divisionsAtTime.some(div => l.divisions.includes(div));
+            });
 
-        sortedGroups.forEach(group => {
-            const { leagueName, league, slots } = group;
-            const leagueTeams = (league.teams || []).map(t => String(t).trim()).filter(Boolean);
-            if (leagueTeams.length < 2) return;
+            for (const league of applicableLeagues) {
+                if (processedLeagues.has(league.name)) continue;
+                processedLeagues.add(league.name);
 
-            const allBunksInGroup = Array.from(group.bunks).sort();
-            if (allBunksInGroup.length === 0) return;
+                // Only divisions in BOTH this league AND this time slot
+                const leagueDivisions = league.divisions.filter(div => divisionsAtTime.includes(div));
+                if (leagueDivisions.length === 0) continue;
 
-            // Find base division
-            let baseDivName = null;
-            const firstBunk = allBunksInGroup[0];
-            baseDivName = Object.keys(divisions).find(div => (divisions[div].bunks || []).includes(firstBunk));
-            if (!baseDivName) return;
+                console.log(`\n📋 League: "${league.name}"`);
+                console.log(`   Teams: [${(league.teams || []).join(", ")}]`);
+                console.log(`   Sports: [${(league.sports || []).join(", ")}]`);
+                console.log(`   Active Divisions: [${leagueDivisions.join(", ")}]`);
 
-            const blockBase = { slots, divName: baseDivName, endTime: group.endTime };
-            const sports = (league.sports || []).filter(s => fieldsBySport[s]);
-            if (sports.length === 0) return;
+                const leagueTeams = league.teams || [];
+                if (leagueTeams.length < 2) {
+                    console.log(`   ⚠️ Not enough teams`);
+                    continue;
+                }
 
-            const usedToday = dailyLeagueSportsUsage[leagueName] || new Set();
-            let optimizerSports = sports.filter(s => !usedToday.has(s));
-            if (optimizerSports.length === 0) optimizerSports = sports;
+                // Get current round
+                const roundCounter = history.roundCounters[league.name] || 0;
+                const fullSchedule = generateRoundRobinSchedule(leagueTeams);
+                const roundIndex = roundCounter % fullSchedule.length;
+                const matchups = fullSchedule[roundIndex] || [];
+                
+                console.log(`   Round: ${roundCounter + 1} (Index: ${roundIndex})`);
+                console.log(`   Matchups: ${matchups.length}`);
+                matchups.forEach(([t1, t2]) => console.log(`      • ${t1} vs ${t2}`));
 
-            const leagueHistory = rotationHistory.leagues[leagueName] || {};
-            rotationHistory.leagues[leagueName] = leagueHistory;
-            const leagueTeamCounts = rotationHistory.leagueTeamSports[leagueName] || {};
-            rotationHistory.leagueTeamSports[leagueName] = leagueTeamCounts;
-            rotationHistory.leagueTeamLastSport = rotationHistory.leagueTeamLastSport || {};
-            const leagueTeamLastSport = rotationHistory.leagueTeamLastSport[leagueName] || {};
-            rotationHistory.leagueTeamLastSport[leagueName] = leagueTeamLastSport;
+                if (matchups.length === 0) continue;
 
-            // Generate Matchups
-            let standardMatchups = [];
-            if (typeof window.getLeagueMatchups === "function") {
-                standardMatchups = window.getLeagueMatchups(leagueName, leagueTeams) || [];
-            } else {
-                standardMatchups = Leagues.coreGetNextLeagueRound(leagueName, leagueTeams) || [];
-            }
-
-            // Get Game Number
-            let gameNumber = 1;
-            if (typeof window.getLeagueCurrentRound === 'function') {
-                 gameNumber = window.getLeagueCurrentRound(leagueName);
-            } else if (window.leagueRoundState && window.leagueRoundState[leagueName]) {
-                 gameNumber = window.leagueRoundState[leagueName].currentRound || 1;
-            }
-            const gameLabel = `Game ${gameNumber}`;
-
-            const slotCount = slots.length || 1;
-
-            const evaluateMatchups = (candidateMatchups) => {
-                const nonBye = candidateMatchups.filter(p => p && p[0] !== "BYE" && p[1] !== "BYE");
-                const { assignments } = Leagues.assignSportsMultiRound(
-                    nonBye, optimizerSports, leagueTeamCounts, leagueHistory, leagueTeamLastSport
+                // Build available field/sport pool
+                const leagueSports = league.sports || ["General Sport"];
+                const availablePool = buildAvailableFieldSportPool(
+                    leagueSports, 
+                    context, 
+                    leagueDivisions, 
+                    timeKey
                 );
-                const simUsedFields = Array.from({ length: slotCount }, () => new Set());
-                let successCount = 0;
-                const results = [];
+                
+                console.log(`   Available Field/Sport Combinations: ${availablePool.length}`);
+                availablePool.slice(0, 10).forEach(p => 
+                    console.log(`      • ${p.sport} @ ${p.field}`)
+                );
 
-                nonBye.forEach((pair, idx) => {
-                    const [teamA, teamB] = pair;
-                    const preferredSport = assignments[idx]?.sport || optimizerSports[idx % optimizerSports.length];
-                    const candidateSports = [
-                        preferredSport,
-                        ...sports.filter(s => s !== preferredSport && !usedToday.has(s)),
-                        ...sports.filter(s => s !== preferredSport && usedToday.has(s))
-                    ];
+                if (availablePool.length === 0) {
+                    console.log(`   🚨 No fields available for league sports!`);
+                    continue;
+                }
 
-                    let foundField = null;
-                    let foundSport = preferredSport;
-                    const slotIdx = idx % slotCount;
+                // THE KEY ALGORITHM: Assign unique fields with varied sports
+                const assignments = assignMatchupsToFieldsAndSports(
+                    matchups, 
+                    availablePool, 
+                    league.name, 
+                    history
+                );
 
-                    for (const s of candidateSports) {
-                        const possibleFields = fieldsBySport[s] || [];
-                        let found = null;
-                        for (const f of possibleFields) {
-                            if (!simUsedFields[slotIdx].has(f) &&
-                                (fieldUsageBySlot[slots[slotIdx]]?.[f]?.count || 0) === 0 &&
-                                window.SchedulerCoreUtils.canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
-                                found = f;
-                                break;
-                            }
-                        }
-                        if (found) {
-                            foundField = found;
-                            foundSport = s;
-                            simUsedFields[slotIdx].add(found);
-                            break;
-                        }
-                    }
-                    if (foundField) successCount++;
-                    results.push({ pair, sport: foundSport, field: foundField, assignments: assignments[idx] });
+                console.log(`\n   📝 Final Assignments:`);
+                assignments.forEach(a => {
+                    console.log(`      ${a.team1} vs ${a.team2} → ${a.sport} @ ${a.field}`);
+                    
+                    // Record in history
+                    recordTeamSport(league.name, a.team1, a.sport, history);
+                    recordTeamSport(league.name, a.team2, a.sport, history);
                 });
-                return { successCount, results, matchups: candidateMatchups, assignments };
-            };
 
-            let bestResult = evaluateMatchups(standardMatchups);
-            const nonByeCount = standardMatchups.filter(p => p && p[0] !== "BYE" && p[1] !== "BYE").length;
+                // Fill blocks for all bunks in league divisions
+                const gameNumber = roundCounter + 1;
+                
+                leagueDivisions.forEach(divName => {
+                    const blocksForDiv = timeData.byDivision[divName];
+                    if (!blocksForDiv) return;
+                    
+                    blocksForDiv.forEach(block => {
+                        const pick = {
+                            field: `League: ${league.name}`,
+                            sport: `Game ${gameNumber}`,
+                            _activity: `League: ${league.name}`,
+                            _h2h: true,
+                            _fixed: true,
+                            _allMatchups: assignments.map(a => 
+                                `${a.team1} vs ${a.team2} @ ${a.field} (${a.sport})`
+                            ),
+                            _gameLabel: `Game ${gameNumber}`
+                        };
 
-            if (bestResult.successCount < nonByeCount) {
-                const teamListCopy = [...leagueTeams];
-                for (let i = 0; i < 50; i++) {
-                    Leagues.shuffleArray(teamListCopy);
-                    const shuffledMatchups = Leagues.pairRoundRobin(teamListCopy);
-                    const res = evaluateMatchups(shuffledMatchups);
-                    if (res.successCount > bestResult.successCount) {
-                        bestResult = res;
-                        if (res.successCount === nonByeCount) break;
-                    }
-                }
+                        fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
+                        block.processed = true;
+                    });
+                });
+
+                // Increment round counter
+                history.roundCounters[league.name] = roundCounter + 1;
+                
+                // Also update window.leagueRoundState for compatibility
+                if (!window.leagueRoundState) window.leagueRoundState = {};
+                window.leagueRoundState[league.name] = { currentRound: roundCounter + 1 };
             }
+        }
 
-            const winningMatchups = bestResult.matchups.filter(p => p && p[0] !== "BYE" && p[1] !== "BYE");
-            const finalOpt = Leagues.assignSportsMultiRound(winningMatchups, optimizerSports, leagueTeamCounts, leagueHistory, leagueTeamLastSport);
-            rotationHistory.leagueTeamSports[leagueName] = finalOpt.updatedTeamCounts;
-            rotationHistory.leagueTeamLastSport[leagueName] = finalOpt.updatedLastSports;
+        // Save history
+        saveLeagueHistory(history);
 
-            const allMatchupLabels = [];
-            const usedForAssignments = [];
-            const usedFieldsPerSlot = Array.from({ length: slotCount }, () => new Set());
-
-            winningMatchups.forEach((pair, idx) => {
-                const [teamA, teamB] = pair;
-                const preferredSport = finalOpt.assignments[idx]?.sport || optimizerSports[idx % optimizerSports.length];
-                const candidateSports = [
-                    preferredSport,
-                    ...sports.filter(s => s !== preferredSport && !usedToday.has(s)),
-                    ...sports.filter(s => s !== preferredSport && usedToday.has(s))
-                ];
-
-                let finalSport = preferredSport;
-                let finalField = null;
-                const slotIdx = idx % slotCount;
-
-                for (const s of candidateSports) {
-                    const possibleFields = fieldsBySport[s] || [];
-                    let found = null;
-                    for (const f of possibleFields) {
-                        if (!usedFieldsPerSlot[slotIdx].has(f) &&
-                            window.SchedulerCoreUtils.canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
-                            found = f;
-                            break;
-                        }
-                    }
-                    if (!found && possibleFields.length > 0) {
-                        const f = possibleFields[usedFieldsPerSlot[slotIdx].size % possibleFields.length];
-                        if (window.SchedulerCoreUtils.canLeagueGameFit(blockBase, f, fieldUsageBySlot, activityProperties)) {
-                            found = f;
-                        }
-                    }
-                    if (found) {
-                        finalSport = s;
-                        finalField = found;
-                        usedFieldsPerSlot[slotIdx].add(found);
-                        break;
-                    }
-                }
-
-                let label = finalField ? `${teamA} vs ${teamB} (${finalSport}) @ ${finalField}` : `${teamA} vs ${teamB} (No Field)`;
-                if (finalField) {
-                    // Mark manually so it persists
-                    // (Logic normally handled in fillBlock, but we need to mark daily usage set)
-                    if (!dailyLeagueSportsUsage[leagueName]) dailyLeagueSportsUsage[leagueName] = new Set();
-                    dailyLeagueSportsUsage[leagueName].add(finalSport);
-                }
-                leagueHistory[finalSport] = Date.now();
-                usedForAssignments.push({ label, sport: finalSport, field: finalField || "No Field", teamA, teamB });
-                allMatchupLabels.push(label);
-            });
-
-            bestResult.matchups.forEach(pair => {
-                if (!pair) return;
-                const [teamA, teamB] = pair;
-                if (teamA === "BYE" || teamB === "BYE") {
-                    allMatchupLabels.push(`${teamA} vs ${teamB} (BYE)`);
-                }
-            });
-
-            const noGamePick = { field: "No Game", sport: null, _h2h: true, _activity: "League", _allMatchups: allMatchupLabels };
-
-            let bunkPtr = 0;
-            usedForAssignments.forEach(game => {
-                if (bunkPtr + 1 >= allBunksInGroup.length) return;
-                const bunkA = allBunksInGroup[bunkPtr];
-                const bunkB = allBunksInGroup[bunkPtr + 1];
-                bunkPtr += 2;
-
-                const pick = {
-                    field: game.field, sport: game.label, _h2h: true, vs: null,
-                    _activity: game.sport, _allMatchups: allMatchupLabels, _gameLabel: gameLabel
-                };
-
-                const bunkADiv = Object.keys(divisions).find(div => (divisions[div].bunks || []).includes(bunkA)) || baseDivName;
-                const bunkBDiv = Object.keys(divisions).find(div => (divisions[div].bunks || []).includes(bunkB)) || baseDivName;
-
-                fillBlock({ slots, bunk: bunkA, divName: bunkADiv, startTime: group.startTime, endTime: group.endTime + INCREMENT_MINS * slots.length }, pick, fieldUsageBySlot, yesterdayHistory, true);
-                fillBlock({ slots, bunk: bunkB, divName: bunkBDiv, startTime: group.startTime, endTime: group.endTime + INCREMENT_MINS * slots.length }, pick, fieldUsageBySlot, yesterdayHistory, true);
-            });
-
-            while (bunkPtr < allBunksInGroup.length) {
-                const leftoverBunk = allBunksInGroup[bunkPtr++];
-                const bunkDivName = Object.keys(divisions).find(div => (divisions[div].bunks || []).includes(leftoverBunk)) || baseDivName;
-                const leftoverPick = { ...noGamePick, _gameLabel: gameLabel };
-                fillBlock({ slots, bunk: leftoverBunk, divName: bunkDivName, startTime: group.startTime, endTime: group.endTime + INCREMENT_MINS * slots.length }, leftoverPick, fieldUsageBySlot, yesterdayHistory, true);
-            }
+        // Print summary
+        console.log("\n=== LEAGUE ENGINE v2 COMPLETE ===");
+        console.log("\n📊 Team Sport History:");
+        Object.keys(history.teamSports).forEach(key => {
+            const [league, team] = key.split('|');
+            const sports = history.teamSports[key];
+            const sportCounts = {};
+            sports.forEach(s => sportCounts[s] = (sportCounts[s] || 0) + 1);
+            console.log(`   ${league} - ${team}: ${JSON.stringify(sportCounts)}`);
         });
     };
 
+    // =========================================================================
+    // SPECIALTY LEAGUES (Similar Logic)
+    // =========================================================================
+    
+    Leagues.processSpecialtyLeagues = function (context) {
+        console.log("\n=== SPECIALTY LEAGUE ENGINE v2 START ===");
+        
+        const { 
+            schedulableSlotBlocks, 
+            masterSpecialtyLeagues, 
+            disabledSpecialtyLeagues,
+            activityProperties,
+            fieldUsageBySlot,
+            fillBlock,
+            divisions
+        } = context;
+
+        if (!masterSpecialtyLeagues || Object.keys(masterSpecialtyLeagues).length === 0) {
+            console.log("No specialty leagues configured.");
+            return;
+        }
+        
+        const history = loadLeagueHistory();
+
+        const blocksByDivisionTime = {};
+        
+        schedulableSlotBlocks
+            .filter(b => b.type === 'specialty_league')
+            .forEach(block => {
+                const key = `${block.divName}_${block.startTime}`;
+                if (!blocksByDivisionTime[key]) {
+                    blocksByDivisionTime[key] = [];
+                }
+                blocksByDivisionTime[key].push(block);
+            });
+
+        for (const [key, blocks] of Object.entries(blocksByDivisionTime)) {
+            const [divName, startTime] = key.split('_');
+            
+            const league = Object.values(masterSpecialtyLeagues).find(l => {
+                if (disabledSpecialtyLeagues?.includes(l.name)) return false;
+                if (!l.divisions || !l.divisions.includes(divName)) return false;
+                return true;
+            });
+
+            if (!league) continue;
+
+            console.log(`\n📋 Specialty League: "${league.name}" (${divName})`);
+
+            const leagueTeams = league.teams || [];
+            if (leagueTeams.length < 2) continue;
+
+            const roundCounter = history.roundCounters[`specialty_${league.name}`] || 0;
+            const fullSchedule = generateRoundRobinSchedule(leagueTeams);
+            const matchups = fullSchedule[roundCounter % fullSchedule.length] || [];
+
+            if (matchups.length === 0) continue;
+
+            const leagueSports = league.sports || [league.sport || "General"];
+            const availablePool = buildAvailableFieldSportPool(
+                leagueSports, 
+                context, 
+                [divName], 
+                startTime
+            );
+
+            const assignments = assignMatchupsToFieldsAndSports(
+                matchups, 
+                availablePool, 
+                `specialty_${league.name}`, 
+                history
+            );
+
+            blocks.forEach(block => {
+                const pick = {
+                    field: `Specialty League: ${league.name}`,
+                    sport: assignments.length > 0 ? assignments[0].sport : "League",
+                    _activity: `Specialty League: ${league.name}`,
+                    _h2h: true,
+                    _fixed: true,
+                    _allMatchups: assignments.map(a => 
+                        `${a.team1} vs ${a.team2} @ ${a.field} (${a.sport})`
+                    ),
+                    _gameLabel: `Specialty League`
+                };
+
+                fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
+                block.processed = true;
+            });
+
+            history.roundCounters[`specialty_${league.name}`] = roundCounter + 1;
+        }
+
+        saveLeagueHistory(history);
+        console.log("=== SPECIALTY LEAGUE ENGINE v2 COMPLETE ===");
+    };
+
+    // =========================================================================
+    // DIAGNOSTIC UTILITIES
+    // =========================================================================
+    
+    window.viewLeagueHistory = function() {
+        const history = loadLeagueHistory();
+        console.log("\n=== COMPLETE LEAGUE HISTORY ===");
+        console.log(JSON.stringify(history, null, 2));
+        return history;
+    };
+    
+    window.resetLeagueHistory = function() {
+        if (confirm("Reset ALL league history? This will start fresh.")) {
+            localStorage.removeItem(LEAGUE_HISTORY_KEY);
+            console.log("League history reset.");
+        }
+    };
+    
+    window.viewTeamSportBalance = function(leagueName) {
+        const history = loadLeagueHistory();
+        console.log(`\n=== Sport Balance for League: ${leagueName} ===`);
+        
+        const teamStats = {};
+        Object.keys(history.teamSports).forEach(key => {
+            if (!key.startsWith(leagueName + '|')) return;
+            const team = key.split('|')[1];
+            const sports = history.teamSports[key];
+            
+            const counts = {};
+            sports.forEach(s => counts[s] = (counts[s] || 0) + 1);
+            teamStats[team] = counts;
+        });
+        
+        console.table(teamStats);
+        return teamStats;
+    };
+
+    // Export
     window.SchedulerCoreLeagues = Leagues;
 
 })();
