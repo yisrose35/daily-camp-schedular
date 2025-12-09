@@ -35,9 +35,9 @@
 
             Object.keys(byDiv).forEach(div => {
                 const tiles = byDiv[div].sort((a, b) => parse(a.startTime) - parse(b.startTime));
-                for (let i=0; i<tiles.length; i+=2) {
+                for (let i = 0; i < tiles.length; i += 2) {
                     const A = tiles[i];
-                    const B = tiles[i+1];
+                    const B = tiles[i + 1];
                     const sd = A.smartData || {};
 
                     if (!B) {
@@ -47,7 +47,11 @@
                             main2: sd.main2,
                             fallbackFor: sd.fallbackFor,
                             fallbackActivity: sd.fallbackActivity,
-                            blockA: { startMin: parse(A.startTime), endMin: parse(A.endTime), division: div },
+                            blockA: {
+                                startMin: parse(A.startTime),
+                                endMin: parse(A.endTime),
+                                division: div
+                            },
                             blockB: null
                         });
                     } else {
@@ -57,8 +61,16 @@
                             main2: sd.main2,
                             fallbackFor: sd.fallbackFor,
                             fallbackActivity: sd.fallbackActivity,
-                            blockA: { startMin: parse(A.startTime), endMin: parse(A.endTime), division: div },
-                            blockB: { startMin: parse(B.startTime), endMin: parse(B.endTime), division: div }
+                            blockA: {
+                                startMin: parse(A.startTime),
+                                endMin: parse(A.endTime),
+                                division: div
+                            },
+                            blockB: {
+                                startMin: parse(B.startTime),
+                                endMin: parse(B.endTime),
+                                division: div
+                            }
                         });
                     }
                 }
@@ -70,7 +82,7 @@
         // ---------------------------------------------------------
         // GENERATE ASSIGNMENTS (With Global Eligibility Check)
         // ---------------------------------------------------------
-        generateAssignments(bunks, job, historical={}, specialNames=[], activityProps={}, masterFields=[], dailyFieldAvailability={}, yesterdayHistory={}) {
+        generateAssignments(bunks, job, historical = {}, specialNames = [], activityProps = {}, masterFields = [], dailyFieldAvailability = {}, yesterdayHistory = {}) {
 
             const main1 = job.main1.trim();
             const main2 = job.main2.trim();
@@ -81,9 +93,11 @@
             let specialAct, openAct;
 
             if (isSame(main1, fbFor)) {
-                specialAct = main1; openAct = main2;
+                specialAct = main1;
+                openAct = main2;
             } else if (isSame(main2, fbFor)) {
-                specialAct = main2; openAct = main1;
+                specialAct = main2;
+                openAct = main1;
             } else {
                 // Default
                 specialAct = main1;
@@ -95,7 +109,7 @@
             // ---------------------------------------------------------
             // We must check if the bunk has ANY valid special activity options left.
             // If they are maxed out on EVERYTHING, do not give them a Special slot.
-            
+
             const allSpecials = window.getGlobalSpecialActivities ? window.getGlobalSpecialActivities() : [];
             const eligibleBunks = [];
             const forcedFallbackBunks = [];
@@ -105,7 +119,7 @@
 
                 if (allSpecials.length === 0) {
                     // No specials defined? Assume unlimited/valid to prevent blocking.
-                    hasAtLeastOneOption = true; 
+                    hasAtLeastOneOption = true;
                 } else {
                     // Check every special activity
                     for (const s of allSpecials) {
@@ -132,6 +146,9 @@
             // ---------------------------------------------------------
             function playedYesterday(bunk) {
                 const sched = yesterdayHistory.schedule?.[bunk] || [];
+                // CRITICAL FIX: Ensure sched is an Array before calling .some()
+                if (!Array.isArray(sched)) return 0;
+                
                 return sched.some(e => {
                     const act = (e?._activity || "").toLowerCase();
                     return allSpecials.some(s => s.name.toLowerCase() === act);
@@ -157,16 +174,16 @@
 
             function getTotalHistory(bunk) {
                 if (!historical[bunk]) return 0;
-                return Object.values(historical[bunk]).reduce((a,b)=>a+b,0);
+                return Object.values(historical[bunk]).reduce((a, b) => a + b, 0);
             }
 
             // ---------------------------------------------------------
             // Sort ONLY ELIGIBLE bunks by fairness
             // ---------------------------------------------------------
-            const sorted = [...eligibleBunks].sort((a,b) => {
+            const sorted = [...eligibleBunks].sort((a, b) => {
                 const A = getCategoryHistory(a, specialAct);
                 const B = getCategoryHistory(b, specialAct);
-                if (A !== B) return A-B;
+                if (A !== B) return A - B;
 
                 const YA = playedYesterday(a);
                 const YB = playedYesterday(b);
@@ -174,7 +191,7 @@
 
                 const TA = getTotalHistory(a);
                 const TB = getTotalHistory(b);
-                if (TA !== TB) return TA-TB;
+                if (TA !== TB) return TA - TB;
 
                 return Math.random() - 0.5;
             });
@@ -184,7 +201,7 @@
             // ---------------------------------------------------------
             function calcCap(startMin, endMin) {
                 const sp = allSpecials.find(s => isSame(s.name, specialAct));
-                if (!sp) return 2; 
+                if (!sp) return 2;
                 // Capacity Logic
                 if (sp.sharableWith?.capacity) return parseInt(sp.sharableWith.capacity);
                 if (sp.sharableWith?.type === 'not_sharable') return 1;
@@ -292,16 +309,17 @@
         let s = str.trim().toLowerCase();
         let am = s.endsWith("am");
         let pm = s.endsWith("pm");
-        s = s.replace(/am|pm/g,"").trim();
-        const [h,m] = s.split(":").map(Number);
-        let hh=h;
-        if (pm && h!==12) hh+=12;
-        if (am && h===12) hh=0;
-        return hh*60 + (m||0);
+        s = s.replace(/am|pm/g, "").trim();
+        const [h, m] = s.split(":").map(Number);
+        let hh = h;
+        if (pm && h !== 12) hh += 12;
+        if (am && h === 12) hh = 0;
+        return hh * 60 + (m || 0);
     }
-    function isSame(a,b){
-        if(!a||!b) return false;
-        return a.trim().toLowerCase()===b.trim().toLowerCase();
+
+    function isSame(a, b) {
+        if (!a || !b) return false;
+        return a.trim().toLowerCase() === b.trim().toLowerCase();
     }
 
 })();
