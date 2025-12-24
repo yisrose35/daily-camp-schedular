@@ -1,39 +1,43 @@
-// ============================================================================
-// campistry_auth.js — CAMPISTRY SAAS AUTH ENGINE (FINAL)
-// Handles signup + login + camp creation safely and deterministically
-// ============================================================================
+let authMode = "login";
 
-document.getElementById("begin-btn").onclick = async function () {
+document.getElementById("mode-login").onclick = () => setMode("login");
+document.getElementById("mode-signup").onclick = () => setMode("signup");
 
-  const email = document.getElementById("auth-email").value.trim();
-  const password = document.getElementById("auth-password").value.trim();
-  const campName = document.getElementById("camp-name-input").value.trim();
-  const status = document.getElementById("auth-status");
+function setMode(mode) {
+  authMode = mode;
+  document.getElementById("mode-login").classList.toggle("active", mode === "login");
+  document.getElementById("mode-signup").classList.toggle("active", mode === "signup");
+  document.getElementById("camp-name-input").style.display = mode === "signup" ? "block" : "none";
+  document.getElementById("begin-btn").innerText = mode === "signup" ? "Create Campistry Account" : "Sign In";
+}
 
-  if (!email || !password || !campName) {
-    status.innerText = "All fields are required.";
+document.getElementById("begin-btn").onclick = async () => {
+  const email = auth-email.value.trim();
+  const password = auth-password.value.trim();
+  const campName = camp-name-input.value.trim();
+  const status = auth-status;
+
+  if (!email || !password || (authMode === "signup" && !campName)) {
+    status.innerText = "Please complete all fields.";
     return;
   }
 
-  // Try signup first (Supabase SaaS flow)
-  let { data } = await supabase.auth.signUp({ email, password });
+  let user;
 
-  // If already exists, login instead
-  if (!data?.user) {
+  if (authMode === "signup") {
+    const signup = await supabase.auth.signUp({ email, password });
+    user = signup.data.user;
+    await supabase.from("camps").insert([{ name: campName, owner: user.id }]);
+  } else {
     const login = await supabase.auth.signInWithPassword({ email, password });
-    data = login.data;
+    user = login.data.user;
   }
 
-  const user = data?.user;
   if (!user) {
     status.innerText = "Authentication failed.";
     return;
   }
 
-  // Ensure cloud camp exists
-  await supabase.from("camps").upsert([{ name: campName, owner: user.id }]);
-
-  // Enter Campistry OS
   document.getElementById("welcome-screen").style.display = "none";
   document.getElementById("main-app-container").style.display = "block";
 };
