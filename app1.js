@@ -1,4 +1,3 @@
-
 // =================================================================
 // app1.js — DOUBLE CLICK DELETE & WIDER INPUTS
 //
@@ -733,8 +732,8 @@ function addDivision() {
         endTime: ""
     };
 
-    window.divisions = divisions;
-    window.availableDivisions = availableDivisions;
+    window.setGlobalDivisions(divisions);
+    window.setGlobalBunks(bunks);
 
     selectedDivision = name;
     i.value = "";
@@ -781,6 +780,7 @@ function setupDivisionButtons() {
         };
 
         const topRow = document.createElement("div");
+        card.appendChild(topRow);
         topRow.className = "division-card-top";
 
         const pill = document.createElement("div");
@@ -794,8 +794,6 @@ function setupDivisionButtons() {
 
         topRow.appendChild(pill);
         topRow.appendChild(chip);
-
-        card.appendChild(topRow);
 
         const sub = document.createElement("div");
         sub.className = "division-card-subline";
@@ -863,8 +861,8 @@ function renderDivisionDetailPane() {
 
         selectedDivision = availableDivisions[0] || null;
 
-        window.divisions = divisions;
-        window.availableDivisions = availableDivisions;
+        window.setGlobalDivisions(divisions);
+        window.setGlobalBunks(bunks);
 
         saveData();
         setupDivisionButtons();
@@ -938,8 +936,8 @@ function renderDivisionDetailPane() {
 
         selectedDivision = trimmed;
 
-        window.divisions = divisions;
-        window.availableDivisions = availableDivisions;
+        window.setGlobalDivisions(divisions);
+        window.setGlobalBunks(bunks);
 
         saveData();
         setupDivisionButtons();
@@ -1168,6 +1166,8 @@ function saveData() {
         sportMetaData
     };
 
+    window.setGlobalDivisions(divisions);
+    window.setGlobalBunks(bunks);
     window.saveGlobalSettings?.("app1", data);
 }
 
@@ -1175,8 +1175,10 @@ function loadData() {
     const data = window.loadGlobalSettings?.().app1 || {};
 
     try {
-        bunks = data.bunks || [];
-        divisions = data.divisions || {};
+        divisions = window.getGlobalDivisions ? window.getGlobalDivisions() : (data.divisions || {});
+        bunks = window.getGlobalBunks ? window.getGlobalBunks() : (data.bunks || []);
+        availableDivisions = Object.keys(divisions);
+
         specialActivities = data.specialActivities || [];
         bunkMetaData = data.bunkMetaData || {};
         sportMetaData = data.sportMetaData || {};
@@ -1189,11 +1191,7 @@ function loadData() {
             divisions[divName].color = divisions[divName].color || defaultColors[0];
         });
 
-        availableDivisions =
-            data.availableDivisions && Array.isArray(data.availableDivisions)
-                ? data.availableDivisions.slice()
-                : Object.keys(divisions);
-
+        // availableDivisions is derived from keys now, but we ensure window is set
         window.divisions = divisions;
         window.availableDivisions = availableDivisions;
         selectedDivision = data.selectedDivision || availableDivisions[0] || null;
