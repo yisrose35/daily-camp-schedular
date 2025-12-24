@@ -1,24 +1,40 @@
+// ============================================================================
+// campistry_auth.js — FINAL SaaS AUTH ENGINE
+// ============================================================================
+
 let authMode = "login";
 
-document.getElementById("mode-login").onclick = () => setMode("login");
-document.getElementById("mode-signup").onclick = () => setMode("signup");
+const emailEl = document.getElementById("auth-email");
+const passEl = document.getElementById("auth-password");
+const campEl = document.getElementById("camp-name-input");
+const statusEl = document.getElementById("auth-status");
+const beginBtn = document.getElementById("begin-btn");
+const loginBtn = document.getElementById("mode-login");
+const signupBtn = document.getElementById("mode-signup");
+
+// Toggle modes
+loginBtn.onclick = () => setMode("login");
+signupBtn.onclick = () => setMode("signup");
 
 function setMode(mode) {
   authMode = mode;
-  document.getElementById("mode-login").classList.toggle("active", mode === "login");
-  document.getElementById("mode-signup").classList.toggle("active", mode === "signup");
-  document.getElementById("camp-name-input").style.display = mode === "signup" ? "block" : "none";
-  document.getElementById("begin-btn").innerText = mode === "signup" ? "Create Campistry Account" : "Sign In";
+  loginBtn.classList.toggle("active", mode === "login");
+  signupBtn.classList.toggle("active", mode === "signup");
+  campEl.style.display = mode === "signup" ? "block" : "none";
+  beginBtn.innerText = mode === "signup" ? "Create Campistry Account" : "Sign In";
 }
 
-document.getElementById("begin-btn").onclick = async () => {
-  const email = auth-email.value.trim();
-  const password = auth-password.value.trim();
-  const campName = camp-name-input.value.trim();
-  const status = auth-status;
+// Default state
+setMode("login");
+
+// Main submit
+beginBtn.onclick = async () => {
+  const email = emailEl.value.trim();
+  const password = passEl.value.trim();
+  const campName = campEl.value.trim();
 
   if (!email || !password || (authMode === "signup" && !campName)) {
-    status.innerText = "Please complete all fields.";
+    statusEl.innerText = "Please complete all fields.";
     return;
   }
 
@@ -27,14 +43,16 @@ document.getElementById("begin-btn").onclick = async () => {
   if (authMode === "signup") {
     const signup = await supabase.auth.signUp({ email, password });
     user = signup.data.user;
-    await supabase.from("camps").insert([{ name: campName, owner: user.id }]);
+    if (user) {
+      await supabase.from("camps").insert([{ name: campName, owner: user.id }]);
+    }
   } else {
     const login = await supabase.auth.signInWithPassword({ email, password });
     user = login.data.user;
   }
 
   if (!user) {
-    status.innerText = "Authentication failed.";
+    statusEl.innerText = "Authentication failed.";
     return;
   }
 
