@@ -1,25 +1,33 @@
 // =================================================================
 // global_bootstrap.js — Campistry OS Boot Gate
-// Ensures identity loads BEFORE any UI or scheduler code runs
+// FIXED VERSION: Simplified synchronous boot
 // =================================================================
 (function () {
   'use strict';
 
   window.__CAMPISTRY_READY__ = false;
 
-  async function hydrate() {
-    // wait for auth
-    while (!window.supabase || !window.supabase.auth) {
-      await new Promise(r => setTimeout(r, 30));
+  function hydrate() {
+    try {
+      // Initialize the global registry (loads from localStorage)
+      const divisions = window.getGlobalDivisions?.() || {};
+      const bunks = window.getGlobalBunks?.() || [];
+      
+      console.log("📦 Boot data:", {
+        divisions: Object.keys(divisions).length,
+        bunks: bunks.length
+      });
+
+      window.__CAMPISTRY_READY__ = true;
+      console.log("🧠 Campistry identity spine hydrated.");
+      
+    } catch (e) {
+      console.error("Boot hydration failed:", e);
+      window.__CAMPISTRY_READY__ = true;
     }
-
-    // force-load identity registry
-    window.getGlobalDivisions();
-    window.getGlobalBunks();
-
-    window.__CAMPISTRY_READY__ = true;
-    console.warn("🧠 Campistry identity spine hydrated.");
   }
 
+  // Run immediately
   hydrate();
+
 })();
