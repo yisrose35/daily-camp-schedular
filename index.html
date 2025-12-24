@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,9 +10,6 @@
 
 <body>
 
-<!-- =============================================================== -->
-<!-- CAMPISTRY AUTH PORTAL -->
-<!-- =============================================================== -->
 <div id="welcome-screen" class="campistry-welcome">
 
     <img
@@ -25,18 +21,15 @@
     <h2 class="welcome-title">Welcome to Campistry</h2>
     <p class="welcome-sub">Sign in or create your Campistry account.</p>
 
-    <!-- MODE TOGGLE -->
     <div class="welcome-toggle">
         <button id="mode-login" class="welcome-toggle-btn active">Sign In</button>
         <button id="mode-signup" class="welcome-toggle-btn">Create Account</button>
     </div>
 
-    <!-- FIELDS -->
     <input type="email" id="auth-email" placeholder="Email" class="welcome-input"/>
     <input type="password" id="auth-password" placeholder="Password" class="welcome-input"/>
     <input type="text" id="camp-name-input" placeholder="Camp Name" class="welcome-input"/>
 
-    <!-- ACTION -->
     <button id="begin-btn" class="welcome-primary-btn">Sign In</button>
 
     <div id="auth-status" class="welcome-status"></div>
@@ -45,16 +38,14 @@
 
 
 
-        <!-- =========================================================== -->
-        <!-- APP MAIN LAYOUT -->
-        <!-- =========================================================== -->
-       <div id="main-app-container" style="display:none;">
-<div class="app-main">
 
+        <div id="main-app-container" style="display:none;">
+        <div class="app-main">
 
-            <!-- ======================================================= -->
-            <!-- SIDEBAR NAVIGATION -->
-            <!-- ======================================================= -->
+            <button id="hamburgerBtn" class="hamburger-btn" aria-label="Open Menu">
+                ☰
+            </button>
+
             <aside id="sidebar" class="sidebar">
                 <nav class="sidebar-nav">
                     <div class="sidebar-label">Configuration</div>
@@ -117,25 +108,17 @@
                 </nav>
             </aside>
 
-            <!-- BACKDROP (Mobile) -->
             <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
 
 
 
-            <!-- ======================================================= -->
-            <!-- MAIN CONTENT -->
-            <!-- ======================================================= -->
             <main class="app-content">
                 <h1 class="app-page-title">🏕️ Camp Scheduler</h1>
 
 
-                <!-- =================================================== -->
-                <!-- SETUP TAB -->
-                <!-- =================================================== -->
                 <div id="setup" class="tab-content active">
                     <div class="setup-grid">
 
-                        <!-- Intro Card -->
                         <section class="setup-card setup-card-wide">
                             <div class="setup-card-header">
                                 <div class="setup-step-pill setup-step-pill-muted">Setup</div>
@@ -150,7 +133,6 @@
                         </section>
 
 
-                        <!-- Left Panel: Divisions -->
                         <section class="setup-card">
                             <div class="setup-card-header">
                                 <div class="setup-step-pill">Step 1</div>
@@ -176,7 +158,6 @@
 
 
 
-                        <!-- Right Panel: Division Details -->
                         <section class="setup-card">
                             <div class="setup-card-header">
                                 <div class="setup-step-pill">Step 2</div>
@@ -200,7 +181,6 @@
 
 
 
-                        <!-- Tools & Maintenance -->
                         <section class="setup-card setup-card-wide">
                             <div class="setup-card-header">
                                 <div class="setup-step-pill setup-step-pill-muted">Tools</div>
@@ -210,7 +190,6 @@
                                 </div>
                             </div>
 
-                            <!-- Clear History -->
                             <div class="setup-group">
                                 <h4>Clear Schedules & History</h4>
                                 <p class="setup-group-help">
@@ -247,7 +226,6 @@
                                 </div>
                             </div>
 
-                            <!-- Backup -->
                             <div class="setup-group">
                                 <h4>Backup & Restore</h4>
                                 <p class="setup-group-help">Download or upload full application data.</p>
@@ -279,7 +257,6 @@
                                 </div>
                             </div>
 
-                            <!-- Full Wipe -->
                             <div class="setup-group setup-group-danger">
                                 <h4>Erase All Data</h4>
                                 <p class="setup-group-help">⚠️ This resets EVERYTHING – setup + schedules.</p>
@@ -295,13 +272,6 @@
 
                     </div>
                 </div>
-                <!-- /setup -->
-
-
-
-                <!-- ======================================================= -->
-                <!-- OTHER TABS -->
-                <!-- ======================================================= -->
                 <div id="locations" class="tab-content"></div>
                 <div id="fields" class="tab-content"></div>
                 <div id="special_activities" class="tab-content"></div>
@@ -335,29 +305,14 @@
                 <div id="helper" class="tab-content"><div id="helper-content"></div></div>
 
             </main>
-            <!-- /app-content -->
-
+            </div>
         </div>
-        <!-- /app-main -->
-
     </div>
-    <!-- /app-shell -->
-</div>
-<!-- /main-app-container -->
-
-
-
-<!-- =============================================================== -->
-<!-- SCRIPT LOADING (ORDER MATTERS) -->
-<!-- =============================================================== -->
-
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="supabase_client.js"></script>
 
 <script src="global_authority.js"></script>
-<script src="global_bootstrap.js"></script>   <!-- waits for identity -->
-
-<script src="campistry_auth.js"></script>
+<script src="global_bootstrap.js"></script>   <script src="campistry_auth.js"></script>
 
 <script src="welcome.js"></script>
 <script src="calendar.js"></script>
@@ -392,9 +347,6 @@
 
 
 
-<!-- =============================================================== -->
-<!-- TAB NAVIGATION & SIDEBAR HANDLING -->
-<!-- =============================================================== -->
 <script>
 /* TAB SWITCHING */
 function showTab(id) {
