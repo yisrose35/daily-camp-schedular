@@ -7,6 +7,12 @@
 // ✓ No longer relies on "scanning bunks" for league data.
 // ✓ Guarantees the UI shows exactly what the League Generator created.
 // ============================================================================
+(function waitForCampistry() {
+  if (!window.__CAMPISTRY_READY__) {
+    setTimeout(waitForCampistry, 50);
+    return;
+  }
+})();
 
 (function () {
   "use strict";
