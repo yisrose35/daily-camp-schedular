@@ -1,15 +1,8 @@
-
 // =================================================================
 // calendar.js
 //
-// --- UPDATED (Smart Logic Reset) ---
-// - eraseRotationHistory now clears ALL rotation systems:
-//   1. Regular Rotation History → campRotationHistory_v1
-//   2. Legacy Smart Tile History → smartTileHistory_v1
-//   3. NEW Smart Tile Special History → smartTileSpecialHistory_v1
-//   4. Manual Usage Offsets (Analytics)
-//
-// This guarantees SmartLogicAdapter V31 starts fresh.
+// FIXED VERSION - Backup/Restore now syncs with global_authority.js
+// which uses the campistry_global_registry key for divisions/bunks
 // =================================================================
 
 (function() {
@@ -22,6 +15,9 @@
     const DAILY_DATA_KEY = "campDailyData_v1";
     const ROTATION_HISTORY_KEY = "campRotationHistory_v1";
     const AUTO_SAVE_KEY = "campAutoSave_v1";
+
+    // ⭐ NEW: Global Authority key (divisions/bunks spine)
+    const GLOBAL_REGISTRY_KEY = "campistry_global_registry";
 
     // legacy smart tile history (old versions)
     const SMART_TILE_HISTORY_KEY = "smartTileHistory_v1";
@@ -229,6 +225,9 @@
             localStorage.removeItem(SMART_TILE_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
 
+            // ⭐ Also clear global authority registry
+            localStorage.removeItem(GLOBAL_REGISTRY_KEY);
+
             localStorage.removeItem("campSchedulerData");
             localStorage.removeItem("fixedActivities_v2");
             localStorage.removeItem("leagues");
@@ -266,14 +265,31 @@
     };
 
     // ==========================================================
-    // 8. BACKUP / RESTORE
+    // 8. BACKUP / RESTORE (⭐ FIXED for global_authority.js)
     // ==========================================================
     function exportAllData() {
         try {
+            // ⭐ Include the global registry (divisions/bunks spine)
+            let globalRegistry = {};
+            try {
+                const regRaw = localStorage.getItem(GLOBAL_REGISTRY_KEY);
+                globalRegistry = regRaw ? JSON.parse(regRaw) : {};
+            } catch (e) {
+                console.warn("Could not load global registry:", e);
+            }
+
             const backup = {
+                // Standard keys
                 globalSettings: JSON.parse(localStorage.getItem(GLOBAL_SETTINGS_KEY) || "{}"),
                 dailyData: JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || "{}"),
-                rotationHistory: JSON.parse(localStorage.getItem(ROTATION_HISTORY_KEY) || "{}")
+                rotationHistory: JSON.parse(localStorage.getItem(ROTATION_HISTORY_KEY) || "{}"),
+                
+                // ⭐ NEW: Global Authority registry (divisions/bunks)
+                globalRegistry: globalRegistry,
+                
+                // Metadata
+                exportVersion: 2,
+                exportDate: new Date().toISOString()
             };
 
             const json = JSON.stringify(backup, null, 2);
@@ -288,6 +304,8 @@
             a.click();
 
             URL.revokeObjectURL(url);
+
+            console.log("✓ Export complete. Includes global registry:", Object.keys(globalRegistry));
 
         } catch (e) {
             console.error("Export error:", e);
@@ -309,19 +327,40 @@
             try {
                 const backup = JSON.parse(evt.target.result);
 
+                // Restore standard keys
                 localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(backup.globalSettings || {}));
                 localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(backup.dailyData || {}));
                 localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify(backup.rotationHistory || {}));
+
+                // ⭐ NEW: Restore global registry if present (v2 exports)
+                if (backup.globalRegistry) {
+                    localStorage.setItem(GLOBAL_REGISTRY_KEY, JSON.stringify(backup.globalRegistry));
+                    console.log("✓ Restored global registry (divisions/bunks)");
+                } else {
+                    // ⭐ FALLBACK: For old backups, extract divisions/bunks from globalSettings.app1
+                    const app1 = backup.globalSettings?.app1;
+                    if (app1 && (app1.divisions || app1.bunks)) {
+                        const registry = {
+                            divisions: app1.divisions || {},
+                            bunks: app1.bunks || []
+                        };
+                        localStorage.setItem(GLOBAL_REGISTRY_KEY, JSON.stringify(registry));
+                        console.log("✓ Migrated divisions/bunks from old backup format");
+                    }
+                }
 
                 alert("Import successful. Reloading...");
                 window.location.reload();
 
             } catch (err) {
                 console.error("Import failed:", err);
-                alert("Invalid backup file.");
+                alert("Invalid backup file. Error: " + err.message);
             }
         };
         reader.readAsText(file);
+
+        // Reset file input so same file can be selected again
+        e.target.value = "";
     }
 
     // ==========================================================
@@ -333,7 +372,9 @@
                 timestamp: Date.now(),
                 [GLOBAL_SETTINGS_KEY]: localStorage.getItem(GLOBAL_SETTINGS_KEY),
                 [DAILY_DATA_KEY]: localStorage.getItem(DAILY_DATA_KEY),
-                [ROTATION_HISTORY_KEY]: localStorage.getItem(ROTATION_HISTORY_KEY)
+                [ROTATION_HISTORY_KEY]: localStorage.getItem(ROTATION_HISTORY_KEY),
+                // ⭐ Also save global registry
+                [GLOBAL_REGISTRY_KEY]: localStorage.getItem(GLOBAL_REGISTRY_KEY)
             };
 
             localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(snapshot));
@@ -363,6 +404,11 @@
             localStorage.setItem(GLOBAL_SETTINGS_KEY, snap[GLOBAL_SETTINGS_KEY]);
             localStorage.setItem(DAILY_DATA_KEY, snap[DAILY_DATA_KEY]);
             localStorage.setItem(ROTATION_HISTORY_KEY, snap[ROTATION_HISTORY_KEY]);
+            
+            // ⭐ Also restore global registry if present
+            if (snap[GLOBAL_REGISTRY_KEY]) {
+                localStorage.setItem(GLOBAL_REGISTRY_KEY, snap[GLOBAL_REGISTRY_KEY]);
+            }
 
             alert("Auto-save restored. Reloading...");
             window.location.reload();
@@ -395,18 +441,38 @@
         const importBtn = document.getElementById("importBackupBtn");
         const importInput = document.getElementById("importFileInput");
 
-        if (exportBtn) exportBtn.addEventListener("click", exportAllData);
+        if (exportBtn) {
+            exportBtn.addEventListener("click", exportAllData);
+            console.log("✓ Export button wired up");
+        }
+        
         if (importBtn && importInput) {
-            importBtn.addEventListener("click", () => importInput.click());
+            importBtn.addEventListener("click", () => {
+                console.log("Import button clicked, opening file dialog...");
+                importInput.click();
+            });
             importInput.addEventListener("change", handleFileSelect);
+            console.log("✓ Import button wired up");
+        } else {
+            console.warn("Import button or input not found:", { importBtn, importInput });
         }
 
         startAutoSaveTimer();
+        
+        console.log("🗓️ Calendar initialized");
     }
 
     window.initCalendar = initCalendar;
 
     // Load day immediately
     window.loadCurrentDailyData();
+
+    // ⭐ Auto-init on DOMContentLoaded if not already initialized
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initCalendar);
+    } else {
+        // DOM already ready, init now
+        initCalendar();
+    }
 
 })();
