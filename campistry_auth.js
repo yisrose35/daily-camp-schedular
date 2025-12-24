@@ -10,21 +10,25 @@ document.getElementById("begin-btn").onclick = async function () {
     return;
   }
 
-  let { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  // Try signup FIRST (Supabase SaaS pattern)
+  let { data, error } = await supabase.auth.signUp({ email, password });
 
-  if (error) {
-    const signup = await supabase.auth.signUp({ email, password });
-    data = signup.data;
+  // If already exists, then login
+  if (!data.user) {
+    const login = await supabase.auth.signInWithPassword({ email, password });
+    data = login.data;
   }
 
   const user = data?.user;
   if (!user) {
-    status.innerText = "Login failed.";
+    status.innerText = "Authentication failed.";
     return;
   }
 
+  // Ensure camp exists
   await supabase.from("camps").upsert([{ name: campName, owner: user.id }]);
 
+  // Enter Campistry OS
   document.getElementById("welcome-screen").style.display = "none";
   document.getElementById("main-app-container").style.display = "block";
 };
