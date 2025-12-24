@@ -1,48 +1,79 @@
 // =================================================================
 // global_authority.js — CAMPISTRY GLOBAL AUTHORITY SPINE
-// This file restores Divisions & Bunks as first-class Supabase entities
+// FIXED VERSION: Uses localStorage (the original used non-existent supabaseGlobal API)
 // =================================================================
 (function () {
   'use strict';
 
   const AUTH_KEY = "campistry_global_registry";
+  
+  // Internal state cache
+  let _cache = null;
 
+  // ===================================================================
+  // STORAGE LAYER (localStorage with future Supabase sync)
+  // ===================================================================
   function loadRegistry() {
     try {
-      return window.supabaseGlobal?.get(AUTH_KEY) || {
-        divisions: [],
-        bunks: []
-      };
-    } catch {
-      return { divisions: [], bunks: [] };
+      // Check cache first
+      if (_cache) return _cache;
+      
+      // Load from localStorage
+      const stored = localStorage.getItem(AUTH_KEY);
+      _cache = stored ? JSON.parse(stored) : { divisions: {}, bunks: [] };
+      
+      // Ensure proper structure
+      if (!_cache.divisions) _cache.divisions = {};
+      if (!_cache.bunks) _cache.bunks = [];
+      
+      return _cache;
+    } catch (e) {
+      console.error("Failed to load registry:", e);
+      return { divisions: {}, bunks: [] };
     }
   }
 
   function saveRegistry(reg) {
-    window.supabaseGlobal?.set(AUTH_KEY, reg);
+    try {
+      _cache = reg;
+      localStorage.setItem(AUTH_KEY, JSON.stringify(reg));
+    } catch (e) {
+      console.error("Failed to save registry:", e);
+    }
   }
 
-  // =======================
+  // ===================================================================
   // PUBLIC AUTHORITY API
-  // =======================
+  // ===================================================================
+  
   window.getGlobalDivisions = function () {
-    return loadRegistry().divisions || [];
+    const reg = loadRegistry();
+    return reg.divisions || {};
   };
 
   window.getGlobalBunks = function () {
-    return loadRegistry().bunks || [];
+    const reg = loadRegistry();
+    return reg.bunks || [];
   };
 
   window.setGlobalDivisions = function (divs) {
-    const r = loadRegistry();
-    r.divisions = structuredClone(divs);
-    saveRegistry(r);
+    const reg = loadRegistry();
+    reg.divisions = structuredClone(divs || {});
+    saveRegistry(reg);
+    console.log("✓ Divisions saved:", Object.keys(reg.divisions).length);
   };
 
   window.setGlobalBunks = function (bunks) {
-    const r = loadRegistry();
-    r.bunks = structuredClone(bunks);
-    saveRegistry(r);
+    const reg = loadRegistry();
+    reg.bunks = structuredClone(bunks || []);
+    saveRegistry(reg);
+    console.log("✓ Bunks saved:", reg.bunks.length);
   };
+
+  // ===================================================================
+  // INITIALIZATION
+  // ===================================================================
+  console.log("🧠 Global Authority initialized");
+  loadRegistry();
 
 })();
