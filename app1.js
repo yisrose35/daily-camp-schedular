@@ -11,6 +11,11 @@
 (function () {
 "use strict";
 
+function syncSpine() {
+  window.setGlobalDivisions?.(structuredClone(divisions));
+  window.setGlobalBunks?.(structuredClone(bunks));
+}
+
 // -------------------- State --------------------
 let bunks = [];
 let divisions = {};
@@ -691,6 +696,7 @@ function addBunkToDivision(divName, bunkName) {
     if (!cleanDiv || !cleanBunk) return;
 
     if (!bunks.includes(cleanBunk)) bunks.push(cleanBunk);
+    syncSpine();
 
     const div = divisions[cleanDiv];
 
@@ -732,8 +738,7 @@ function addDivision() {
         endTime: ""
     };
 
-    window.setGlobalDivisions(divisions);
-    window.setGlobalBunks(bunks);
+    syncSpine();
 
     selectedDivision = name;
     i.value = "";
@@ -855,6 +860,7 @@ function renderDivisionDetailPane() {
         if (!confirm(`Delete division "${selectedDivision}"?`)) return;
 
         delete divisions[selectedDivision];
+        syncSpine();
 
         const idx = availableDivisions.indexOf(selectedDivision);
         if (idx !== -1) availableDivisions.splice(idx, 1);
@@ -1099,6 +1105,7 @@ function renderDivisionDetailPane() {
                     const idx = divObj.bunks.indexOf(bName);
                     if (idx !== -1) {
                         divObj.bunks.splice(idx, 1);
+                        syncSpine();
                         saveData();
                         renderDivisionDetailPane();
                         window.updateTable?.();
