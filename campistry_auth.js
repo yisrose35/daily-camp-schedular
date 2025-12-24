@@ -1,3 +1,8 @@
+// ============================================================================
+// campistry_auth.js — CAMPISTRY SAAS AUTH ENGINE (FINAL)
+// Handles signup + login + camp creation safely and deterministically
+// ============================================================================
+
 document.getElementById("begin-btn").onclick = async function () {
 
   const email = document.getElementById("auth-email").value.trim();
@@ -10,11 +15,11 @@ document.getElementById("begin-btn").onclick = async function () {
     return;
   }
 
-  // Try signup FIRST (Supabase SaaS pattern)
-  let { data, error } = await supabase.auth.signUp({ email, password });
+  // Try signup first (Supabase SaaS flow)
+  let { data } = await supabase.auth.signUp({ email, password });
 
-  // If already exists, then login
-  if (!data.user) {
+  // If already exists, login instead
+  if (!data?.user) {
     const login = await supabase.auth.signInWithPassword({ email, password });
     data = login.data;
   }
@@ -25,7 +30,7 @@ document.getElementById("begin-btn").onclick = async function () {
     return;
   }
 
-  // Ensure camp exists
+  // Ensure cloud camp exists
   await supabase.from("camps").upsert([{ name: campName, owner: user.id }]);
 
   // Enter Campistry OS
