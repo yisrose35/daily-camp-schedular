@@ -1,7 +1,7 @@
 
 // =================================================================
 // master_schedule_builder.js (FIXED & TIMELINE INTEGRATED)
-//
+//Published
 // Updates:
 // 1. Fixed Grid Rendering (Prevents "Just Words" glitch).
 // 2. Added Timeline Gatekeeper to Drag-and-Drop.
