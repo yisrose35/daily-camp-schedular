@@ -1175,12 +1175,6 @@ function init() {
       .conflict-warn, .conflict-critical { border:2px solid #dc2626 !important; background:#fef2f2 !important; box-shadow:0 0 0 2px rgba(220,38,38,0.2), 0 2px 8px rgba(220,38,38,0.15) !important; }
       .conflict-notice, .conflict-warning { border:2px solid #f59e0b !important; background:#fffbeb !important; box-shadow:0 0 0 2px rgba(245,158,11,0.2), 0 2px 8px rgba(245,158,11,0.15) !important; }
       
-      .da-tab-btn { flex:1; padding:8px 12px; border:1px solid #d1d5db; background:#fff; border-radius:999px; cursor:pointer; font-size:0.85rem; font-weight:500; color:#4b5563; transition:background 0.15s, color 0.15s, border-color 0.15s; }
-      .da-tab-btn:hover { background:#f3f4f6; border-color:#9ca3af; }
-      .da-tab-btn.active { background:#2563eb; color:#fff; border-color:#2563eb; }
-      .da-pane { display:none; }
-      .da-pane.active { display:block; }
-      
       /* RAINY DAY MODE STYLES */
       .rainy-day-card { border-radius: 16px; overflow: hidden; margin-bottom: 20px; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); position: relative; }
       .rainy-day-card.inactive { background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border: 1px solid #e2e8f0; }
@@ -1258,29 +1252,29 @@ function init() {
     <!-- RAINY DAY MODE TOGGLE -->
     <div id="rainy-day-container">${renderRainyDayToggle()}</div>
     
-    <div style="display:flex;gap:5px;margin-bottom:15px;">
-      <button class="da-tab-btn active" data-tab="skeleton">Skeleton</button>
-      <button class="da-tab-btn" data-tab="trips">Trips</button>
-      <button class="da-tab-btn" data-tab="bunk-specific">Bunk Specific</button>
-      <button class="da-tab-btn" data-tab="resources">Resources</button>
+    <div class="da-tabs-nav league-nav">
+      <button class="tab-button active" data-tab="skeleton">Skeleton</button>
+      <button class="tab-button" data-tab="trips">Trips</button>
+      <button class="tab-button" data-tab="bunk-specific">Bunk Specific</button>
+      <button class="tab-button" data-tab="resources">Resources</button>
     </div>
-    <div id="da-pane-skeleton" class="da-pane active"></div>
-    <div id="da-pane-trips" class="da-pane" style="display:none;"></div>
-    <div id="da-pane-bunk-specific" class="da-pane" style="display:none;"></div>
-    <div id="da-pane-resources" class="da-pane" style="display:none;"></div>
+    <div id="da-pane-skeleton" class="da-tab-pane league-content-pane active"></div>
+    <div id="da-pane-trips" class="da-tab-pane league-content-pane"></div>
+    <div id="da-pane-bunk-specific" class="da-tab-pane league-content-pane"></div>
+    <div id="da-pane-resources" class="da-tab-pane league-content-pane"></div>
   `;
 
   document.getElementById("run-optimizer-btn").onclick = runOptimizer;
   bindRainyDayToggle();
   
-  container.querySelectorAll('.da-tab-btn').forEach(btn => {
+  container.querySelectorAll('.da-tabs-nav .tab-button').forEach(btn => {
     btn.onclick = () => {
       activeSubTab = btn.dataset.tab;
-      container.querySelectorAll('.da-tab-btn').forEach(b => b.classList.remove('active'));
+      container.querySelectorAll('.da-tabs-nav .tab-button').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      container.querySelectorAll('.da-pane').forEach(p => { p.style.display = 'none'; p.classList.remove('active'); });
+      container.querySelectorAll('.da-tab-pane').forEach(p => p.classList.remove('active'));
       const pane = container.querySelector('#da-pane-' + activeSubTab);
-      if (pane) { pane.style.display = 'block'; pane.classList.add('active'); }
+      if (pane) { pane.classList.add('active'); }
     };
   });
   
@@ -1405,7 +1399,7 @@ function renderTripsForm() {
     dailyOverrideSkeleton.push(newEvent);
     saveDailySkeleton();
     renderGrid(document.getElementById("daily-skeleton-grid"));
-    container.querySelector('.da-tab-btn[data-tab="skeleton"]').click();
+    container.querySelector('.tab-button[data-tab="skeleton"]').click();
     alert("Trip added!");
     document.getElementById("trip-name-input").value = "";
     document.getElementById("trip-start-input").value = "";
