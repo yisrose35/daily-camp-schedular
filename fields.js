@@ -1,698 +1,1202 @@
-
-
-// =================================================================
-// fields.js
-//
-// UPDATED: Added Transition, Buffer Occupancy, Zone, and Min Duration.
-// =================================================================
-
-(function() {
+// ============================================================================
+// fields.js — MERGED: NEW UX + SPORT PLAYER REQS + RAINY DAY AVAILABILITY
+// ============================================================================
+// 1. Layout: Apple-inspired Two-Pane with Collapsible Detail Sections.
+// 2. Logic: Retains all Transition, Sharing, Priority, and Sport logic.
+// 3. Fix: Access & Restrictions toggle stays open and updates locally.
+// 4. Feat: Sport Player Requirements section.
+// 5. NEW: Weather & Availability (Rainy Day Mode configuration).
+// ============================================================================
+(function(){
 'use strict';
+console.log("🏟️ fields.js loaded");
 
 let fields = [];
-let selectedItemId = null; // e.g., "field-Court 1"
-
+let selectedItemId = null;
 let fieldsListEl = null;
 let detailPaneEl = null;
 let addFieldInput = null;
 
-/**
- * Main entry point, called by index.html
- */
-function initFieldsTab() {
+// Sport metadata (min/max players) - synced with app1.js sportMetaData
+let sportMetaData = {};
+
+//------------------------------------------------------------------
+// INIT
+//------------------------------------------------------------------
+function initFieldsTab(){
     const container = document.getElementById("fields");
-    if (!container) return;
+    if(!container) return;
     
     loadData();
-
-    container.innerHTML = `
-        <div class="setup-grid">
-            <section class="setup-card setup-card-wide">
-                <div class="setup-card-header">
-                    <span class="setup-step-pill">Fields</span>
-                    <div class="setup-card-text">
-                        <h3>Manage Fields &amp; Activities</h3>
-                        <p>
-                            Add your courts, fields, and facilities. Then choose
-                            which <strong>sports</strong> they host, who can use them,
-                            and any <strong>time rules</strong> they follow.
-                        </p>
-                    </div>
-                </div>
-
-                <div style="display:flex; flex-wrap:wrap; gap:20px; margin-top:8px;">
-                    <!-- LEFT: Fields list + add -->
-                    <div style="flex:1; min-width:260px;">
-                        <div class="setup-subtitle">All Fields</div>
-                        <p style="font-size:0.8rem; color:#6b7280; margin-top:4px;">
-                            Click a field to open its settings. Toggle availability or rename
-                            directly from this list. Everything saves automatically.
-                        </p>
-
-                        <div class="setup-field-row" style="margin-top:10px;">
-                            <input id="new-field-input"
-                                   placeholder="New Field (e.g., Court 1)">
-                            <button id="add-field-btn">Add Field</button>
-                        </div>
-
-                        <div id="fields-master-list" class="master-list"
-                             style="margin-top:10px; max-height:440px; overflow:auto;"></div>
-                    </div>
-
-                    <!-- RIGHT: Detail pane -->
-                    <div style="flex:1.3; min-width:320px;">
-                        <div class="setup-subtitle">Field Details</div>
-                        <div id="fields-detail-pane" class="detail-pane"
-                             style="margin-top:8px; min-height:360px;">
-                            <p class="muted">
-                                Select a field from the left to edit its details:
-                                <br>• Toggle if it’s <strong>available</strong> for scheduling
-                                <br>• Assign which <strong>sports</strong> can use it
-                                <br>• Control <strong>sharing &amp; restrictions</strong> by division
-                                <br>• Add <strong>time rules</strong> (e.g. mornings only)
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </section>
-        </div>
+    // Inject Styles for the new UI and the inner controls
+    const style = document.createElement('style');
+    style.innerHTML = `
+        /* New UX Styles */
+        .master-list { border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
+        .list-item { padding: 12px 14px; border-bottom: 1px solid #F3F4F6; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.15s; }
+        .list-item:last-child { border-bottom: none; }
+        .list-item:hover { background: #F9FAFB; }
+        .list-item.selected { background: #F0FDF4; border-left: 3px solid #10B981; }
+        .list-item-name { font-weight: 500; color: #1F2937; font-size: 0.9rem; }
+        .list-item-meta { font-size: 0.75rem; color: #6B7280; margin-left: 6px; }
+        /* Accordion / Collapsible Sections */
+        .detail-section { margin-bottom: 12px; border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
+        .detail-section-header { padding: 12px 16px; background: #F9FAFB; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; }
+        .detail-section-header:hover { background: #F3F4F6; }
+        .detail-section-title { font-size: 0.9rem; font-weight: 600; color: #111; }
+        .detail-section-summary { font-size: 0.8rem; color: #6B7280; margin-top: 2px; }
+        .detail-section-body { display: none; padding: 16px; border-top: 1px solid #E5E7EB; }
         
-        <style>
-            /* Master list container – Modern Pro Camp card shell */
-            .master-list {
-                border-radius: 18px;
-                border: 1px solid #E5E7EB;
-                background: #F7F9FA;
-                padding: 8px 6px;
-                box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
-            }
+        /* Inner Controls (Chips, Priority Lists) */
+        .chip { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; cursor: pointer; border: 1px solid #E5E7EB; margin-right: 4px; margin-bottom: 4px; transition: all 0.2s; }
+        .chip.active { background: #10B981; color: white; border-color: #10B981; box-shadow: 0 2px 5px rgba(16, 185, 129, 0.3); }
+        .chip.inactive { background: #F3F4F6; color: #374151; }
+        
+        .priority-list-item { display: flex; align-items: center; gap: 10px; padding: 8px; background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; margin-bottom: 6px; }
+        .priority-btn { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px solid #D1D5DB; border-radius: 4px; background: white; cursor: pointer; font-size: 0.8rem; }
+        .priority-btn:hover:not(:disabled) { border-color: #10B981; color: #10B981; }
+        .priority-btn:disabled { opacity: 0.4; cursor: default; }
+        .activity-button { padding: 6px 12px; border: 1px solid #E5E7EB; border-radius: 8px; background: white; cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }
+        .activity-button.active { background: #ECFDF5; color: #047857; border-color: #10B981; font-weight: 500; }
+        
+        /* Switch/Toggle */
+        .switch { position: relative; display: inline-block; width: 34px; height: 20px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #10B981; }
+        input:checked + .slider:before { transform: translateX(14px); }
+        /* Sport Rules Card */
+        .sport-rules-card {
+            border: 1px solid #E5E7EB;
+            border-radius: 16px;
+            padding: 20px;
+            background: linear-gradient(135deg, #F0FDF4 0%, #FFFFFF 100%);
+            margin-bottom: 24px;
+        }
+        .sport-rules-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            user-select: none;
+        }
+        .sport-rules-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #111827;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .sport-rules-badge {
+            background: #10B981;
+            color: white;
+            padding: 2px 10px;
+            border-radius: 999px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+        .sport-rule-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #F3F4F6;
+        }
+        .sport-rule-row:last-child {
+            border-bottom: none;
+        }
+        .sport-rule-name {
+            font-weight: 500;
+            color: #374151;
+            flex: 1;
+        }
+        .sport-rule-inputs {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .sport-rule-input-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .sport-rule-label {
+            font-size: 0.8rem;
+            color: #6B7280;
+        }
+        .sport-rule-input {
+            width: 60px;
+            padding: 6px 8px;
+            border: 1px solid #D1D5DB;
+            border-radius: 6px;
+            text-align: center;
+            font-size: 0.9rem;
+        }
+        .sport-rule-input:focus {
+            outline: none;
+            border-color: #10B981;
+            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+        }
+        .sport-rules-hint {
+            font-size: 0.85rem;
+            color: #6B7280;
+            margin-bottom: 16px;
+            padding: 12px;
+            background: #F9FAFB;
+            border-radius: 8px;
+            border-left: 3px solid #10B981;
+        }
+    `;
+    container.appendChild(style);
 
-            .master-list .list-item {
-                padding: 10px 10px;
-                border-radius: 14px;
-                margin-bottom: 6px;
-                cursor: pointer;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                background: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                box-shadow: 0 4px 10px rgba(15, 23, 42, 0.05);
-                transition:
-                    background 0.15s ease,
-                    box-shadow 0.15s ease,
-                    transform 0.08s ease,
-                    border-color 0.15s ease;
-            }
-            .master-list .list-item:hover {
-                background: #F3F4F6;
-                box-shadow: 0 8px 18px rgba(15, 23, 42, 0.10);
-                transform: translateY(-1px);
-            }
-            .master-list .list-item.selected {
-                background: radial-gradient(circle at top left, #ECFDF5 0, #FFFFFF 70%);
-                border-color: #00C896;
-                box-shadow: 0 0 0 1px rgba(0, 200, 150, 0.55);
-                font-weight: 600;
-            }
-            .master-list .list-item-name {
-                flex-grow: 1;
-                font-size: 0.88rem;
-                font-weight: 500;
-                color: #111827;
-            }
-            .master-list .list-item-toggle {
-                margin-left: 10px;
-            }
+    container.innerHTML += `
+        <div class="setup-grid">
+          <section class="setup-card setup-card-wide" style="border:none; box-shadow:none; background:transparent;">
+            <div class="setup-card-header" style="margin-bottom:20px;">
+              <span class="setup-step-pill">Fields</span>
+              <div class="setup-card-text">
+                <h3>Manage Fields & Facilities</h3>
+                <p>Configure courts, fields, capabilities, restriction rules, and sport player requirements.</p>
+              </div>
+            </div>
 
-            /* Detail pane – align with app1 detail pane theme */
-            .detail-pane {
-                border-radius: 18px;
-                border: 1px solid #E5E7EB;
-                padding: 18px 20px;
-                background: linear-gradient(135deg, #F7F9FA 0%, #FFFFFF 55%, #F7F9FA 100%);
-                min-height: 360px;
-                box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
-            }
+            <!-- SPORT PLAYER REQUIREMENTS SECTION -->
+            <div id="sport-rules-section"></div>
 
-            /* Field detail layout */
-            .field-detail-grid {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 18px;
-                margin-top: 12px;
-            }
-            .field-section-card {
-                flex: 1 1 260px;
-                border-radius: 16px;
-                border: 1px solid #E5E7EB;
-                background: #FFFFFF;
-                padding: 12px 14px;
-                box-shadow: 0 10px 22px rgba(15, 23, 42, 0.05);
-            }
-            .field-section-header {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                margin-bottom: 6px;
-                font-size: 0.78rem;
-                text-transform: uppercase;
-                letter-spacing: 0.06em;
-                color: #6B7280;
-            }
-            .field-section-title {
-                font-weight: 600;
-            }
-            .field-section-tag {
-                font-size: 0.7rem;
-                padding: 2px 8px;
-                border-radius: 999px;
-                background: #ECFDF5;
-                color: #047857;
-                font-weight: 500;
-                box-shadow: 0 3px 8px rgba(16, 185, 129, 0.35);
-            }
-            .field-section-help {
-                margin: 0 0 8px;
-                font-size: 0.78rem;
-                color: #6B7280;
-            }
+            <div style="display:flex; flex-wrap:wrap; gap:24px;">
+              <!-- LEFT SIDE: MASTER LIST -->
+              <div style="flex:1; min-width:280px;">
+                <div style="display:flex; justify-content:space-between; align-items:end; margin-bottom:8px;">
+                    <div class="setup-subtitle">All Fields</div>
+                </div>
+                
+                <div style="background:white; padding:10px; border-radius:12px; border:1px solid #E5E7EB; margin-bottom:12px; display:flex; gap:8px;">
+                  <input id="new-field-input" placeholder="New Field (e.g., Court 1)" style="flex:1; border:none; outline:none; font-size:0.9rem;">
+                  <button id="add-field-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
+                </div>
 
-            /* Priority list row styling */
-            .priority-list-item {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                padding: 6px 8px;
-                border-radius: 10px;
-                border: 1px solid #E5E7EB;
-                margin-bottom: 4px;
-                background: #F9FAFB;
-            }
-            .priority-controls button {
-                background: #FFFFFF;
-                border: 1px solid #CBD5E1;
-                border-radius: 8px;
-                padding: 2px 6px;
-                cursor: pointer;
-                font-size: 0.8rem;
-                box-shadow: 0 2px 5px rgba(15, 23, 42, 0.06);
-            }
-            .priority-controls button:hover:not(:disabled) {
-                border-color: #00C896;
-            }
-            .priority-controls button:disabled {
-                opacity: 0.4;
-                cursor: default;
-                box-shadow: none;
-            }
+                <div id="fields-master-list" class="master-list" style="max-height:600px; overflow-y:auto;"></div>
+              </div>
 
-            .muted {
-                color: #6B7280;
-                font-size: 0.86rem;
-            }
-        </style>
-        `;
-
+              <!-- RIGHT SIDE: DETAIL PANE -->
+              <div style="flex:1.4; min-width:340px;">
+                <div class="setup-subtitle">Field Configuration</div>
+                <div id="fields-detail-pane" style="margin-top:8px;"></div>
+              </div>
+            </div>
+          </section>
+        </div>`;
 
     fieldsListEl = document.getElementById("fields-master-list");
     detailPaneEl = document.getElementById("fields-detail-pane");
     addFieldInput = document.getElementById("new-field-input");
 
     document.getElementById("add-field-btn").onclick = addField;
-    addFieldInput.onkeyup = (e) => { if (e.key === "Enter") addField(); };
+    addFieldInput.onkeyup = function(e) { if(e.key === "Enter") addField(); };
 
+    renderSportRulesSection();
     renderMasterLists();
     renderDetailPane();
+    
+    console.log("🏟️ fields.js initialized");
 }
 
-function loadData() {
-    const app1Data = window.loadGlobalSettings?.().app1 || {};
-    fields = app1Data.fields || [];
-    
-    fields.forEach(f => {
+//------------------------------------------------------------------
+// DATA LOADING
+//------------------------------------------------------------------
+function loadData(){
+    const app1 = (window.loadGlobalSettings?.().app1) || {};
+    fields = app1.fields || [];
+    sportMetaData = app1.sportMetaData || {};
+
+    fields.forEach(function(f) {
         f.available = f.available !== false;
+        f.activities = f.activities || [];
         f.timeRules = f.timeRules || [];
-        f.sharableWith = f.sharableWith || { type: 'not_sharable', divisions: [] };
-        // Ensure default capacity is set if sharable
-        if (!f.sharableWith.capacity) f.sharableWith.capacity = 2;
+        f.sharableWith = f.sharableWith || { type:"not_sharable", divisions:[], capacity:2 };
+        if(!f.sharableWith.capacity) f.sharableWith.capacity = 2;
         
-        f.limitUsage = f.limitUsage || { enabled: false, divisions: {} };
-        f.preferences = f.preferences || { enabled: false, exclusive: false, list: [] };
-
-        // NEW: Transition fields
+        f.limitUsage = f.limitUsage || { enabled:false, divisions:{} };
+        f.preferences = f.preferences || { enabled:false, exclusive:false, list:[] };
+        
+        // Ensure Transition/Zone Logic exists
         f.transition = f.transition || {
-            preMin: 0,
-            postMin: 0,
-            label: "Travel",
-            zone: window.DEFAULT_ZONE_NAME,
-            occupiesField: false,
-            minDurationMin: 0 // Issue 1: Minimum Viable Duration
+            preMin:0,
+            postMin:0,
+            label:"Travel",
+            zone:window.DEFAULT_ZONE_NAME || "Default",
+            occupiesField:false,
+            minDurationMin:0
         };
+
+        // Rainy Day Default
+        f.rainyDayAvailable = f.rainyDayAvailable ?? false;
     });
 }
 
-function saveData() {
-    const app1Data = window.loadGlobalSettings?.().app1 || {};
-    app1Data.fields = fields;
-    window.saveGlobalSettings?.("app1", app1Data);
+function saveData(){
+    const settings = window.loadGlobalSettings?.() || {};
+    settings.app1 = settings.app1 || {};
+    settings.app1.fields = fields;
+    settings.app1.sportMetaData = sportMetaData;
+    window.saveGlobalSettings?.("app1", settings.app1);
 }
 
-function renderMasterLists() {
+//------------------------------------------------------------------
+// SPORT RULES SECTION (Dropdown/Collapsible)
+//------------------------------------------------------------------
+function renderSportRulesSection() {
+    const container = document.getElementById("sport-rules-section");
+    if (!container) return;
+
+    const allSports = window.getAllGlobalSports?.() || [];
+    
+    // Empty state handling
+    if (allSports.length === 0) {
+        container.innerHTML = 
+            '<div class="sport-rules-card">' +
+                '<div class="sport-rules-header">' +
+                    '<div class="sport-rules-title">⚡ Sports Rules</div>' +
+                '</div>' +
+                '<div class="sport-rules-body" style="display:block; padding-top:10px; text-align:center;">' +
+                    '<p class="muted" style="padding:10px;">No sports configured yet. Add sports to fields first.</p>' +
+                '</div>' +
+            '</div>';
+        return;
+    }
+
+    let sportsHTML = '';
+    const sortedSports = [...allSports].sort();
+    
+    sortedSports.forEach(function(sport) {
+        const meta = sportMetaData[sport] || {};
+        const minPlayers = meta.minPlayers || '';
+        const maxPlayers = meta.maxPlayers || '';
+        
+        sportsHTML += 
+            '<div class="sport-rule-row">' +
+                '<span class="sport-rule-name">' + sport + '</span>' +
+                '<div class="sport-rule-inputs">' +
+                    '<div class="sport-rule-input-group">' +
+                        '<span class="sport-rule-label">Min:</span>' +
+                        '<input type="number" class="sport-rule-input" data-sport="' + sport + '" data-type="min" value="' + minPlayers + '" placeholder="—" min="1">' +
+                    '</div>' +
+                    '<div class="sport-rule-input-group">' +
+                        '<span class="sport-rule-label">Max:</span>' +
+                        '<input type="number" class="sport-rule-input" data-sport="' + sport + '" data-type="max" value="' + maxPlayers + '" placeholder="∞" min="1">' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+    });
+
+    // Render the dropdown structure
+    container.innerHTML = 
+        '<div class="sport-rules-card">' +
+            '<div class="sport-rules-header" id="sport-rules-toggle">' +
+                '<div class="sport-rules-title">⚡ Sports Rules</div>' +
+                '<span id="sport-rules-caret" style="transform: rotate(0deg); transition: transform 0.2s; color:#6B7280;">' +
+                    '<svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>' +
+                '</span>' +
+            '</div>' +
+            '<div id="sport-rules-body" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid #E5E7EB;">' +
+                '<div class="sport-rules-hint">' +
+                    '<strong>How this works:</strong> Set minimum and maximum players for each sport. ' +
+                    'The scheduler will try to match bunks appropriately based on their sizes. ' +
+                    'If a bunk is too small, it may be paired with another bunk. ' +
+                    'If combined bunks are slightly over the max, the scheduler will still prefer a valid sport over "Free".' +
+                '</div>' +
+                '<div id="sport-rules-list">' + sportsHTML + '</div>' +
+                '<div style="margin-top:20px; text-align:right;">' +
+                    '<button id="save-sport-rules-btn" style="background:#10B981; color:white; border:none; padding:8px 24px; border-radius:999px; cursor:pointer; font-weight:600; font-size:0.9rem; box-shadow: 0 2px 5px rgba(16,185,129,0.3);">Save Rules</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+
+    // Toggle Logic
+    const toggleBtn = document.getElementById('sport-rules-toggle');
+    const bodyEl = document.getElementById('sport-rules-body');
+    const caretEl = document.getElementById('sport-rules-caret');
+    
+    toggleBtn.onclick = function() {
+        const isHidden = bodyEl.style.display === 'none';
+        bodyEl.style.display = isHidden ? 'block' : 'none';
+        caretEl.style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+    };
+
+    // Add event listeners for Inputs
+    container.querySelectorAll('.sport-rule-input').forEach(function(input) {
+        input.addEventListener('change', function() {
+            const sport = input.dataset.sport;
+            const type = input.dataset.type;
+            const val = parseInt(input.value) || null;
+            
+            if (!sportMetaData[sport]) sportMetaData[sport] = {};
+            
+            if (type === 'min') {
+                sportMetaData[sport].minPlayers = val;
+            } else if (type === 'max') {
+                sportMetaData[sport].maxPlayers = val;
+            }
+        });
+    });
+
+    // Save Button Logic
+    const saveBtn = document.getElementById('save-sport-rules-btn');
+    if(saveBtn) {
+        saveBtn.onclick = function(e) {
+            e.stopPropagation();
+            
+            container.querySelectorAll('.sport-rule-input').forEach(function(input) {
+                const sport = input.dataset.sport;
+                const type = input.dataset.type;
+                const val = parseInt(input.value) || null;
+                
+                if (!sportMetaData[sport]) sportMetaData[sport] = {};
+                
+                if (type === 'min') {
+                    sportMetaData[sport].minPlayers = val;
+                } else if (type === 'max') {
+                    sportMetaData[sport].maxPlayers = val;
+                }
+            });
+            
+            saveData();
+            
+            // Visual feedback
+            const originalText = saveBtn.textContent;
+            saveBtn.textContent = '✓ Saved!';
+            saveBtn.style.background = '#059669';
+            setTimeout(function() {
+                saveBtn.textContent = originalText;
+                saveBtn.style.background = '#10B981';
+            }, 1500);
+        };
+    }
+}
+
+//------------------------------------------------------------------
+// LEFT LIST
+//------------------------------------------------------------------
+function renderMasterLists(){
     fieldsListEl.innerHTML = "";
-
-    if (fields.length === 0) {
-        fieldsListEl.innerHTML = `<p class="muted">No fields created yet.</p>`;
+    if(fields.length === 0){
+        fieldsListEl.innerHTML = '<div style="padding:20px; text-align:center; color:#9CA3AF;">No fields created yet.</div>';
+        return;
     }
-    fields.forEach(item => {
-        fieldsListEl.appendChild(createMasterListItem('field', item));
-    });
+    fields.forEach(function(f) { fieldsListEl.appendChild(masterListItem(f)); });
 }
 
-function createMasterListItem(type, item) {
-    const el = document.createElement('div');
-    el.className = 'list-item';
-    const id = `${type}-${item.name}`;
-    if (id === selectedItemId) {
-        el.classList.add('selected');
+function masterListItem(item){
+    const id = "field-" + item.name;
+    const el = document.createElement("div");
+    el.className = "list-item" + (id === selectedItemId ? " selected" : "");
+    el.onclick = function(){ selectedItemId = id; renderMasterLists(); renderDetailPane(); };
+
+    const infoDiv = document.createElement("div");
+    
+    const name = document.createElement("div");
+    name.className = "list-item-name";
+    name.textContent = item.name;
+    
+    // Add meta info (Transition/Zone)
+    if(item.transition.preMin > 0 || item.transition.postMin > 0){
+        const meta = document.createElement("span");
+        meta.className = "list-item-meta";
+        meta.textContent = "(" + item.transition.preMin + "m / " + item.transition.postMin + "m)";
+        name.appendChild(meta);
     }
     
-    el.onclick = () => {
-        selectedItemId = id;
-        renderMasterLists(); 
-        renderDetailPane(); 
-    };
+    infoDiv.appendChild(name);
+    el.appendChild(infoDiv);
 
-    const nameEl = document.createElement('span');
-    nameEl.className = 'list-item-name';
-    nameEl.textContent = item.name;
-    
-    // Show Transition status
-    if (item.transition.preMin > 0 || item.transition.postMin > 0) {
-        const span = document.createElement('span');
-        span.textContent = ` (${item.transition.preMin}m / ${item.transition.postMin}m)`;
-        span.style.fontSize = '0.7rem';
-        span.style.color = '#047857';
-        span.style.fontWeight = 'normal';
-        nameEl.appendChild(span);
-    }
-
-    el.appendChild(nameEl);
-
-    const tog = document.createElement("label"); 
+    // Toggle Switch
+    const tog = document.createElement("label");
     tog.className = "switch list-item-toggle";
-    tog.title = "Available (Master)";
-    tog.onclick = (e) => e.stopPropagation(); 
+    tog.onclick = function(e) { e.stopPropagation(); };
     
-    const cb = document.createElement("input"); 
-    cb.type = "checkbox"; 
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
     cb.checked = item.available;
-    cb.onchange = (e) => { 
-        e.stopPropagation();
-        item.available = cb.checked; 
-        saveData(); 
-        renderDetailPane(); 
-    };
+    cb.onchange = function() { item.available = cb.checked; saveData(); renderDetailPane(); };
     
-    const sl = document.createElement("span"); 
-    sl.className = "slider";
-    
+    const slider = document.createElement("span"); 
+    slider.className = "slider";
     tog.appendChild(cb); 
-    tog.appendChild(sl);
+    tog.appendChild(slider);
     el.appendChild(tog);
 
     return el;
 }
 
-function renderDetailPane() {
-    if (!selectedItemId) {
-        detailPaneEl.innerHTML = `<p class="muted">Select a field from the left to edit its details.</p>`;
-        return;
+//------------------------------------------------------------------
+// RIGHT PANEL — APPLE STYLE COLLAPSIBLE SECTIONS
+//------------------------------------------------------------------
+function renderDetailPane(){
+    if(!selectedItemId){ 
+        detailPaneEl.innerHTML = 
+            '<div style="height:300px; display:flex; align-items:center; justify-content:center; color:#9CA3AF; border:1px dashed #E5E7EB; border-radius:12px;">' +
+                'Select a field to edit details' +
+            '</div>'; 
+        return; 
     }
 
-    const [type, name] = selectedItemId.split(/-(.+)/); 
-    const item = fields.find(f => f.name === name);
-
-    if (!item) {
-        selectedItemId = null;
-        detailPaneEl.innerHTML = `<p style="color: red;">Error: Could not find item. Please select another.</p>`;
-        return;
-    }
+    const parts = selectedItemId.split(/-(.+)/);
+    const name = parts[1];
+    const item = fields.find(function(f) { return f.name === name; });
     
+    if(!item){ 
+        detailPaneEl.innerHTML = '<p class="muted">Not found.</p>'; 
+        return; 
+    }
+
     const allSports = window.getAllGlobalSports?.() || [];
 
-    detailPaneEl.innerHTML = ""; 
-    
-    // --- TOP: Name & Delete ---
-    const header = document.createElement('div');
-    header.style.display = 'flex';
-    header.style.justifyContent = 'space-between';
-    header.style.alignItems = 'center';
-    header.style.borderBottom = '2px solid #E5E7EB';
-    header.style.paddingBottom = '10px';
-    header.style.marginBottom = '10px';
-    header.style.columnGap = '12px';
-    
-    const title = document.createElement('h3');
-    title.style.margin = '0';
-    title.style.fontSize = '1rem';
-    title.style.fontWeight = '600';
-    title.style.color = '#111827';
+    detailPaneEl.innerHTML = "";
+
+    // -- 1. HEADER (Title & Delete) --
+    const header = document.createElement("div");
+    header.style.display = "flex";
+    header.style.justifyContent = "space-between";
+    header.style.alignItems = "center";
+    header.style.marginBottom = "16px";
+
+    const title = document.createElement("h2");
     title.textContent = item.name;
-    makeEditable(title, newName => {
-        if (!newName.trim()) return;
-        item.name = newName;
-        selectedItemId = `${type}-${newName}`; 
-        saveData();
-        renderMasterLists(); 
-    });
+    title.style.margin = "0";
+    title.style.fontSize = "1.25rem";
+    title.title = "Double click to rename";
     
-    const deleteBtn = document.createElement('button');
-    deleteBtn.textContent = 'Delete';
-    deleteBtn.style.background = '#FFFFFF';
-    deleteBtn.style.color = '#DC2626';
-    deleteBtn.style.border = '1px solid #FECACA';
-    deleteBtn.style.padding = '6px 14px';
-    deleteBtn.style.borderRadius = '999px';
-    deleteBtn.style.cursor = 'pointer';
-    deleteBtn.style.fontWeight = '600';
-    deleteBtn.style.fontSize = '0.85rem';
-    deleteBtn.style.boxShadow = '0 4px 10px rgba(220,38,38,0.18)';
-    deleteBtn.onmouseenter = () => {
-        deleteBtn.style.background = '#FEE2E2';
-    };
-    deleteBtn.onmouseleave = () => {
-        deleteBtn.style.background = '#FFFFFF';
-    };
-    deleteBtn.onclick = () => {
-        if (confirm(`Are you sure you want to delete "${item.name}"?`)) {
-            fields = fields.filter(f => f.name !== item.name);
-            selectedItemId = null;
+    makeEditable(title, function(newName){
+        if(!newName.trim()) return;
+        item.name = newName;
+        selectedItemId = "field-" + newName;
+        saveData();
+        renderMasterLists();
+        renderDetailPane();
+    });
+
+    const delBtn = document.createElement("button");
+    delBtn.innerHTML = 
+        '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">' +
+            '<path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>' +
+        '</svg> Delete';
+    delBtn.style.color = "#DC2626";
+    delBtn.style.background = "#FEF2F2";
+    delBtn.style.border = "1px solid #FECACA";
+    delBtn.style.padding = "6px 12px";
+    delBtn.style.borderRadius = "6px";
+    delBtn.style.cursor = "pointer";
+    delBtn.style.display = "flex";
+    delBtn.style.gap = "6px";
+    delBtn.style.alignItems = "center";
+    
+    delBtn.onclick = function(){
+        if(confirm("Delete " + item.name + "?")){
+            fields = fields.filter(function(f) { return f !== item; });
             saveData();
+            selectedItemId = null;
             renderMasterLists();
             renderDetailPane();
         }
     };
+
     header.appendChild(title);
-    header.appendChild(deleteBtn);
+    header.appendChild(delBtn);
     detailPaneEl.appendChild(header);
+
+    // -- 2. AVAILABILITY STRIP --
+    const availability = document.createElement("div");
+    availability.style.padding = "12px";
+    availability.style.borderRadius = "8px";
+    availability.style.marginBottom = "20px";
+    availability.style.background = item.available ? "#ECFDF5" : "#FEF2F2";
+    availability.style.border = item.available ? "1px solid #A7F3D0" : "1px solid #FECACA";
+    availability.style.color = item.available ? "#065F46" : "#991B1B";
+    availability.style.fontSize = "0.9rem";
+    availability.style.display = "flex";
+    availability.style.justifyContent = "space-between";
+    availability.innerHTML = '<span>Field is <strong>' + (item.available ? 'AVAILABLE' : 'UNAVAILABLE') + '</strong></span> <span style="font-size:0.8rem; opacity:0.8;">Toggle in master list</span>';
+    detailPaneEl.appendChild(availability);
+
+    // -- 3. ACCORDION SECTIONS (Logic Wrappers) --
     
-    // --- GLOBAL AVAILABILITY STRIP ---
-    const masterToggle = document.createElement('div');
-    masterToggle.style.background = item.available ? '#ECFDF5' : '#FEF2F2';
-    masterToggle.style.padding = '8px 12px';
-    masterToggle.style.borderRadius = '12px';
-    masterToggle.style.marginBottom = '12px';
-    masterToggle.style.fontSize = '0.8rem';
-    masterToggle.style.display = 'flex';
-    masterToggle.style.justifyContent = 'space-between';
-    masterToggle.style.alignItems = 'center';
-    masterToggle.style.border = '1px solid ' + (item.available ? '#BBF7D0' : '#FECACA');
-    masterToggle.innerHTML = `
-        <span>
-            This field is currently 
-            <strong>${item.available ? 'AVAILABLE' : 'UNAVAILABLE'}</strong>
-            to the scheduler.
-        </span>
-        <span style="opacity:0.75;">(Toggle in the list on the left)</span>
-    `;
-    detailPaneEl.appendChild(masterToggle);
+    // Activities
+    detailPaneEl.appendChild(section("Activities", summaryActivities(item), 
+        function() { return renderActivities(item, allSports); }));
 
-    // --- MAIN DETAIL GRID (cards) ---
-    const detailGrid = document.createElement("div");
-    detailGrid.className = "field-detail-grid";
-    detailPaneEl.appendChild(detailGrid);
-    
-    const onSave = () => saveData();
-    const onRerender = () => renderDetailPane();
+    // Transition & Zones
+    detailPaneEl.appendChild(section("Transition & Zone Rules", summaryTransition(item), 
+        function() { return renderTransition(item); }));
 
-    // ========== CARD X: TRANSITION RULES (NEW) ==========
-    const transitionCard = document.createElement("div");
-    transitionCard.className = "field-section-card";
-    const transitionHeader = document.createElement("div");
-    transitionHeader.className = "field-section-header";
-    transitionHeader.innerHTML = `
-        <span class="field-section-title">Transition Rules</span>
-        <span class="field-section-tag">Travel & Setup</span>
-    `;
-    transitionCard.appendChild(transitionHeader);
+    // Access & Priority
+    detailPaneEl.appendChild(section("Access & Restrictions", summaryAccess(item), 
+        function() { return renderAccess(item); }));
 
-    const transitionHelp = document.createElement("p");
-    transitionHelp.className = "field-section-help";
-    transitionHelp.textContent = "Time buffers for travel or setup/cleanup. This time is added to the start/end of the block.";
-    transitionCard.appendChild(transitionHelp);
-    
-    // --- Transition Controls ---
-    const tControls = renderTransitionControls(item.transition, onSave, onRerender);
-    transitionCard.appendChild(tControls);
+    // Sharing Rules
+    detailPaneEl.appendChild(section("Sharing Rules", summarySharing(item), 
+        function() { return renderSharing(item); }));
 
-    detailGrid.appendChild(transitionCard);
-    
-    // ========== CARD 1: ACTIVITIES ==========
-    const actCard = document.createElement("div");
-    actCard.className = "field-section-card";
-    const actHeader = document.createElement("div");
-    actHeader.className = "field-section-header";
-    actHeader.innerHTML = `
-        <span class="field-section-title">Activities</span>
-        <span class="field-section-tag">What plays here?</span>
-    `;
-    actCard.appendChild(actHeader);
+    // Time Rules
+    detailPaneEl.appendChild(section("Time Rules", summaryTime(item), 
+        function() { return renderTimeRules(item); }));
 
-    const actHelp = document.createElement("p");
-    actHelp.className = "field-section-help";
-    actHelp.textContent = "Click a sport to toggle it ON/OFF for this field. Type a new sport and press Enter to add it globally.";
-    actCard.appendChild(actHelp);
-
-    const bw = document.createElement("div"); 
-    bw.style.marginTop = "4px";
-    bw.style.display = 'flex';
-    bw.style.flexWrap = 'wrap';
-    bw.style.gap = '5px';
-    
-    item.activities = item.activities || [];
-    allSports.forEach(act => {
-        const b = document.createElement("button"); 
-        b.textContent = act; 
-        b.className = "activity-button";
-        if (item.activities.includes(act)) b.classList.add("active");
-        b.onclick = () => {
-            if (item.activities.includes(act)) {
-                item.activities = item.activities.filter(a => a !== act);
-            } else {
-                item.activities.push(act);
-            }
-            saveData(); 
-            renderDetailPane(); 
-        };
-        bw.appendChild(b);
-    });
-    
-    const other = document.createElement("input");
-    other.placeholder = "Add new sport (Enter to save)";
-    other.style.marginTop = '6px';
-    other.style.width = '100%';
-    other.onkeyup = e => {
-        if (e.key === "Enter" && other.value.trim()) {
-            const newSport = other.value.trim();
-            window.addGlobalSport?.(newSport);
-            if (!item.activities.includes(newSport)) {
-                item.activities.push(newSport);
-                saveData();
-            }
-            other.value = "";
-            renderDetailPane();
-        }
-    };
-    
-    actCard.appendChild(bw);
-    actCard.appendChild(other);
-    detailGrid.appendChild(actCard);
-
-    // ========== CARD 2: SHARING RULES ==========
-    const sharingCard = document.createElement("div");
-    sharingCard.className = "field-section-card";
-    const sharingHeader = document.createElement("div");
-    sharingHeader.className = "field-section-header";
-    sharingHeader.innerHTML = `
-        <span class="field-section-title">Sharing Rules</span>
-        <span class="field-section-tag">Multiple divisions</span>
-    `;
-    sharingCard.appendChild(sharingHeader);
-
-    const sharingHelp = document.createElement("p");
-    sharingHelp.className = "field-section-help";
-    sharingHelp.textContent = "Decide whether this field can host more than one division at the same time (shared fields).";
-    sharingCard.appendChild(sharingHelp);
-
-    const sharableControls = renderSharableControls(item, saveData, renderDetailPane);
-    sharableControls.style.marginTop = "4px";
-    sharingCard.appendChild(sharableControls);
-    detailGrid.appendChild(sharingCard);
-
-    // ========== CARD 3: WHO CAN USE THIS FIELD? ==========
-    const restrictCard = document.createElement("div");
-    restrictCard.className = "field-section-card";
-    const restrictHeader = document.createElement("div");
-    restrictHeader.className = "field-section-header";
-    restrictHeader.innerHTML = `
-        <span class="field-section-title">Who Can Use This Field?</span>
-        <span class="field-section-tag">Restrictions &amp; priority</span>
-    `;
-    restrictCard.appendChild(restrictHeader);
-
-    const restrictHelp = document.createElement("p");
-    restrictHelp.className = "field-section-help";
-    restrictHelp.textContent = "Choose which divisions (and specific bunks) are allowed here, and set a priority order if some should get this field first.";
-    restrictCard.appendChild(restrictHelp);
-
-    const limitControls = renderAllowedBunksControls(item, saveData, renderDetailPane);
-    limitControls.style.marginTop = "4px";
-    restrictCard.appendChild(limitControls);
-    detailGrid.appendChild(restrictCard);
-
-    // ========== CARD 4: TIME RULES ==========
-    const timeCard = document.createElement("div");
-    timeCard.className = "field-section-card";
-    const timeHeader = document.createElement("div");
-    timeHeader.className = "field-section-header";
-    timeHeader.innerHTML = `
-        <span class="field-section-title">Time Rules</span>
-        <span class="field-section-tag">When is it open?</span>
-    `;
-    timeCard.appendChild(timeHeader);
-
-    const timeHelp = document.createElement("p");
-    timeHelp.className = "field-section-help";
-    timeHelp.textContent = "Add optional windows when this field is specifically AVAILABLE or UNAVAILABLE (e.g., mornings only).";
-    timeCard.appendChild(timeHelp);
-
-    const timeRuleControls = renderTimeRulesUI(item, saveData, renderDetailPane);
-    timeRuleControls.style.marginTop = "4px";
-    timeCard.appendChild(timeRuleControls);
-    detailGrid.appendChild(timeCard);
+    // Weather & Availability (Rainy Day)
+    detailPaneEl.appendChild(section("Weather & Availability", summaryWeather(item), 
+        function() { return renderWeatherSettings(item); }));
 }
 
-// --- NEW FUNCTION: Render Transition Controls ---
-function renderTransitionControls(transition, onSave, onRerender) {
-    const container = document.createElement("div");
-    
-    // --- 1. Pre/Post Buffer Inputs ---
-    container.innerHTML = `
-        <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
-            <label style="font-weight:600; font-size:0.85rem;">Pre-Activity (To):</label>
-            <input type="number" id="pre-min-input" value="${transition.preMin}" min="0" step="5" style="width:60px; padding:4px;">
-            <label style="font-weight:600; font-size:0.85rem;">Post-Activity (From):</label>
-            <input type="number" id="post-min-input" value="${transition.postMin}" min="0" step="5" style="width:60px; padding:4px;">
-        </div>
-        
-        <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
-            <label style="font-weight:600; font-size:0.85rem;">Label:</label>
-            <input type="text" id="buffer-label-input" value="${transition.label}" style="width:120px; padding:4px;">
-        </div>
+//------------------------------------------------------------------
+// SECTION BUILDER (Accordion UX)
+//------------------------------------------------------------------
+function section(title, summary, builder){
+    const wrap = document.createElement("div"); 
+    wrap.className = "detail-section";
 
-        <!-- Zone Selector (Issue 2/4) -->
-        <div style="margin-top:15px; border-top:1px dashed #E5E7EB; padding-top:10px;">
-            <label style="font-weight:600; font-size:0.85rem;">Location Zone:</label>
-            <select id="zone-select" style="width:100%; margin-top:5px; padding:6px;"></select>
-            <p class="muted" style="font-size:0.75rem; margin-top:5px;">Required for Buffer Merging and Transport Limits.</p>
-        </div>
+    const head = document.createElement("div");
+    head.className = "detail-section-header";
 
-        <!-- Occupancy Toggle (Issue 5) -->
-        <label style="display:flex; align-items:center; gap:8px; margin-top:10px; cursor:pointer;">
-            <input type="checkbox" id="occupies-field-check" ${transition.occupiesField ? 'checked' : ''} style="width:16px; height:16px;">
-            <span style="font-size:0.85rem; font-weight:600;">Buffer Occupies Field (e.g., Setup/Change)</span>
-        </label>
-        <p class="muted" style="font-size:0.75rem; margin-top:2px; padding-left:25px;">
-            If unchecked (Travel), the field is available during transition time.
-        </p>
+    const t = document.createElement("div");
+    t.innerHTML = '<div class="detail-section-title">' + title + '</div><div class="detail-section-summary">' + summary + '</div>';
 
-        <!-- Minimum Duration (Issue 1) -->
-        <div style="margin-top:15px; border-top:1px dashed #E5E7EB; padding-top:10px;">
-            <label style="font-weight:600; font-size:0.85rem;">Min Activity Duration:</label>
-            <input type="number" id="min-duration-input" value="${transition.minDurationMin}" min="0" step="5" style="width:60px; padding:4px; margin-left:5px;">
-            <span class="muted" style="font-size:0.85rem;">minutes (if less, placement is rejected).</span>
-        </div>
-    `;
-    
-    // Populate Zones
-    const zones = window.getZones?.() || {};
-    const zoneSelect = container.querySelector('#zone-select');
-    Object.values(zones).forEach(z => {
-        const opt = document.createElement('option');
-        opt.value = z.name;
-        opt.textContent = z.name + (z.isDefault ? ' (Default)' : '');
-        if (z.name === transition.zone) opt.selected = true;
-        zoneSelect.appendChild(opt);
-    });
+    const caret = document.createElement("span");
+    caret.innerHTML = '<svg width="20" height="20" fill="none" stroke="#9CA3AF" stroke-width="2" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"></path></svg>';
+    caret.style.transition = "transform 0.2s";
 
-    const updateTransition = () => {
-        transition.preMin = parseInt(container.querySelector('#pre-min-input').value) || 0;
-        transition.postMin = parseInt(container.querySelector('#post-min-input').value) || 0;
-        transition.label = container.querySelector('#buffer-label-input').value.trim() || "Transition";
-        transition.zone = container.querySelector('#zone-select').value;
-        transition.occupiesField = container.querySelector('#occupies-field-check').checked;
-        transition.minDurationMin = parseInt(container.querySelector('#min-duration-input').value) || 0;
-        onSave();
-        onRerender(); // Re-render master list to show buffer text
+    head.appendChild(t);
+    head.appendChild(caret);
+
+    const body = document.createElement("div");
+    body.className = "detail-section-body";
+
+    head.onclick = function(){
+        const open = body.style.display === "block";
+        body.style.display = open ? "none" : "block";
+        caret.style.transform = open ? "rotate(0deg)" : "rotate(90deg)";
+        if(!open && !body.dataset.built){ 
+            body.innerHTML = "";
+            body.appendChild(builder()); 
+            body.dataset.built = "1"; 
+        }
     };
 
-    container.querySelectorAll('input, select').forEach(el => {
-        el.onchange = updateTransition;
+    wrap.appendChild(head);
+    wrap.appendChild(body);
+    return wrap;
+}
+
+//------------------------------------------------------------------
+// CONTENT GENERATORS
+//------------------------------------------------------------------
+function summaryActivities(f){ return f.activities.length ? f.activities.length + " sports selected" : "No sports selected"; }
+function summarySharing(f){ return f.sharableWith.type === "not_sharable" ? "Not sharable" : "Sharable (Max " + f.sharableWith.capacity + ")"; }
+function summaryAccess(f){ 
+    if(!f.limitUsage.enabled) return "Open to All Divisions";
+    if(f.preferences.exclusive) return "Exclusive to specific divisions";
+    return "Priority/Restrictions Active";
+}
+function summaryTransition(f){ return f.transition.preMin + "m Pre / " + f.transition.postMin + "m Post"; }
+function summaryTime(f){ return f.timeRules.length ? f.timeRules.length + " rule(s) active" : "Available all day"; }
+function summaryWeather(f) { return f.rainyDayAvailable ? "🏠 Indoor (Rain OK)" : "🌳 Outdoor"; }
+
+// 1. ACTIVITIES
+function renderActivities(item, allSports){
+    const box = document.createElement("div");
+    const wrap = document.createElement("div"); 
+    wrap.style.display = "flex"; 
+    wrap.style.flexWrap = "wrap"; 
+    wrap.style.gap = "8px"; 
+    wrap.style.marginBottom = "12px";
+
+    allSports.forEach(function(s){
+        const b = document.createElement("button");
+        b.textContent = s;
+        b.className = "activity-button" + (item.activities.includes(s) ? " active" : "");
+        b.onclick = function(){
+            if(item.activities.includes(s)) {
+                item.activities = item.activities.filter(function(x){ return x !== s; });
+            } else {
+                item.activities.push(s);
+            }
+            saveData(); 
+            b.className = "activity-button" + (item.activities.includes(s) ? " active" : "");
+            // Update summary
+            const summaryEl = b.closest('.detail-section').querySelector('.detail-section-summary');
+            if(summaryEl) summaryEl.textContent = summaryActivities(item);
+            // Re-render sport rules section
+            renderSportRulesSection();
+        };
+        wrap.appendChild(b);
     });
+
+    const add = document.createElement("input");
+    add.placeholder = "Add new sport (Type & Enter)...";
+    add.style.width = "100%";
+    add.style.padding = "8px";
+    add.style.borderRadius = "6px";
+    add.style.border = "1px solid #D1D5DB";
+    add.onkeyup = function(e){
+        if(e.key==="Enter" && add.value.trim()){
+            const s = add.value.trim();
+            window.addGlobalSport?.(s);
+            if(!item.activities.includes(s)) item.activities.push(s);
+            saveData(); 
+            renderDetailPane();
+            renderSportRulesSection();
+        }
+    };
+
+    box.appendChild(wrap);
+    box.appendChild(add);
+    return box;
+}
+
+// 2. TRANSITION
+function renderTransition(item){
+    const t = item.transition;
+    const box = document.createElement("div");
+    
+    var update = function() { saveData(); renderMasterLists(); };
+
+    // Times
+    const timeRow = document.createElement("div");
+    timeRow.style.display="flex"; 
+    timeRow.style.gap="12px"; 
+    timeRow.style.marginBottom="12px";
+    
+    var mkInput = function(lbl, val, setter) {
+        const d = document.createElement("div");
+        d.innerHTML = '<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">' + lbl + '</label>';
+        const i = document.createElement("input");
+        i.type="number"; i.min="0"; i.step="5"; i.value=val;
+        i.style.width="80px"; i.style.padding="6px"; i.style.border="1px solid #D1D5DB"; i.style.borderRadius="6px";
+        i.onchange = function(){ setter(parseInt(i.value)||0); update(); };
+        d.appendChild(i); 
+        return d;
+    };
+
+    timeRow.appendChild(mkInput("Pre-Buffer (min)", t.preMin, function(v){ t.preMin=v; }));
+    timeRow.appendChild(mkInput("Post-Buffer (min)", t.postMin, function(v){ t.postMin=v; }));
+    box.appendChild(timeRow);
+
+    // Label & Zone
+    const metaRow = document.createElement("div");
+    metaRow.style.display="flex"; 
+    metaRow.style.gap="12px"; 
+    metaRow.style.marginBottom="12px";
+    
+    // Zone Select
+    const zoneDiv = document.createElement("div");
+    zoneDiv.style.flex = "1";
+    zoneDiv.innerHTML = '<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">Zone (Location)</label>';
+    
+    const zoneSel = document.createElement("select");
+    zoneSel.style.width="100%"; 
+    zoneSel.style.padding="6px"; 
+    zoneSel.style.borderRadius="6px"; 
+    zoneSel.style.border="1px solid #D1D5DB";
+    
+    const zones = window.getZones?.() || {};
+    Object.values(zones).forEach(function(z) {
+        const opt = document.createElement("option");
+        opt.value = z.name;
+        opt.textContent = z.name + (z.isDefault ? " (Default)" : "");
+        if(z.name === t.zone) opt.selected = true;
+        zoneSel.appendChild(opt);
+    });
+    zoneSel.onchange = function(){ t.zone = zoneSel.value; update(); };
+    zoneDiv.appendChild(zoneSel);
+    metaRow.appendChild(zoneDiv);
+    
+    // Min Duration
+    metaRow.appendChild(mkInput("Min Activity (min)", t.minDurationMin, function(v){ t.minDurationMin=v; }));
+    
+    box.appendChild(metaRow);
+
+    // Occupancy Toggle
+    const occLabel = document.createElement("label");
+    occLabel.style.display="flex"; 
+    occLabel.style.alignItems="center"; 
+    occLabel.style.gap="8px"; 
+    occLabel.style.cursor="pointer";
+    
+    const occCk = document.createElement("input"); 
+    occCk.type="checkbox"; 
+    occCk.checked = t.occupiesField;
+    occCk.onchange = function(){ t.occupiesField = occCk.checked; update(); };
+    
+    occLabel.appendChild(occCk);
+    occLabel.appendChild(document.createTextNode("Buffer occupies field (e.g. Setup/Teardown)"));
+    box.appendChild(occLabel);
+
+    return box;
+}
+
+// 3. SHARING
+function renderSharing(item){
+    const container = document.createElement("div");
+    const rules = item.sharableWith;
+
+    const tog = document.createElement("label"); 
+    tog.className = "switch";
+    
+    const cb = document.createElement("input"); 
+    cb.type = "checkbox";
+    cb.checked = rules.type !== 'not_sharable';
+    cb.onchange = function(){
+        rules.type = cb.checked ? 'all' : 'not_sharable';
+        rules.divisions = [];
+        saveData();
+        renderDetailPane();
+    };
+    
+    const sl = document.createElement("span"); 
+    sl.className = "slider";
+    tog.appendChild(cb); 
+    tog.appendChild(sl);
+    
+    const header = document.createElement("div");
+    header.style.display="flex"; 
+    header.style.alignItems="center"; 
+    header.style.gap="10px";
+    header.appendChild(tog);
+    header.appendChild(document.createTextNode("Allow Sharing (Multiple bunks at once)"));
+    container.appendChild(header);
+
+    if(rules.type !== 'not_sharable'){
+        const det = document.createElement("div");
+        det.style.marginTop="16px"; 
+        det.style.paddingLeft="12px"; 
+        det.style.borderLeft="2px solid #E5E7EB";
+
+        // Capacity
+        const capRow = document.createElement("div");
+        capRow.style.marginBottom="12px";
+        capRow.innerHTML = '<span>Max Capacity: </span>';
+        
+        const capIn = document.createElement("input"); 
+        capIn.type="number"; 
+        capIn.min="2"; 
+        capIn.value=rules.capacity;
+        capIn.style.width="60px"; 
+        capIn.style.marginLeft="8px"; 
+        capIn.style.padding="4px";
+        capIn.onchange = function(){ rules.capacity = Math.max(2, parseInt(capIn.value)||2); saveData(); };
+        capRow.appendChild(capIn);
+        det.appendChild(capRow);
+
+        // Limit Divisions
+        const divLabel = document.createElement("div");
+        divLabel.textContent = "Limit sharing to specific divisions (Optional):";
+        divLabel.style.fontSize="0.85rem"; 
+        divLabel.style.marginBottom="6px";
+        det.appendChild(divLabel);
+
+        const allDivs = window.availableDivisions || [];
+        allDivs.forEach(function(d) {
+            const isActive = rules.divisions.includes(d);
+            const chip = document.createElement("span");
+            chip.className = "chip " + (isActive ? "active" : "inactive");
+            chip.textContent = d;
+            chip.onclick = function(){
+                if(isActive) {
+                    rules.divisions = rules.divisions.filter(function(x){ return x !== d; });
+                } else {
+                    rules.divisions.push(d);
+                }
+                rules.type = rules.divisions.length > 0 ? 'custom' : 'all';
+                saveData();
+                chip.className = "chip " + (rules.divisions.includes(d) ? "active" : "inactive");
+            };
+            det.appendChild(chip);
+        });
+
+        container.appendChild(det);
+    }
 
     return container;
 }
 
+// 4. ACCESS & PRIORITY
+function renderAccess(item){
+    const container = document.createElement("div");
 
-// --- Add Field Function ---
-function addField() {
-    const n = addFieldInput.value.trim();
-    if (!n) return;
-    if (fields.some(f => f.name.toLowerCase() === n.toLowerCase())) {
-        alert("A field with this name already exists.");
-        return;
-    }
-    fields.push({
-        name: n,
-        activities: [],
-        available: true,
-        sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
-        limitUsage: { enabled: false, divisions: {} },
-        preferences: { enabled: false, exclusive: false, list: [] }, // Default
-        timeRules: [],
-        transition: { // NEW DEFAULT
-            preMin: 0,
-            postMin: 0,
-            label: "Travel",
-            zone: window.DEFAULT_ZONE_NAME,
-            occupiesField: false,
-            minDurationMin: 0
+    var updateSummary = function() {
+        const summaryEl = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if(summaryEl) summaryEl.textContent = summaryAccess(item);
+    };
+
+    var renderContent = function() {
+        container.innerHTML = "";
+        
+        const rules = item.limitUsage;
+        const prefs = item.preferences;
+
+        // Toggle Mode Buttons
+        const modeWrap = document.createElement("div");
+        modeWrap.style.display="flex"; 
+        modeWrap.style.gap="12px"; 
+        modeWrap.style.marginBottom="16px";
+        
+        const btnAll = document.createElement("button");
+        btnAll.textContent = "Open to All";
+        btnAll.style.cssText = "flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:" + (!rules.enabled ? '#ECFDF5' : '#fff') + "; color:" + (!rules.enabled ? '#047857' : '#333') + "; border-color:" + (!rules.enabled ? '#10B981' : '#E5E7EB') + "; font-weight:" + (!rules.enabled ? '600' : '400') + "; transition:all 0.2s;";
+        
+        const btnRes = document.createElement("button");
+        btnRes.textContent = "Restricted / Priority";
+        btnRes.style.cssText = "flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:" + (rules.enabled ? '#ECFDF5' : '#fff') + "; color:" + (rules.enabled ? '#047857' : '#333') + "; border-color:" + (rules.enabled ? '#10B981' : '#E5E7EB') + "; font-weight:" + (rules.enabled ? '600' : '400') + "; transition:all 0.2s;";
+
+        btnAll.onclick = function(){ 
+            rules.enabled=false; 
+            prefs.enabled=false; 
+            saveData(); 
+            renderContent(); 
+            updateSummary();
+        };
+        
+        btnRes.onclick = function(){ 
+            rules.enabled=true; 
+            prefs.enabled=true; 
+            saveData(); 
+            renderContent(); 
+            updateSummary();
+        };
+
+        modeWrap.appendChild(btnAll);
+        modeWrap.appendChild(btnRes);
+        container.appendChild(modeWrap);
+
+        if(rules.enabled){
+            const body = document.createElement("div");
+            
+            // Exclusive Checkbox
+            const exLabel = document.createElement("label");
+            exLabel.style.display="flex"; 
+            exLabel.style.alignItems="center"; 
+            exLabel.style.gap="8px"; 
+            exLabel.style.marginBottom="12px"; 
+            exLabel.style.cursor="pointer";
+            
+            const exCk = document.createElement("input"); 
+            exCk.type="checkbox"; 
+            exCk.checked=prefs.exclusive;
+            exCk.onchange = function(){ prefs.exclusive=exCk.checked; saveData(); updateSummary(); };
+            
+            exLabel.appendChild(exCk);
+            exLabel.appendChild(document.createTextNode("Exclusive Mode (Only allowed divisions can use this)"));
+            body.appendChild(exLabel);
+
+            // Priority List
+            const pHeader = document.createElement("div");
+            pHeader.textContent = "Priority Order (Top = First Choice):";
+            pHeader.style.fontSize="0.85rem"; 
+            pHeader.style.fontWeight="600"; 
+            pHeader.style.marginBottom="6px";
+            body.appendChild(pHeader);
+
+            const listContainer = document.createElement("div");
+            
+            prefs.list = (prefs.list || []).filter(function(d) { return rules.divisions.hasOwnProperty(d); });
+            
+            if(prefs.list.length === 0) {
+                listContainer.innerHTML = '<div class="muted" style="font-size:0.8rem; font-style:italic; padding:4px; color:#6B7280;">No priority divisions set. Add below.</div>';
+            }
+            
+            prefs.list.forEach(function(divName, idx) {
+                const row = document.createElement("div"); 
+                row.className = "priority-list-item";
+                row.innerHTML = '<span style="font-weight:bold; color:#10B981; width:20px;">' + (idx+1) + '</span> <span style="flex:1;">' + divName + '</span>';
+                
+                const ctrls = document.createElement("div"); 
+                ctrls.style.display="flex"; 
+                ctrls.style.gap="4px";
+                
+                var mkBtn = function(txt, fn, dis) {
+                    const b = document.createElement("button"); 
+                    b.className="priority-btn"; 
+                    b.textContent=txt;
+                    if(dis) b.disabled=true; 
+                    else b.onclick=fn;
+                    return b;
+                };
+                
+                ctrls.appendChild(mkBtn("↑", function(){ 
+                    var temp = prefs.list[idx-1];
+                    prefs.list[idx-1] = prefs.list[idx];
+                    prefs.list[idx] = temp;
+                    saveData(); 
+                    renderContent(); 
+                }, idx===0));
+                
+                ctrls.appendChild(mkBtn("↓", function(){ 
+                    var temp = prefs.list[idx+1];
+                    prefs.list[idx+1] = prefs.list[idx];
+                    prefs.list[idx] = temp;
+                    saveData(); 
+                    renderContent(); 
+                }, idx===prefs.list.length-1));
+                
+                const rm = mkBtn("✕", function(){ 
+                    prefs.list = prefs.list.filter(function(d){ return d !== divName; }); 
+                    saveData(); 
+                    renderContent(); 
+                }, false);
+                rm.style.color="#DC2626"; 
+                rm.style.borderColor="#FECACA";
+                ctrls.appendChild(rm);
+                
+                row.appendChild(ctrls);
+                listContainer.appendChild(row);
+            });
+            body.appendChild(listContainer);
+
+            // Division Selector Chips
+            const divHeader = document.createElement("div");
+            divHeader.textContent = "Allowed Divisions (Click to add/remove from priority):";
+            divHeader.style.fontSize="0.85rem"; 
+            divHeader.style.fontWeight="600"; 
+            divHeader.style.marginTop="16px"; 
+            divHeader.style.marginBottom="6px";
+            body.appendChild(divHeader);
+
+            const chipWrap = document.createElement("div");
+            const availableDivisions = window.availableDivisions || [];
+            
+            availableDivisions.forEach(function(divName) {
+                const isAllowed = divName in rules.divisions;
+                const c = document.createElement("span");
+                c.className = "chip " + (isAllowed ? "active" : "inactive");
+                c.textContent = divName;
+                c.onclick = function(){
+                    if(isAllowed){
+                        delete rules.divisions[divName];
+                        prefs.list = prefs.list.filter(function(d) { return d !== divName; });
+                    } else {
+                        rules.divisions[divName] = [];
+                        if(!prefs.list.includes(divName)) prefs.list.push(divName);
+                    }
+                    saveData();
+                    renderContent(); 
+                };
+                chipWrap.appendChild(c);
+            });
+            body.appendChild(chipWrap);
+
+            container.appendChild(body);
         }
+    };
+
+    renderContent(); 
+    return container;
+}
+
+// 5. TIME RULES
+function renderTimeRules(item){
+    const container = document.createElement("div");
+    
+    // Existing Rules
+    if(item.timeRules.length > 0){
+        item.timeRules.forEach(function(r, i) {
+            const row = document.createElement("div");
+            row.style.display="flex"; 
+            row.style.justifyContent="space-between"; 
+            row.style.alignItems="center";
+            row.style.background="#F9FAFB"; 
+            row.style.padding="8px"; 
+            row.style.marginBottom="6px"; 
+            row.style.borderRadius="6px"; 
+            row.style.border="1px solid #E5E7EB";
+            
+            const txt = document.createElement("span");
+            txt.innerHTML = '<strong style="color:' + (r.type==='Available'?'#059669':'#DC2626') + '">' + r.type + '</strong>: ' + r.start + ' to ' + r.end;
+            
+            const del = document.createElement("button");
+            del.textContent="✕"; 
+            del.style.border="none"; 
+            del.style.background="transparent"; 
+            del.style.color="#9CA3AF"; 
+            del.style.cursor="pointer";
+            del.onclick = function(){ item.timeRules.splice(i,1); saveData(); renderDetailPane(); };
+            
+            row.appendChild(txt); 
+            row.appendChild(del);
+            container.appendChild(row);
+        });
+    } else {
+        container.innerHTML = '<div class="muted" style="font-size:0.8rem; margin-bottom:10px;">No specific time rules (Available all day).</div>';
+    }
+
+    // Add New
+    const addRow = document.createElement("div");
+    addRow.style.display="flex"; 
+    addRow.style.gap="8px"; 
+    addRow.style.marginTop="12px"; 
+    addRow.style.paddingTop="12px"; 
+    addRow.style.borderTop="1px dashed #E5E7EB";
+    
+    const typeSel = document.createElement("select");
+    typeSel.innerHTML = '<option>Available</option><option>Unavailable</option>';
+    typeSel.style.borderRadius="6px"; 
+    typeSel.style.border="1px solid #D1D5DB";
+    
+    const startIn = document.createElement("input"); 
+    startIn.placeholder="9:00am"; 
+    startIn.style.width="70px"; 
+    startIn.style.padding="4px"; 
+    startIn.style.borderRadius="6px"; 
+    startIn.style.border="1px solid #D1D5DB";
+    
+    const endIn = document.createElement("input"); 
+    endIn.placeholder="10:00am"; 
+    endIn.style.width="70px"; 
+    endIn.style.padding="4px"; 
+    endIn.style.borderRadius="6px"; 
+    endIn.style.border="1px solid #D1D5DB";
+    
+    const btn = document.createElement("button");
+    btn.textContent="Add"; 
+    btn.style.background="#111"; 
+    btn.style.color="white"; 
+    btn.style.border="none"; 
+    btn.style.borderRadius="6px"; 
+    btn.style.padding="4px 12px"; 
+    btn.style.cursor="pointer";
+    
+    btn.onclick = function(){
+        if(!startIn.value || !endIn.value) return;
+        if(parseTimeToMinutes(startIn.value) === null){ alert("Invalid Start Time"); return; }
+        item.timeRules.push({ type: typeSel.value, start: startIn.value, end: endIn.value });
+        saveData();
+        renderDetailPane();
+    };
+
+    addRow.appendChild(typeSel);
+    addRow.appendChild(startIn);
+    addRow.appendChild(document.createTextNode(" to "));
+    addRow.appendChild(endIn);
+    addRow.appendChild(btn);
+    
+    container.appendChild(addRow);
+    return container;
+}
+
+// 6. WEATHER / RAINY DAY AVAILABILITY
+function renderWeatherSettings(item) {
+    const container = document.createElement("div");
+    
+    const isIndoor = item.rainyDayAvailable === true;
+    
+    container.innerHTML = 
+        '<div style="margin-bottom: 16px;">' +
+            '<p style="font-size: 0.85rem; color: #6b7280; margin: 0 0 12px 0;">' +
+                'Mark this field as indoor/covered to keep it available during Rainy Day Mode. ' +
+                'Outdoor fields will be automatically disabled when rainy weather is activated.' +
+            '</p>' +
+            '<div style="display: flex; align-items: center; gap: 12px; padding: 14px; ' +
+                        'background: ' + (isIndoor ? '#ecfdf5' : '#fef3c7') + '; ' +
+                        'border: 1px solid ' + (isIndoor ? '#a7f3d0' : '#fcd34d') + '; ' +
+                        'border-radius: 10px; transition: all 0.2s ease;">' +
+                '<span style="font-size: 28px;">' + (isIndoor ? '🏠' : '🌳') + '</span>' +
+                '<div style="flex: 1;">' +
+                    '<div style="font-weight: 600; color: ' + (isIndoor ? '#065f46' : '#92400e') + ';">' +
+                        (isIndoor ? 'Indoor / Covered' : 'Outdoor') +
+                    '</div>' +
+                    '<div style="font-size: 0.85rem; color: ' + (isIndoor ? '#047857' : '#b45309') + ';">' +
+                        (isIndoor ? 'Available on rainy days' : 'Disabled during rainy days') +
+                    '</div>' +
+                '</div>' +
+                '<label class="switch">' +
+                    '<input type="checkbox" id="rainy-day-toggle" ' + (isIndoor ? 'checked' : '') + '>' +
+                    '<span class="slider"></span>' +
+                '</label>' +
+            '</div>' +
+        '</div>' +
+        '<div style="background: #f9fafb; border-radius: 8px; padding: 12px; font-size: 0.85rem; color: #4b5563;">' +
+            '<strong>💡 Tip:</strong> Indoor facilities like gyms, covered courts, and activity rooms ' +
+            'should be marked as indoor. Outdoor fields like soccer fields, baseball diamonds, ' +
+            'and open courts should remain as outdoor.' +
+        '</div>';
+    
+    // Bind toggle
+    container.querySelector('#rainy-day-toggle').onchange = function() {
+        item.rainyDayAvailable = this.checked;
+        saveData();
+        // Update the parent container to reflect the change
+        const parentContainer = container.parentElement;
+        parentContainer.innerHTML = '';
+        parentContainer.appendChild(renderWeatherSettings(item));
+        // Update summary
+        const summaryEl = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (summaryEl) summaryEl.textContent = summaryWeather(item);
+    };
+    
+    return container;
+}
+
+//------------------------------------------------------------------
+// HELPERS
+//------------------------------------------------------------------
+function makeEditable(el, save){
+    el.ondblclick = function(){
+        const inp = document.createElement("input"); 
+        inp.value = el.textContent;
+        inp.style.fontSize = "inherit"; 
+        inp.style.fontWeight = "inherit"; 
+        inp.style.border="1px solid #10B981"; 
+        inp.style.outline="none"; 
+        inp.style.borderRadius="4px";
+        el.replaceWith(inp); 
+        inp.focus();
+        
+        var finish = function(){ 
+            save(inp.value.trim()); 
+            if(inp.parentNode) inp.replaceWith(el); 
+        };
+        inp.onblur = finish;
+        inp.onkeyup = function(e){ if(e.key==="Enter") finish(); };
+    };
+}
+
+function addField(){
+    const n = addFieldInput.value.trim();
+    if(!n) return;
+    if(fields.some(function(f){ return f.name.toLowerCase() === n.toLowerCase(); })){ 
+        alert("Already exists."); 
+        return; 
+    }
+    
+    fields.push({
+        name:n,
+        activities:[],
+        available:true,
+        sharableWith:{ type:'not_sharable', divisions:[], capacity:2 },
+        limitUsage:{ enabled:false, divisions:{} },
+        preferences:{ enabled:false, exclusive:false, list:[] },
+        timeRules:[],
+        transition:{ preMin:0, postMin:0, label:"Travel", zone:window.DEFAULT_ZONE_NAME || "Default", occupiesField:false, minDurationMin:0 },
+        rainyDayAvailable: false
     });
+    
     addFieldInput.value = "";
     saveData();
-    selectedItemId = `field-${n}`;
-    renderMasterLists();
+    selectedItemId = "field-" + n;
+    renderMasterLists(); 
     renderDetailPane();
 }
 
-// =================================================================
-// ===== HELPERS (UI Functions) =====
-// =================================================================
-
 function parseTimeToMinutes(str) {
     if (!str || typeof str !== "string") return null;
-    let s = str.trim().toLowerCase();
-    let mer = null;
+    var s = str.trim().toLowerCase();
+    var mer = null;
     if (s.endsWith("am") || s.endsWith("pm")) {
         mer = s.endsWith("am") ? "am" : "pm";
         s = s.replace(/am|pm/g, "").trim();
     }
-    const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+    var m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
     if (!m) return null;
-    let hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
+    var hh = parseInt(m[1], 10);
+    var mm = parseInt(m[2], 10);
     if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
     if (mer) {
         if (hh === 12) hh = mer === "am" ? 0 : 12; 
@@ -701,536 +1205,16 @@ function parseTimeToMinutes(str) {
     return hh * 60 + mm;
 }
 
-function makeEditable(el, save) {
-    el.ondblclick = e => {
-        e.stopPropagation();
-        const old = el.textContent;
-        const input = document.createElement("input");
-        input.type = "text"; input.value = old;
-        el.replaceWith(input); input.focus();
-        function done() {
-            const val = input.value.trim();
-            if (val && val !== old) save(val);
-            el.textContent = val || old; input.replaceWith(el);
-        }
-        input.onblur = done; input.onkeyup = e => { if (e.key === "Enter") done(); };
-    };
-}
-
-function renderTimeRulesUI(item, onSave, onRerender) {
-    const container = document.createElement("div");
-    container.innerHTML = `<strong>Global Time Rules:</strong>`;
-
-    if (!item.timeRules) {
-        item.timeRules = [];
-    }
-
-    const ruleList = document.createElement("div");
-    if (item.timeRules.length === 0) {
-        ruleList.innerHTML = `<p class="muted" style="margin: 4px 0 0;">No specific time rules. (Available all day)</p>`;
-    }
-
-    item.timeRules.forEach((rule, index) => {
-        const ruleEl = document.createElement("div");
-        ruleEl.style.margin = "4px 0";
-        ruleEl.style.padding = "4px 6px";
-        ruleEl.style.background = "#F9FAFB";
-        ruleEl.style.borderRadius = "8px";
-        ruleEl.style.display = "flex";
-        ruleEl.style.alignItems = "center";
-        ruleEl.style.justifyContent = "space-between";
-        ruleEl.style.border = "1px solid #E5E7EB";
-        
-        const left = document.createElement("span");
-        const ruleType = document.createElement("strong");
-        ruleType.textContent = rule.type;
-        ruleType.style.color = rule.type === 'Available' ? '#16A34A' : '#DC2626';
-        ruleType.style.textTransform = "capitalize";
-        
-        const ruleText = document.createElement("span");
-        ruleText.textContent = ` from ${rule.start} to ${rule.end}`;
-        left.appendChild(ruleType);
-        left.appendChild(ruleText);
-
-        const removeBtn = document.createElement("button");
-        removeBtn.textContent = "✖";
-        removeBtn.style.marginLeft = "8px";
-        removeBtn.style.border = "none";
-        removeBtn.style.background = "transparent";
-        removeBtn.style.cursor = "pointer";
-        removeBtn.style.color = "#9CA3AF";
-        removeBtn.onmouseenter = () => removeBtn.style.color = "#DC2626";
-        removeBtn.onmouseleave = () => removeBtn.style.color = "#9CA3AF";
-        removeBtn.onclick = () => {
-            item.timeRules.splice(index, 1);
-            onSave();
-            onRerender();
-        };
-        
-        ruleEl.appendChild(left);
-        ruleEl.appendChild(removeBtn);
-        ruleList.appendChild(ruleEl);
-    });
-    container.appendChild(ruleList);
-
-    const addContainer = document.createElement("div");
-    addContainer.style.marginTop = "10px";
-    
-    const typeSelect = document.createElement("select");
-    typeSelect.innerHTML = `
-        <option value="Available">Available</option>
-        <option value="Unavailable">Unavailable</option>
-    `;
-    
-    const startInput = document.createElement("input");
-    startInput.placeholder = "e.g., 9:00am";
-    startInput.style.width = "100px";
-    startInput.style.marginLeft = "5px";
-    startInput.style.padding = "3px 8px";
-    startInput.style.borderRadius = "999px";
-    startInput.style.border = "1px solid #D1D5DB";
-    startInput.style.fontSize = "0.8rem";
-
-    const toLabel = document.createElement("span");
-    toLabel.textContent = " to ";
-    toLabel.style.margin = "0 5px";
-
-    const endInput = document.createElement("input");
-    endInput.placeholder = "e.g., 10:30am";
-    endInput.style.width = "100px";
-    endInput.style.padding = "3px 8px";
-    endInput.style.borderRadius = "999px";
-    endInput.style.border = "1px solid #D1D5DB";
-    endInput.style.fontSize = "0.8rem";
-
-    const addBtn = document.createElement("button");
-    addBtn.textContent = "Add Rule";
-    addBtn.style.marginLeft = "8px";
-    addBtn.style.padding = "4px 12px";
-    addBtn.style.borderRadius = "999px";
-    addBtn.style.border = "none";
-    addBtn.style.background = "#00C896";
-    addBtn.style.color = "#FFFFFF";
-    addBtn.style.fontSize = "0.8rem";
-    addBtn.style.fontWeight = "600";
-    addBtn.style.cursor = "pointer";
-    addBtn.style.boxShadow = "0 3px 8px rgba(0, 200, 150, 0.35)";
-    
-    addBtn.onclick = () => {
-        const type = typeSelect.value;
-        const start = startInput.value;
-        const end = endInput.value;
-        
-        if (!start || !end) {
-            alert("Please enter a start and end time."); return;
-        }
-        if (parseTimeToMinutes(start) == null || parseTimeToMinutes(end) == null) {
-            alert("Invalid time format. Use '9:00am' or '2:30pm'."); return;
-        }
-        if (parseTimeToMinutes(start) >= parseTimeToMinutes(end)) {
-            alert("End time must be after start time."); return;
-        }
-
-        item.timeRules.push({ type, start, end });
-        onSave();
-        onRerender();
-    };
-
-    addContainer.appendChild(typeSelect);
-    addContainer.appendChild(startInput);
-    addContainer.appendChild(toLabel);
-    addContainer.appendChild(endInput);
-    addContainer.appendChild(addBtn);
-    container.appendChild(addContainer);
-
-    return container;
-}
-
-function renderSharableControls(item, onSave, onRerender) {
-    const container = document.createElement("div");
-    container.innerHTML = `<strong>Sharing Rules:</strong>`;
-    
-    // Ensure default capacity exists
-    if (!item.sharableWith) { item.sharableWith = { type: 'not_sharable', capacity: 2 }; }
-    if (!item.sharableWith.capacity) { item.sharableWith.capacity = 2; }
-    
-    const rules = item.sharableWith;
-    const isSharable = rules.type !== 'not_sharable';
-
-    const tog = document.createElement("label");
-    tog.className = "switch";
-    tog.title = "Toggle Sharable";
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = isSharable;
-    cb.onchange = () => {
-        if (cb.checked) { rules.type = 'all'; } 
-        else { rules.type = 'not_sharable'; }
-        rules.divisions = [];
-        onSave();
-        onRerender();
-    };
-    const sl = document.createElement("span"); sl.className = "slider";
-    tog.appendChild(cb); tog.appendChild(sl);
-    const togLabel = document.createElement("span");
-    togLabel.textContent = "Sharable";
-    const shareWrap = document.createElement("label");
-    shareWrap.style.display="flex";
-    shareWrap.style.alignItems="center";
-    shareWrap.style.gap="5px";
-    shareWrap.style.cursor="pointer";
-    shareWrap.style.marginTop = '5px';
-    shareWrap.appendChild(tog);
-    shareWrap.appendChild(togLabel);
-    container.appendChild(shareWrap);
-
-    if (isSharable) {
-        // --- CAPACITY INPUT ---
-        const capDiv = document.createElement("div");
-        capDiv.style.marginTop = "8px";
-        capDiv.style.paddingLeft = "12px";
-        capDiv.style.display = "flex";
-        capDiv.style.alignItems = "center";
-        capDiv.style.gap = "8px";
-        
-        const capLabel = document.createElement("span");
-        capLabel.textContent = "Max Total Bunks at once:";
-        capLabel.style.fontSize = "0.85rem";
-        
-        const capInput = document.createElement("input");
-        capInput.type = "number";
-        capInput.min = "2";
-        capInput.value = rules.capacity || 2;
-        capInput.style.width = "60px";
-        capInput.style.padding = "2px 6px";
-        capInput.style.borderRadius = "6px";
-        capInput.style.border = "1px solid #d1d5db";
-        
-        capInput.onchange = (e) => {
-            const val = parseInt(e.target.value);
-            rules.capacity = val >= 2 ? val : 2;
-            onSave();
-        };
-        
-        capDiv.appendChild(capLabel);
-        capDiv.appendChild(capInput);
-        container.appendChild(capDiv);
-
-        // --- SPECIFIC DIVISIONS ---
-        const customPanel = document.createElement("div");
-        customPanel.style.paddingLeft = "12px";
-        customPanel.style.marginTop = "8px";
-        const divLabel = document.createElement("div");
-        divLabel.textContent = "Optionally limit sharing to specific divisions:";
-        divLabel.style.fontSize = "0.78rem";
-        divLabel.style.color = "#4b5563";
-        customPanel.appendChild(divLabel);
-        const onDivToggle = () => {
-            rules.type = (rules.divisions.length > 0) ? 'custom' : 'all';
-            onSave();
-            onRerender();
-        };
-        const divChipBox = createChipPicker(window.availableDivisions || [], rules.divisions, onDivToggle);
-        customPanel.appendChild(divChipBox);
-        container.appendChild(customPanel);
-    }
-    return container;
-}
-
-function createChipPicker(allItems, selectedItems, onToggle) {
-    const chipBox = document.createElement("div");
-    chipBox.style.display = "flex";
-    chipBox.style.flexWrap = "wrap";
-    chipBox.style.gap = "5px";
-    chipBox.style.marginTop = "5px";
-
-    allItems.forEach(name => {
-        const chip = document.createElement("span");
-        chip.textContent = name;
-        chip.style.padding = "4px 10px";
-        chip.style.borderRadius = "999px";
-        chip.style.cursor = "pointer";
-        chip.style.border = "1px solid #CBD5E1";
-        chip.style.fontSize = "0.8rem";
-        const isActive = selectedItems.includes(name);
-        chip.style.backgroundColor = isActive ? "#00C896" : "#F3F4F6";
-        chip.style.color = isActive ? "#FFFFFF" : "#111827";
-        chip.style.boxShadow = isActive ? "0 3px 8px rgba(0, 200, 150, 0.35)" : "none";
-        chip.onclick = () => {
-            const idx = selectedItems.indexOf(name);
-            if (idx > -1) { selectedItems.splice(idx, 1); } 
-            else { selectedItems.push(name); }
-            onToggle();
-        };
-        chipBox.appendChild(chip);
-    });
-    return chipBox;
-}
-
-function renderAllowedBunksControls(item, onSave, onRerender) {
-    const container = document.createElement("div");
-    container.style.marginTop = "4px";
-
-    if (!item.limitUsage) { item.limitUsage = { enabled: false, divisions: {} }; }
-    if (!item.preferences) { item.preferences = { enabled: false, exclusive: false, list: [] }; }
-
-    const rules = item.limitUsage;
-    const prefs = item.preferences;
-    prefs.enabled = !!rules.enabled;
-
-    container.innerHTML = `<strong>Division Restrictions & Priority:</strong>`;
-
-    // --- 1. Master Toggle (All vs Specific) ---
-    const modeLabel = document.createElement("label");
-    modeLabel.style.display = "flex";
-    modeLabel.style.alignItems = "center";
-    modeLabel.style.gap = "10px";
-    modeLabel.style.cursor = "pointer";
-    modeLabel.style.marginTop = '6px';
-
-    const textAll = document.createElement("span");
-    textAll.textContent = "All Divisions (No Restrictions)";
-    const toggleTrack = document.createElement("span");
-    Object.assign(toggleTrack.style, {
-        "width": "44px", "height": "24px", "borderRadius": "99px", "position": "relative",
-        "display": "inline-block", "border": "1px solid #CBD5E1",
-        "backgroundColor": rules.enabled ? '#D1D5DB' : '#22C55E',
-        "transition": "background-color 0.2s"
-    });
-    const toggleKnob = document.createElement("span");
-    Object.assign(toggleKnob.style, {
-        "width": "20px", "height": "20px", "borderRadius": "50%", "backgroundColor": "white",
-        "position": "absolute", "top": "1px", "left": rules.enabled ? '21px' : '1px',
-        "transition": "left 0.2s"
-    });
-    toggleTrack.appendChild(toggleKnob);
-    const textLimit = document.createElement("span");
-    textLimit.textContent = "Specific Restrictions/Priority";
-    
-    textAll.style.fontWeight = rules.enabled ? 'normal' : 'bold';
-    textLimit.style.fontWeight = rules.enabled ? 'bold' : 'normal';
-    
-    modeLabel.onclick = () => {
-        rules.enabled = !rules.enabled;
-        prefs.enabled = rules.enabled;
-        onSave();
-        onRerender();
-    };
-    modeLabel.appendChild(textAll);
-    modeLabel.appendChild(toggleTrack);
-    modeLabel.appendChild(textLimit);
-    container.appendChild(modeLabel);
-
-    if (rules.enabled) {
-        const customPanel = document.createElement("div");
-        customPanel.style.padding = "12px 0 0";
-        customPanel.style.borderTop = "1px solid #F3F4F6";
-        
-        // --- 2. Priority and Exclusive Toggle ---
-        const prioritySettings = document.createElement("div");
-        prioritySettings.style.cssText = "background:#F9FAFB; padding:10px; border-radius:12px; border:1px solid #E5E7EB; margin-bottom:12px;";
-        
-        // Exclusive Mode
-        const exclDiv = document.createElement("div");
-        const exclLabel = document.createElement("label");
-        exclLabel.style.cursor = "pointer";
-        exclLabel.style.display = "flex";
-        exclLabel.style.alignItems = "center";
-        exclLabel.innerHTML = `<input type="checkbox" ${!!prefs.exclusive ? 'checked' : ''} style="margin-right:6px;"> <strong>Exclusive Mode:</strong> Only Divisions/Bunks listed below can use this field.`;
-        exclLabel.querySelector("input").onchange = (e) => {
-            prefs.exclusive = e.target.checked;
-            onSave();
-        };
-        exclDiv.appendChild(exclLabel);
-        prioritySettings.appendChild(exclDiv);
-
-        // --- Priority List (Visible when enabled) ---
-        const listHeader = document.createElement("div");
-        listHeader.textContent = "Division Priority Order (top = first choice):";
-        listHeader.style.marginTop = "8px";
-        listHeader.style.fontWeight = "600";
-        listHeader.style.fontSize = "0.78rem";
-        prioritySettings.appendChild(listHeader);
-
-        const priorityListContainer = document.createElement("ul");
-        priorityListContainer.style.cssText = "list-style:none; padding:0; margin-top:5px;";
-        
-        // Render Priority List Items
-        prefs.list = (prefs.list || []).filter(divName => rules.divisions.hasOwnProperty(divName));
-        prefs.list.forEach((divName, idx) => {
-            const li = document.createElement("li");
-            li.className = "priority-list-item";
-
-            li.innerHTML = `
-                <span style="font-weight:bold; width: 30px; text-align:center;">#${idx + 1}</span>
-                <span style="flex-grow:1;">${divName}</span>
-                <div class="priority-controls">
-                    <button data-action="up" data-div="${divName}" ${idx === 0 ? 'disabled' : ''}>↑</button>
-                    <button data-action="down" data-div="${divName}" ${idx === prefs.list.length - 1 ? 'disabled' : ''}>↓</button>
-                    <button data-action="rem" data-div="${divName}" style="color:#B91C1C; border-color:#FECACA;">x</button>
-                </div>
-            `;
-            
-            li.querySelector('[data-action="up"]').onclick = () => {
-                if (idx > 0) {
-                    [prefs.list[idx - 1], prefs.list[idx]] = [prefs.list[idx], prefs.list[idx - 1]];
-                    onSave();
-                    onRerender();
-                }
-            };
-            li.querySelector('[data-action="down"]').onclick = () => {
-                if (idx < prefs.list.length - 1) {
-                    [prefs.list[idx + 1], prefs.list[idx]] = [prefs.list[idx], prefs.list[idx + 1]];
-                    onSave();
-                    onRerender();
-                }
-            };
-            li.querySelector('[data-action="rem"]').onclick = () => {
-                prefs.list = prefs.list.filter(d => d !== divName);
-                onSave();
-                onRerender();
-            };
-
-            priorityListContainer.appendChild(li);
-        });
-
-        prioritySettings.appendChild(priorityListContainer);
-
-        // --- Add to Priority Dropdown ---
-        const priorityAddRow = document.createElement("div");
-        priorityAddRow.style.cssText = "margin-top:8px; padding-top:6px; border-top:1px dashed #E5E7EB; display:flex; gap:6px;";
-        
-        const select = document.createElement("select");
-        select.innerHTML = `<option value="">-- Add Division to Priority --</option>`;
-        Object.keys(rules.divisions).forEach(divName => {
-            if (!prefs.list.includes(divName)) {
-                select.innerHTML += `<option value="${divName}">${divName}</option>`;
-            }
-        });
-
-        const addBtn = document.createElement("button");
-        addBtn.textContent = "Add";
-        addBtn.style.padding = "4px 10px";
-        addBtn.style.borderRadius = "999px";
-        addBtn.style.border = "none";
-        addBtn.style.background = "#00C896";
-        addBtn.style.color = "#FFFFFF";
-        addBtn.style.fontSize = "0.8rem";
-        addBtn.style.cursor = "pointer";
-        addBtn.style.boxShadow = "0 3px 8px rgba(0, 200, 150, 0.35)";
-        addBtn.onclick = () => {
-            if (select.value) {
-                prefs.list.push(select.value);
-                onSave();
-                onRerender();
-            }
-        };
-        priorityAddRow.appendChild(select);
-        priorityAddRow.appendChild(addBtn);
-        prioritySettings.appendChild(priorityAddRow);
-        
-        customPanel.appendChild(prioritySettings);
-
-        // --- 3. Allowed Divisions/Bunks Chips ---
-        const allowedHeader = document.createElement("div");
-        allowedHeader.style.cssText = "margin-top:10px; font-weight:600; font-size:0.8rem;";
-        allowedHeader.textContent = "Select Allowed Divisions & Per-Bunk Restrictions:";
-        customPanel.appendChild(allowedHeader);
-        
-        const availableDivisions = window.availableDivisions || []; 
-
-        // --- Division/Bunk Chips ---
-        availableDivisions.forEach(divName => {
-            const divWrapper = document.createElement("div");
-            divWrapper.style.marginTop = "8px";
-            
-            const isAllowed = divName in rules.divisions;
-            const allowedBunks = rules.divisions[divName] || [];
-            
-            const divChip = createLimitChip(divName, isAllowed, true);
-            
-            divChip.onclick = () => {
-                if (isAllowed) {
-                    delete rules.divisions[divName];
-                    prefs.list = prefs.list.filter(d => d !== divName); // Remove from Priority List
-                } else {
-                    rules.divisions[divName] = []; 
-                }
-                onSave();
-                onRerender();
-            };
-            
-            divWrapper.appendChild(divChip);
-
-            if (isAllowed) {
-                const bunkList = document.createElement("div");
-                bunkList.style.display = "flex";
-                bunkList.style.flexWrap = "wrap";
-                bunkList.style.gap = "5px";
-                bunkList.style.marginTop = "5px";
-                bunkList.style.paddingLeft = "25px";
-                
-                const bunksInDiv = (window.divisions[divName]?.bunks || []);
-                if (bunksInDiv.length === 0) {
-                    bunkList.innerHTML = `<span class="muted" style="font-size: 0.8rem;">No bunks in this division.</span>`;
-                }
-
-                if (allowedBunks.length > 0) {
-                    const allBunksChip = createLimitChip(`All ${divName}`, false, false);
-                    allBunksChip.style.backgroundColor = "#F3F4F6";
-                    allBunksChip.style.color = "#2563EB";
-                    allBunksChip.style.borderColor = "#93C5FD";
-                    allBunksChip.onclick = () => {
-                        rules.divisions[divName] = []; 
-                        onSave();
-                        onRerender();
-                    };
-                    bunkList.appendChild(allBunksChip);
-                }
-
-                bunksInDiv.forEach(bunkName => {
-                    const bunkChip = createLimitChip(bunkName, allowedBunks.includes(bunkName), false);
-                    bunkChip.onclick = () => {
-                        const bunkIdx = allowedBunks.indexOf(bunkName);
-                        if (bunkIdx > -1) {
-                            allowedBunks.splice(bunkIdx, 1);
-                        } else {
-                            allowedBunks.push(bunkName);
-                        }
-                        onSave();
-                        onRerender();
-                    };
-                    bunkList.appendChild(bunkChip);
-                });
-                divWrapper.appendChild(bunkList);
-            }
-            customPanel.appendChild(divWrapper);
-        });
-
-        container.appendChild(customPanel);
-    }
-    return container;
-}
-
-function createLimitChip(name, isActive, isDivision = true) {
-    const chip = document.createElement("span");
-    chip.textContent = name;
-    chip.style.padding = "4px 9px";
-    chip.style.borderRadius = "999px";
-    chip.style.cursor = "pointer";
-    chip.style.border = "1px solid #CBD5E1";
-    chip.style.fontSize = isDivision ? "0.82rem" : "0.78rem";
-    const activeBG = isDivision ? "#00C896" : "#38BDF8"; 
-    const activeColor = "#FFFFFF";
-    const inactiveBG = isDivision ? "#F3F4F6" : "#F9FAFB";
-    const inactiveColor = "#111827";
-    chip.style.backgroundColor = isActive ? activeBG : inactiveBG;
-    chip.style.color = isActive ? activeColor : inactiveColor;
-    chip.style.boxShadow = isActive ? "0 3px 8px rgba(0, 200, 150, 0.35)" : "none";
-    return chip;
-}
-
+//------------------------------------------------------------------
+// EXPORTS
+//------------------------------------------------------------------
 window.initFieldsTab = initFieldsTab;
 window.fields = fields;
 
+// Export sport metadata getter for scheduler
+window.getSportMetaData = function() {
+    return sportMetaData;
+};
+
+console.log("🏟️ fields.js: window.initFieldsTab ready");
 })();
