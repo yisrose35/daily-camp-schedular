@@ -12,7 +12,7 @@
 <body>
 
 <!-- =============================================================== -->
-<!-- CAMPISTRY ACCOUNT CREATION -->
+<!-- CAMPISTRY AUTH PORTAL -->
 <!-- =============================================================== -->
 <div id="welcome-screen" class="campistry-welcome">
 
@@ -23,20 +23,25 @@
     />
 
     <h2 class="welcome-title">Welcome to Campistry</h2>
-    <p class="welcome-sub">
-        Create your Campistry account to begin managing your camp.
-    </p>
+    <p class="welcome-sub">Sign in or create your Campistry account.</p>
 
+    <!-- MODE TOGGLE -->
+    <div class="welcome-toggle">
+        <button id="mode-login" class="welcome-toggle-btn active">Sign In</button>
+        <button id="mode-signup" class="welcome-toggle-btn">Create Account</button>
+    </div>
+
+    <!-- FIELDS -->
     <input type="email" id="auth-email" placeholder="Email" class="welcome-input"/>
     <input type="password" id="auth-password" placeholder="Password" class="welcome-input"/>
     <input type="text" id="camp-name-input" placeholder="Camp Name" class="welcome-input"/>
 
-    <button id="begin-btn" class="welcome-primary-btn">
-        Create Campistry Account
-    </button>
+    <!-- ACTION -->
+    <button id="begin-btn" class="welcome-primary-btn">Sign In</button>
 
     <div id="auth-status" class="welcome-status"></div>
 </div>
+
 
 
 
