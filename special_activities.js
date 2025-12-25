@@ -1,17 +1,13 @@
-
-
 // =================================================================
 // special_activities.js  — Modern Pro Camp THEMED VERSION
 //
 // ✦ UPDATE: Added Transition, Buffer Occupancy, Zone, and Min Duration.
 // =================================================================
-
 (function() {
 'use strict';
 
 let specialActivities = [];
 let selectedItemId = null;
-
 let specialsListEl = null;
 let detailPaneEl = null;
 let addSpecialInput = null;
@@ -50,9 +46,7 @@ function initSpecialActivitiesTab() {
     // ==== THEMED HTML SHELL ====
     container.innerHTML = `
         <div class="setup-grid">
-
             <section class="setup-card setup-card-wide">
-
                 <div class="setup-card-header">
                     <span class="setup-step-pill">Specials</span>
                     <div class="setup-card-text">
@@ -63,26 +57,21 @@ function initSpecialActivitiesTab() {
                         </p>
                     </div>
                 </div>
-
                 <div style="display:flex; flex-wrap:wrap; gap:22px; margin-top:10px;">
-
                     <div style="flex:1; min-width:260px;">
                         <div class="setup-subtitle">All Specials</div>
                         <p style="font-size:0.8rem; color:#6b7280;">
                             Click a special to edit its rules.
                         </p>
-
                         <div class="setup-field-row" style="margin-top:10px;">
                             <input id="new-special-input" placeholder="New Special (e.g., Canteen)">
                             <button id="add-special-btn">Add Special</button>
                         </div>
-
                         <div id="specials-master-list"
                              class="master-list"
                              style="margin-top:10px; max-height:460px; overflow:auto;">
                         </div>
                     </div>
-
                     <div style="flex:1.3; min-width:330px;">
                         <div class="setup-subtitle">Special Details</div>
                         <div id="specials-detail-pane"
@@ -91,11 +80,9 @@ function initSpecialActivitiesTab() {
                             <p class="muted">Select a special to begin.</p>
                         </div>
                     </div>
-
                 </div>
             </section>
         </div>
-
         <style>
             .master-list {
                 border-radius: 18px;
@@ -112,7 +99,6 @@ function initSpecialActivitiesTab() {
                 justify-content: space-between;
                 align-items: center;
                 cursor: pointer;
-
                 background: #ffffff;
                 border: 1px solid #e5e7eb;
                 box-shadow: 0 3px 8px rgba(15,23,42,0.05);
@@ -128,7 +114,6 @@ function initSpecialActivitiesTab() {
                 box-shadow: 0 0 0 2px rgba(0,200,150,0.45);
                 font-weight: 600;
             }
-
             .detail-pane {
                 border-radius: 18px;
                 border: 1px solid #E5E7EB;
@@ -136,7 +121,6 @@ function initSpecialActivitiesTab() {
                 background: radial-gradient(circle at top left, #F0F9FF 0%, #FFFFFF 55%, #F8FAFC 100%);
                 box-shadow: 0 14px 36px rgba(15,23,42,0.08);
             }
-
             .muted { color:#6b7280; font-size:0.86rem; }
         </style>
     `;
@@ -168,7 +152,6 @@ function renderMasterLists() {
 function createMasterListItem(type, item) {
     const el = document.createElement('div');
     el.className = 'list-item';
-
     const id = `${type}-${item.name}`;
     if (id === selectedItemId) el.classList.add('selected');
 
@@ -202,7 +185,6 @@ function createMasterListItem(type, item) {
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.checked = item.available;
-
     cb.onchange = e => {
         e.stopPropagation();
         item.available = cb.checked;
@@ -212,7 +194,6 @@ function createMasterListItem(type, item) {
 
     const slider = document.createElement("span");
     slider.className = "slider";
-
     tog.appendChild(cb);
     tog.appendChild(slider);
     el.appendChild(tog);
@@ -239,6 +220,7 @@ function renderDetailPane() {
     }
 
     detailPaneEl.innerHTML = "";
+
     const onSave = () => window.saveGlobalSpecialActivities(specialActivities);
     const onRerender = () => renderDetailPane();
 
@@ -256,6 +238,7 @@ function renderDetailPane() {
     title.style.fontSize = '1.05rem';
     title.style.fontWeight = '600';
     title.textContent = item.name;
+
     makeEditable(title, newName => {
         if (!newName.trim()) return;
         item.name = newName;
@@ -364,7 +347,6 @@ function renderDetailPane() {
             onRerender();
         };
         maxCard.appendChild(addLimitBtn);
-
     } else {
         const limitDesc = document.createElement('p');
         limitDesc.textContent = "Bunks are allowed to play this:";
@@ -388,7 +370,6 @@ function renderDetailPane() {
         maxInput.style.padding = "6px 12px";
         maxInput.value = item.maxUsage;
         maxInput.min = 1;
-
         maxInput.oninput = () => {
             const val = maxInput.value.trim();
             if (val !== "") {
@@ -448,9 +429,7 @@ function renderDetailPane() {
         controlRow.appendChild(removeBtn);
         maxCard.appendChild(controlRow);
     }
-
     detailPaneEl.appendChild(maxCard);
-
 
     /*******************************************************
      * SHARABLE RULES
@@ -547,14 +526,12 @@ function renderTransitionControls(transition, onSave, onRerender) {
     return container;
 }
 
-
 /*********************************************************
  * ADD SPECIAL
  *********************************************************/
 function addSpecial() {
     const n = addSpecialInput.value.trim();
     if (!n) return;
-
     if (specialActivities.some(s => s.name.toLowerCase() === n.toLowerCase())) {
         alert("Special already exists.");
         return;
@@ -580,7 +557,6 @@ function addSpecial() {
 
     addSpecialInput.value = "";
     window.saveGlobalSpecialActivities(specialActivities);
-
     selectedItemId = `special-${n}`;
     renderMasterLists();
     renderDetailPane();
@@ -612,7 +588,6 @@ function makeEditable(el, save) {
     el.ondblclick = e => {
         e.stopPropagation();
         const old = el.textContent;
-
         const input = document.createElement("input");
         input.type = "text";
         input.value = old;
@@ -622,7 +597,6 @@ function makeEditable(el, save) {
         input.style.outline = "none";
         input.style.boxShadow = "0 0 0 1px rgba(96,165,250,0.4)";
         input.style.minWidth = "120px";
-
         el.replaceWith(input);
         input.focus();
 
@@ -641,7 +615,6 @@ function renderTimeRulesUI(item, onSave, onRerender) {
     const wrap = document.createElement("div");
     wrap.style.paddingLeft = "14px";
     wrap.style.borderLeft = "3px solid #e5e7eb";
-
     wrap.innerHTML = `<strong>Global Time Rules:</strong>`;
 
     if (!item.timeRules) item.timeRules = [];
@@ -658,14 +631,12 @@ function renderTimeRulesUI(item, onSave, onRerender) {
             background:"#f3f4f6",
             borderRadius:"8px",
         });
-
         row.innerHTML = `
             <strong style="color:${rule.type==="Available"?"#059669":"#DC2626"};">
                 ${rule.type}
             </strong>
             from ${rule.start} to ${rule.end}
         `;
-
         const x = document.createElement("button");
         x.textContent = "✖";
         x.style.marginLeft = "10px";
@@ -677,11 +648,9 @@ function renderTimeRulesUI(item, onSave, onRerender) {
             onSave();
             onRerender();
         };
-
         row.appendChild(x);
         list.appendChild(row);
     });
-
     wrap.appendChild(list);
 
     // Add rule
@@ -712,7 +681,6 @@ function renderTimeRulesUI(item, onSave, onRerender) {
     const add = document.createElement("button");
     add.textContent = "Add";
     add.style.marginLeft = "8px";
-
     add.onclick = () => {
         if (!s.value || !e.value) return alert("Enter both times.");
         if (parseTimeToMinutes(s.value)==null ||
@@ -720,7 +688,6 @@ function renderTimeRulesUI(item, onSave, onRerender) {
             return alert("Invalid time.");
         if (parseTimeToMinutes(s.value)>=parseTimeToMinutes(e.value))
             return alert("End must be after start.");
-
         item.timeRules.push({
             type: sel.value,
             start: s.value,
@@ -735,8 +702,8 @@ function renderTimeRulesUI(item, onSave, onRerender) {
     form.appendChild(txt);
     form.appendChild(e);
     form.appendChild(add);
-
     wrap.appendChild(form);
+
     return wrap;
 }
 
@@ -761,7 +728,6 @@ function renderSharableControls(item, onSave, onRerender) {
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.checked = isSharable;
-
     cb.onchange = () => {
         rules.type = cb.checked ? "all":"not_sharable";
         rules.divisions = [];
@@ -771,7 +737,6 @@ function renderSharableControls(item, onSave, onRerender) {
 
     const txt = document.createElement("span");
     txt.textContent = "Sharable";
-
     row.appendChild(cb);
     row.appendChild(txt);
     wrap.appendChild(row);
@@ -798,7 +763,6 @@ function renderSharableControls(item, onSave, onRerender) {
                 onRerender();
             }
         );
-
         box.appendChild(chips);
         wrap.appendChild(box);
     }
@@ -831,7 +795,6 @@ function createChipPicker(all, selected, onToggle) {
             else selected.push(name);
             onToggle();
         };
-
         box.appendChild(chip);
     });
 
@@ -846,7 +809,6 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
     wrap.style.marginTop = "16px";
     wrap.style.paddingTop = "16px";
     wrap.style.borderTop = "1px solid #e5e7eb";
-
     wrap.innerHTML = `<strong>Allowed Divisions & Bunks:</strong>`;
 
     const rules = item.limitUsage || { enabled:false, divisions:{} };
@@ -888,7 +850,6 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
         left: rules.enabled ? "21px" : "1px",
         transition:"0.2s"
     });
-
     track.appendChild(knob);
 
     const tSpec = document.createElement("span");
@@ -916,6 +877,7 @@ function renderAllowedBunksControls(item, onSave, onRerender) {
     panel.style.borderLeft = "3px solid #e5e7eb";
 
     const allDivs = window.availableDivisions || [];
+
     allDivs.forEach(div => {
         const divWrap = document.createElement("div");
         divWrap.style.marginTop = "8px";
