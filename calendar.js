@@ -1,34 +1,38 @@
 // =================================================================
-// calendar.js
+// calendar.js (FIXED)
 //
-// MERGED: Beta startNewHalf + Published global_authority.js sync
-// - startNewHalf() resets counters for second half of season
-// - Backup/Restore syncs with global_authority.js registry
-// - League history persistence
+// FIXES:
+// - Uses unified storage key for export/import
+// - Proper backup/restore with all data
+// - Division color index persistence
 // =================================================================
 (function() {
     'use strict';
-    console.log("🗓️ calendar.js loaded");
+    console.log("🗓️ calendar.js v2.0 (FIXED) loaded");
     
     // ==========================================================
-    // 1. STORAGE KEYS
+    // 1. STORAGE KEYS - UNIFIED
     // ==========================================================
-    const GLOBAL_SETTINGS_KEY = "campGlobalSettings_v1";
+    
+    // ⭐ Primary unified key (must match cloud_storage_bridge)
+    const UNIFIED_CACHE_KEY = "CAMPISTRY_UNIFIED_STATE";
+    
+    // Daily data (separate - changes frequently)
     const DAILY_DATA_KEY = "campDailyData_v1";
     const ROTATION_HISTORY_KEY = "campRotationHistory_v1";
-    const AUTO_SAVE_KEY = "campAutoSave_v1";
+    const AUTO_SAVE_KEY = "campAutoSave_v2"; // Bumped version
     
-    // ⭐ Global Authority key (divisions/bunks spine)
-    const GLOBAL_REGISTRY_KEY = "campistry_global_registry";
-    
-    // Legacy smart tile history (old versions)
+    // Smart tile histories
     const SMART_TILE_HISTORY_KEY = "smartTileHistory_v1";
-    // NEW Smart Tile rotation (SmartLogicAdapter V31)
     const SMART_TILE_SPECIAL_HISTORY_KEY = "smartTileSpecialHistory_v1";
     
     // League history keys
     const LEAGUE_HISTORY_KEY = "campLeagueHistory_v2";
     const SPECIALTY_LEAGUE_HISTORY_KEY = "specialtyLeagueHistory_v1";
+    
+    // Legacy keys (for backward compatibility in export)
+    const LEGACY_GLOBAL_SETTINGS_KEY = "campGlobalSettings_v1";
+    const LEGACY_GLOBAL_REGISTRY_KEY = "campistry_global_registry";
     
     // ==========================================================
     // Helper — formatted date YYYY-MM-DD
@@ -60,7 +64,7 @@
     }
     
     // ==========================================================
-    // 3. GLOBAL DATA API
+    // 3. DAILY DATA API (unchanged - works correctly)
     // ==========================================================
     
     window.loadAllDailyData = function() {
@@ -88,8 +92,7 @@
                 }
             };
         }
-        all[date].leagueDayCounters =
-            all[date].leagueDayCounters || {};
+        all[date].leagueDayCounters = all[date].leagueDayCounters || {};
         window.currentDailyData = all[date];
         return window.currentDailyData;
     };
@@ -124,7 +127,7 @@
     };
     
     // ==========================================================
-    // 4. ROTATION HISTORY SYSTEMS
+    // 4. ROTATION HISTORY SYSTEMS (unchanged)
     // ==========================================================
     window.loadRotationHistory = function() {
         try {
@@ -134,10 +137,7 @@
             hist.leagues = hist.leagues || {};
             return hist;
         } catch {
-            return {
-                bunks: {},
-                leagues: {}
-            };
+            return { bunks: {}, leagues: {} };
         }
     };
     
@@ -151,23 +151,21 @@
     };
     
     // ==========================================================
-    // ⭐ RESET ALL ACTIVITY / SPECIAL ROTATION (Full Reset)
+    // RESET ALL ACTIVITY / SPECIAL ROTATION
     // ==========================================================
     window.eraseRotationHistory = function() {
         try {
-            // 1. Regular rotation history
             localStorage.removeItem(ROTATION_HISTORY_KEY);
-            // 2. Legacy Smart Tile history
             localStorage.removeItem(SMART_TILE_HISTORY_KEY);
-            // ⭐ 3. NEW Smart Tile Special Rotation history (V31)
             localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
-            // 4. Manual offsets from analytics UI
-            const settings = window.loadGlobalSettings();
+            
+            const settings = window.loadGlobalSettings?.() || {};
             if (settings.manualUsageOffsets) {
                 delete settings.manualUsageOffsets;
-                localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(settings));
+                window.saveGlobalSettings?.('manualUsageOffsets', undefined);
             }
-            console.log("All rotation histories cleared (regular + smart tile + special tile).");
+            
+            console.log("All rotation histories cleared.");
             alert("Activity & Smart Tile History reset successfully!");
             window.location.reload();
         } catch (e) {
@@ -177,23 +175,9 @@
     };
     
     // ==========================================================
-    // ⭐⭐⭐ NEW HALF - Reset for Second Half of Season ⭐⭐⭐
-    // ==========================================================
-    // Resets:
-    // - Bunk activity usage counters (rotation history)
-    // - Smart tile histories
-    // - Regular league game counters (back to Game 1)
-    // - Specialty league game counters (back to Game 1)
-    // - All daily schedules
-    //
-    // Does NOT touch:
-    // - Fields configuration
-    // - Special activities configuration
-    // - Master schedule templates
-    // - Divisions and bunks setup
+    // START NEW HALF
     // ==========================================================
     window.startNewHalf = function() {
-        // Confirmation dialog
         const confirmed = confirm(
             "🏕️ START NEW HALF\n\n" +
             "This will reset:\n" +
@@ -216,61 +200,23 @@
             console.log("⭐ STARTING NEW HALF - Resetting Counters ⭐");
             console.log("=".repeat(50));
             
-            // 1. Clear bunk rotation history (activity usage per bunk)
             localStorage.removeItem(ROTATION_HISTORY_KEY);
-            console.log("✓ Cleared bunk rotation history");
-            
-            // 2. Clear Smart Tile histories
             localStorage.removeItem(SMART_TILE_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
-            console.log("✓ Cleared Smart Tile histories");
-            
-            // 3. Reset Regular League counters to 0
             localStorage.removeItem(LEAGUE_HISTORY_KEY);
-            console.log("✓ Reset regular league history (Game counters back to 1)");
-            
-            // 4. Reset Specialty League counters
             localStorage.removeItem(SPECIALTY_LEAGUE_HISTORY_KEY);
-            // Also check for any other specialty league keys
-            const keysToCheck = [
-                'specialtyLeagueHistory',
-                'specialty_league_history',
-                'campSpecialtyLeagueHistory_v1',
-                'specialtyLeagueRoundState'
-            ];
-            keysToCheck.forEach(key => {
-                if (localStorage.getItem(key)) {
-                    localStorage.removeItem(key);
-                    console.log("✓ Removed " + key);
-                }
-            });
-            console.log("✓ Reset specialty league history (Game counters back to 1)");
-            
-            // 5. Clear in-memory league state
-            if (window.leagueRoundState) {
-                window.leagueRoundState = {};
-            }
-            window.saveGlobalSettings?.('leagueRoundState', {});
-            console.log("✓ Cleared in-memory league round state");
-            
-            // 6. Clear all daily schedules
             localStorage.removeItem(DAILY_DATA_KEY);
-            console.log("✓ Cleared all daily schedules");
             
-            // 7. Clear manual usage offsets from analytics
-            const settings = window.loadGlobalSettings();
+            // Clear league round state from global settings
+            window.saveGlobalSettings?.('leagueRoundState', {});
+            
+            // Clear manual offsets
+            const settings = window.loadGlobalSettings?.() || {};
             if (settings.manualUsageOffsets) {
-                delete settings.manualUsageOffsets;
-                localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(settings));
-                console.log("✓ Cleared manual usage offsets");
+                window.saveGlobalSettings?.('manualUsageOffsets', undefined);
             }
             
-            // 8. Clear any cached league assignments in daily data
-            // (Already handled by removing DAILY_DATA_KEY)
-            
-            console.log("=".repeat(50));
             console.log("⭐ NEW HALF RESET COMPLETE ⭐");
-            console.log("=".repeat(50));
             
             alert(
                 "✅ New Half Started!\n\n" +
@@ -286,30 +232,37 @@
     };
     
     // ==========================================================
-    // 5. ERASE ALL DATA BUTTON
+    // 5. ERASE ALL DATA
     // ==========================================================
     function setupEraseAll() {
         const btn = document.getElementById("eraseAllBtn");
         if (!btn) return;
         btn.onclick = function() {
             if (!confirm("Erase ALL settings, schedules, and rotation histories?\nThis cannot be undone.")) return;
-            localStorage.removeItem(GLOBAL_SETTINGS_KEY);
-            localStorage.removeItem(DAILY_DATA_KEY);
-            localStorage.removeItem(ROTATION_HISTORY_KEY);
-            localStorage.removeItem(AUTO_SAVE_KEY);
-            localStorage.removeItem(SMART_TILE_HISTORY_KEY);
-            localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
-            localStorage.removeItem(LEAGUE_HISTORY_KEY);
-            localStorage.removeItem(SPECIALTY_LEAGUE_HISTORY_KEY);
-            // ⭐ Also clear global authority registry
-            localStorage.removeItem(GLOBAL_REGISTRY_KEY);
-            localStorage.removeItem("campSchedulerData");
-            localStorage.removeItem("fixedActivities_v2");
-            localStorage.removeItem("leagues");
-            localStorage.removeItem("camp_league_round_state");
-            localStorage.removeItem("camp_league_sport_rotation");
-            localStorage.removeItem("scheduleAssignments");
-            localStorage.removeItem("leagueAssignments");
+            
+            // Clear everything
+            const keysToRemove = [
+                UNIFIED_CACHE_KEY,
+                DAILY_DATA_KEY,
+                ROTATION_HISTORY_KEY,
+                AUTO_SAVE_KEY,
+                SMART_TILE_HISTORY_KEY,
+                SMART_TILE_SPECIAL_HISTORY_KEY,
+                LEAGUE_HISTORY_KEY,
+                SPECIALTY_LEAGUE_HISTORY_KEY,
+                LEGACY_GLOBAL_SETTINGS_KEY,
+                LEGACY_GLOBAL_REGISTRY_KEY,
+                "CAMPISTRY_LOCAL_CACHE",
+                "campSchedulerData",
+                "fixedActivities_v2",
+                "leagues",
+                "camp_league_round_state",
+                "camp_league_sport_rotation",
+                "scheduleAssignments",
+                "leagueAssignments"
+            ];
+            
+            keysToRemove.forEach(key => localStorage.removeItem(key));
             window.location.reload();
         };
     }
@@ -337,54 +290,67 @@
     };
     
     // ==========================================================
-    // 8. BACKUP / RESTORE (⭐ FIXED for global_authority.js + league histories)
+    // 8. BACKUP / RESTORE (FIXED - Uses unified storage)
     // ==========================================================
     function exportAllData() {
         try {
-            // ⭐ Include the global registry (divisions/bunks spine)
-            let globalRegistry = {};
+            // ⭐ Read from unified key
+            let globalSettings = {};
             try {
-                const regRaw = localStorage.getItem(GLOBAL_REGISTRY_KEY);
-                globalRegistry = regRaw ? JSON.parse(regRaw) : {};
+                globalSettings = JSON.parse(localStorage.getItem(UNIFIED_CACHE_KEY) || "{}");
             } catch (e) {
-                console.warn("Could not load global registry:", e);
+                console.warn("Could not load unified settings:", e);
             }
             
+            // ⭐ Also include division color index
+            const colorIndex = globalSettings.divisionColorIndex || 0;
+            
             const backup = {
-                // Standard keys
-                globalSettings: JSON.parse(localStorage.getItem(GLOBAL_SETTINGS_KEY) || "{}"),
+                // ⭐ Main unified state
+                globalSettings: globalSettings,
+                
+                // Daily/rotation data
                 dailyData: JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || "{}"),
                 rotationHistory: JSON.parse(localStorage.getItem(ROTATION_HISTORY_KEY) || "{}"),
                 
-                // ⭐ Global Authority registry (divisions/bunks)
-                globalRegistry: globalRegistry,
+                // Smart tile histories
+                smartTileHistory: JSON.parse(localStorage.getItem(SMART_TILE_HISTORY_KEY) || "{}"),
+                smartTileSpecialHistory: JSON.parse(localStorage.getItem(SMART_TILE_SPECIAL_HISTORY_KEY) || "{}"),
                 
-                // ⭐ League histories
+                // League histories
                 leagueHistory: JSON.parse(localStorage.getItem(LEAGUE_HISTORY_KEY) || "{}"),
                 specialtyLeagueHistory: JSON.parse(localStorage.getItem(SPECIALTY_LEAGUE_HISTORY_KEY) || "{}"),
                 
+                // ⭐ Explicit divisions/bunks extraction (for clarity)
+                divisions: globalSettings.divisions || {},
+                bunks: globalSettings.bunks || [],
+                divisionColorIndex: colorIndex,
+                
                 // Metadata
-                exportVersion: 2,
+                exportVersion: 3,
                 exportDate: new Date().toISOString()
             };
             
             const json = JSON.stringify(backup, null, 2);
-            const blob = new Blob([json], {
-                type: "application/json"
-            });
+            const blob = new Blob([json], { type: "application/json" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = `camp_scheduler_backup_${getTodayString()}.json`;
+            a.download = `campistry_backup_${getTodayString()}.json`;
             a.click();
             URL.revokeObjectURL(url);
-            console.log("✓ Export complete. Includes global registry:", Object.keys(globalRegistry));
+            
+            console.log("✅ Export complete:", {
+                divisions: Object.keys(backup.divisions).length,
+                bunks: backup.bunks.length,
+                colorIndex: colorIndex
+            });
+            
         } catch (e) {
             console.error("Export error:", e);
-            alert("Export failed.");
+            alert("Export failed: " + e.message);
         }
     }
-    // Expose for late-bind SaaS wiring
     window.__campistry_exportAllData = exportAllData;
     
     function handleFileSelect(e) {
@@ -394,81 +360,117 @@
             e.target.value = "";
             return;
         }
+        
         const reader = new FileReader();
         reader.onload = function(evt) {
             try {
                 const backup = JSON.parse(evt.target.result);
                 
-                // Restore standard keys
-                localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(backup.globalSettings || {}));
-                localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(backup.dailyData || {}));
-                localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify(backup.rotationHistory || {}));
+                console.log("📥 Importing backup version:", backup.exportVersion || 1);
                 
-                // ⭐ Restore global registry if present (v2 exports)
+                // ⭐ Build unified state from backup
+                let unifiedState = {};
+                
+                if (backup.globalSettings) {
+                    unifiedState = { ...backup.globalSettings };
+                }
+                
+                // Merge explicit divisions/bunks if present (v3 backups)
+                if (backup.divisions && Object.keys(backup.divisions).length > 0) {
+                    unifiedState.divisions = backup.divisions;
+                }
+                if (backup.bunks && backup.bunks.length > 0) {
+                    unifiedState.bunks = backup.bunks;
+                }
+                
+                // ⭐ Restore color index
+                if (backup.divisionColorIndex !== undefined) {
+                    unifiedState.divisionColorIndex = backup.divisionColorIndex;
+                }
+                
+                // Handle v1/v2 backups with globalRegistry
                 if (backup.globalRegistry) {
-                    localStorage.setItem(GLOBAL_REGISTRY_KEY, JSON.stringify(backup.globalRegistry));
-                    console.log("✓ Restored global registry (divisions/bunks)");
-                } else {
-                    // ⭐ FALLBACK: For old backups, extract divisions/bunks from globalSettings.app1
-                    const app1 = backup.globalSettings?.app1;
-                    if (app1 && (app1.divisions || app1.bunks)) {
-                        const registry = {
-                            divisions: app1.divisions || {},
-                            bunks: app1.bunks || []
-                        };
-                        localStorage.setItem(GLOBAL_REGISTRY_KEY, JSON.stringify(registry));
-                        console.log("✓ Migrated divisions/bunks from old backup format");
+                    if (backup.globalRegistry.divisions) {
+                        unifiedState.divisions = backup.globalRegistry.divisions;
+                    }
+                    if (backup.globalRegistry.bunks) {
+                        unifiedState.bunks = backup.globalRegistry.bunks;
                     }
                 }
                 
-                // ⭐ Restore league histories if present
+                // Legacy app1 data extraction
+                if (unifiedState.app1) {
+                    if (unifiedState.app1.divisions && !unifiedState.divisions) {
+                        unifiedState.divisions = unifiedState.app1.divisions;
+                    }
+                    if (unifiedState.app1.bunks && (!unifiedState.bunks || unifiedState.bunks.length === 0)) {
+                        unifiedState.bunks = unifiedState.app1.bunks;
+                    }
+                }
+                
+                // ⭐ Save to all storage keys for maximum compatibility
+                localStorage.setItem(UNIFIED_CACHE_KEY, JSON.stringify(unifiedState));
+                localStorage.setItem(LEGACY_GLOBAL_SETTINGS_KEY, JSON.stringify(unifiedState));
+                localStorage.setItem(LEGACY_GLOBAL_REGISTRY_KEY, JSON.stringify({
+                    divisions: unifiedState.divisions || {},
+                    bunks: unifiedState.bunks || []
+                }));
+                localStorage.setItem("CAMPISTRY_LOCAL_CACHE", JSON.stringify(unifiedState));
+                
+                // Restore other data
+                if (backup.dailyData) {
+                    localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(backup.dailyData));
+                }
+                if (backup.rotationHistory) {
+                    localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify(backup.rotationHistory));
+                }
+                if (backup.smartTileHistory) {
+                    localStorage.setItem(SMART_TILE_HISTORY_KEY, JSON.stringify(backup.smartTileHistory));
+                }
+                if (backup.smartTileSpecialHistory) {
+                    localStorage.setItem(SMART_TILE_SPECIAL_HISTORY_KEY, JSON.stringify(backup.smartTileSpecialHistory));
+                }
                 if (backup.leagueHistory) {
                     localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(backup.leagueHistory));
-                    console.log("✓ Restored league history");
                 }
                 if (backup.specialtyLeagueHistory) {
                     localStorage.setItem(SPECIALTY_LEAGUE_HISTORY_KEY, JSON.stringify(backup.specialtyLeagueHistory));
-                    console.log("✓ Restored specialty league history");
                 }
                 
-                // Live apply imported cloud registry into running app (NO reload)
+                console.log("✅ Import complete:", {
+                    divisions: Object.keys(unifiedState.divisions || {}).length,
+                    bunks: (unifiedState.bunks || []).length,
+                    colorIndex: unifiedState.divisionColorIndex
+                });
+                
+                // Live apply if possible
                 try {
-                    const reg = backup.globalRegistry || {};
-                
-                    if (reg.divisions) {
-                        window.setGlobalDivisions?.(reg.divisions);
-                    }
-                    if (reg.bunks) {
-                        window.setGlobalBunks?.(reg.bunks);
-                    }
-                
-                    // Re-hydrate runtime memory immediately
-                    window.divisions = structuredClone(reg.divisions || {});
-                    window.globalBunks = structuredClone(reg.bunks || []);
-                
+                    window.setGlobalDivisions?.(unifiedState.divisions || {});
+                    window.setGlobalBunks?.(unifiedState.bunks || []);
+                    window.divisions = unifiedState.divisions || {};
+                    window.globalBunks = unifiedState.bunks || [];
+                    
                     window.loadCurrentDailyData?.();
                     window.initApp1?.();
                     window.initLeagues?.();
                     window.initScheduleSystem?.();
                     window.updateTable?.();
-                
-                    console.log("☁️ Cloud import LIVE APPLIED");
-                    alert("Import successful. Data loaded live — no reload required.");
-                } catch (e) {
-                    console.error("Live apply failed:", e);
-                    alert("Import partially applied — check console.");
+                    
+                    alert("Import successful! Data loaded.");
+                } catch (liveErr) {
+                    console.warn("Live apply failed, reload required:", liveErr);
+                    alert("Import successful! Reloading page...");
+                    window.location.reload();
                 }
-
+                
             } catch (err) {
                 console.error("Import failed:", err);
                 alert("Invalid backup file. Error: " + err.message);
             }
         };
         reader.readAsText(file);
-        // Reset file input so same file can be selected again
         e.target.value = "";
     }
-    // Expose for late-bind SaaS wiring
     window.__campistry_handleFileSelect = handleFileSelect;
     
     // ==========================================================
@@ -478,14 +480,13 @@
         try {
             const snapshot = {
                 timestamp: Date.now(),
-                [GLOBAL_SETTINGS_KEY]: localStorage.getItem(GLOBAL_SETTINGS_KEY),
+                [UNIFIED_CACHE_KEY]: localStorage.getItem(UNIFIED_CACHE_KEY),
                 [DAILY_DATA_KEY]: localStorage.getItem(DAILY_DATA_KEY),
                 [ROTATION_HISTORY_KEY]: localStorage.getItem(ROTATION_HISTORY_KEY),
-                // ⭐ Also save global registry
-                [GLOBAL_REGISTRY_KEY]: localStorage.getItem(GLOBAL_REGISTRY_KEY),
-                // ⭐ Also save league histories
                 [LEAGUE_HISTORY_KEY]: localStorage.getItem(LEAGUE_HISTORY_KEY),
-                [SPECIALTY_LEAGUE_HISTORY_KEY]: localStorage.getItem(SPECIALTY_LEAGUE_HISTORY_KEY)
+                [SPECIALTY_LEAGUE_HISTORY_KEY]: localStorage.getItem(SPECIALTY_LEAGUE_HISTORY_KEY),
+                [SMART_TILE_HISTORY_KEY]: localStorage.getItem(SMART_TILE_HISTORY_KEY),
+                [SMART_TILE_SPECIAL_HISTORY_KEY]: localStorage.getItem(SMART_TILE_SPECIAL_HISTORY_KEY)
             };
             localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(snapshot));
             if (!silent) alert("Work saved!");
@@ -507,21 +508,18 @@
             const date = new Date(snap.timestamp).toLocaleString();
             if (!confirm("Restore auto-save from " + date + "?\nThis will overwrite current data.")) return;
             
-            localStorage.setItem(GLOBAL_SETTINGS_KEY, snap[GLOBAL_SETTINGS_KEY]);
-            localStorage.setItem(DAILY_DATA_KEY, snap[DAILY_DATA_KEY]);
-            localStorage.setItem(ROTATION_HISTORY_KEY, snap[ROTATION_HISTORY_KEY]);
+            // Restore all keys from snapshot
+            Object.keys(snap).forEach(key => {
+                if (key === 'timestamp') return;
+                if (snap[key]) {
+                    localStorage.setItem(key, snap[key]);
+                }
+            });
             
-            // ⭐ Also restore global registry if present
-            if (snap[GLOBAL_REGISTRY_KEY]) {
-                localStorage.setItem(GLOBAL_REGISTRY_KEY, snap[GLOBAL_REGISTRY_KEY]);
-            }
-            
-            // ⭐ Also restore league histories if present
-            if (snap[LEAGUE_HISTORY_KEY]) {
-                localStorage.setItem(LEAGUE_HISTORY_KEY, snap[LEAGUE_HISTORY_KEY]);
-            }
-            if (snap[SPECIALTY_LEAGUE_HISTORY_KEY]) {
-                localStorage.setItem(SPECIALTY_LEAGUE_HISTORY_KEY, snap[SPECIALTY_LEAGUE_HISTORY_KEY]);
+            // Also sync to legacy keys
+            if (snap[UNIFIED_CACHE_KEY]) {
+                localStorage.setItem(LEGACY_GLOBAL_SETTINGS_KEY, snap[UNIFIED_CACHE_KEY]);
+                localStorage.setItem("CAMPISTRY_LOCAL_CACHE", snap[UNIFIED_CACHE_KEY]);
             }
             
             alert("Auto-save restored. Reloading...");
@@ -533,8 +531,8 @@
     };
     
     function startAutoSaveTimer() {
-        setInterval(() => performAutoSave(true), 300000);
-        setTimeout(() => performAutoSave(true), 5000);
+        setInterval(() => performAutoSave(true), 300000); // 5 minutes
+        setTimeout(() => performAutoSave(true), 5000); // Initial save after 5s
     }
     
     // ==========================================================
@@ -554,23 +552,16 @@
         
         if (exportBtn) {
             exportBtn.addEventListener("click", exportAllData);
-            console.log("✓ Export button wired up");
         }
         
         if (importBtn && importInput) {
-            importBtn.addEventListener("click", () => {
-                console.log("Import button clicked, opening file dialog...");
-                importInput.click();
-            });
+            importBtn.addEventListener("click", () => importInput.click());
             importInput.addEventListener("change", handleFileSelect);
-            console.log("✓ Import button wired up");
-        } else {
-            console.warn("Import button or input not found:", { importBtn, importInput });
         }
         
         startAutoSaveTimer();
         
-        console.log("🗓️ Calendar initialized");
+        console.log("🗓️ Calendar initialized (FIXED v2.0)");
     }
     
     window.initCalendar = initCalendar;
@@ -578,17 +569,16 @@
     // Load day immediately
     window.loadCurrentDailyData();
     
-    // ⭐ Auto-init on DOMContentLoaded if not already initialized
+    // Auto-init
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initCalendar);
     } else {
-        // DOM already ready, init now
         initCalendar();
     }
 })();
 
 // ==========================================================
-// LATE-BIND BACKUP / IMPORT WIRING (SaaS Safe)
+// LATE-BIND BACKUP / IMPORT WIRING
 // ==========================================================
 (function bindBackupWhenReady(){
     function wire() {
@@ -597,7 +587,6 @@
         const inp = document.getElementById("importFileInput");
         if (!exp || !imp || !inp) return;
 
-        // Use the globally exposed functions from the main closure
         exp.onclick = window.__campistry_exportAllData;
         imp.onclick = () => inp.click();
         inp.onchange = window.__campistry_handleFileSelect;
