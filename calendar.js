@@ -384,6 +384,8 @@
             alert("Export failed.");
         }
     }
+    // Expose for late-bind SaaS wiring
+    window.__campistry_exportAllData = exportAllData;
     
     function handleFileSelect(e) {
         const file = e.target.files[0];
@@ -430,24 +432,24 @@
                 }
                 
                 // Push imported divisions & bunks into cloud authority BEFORE reload
-try {
-    if (backup.globalRegistry) {
-        if (backup.globalRegistry.divisions) {
-            window.setGlobalDivisions?.(backup.globalRegistry.divisions);
-        }
-        if (backup.globalRegistry.bunks) {
-            window.setGlobalBunks?.(backup.globalRegistry.bunks);
-        }
-    }
-} catch(e) {
-    console.error("Cloud push failed:", e);
-}
+                try {
+                    if (backup.globalRegistry) {
+                        if (backup.globalRegistry.divisions) {
+                            window.setGlobalDivisions?.(backup.globalRegistry.divisions);
+                        }
+                        if (backup.globalRegistry.bunks) {
+                            window.setGlobalBunks?.(backup.globalRegistry.bunks);
+                        }
+                    }
+                } catch(e) {
+                    console.error("Cloud push failed:", e);
+                }
 
-// Give cloud write a moment to commit, then reload
-setTimeout(() => {
-    alert("Import successful. Reloading...");
-    window.location.reload();
-}, 1200);
+                // Give cloud write a moment to commit, then reload
+                setTimeout(() => {
+                    alert("Import successful. Reloading...");
+                    window.location.reload();
+                }, 1200);
 
             } catch (err) {
                 console.error("Import failed:", err);
@@ -458,6 +460,8 @@ setTimeout(() => {
         // Reset file input so same file can be selected again
         e.target.value = "";
     }
+    // Expose for late-bind SaaS wiring
+    window.__campistry_handleFileSelect = handleFileSelect;
     
     // ==========================================================
     // 9. AUTO-SAVE SYSTEM
@@ -574,6 +578,7 @@ setTimeout(() => {
         initCalendar();
     }
 })();
+
 // ==========================================================
 // LATE-BIND BACKUP / IMPORT WIRING (SaaS Safe)
 // ==========================================================
@@ -584,9 +589,10 @@ setTimeout(() => {
         const inp = document.getElementById("importFileInput");
         if (!exp || !imp || !inp) return;
 
-        exp.onclick = exportAllData;
+        // Use the globally exposed functions from the main closure
+        exp.onclick = window.__campistry_exportAllData;
         imp.onclick = () => inp.click();
-        inp.onchange = handleFileSelect;
+        inp.onchange = window.__campistry_handleFileSelect;
 
         console.log("🧬 Backup / Import wired (late bind)");
     }
