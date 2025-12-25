@@ -155,4 +155,13 @@ document.addEventListener("DOMContentLoaded", async () => {
             if (mainAppContainer) mainAppContainer.style.display = 'none';
         }
     });
+    
+    // ⭐ Listen for post-sign-in cloud hydration
+    // This happens when user signs in and cloud data is loaded AFTER initial boot
+    window.addEventListener('campistry-cloud-hydrated', function(e) {
+        if (e.detail?.afterSignIn && e.detail?.hasData) {
+            console.log("🔄 Post-sign-in cloud hydration detected, refreshing UI...");
+            initializeUIComponents();
+        }
+    });
 });
