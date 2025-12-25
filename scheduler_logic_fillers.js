@@ -1,19 +1,14 @@
-
 // ============================================================================
-// scheduler_logic_fillers.js (FIXED v2)
+// scheduler_logic_fillers.js (FIXED v3 - GLOBAL LOCK INTEGRATION)
 // 
-// CRITICAL FIXES:
-// 1. Same-activity requirement when sharing fields
-// 2. Adjacent bunk preference scoring
-// 3. Proper capacity checks before assignment
+// CRITICAL UPDATE:
+// - All filler functions check GlobalFieldLocks before considering a field
+// - Locked fields are completely excluded from available options
 // ============================================================================
 
 (function () {
     'use strict';
 
-    // ---------------------------------------------------------
-    // Safe fieldLabel wrapper
-    // ---------------------------------------------------------
     function fieldLabel(f) {
         if (window.SchedulerCoreUtils?.fieldLabel) {
             return window.SchedulerCoreUtils.fieldLabel(f);
@@ -27,9 +22,6 @@
         return match ? parseInt(match[1], 10) : Infinity;
     }
 
-    // ---------------------------------------------------------
-    // Preference Score
-    // ---------------------------------------------------------
     function calculatePreferenceScore(fieldProps, divName) {
         if (!fieldProps?.preferences?.enabled) return 0;
 
@@ -40,9 +32,6 @@
         return 1000 - idx * 100;
     }
 
-    // ---------------------------------------------------------
-    // Get current field usage (for sharing checks)
-    // ---------------------------------------------------------
     function getFieldCurrentState(fieldName, block) {
         const slots = block.slots || [];
         const schedules = window.scheduleAssignments || {};
@@ -85,16 +74,26 @@
         return state;
     }
 
-    // ---------------------------------------------------------
-    // Check if activity matches existing on field (for sharing)
-    // ---------------------------------------------------------
+    /**
+     * ★★★ CHECK IF FIELD IS GLOBALLY LOCKED ★★★
+     */
+    function isFieldGloballyLocked(fieldName, block) {
+        if (!window.GlobalFieldLocks) return false;
+        const slots = block.slots || [];
+        if (slots.length === 0) return false;
+        return window.GlobalFieldLocks.isFieldLocked(fieldName, slots) !== null;
+    }
+
     function canShareWithActivity(fieldName, block, activityName, activityProperties) {
+        // ★★★ CHECK GLOBAL LOCK FIRST ★★★
+        if (isFieldGloballyLocked(fieldName, block)) {
+            return false;
+        }
+        
         const state = getFieldCurrentState(fieldName, block);
         
-        // Empty field - can use
         if (state.count === 0) return true;
         
-        // Check capacity
         const props = activityProperties[fieldName] || {};
         let maxCapacity = 1;
         if (props.sharableWith?.capacity) {
@@ -103,16 +102,13 @@
             maxCapacity = 2;
         }
         
-        // At capacity - can't share
         if (state.count >= maxCapacity) {
             return false;
         }
         
-        // Check activity match
         if (state.activities.size > 0 && activityName) {
             const myActivity = activityName.toLowerCase().trim();
             if (!state.activities.has(myActivity)) {
-                // Different activity - can't share
                 return false;
             }
         }
@@ -120,19 +116,19 @@
         return true;
     }
 
-    // ---------------------------------------------------------
-    // Calculate sharing bonus (adjacent bunks score higher)
-    // ---------------------------------------------------------
     function calculateSharingBonus(fieldName, block, activityProperties) {
+        // ★★★ CHECK GLOBAL LOCK FIRST ★★★
+        if (isFieldGloballyLocked(fieldName, block)) {
+            return -999999; // Completely unavailable
+        }
+        
         const state = getFieldCurrentState(fieldName, block);
         
-        // Empty field - neutral
         if (state.count === 0) return 0;
         
         const myNum = getBunkNumber(block.bunk);
         if (myNum === Infinity) return 0;
         
-        // Calculate average distance to existing bunks
         let totalDistance = 0;
         for (const existingBunk of state.bunks) {
             const existingNum = getBunkNumber(existingBunk);
@@ -142,19 +138,11 @@
         }
         
         const avgDistance = state.bunks.length > 0 ? totalDistance / state.bunks.length : 0;
-        
-        // Distance 1 = +100 bonus
-        // Distance 2 = +80 bonus
-        // Distance 5 = +20 bonus
-        // Distance 10+ = 0 or negative
         const bonus = Math.max(0, 120 - avgDistance * 20);
         
         return bonus;
     }
 
-    // ---------------------------------------------------------
-    // Fairness Score (Sports Slot)
-    // ---------------------------------------------------------
     function calculateFairnessScore(activityName, bunkName, rotationHistory, yesterdayHistory, doneToday) {
         const hist = rotationHistory?.bunks?.[bunkName] || {};
         const yesterday = yesterdayHistory?.[bunkName] || [];
@@ -164,22 +152,13 @@
         const didToday = doneToday.has(activityName);
 
         let score = 0;
-
-        // Prefer sports done least this week
         score -= count * 50;
-
-        // Hard avoid yesterday unless no alternative
         if (didYesterday) score -= 600;
-
-        // Never repeat today
         if (didToday) score -= 9999;
 
         return score;
     }
 
-    // ---------------------------------------------------------
-    // Freshness Sorting (ENHANCED with sharing logic)
-    // ---------------------------------------------------------
     function sortPicksByFreshness(picks, bunkHist, divName, activityProperties, block) {
         return picks.sort((a, b) => {
             const fieldA = fieldLabel(a.field);
@@ -188,17 +167,14 @@
             const propsA = activityProperties[fieldA] || {};
             const propsB = activityProperties[fieldB] || {};
 
-            // 1. Preference score (division priority)
             const prefA = calculatePreferenceScore(propsA, divName);
             const prefB = calculatePreferenceScore(propsB, divName);
             if (prefA !== prefB) return prefB - prefA;
 
-            // 2. Sharing bonus (adjacent bunks)
             const shareA = calculateSharingBonus(fieldA, block, activityProperties);
             const shareB = calculateSharingBonus(fieldB, block, activityProperties);
             if (shareA !== shareB) return shareB - shareA;
 
-            // 3. Freshness (least recently used)
             const lastA = bunkHist[a._activity] || 0;
             const lastB = bunkHist[b._activity] || 0;
             if (lastA !== lastB) return lastA - lastB;
@@ -207,9 +183,6 @@
         });
     }
 
-    // ---------------------------------------------------------
-    // Determine activities already done today (no repeats)
-    // ---------------------------------------------------------
     function getGeneralActivitiesDoneToday(bunkName, currentSlotIndex) {
         const set = new Set();
         const sched = window.scheduleAssignments?.[bunkName] || [];
@@ -223,9 +196,6 @@
         return set;
     }
 
-    // ---------------------------------------------------------
-    // Max Usage Guard
-    // ---------------------------------------------------------
     function isOverUsageLimit(activityName, bunk, activityProperties, historicalCounts, todaySet) {
         const props = activityProperties[activityName];
         const max = props?.maxUsage || 0;
@@ -241,7 +211,7 @@
     }
 
     // ========================================================================
-    // SPECIAL ACTIVITY SELECTOR (ENHANCED)
+    // SPECIAL ACTIVITY SELECTOR (WITH GLOBAL LOCK CHECK)
     // ========================================================================
     window.findBestSpecial = function (
         block,
@@ -268,12 +238,15 @@
             const actName = pick._activity;
             const fieldName = fieldLabel(pick.field);
 
-            // Check if can share (same activity requirement)
+            // ★★★ CHECK GLOBAL LOCK FIRST ★★★
+            if (isFieldGloballyLocked(fieldName, block)) {
+                return false;
+            }
+
             if (!canShareWithActivity(fieldName, block, actName, activityProperties)) {
                 return false;
             }
 
-            // canBlockFit with activity name
             if (!window.SchedulerCoreUtils.canBlockFit(
                 block,
                 fieldName,
@@ -283,11 +256,9 @@
                 false
             )) return false;
 
-            // max usage
             if (isOverUsageLimit(actName, block.bunk, activityProperties, historicalCounts, doneToday))
                 return false;
 
-            // today repeat
             if (doneToday.has(actName)) return false;
 
             return true;
@@ -298,7 +269,7 @@
     };
 
     // ========================================================================
-    // SPORTS ACTIVITY SELECTOR (ENHANCED)
+    // SPORTS ACTIVITY SELECTOR (WITH GLOBAL LOCK CHECK)
     // ========================================================================
     window.findBestSportActivity = function (
         block,
@@ -330,7 +301,11 @@
             const actName = pick._activity;
             const fieldName = fieldLabel(pick.field);
 
-            // Check if can share (same activity requirement)
+            // ★★★ CHECK GLOBAL LOCK FIRST ★★★
+            if (isFieldGloballyLocked(fieldName, block)) {
+                return false;
+            }
+
             if (!canShareWithActivity(fieldName, block, actName, activityProperties)) {
                 return false;
             }
@@ -356,7 +331,7 @@
     };
 
     // ========================================================================
-    // SPORTS SLOT — FAIRNESS-BASED SELECTOR (ENHANCED)
+    // SPORTS SLOT — FAIRNESS-BASED SELECTOR (WITH GLOBAL LOCK CHECK)
     // ========================================================================
     function findBestSportsSlot(block, allActivities, fieldUsageBySlot, yesterdayHistory,
                                 activityProperties, rotationHistory, historicalCounts) {
@@ -386,15 +361,18 @@
             });
         });
 
-        // Score with fairness AND sharing logic
         const scored = picks
             .map(pick => {
                 const actName = pick._activity;
                 const fieldName = pick.field;
 
+                // ★★★ CHECK GLOBAL LOCK FIRST ★★★
+                if (isFieldGloballyLocked(fieldName, block)) {
+                    return null;
+                }
+
                 if (!activityProperties[fieldName]) return null;
 
-                // Check sharing compatibility FIRST
                 if (!canShareWithActivity(fieldName, block, actName, activityProperties)) {
                     return null;
                 }
@@ -408,10 +386,8 @@
                     false
                 )) return null;
 
-                // Calculate score
                 let score = 0;
                 
-                // Fairness score
                 score += calculateFairnessScore(
                     actName,
                     block.bunk,
@@ -420,7 +396,6 @@
                     doneToday
                 );
                 
-                // Sharing bonus (adjacent bunks)
                 score += calculateSharingBonus(fieldName, block, activityProperties);
 
                 return { ...pick, _score: score };
@@ -462,7 +437,7 @@
 
         if (specialPick) return specialPick;
 
-        // 2) Try SPORTS SLOT (fairness-based with sharing logic)
+        // 2) Try SPORTS SLOT
         const sportSlotPick = findBestSportsSlot(
             block,
             allActivities,
