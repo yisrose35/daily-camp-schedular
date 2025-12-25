@@ -147,20 +147,38 @@
             return;
         }
         
-        // Wait for cloud to be ready (with timeout)
-        console.log("🚀 Waiting for cloud bridge...");
-        let attempts = 0;
-        while (!window.__CAMPISTRY_CLOUD_READY__ && attempts < 50) {
-            await new Promise(r => setTimeout(r, 100));
-            attempts++;
-        }
+        // ⭐ Wait for cloud hydration event (this fires AFTER cloud data is loaded)
+        console.log("🚀 Waiting for cloud data...");
         
-        if (window.__CAMPISTRY_CLOUD_READY__) {
-            console.log("☁️ Cloud ready after", attempts * 100, "ms");
+        const cloudReady = await new Promise((resolve) => {
+            // If already ready with data, proceed
+            const cache = JSON.parse(localStorage.getItem('CAMPISTRY_UNIFIED_STATE') || '{}');
+            if (Object.keys(cache.divisions || {}).length > 0) {
+                console.log("🚀 Local cache has data, proceeding");
+                resolve(true);
+                return;
+            }
+            
+            // Wait for cloud hydration event
+            const handler = (e) => {
+                console.log("🚀 Cloud hydration event received:", e.detail);
+                window.removeEventListener('campistry-cloud-hydrated', handler);
+                resolve(true);
+            };
+            window.addEventListener('campistry-cloud-hydrated', handler);
+            
+            // Timeout after 8 seconds
+            setTimeout(() => {
+                window.removeEventListener('campistry-cloud-hydrated', handler);
+                console.warn("⚠️ Cloud hydration timeout after 8s");
+                resolve(false);
+            }, 8000);
+        });
+        
+        if (cloudReady) {
+            console.log("☁️ Cloud ready, initializing app...");
         } else {
-            console.warn("⚠️ Cloud not ready after 5s, proceeding anyway");
-            // Force the flag so other code can proceed
-            window.__CAMPISTRY_CLOUD_READY__ = true;
+            console.warn("⚠️ Proceeding without cloud data");
         }
         
         // Mark as booted to prevent duplicate boots
