@@ -584,21 +584,7 @@ function renderBulkImportUI() {
     const card = document.createElement("section");
     card.className = "setup-card setup-card-wide bulk-card";
     card.id = "bulk-data-card";
-    card.innerHTML = `
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:20px;">
-        <div style="flex:1;">
-          <h3 style="margin:0; font-size:1.1rem; color:#111827; display:flex; align-items:center; gap:8px;">
-             Camp Setup &amp; Configuration
-             <span style="font-size:0.7rem; background:#8A5DFF; color:white; padding:2px 8px; border-radius:999px;">Step 1</span>
-          </h3>
-          <p class="muted" style="margin:4px 0 0;">Import data via CSV (Divisions, Bunks, Camper Names) or add manually below.</p>
-        </div>
-        <div style="display:flex; gap:10px; align-items:center;">
-            <button id="btn-manage-sports" style="background:#FFFFFF; border:1px solid #E5E7EB; color:#374151; padding:8px 16px; border-radius:999px; cursor:pointer; font-size:0.85rem; font-weight:500; display:flex; align-items:center; gap:6px;">
-                <span>⚡</span> Sports Rules
-            </button>
-            <div style="height:24px; width:1px; background:#E5E7EB;"></div>
-            <button id="btn-download-template" style="background:white; border:1px solid #D1D5DB; padding:8px 16px; border-radius:999px; font-size:0.85rem; cursor:pointer;">Template</button>
+    
             <button id="btn-trigger-upload" style="background:#0094FF; color:white; border:none; padding:8px 18px; border-radius:999px; font-size:0.85rem; cursor:pointer; font-weight:600;">Upload CSV</button>
             <input type="file" id="bulk-upload-input" accept=".csv" style="display:none;">
         </div>
