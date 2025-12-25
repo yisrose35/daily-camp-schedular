@@ -50,7 +50,8 @@
 
     await window.supabase.from(TABLE).upsert({
       camp_id: camp.id,
-      owner_id: camp.owner_id,
+      owner_id: camp.owner,
+
       state
     });
   }
