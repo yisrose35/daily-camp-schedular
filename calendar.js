@@ -357,6 +357,8 @@
     let _importInProgress = false;
     
     function handleFileSelect(e) {
+        console.log("📁 handleFileSelect called, importInProgress:", _importInProgress);
+        
         // Prevent double-trigger
         if (_importInProgress) {
             console.log("Import already in progress, ignoring duplicate trigger");
@@ -364,12 +366,15 @@
         }
         
         const file = e.target.files?.[0];
+        console.log("📁 File from event:", file?.name);
+        
         if (!file) {
             console.log("No file selected");
             return;
         }
         
         _importInProgress = true;
+        console.log("📁 Starting import of:", file.name);
         
         // Reset input immediately to allow re-selection of same file
         const input = e.target;
@@ -377,18 +382,21 @@
         if (!confirm("Importing will overwrite ALL current data.\nProceed?")) {
             input.value = "";
             _importInProgress = false;
+            console.log("📁 Import cancelled by user");
             return;
         }
         
-        console.log("📥 Starting import of:", file.name);
+        console.log("📥 User confirmed, reading file...");
         
         const reader = new FileReader();
+        
         reader.onload = function(evt) {
+            console.log("📥 File read complete, parsing JSON...");
             try {
                 const backup = JSON.parse(evt.target.result);
                 
                 console.log("📥 Importing backup version:", backup.exportVersion || 1);
-                console.log("📥 Backup contents:", Object.keys(backup));
+                console.log("📥 Backup keys:", Object.keys(backup));
                 
                 // ⭐ Build unified state from backup
                 let unifiedState = {};
@@ -637,53 +645,67 @@
 })();
 
 // ==========================================================
-// LATE-BIND BACKUP / IMPORT WIRING (prevents double-binding)
+// LATE-BIND BACKUP / IMPORT WIRING (FIXED)
 // ==========================================================
 (function bindBackupWhenReady(){
-    let _wired = false;
+    let _bound = false;
     
     function wire() {
-        if (_wired) return;
+        if (_bound) return;
         
         const exp = document.getElementById("exportBackupBtn");
         const imp = document.getElementById("importBackupBtn");
         const inp = document.getElementById("importFileInput");
         
-        if (!exp || !imp || !inp) return;
+        console.log("🔌 Late-bind check:", { exp: !!exp, imp: !!imp, inp: !!inp });
         
-        // Only wire if not already wired
-        if (!exp._campistryWired) {
-            exp.onclick = function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                window.__campistry_exportAllData?.();
-            };
-            exp._campistryWired = true;
+        if (!exp || !imp || !inp) {
+            console.log("🔌 Elements not ready yet...");
+            return;
         }
         
-        if (!imp._campistryWired) {
-            imp.onclick = function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                inp.click();
-            };
-            imp._campistryWired = true;
-        }
+        // Export button
+        exp.onclick = function(e) {
+            console.log("📤 Export clicked");
+            e.preventDefault();
+            if (window.__campistry_exportAllData) {
+                window.__campistry_exportAllData();
+            } else {
+                console.error("Export function not found!");
+            }
+        };
         
-        if (!inp._campistryWired) {
-            // Remove any existing listeners by cloning
-            const newInp = inp.cloneNode(true);
-            inp.parentNode.replaceChild(newInp, inp);
-            
-            newInp.onchange = window.__campistry_handleFileSelect;
-            newInp._campistryWired = true;
-        }
+        // Import button - opens file dialog
+        imp.onclick = function(e) {
+            console.log("📥 Import button clicked, opening file dialog...");
+            e.preventDefault();
+            inp.value = ""; // Reset so same file can be selected again
+            inp.click();
+        };
         
-        _wired = true;
-        console.log("🧬 Backup / Import wired (late bind)");
+        // File input change handler
+        inp.onchange = function(e) {
+            console.log("📁 File selected:", e.target.files?.[0]?.name);
+            if (window.__campistry_handleFileSelect) {
+                window.__campistry_handleFileSelect(e);
+            } else {
+                console.error("Import handler not found!");
+            }
+        };
+        
+        _bound = true;
+        console.log("✅ Backup / Import buttons wired successfully");
     }
 
-    setTimeout(wire, 200);
+    // Try multiple times in case DOM isn't ready
+    setTimeout(wire, 100);
+    setTimeout(wire, 300);
     setTimeout(wire, 600);
-    setTimeout(wire, 1200);
+    setTimeout(wire, 1000);
+    setTimeout(wire, 2000);
+    
+    // Also try on DOMContentLoaded
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', wire);
+    }
 })();
