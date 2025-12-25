@@ -573,56 +573,7 @@ function handleBulkImport(file) {
     reader.readAsText(file);
 }
 
-function showSportsRulesModal() {
-    const overlay = document.createElement("div");
-    overlay.className = "sports-modal-overlay";
-    const modal = document.createElement("div");
-    modal.className = "sports-modal";
-    modal.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-        <h2 style="margin:0; color:#111827;">Sports Capacity Rules</h2>
-        <button id="close-sports-modal" style="border:none; background:none; font-size:1.5rem; cursor:pointer;">&times;</button>
-      </div>
-      <p class="muted" style="margin-bottom:15px;">Set max total players per sport.</p>
-      <div id="sports-rules-list"></div>
-      <div style="margin-top:22px; text-align:right;">
-        <button id="save-sports-rules" style="background:#00C896; color:white; border:none; padding:8px 20px; border-radius:999px; cursor:pointer; font-weight:600;">
-            Save Rules
-        </button>
-      </div>
-    `;
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-    
-    const list = modal.querySelector("#sports-rules-list");
-    const sortedSports = [...allSports].sort();
-    sortedSports.forEach(sport => {
-        const meta = sportMetaData[sport] || {};
-        const cap = meta.maxCapacity || "";
-        const row = document.createElement("div");
-        row.className = "sports-row";
-        row.innerHTML = `
-            <strong>${sport}</strong>
-            <div>
-                <span style="font-size:0.8rem; margin-right:5px;">Max Kids:</span>
-                <input type="number" class="sport-cap-input" data-sport="${sport}" value="${cap}" placeholder="∞">
-            </div>
-        `;
-        list.appendChild(row);
-    });
-    
-    modal.querySelector("#close-sports-modal").onclick = () => overlay.remove();
-    modal.querySelector("#save-sports-rules").onclick = () => {
-        modal.querySelectorAll(".sport-cap-input").forEach(input => {
-            const sport = input.dataset.sport;
-            const val = parseInt(input.value);
-            if (!sportMetaData[sport]) sportMetaData[sport] = {};
-            sportMetaData[sport].maxCapacity = val > 0 ? val : null;
-        });
-        saveData();
-        overlay.remove();
-    };
-}
+
 
 function renderBulkImportUI() {
     if (document.getElementById("bulk-data-card")) return;
