@@ -75,18 +75,30 @@
     }
 
     /**
-     * ★★★ CHECK IF FIELD IS GLOBALLY LOCKED ★★★
+     * ★★★ CHECK IF FIELD IS UNAVAILABLE (DISABLED OR GLOBALLY LOCKED) ★★★
      */
-    function isFieldGloballyLocked(fieldName, block) {
+    function isFieldUnavailable(fieldName, block) {
+        // ★★★ CHECK DISABLED FIELDS FIRST (rainy day, manual overrides) ★★★
+        const disabledFields = window.currentDisabledFields || [];
+        if (disabledFields.includes(fieldName)) {
+            return true;
+        }
+        
+        // Then check global locks
         if (!window.GlobalFieldLocks) return false;
         const slots = block.slots || [];
         if (slots.length === 0) return false;
         return window.GlobalFieldLocks.isFieldLocked(fieldName, slots) !== null;
     }
+    
+    // Keep old function name as alias for compatibility
+    function isFieldGloballyLocked(fieldName, block) {
+        return isFieldUnavailable(fieldName, block);
+    }
 
     function canShareWithActivity(fieldName, block, activityName, activityProperties) {
-        // ★★★ CHECK GLOBAL LOCK FIRST ★★★
-        if (isFieldGloballyLocked(fieldName, block)) {
+        // ★★★ CHECK IF FIELD IS UNAVAILABLE (DISABLED OR LOCKED) ★★★
+        if (isFieldUnavailable(fieldName, block)) {
             return false;
         }
         
@@ -117,8 +129,8 @@
     }
 
     function calculateSharingBonus(fieldName, block, activityProperties) {
-        // ★★★ CHECK GLOBAL LOCK FIRST ★★★
-        if (isFieldGloballyLocked(fieldName, block)) {
+        // ★★★ CHECK IF FIELD IS UNAVAILABLE (DISABLED OR LOCKED) ★★★
+        if (isFieldUnavailable(fieldName, block)) {
             return -999999; // Completely unavailable
         }
         
@@ -238,8 +250,8 @@
             const actName = pick._activity;
             const fieldName = fieldLabel(pick.field);
 
-            // ★★★ CHECK GLOBAL LOCK FIRST ★★★
-            if (isFieldGloballyLocked(fieldName, block)) {
+            // ★★★ CHECK IF FIELD IS UNAVAILABLE (DISABLED OR LOCKED) ★★★
+            if (isFieldUnavailable(fieldName, block)) {
                 return false;
             }
 
@@ -301,8 +313,8 @@
             const actName = pick._activity;
             const fieldName = fieldLabel(pick.field);
 
-            // ★★★ CHECK GLOBAL LOCK FIRST ★★★
-            if (isFieldGloballyLocked(fieldName, block)) {
+            // ★★★ CHECK IF FIELD IS UNAVAILABLE (DISABLED OR LOCKED) ★★★
+            if (isFieldUnavailable(fieldName, block)) {
                 return false;
             }
 
@@ -366,8 +378,8 @@
                 const actName = pick._activity;
                 const fieldName = pick.field;
 
-                // ★★★ CHECK GLOBAL LOCK FIRST ★★★
-                if (isFieldGloballyLocked(fieldName, block)) {
+                // ★★★ CHECK IF FIELD IS UNAVAILABLE (DISABLED OR LOCKED) ★★★
+                if (isFieldUnavailable(fieldName, block)) {
                     return null;
                 }
 
