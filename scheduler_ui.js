@@ -1,12 +1,15 @@
-
 // ============================================================================
-// scheduler_ui.js (GCM FINAL: LEAGUE SOURCE OF TRUTH)
+// scheduler_ui.js (COMBINED: CAMPISTRY + ELECTIVE DISPLAY + LEAGUE SOURCE OF TRUTH)
 //
 // FIXES:
+// ✓ Waits for Campistry cloud system to be ready
 // ✓ Connects UI directly to 'window.leagueAssignments' (The League Engine Output).
+// ✓ Elective tiles now display like leagues (combined cells showing activities)
 // ✓ No longer relies on "scanning bunks" for league data.
 // ✓ Guarantees the UI shows exactly what the League Generator created.
 // ============================================================================
+
+// Wait for Campistry cloud system
 (function waitForCampistry() {
   if (!window.__CAMPISTRY_READY__) {
     setTimeout(waitForCampistry, 50);
@@ -56,7 +59,6 @@
       const cleanInput = String(input).toLowerCase().trim();
       
       if (knownNames.includes(input)) return input;
-
       const sortedNames = [...knownNames].sort((a,b) => b.length - a.length);
       for (const name of sortedNames) {
           const cleanName = name.toLowerCase().trim();
@@ -73,6 +75,7 @@
   const UI_GENERATED_EVENTS = new Set([
     "general activity", "general activity slot", "activity", "activities", "sports", "sport", "sports slot", "special activity", "swim", "league game", "specialty league"
   ]);
+
   function uiIsGeneratedEventName(name) {
     if (!name) return false;
     return UI_GENERATED_EVENTS.has(String(name).trim().toLowerCase());
@@ -85,7 +88,6 @@
     const slots = [];
     const times = window.unifiedTimes;
     if (!times) return slots;
-
     for (let i = 0; i < times.length; i++) {
       const slotStart = new Date(times[i].start).getHours() * 60 + new Date(times[i].start).getMinutes();
       let slotEnd;
@@ -94,7 +96,6 @@
       } else {
          slotEnd = slotStart + INCREMENT_MINS;
       }
-
       if (startMin < slotEnd && endMin > slotStart) {
         slots.push(i);
       }
@@ -111,7 +112,6 @@
     // 1. Get user input
     const newName = prompt(`Edit activity for ${bunk}\n${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}\n(Enter CLEAR or FREE to empty)`, current);
     if (newName === null) return; 
-
     const value = newName.trim();
     const isClear = (value === "" || value.toUpperCase() === "CLEAR" || value.toUpperCase() === "FREE");
     
@@ -165,7 +165,6 @@
             let capacityLimit = 1;
             if (props.sharableWith?.capacity) capacityLimit = parseInt(props.sharableWith.capacity);
             else if (props.sharable || props.sharableWith?.type === 'all' || props.sharableWith?.type === 'custom') capacityLimit = 2;
-
             let myWeight = 1;
             const isAvailable = window.SchedulerCoreUtils.timeline.checkAvailability(
                 resolvedName, 
@@ -175,7 +174,6 @@
                 capacityLimit,
                 bunk 
             );
-
             if (!isAvailable) {
                 const currentPeak = window.SchedulerCoreUtils.timeline.getPeakUsage(resolvedName, startMin, endMin, bunk);
                 warnings.push(`⚠️ CAPACITY CONFLICT: "${resolvedName}" is full during this time.\n   Current Peak: ${currentPeak} bunks.\n   Limit: ${capacityLimit}.`);
@@ -219,7 +217,6 @@
         };
       });
     }
-
     saveSchedule();
     updateTable();
   }
@@ -275,8 +272,8 @@
 
     availableDivisions.forEach((div) => {
       const bunks = (divisions[div]?.bunks || []).slice().sort((a, b) => 
-    String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
-);
+        String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
+      );
       if (bunks.length === 0) return;
 
       const table = document.createElement("table");
@@ -296,13 +293,11 @@
       const thTime = document.createElement("th");
       thTime.textContent = "Time";
       tr2.appendChild(thTime);
-
       bunks.forEach((b) => {
         const thB = document.createElement("th");
         thB.textContent = b;
         tr2.appendChild(thB);
       });
-
       thead.appendChild(tr2);
       table.appendChild(thead);
 
@@ -335,7 +330,7 @@
         tdTime.textContent = block.label;
         tr.appendChild(tdTime);
 
-        // --- LEAGUE BLOCK RENDERER (The Critical Fix) ---
+        // --- LEAGUE BLOCK RENDERER ---
         if (block.event.startsWith("League Game") || block.event.startsWith("Specialty League")) {
           const td = document.createElement("td");
           td.colSpan = bunks.length;
@@ -348,12 +343,9 @@
           let titleHtml = block.event;
 
           // 1. CHECK THE MASTER SOURCE (window.leagueAssignments)
-          // This is the generated output from the League Engine
           const leagueData = window.leagueAssignments?.[div]?.[slotIdx];
           
           if (leagueData && leagueData.matchups) {
-              // Found authoritative data!
-              // Format matchups for display
               allMatchups = leagueData.matchups.map(m => 
                  `${m.teamA} vs ${m.teamB} — ${m.sport} @ ${m.field || 'TBD'}`
               );
@@ -383,10 +375,44 @@
           } else {
             td.innerHTML = `<div>${titleHtml}</div><ul>${allMatchups.map((m) => `<li>${m}</li>`).join("")}</ul>`;
           }
-
           td.style.cursor = "pointer";
           td.onclick = () => editCell(bunks[0], block.startMin, block.endMin, block.event);
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+          return;
+        }
 
+        // --- ELECTIVE BLOCK RENDERER ---
+        if (block.type === "elective" || block.event.toLowerCase().startsWith("elective")) {
+          const td = document.createElement("td");
+          td.colSpan = bunks.length;
+          td.style.background = "#f3e5f5"; // Light purple
+          td.style.fontWeight = "bold";
+
+          const activities = block.electiveActivities || block.reservedFields || [];
+          
+          let contentHtml = `<div style="color:#6a1b9a;">🎯 Elective</div>`;
+          
+          if (activities.length > 0) {
+            contentHtml += `<div style="font-size:0.9em;font-weight:normal;margin-top:4px;">`;
+            contentHtml += `<strong>Reserved for ${div}:</strong> ${activities.join(', ')}`;
+            contentHtml += `</div>`;
+            contentHtml += `<div style="font-size:0.8em;color:#666;margin-top:2px;">`;
+            contentHtml += `Other divisions cannot use these activities during this time.`;
+            contentHtml += `</div>`;
+          } else {
+            contentHtml += `<div style="font-size:0.85em;color:#666;">No activities specified</div>`;
+          }
+          
+          td.innerHTML = contentHtml;
+          td.style.cursor = "pointer";
+          td.onclick = () => {
+            const msg = `Elective Block for ${div}\n\n` +
+                        `Time: ${block.label}\n` +
+                        `Reserved Activities: ${activities.join(', ') || 'None'}\n\n` +
+                        `These activities are locked for other divisions during this time.`;
+            alert(msg);
+          };
           tr.appendChild(td);
           tbody.appendChild(tr);
           return;
@@ -420,8 +446,10 @@
           td.onclick = () => editCell(bunk, block.startMin, block.endMin, label);
           tr.appendChild(td);
         });
+
         tbody.appendChild(tr);
       });
+
       table.appendChild(tbody);
       wrapper.appendChild(table);
     });
