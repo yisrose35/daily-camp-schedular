@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v8 - ELECTIVE + SWIM/POOL ALIAS)
+// scheduler_core_main.js (FIXED v9 - RAINY DAY AWARE + GLOBAL DISABLED EXPOSURE)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks (RESET)
@@ -382,6 +382,9 @@
         console.log("★★★ OPTIMIZER STARTED (v9 - RAINY DAY AWARE) ★★★");
         console.log("=".repeat(70));
         
+        // ★★★ RESET disabled fields at start of each run ★★★
+        window.currentDisabledFields = [];
+        
         const Utils = window.SchedulerCoreUtils;
         const config = Utils.loadAndFilterData();
         window.activityProperties = config.activityProperties;
@@ -447,14 +450,21 @@
             
             // Update config object so downstream solvers see the disabled fields
             config.disabledFields = disabledFields;
+            
+            // ★★★ CRITICAL: Expose disabled fields globally so canBlockFit can check them ★★★
+            window.currentDisabledFields = disabledFields;
 
             console.log(`[RainyDay] Total disabled fields: ${disabledFields.length}`);
+            console.log(`[RainyDay] Disabled: ${disabledFields.join(', ')}`);
             
             // Note: We don't need to explicitly "enable" rainy-day-only specials here 
             // because they are likely in masterSpecials already. 
             // The filtering logic (which is in logic fillers) uses the rainyDayOnly flag.
             // Since we are only updating core_main, we ensure the disabledFields list is correct
             // so smart tiles and other logic in this file don't use outdoor fields.
+        } else {
+            // Even when not rainy day, expose disabled fields (from manual overrides)
+            window.currentDisabledFields = disabledFields || [];
         }
 
         // =========================================================================
