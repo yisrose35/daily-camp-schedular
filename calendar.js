@@ -556,3 +556,24 @@
         initCalendar();
     }
 })();
+// ==========================================================
+// LATE-BIND BACKUP / IMPORT WIRING (SaaS Safe)
+// ==========================================================
+(function bindBackupWhenReady(){
+    function wire() {
+        const exp = document.getElementById("exportBackupBtn");
+        const imp = document.getElementById("importBackupBtn");
+        const inp = document.getElementById("importFileInput");
+        if (!exp || !imp || !inp) return;
+
+        exp.onclick = exportAllData;
+        imp.onclick = () => inp.click();
+        inp.onchange = handleFileSelect;
+
+        console.log("🧬 Backup / Import wired (late bind)");
+    }
+
+    setTimeout(wire, 200);
+    setTimeout(wire, 600);
+    setTimeout(wire, 1200);
+})();
