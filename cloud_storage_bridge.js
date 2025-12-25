@@ -2,6 +2,8 @@
 // cloud_storage_bridge.js — Campistry Canonical Cloud State Engine
 // DIAGNOSTIC MODE — exposes Supabase write errors
 // =================================================================
+console.log("CLOUD BRIDGE LOADING...");
+
 (function () {
   'use strict';
 
