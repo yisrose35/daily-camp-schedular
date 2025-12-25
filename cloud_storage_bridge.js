@@ -251,10 +251,14 @@
       setLocalCache(localData);
       _initialized = true;
       window.__CAMPISTRY_CLOUD_READY__ = true;
+      
+      // ⭐ Dispatch event so other modules know cloud is ready
+      window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
       return;
     }
     
     // Step 4: Try to hydrate from cloud (async, non-blocking)
+    let hydrated = false;
     try {
       const cloudState = await loadFromCloud();
       if (cloudState && Object.keys(cloudState).length > 0) {
@@ -267,6 +271,7 @@
           const merged = { ...localData, ...cloudState };
           setLocalCache(merged);
           console.log("☁️ Hydrated from cloud (cloud was newer)");
+          hydrated = true;
         } else if (localTime > cloudTime) {
           // Local is newer - push to cloud
           console.log("☁️ Local data is newer - will sync to cloud");
@@ -277,6 +282,7 @@
           const merged = { ...localData, ...cloudState };
           setLocalCache(merged);
           console.log("☁️ Hydrated from cloud");
+          hydrated = true;
         }
       }
     } catch (e) {
@@ -285,6 +291,12 @@
     
     _initialized = true;
     window.__CAMPISTRY_CLOUD_READY__ = true;
+    
+    // ⭐ Dispatch event so other modules know cloud is ready and can reload
+    console.log("☁️ Dispatching cloud-hydrated event, hydrated:", hydrated);
+    window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
+      detail: { hydrated, hasData: Object.keys(getLocalCache().divisions || {}).length > 0 }
+    }));
   }
 
   // ------------------------------------------------------------
