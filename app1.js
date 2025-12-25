@@ -592,7 +592,7 @@ function renderBulkImportUI() {
     `;
     target.prepend(card);
     
-    card.querySelector("#btn-manage-sports").onclick = showSportsRulesModal;
+    
     card.querySelector("#btn-download-template").onclick = downloadTemplate;
     const uploadBtn = card.querySelector("#btn-trigger-upload");
     const uploadInput = card.querySelector("#bulk-upload-input");
