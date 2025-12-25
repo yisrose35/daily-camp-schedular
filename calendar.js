@@ -62,24 +62,6 @@
     // ==========================================================
     // 3. GLOBAL DATA API
     // ==========================================================
-    window.loadGlobalSettings = function() {
-        try {
-            const d = localStorage.getItem(GLOBAL_SETTINGS_KEY);
-            return d ? JSON.parse(d) : {};
-        } catch {
-            return {};
-        }
-    };
-    
-    window.saveGlobalSettings = function(key, value) {
-        try {
-            const settings = window.loadGlobalSettings();
-            settings[key] = value;
-            localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(settings));
-        } catch (e) {
-            console.error("Failed to save global settings:", e);
-        }
-    };
     
     window.loadAllDailyData = function() {
         try {
