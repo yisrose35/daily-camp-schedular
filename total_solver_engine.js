@@ -1,5 +1,5 @@
 // ============================================================================
-// total_solver_engine.js (FIXED v6 - SPORT PLAYER REQUIREMENTS)
+// total_solver_engine.js (FIXED v7 - SPORT PLAYER REQUIREMENTS + DISABLED FIELDS)
 // Backtracking Constraint Solver + League Engine
 // ----------------------------------------------------------------------------
 // CRITICAL UPDATE:
@@ -7,6 +7,7 @@
 // - Locked fields are completely excluded from consideration
 // - NEW: Player count requirements are soft constraints with penalties
 // - This ensures NO field double-booking across divisions
+// - PATCH 3: Filters disabled fields (rainy day/manual overrides)
 // ============================================================================
 
 (function () {
@@ -233,8 +234,20 @@
         
         debugLog('=== BUILDING CANDIDATE OPTIONS ===');
         
+        // ★★★ Get disabled fields (rainy day, manual overrides, etc) ★★★
+        const disabledFields = window.currentDisabledFields || config.disabledFields || [];
+        if (disabledFields.length > 0) {
+            debugLog(`  Disabled fields: ${disabledFields.join(', ')}`);
+        }
+        
         // Source 1: masterFields with activities
         config.masterFields?.forEach(f => {
+            // ★★★ CHECK IF FIELD IS DISABLED (RAINY DAY, ETC) ★★★
+            if (disabledFields.includes(f.name)) {
+                debugLog(`  SKIPPING ${f.name} - field is DISABLED`);
+                return;
+            }
+            
             (f.activities || []).forEach(sport => {
                 // ★★★ CHECK IF FIELD IS GLOBALLY LOCKED ★★★
                 if (window.GlobalFieldLocks && blockSlots && blockSlots.length > 0) {
@@ -260,6 +273,12 @@
         
         // Source 2: masterSpecials
         config.masterSpecials?.forEach(s => {
+            // ★★★ CHECK IF SPECIAL IS DISABLED ★★★
+            if (disabledFields.includes(s.name)) {
+                debugLog(`  SKIPPING ${s.name} - special is DISABLED`);
+                return;
+            }
+            
             // ★★★ CHECK IF SPECIAL IS GLOBALLY LOCKED ★★★
             if (window.GlobalFieldLocks && blockSlots && blockSlots.length > 0) {
                 const lockInfo = window.GlobalFieldLocks.isFieldLocked(s.name, blockSlots);
@@ -288,6 +307,12 @@
         for (const [sport, fields] of Object.entries(fieldsBySport)) {
             (fields || []).forEach(fieldName => {
                 if (isSportName(fieldName)) return;
+                
+                // ★★★ CHECK IF FIELD IS DISABLED (RAINY DAY, ETC) ★★★
+                if (disabledFields.includes(fieldName)) {
+                    debugLog(`  SKIPPING ${fieldName} - field is DISABLED`);
+                    return;
+                }
                 
                 // ★★★ CHECK IF FIELD IS GLOBALLY LOCKED ★★★
                 if (window.GlobalFieldLocks && blockSlots && blockSlots.length > 0) {
@@ -323,10 +348,18 @@
         const picks = [];
         const slots = block.slots || [];
         
+        // ★★★ Get disabled fields ★★★
+        const disabledFields = window.currentDisabledFields || globalConfig.disabledFields || [];
+        
         // Rebuild options for this specific block's slots (filters out locked fields)
         const blockOptions = buildAllCandidateOptions(globalConfig, slots);
         
         for (const cand of blockOptions) {
+            // ★★★ CHECK IF FIELD IS DISABLED ★★★
+            if (disabledFields.includes(cand.field)) {
+                continue;
+            }
+            
             // Double-check global lock (shouldn't be needed but safety first)
             if (window.GlobalFieldLocks?.isFieldLocked(cand.field, slots)) {
                 continue;
