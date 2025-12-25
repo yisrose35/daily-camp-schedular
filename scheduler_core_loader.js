@@ -1,4 +1,3 @@
-
 // ============================================================================
 // scheduler_core_loader.js (GCM PATCHED FOR SMART LEAGUE ENGINE v2)
 // FULL REWRITE — SPEC-COMPLIANT LOADER FOR ORCHESTRATOR V3
