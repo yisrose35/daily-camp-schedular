@@ -339,42 +339,53 @@
         // Step 4: Try to hydrate from cloud (with timeout protection)
         let hydrated = false;
         try {
-          // Add timeout to cloud load
-          const cloudPromise = loadFromCloud();
-          const timeoutPromise = new Promise((resolve) => {
-            setTimeout(() => {
-              console.log("☁️ Cloud load timeout after 5s, using local cache");
-              resolve(null);
-            }, 5000);
-          });
+          // Check if user is authenticated FIRST
+          const user = await getUser();
           
-          const cloudState = await Promise.race([cloudPromise, timeoutPromise]);
-          
-          if (cloudState && Object.keys(cloudState).length > 0) {
-            // Compare timestamps if available
-            const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
-            const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
-            
-            if (cloudTime > localTime) {
-              // Cloud is newer - merge with cloud winning
-              const merged = { ...localData, ...cloudState };
-              setLocalCache(merged);
-              console.log("☁️ Hydrated from cloud (cloud was newer)");
-              hydrated = true;
-            } else if (localTime > cloudTime) {
-              // Local is newer - push to cloud
-              console.log("☁️ Local data is newer - will sync to cloud");
-              _cloudSyncPending = true;
-              scheduleCloudSync();
-            } else {
-              // Same time or no timestamps - merge with cloud winning (safe default)
-              const merged = { ...localData, ...cloudState };
-              setLocalCache(merged);
-              console.log("☁️ Hydrated from cloud");
-              hydrated = true;
-            }
+          if (!user) {
+            console.log("☁️ No user yet - will load from cloud after sign-in");
+            // Don't wait for cloud, just use local cache
           } else {
-            console.log("☁️ No cloud data available, using local cache");
+            // User is authenticated, try to load from cloud
+            console.log("☁️ User authenticated, loading from cloud...");
+            
+            // Add timeout to cloud load
+            const cloudPromise = loadFromCloud();
+            const timeoutPromise = new Promise((resolve) => {
+              setTimeout(() => {
+                console.log("☁️ Cloud load timeout after 5s, using local cache");
+                resolve(null);
+              }, 5000);
+            });
+            
+            const cloudState = await Promise.race([cloudPromise, timeoutPromise]);
+            
+            if (cloudState && Object.keys(cloudState).length > 0) {
+              // Compare timestamps if available
+              const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
+              const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
+              
+              if (cloudTime > localTime) {
+                // Cloud is newer - merge with cloud winning
+                const merged = { ...localData, ...cloudState };
+                setLocalCache(merged);
+                console.log("☁️ Hydrated from cloud (cloud was newer)");
+                hydrated = true;
+              } else if (localTime > cloudTime) {
+                // Local is newer - push to cloud
+                console.log("☁️ Local data is newer - will sync to cloud");
+                _cloudSyncPending = true;
+                scheduleCloudSync();
+              } else {
+                // Same time or no timestamps - merge with cloud winning (safe default)
+                const merged = { ...localData, ...cloudState };
+                setLocalCache(merged);
+                console.log("☁️ Hydrated from cloud");
+                hydrated = true;
+              }
+            } else {
+              console.log("☁️ No cloud data available, using local cache");
+            }
           }
         } catch (e) {
           console.warn("☁️ Cloud hydration failed, using local cache:", e);
@@ -563,29 +574,32 @@
         }
         _rehydrating = true;
         
-        console.log("☁️ User signed in, re-hydrating from cloud...");
+        console.log("☁️ User signed in, fetching data from cloud...");
         
         try {
-          // Reset initialization flag to allow re-fetch
-          _initialized = false;
+          // ⭐ CRITICAL: Force fresh fetch from cloud
+          // Don't wait for old initialize() - do a direct cloud fetch
+          const cloudState = await loadFromCloud();
           
-          // DON'T clear memory cache - keep local data as fallback
-          // _memoryCache = null;
+          if (cloudState && Object.keys(cloudState).length > 0) {
+            console.log("☁️ Cloud data retrieved:", {
+              divisions: Object.keys(cloudState.divisions || {}).length,
+              bunks: (cloudState.bunks || []).length
+            });
+            
+            // Merge with any local data (cloud wins)
+            const localData = getLocalCache();
+            const merged = { ...localData, ...cloudState };
+            setLocalCache(merged);
+            
+            console.log("☁️ Local cache updated from cloud");
+          } else {
+            console.log("☁️ No cloud data found");
+          }
           
-          // Re-initialize with timeout protection
-          const timeoutPromise = new Promise((resolve) => {
-            setTimeout(() => {
-              console.log("☁️ Re-hydration timeout after 5s, completing anyway");
-              resolve('timeout');
-            }, 5000);
-          });
-          
-          const initPromise = initialize();
-          
-          await Promise.race([initPromise, timeoutPromise]);
-          
-          // Ensure flags are set even if we timed out
+          // Mark as ready
           _initialized = true;
+          _initializingPromise = null;
           window.__CAMPISTRY_CLOUD_READY__ = true;
           
           // Notify app to refresh
@@ -600,6 +614,7 @@
           console.error("☁️ Re-hydration error:", e);
           // Still mark as ready so app can proceed
           _initialized = true;
+          _initializingPromise = null;
           window.__CAMPISTRY_CLOUD_READY__ = true;
         } finally {
           _rehydrating = false;
