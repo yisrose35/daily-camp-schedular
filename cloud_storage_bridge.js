@@ -104,17 +104,37 @@
   // ------------------------------------------------------------
   async function getUser() {
     try {
-      const { data } = await window.supabase?.auth?.getUser?.();
+      if (!window.supabase) {
+        console.warn("☁️ Supabase not available");
+        return null;
+      }
+      const { data, error } = await window.supabase.auth.getUser();
+      if (error) {
+        console.warn("☁️ getUser error:", error.message);
+        return null;
+      }
+      console.log("☁️ Current user:", data?.user?.email || "none");
       return data?.user || null;
     } catch (e) {
-      console.warn("Failed to get user:", e);
+      console.warn("☁️ Failed to get user:", e);
       return null;
     }
   }
 
   async function loadFromCloud() {
     try {
-      if (!window.supabase) return null;
+      if (!window.supabase) {
+        console.warn("☁️ Supabase not available for load");
+        return null;
+      }
+      
+      const user = await getUser();
+      if (!user) {
+        console.warn("☁️ No user - cannot load from cloud");
+        return null;
+      }
+      
+      console.log("☁️ Loading from cloud for user:", user.id);
       
       const { data, error } = await window.supabase
         .from(TABLE)
@@ -123,43 +143,77 @@
         .single();
 
       if (error) {
-        console.warn("Cloud load error:", error.message);
+        // PGRST116 = no rows found, which is OK for new users
+        if (error.code === 'PGRST116') {
+          console.log("☁️ No cloud data found (new user or first sync)");
+          return null;
+        }
+        console.error("☁️ Cloud load error:", error.message, error.code);
         return null;
       }
       
+      console.log("☁️ Cloud data loaded:", {
+        hasState: !!data?.state,
+        divisions: Object.keys(data?.state?.divisions || {}).length,
+        bunks: (data?.state?.bunks || []).length
+      });
+      
       return data?.state || null;
     } catch (e) {
-      console.warn("Cloud load failed:", e);
+      console.error("☁️ Cloud load failed:", e);
       return null;
     }
   }
 
   async function saveToCloud(state) {
     try {
-      if (!window.supabase) return;
+      if (!window.supabase) {
+        console.error("☁️ Supabase not available for save");
+        return false;
+      }
       
       const user = await getUser();
       if (!user) {
-        console.warn("Cannot save to cloud: no authenticated user");
-        return;
+        console.error("☁️ Cannot save to cloud: no authenticated user");
+        return false;
       }
 
+      // Add metadata
       state.schema_version = SCHEMA_VERSION;
       state.updated_at = new Date().toISOString();
+      
+      // Remove internal flags before saving
+      const stateToSave = { ...state };
+      delete stateToSave._importTimestamp;
 
-      const { error } = await window.supabase.from(TABLE).upsert({
+      console.log("☁️ Saving to cloud:", {
         camp_id: CAMP_ID,
-        owner_id: user.id,
-        state
+        user_id: user.id,
+        divisions: Object.keys(stateToSave.divisions || {}).length,
+        bunks: (stateToSave.bunks || []).length
       });
+
+      const { data, error } = await window.supabase
+        .from(TABLE)
+        .upsert({
+          camp_id: CAMP_ID,
+          owner_id: user.id,
+          state: stateToSave
+        }, {
+          onConflict: 'camp_id'
+        })
+        .select();
       
       if (error) {
-        console.error("Cloud save error:", error.message);
-      } else {
-        console.log("☁️ Saved to cloud");
+        console.error("☁️ Cloud save error:", error.message, error.code, error.details);
+        return false;
       }
+      
+      console.log("☁️ ✅ Saved to cloud successfully");
+      return true;
     } catch (e) {
-      console.error("Cloud save failed:", e);
+      console.error("☁️ Cloud save failed:", e);
+      return false;
     }
   }
   
@@ -273,7 +327,8 @@
   window.forceSyncToCloud = async function() {
     _cloudSyncPending = false;
     if (_syncTimeout) clearTimeout(_syncTimeout);
-    await saveToCloud(getLocalCache());
+    const success = await saveToCloud(getLocalCache());
+    return success;
   };
   
   // Force cloud refresh
@@ -285,6 +340,49 @@
       return cloudState;
     }
     return getLocalCache();
+  };
+  
+  // ⭐ Diagnostic function - call from console to test cloud
+  window.testCloudConnection = async function() {
+    console.log("=".repeat(50));
+    console.log("☁️ CLOUD CONNECTION TEST");
+    console.log("=".repeat(50));
+    
+    // Test 1: Supabase available?
+    console.log("1. Supabase available:", !!window.supabase);
+    if (!window.supabase) {
+      console.error("❌ Supabase not loaded!");
+      return false;
+    }
+    
+    // Test 2: User authenticated?
+    const user = await getUser();
+    console.log("2. User authenticated:", !!user, user?.email);
+    if (!user) {
+      console.error("❌ Not logged in!");
+      return false;
+    }
+    
+    // Test 3: Can read from cloud?
+    console.log("3. Testing cloud read...");
+    const cloudData = await loadFromCloud();
+    console.log("   Cloud data exists:", !!cloudData);
+    if (cloudData) {
+      console.log("   Divisions:", Object.keys(cloudData.divisions || {}).length);
+      console.log("   Bunks:", (cloudData.bunks || []).length);
+    }
+    
+    // Test 4: Can write to cloud?
+    console.log("4. Testing cloud write...");
+    const localData = getLocalCache();
+    const saveSuccess = await saveToCloud(localData);
+    console.log("   Save success:", saveSuccess);
+    
+    console.log("=".repeat(50));
+    console.log(saveSuccess ? "✅ CLOUD CONNECTION OK" : "❌ CLOUD CONNECTION FAILED");
+    console.log("=".repeat(50));
+    
+    return saveSuccess;
   };
 
   // Start initialization
