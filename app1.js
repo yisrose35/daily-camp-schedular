@@ -7,6 +7,7 @@
 // - Double-click bunk to DELETE
 // - Wider inputs for bunk editing
 // - SyncSpine integration with global_authority.js
+// - FIXED: Cloud First Loading Strategy
 // =================================================================
 (function () {
 "use strict";
@@ -977,15 +978,34 @@ function saveData() {
     window.saveGlobalSettings?.("app1", data);
 }
 
-function loadData() {
-    const data = window.loadGlobalSettings?.().app1 || {};
+// FIXED: Cloud-First Loading Strategy
+async function loadData() {
+    console.log("⏳ App1: Fetching data from cloud...");
+    
+    // 1. Wait for Cloud Data
+    const globalData = (await window.loadGlobalSettings?.()) || {};
+    const data = globalData.app1 || {};
+
     try {
-        divisions = window.getGlobalDivisions ? window.getGlobalDivisions() : (data.divisions || {});
-        bunks = window.getGlobalBunks ? window.getGlobalBunks() : (data.bunks || []);
+        // --- CRITICAL FIX START ---
+        // OLD WAY: Trusted Local Storage first (which caused the bug when cache was cleared)
+        // NEW WAY: Trust Cloud Data first. Only use Local as a backup.
+        
+        divisions = (data.divisions && Object.keys(data.divisions).length > 0)
+            ? data.divisions 
+            : (window.getGlobalDivisions ? window.getGlobalDivisions() : {});
+
+        bunks = (data.bunks && data.bunks.length > 0)
+            ? data.bunks
+            : (window.getGlobalBunks ? window.getGlobalBunks() : []);
+        // --- CRITICAL FIX END ---
+
         availableDivisions = Object.keys(divisions);
         specialActivities = data.specialActivities || [];
         bunkMetaData = data.bunkMetaData || {};
         sportMetaData = data.sportMetaData || {};
+        
+        // Ensure data integrity
         Object.keys(divisions).forEach(divName => {
             divisions[divName].startTime = divisions[divName].startTime || "";
             divisions[divName].endTime = divisions[divName].endTime || "";
@@ -993,22 +1013,22 @@ function loadData() {
             sortBunksInPlace(divisions[divName].bunks);
             divisions[divName].color = divisions[divName].color || defaultColors[0];
         });
+        
         window.divisions = divisions;
         window.availableDivisions = availableDivisions;
         selectedDivision = data.selectedDivision || availableDivisions[0] || null;
-        allSports =
-            data.allSports && Array.isArray(data.allSports)
-                ? data.allSports
-                : [...defaultSports];
+        allSports = data.allSports && Array.isArray(data.allSports) ? data.allSports : [...defaultSports];
         savedSkeletons = data.savedSkeletons || {};
         skeletonAssignments = data.skeletonAssignments || {};
+        
+        console.log("✅ App1: Data loaded successfully.");
     } catch (e) {
         console.error("Error loading app1 data:", e);
     }
 }
 
 // -------------------- Init --------------------
-function initApp1() {
+async function initApp1() {
     console.log("📋 app1.js: initApp1() called");
     ensureSharedSetupStyles();
     const addDivisionBtn = document.getElementById("addDivisionBtn");
@@ -1019,7 +1039,10 @@ function initApp1() {
             if (e.key === "Enter") addDivision();
         });
     }
-    loadData();
+
+    // FIXED: Wait for data before rendering
+    await loadData();
+
     const detailPane = document.getElementById("division-detail-pane");
     if (detailPane) {
         detailPane.classList.add("detail-pane");
