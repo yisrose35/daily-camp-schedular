@@ -6,77 +6,77 @@
   'use strict';
 
   const AUTH_KEY = "campistry_global_registry";
-
   let _cache = null;
 
   // --------------------------------------------------------------
-  // LOAD (cloud-first, no skeleton overwrite)
+  // SAFE BUNK COLLECTOR (prevents zero-bunk wipes)
   // --------------------------------------------------------------
-  async function loadRegistry() {
-    try {
-      if (_cache) return _cache;
-      if (window.__CAMPISTRY_READY__) return _cache;
+  function collectBunks() {
+    if (Array.isArray(window.getGlobalBunks?.()) && window.getGlobalBunks().length)
+      return structuredClone(window.getGlobalBunks());
 
-      const cloud = await window.loadGlobalSettings();
-      if (cloud && (cloud.divisions || cloud.bunks)) {
-        _cache = {
-          divisions: cloud.divisions || {},
-          bunks: cloud.bunks || []
-        };
-        localStorage.setItem(AUTH_KEY, JSON.stringify(_cache));
-        return _cache;
-      }
+    if (Array.isArray(window.globalBunks) && window.globalBunks.length)
+      return structuredClone(window.globalBunks);
 
-      const stored = localStorage.getItem(AUTH_KEY);
-      _cache = stored ? JSON.parse(stored) : { divisions: {}, bunks: [] };
-      return _cache;
-    } catch (e) {
-      console.error("Failed to load registry:", e);
-      return { divisions: {}, bunks: [] };
-    }
+    if (Array.isArray(window.campBunks) && window.campBunks.length)
+      return structuredClone(window.campBunks);
+
+    const gs = window.loadGlobalSettings?.() || {};
+    if (Array.isArray(gs.bunks) && gs.bunks.length)
+      return structuredClone(gs.bunks);
+
+    return [];
   }
 
   // --------------------------------------------------------------
-  // SAVE (dual-write)
+  // LOAD
+  // --------------------------------------------------------------
+  async function loadRegistry() {
+    if (_cache) return _cache;
+
+    const cloud = await window.loadGlobalSettings?.() || {};
+    _cache = {
+      divisions: structuredClone(cloud.divisions || {}),
+      bunks: structuredClone(cloud.bunks || [])
+    };
+
+    localStorage.setItem(AUTH_KEY, JSON.stringify(_cache));
+    return _cache;
+  }
+
+  // --------------------------------------------------------------
+  // SAVE
   // --------------------------------------------------------------
   async function saveRegistry(reg) {
-    try {
-      _cache = reg;
-      localStorage.setItem(AUTH_KEY, JSON.stringify(reg));
-      await window.saveGlobalSettings("divisions", reg.divisions);
-      await window.saveGlobalSettings("bunks", reg.bunks);
-    } catch (e) {
-      console.error("Failed to save registry:", e);
-    }
+    _cache = reg;
+    localStorage.setItem(AUTH_KEY, JSON.stringify(reg));
+
+    await window.saveGlobalSettings("divisions", reg.divisions);
+    await window.saveGlobalSettings("bunks", reg.bunks);
+
+    console.log("☁️ Cloud Registry Saved:", {
+      divisions: Object.keys(reg.divisions).length,
+      bunks: reg.bunks.length
+    });
   }
 
   // --------------------------------------------------------------
   // PUBLIC API
   // --------------------------------------------------------------
-  window.getGlobalDivisions = function () {
-    return loadRegistry().divisions || {};
+  window.getGlobalDivisions = () => _cache?.divisions || {};
+  window.getGlobalBunks = () => _cache?.bunks || [];
+
+  window.setGlobalDivisions = async function (divs) {
+    const reg = await loadRegistry();
+    reg.divisions = structuredClone(divs || {});
+    await saveRegistry(reg);
   };
 
-  window.getGlobalBunks = function () {
-    return loadRegistry().bunks || [];
-  };
-
-  window.setGlobalDivisions = function (divs) {
-    loadRegistry().then(reg => {
-      reg.divisions = structuredClone(divs || {});
-      saveRegistry(reg);
-      console.log("☁️ Divisions saved:", Object.keys(reg.divisions).length);
-    });
-  };
-
-  window.setGlobalBunks = function (bunks) {
-    loadRegistry().then(reg => {
-      reg.bunks = structuredClone(bunks || []);
-      saveRegistry(reg);
-      console.log("☁️ Bunks saved:", reg.bunks.length);
-    });
+  window.setGlobalBunks = async function (bunks) {
+    const reg = await loadRegistry();
+    reg.bunks = collectBunks().length ? collectBunks() : structuredClone(bunks || []);
+    await saveRegistry(reg);
   };
 
   console.log("🧠 Global Authority cloud spine initialized");
-
 })();
