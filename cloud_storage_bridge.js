@@ -15,7 +15,8 @@
   async function getActiveCamp() {
     const { data } = await window.supabase
       .from("camps")
-      .select("id, owner_id")
+      .select("id, owner")
+
       .limit(1)
       .single();
     return data;
