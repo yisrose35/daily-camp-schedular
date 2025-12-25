@@ -19,7 +19,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (!window.supabase) {
     console.error("Supabase client not available");
-    welcomeScreen?.style.display = 'flex';
+    if (welcomeScreen) welcomeScreen.style.display = 'flex';
     return;
   }
 
@@ -29,17 +29,30 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (booted) return;
     booted = true;
 
-    welcomeScreen?.style.display = 'none';
-    mainAppContainer?.style.display = 'block';
+    if (welcomeScreen) welcomeScreen.style.display = 'none';
+    if (mainAppContainer) mainAppContainer.style.display = 'block';
 
     console.log("🚀 Booting Campistry OS...");
 
     try {
-      window.initCalendar?.();
-      window.initApp1?.();
-      window.initLeagues?.();
-      window.initScheduleSystem?.();
-      console.log("✅ Campistry boot complete");
+      (async () => {
+        let tries = 0;
+        // Wait for global_authority.js to signal cloud readiness
+        while (!window.__CAMPISTRY_CLOUD_READY__ && tries < 120) {
+          await new Promise(r => setTimeout(r, 100));
+          tries++;
+        }
+
+        console.log("☁️ Cloud Ready:", window.__CAMPISTRY_CLOUD_READY__);
+
+        window.initCalendar?.();
+        window.initApp1?.();
+        window.initLeagues?.();
+        window.initScheduleSystem?.();
+        
+        console.log("✅ Campistry boot complete");
+      })();
+
     } catch (e) {
       console.error("Boot error:", e);
     }
@@ -58,8 +71,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (session?.user) {
     await bootOnce();
   } else {
-    welcomeScreen?.style.display = 'flex';
-    mainAppContainer?.style.display = 'none';
+    if (welcomeScreen) welcomeScreen.style.display = 'flex';
+    if (mainAppContainer) mainAppContainer.style.display = 'none';
   }
 
   supabase.auth.onAuthStateChange(async (event, session) => {
@@ -71,9 +84,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (event === 'SIGNED_OUT') {
       booted = false;
-      welcomeScreen?.style.display = 'flex';
-      mainAppContainer?.style.display = 'none';
+      if (welcomeScreen) welcomeScreen.style.display = 'flex';
+      if (mainAppContainer) mainAppContainer.style.display = 'none';
     }
   });
-
 });
