@@ -1,11 +1,12 @@
 // ============================================================================
-// scheduler_core_utils.js (FIXED v7 - ELECTIVE DIVISION LOCKS)
+// scheduler_core_utils.js (FIXED v7 - ELECTIVE DIVISION LOCKS + DISABLED FIELDS)
 // PART 1 of 3: THE FOUNDATION
 //
 // CRITICAL UPDATE:
 // - Division-aware lock checking for elective tiles
 // - canBlockFit() now passes division context to GlobalFieldLocks
 // - Elective tiles can lock fields for OTHER divisions while allowing their own
+// - Added disabled fields check (e.g. Rainy Day) to core fit functions
 // ============================================================================
 
 (function () {
@@ -440,8 +441,8 @@
      * MAIN FIT CHECK - DIVISION-AWARE LOCK CHECKING FOR ELECTIVES
      * =========================================================================
      * This is the CRITICAL function that determines if a bunk can use a field.
-     * 
-     * CHECK ORDER:
+     * * CHECK ORDER:
+     * 0. DISABLED FIELDS - If disabled (Rainy Day), IMMEDIATELY REJECT
      * 1. GLOBAL LOCKS (leagues) - If locked, IMMEDIATELY REJECT
      * 2. DIVISION LOCKS (electives) - Check if this division is allowed
      * 3. Field reservations (skeleton)
@@ -454,6 +455,16 @@
         if (!fieldUsageBySlot) fieldUsageBySlot = window.fieldUsageBySlot || {};
         if (!fieldName) {
             if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - no field name`);
+            return false;
+        }
+
+        // =================================================================
+        // ★★★ CHECK IF FIELD IS IN DISABLED FIELDS LIST (RAINY DAY, ETC) ★★★
+        // This MUST be checked BEFORE anything else!
+        // =================================================================
+        const disabledFields = window.currentDisabledFields || [];
+        if (disabledFields.includes(fieldName)) {
+            if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - field is DISABLED (rainy day or manual override)`);
             return false;
         }
 
@@ -688,6 +699,12 @@
     Utils.calculateSharingScore = function (block, fieldName, fieldUsageBySlot, actName) {
         if (!fieldUsageBySlot) fieldUsageBySlot = window.fieldUsageBySlot || {};
         
+        // ★★★ CHECK DISABLED FIELDS FIRST ★★★
+        const disabledFields = window.currentDisabledFields || [];
+        if (disabledFields.includes(fieldName)) {
+            return -999999; // Completely unavailable
+        }
+        
         // First check if field is locked (with division context)
         const slots = Utils.findSlotsForRange(block.startTime, block.endTime);
         const divisionContext = block.divName || block.division;
@@ -783,7 +800,13 @@
 
     Utils.timeline = {
         checkAvailability(resourceName, startMin, endMin, weight, capacity, excludeBunk, divisionContext) {
-            // Check global locks first (with division context)
+            // ★★★ CHECK DISABLED FIELDS FIRST ★★★
+            const disabledFields = window.currentDisabledFields || [];
+            if (disabledFields.includes(resourceName)) {
+                return false;
+            }
+            
+            // Check global locks (with division context)
             const slots = Utils.findSlotsForRange(startMin, endMin);
             if (window.GlobalFieldLocks?.isFieldLocked(resourceName, slots, divisionContext)) {
                 return false;
