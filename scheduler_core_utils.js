@@ -1,13 +1,11 @@
-
 // ============================================================================
-// scheduler_core_utils.js (FIXED v3 - WITH DEBUGGING)
+// scheduler_core_utils.js (FIXED v7 - ELECTIVE DIVISION LOCKS)
 // PART 1 of 3: THE FOUNDATION
 //
-// CRITICAL FIXES:
-// 1. STRICT capacity enforcement (no exceeding max bunks)
-// 2. SAME ACTIVITY requirement when sharing fields
-// 3. Adjacent bunk preference scoring helper
-// 4. DEBUGGING to see why fields are rejected
+// CRITICAL UPDATE:
+// - Division-aware lock checking for elective tiles
+// - canBlockFit() now passes division context to GlobalFieldLocks
+// - Elective tiles can lock fields for OTHER divisions while allowing their own
 // ============================================================================
 
 (function () {
@@ -21,7 +19,7 @@
     window.TRANSITION_TYPE = TRANSITION_TYPE;
     
     // DEBUG MODE - Set to true to see why canBlockFit fails
-    const DEBUG_FITS = false; // Disabled - issue was limitUsage "no rule" being treated as rejection
+    const DEBUG_FITS = false; 
 
     const Utils = {};
 
@@ -53,6 +51,12 @@
         if (mer) {
             if (hh === 12) hh = mer === "am" ? 0 : 12;
             else if (mer === "pm") hh += 12;
+        } else {
+            // If no AM/PM specified, assume PM ONLY for afternoon hours (12-6)
+            if (hh >= 1 && hh <= 6) {
+                console.warn(`[TIME PARSE] "${str}" has no AM/PM - assuming ${hh + 12 >= 12 ? 'PM' : 'AM'}`);
+                hh += 12; 
+            }
         }
 
         return hh * 60 + mm;
@@ -115,7 +119,60 @@
     };
 
     // =================================================================
-    // 2. TRANSITION / BUFFER LOGIC
+    // 2. FIELD RESERVATION LOGIC (Skeleton-based)
+    // =================================================================
+
+    Utils.getFieldReservationsFromSkeleton = function(skeleton) {
+        const reservations = {};
+        
+        if (!skeleton || !Array.isArray(skeleton)) {
+            return reservations;
+        }
+        
+        skeleton.forEach(block => {
+            if (block.reservedFields && Array.isArray(block.reservedFields) && block.reservedFields.length > 0) {
+                const startMin = Utils.parseTimeToMinutes(block.startTime);
+                const endMin = Utils.parseTimeToMinutes(block.endTime);
+                
+                if (startMin === null || endMin === null) return;
+                
+                block.reservedFields.forEach(fieldName => {
+                    if (!reservations[fieldName]) {
+                        reservations[fieldName] = [];
+                    }
+                    
+                    reservations[fieldName].push({
+                        startMin,
+                        endMin,
+                        division: block.division,
+                        event: block.event,
+                        id: block.id
+                    });
+                });
+            }
+        });
+        
+        console.log("[FieldReservations] Scanned skeleton, found reservations:", reservations);
+        return reservations;
+    };
+
+    Utils.isFieldReserved = function(fieldName, startMin, endMin, reservations) {
+        if (!reservations || !reservations[fieldName]) {
+            return null;
+        }
+        
+        for (const reservation of reservations[fieldName]) {
+            const overlaps = (startMin < reservation.endMin) && (endMin > reservation.startMin);
+            if (overlaps) {
+                return reservation;
+            }
+        }
+        
+        return null;
+    };
+
+    // =================================================================
+    // 3. TRANSITION / BUFFER LOGIC
     // =================================================================
 
     Utils.getTransitionRules = function (fieldName, activityProperties) {
@@ -164,7 +221,7 @@
     };
 
     // =================================================================
-    // 3. BUNK NUMBER EXTRACTION (for adjacent pairing)
+    // 4. BUNK NUMBER EXTRACTION (for adjacent pairing)
     // =================================================================
 
     Utils.getBunkNumber = function (bunkName) {
@@ -181,13 +238,100 @@
     };
 
     // =================================================================
-    // 4. FIELD USAGE HELPERS
+    // 5. SPORT PLAYER REQUIREMENTS
     // =================================================================
 
-    /**
-     * Get current usage for a field at a slot
-     * Returns: { count, bunks: {bunkName: activityName}, activities: Set }
-     */
+    Utils.getSportPlayerRequirements = function(sportName) {
+        if (!sportName) return { minPlayers: null, maxPlayers: null };
+        
+        const sportMeta = window.getSportMetaData?.() || window.sportMetaData || Utils._sportMetaData || {};
+        const meta = sportMeta[sportName] || {};
+        
+        return {
+            minPlayers: meta.minPlayers || null,
+            maxPlayers: meta.maxPlayers || null
+        };
+    };
+
+    Utils.checkPlayerCountForSport = function(sportName, playerCount, isForLeague = false) {
+        if (isForLeague) {
+            return { valid: true, reason: null, severity: null };
+        }
+        
+        const reqs = Utils.getSportPlayerRequirements(sportName);
+        
+        if (reqs.minPlayers === null && reqs.maxPlayers === null) {
+            return { valid: true, reason: null, severity: null };
+        }
+        
+        if (reqs.minPlayers !== null && playerCount < reqs.minPlayers) {
+            const deficit = reqs.minPlayers - playerCount;
+            const percentageUnder = deficit / reqs.minPlayers;
+            
+            if (percentageUnder > 0.4) {
+                return { 
+                    valid: false, 
+                    reason: `Need at least ${reqs.minPlayers} players, only have ${playerCount}`,
+                    severity: 'hard'
+                };
+            }
+            
+            return { 
+                valid: false, 
+                reason: `Below minimum (${playerCount}/${reqs.minPlayers})`,
+                severity: 'soft'
+            };
+        }
+        
+        if (reqs.maxPlayers !== null && playerCount > reqs.maxPlayers) {
+            const excess = playerCount - reqs.maxPlayers;
+            const percentageOver = excess / reqs.maxPlayers;
+            
+            if (percentageOver > 0.3) {
+                return { 
+                    valid: false, 
+                    reason: `Maximum ${reqs.maxPlayers} players, have ${playerCount}`,
+                    severity: 'hard'
+                };
+            }
+            
+            return { 
+                valid: false, 
+                reason: `Above maximum (${playerCount}/${reqs.maxPlayers})`,
+                severity: 'soft'
+            };
+        }
+        
+        return { valid: true, reason: null, severity: null };
+    };
+
+    Utils.getFieldPlayerCount = function(fieldName, slotIndex, excludeBunk = null) {
+        const bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || Utils._bunkMetaData || {};
+        const schedules = window.scheduleAssignments || {};
+        
+        let totalPlayers = 0;
+        
+        for (const [bunk, slots] of Object.entries(schedules)) {
+            if (bunk === excludeBunk) continue;
+            
+            const entry = slots?.[slotIndex];
+            if (!entry) continue;
+            
+            const entryField = Utils.fieldLabel(entry.field) || entry._activity;
+            if (!entryField) continue;
+            
+            if (entryField.toLowerCase().trim() === fieldName.toLowerCase().trim()) {
+                totalPlayers += bunkMeta[bunk]?.size || 0;
+            }
+        }
+        
+        return totalPlayers;
+    };
+
+    // =================================================================
+    // 6. FIELD USAGE HELPERS
+    // =================================================================
+
     function getFieldUsageAtSlot(slotIndex, fieldName, fieldUsageBySlot) {
         const result = { 
             count: 0, 
@@ -207,7 +351,6 @@
         result.bunks = fieldData.bunks || {};
         result.bunkList = Object.keys(result.bunks);
         
-        // Extract unique activities
         Object.values(result.bunks).forEach(actName => {
             if (actName) result.activities.add(actName.toLowerCase().trim());
         });
@@ -215,9 +358,6 @@
         return result;
     }
 
-    /**
-     * Also check window.scheduleAssignments for more accurate count
-     */
     function getScheduleUsageAtSlot(slotIndex, fieldName) {
         const result = { 
             count: 0, 
@@ -235,7 +375,6 @@
             const entryField = Utils.fieldLabel(entry.field) || entry._activity;
             if (!entryField) continue;
             
-            // Check if this is the same field
             if (entryField.toLowerCase().trim() === fieldName.toLowerCase().trim()) {
                 result.count++;
                 result.bunks[bunk] = entry._activity || entry.sport || entryField;
@@ -250,7 +389,7 @@
     }
 
     // =================================================================
-    // 5. MAIN FIT LOGIC (STRICT ENFORCEMENT)
+    // 7. MAIN FIT LOGIC (WITH DIVISION-AWARE LOCK CHECK)
     // =================================================================
 
     Utils.isTimeAvailable = function (slotIndex, props) {
@@ -297,14 +436,19 @@
     };
 
     /**
-     * MAIN FIT CHECK - Now with strict enforcement
+     * =========================================================================
+     * MAIN FIT CHECK - DIVISION-AWARE LOCK CHECKING FOR ELECTIVES
+     * =========================================================================
+     * This is the CRITICAL function that determines if a bunk can use a field.
      * 
-     * @param block - The block to place
-     * @param fieldName - The field/activity name
-     * @param activityProperties - Properties lookup
-     * @param fieldUsageBySlot - Usage tracking map
-     * @param actName - The specific activity/sport being assigned
-     * @param forceLeague - Whether this is a league placement
+     * CHECK ORDER:
+     * 1. GLOBAL LOCKS (leagues) - If locked, IMMEDIATELY REJECT
+     * 2. DIVISION LOCKS (electives) - Check if this division is allowed
+     * 3. Field reservations (skeleton)
+     * 4. Activity properties (availability, time rules, preferences)
+     * 5. Capacity checks
+     * 6. Player requirements (soft check)
+     * =========================================================================
      */
     Utils.canBlockFit = function (block, fieldName, activityProperties, fieldUsageBySlot, actName, forceLeague = false) {
         if (!fieldUsageBySlot) fieldUsageBySlot = window.fieldUsageBySlot || {};
@@ -312,6 +456,37 @@
             if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - no field name`);
             return false;
         }
+
+        // Get slots for this block
+        let uniqueSlots = [];
+        if (block.slots && block.slots.length > 0) {
+            uniqueSlots = [...new Set(block.slots)].sort((a, b) => a - b);
+        } else {
+            const { blockStartMin, blockEndMin } = Utils.getBlockTimeRange(block);
+            if (blockStartMin != null && blockEndMin != null) {
+                uniqueSlots = Utils.findSlotsForRange(blockStartMin, blockEndMin);
+            }
+        }
+
+        // =================================================================
+        // ★★★ CRITICAL: DIVISION-AWARE GLOBAL LOCK CHECK ★★★
+        // =================================================================
+        if (window.GlobalFieldLocks && uniqueSlots.length > 0) {
+            // Pass the division context so elective locks work correctly
+            const divisionContext = block.divName || block.division;
+            const lockInfo = window.GlobalFieldLocks.isFieldLocked(fieldName, uniqueSlots, divisionContext);
+            if (lockInfo) {
+                if (DEBUG_FITS) {
+                    if (lockInfo.type === 'division') {
+                        console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - ELECTIVE LOCKED for ${lockInfo.allowedDivision} (not ${divisionContext})`);
+                    } else {
+                        console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - GLOBALLY LOCKED by ${lockInfo.lockedBy}`);
+                    }
+                }
+                return false;
+            }
+        }
+        // =================================================================
 
         const baseProps = {
             available: true,
@@ -322,17 +497,6 @@
         };
 
         const props = activityProperties?.[fieldName];
-        
-        // =================================================================
-        // FIX: If field is not in activityProperties, check if it should be allowed
-        // =================================================================
-        if (!props) {
-            // Field not configured - allow it as a fallback with base props
-            // This helps when fields exist in masterFields but not in activityProperties
-            if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: Using base props (not in activityProperties)`);
-            // Continue with baseProps instead of rejecting
-        }
-        
         const effectiveProps = props || baseProps;
 
         // Get transition rules
@@ -343,13 +507,31 @@
             activityDuration
         } = Utils.getEffectiveTimeRange(block, rules);
 
+        // =================================================================
+        // FIELD RESERVATION CHECK (Skeleton-based)
+        // =================================================================
+        if (window.fieldReservations && blockStartMin != null && blockEndMin != null) {
+            const reservation = Utils.isFieldReserved(
+                fieldName, 
+                blockStartMin, 
+                blockEndMin, 
+                window.fieldReservations
+            );
+            if (reservation) {
+                if (DEBUG_FITS) {
+                    console.log(`[FIT] ${fieldName} REJECTED - reserved by "${reservation.event}" (${reservation.division})`);
+                }
+                return false;
+            }
+        }
+
         if (activityDuration <= 0 || activityDuration < (rules.minDurationMin || 0)) {
             if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - duration ${activityDuration}`);
             return false;
         }
 
         // =================================================================
-        // CAPACITY CALCULATION (STRICT)
+        // CAPACITY CALCULATION
         // =================================================================
         let maxCapacity = 1;
         
@@ -376,16 +558,10 @@
             return false;
         }
 
-        // LimitUsage check - restricts which bunks from each division can use this field
-        // If enabled and division is NOT in the rules, that division CANNOT use this field
-        // If enabled and division IS in the rules:
-        //   - Empty array [] = ALL bunks from this division are allowed
-        //   - Array with bunks = only those specific bunks are allowed
-        //   - true/truthy = ALL bunks from this division are allowed
+        // LimitUsage check
         if (effectiveProps.limitUsage?.enabled) {
             const divisionRules = effectiveProps.limitUsage.divisions || {};
             
-            // Check if this division exists in the rules at all
             if (!(block.divName in divisionRules)) {
                 if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - limitUsage: division ${block.divName} not in allowed list`);
                 return false;
@@ -393,47 +569,25 @@
             
             const rule = divisionRules[block.divName];
             
-            // If rule is an array with items, check if bunk is in the allowed list
             if (Array.isArray(rule) && rule.length > 0) {
-                // Convert bunk to string/number for comparison
                 const bunkStr = String(block.bunk);
                 const bunkNum = parseInt(block.bunk);
                 const inList = rule.some(b => String(b) === bunkStr || parseInt(b) === bunkNum);
                 
                 if (!inList) {
-                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - limitUsage: bunk not in allowed list [${rule.slice(0,5).join(',')}...]`);
+                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - limitUsage: bunk not in allowed list`);
                     return false;
                 }
             }
-            // If rule is empty array [], true, or any other truthy/falsy value:
-            // Division is in the rules = ALL bunks from this division are allowed
-            if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: limitUsage PASSED - division ${block.divName} allowed`);
         }
 
-        // Get slots to check - USE BLOCK'S SLOTS IF AVAILABLE
-        let uniqueSlots = [];
-        
-        if (block.slots && block.slots.length > 0) {
-            // Block already has slots defined - use them
-            uniqueSlots = [...new Set(block.slots)].sort((a, b) => a - b);
-        } else {
-            // Calculate slots from time range
-            const slots = rules.occupiesField
-                ? Utils.findSlotsForRange(blockStartMin, blockEndMin)
-                : Utils.findSlotsForRange(effectiveStart, effectiveEnd);
-            uniqueSlots = [...new Set(slots)].sort((a, b) => a - b);
-        }
-        
-        // If still no slots, try a more lenient search
         if (uniqueSlots.length === 0 && blockStartMin != null) {
-            // Try to find ANY slot that overlaps with our time range
             if (window.unifiedTimes) {
                 for (let i = 0; i < window.unifiedTimes.length; i++) {
                     const slot = window.unifiedTimes[i];
                     const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
                     const slotEnd = new Date(slot.end).getHours() * 60 + new Date(slot.end).getMinutes();
                     
-                    // Check for ANY overlap
                     if (slotStart < blockEndMin && slotEnd > blockStartMin) {
                         uniqueSlots.push(i);
                     }
@@ -442,63 +596,72 @@
         }
         
         if (uniqueSlots.length === 0) {
-            if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - no slots found for time ${blockStartMin}-${blockEndMin}`);
+            if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - no slots found`);
             return false;
         }
 
         // =================================================================
-        // CHECK EACH SLOT
+        // CHECK EACH SLOT FOR CAPACITY AND ACTIVITY MATCHING
         // =================================================================
+        const bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || Utils._bunkMetaData || {};
+        const sportMeta = window.getSportMetaData?.() || window.sportMetaData || Utils._sportMetaData || {};
+        const mySize = bunkMeta[block.bunk]?.size || 0;
+
         for (const idx of uniqueSlots) {
-            // Get usage from BOTH sources for accuracy
             const trackedUsage = getFieldUsageAtSlot(idx, fieldName, fieldUsageBySlot);
             const scheduleUsage = getScheduleUsageAtSlot(idx, fieldName);
             
-            // Merge the two usage sources
             const allBunks = new Set([...trackedUsage.bunkList, ...scheduleUsage.bunkList]);
             const allActivities = new Set([...trackedUsage.activities, ...scheduleUsage.activities]);
             
-            // Remove self if already counted
             allBunks.delete(block.bunk);
             
             const currentCount = allBunks.size;
 
-            // =================================================================
-            // FIX #1: STRICT CAPACITY CHECK
-            // =================================================================
+            // STRICT CAPACITY CHECK
             if (currentCount >= maxCapacity) {
                 if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - at capacity (${currentCount}/${maxCapacity})`);
                 return false;
             }
 
-            // =================================================================
-            // FIX #2: SAME ACTIVITY REQUIREMENT WHEN SHARING
-            // =================================================================
+            // SAME ACTIVITY REQUIREMENT WHEN SHARING
             if (currentCount > 0 && actName) {
                 const myActivity = actName.toLowerCase().trim();
                 
-                // If there are existing activities, we must match one of them
                 if (allActivities.size > 0) {
                     const activitiesMatch = allActivities.has(myActivity);
                     
                     if (!activitiesMatch) {
-                        // Different activity - reject sharing
-                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - different activity (${actName} vs [${[...allActivities].join(', ')}])`);
+                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - different activity`);
                         return false;
                     }
                 }
             }
 
-            // Time availability check
             if (!Utils.isTimeAvailable(idx, effectiveProps)) {
                 if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - time not available at slot ${idx}`);
                 return false;
             }
 
-            // Headcount check (sport max capacity)
-            const bunkMeta = window.bunkMetaData || Utils._bunkMetaData || {};
-            const sportMeta = window.sportMetaData || Utils._sportMetaData || {};
-            
+            // =================================================================
+            // SPORT PLAYER REQUIREMENTS (SOFT CHECK)
+            // =================================================================
+            if (actName && !forceLeague) {
+                let currentHeadcount = 0;
+                allBunks.forEach(b => {
+                    currentHeadcount += (bunkMeta[b]?.size || 0);
+                });
+                const projectedHeadcount = currentHeadcount + mySize;
+                
+                const playerCheck = Utils.checkPlayerCountForSport(actName, projectedHeadcount, forceLeague);
+                
+                if (!playerCheck.valid && playerCheck.severity === 'hard') {
+                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - player count HARD violation`);
+                    return false;
+                }
+            }
+
+            // Legacy maxCapacity check
             const maxHeadcount = sportMeta[actName]?.maxCapacity ?? Infinity;
             
             if (maxHeadcount !== Infinity) {
@@ -506,7 +669,6 @@
                 allBunks.forEach(b => {
                     currentHeadcount += (bunkMeta[b]?.size || 0);
                 });
-                const mySize = bunkMeta[block.bunk]?.size || 0;
                 
                 if (currentHeadcount + mySize > maxHeadcount) {
                     if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - headcount exceeded`);
@@ -521,32 +683,49 @@
 
     /**
      * Calculate sharing score - HIGHER is better
-     * Used by solver to prefer adjacent bunks
+     * NOW division-aware for elective locks
      */
     Utils.calculateSharingScore = function (block, fieldName, fieldUsageBySlot, actName) {
         if (!fieldUsageBySlot) fieldUsageBySlot = window.fieldUsageBySlot || {};
         
-        let score = 0;
-        const myBunkNum = Utils.getBunkNumber(block.bunk);
-        
+        // First check if field is locked (with division context)
         const slots = Utils.findSlotsForRange(block.startTime, block.endTime);
+        const divisionContext = block.divName || block.division;
+        
+        if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots, divisionContext)) {
+            return -999999; // Completely unavailable
+        }
+        
+        let score = 0;
+        const bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || Utils._bunkMetaData || {};
+        const mySize = bunkMeta[block.bunk]?.size || 0;
         
         for (const idx of slots) {
             const scheduleUsage = getScheduleUsageAtSlot(idx, fieldName);
             
             if (scheduleUsage.count === 0) {
-                // Empty field - good base score
                 score += 100;
+                
+                if (actName) {
+                    const playerCheck = Utils.checkPlayerCountForSport(actName, mySize, false);
+                    if (!playerCheck.valid) {
+                        if (playerCheck.severity === 'hard') {
+                            score -= 5000;
+                        } else {
+                            score -= 500;
+                        }
+                    }
+                }
             } else {
-                // Field has existing bunks - check adjacency
                 let minDistance = Infinity;
                 let sameActivity = true;
+                let combinedSize = mySize;
                 
                 for (const existingBunk of scheduleUsage.bunkList) {
                     const distance = Utils.getBunkDistance(block.bunk, existingBunk);
                     minDistance = Math.min(minDistance, distance);
+                    combinedSize += (bunkMeta[existingBunk]?.size || 0);
                     
-                    // Check activity match
                     const existingActivity = scheduleUsage.bunks[existingBunk];
                     if (existingActivity && actName) {
                         if (existingActivity.toLowerCase().trim() !== actName.toLowerCase().trim()) {
@@ -555,23 +734,24 @@
                     }
                 }
                 
-                // =================================================================
-                // FIX #3: SCORING FOR ADJACENT BUNK PREFERENCE
-                // =================================================================
-                // Bunks 10 & 11 (distance 1) = +90 points
-                // Bunks 10 & 12 (distance 2) = +80 points
-                // Bunks 10 & 15 (distance 5) = +50 points
-                // etc.
-                
                 if (minDistance < Infinity) {
                     score += Math.max(0, 100 - (minDistance * 10));
                 }
                 
-                // Bonus for same activity
                 if (sameActivity) {
                     score += 50;
+                    
+                    if (actName) {
+                        const playerCheck = Utils.checkPlayerCountForSport(actName, combinedSize, false);
+                        if (playerCheck.valid) {
+                            score += 200;
+                        } else if (playerCheck.severity === 'soft') {
+                            score -= 100;
+                        } else {
+                            score -= 2000;
+                        }
+                    }
                 } else {
-                    // Heavy penalty for different activities (shouldn't happen with canBlockFit check)
                     score -= 1000;
                 }
             }
@@ -580,17 +760,35 @@
         return score;
     };
 
+    Utils.calculatePlayerCountPenalty = function(actName, playerCount, isLeague = false) {
+        if (!actName || isLeague) return 0;
+        
+        const check = Utils.checkPlayerCountForSport(actName, playerCount, isLeague);
+        
+        if (check.valid) return 0;
+        
+        if (check.severity === 'hard') return 10000;
+        if (check.severity === 'soft') return 1000;
+        
+        return 0;
+    };
+
     Utils.canLeagueGameFit = function (block, fieldName, usage, props) {
         return Utils.canBlockFit(block, fieldName, props, usage, "League Game", true);
     };
 
     // =================================================================
-    // 6. TIMELINE
+    // 8. TIMELINE & DEBUG
     // =================================================================
 
     Utils.timeline = {
-        checkAvailability(resourceName, startMin, endMin, weight, capacity, excludeBunk) {
+        checkAvailability(resourceName, startMin, endMin, weight, capacity, excludeBunk, divisionContext) {
+            // Check global locks first (with division context)
             const slots = Utils.findSlotsForRange(startMin, endMin);
+            if (window.GlobalFieldLocks?.isFieldLocked(resourceName, slots, divisionContext)) {
+                return false;
+            }
+            
             const assigns = window.scheduleAssignments || {};
 
             for (const s of slots) {
@@ -640,10 +838,6 @@
         return window.loadAndFilterData();
     };
     
-    // =================================================================
-    // DEBUG UTILITIES
-    // =================================================================
-    
     Utils.debugFieldConfig = function(fieldName) {
         const props = window.activityProperties?.[fieldName];
         console.log(`=== DEBUG: ${fieldName} ===`);
@@ -653,8 +847,40 @@
         console.log('SharableWith:', props?.sharableWith);
         console.log('TimeRules:', props?.timeRules);
         console.log('Preferences:', props?.preferences);
+        
+        // Check global lock status
+        if (window.GlobalFieldLocks) {
+            console.log('Global Lock Status: checking all slots...');
+            const allSlots = window.unifiedTimes?.map((_, i) => i) || [];
+            const lockInfo = window.GlobalFieldLocks.isFieldLocked(fieldName, allSlots);
+            if (lockInfo) {
+                console.log('LOCKED:', lockInfo);
+            } else {
+                console.log('Not globally locked');
+            }
+        }
+    };
+
+    Utils.debugSportRequirements = function(sportName) {
+        const reqs = Utils.getSportPlayerRequirements(sportName);
+        console.log(`\n=== ${sportName} PLAYER REQUIREMENTS ===`);
+        console.log(`Min Players: ${reqs.minPlayers || 'Not set'}`);
+        console.log(`Max Players: ${reqs.maxPlayers || 'Not set'}`);
+        
+        [8, 12, 14, 18, 24, 28, 32].forEach(count => {
+            const check = Utils.checkPlayerCountForSport(sportName, count, false);
+            const status = check.valid ? '✅' : (check.severity === 'hard' ? '❌ HARD' : '⚠️ SOFT');
+            console.log(`  ${count} players: ${status} ${check.reason || ''}`);
+        });
     };
 
     window.SchedulerCoreUtils = Utils;
+
+    // EXPOSE GLOBALLY FOR COMPATIBILITY
+    window.FieldReservations = {
+        getFromSkeleton: Utils.getFieldReservationsFromSkeleton,
+        isReserved: Utils.isFieldReserved,
+        parseTimeToMinutes: Utils.parseTimeToMinutes
+    };
 
 })();
