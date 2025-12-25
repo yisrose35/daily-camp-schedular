@@ -278,10 +278,19 @@
   // Debounced cloud sync
   let _syncTimeout = null;
   function scheduleCloudSync() {
-    if (_syncTimeout) clearTimeout(_syncTimeout);
+    console.log("☁️ Scheduling cloud sync...");
+    if (_syncTimeout) {
+      console.log("☁️ Clearing previous sync timeout");
+      clearTimeout(_syncTimeout);
+    }
     _syncTimeout = setTimeout(async () => {
-      if (!_cloudSyncPending) return;
+      console.log("☁️ Cloud sync timeout fired, pending:", _cloudSyncPending);
+      if (!_cloudSyncPending) {
+        console.log("☁️ No pending sync, skipping");
+        return;
+      }
       _cloudSyncPending = false;
+      console.log("☁️ Performing cloud sync...");
       await saveToCloud(getLocalCache());
     }, 2000); // 2 second debounce
   }
@@ -402,8 +411,16 @@
   
   // ⭐ SYNCHRONOUS saveGlobalSettings  
   window.saveGlobalSettings = function(key, value) {
+    console.log("☁️ saveGlobalSettings called:", key);
     const state = getLocalCache();
     state[key] = value;
+    
+    // Clear import timestamp if present (it's been used, don't need it anymore)
+    if (state._importTimestamp) {
+      console.log("☁️ Clearing import timestamp flag");
+      delete state._importTimestamp;
+    }
+    
     setLocalCache(state);
     
     // Schedule background cloud sync
@@ -429,10 +446,33 @@
   
   // Force immediate cloud sync
   window.forceSyncToCloud = async function() {
+    console.log("☁️ Force sync to cloud requested");
     _cloudSyncPending = false;
     if (_syncTimeout) clearTimeout(_syncTimeout);
+    
+    // Clear import flag if present
+    const state = getLocalCache();
+    if (state._importTimestamp) {
+      console.log("☁️ Clearing import timestamp before sync");
+      delete state._importTimestamp;
+      setLocalCache(state);
+    }
+    
     const success = await saveToCloud(getLocalCache());
+    console.log("☁️ Force sync result:", success ? "SUCCESS" : "FAILED");
     return success;
+  };
+  
+  // Clear import flag manually
+  window.clearImportFlag = function() {
+    const state = getLocalCache();
+    if (state._importTimestamp) {
+      delete state._importTimestamp;
+      setLocalCache(state);
+      console.log("☁️ Import timestamp cleared");
+    } else {
+      console.log("☁️ No import timestamp to clear");
+    }
   };
   
   // Force cloud refresh
