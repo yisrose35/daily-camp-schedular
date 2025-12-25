@@ -4,6 +4,7 @@
 // =================================================================
 (function () {
   'use strict';
+  window.__CAMPISTRY_CLOUD_READY__ = false;
 
   const AUTH_KEY = "campistry_global_registry";
   let _cache = null;
@@ -41,6 +42,7 @@
     };
 
     localStorage.setItem(AUTH_KEY, JSON.stringify(_cache));
+    window.__CAMPISTRY_CLOUD_READY__ = true;
     return _cache;
   }
 
