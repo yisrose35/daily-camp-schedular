@@ -1,13 +1,12 @@
-
 // ============================================================================
-// total_solver_engine.js (FIXED v4)
+// total_solver_engine.js (FIXED v6 - SPORT PLAYER REQUIREMENTS)
 // Backtracking Constraint Solver + League Engine
 // ----------------------------------------------------------------------------
-// FIXES:
-// 1. DON'T add sports as fields (Hockey:Hockey is wrong!)
-// 2. Better rejection reason logging
-// 3. Adjacent bunk preference
-// 4. Same activity requirement when sharing
+// CRITICAL UPDATE:
+// - ALL candidate options are filtered against GlobalFieldLocks
+// - Locked fields are completely excluded from consideration
+// - NEW: Player count requirements are soft constraints with penalties
+// - This ensures NO field double-booking across divisions
 // ============================================================================
 
 (function () {
@@ -16,10 +15,8 @@
     const Solver = {};
     const MAX_MATCHUP_ITERATIONS = 2000;
     
-    // DEBUG MODE - Set to true to see why fields are rejected
-    const DEBUG_MODE = true;
+    const DEBUG_MODE = false;
 
-    // Runtime globals
     let globalConfig = null;
     let activityProperties = {};
     let allCandidateOptions = [];
@@ -46,10 +43,6 @@
         return m ? parseInt(m[1], 10) : null;
     }
 
-    // ============================================================================
-    // DEBUG LOGGING
-    // ============================================================================
-    
     function debugLog(...args) {
         if (DEBUG_MODE) {
             console.log('[SOLVER DEBUG]', ...args);
@@ -57,7 +50,7 @@
     }
 
     // ============================================================================
-    // PENALTY ENGINE
+    // PENALTY ENGINE (WITH PLAYER COUNT REQUIREMENTS)
     // ============================================================================
 
     function calculatePenaltyCost(block, pick) {
@@ -66,7 +59,10 @@
         const act = pick._activity;
         const fieldName = pick.field;
 
-        // Use sharing score from Utils
+        // Get bunk metadata
+        const bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
+        const mySize = bunkMeta[bunk]?.size || 0;
+
         const sharingScore = window.SchedulerCoreUtils?.calculateSharingScore?.(
             block, 
             fieldName, 
@@ -76,13 +72,13 @@
         
         penalty -= sharingScore;
 
-        // Check capacity and activity matching
         const schedules = window.scheduleAssignments || {};
         const slots = block.slots || [];
         
         for (const slotIdx of slots) {
             let fieldCount = 0;
             let existingActivities = new Set();
+            let combinedSize = mySize;
             
             for (const [otherBunk, otherSlots] of Object.entries(schedules)) {
                 if (otherBunk === bunk) continue;
@@ -92,6 +88,7 @@
                 const entryField = window.SchedulerCoreUtils?.fieldLabel(entry.field) || entry._activity;
                 if (entryField && entryField.toLowerCase().trim() === fieldName.toLowerCase().trim()) {
                     fieldCount++;
+                    combinedSize += (bunkMeta[otherBunk]?.size || 0);
                     if (entry._activity) {
                         existingActivities.add(entry._activity.toLowerCase().trim());
                     }
@@ -116,9 +113,31 @@
                     return 888888;
                 }
             }
+
+            // =================================================================
+            // SPORT PLAYER REQUIREMENTS PENALTY (NEW!)
+            // =================================================================
+            if (act && !pick._isLeague) {
+                const playerCheck = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(act, combinedSize, false);
+                
+                if (playerCheck && !playerCheck.valid) {
+                    if (playerCheck.severity === 'hard') {
+                        // Heavy penalty but NOT a rejection - we prefer this over "Free"
+                        penalty += 8000;
+                        debugLog(`[PENALTY] ${bunk} - ${act}: HARD player violation (${combinedSize} players), penalty +8000`);
+                    } else if (playerCheck.severity === 'soft') {
+                        // Moderate penalty for slightly off
+                        penalty += 1500;
+                        debugLog(`[PENALTY] ${bunk} - ${act}: SOFT player violation (${combinedSize} players), penalty +1500`);
+                    }
+                } else if (playerCheck && playerCheck.valid) {
+                    // BONUS for meeting player requirements!
+                    penalty -= 500;
+                    debugLog(`[PENALTY] ${bunk} - ${act}: Player count GOOD (${combinedSize} players), bonus -500`);
+                }
+            }
         }
 
-        // Adjacent bunk bonus
         const myNum = getBunkNumber(bunk);
         if (myNum !== null) {
             for (const slotIdx of slots) {
@@ -139,7 +158,6 @@
             }
         }
 
-        // No double activity
         const today = window.scheduleAssignments[bunk] || {};
         let todayCount = 0;
         for (const e of Object.values(today)) {
@@ -151,14 +169,12 @@
         }
         if (!pick._isLeague && todayCount >= 1) penalty += 15000;
 
-        // Special max usage
         const specialRule = globalConfig.masterSpecials?.find(s => isSameActivity(s.name, act));
         if (specialRule && specialRule.maxUsage > 0) {
             const hist = globalConfig.historicalCounts?.[bunk]?.[act] || 0;
             if (hist + todayCount >= specialRule.maxUsage) penalty += 20000;
         }
 
-        // Field preferences
         const props = activityProperties[fieldName];
         if (props?.preferences?.enabled) {
             const idx = (props.preferences.list || []).indexOf(block.divName);
@@ -173,171 +189,6 @@
 
         return penalty;
     }
-
-    // ============================================================================
-    // LEAGUE ENGINE
-    // ============================================================================
-
-    function getMatchupHistory(teamA, teamB, leagueName) {
-        const hist = globalConfig.rotationHistory?.leagues || {};
-        const key = [teamA, teamB].sort().join("|");
-        const leagueKey = `${leagueName}|${key}`;
-        const played = hist[leagueKey] || [];
-        const sportCounts = {};
-        for (const g of played) {
-            sportCounts[g.sport] = (sportCounts[g.sport] || 0) + 1;
-        }
-        return { playCount: played.length, sportCounts };
-    }
-
-    function buildFieldConstraintCache(block, leagueSports) {
-        const cache = {};
-        for (const sport of leagueSports) {
-            cache[sport] = [];
-            const potentials = allCandidateOptions.filter(c => c.type === "sport" && isSameActivity(c.sport, sport));
-            for (const cand of potentials) {
-                const fits = window.SchedulerCoreUtils.canBlockFit(
-                    block, cand.field, activityProperties, window.fieldUsageBySlot, cand.activityName, false
-                );
-                if (fits) cache[sport].push(cand.field);
-            }
-        }
-        return cache;
-    }
-
-    function findOptimalSchedule(cands, current) {
-        if (cands.length === 0) return current;
-        if (current.length * 2 === globalConfig._totalLeagueTeams) return current;
-
-        let best = null;
-        let maxMatches = current.length;
-        let iterations = 0;
-
-        cands.sort((a, b) => {
-            if (a.playCount !== b.playCount) return a.playCount - b.playCount;
-            return Math.random() - 0.5;
-        });
-
-        const backtrack = (idx, cur) => {
-            iterations++;
-            if (iterations > MAX_MATCHUP_ITERATIONS) return;
-            if (cur.length * 2 === globalConfig._totalLeagueTeams) {
-                if (cur.length > maxMatches) { maxMatches = cur.length; best = cur; }
-                return;
-            }
-            if (idx === cands.length) {
-                if (cur.length > maxMatches) { maxMatches = cur.length; best = cur; }
-                return;
-            }
-
-            const cand = cands[idx];
-            const available = !cur.some(m =>
-                m.t1 === cand.t1 || m.t1 === cand.t2 ||
-                m.t2 === cand.t1 || m.t2 === cand.t2 ||
-                m.field === cand.field
-            );
-
-            if (available) backtrack(idx + 1, [...cur, cand]);
-            backtrack(idx + 1, cur);
-        };
-
-        backtrack(0, []);
-        return best || [];
-    }
-
-    Solver.generateDailyMatchups = function (league, repBlock) {
-        const teams = league.teams || [];
-        if (teams.length < 2) return [];
-
-        const allPairs = [];
-        let minPlay = Infinity;
-
-        for (let i = 0; i < teams.length; i++) {
-            for (let j = i + 1; j < teams.length; j++) {
-                const hist = getMatchupHistory(teams[i], teams[j], league.name);
-                allPairs.push({
-                    t1: teams[i], t2: teams[j],
-                    playCount: hist.playCount, sportCounts: hist.sportCounts
-                });
-                minPlay = Math.min(minPlay, hist.playCount);
-            }
-        }
-
-        globalConfig._totalLeagueTeams = teams.length;
-        let candidates = allPairs.filter(p => p.playCount === minPlay);
-        const leagueSports = league.sports || ["General Sport"];
-        fieldAvailabilityCache = buildFieldConstraintCache(repBlock, leagueSports);
-
-        const viable = [];
-        for (const p of candidates) {
-            let minSC = Infinity;
-            for (const sport of leagueSports) {
-                const c = p.sportCounts[sport] || 0;
-                minSC = Math.min(minSC, c);
-            }
-            const validSports = leagueSports.filter(s => (p.sportCounts[s] || 0) === minSC && fieldAvailabilityCache[s] && fieldAvailabilityCache[s].length > 0);
-            
-            shuffleArray(validSports);
-            for (const sport of validSports) {
-                const fields = fieldAvailabilityCache[sport];
-                shuffleArray(fields);
-                for (const f of fields) {
-                    viable.push({
-                        t1: p.t1, t2: p.t2, playCount: p.playCount, sport: sport, field: f
-                    });
-                    if (viable.length > 50) break;
-                }
-            }
-        }
-        shuffleArray(viable);
-        return findOptimalSchedule(viable, []);
-    };
-
-    Solver.solveLeagueSchedule = function (leagueBlocks) {
-        if (!leagueBlocks?.length) return [];
-        const output = [];
-        const bucket = {};
-
-        for (const b of leagueBlocks) {
-            const key = `${b.divName}_${b.startTime}`;
-            if (!bucket[key]) bucket[key] = [];
-            bucket[key].push(b);
-        }
-
-        for (const key in bucket) {
-            const blocks = bucket[key];
-            const rep = blocks[0];
-            const league = globalConfig.masterLeagues
-                ? Object.values(globalConfig.masterLeagues).find(l => l.enabled && l.divisions?.includes(rep.divName))
-                : null;
-
-            if (!league) continue;
-
-            const matches = Solver.generateDailyMatchups(league, rep);
-            if (!matches.length) continue;
-
-            const tier = matches[0].playCount;
-            const gameLabel = `Round ${tier + 1}`;
-            
-            for (const b of blocks) {
-                const myMatch = matches.find(m => m.t1 === b.bunk || m.t2 === b.bunk);
-                if (!myMatch) continue;
-
-                const opponent = (myMatch.t1 === b.bunk) ? myMatch.t2 : myMatch.t1;
-                const pick = {
-                    field: myMatch.field,
-                    sport: myMatch.sport,
-                    _activity: `vs ${opponent} (${myMatch.sport})`,
-                    _isLeague: true,
-                    _gameLabel: gameLabel
-                };
-
-                window.fillBlock(b, pick, window.fieldUsageBySlot, globalConfig.yesterdayHistory, true, activityProperties);
-                output.push({ block: b, solution: pick });
-            }
-        }
-        return output;
-    };
 
     // ============================================================================
     // MAIN SOLVER
@@ -361,9 +212,6 @@
         });
     };
 
-    /**
-     * Known sport names - these should NOT be treated as fields
-     */
     const KNOWN_SPORTS = new Set([
         'hockey', 'soccer', 'football', 'baseball', 'kickball', 'basketball',
         'lineup', 'running bases', 'newcomb', 'volleyball', 'dodgeball',
@@ -371,29 +219,32 @@
         'ga slot', 'sport slot', 'free', 'free play'
     ]);
 
-    /**
-     * Check if something is a sport name (not a field)
-     */
     function isSportName(name) {
         if (!name) return false;
         return KNOWN_SPORTS.has(name.toLowerCase().trim());
     }
 
     /**
-     * Build all candidate options from multiple sources
-     * FIXED: Don't add sports as fields!
+     * ★★★ BUILD CANDIDATE OPTIONS - WITH GLOBAL LOCK FILTERING ★★★
      */
-    function buildAllCandidateOptions(config) {
+    function buildAllCandidateOptions(config, blockSlots) {
         const options = [];
         const seenKeys = new Set();
         
         debugLog('=== BUILDING CANDIDATE OPTIONS ===');
-        debugLog('masterFields:', config.masterFields?.length || 0);
         
-        // Source 1: masterFields with activities (PRIMARY SOURCE)
+        // Source 1: masterFields with activities
         config.masterFields?.forEach(f => {
-            debugLog(`  Field: ${f.name}, activities:`, f.activities);
             (f.activities || []).forEach(sport => {
+                // ★★★ CHECK IF FIELD IS GLOBALLY LOCKED ★★★
+                if (window.GlobalFieldLocks && blockSlots && blockSlots.length > 0) {
+                    const lockInfo = window.GlobalFieldLocks.isFieldLocked(f.name, blockSlots);
+                    if (lockInfo) {
+                        debugLog(`  SKIPPING ${f.name} - locked by ${lockInfo.lockedBy}`);
+                        return;
+                    }
+                }
+                
                 const key = `${f.name}|${sport}`;
                 if (!seenKeys.has(key)) {
                     seenKeys.add(key);
@@ -408,9 +259,16 @@
         });
         
         // Source 2: masterSpecials
-        debugLog('masterSpecials:', config.masterSpecials?.length || 0);
         config.masterSpecials?.forEach(s => {
-            debugLog(`  Special: ${s.name}`);
+            // ★★★ CHECK IF SPECIAL IS GLOBALLY LOCKED ★★★
+            if (window.GlobalFieldLocks && blockSlots && blockSlots.length > 0) {
+                const lockInfo = window.GlobalFieldLocks.isFieldLocked(s.name, blockSlots);
+                if (lockInfo) {
+                    debugLog(`  SKIPPING ${s.name} - locked by ${lockInfo.lockedBy}`);
+                    return;
+                }
+            }
+            
             const key = `${s.name}|special`;
             if (!seenKeys.has(key)) {
                 seenKeys.add(key);
@@ -423,22 +281,25 @@
             }
         });
         
-        // Source 3: fieldsBySport from loadAndFilterData
+        // Source 3: fieldsBySport
         const loadedData = window.SchedulerCoreUtils?.loadAndFilterData?.() || {};
         const fieldsBySport = loadedData.fieldsBySport || {};
         
-        debugLog('fieldsBySport:', Object.keys(fieldsBySport));
         for (const [sport, fields] of Object.entries(fieldsBySport)) {
             (fields || []).forEach(fieldName => {
-                // Skip if this "field" is actually a sport name
-                if (isSportName(fieldName)) {
-                    debugLog(`  SKIPPING sport-as-field: ${fieldName}`);
-                    return;
+                if (isSportName(fieldName)) return;
+                
+                // ★★★ CHECK IF FIELD IS GLOBALLY LOCKED ★★★
+                if (window.GlobalFieldLocks && blockSlots && blockSlots.length > 0) {
+                    const lockInfo = window.GlobalFieldLocks.isFieldLocked(fieldName, blockSlots);
+                    if (lockInfo) {
+                        debugLog(`  SKIPPING ${fieldName} - locked by ${lockInfo.lockedBy}`);
+                        return;
+                    }
                 }
                 
                 const key = `${fieldName}|${sport}`;
                 if (!seenKeys.has(key)) {
-                    debugLog(`  Adding from fieldsBySport: ${fieldName} -> ${sport}`);
                     seenKeys.add(key);
                     options.push({ 
                         field: fieldName, 
@@ -450,116 +311,27 @@
             });
         }
         
-        // DO NOT add activityProperties entries as fields - they're often sports not fields!
-        // The masterFields is the authoritative source for field->activity mappings
-        
         debugLog('=== TOTAL CANDIDATE OPTIONS:', options.length, '===');
-        debugLog('Options:', options.map(o => `${o.field}:${o.activityName}`).join(', '));
         
         return options;
     }
 
     /**
-     * Debug why a specific field is rejected for a block
+     * ★★★ GET VALID PICKS - RESPECTS GLOBAL LOCKS + PLAYER REQUIREMENTS ★★★
      */
-    function debugRejection(block, fieldName, actName) {
-        const props = activityProperties[fieldName];
-        
-        // Check block validity first
-        if (!block.startTime && !block.slots?.length) {
-            return `Block has no startTime or slots`;
-        }
-        
-        // Check if slots can be found
-        const slots = block.slots?.length ? block.slots : 
-            window.SchedulerCoreUtils?.findSlotsForRange(block.startTime, block.endTime);
-        if (!slots || slots.length === 0) {
-            return `No slots found for time ${block.startTime}-${block.endTime}`;
-        }
-        
-        if (!props) {
-            return `No activityProperties for "${fieldName}"`;
-        }
-        
-        if (props.available === false) {
-            return `Field marked unavailable`;
-        }
-        
-        // Check time rules
-        if (props.timeRules && props.timeRules.length > 0) {
-            const blockStart = block.startTime;
-            const blockEnd = block.endTime;
-            
-            // Check if any Available rule covers this time
-            const availableRules = props.timeRules.filter(r => r.type === "Available");
-            if (availableRules.length > 0) {
-                let covered = false;
-                for (const rule of availableRules) {
-                    const ruleStart = window.SchedulerCoreUtils?.parseTimeToMinutes(rule.start) || rule.startMin;
-                    const ruleEnd = window.SchedulerCoreUtils?.parseTimeToMinutes(rule.end) || rule.endMin;
-                    if (blockStart >= ruleStart && blockEnd <= ruleEnd) {
-                        covered = true;
-                        break;
-                    }
-                }
-                if (!covered) {
-                    return `Time ${blockStart}-${blockEnd} not in Available rules (${availableRules.map(r => `${r.start || r.startMin}-${r.end || r.endMin}`).join(', ')})`;
-                }
-            }
-            
-            // Check Unavailable rules
-            const unavailableRules = props.timeRules.filter(r => r.type === "Unavailable");
-            for (const rule of unavailableRules) {
-                const ruleStart = window.SchedulerCoreUtils?.parseTimeToMinutes(rule.start) || rule.startMin;
-                const ruleEnd = window.SchedulerCoreUtils?.parseTimeToMinutes(rule.end) || rule.endMin;
-                if (blockStart < ruleEnd && blockEnd > ruleStart) {
-                    return `Time ${blockStart}-${blockEnd} blocked by Unavailable rule ${ruleStart}-${ruleEnd}`;
-                }
-            }
-        }
-        
-        // Check division restrictions
-        if (props.allowedDivisions?.length && !props.allowedDivisions.includes(block.divName)) {
-            return `Division "${block.divName}" not in allowedDivisions: [${props.allowedDivisions.join(', ')}]`;
-        }
-        
-        if (props.preferences?.enabled && props.preferences.exclusive) {
-            if (!props.preferences.list.includes(block.divName)) {
-                return `Division "${block.divName}" not in exclusive preference list`;
-            }
-        }
-        
-        // Check capacity
-        const schedules = window.scheduleAssignments || {};
-        for (const slotIdx of slots) {
-            let count = 0;
-            for (const [otherBunk, otherSlots] of Object.entries(schedules)) {
-                if (otherBunk === block.bunk) continue;
-                const entry = otherSlots?.[slotIdx];
-                if (!entry) continue;
-                const entryField = window.SchedulerCoreUtils?.fieldLabel(entry.field) || entry._activity;
-                if (entryField?.toLowerCase().trim() === fieldName.toLowerCase().trim()) {
-                    count++;
-                }
-            }
-            
-            let maxCap = 1;
-            if (props.sharableWith?.capacity) maxCap = parseInt(props.sharableWith.capacity) || 1;
-            else if (props.sharable) maxCap = 2;
-            
-            if (count >= maxCap) {
-                return `Field at capacity (${count}/${maxCap}) at slot ${slotIdx}`;
-            }
-        }
-        
-        return `Unknown (canBlockFit returned false) - check console for [FIT] messages`;
-    }
-
     Solver.getValidActivityPicks = function (block) {
         const picks = [];
-        const rejectionReasons = {};
+        const slots = block.slots || [];
         
-        for (const cand of allCandidateOptions) {
+        // Rebuild options for this specific block's slots (filters out locked fields)
+        const blockOptions = buildAllCandidateOptions(globalConfig, slots);
+        
+        for (const cand of blockOptions) {
+            // Double-check global lock (shouldn't be needed but safety first)
+            if (window.GlobalFieldLocks?.isFieldLocked(cand.field, slots)) {
+                continue;
+            }
+            
             const fits = window.SchedulerCoreUtils.canBlockFit(
                 block, 
                 cand.field, 
@@ -577,43 +349,23 @@
                 };
                 const cost = calculatePenaltyCost(block, pick);
                 
+                // Allow picks with higher penalties (soft constraints)
+                // Only reject if cost is astronomical (hard constraints)
                 if (cost < 500000) {
                     picks.push({ pick, cost });
-                } else {
-                    rejectionReasons[`${cand.field}:${cand.activityName}`] = `High penalty: ${cost}`;
                 }
-            } else {
-                // Get detailed rejection reason
-                rejectionReasons[`${cand.field}:${cand.activityName}`] = debugRejection(block, cand.field, cand.activityName);
             }
         }
         
-        // DEBUG: Log rejections for blocks with few picks
-        if (picks.length < 3 && DEBUG_MODE) {
-            const timeHr = Math.floor(block.startTime/60);
-            const timeMin = block.startTime % 60;
-            const ampm = timeHr >= 12 ? 'PM' : 'AM';
-            const hr12 = timeHr % 12 || 12;
-            const timeStr = `${hr12}:${String(timeMin).padStart(2,'0')} ${ampm}`;
-            
-            console.log(`\n⚠️ BLOCK WITH FEW OPTIONS:`);
-            console.log(`   Bunk: ${block.bunk}`);
-            console.log(`   Division: ${block.divName}`);
-            console.log(`   Time: ${timeStr} (${block.startTime} mins)`);
-            console.log(`   Valid picks (${picks.length}): ${picks.map(p => `${p.pick.field}:${p.pick._activity}`).join(', ') || 'NONE'}`);
-            console.log(`   Sample rejections:`);
-            
-            // Show first 10 rejections with full reasons
-            const rejectionList = Object.entries(rejectionReasons).slice(0, 10);
-            rejectionList.forEach(([key, reason]) => {
-                console.log(`     ❌ ${key}: ${reason}`);
-            });
+        if (picks.length === 0 && DEBUG_MODE) {
+            console.log(`⚠️ NO VALID PICKS for ${block.bunk} at ${block.startTime}`);
         }
         
-        // Always have Free as fallback
+        // Always have Free as fallback - but with VERY high penalty
+        // This ensures we prefer even bad sports matches over Free
         picks.push({ 
             pick: { field: "Free", sport: null, _activity: "Free" }, 
-            cost: 50000 
+            cost: 100000  // High but not impossible
         });
         
         return picks;
@@ -658,11 +410,11 @@
         let iterations = 0;
         const SAFETY_LIMIT = 100000;
 
-        // Build candidate options (FIXED - no sports as fields)
-        allCandidateOptions = buildAllCandidateOptions(config);
+        // Build initial candidate options (will be rebuilt per-block with lock filtering)
+        allCandidateOptions = buildAllCandidateOptions(config, []);
         
         if (allCandidateOptions.length === 0) {
-            console.error('[SOLVER] NO CANDIDATE OPTIONS BUILT!');
+            console.warn('[SOLVER] Warning: Limited candidate options available');
         }
 
         if (!window.leagueRoundState) window.leagueRoundState = {};
@@ -670,14 +422,11 @@
         if (!globalConfig.rotationHistory.leagues) globalConfig.rotationHistory.leagues = {};
 
         const sorted = Solver.sortBlocksByDifficulty(allBlocks, config);
-        const leagueBlocks = sorted.filter(b => b._isLeague);
         const activityBlocks = sorted.filter(b => !b._isLeague);
 
-        console.log(`[SOLVER] Processing ${activityBlocks.length} activity blocks with ${allCandidateOptions.length} candidate options`);
+        console.log(`[SOLVER] Processing ${activityBlocks.length} activity blocks`);
 
-        const solvedLeague = Solver.solveLeagueSchedule(leagueBlocks);
-
-        let bestSchedule = [...solvedLeague];
+        let bestSchedule = [];
         let maxDepthReached = 0;
 
         function backtrack(idx, acc) {
@@ -696,7 +445,7 @@
             
             const picks = Solver.getValidActivityPicks(block)
                 .sort((a, b) => a.cost - b.cost)
-                .slice(0, 10);
+                .slice(0, 15); // Increased from 10 to consider more options
 
             for (const p of picks) {
                 const res = Solver.applyTentativePick(block, p);
@@ -707,7 +456,7 @@
             return null;
         }
 
-        const final = backtrack(0, solvedLeague);
+        const final = backtrack(0, []);
 
         if (final) {
             console.log(`[SOLVER] Solution found after ${iterations} iterations`);
@@ -745,31 +494,79 @@
     // DEBUG UTILITIES
     // ============================================================================
     
-    Solver.debugTimeRules = function(fieldName) {
-        const props = activityProperties[fieldName];
-        console.log(`=== TIME RULES FOR: ${fieldName} ===`);
-        console.log('Props:', props);
-        console.log('TimeRules:', props?.timeRules);
+    Solver.debugFieldAvailability = function(fieldName, slots) {
+        console.log(`\n=== DEBUG: ${fieldName} AVAILABILITY ===`);
         
-        if (props?.timeRules) {
-            props.timeRules.forEach((rule, i) => {
-                const startMin = window.SchedulerCoreUtils?.parseTimeToMinutes(rule.start) || rule.startMin;
-                const endMin = window.SchedulerCoreUtils?.parseTimeToMinutes(rule.end) || rule.endMin;
-                console.log(`  Rule ${i}: ${rule.type} ${startMin}-${endMin} (${rule.start}-${rule.end})`);
-            });
-        }
-    };
-    
-    Solver.debugAllTimeRules = function() {
-        console.log('=== ALL FIELD TIME RULES ===');
-        for (const [fieldName, props] of Object.entries(activityProperties)) {
-            if (props.timeRules && props.timeRules.length > 0) {
-                console.log(`${fieldName}:`);
-                props.timeRules.forEach((rule, i) => {
-                    console.log(`  ${rule.type}: ${rule.start || rule.startMin} - ${rule.end || rule.endMin}`);
-                });
+        // Check global lock
+        if (window.GlobalFieldLocks) {
+            const lockInfo = window.GlobalFieldLocks.isFieldLocked(fieldName, slots);
+            if (lockInfo) {
+                console.log(`🔒 GLOBALLY LOCKED by ${lockInfo.lockedBy} (${lockInfo.leagueName || lockInfo.activity})`);
+                return false;
+            } else {
+                console.log('✅ Not globally locked');
             }
         }
+        
+        // Check activity properties
+        const props = activityProperties[fieldName];
+        if (props) {
+            console.log('Props:', props);
+        } else {
+            console.log('No activity properties found');
+        }
+        
+        return true;
+    };
+
+    /**
+     * Debug utility: Analyze player requirements impact
+     */
+    Solver.debugPlayerRequirements = function() {
+        const bunkMeta = window.getBunkMetaData?.() || {};
+        const sportMeta = window.getSportMetaData?.() || {};
+        
+        console.log('\n=== PLAYER REQUIREMENTS DEBUG ===');
+        console.log('\nBunk Sizes:');
+        Object.entries(bunkMeta).forEach(([bunk, meta]) => {
+            console.log(`  ${bunk}: ${meta.size || 0} players`);
+        });
+        
+        console.log('\nSport Requirements:');
+        Object.entries(sportMeta).forEach(([sport, meta]) => {
+            const min = meta.minPlayers || 'none';
+            const max = meta.maxPlayers || 'none';
+            console.log(`  ${sport}: min=${min}, max=${max}`);
+        });
+        
+        console.log('\nViability Analysis:');
+        const bunks = Object.keys(bunkMeta);
+        Object.entries(sportMeta).forEach(([sport, meta]) => {
+            if (meta.minPlayers || meta.maxPlayers) {
+                console.log(`\n  ${sport} (min: ${meta.minPlayers || 'n/a'}, max: ${meta.maxPlayers || 'n/a'}):`);
+                
+                // Check solo play
+                bunks.forEach(bunk => {
+                    const size = bunkMeta[bunk]?.size || 0;
+                    const check = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(sport, size, false);
+                    if (check && !check.valid) {
+                        console.log(`    ${bunk} (${size}): ${check.severity} - ${check.reason}`);
+                    }
+                });
+                
+                // Check pairs
+                console.log('    Viable pairs:');
+                for (let i = 0; i < bunks.length; i++) {
+                    for (let j = i + 1; j < bunks.length; j++) {
+                        const combined = (bunkMeta[bunks[i]]?.size || 0) + (bunkMeta[bunks[j]]?.size || 0);
+                        const check = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(sport, combined, false);
+                        if (check && check.valid) {
+                            console.log(`      ${bunks[i]} + ${bunks[j]} = ${combined} ✅`);
+                        }
+                    }
+                }
+            }
+        });
     };
 
     window.totalSolverEngine = Solver;
