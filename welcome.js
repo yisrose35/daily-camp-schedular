@@ -1,71 +1,79 @@
 // ============================================================================
-// welcome.js — CAMPISTRY CLOUD BOOT ENGINE (FINAL SaaS SAFE VERSION)
+// welcome.js — CAMPISTRY CLOUD BOOT ENGINE (PRODUCTION SAFE)
 // ============================================================================
 
 document.addEventListener("DOMContentLoaded", async () => {
 
-    const welcomeScreen = document.getElementById('welcome-screen');
-    const mainAppContainer = document.getElementById('main-app-container');
+  const welcomeScreen = document.getElementById('welcome-screen');
+  const mainAppContainer = document.getElementById('main-app-container');
 
-    // Wait for Supabase to be available
-    let attempts = 0;
-    while (!window.supabase && attempts < 50) {
-        await new Promise(r => setTimeout(r, 100));
-        attempts++;
-    }
+  // Defensive semicolon to prevent concat/minify glue bugs
+  ;
 
-    if (!window.supabase) {
-        console.error("Supabase client not available");
-        welcomeScreen?.style.display = 'flex';
-        return;
-    }
+  // Wait for Supabase
+  let attempts = 0;
+  while (!window.supabase && attempts < 50) {
+    await new Promise(r => setTimeout(r, 100));
+    attempts++;
+  }
 
-    let booted = false;
+  if (!window.supabase) {
+    console.error("Supabase client not available");
+    welcomeScreen?.style.display = 'flex';
+    return;
+  }
 
-    async function bootOnce() {
-        if (booted) return;
-        booted = true;
+  let booted = false;
 
-        welcomeScreen?.style.display = 'none';
-        mainAppContainer?.style.display = 'block';
+  async function bootOnce() {
+    if (booted) return;
+    booted = true;
 
-        console.log("🚀 Booting Campistry OS...");
-        try {
-            window.initCalendar?.();
-            window.initApp1?.();
-            window.initLeagues?.();
-            window.initScheduleSystem?.();
-            console.log("✅ Campistry boot complete");
-        } catch (e) {
-            console.error("Boot error:", e);
-        }
-    }
+    welcomeScreen?.style.display = 'none';
+    mainAppContainer?.style.display = 'block';
+
+    console.log("🚀 Booting Campistry OS...");
 
     try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user) {
-            console.log("✅ Existing session found, auto-login...");
-            await bootOnce();
-        } else {
-            welcomeScreen?.style.display = 'flex';
-            mainAppContainer?.style.display = 'none';
-        }
+      window.initCalendar?.();
+      window.initApp1?.();
+      window.initLeagues?.();
+      window.initScheduleSystem?.();
+      console.log("✅ Campistry boot complete");
     } catch (e) {
-        console.error("Session check failed:", e);
-        welcomeScreen?.style.display = 'flex';
-        mainAppContainer?.style.display = 'none';
+      console.error("Boot error:", e);
+    }
+  }
+
+  // SAFE session check (cannot throw syntax errors)
+  let session = null;
+  try {
+    const res = await supabase.auth.getSession();
+    session = res?.data?.session || null;
+    console.log("[AUTH] session exists?", !!session);
+  } catch (e) {
+    console.warn("[AUTH] getSession failed:", e);
+  }
+
+  if (session?.user) {
+    await bootOnce();
+  } else {
+    welcomeScreen?.style.display = 'flex';
+    mainAppContainer?.style.display = 'none';
+  }
+
+  supabase.auth.onAuthStateChange(async (event, session) => {
+    console.log("[AUTH] state:", event);
+
+    if (event === 'SIGNED_IN' && session?.user) {
+      await bootOnce();
     }
 
-    supabase.auth.onAuthStateChange(async (event, session) => {
-        console.log("Auth state change:", event);
-        if (event === 'SIGNED_IN' && session?.user) {
-            await bootOnce();
-        }
-        if (event === 'SIGNED_OUT') {
-            booted = false;
-            welcomeScreen?.style.display = 'flex';
-            mainAppContainer?.style.display = 'none';
-        }
-    });
+    if (event === 'SIGNED_OUT') {
+      booted = false;
+      welcomeScreen?.style.display = 'flex';
+      mainAppContainer?.style.display = 'none';
+    }
+  });
 
 });
