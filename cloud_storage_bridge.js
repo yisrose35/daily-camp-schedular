@@ -118,15 +118,22 @@
   async function getUser() {
     try {
       if (!window.supabase) {
-        console.warn("☁️ Supabase not available");
+        console.log("☁️ Supabase not available yet");
         return null;
       }
       const { data, error } = await window.supabase.auth.getUser();
       if (error) {
-        console.warn("☁️ getUser error:", error.message);
+        // Auth session missing is expected before sign-in, don't log as error
+        if (error.message?.includes('session')) {
+          console.log("☁️ No auth session yet (user not signed in)");
+        } else {
+          console.warn("☁️ getUser error:", error.message);
+        }
         return null;
       }
-      console.log("☁️ Current user:", data?.user?.email || "none");
+      if (data?.user) {
+        console.log("☁️ Current user:", data.user.email);
+      }
       return data?.user || null;
     } catch (e) {
       console.warn("☁️ Failed to get user:", e);
@@ -137,13 +144,14 @@
   async function loadFromCloud() {
     try {
       if (!window.supabase) {
-        console.warn("☁️ Supabase not available for load");
+        console.log("☁️ Supabase not available for load");
         return null;
       }
       
       const user = await getUser();
       if (!user) {
-        console.warn("☁️ No user - cannot load from cloud");
+        // No user is expected before sign-in, don't log as warning
+        console.log("☁️ No user yet - will load from cloud after sign-in");
         return null;
       }
       
@@ -442,6 +450,43 @@
 
   // Start initialization
   initialize().catch(e => console.error("Cloud bridge init failed:", e));
+  
+  // ⭐ CRITICAL: Re-hydrate when user signs in
+  // The initial load might fail if user isn't authenticated yet
+  function setupAuthListener() {
+    if (!window.supabase?.auth) {
+      // Supabase not ready yet, try again
+      setTimeout(setupAuthListener, 500);
+      return;
+    }
+    
+    window.supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log("☁️ Auth state change:", event);
+      
+      if (event === 'SIGNED_IN' && session?.user) {
+        console.log("☁️ User signed in, re-hydrating from cloud...");
+        
+        // Reset initialization flag to allow re-fetch
+        _initialized = false;
+        
+        // Clear memory cache to force re-read
+        _memoryCache = null;
+        
+        // Re-initialize (will fetch from cloud now that user is authenticated)
+        await initialize();
+        
+        // Notify app to refresh
+        window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
+          detail: { hydrated: true, hasData: Object.keys(getLocalCache().divisions || {}).length > 0, afterSignIn: true }
+        }));
+      }
+    });
+    
+    console.log("☁️ Auth listener registered");
+  }
+  
+  // Setup auth listener
+  setupAuthListener();
   
   console.log("☁️ Cloud Bridge API ready (sync + background cloud)");
 
