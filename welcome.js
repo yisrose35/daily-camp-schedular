@@ -1,6 +1,5 @@
 // ============================================================================
-// welcome.js — CAMPISTRY CLOUD BOOT ENGINE
-// FIXED VERSION: Proper session check and auto-login
+// welcome.js — CAMPISTRY CLOUD BOOT ENGINE (FINAL SaaS SAFE VERSION)
 // ============================================================================
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -17,32 +16,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (!window.supabase) {
         console.error("Supabase client not available");
-        if (welcomeScreen) welcomeScreen.style.display = 'flex';
+        welcomeScreen?.style.display = 'flex';
         return;
     }
 
-    // Check for existing session
-    try {
-        const { data: { session } } = await supabase.auth.getSession();
+    let booted = false;
 
-        if (session && session.user) {
-            console.log("✅ Existing session found, auto-login...");
-            if (welcomeScreen) welcomeScreen.style.display = 'none';
-            if (mainAppContainer) mainAppContainer.style.display = 'block';
-            bootMainApp();
-        } else {
-            console.log("No existing session, showing login...");
-            if (welcomeScreen) welcomeScreen.style.display = 'flex';
-            if (mainAppContainer) mainAppContainer.style.display = 'none';
-        }
+    async function bootOnce() {
+        if (booted) return;
+        booted = true;
 
-    } catch (e) {
-        console.error("Session check failed:", e);
-        if (welcomeScreen) welcomeScreen.style.display = 'flex';
-        if (mainAppContainer) mainAppContainer.style.display = 'none';
-    }
+        welcomeScreen?.style.display = 'none';
+        mainAppContainer?.style.display = 'block';
 
-    function bootMainApp() {
         console.log("🚀 Booting Campistry OS...");
         try {
             window.initCalendar?.();
@@ -55,21 +41,30 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
     }
 
-    window.bootMainApp = bootMainApp;
-
-    // Listen for auth state changes
-    supabase.auth.onAuthStateChange((event, session) => {
-        console.log("Auth state change:", event);
-        
-        if (event === 'SIGNED_IN' && session) {
-            if (welcomeScreen) welcomeScreen.style.display = 'none';
-            if (mainAppContainer) mainAppContainer.style.display = 'block';
-            bootMainApp();
+    try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+            console.log("✅ Existing session found, auto-login...");
+            await bootOnce();
+        } else {
+            welcomeScreen?.style.display = 'flex';
+            mainAppContainer?.style.display = 'none';
         }
-        
+    } catch (e) {
+        console.error("Session check failed:", e);
+        welcomeScreen?.style.display = 'flex';
+        mainAppContainer?.style.display = 'none';
+    }
+
+    supabase.auth.onAuthStateChange(async (event, session) => {
+        console.log("Auth state change:", event);
+        if (event === 'SIGNED_IN' && session?.user) {
+            await bootOnce();
+        }
         if (event === 'SIGNED_OUT') {
-            if (welcomeScreen) welcomeScreen.style.display = 'flex';
-            if (mainAppContainer) mainAppContainer.style.display = 'none';
+            booted = false;
+            welcomeScreen?.style.display = 'flex';
+            mainAppContainer?.style.display = 'none';
         }
     });
 
