@@ -429,8 +429,26 @@
                     console.log("✓ Restored specialty league history");
                 }
                 
-                alert("Import successful. Reloading...");
-                window.location.reload();
+                // Push imported divisions & bunks into cloud authority BEFORE reload
+try {
+    if (backup.globalRegistry) {
+        if (backup.globalRegistry.divisions) {
+            window.setGlobalDivisions?.(backup.globalRegistry.divisions);
+        }
+        if (backup.globalRegistry.bunks) {
+            window.setGlobalBunks?.(backup.globalRegistry.bunks);
+        }
+    }
+} catch(e) {
+    console.error("Cloud push failed:", e);
+}
+
+// Give cloud write a moment to commit, then reload
+setTimeout(() => {
+    alert("Import successful. Reloading...");
+    window.location.reload();
+}, 1200);
+
             } catch (err) {
                 console.error("Import failed:", err);
                 alert("Invalid backup file. Error: " + err.message);
