@@ -71,7 +71,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     // ⭐ FIXED: Proper async boot with cloud hydration wait
     async function bootOnce() {
         if (booted) return;
+        
+        // Check if campistry_auth.js already booted
+        if (window.__CAMPISTRY_BOOTED__) {
+            console.log("🚀 App already booted by campistry_auth.js");
+            booted = true;
+            return;
+        }
+        
         booted = true;
+        window.__CAMPISTRY_BOOTED__ = true;
 
         if (welcomeScreen) welcomeScreen.style.display = 'none';
         if (mainAppContainer) mainAppContainer.style.display = 'block';
@@ -107,6 +116,7 @@ document.addEventListener("DOMContentLoaded", async () => {
                 setTimeout(() => {
                     window.removeEventListener('campistry-cloud-hydrated', handler);
                     console.warn("⚠️ Cloud hydration timeout - proceeding anyway");
+                    window.__CAMPISTRY_CLOUD_READY__ = true;
                     resolve();
                 }, 5000);
             });
