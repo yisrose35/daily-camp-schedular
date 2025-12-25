@@ -1,13 +1,19 @@
 // ============================================================================
-// total_solver_engine.js (FIXED v7 - SPORT PLAYER REQUIREMENTS + DISABLED FIELDS)
+// total_solver_engine.js (ENHANCED v8 - SMART ROTATION INTEGRATION)
 // Backtracking Constraint Solver + League Engine
 // ----------------------------------------------------------------------------
-// CRITICAL UPDATE:
-// - ALL candidate options are filtered against GlobalFieldLocks
-// - Locked fields are completely excluded from consideration
-// - NEW: Player count requirements are soft constraints with penalties
-// - This ensures NO field double-booking across divisions
-// - PATCH 3: Filters disabled fields (rainy day/manual overrides)
+// MAJOR UPDATE: Smart Activity Rotation System
+// - Tracks detailed activity history (when each bunk last did each activity)
+// - Calculates "staleness scores" - prioritizes activities bunks haven't done
+// - Enforces variety - strong penalties for repeating, bonuses for variety
+// - Balances distribution - ensures fair access across all bunks
+//
+// SCORING PHILOSOPHY:
+// - Lower penalty = BETTER
+// - Same day repeat = BLOCKED (Infinity)
+// - Yesterday repeat = Heavy penalty (+5000)
+// - Recent repeat (2-3 days) = Moderate penalty (+2000-3000)
+// - Never done before = BONUS (-1500)
 // ============================================================================
 
 (function () {
@@ -17,11 +23,41 @@
     const MAX_MATCHUP_ITERATIONS = 2000;
     
     const DEBUG_MODE = false;
+    const DEBUG_ROTATION = false; // Set to true to see rotation scoring
 
     let globalConfig = null;
     let activityProperties = {};
     let allCandidateOptions = [];
     let fieldAvailabilityCache = {};
+
+    // ============================================================================
+    // ROTATION CONFIGURATION
+    // ============================================================================
+    const ROTATION_CONFIG = {
+        // Hard rules
+        SAME_DAY_PENALTY: Infinity,           // NEVER allow same activity twice in one day
+        
+        // Recency penalties (days ago)
+        YESTERDAY_PENALTY: 5000,              // Did it yesterday
+        TWO_DAYS_AGO_PENALTY: 3000,           // Did it 2 days ago
+        THREE_DAYS_AGO_PENALTY: 2000,         // Did it 3 days ago
+        FOUR_TO_SEVEN_DAYS_PENALTY: 800,      // Did it 4-7 days ago
+        WEEK_PLUS_PENALTY: 200,               // Did it more than a week ago
+        
+        // Frequency penalties
+        HIGH_FREQUENCY_PENALTY: 1500,         // Bunk has done this much more than others
+        ABOVE_AVERAGE_PENALTY: 500,           // Bunk has done this more than average
+        
+        // Variety bonuses (negative = good)
+        NEVER_DONE_BONUS: -1500,              // Bunk has NEVER done this activity
+        UNDER_UTILIZED_BONUS: -800,           // Activity is under-utilized by this bunk
+        GOOD_VARIETY_BONUS: -300,             // General variety bonus
+        
+        // Weights
+        RECENCY_WEIGHT: 1.0,
+        FREQUENCY_WEIGHT: 0.8,
+        VARIETY_WEIGHT: 1.2
+    };
 
     // ============================================================================
     // HELPERS
@@ -50,8 +86,282 @@
         }
     }
 
+    function rotationLog(...args) {
+        if (DEBUG_ROTATION) {
+            console.log('[ROTATION]', ...args);
+        }
+    }
+
     // ============================================================================
-    // PENALTY ENGINE (WITH PLAYER COUNT REQUIREMENTS)
+    // ★★★ SMART ROTATION SCORING SYSTEM ★★★
+    // ============================================================================
+
+    /**
+     * Get all activities done by a bunk TODAY (before current slot)
+     */
+    function getActivitiesDoneToday(bunkName, beforeSlotIndex) {
+        const activities = new Set();
+        const schedule = window.scheduleAssignments?.[bunkName] || [];
+        
+        for (let i = 0; i < beforeSlotIndex && i < schedule.length; i++) {
+            const entry = schedule[i];
+            if (entry && entry._activity && !entry._isTransition && !entry.continuation) {
+                activities.add(entry._activity.toLowerCase().trim());
+            }
+        }
+        
+        return activities;
+    }
+
+    /**
+     * Get the last time a bunk did a specific activity (days ago)
+     * Returns null if never done, 0 if done today, 1 if yesterday, etc.
+     */
+    function getDaysSinceActivity(bunkName, activityName, beforeSlotIndex) {
+        const actLower = activityName.toLowerCase().trim();
+        
+        // Check today first
+        const todayActivities = getActivitiesDoneToday(bunkName, beforeSlotIndex);
+        if (todayActivities.has(actLower)) {
+            return 0; // Done today
+        }
+        
+        // Check rotation history
+        const rotationHistory = globalConfig?.rotationHistory || window.loadRotationHistory?.() || { bunks: {} };
+        const bunkHistory = rotationHistory.bunks?.[bunkName] || {};
+        const lastTimestamp = bunkHistory[activityName];
+        
+        if (!lastTimestamp) {
+            // Check historical counts - if count > 0, they've done it but we don't know when
+            const historicalCounts = globalConfig?.historicalCounts || {};
+            if (historicalCounts[bunkName]?.[activityName] > 0) {
+                return 14; // Assume 2 weeks ago if we have count but no timestamp
+            }
+            return null; // Never done
+        }
+        
+        const now = Date.now();
+        const daysSince = Math.floor((now - lastTimestamp) / (1000 * 60 * 60 * 24));
+        return Math.max(1, daysSince); // At least 1 day if it's in history
+    }
+
+    /**
+     * Get total count of how many times a bunk has done an activity
+     */
+    function getActivityCount(bunkName, activityName) {
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const historicalCounts = globalConfig?.historicalCounts || globalSettings.historicalCounts || {};
+        const manualOffsets = globalSettings.manualUsageOffsets || {};
+        
+        const baseCount = historicalCounts[bunkName]?.[activityName] || 0;
+        const offset = manualOffsets[bunkName]?.[activityName] || 0;
+        
+        return Math.max(0, baseCount + offset);
+    }
+
+    /**
+     * Get average activity count for a bunk across all activities
+     */
+    function getBunkAverageActivityCount(bunkName, allActivities) {
+        if (!allActivities || allActivities.length === 0) return 0;
+        
+        let total = 0;
+        for (const act of allActivities) {
+            total += getActivityCount(bunkName, act);
+        }
+        
+        return total / allActivities.length;
+    }
+
+    /**
+     * Calculate RECENCY penalty - how recently did they do this?
+     * Higher = worse (more recent = higher penalty)
+     */
+    function calculateRecencyPenalty(bunkName, activityName, beforeSlotIndex) {
+        const daysSince = getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+        
+        if (daysSince === null) {
+            // Never done - this is GREAT!
+            return ROTATION_CONFIG.NEVER_DONE_BONUS;
+        }
+        
+        if (daysSince === 0) {
+            // Same day - FORBIDDEN
+            return ROTATION_CONFIG.SAME_DAY_PENALTY;
+        }
+        
+        if (daysSince === 1) {
+            return ROTATION_CONFIG.YESTERDAY_PENALTY;
+        }
+        
+        if (daysSince === 2) {
+            return ROTATION_CONFIG.TWO_DAYS_AGO_PENALTY;
+        }
+        
+        if (daysSince === 3) {
+            return ROTATION_CONFIG.THREE_DAYS_AGO_PENALTY;
+        }
+        
+        if (daysSince <= 7) {
+            return ROTATION_CONFIG.FOUR_TO_SEVEN_DAYS_PENALTY;
+        }
+        
+        // More than a week ago - small penalty that decreases over time
+        const weeksAgo = Math.floor(daysSince / 7);
+        return Math.max(50, ROTATION_CONFIG.WEEK_PLUS_PENALTY * Math.pow(0.7, weeksAgo));
+    }
+
+    /**
+     * Calculate FREQUENCY penalty - how often have they done this compared to others?
+     */
+    function calculateFrequencyPenalty(bunkName, activityName) {
+        // Get all activities for comparison
+        const allActivities = getAllActivityNames();
+        if (allActivities.length === 0) return 0;
+        
+        const count = getActivityCount(bunkName, activityName);
+        const average = getBunkAverageActivityCount(bunkName, allActivities);
+        const deviation = count - average;
+        
+        if (deviation <= -2) {
+            // Significantly under-utilized - bonus!
+            return ROTATION_CONFIG.UNDER_UTILIZED_BONUS;
+        }
+        
+        if (deviation < 0) {
+            // Slightly under-utilized
+            return ROTATION_CONFIG.GOOD_VARIETY_BONUS;
+        }
+        
+        if (deviation === 0) {
+            // Average usage
+            return 0;
+        }
+        
+        if (deviation <= 2) {
+            // Slightly over-used
+            return ROTATION_CONFIG.ABOVE_AVERAGE_PENALTY;
+        }
+        
+        // Significantly over-used
+        return ROTATION_CONFIG.HIGH_FREQUENCY_PENALTY + (deviation - 2) * 200;
+    }
+
+    /**
+     * Calculate VARIETY penalty - how much variety does this add to today?
+     */
+    function calculateVarietyPenalty(bunkName, activityName, beforeSlotIndex) {
+        const todayActivities = getActivitiesDoneToday(bunkName, beforeSlotIndex);
+        const actLower = activityName.toLowerCase().trim();
+        
+        // Already done today - FORBIDDEN
+        if (todayActivities.has(actLower)) {
+            return ROTATION_CONFIG.SAME_DAY_PENALTY;
+        }
+        
+        // Check activity type balance (sports vs specials)
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const specialNames = new Set(
+            (globalSettings.app1?.specialActivities || []).map(s => s.name.toLowerCase().trim())
+        );
+        
+        let todaySports = 0;
+        let todaySpecials = 0;
+        
+        for (const act of todayActivities) {
+            if (specialNames.has(act)) {
+                todaySpecials++;
+            } else {
+                todaySports++;
+            }
+        }
+        
+        const isSpecial = specialNames.has(actLower);
+        
+        // Bonus if this balances the day's activities
+        if (isSpecial && todaySports > todaySpecials) {
+            return -200; // Bonus for adding a special when they've done more sports
+        }
+        
+        if (!isSpecial && todaySpecials > todaySports) {
+            return -200; // Bonus for adding a sport when they've done more specials
+        }
+        
+        // General variety bonus based on unique activities today
+        const uniqueToday = todayActivities.size;
+        return -50 * uniqueToday; // More bonus for early variety
+    }
+
+    /**
+     * Get all activity names from config
+     */
+    function getAllActivityNames() {
+        const names = new Set();
+        
+        // From masterFields
+        globalConfig?.masterFields?.forEach(f => {
+            (f.activities || []).forEach(sport => names.add(sport));
+        });
+        
+        // From masterSpecials
+        globalConfig?.masterSpecials?.forEach(s => {
+            if (s.name) names.add(s.name);
+        });
+        
+        // From activityProperties
+        if (activityProperties) {
+            for (const name of Object.keys(activityProperties)) {
+                if (name && name !== 'Free' && !name.includes('Transition')) {
+                    names.add(name);
+                }
+            }
+        }
+        
+        return [...names];
+    }
+
+    /**
+     * ★★★ MASTER ROTATION SCORE CALCULATOR ★★★
+     * Returns total rotation penalty for an activity choice
+     * LOWER IS BETTER, Infinity means blocked
+     */
+    function calculateRotationPenalty(bunkName, activityName, block) {
+        if (!activityName || activityName === 'Free') return 0;
+        
+        const beforeSlotIndex = block.slots?.[0] || 0;
+        
+        // Calculate individual penalties
+        const recencyPenalty = calculateRecencyPenalty(bunkName, activityName, beforeSlotIndex);
+        
+        // If recency returns Infinity (same day), stop immediately
+        if (recencyPenalty === Infinity || recencyPenalty === ROTATION_CONFIG.SAME_DAY_PENALTY) {
+            rotationLog(`${bunkName} - ${activityName}: BLOCKED (same day)`);
+            return Infinity;
+        }
+        
+        const frequencyPenalty = calculateFrequencyPenalty(bunkName, activityName);
+        const varietyPenalty = calculateVarietyPenalty(bunkName, activityName, beforeSlotIndex);
+        
+        // If variety returns Infinity, stop
+        if (varietyPenalty === Infinity) {
+            rotationLog(`${bunkName} - ${activityName}: BLOCKED (variety check)`);
+            return Infinity;
+        }
+        
+        // Combine penalties with weights
+        const totalPenalty = (
+            recencyPenalty * ROTATION_CONFIG.RECENCY_WEIGHT +
+            frequencyPenalty * ROTATION_CONFIG.FREQUENCY_WEIGHT +
+            varietyPenalty * ROTATION_CONFIG.VARIETY_WEIGHT
+        );
+        
+        rotationLog(`${bunkName} - ${activityName}: recency=${recencyPenalty}, freq=${frequencyPenalty}, variety=${varietyPenalty}, TOTAL=${totalPenalty}`);
+        
+        return totalPenalty;
+    }
+
+    // ============================================================================
+    // PENALTY ENGINE (ENHANCED WITH SMART ROTATION)
     // ============================================================================
 
     function calculatePenaltyCost(block, pick) {
@@ -60,10 +370,20 @@
         const act = pick._activity;
         const fieldName = pick.field;
 
+        // ★★★ SMART ROTATION PENALTY (PRIMARY FACTOR) ★★★
+        const rotationPenalty = calculateRotationPenalty(bunk, act, block);
+        
+        if (rotationPenalty === Infinity) {
+            return 999999; // Blocked by rotation rules
+        }
+        
+        penalty += rotationPenalty;
+
         // Get bunk metadata
         const bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
         const mySize = bunkMeta[bunk]?.size || 0;
 
+        // Sharing score (adjacent bunks bonus)
         const sharingScore = window.SchedulerCoreUtils?.calculateSharingScore?.(
             block, 
             fieldName, 
@@ -73,6 +393,7 @@
         
         penalty -= sharingScore;
 
+        // Capacity and activity matching checks
         const schedules = window.scheduleAssignments || {};
         const slots = block.slots || [];
         
@@ -115,30 +436,23 @@
                 }
             }
 
-            // =================================================================
-            // SPORT PLAYER REQUIREMENTS PENALTY (NEW!)
-            // =================================================================
+            // Sport player requirements (soft constraints)
             if (act && !pick._isLeague) {
                 const playerCheck = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(act, combinedSize, false);
                 
                 if (playerCheck && !playerCheck.valid) {
                     if (playerCheck.severity === 'hard') {
-                        // Heavy penalty but NOT a rejection - we prefer this over "Free"
                         penalty += 8000;
-                        debugLog(`[PENALTY] ${bunk} - ${act}: HARD player violation (${combinedSize} players), penalty +8000`);
                     } else if (playerCheck.severity === 'soft') {
-                        // Moderate penalty for slightly off
                         penalty += 1500;
-                        debugLog(`[PENALTY] ${bunk} - ${act}: SOFT player violation (${combinedSize} players), penalty +1500`);
                     }
                 } else if (playerCheck && playerCheck.valid) {
-                    // BONUS for meeting player requirements!
                     penalty -= 500;
-                    debugLog(`[PENALTY] ${bunk} - ${act}: Player count GOOD (${combinedSize} players), bonus -500`);
                 }
             }
         }
 
+        // Adjacent bunk bonus
         const myNum = getBunkNumber(bunk);
         if (myNum !== null) {
             for (const slotIdx of slots) {
@@ -159,23 +473,15 @@
             }
         }
 
-        const today = window.scheduleAssignments[bunk] || {};
-        let todayCount = 0;
-        for (const e of Object.values(today)) {
-            if (!e) continue;
-            const existing = e._activity || e.activity || e.field;
-            if (isSameActivity(existing, act)) {
-                todayCount++;
-            }
-        }
-        if (!pick._isLeague && todayCount >= 1) penalty += 15000;
-
+        // Usage limit check (for special activities with maxUsage)
         const specialRule = globalConfig.masterSpecials?.find(s => isSameActivity(s.name, act));
         if (specialRule && specialRule.maxUsage > 0) {
             const hist = globalConfig.historicalCounts?.[bunk]?.[act] || 0;
+            const todayCount = getActivitiesDoneToday(bunk, block.slots?.[0] || 999).has((act || '').toLowerCase().trim()) ? 1 : 0;
             if (hist + todayCount >= specialRule.maxUsage) penalty += 20000;
         }
 
+        // Division preference
         const props = activityProperties[fieldName];
         if (props?.preferences?.enabled) {
             const idx = (props.preferences.list || []).indexOf(block.divName);
@@ -234,7 +540,6 @@
         
         debugLog('=== BUILDING CANDIDATE OPTIONS ===');
         
-        // ★★★ Get disabled fields (rainy day, manual overrides, etc) ★★★
         const disabledFields = window.currentDisabledFields || config.disabledFields || [];
         if (disabledFields.length > 0) {
             debugLog(`  Disabled fields: ${disabledFields.join(', ')}`);
@@ -242,18 +547,14 @@
         
         // Source 1: masterFields with activities
         config.masterFields?.forEach(f => {
-            // ★★★ CHECK IF FIELD IS DISABLED (RAINY DAY, ETC) ★★★
             if (disabledFields.includes(f.name)) {
-                debugLog(`  SKIPPING ${f.name} - field is DISABLED`);
                 return;
             }
             
             (f.activities || []).forEach(sport => {
-                // ★★★ CHECK IF FIELD IS GLOBALLY LOCKED ★★★
                 if (window.GlobalFieldLocks && blockSlots && blockSlots.length > 0) {
                     const lockInfo = window.GlobalFieldLocks.isFieldLocked(f.name, blockSlots);
                     if (lockInfo) {
-                        debugLog(`  SKIPPING ${f.name} - locked by ${lockInfo.lockedBy}`);
                         return;
                     }
                 }
@@ -273,17 +574,13 @@
         
         // Source 2: masterSpecials
         config.masterSpecials?.forEach(s => {
-            // ★★★ CHECK IF SPECIAL IS DISABLED ★★★
             if (disabledFields.includes(s.name)) {
-                debugLog(`  SKIPPING ${s.name} - special is DISABLED`);
                 return;
             }
             
-            // ★★★ CHECK IF SPECIAL IS GLOBALLY LOCKED ★★★
             if (window.GlobalFieldLocks && blockSlots && blockSlots.length > 0) {
                 const lockInfo = window.GlobalFieldLocks.isFieldLocked(s.name, blockSlots);
                 if (lockInfo) {
-                    debugLog(`  SKIPPING ${s.name} - locked by ${lockInfo.lockedBy}`);
                     return;
                 }
             }
@@ -308,17 +605,13 @@
             (fields || []).forEach(fieldName => {
                 if (isSportName(fieldName)) return;
                 
-                // ★★★ CHECK IF FIELD IS DISABLED (RAINY DAY, ETC) ★★★
                 if (disabledFields.includes(fieldName)) {
-                    debugLog(`  SKIPPING ${fieldName} - field is DISABLED`);
                     return;
                 }
                 
-                // ★★★ CHECK IF FIELD IS GLOBALLY LOCKED ★★★
                 if (window.GlobalFieldLocks && blockSlots && blockSlots.length > 0) {
                     const lockInfo = window.GlobalFieldLocks.isFieldLocked(fieldName, blockSlots);
                     if (lockInfo) {
-                        debugLog(`  SKIPPING ${fieldName} - locked by ${lockInfo.lockedBy}`);
                         return;
                     }
                 }
@@ -342,27 +635,31 @@
     }
 
     /**
-     * ★★★ GET VALID PICKS - RESPECTS GLOBAL LOCKS + PLAYER REQUIREMENTS ★★★
+     * ★★★ GET VALID PICKS - WITH SMART ROTATION SCORING ★★★
      */
     Solver.getValidActivityPicks = function (block) {
         const picks = [];
         const slots = block.slots || [];
+        const bunk = block.bunk;
         
-        // ★★★ Get disabled fields ★★★
         const disabledFields = window.currentDisabledFields || globalConfig.disabledFields || [];
         
-        // Rebuild options for this specific block's slots (filters out locked fields)
+        // Rebuild options for this specific block's slots
         const blockOptions = buildAllCandidateOptions(globalConfig, slots);
         
         for (const cand of blockOptions) {
-            // ★★★ CHECK IF FIELD IS DISABLED ★★★
             if (disabledFields.includes(cand.field)) {
                 continue;
             }
             
-            // Double-check global lock (shouldn't be needed but safety first)
             if (window.GlobalFieldLocks?.isFieldLocked(cand.field, slots)) {
                 continue;
+            }
+            
+            // ★★★ PRE-CHECK ROTATION - Skip activities done today ★★★
+            const rotationPenalty = calculateRotationPenalty(bunk, cand.activityName, block);
+            if (rotationPenalty === Infinity) {
+                continue; // Skip - blocked by rotation
             }
             
             const fits = window.SchedulerCoreUtils.canBlockFit(
@@ -382,8 +679,6 @@
                 };
                 const cost = calculatePenaltyCost(block, pick);
                 
-                // Allow picks with higher penalties (soft constraints)
-                // Only reject if cost is astronomical (hard constraints)
                 if (cost < 500000) {
                     picks.push({ pick, cost });
                 }
@@ -394,11 +689,10 @@
             console.log(`⚠️ NO VALID PICKS for ${block.bunk} at ${block.startTime}`);
         }
         
-        // Always have Free as fallback - but with VERY high penalty
-        // This ensures we prefer even bad sports matches over Free
+        // Free as fallback with very high penalty
         picks.push({ 
             pick: { field: "Free", sport: null, _activity: "Free" }, 
-            cost: 100000  // High but not impossible
+            cost: 100000
         });
         
         return picks;
@@ -443,7 +737,6 @@
         let iterations = 0;
         const SAFETY_LIMIT = 100000;
 
-        // Build initial candidate options (will be rebuilt per-block with lock filtering)
         allCandidateOptions = buildAllCandidateOptions(config, []);
         
         if (allCandidateOptions.length === 0) {
@@ -457,7 +750,7 @@
         const sorted = Solver.sortBlocksByDifficulty(allBlocks, config);
         const activityBlocks = sorted.filter(b => !b._isLeague);
 
-        console.log(`[SOLVER] Processing ${activityBlocks.length} activity blocks`);
+        console.log(`[SOLVER] Processing ${activityBlocks.length} activity blocks with SMART ROTATION`);
 
         let bestSchedule = [];
         let maxDepthReached = 0;
@@ -478,7 +771,7 @@
             
             const picks = Solver.getValidActivityPicks(block)
                 .sort((a, b) => a.cost - b.cost)
-                .slice(0, 15); // Increased from 10 to consider more options
+                .slice(0, 15);
 
             for (const p of picks) {
                 const res = Solver.applyTentativePick(block, p);
@@ -530,18 +823,16 @@
     Solver.debugFieldAvailability = function(fieldName, slots) {
         console.log(`\n=== DEBUG: ${fieldName} AVAILABILITY ===`);
         
-        // Check global lock
         if (window.GlobalFieldLocks) {
             const lockInfo = window.GlobalFieldLocks.isFieldLocked(fieldName, slots);
             if (lockInfo) {
-                console.log(`🔒 GLOBALLY LOCKED by ${lockInfo.lockedBy} (${lockInfo.leagueName || lockInfo.activity})`);
+                console.log(`🔒 GLOBALLY LOCKED by ${lockInfo.lockedBy}`);
                 return false;
             } else {
                 console.log('✅ Not globally locked');
             }
         }
         
-        // Check activity properties
         const props = activityProperties[fieldName];
         if (props) {
             console.log('Props:', props);
@@ -553,7 +844,69 @@
     };
 
     /**
-     * Debug utility: Analyze player requirements impact
+     * ★★★ DEBUG: Rotation Analysis for a bunk ★★★
+     */
+    Solver.debugBunkRotation = function(bunkName) {
+        console.log('\n' + '='.repeat(60));
+        console.log(`ROTATION ANALYSIS: ${bunkName}`);
+        console.log('='.repeat(60));
+        
+        const allActivities = getAllActivityNames();
+        
+        console.log('\nActivity History:');
+        allActivities.forEach(act => {
+            const count = getActivityCount(bunkName, act);
+            const daysSince = getDaysSinceActivity(bunkName, act, 999);
+            const daysStr = daysSince === null ? 'never' : (daysSince === 0 ? 'TODAY' : `${daysSince}d ago`);
+            
+            console.log(`  ${act}: count=${count}, last=${daysStr}`);
+        });
+        
+        const todayActivities = getActivitiesDoneToday(bunkName, 999);
+        console.log(`\nDone Today: ${[...todayActivities].join(', ') || 'none'}`);
+        
+        console.log('\n' + '='.repeat(60));
+    };
+
+    /**
+     * ★★★ DEBUG: Activity recommendations for a bunk ★★★
+     */
+    Solver.debugActivityRecommendations = function(bunkName, slotIndex = 0) {
+        console.log('\n' + '='.repeat(60));
+        console.log(`ACTIVITY RECOMMENDATIONS: ${bunkName} @ slot ${slotIndex}`);
+        console.log('='.repeat(60));
+        
+        const allActivities = getAllActivityNames();
+        const fakeBlock = { bunk: bunkName, slots: [slotIndex] };
+        
+        const scored = allActivities.map(act => {
+            const penalty = calculateRotationPenalty(bunkName, act, fakeBlock);
+            return {
+                activity: act,
+                penalty,
+                allowed: penalty !== Infinity
+            };
+        });
+        
+        scored.sort((a, b) => a.penalty - b.penalty);
+        
+        console.log('\nRanked Activities (best to worst):');
+        scored.slice(0, 15).forEach((item, i) => {
+            const status = item.allowed ? '✅' : '❌';
+            const penaltyStr = item.penalty === Infinity ? 'BLOCKED' : item.penalty.toFixed(0);
+            console.log(`  ${i + 1}. ${status} ${item.activity}: ${penaltyStr}`);
+        });
+        
+        const blocked = scored.filter(r => !r.allowed);
+        if (blocked.length > 0) {
+            console.log(`\nBlocked (${blocked.length}): ${blocked.map(b => b.activity).join(', ')}`);
+        }
+        
+        console.log('\n' + '='.repeat(60));
+    };
+
+    /**
+     * Debug player requirements
      */
     Solver.debugPlayerRequirements = function() {
         const bunkMeta = window.getBunkMetaData?.() || {};
@@ -571,37 +924,13 @@
             const max = meta.maxPlayers || 'none';
             console.log(`  ${sport}: min=${min}, max=${max}`);
         });
-        
-        console.log('\nViability Analysis:');
-        const bunks = Object.keys(bunkMeta);
-        Object.entries(sportMeta).forEach(([sport, meta]) => {
-            if (meta.minPlayers || meta.maxPlayers) {
-                console.log(`\n  ${sport} (min: ${meta.minPlayers || 'n/a'}, max: ${meta.maxPlayers || 'n/a'}):`);
-                
-                // Check solo play
-                bunks.forEach(bunk => {
-                    const size = bunkMeta[bunk]?.size || 0;
-                    const check = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(sport, size, false);
-                    if (check && !check.valid) {
-                        console.log(`    ${bunk} (${size}): ${check.severity} - ${check.reason}`);
-                    }
-                });
-                
-                // Check pairs
-                console.log('    Viable pairs:');
-                for (let i = 0; i < bunks.length; i++) {
-                    for (let j = i + 1; j < bunks.length; j++) {
-                        const combined = (bunkMeta[bunks[i]]?.size || 0) + (bunkMeta[bunks[j]]?.size || 0);
-                        const check = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(sport, combined, false);
-                        if (check && check.valid) {
-                            console.log(`      ${bunks[i]} + ${bunks[j]} = ${combined} ✅`);
-                        }
-                    }
-                }
-            }
-        });
     };
 
+    // Expose globally
     window.totalSolverEngine = Solver;
+    
+    // Also expose rotation debug utilities
+    window.debugBunkRotation = Solver.debugBunkRotation;
+    window.debugActivityRecommendations = Solver.debugActivityRecommendations;
 
 })();
