@@ -353,13 +353,34 @@
     }
     window.__campistry_exportAllData = exportAllData;
     
+    // ⭐ Flag to prevent double-triggering
+    let _importInProgress = false;
+    
     function handleFileSelect(e) {
-        const file = e.target.files[0];
-        if (!file) return;
-        if (!confirm("Importing will overwrite ALL current data.\nProceed?")) {
-            e.target.value = "";
+        // Prevent double-trigger
+        if (_importInProgress) {
+            console.log("Import already in progress, ignoring duplicate trigger");
             return;
         }
+        
+        const file = e.target.files?.[0];
+        if (!file) {
+            console.log("No file selected");
+            return;
+        }
+        
+        _importInProgress = true;
+        
+        // Reset input immediately to allow re-selection of same file
+        const input = e.target;
+        
+        if (!confirm("Importing will overwrite ALL current data.\nProceed?")) {
+            input.value = "";
+            _importInProgress = false;
+            return;
+        }
+        
+        console.log("📥 Starting import of:", file.name);
         
         const reader = new FileReader();
         reader.onload = function(evt) {
@@ -367,20 +388,24 @@
                 const backup = JSON.parse(evt.target.result);
                 
                 console.log("📥 Importing backup version:", backup.exportVersion || 1);
+                console.log("📥 Backup contents:", Object.keys(backup));
                 
                 // ⭐ Build unified state from backup
                 let unifiedState = {};
                 
                 if (backup.globalSettings) {
                     unifiedState = { ...backup.globalSettings };
+                    console.log("  ↳ Loaded globalSettings");
                 }
                 
                 // Merge explicit divisions/bunks if present (v3 backups)
                 if (backup.divisions && Object.keys(backup.divisions).length > 0) {
                     unifiedState.divisions = backup.divisions;
+                    console.log("  ↳ Loaded divisions:", Object.keys(backup.divisions).length);
                 }
                 if (backup.bunks && backup.bunks.length > 0) {
                     unifiedState.bunks = backup.bunks;
+                    console.log("  ↳ Loaded bunks:", backup.bunks.length);
                 }
                 
                 // ⭐ Restore color index
@@ -392,34 +417,57 @@
                 if (backup.globalRegistry) {
                     if (backup.globalRegistry.divisions) {
                         unifiedState.divisions = backup.globalRegistry.divisions;
+                        console.log("  ↳ Loaded divisions from globalRegistry");
                     }
                     if (backup.globalRegistry.bunks) {
                         unifiedState.bunks = backup.globalRegistry.bunks;
+                        console.log("  ↳ Loaded bunks from globalRegistry");
                     }
                 }
                 
                 // Legacy app1 data extraction
                 if (unifiedState.app1) {
-                    if (unifiedState.app1.divisions && !unifiedState.divisions) {
+                    if (unifiedState.app1.divisions && (!unifiedState.divisions || Object.keys(unifiedState.divisions).length === 0)) {
                         unifiedState.divisions = unifiedState.app1.divisions;
+                        console.log("  ↳ Loaded divisions from app1");
                     }
                     if (unifiedState.app1.bunks && (!unifiedState.bunks || unifiedState.bunks.length === 0)) {
                         unifiedState.bunks = unifiedState.app1.bunks;
+                        console.log("  ↳ Loaded bunks from app1");
+                    }
+                    // Also extract fields and other app1 data
+                    if (unifiedState.app1.fields) {
+                        unifiedState.fields = unifiedState.app1.fields;
+                        console.log("  ↳ Loaded fields from app1");
+                    }
+                    if (unifiedState.app1.allSports) {
+                        unifiedState.allSports = unifiedState.app1.allSports;
+                    }
+                    if (unifiedState.app1.specialActivities) {
+                        unifiedState.specialActivities = unifiedState.app1.specialActivities;
                     }
                 }
                 
+                // ⭐ Add import timestamp so cloud bridge knows not to overwrite
+                unifiedState._importTimestamp = Date.now();
+                unifiedState.updated_at = new Date().toISOString();
+                
                 // ⭐ Save to all storage keys for maximum compatibility
-                localStorage.setItem(UNIFIED_CACHE_KEY, JSON.stringify(unifiedState));
-                localStorage.setItem(LEGACY_GLOBAL_SETTINGS_KEY, JSON.stringify(unifiedState));
+                const unifiedJSON = JSON.stringify(unifiedState);
+                localStorage.setItem(UNIFIED_CACHE_KEY, unifiedJSON);
+                localStorage.setItem(LEGACY_GLOBAL_SETTINGS_KEY, unifiedJSON);
                 localStorage.setItem(LEGACY_GLOBAL_REGISTRY_KEY, JSON.stringify({
                     divisions: unifiedState.divisions || {},
                     bunks: unifiedState.bunks || []
                 }));
-                localStorage.setItem("CAMPISTRY_LOCAL_CACHE", JSON.stringify(unifiedState));
+                localStorage.setItem("CAMPISTRY_LOCAL_CACHE", unifiedJSON);
+                
+                console.log("✅ Saved to localStorage");
                 
                 // Restore other data
                 if (backup.dailyData) {
                     localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(backup.dailyData));
+                    console.log("  ↳ Restored daily data");
                 }
                 if (backup.rotationHistory) {
                     localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify(backup.rotationHistory));
@@ -437,39 +485,60 @@
                     localStorage.setItem(SPECIALTY_LEAGUE_HISTORY_KEY, JSON.stringify(backup.specialtyLeagueHistory));
                 }
                 
-                console.log("✅ Import complete:", {
+                console.log("✅ Import to localStorage complete:", {
                     divisions: Object.keys(unifiedState.divisions || {}).length,
                     bunks: (unifiedState.bunks || []).length,
-                    colorIndex: unifiedState.divisionColorIndex
+                    fields: (unifiedState.fields || unifiedState.app1?.fields || []).length
                 });
                 
-                // Live apply if possible
-                try {
-                    window.setGlobalDivisions?.(unifiedState.divisions || {});
-                    window.setGlobalBunks?.(unifiedState.bunks || []);
-                    window.divisions = unifiedState.divisions || {};
-                    window.globalBunks = unifiedState.bunks || [];
+                // ⭐ Try to sync to cloud BEFORE reload (so cloud doesn't overwrite on next load)
+                async function syncAndReload() {
+                    try {
+                        // Force sync to cloud if available
+                        if (typeof window.forceSyncToCloud === 'function') {
+                            console.log("☁️ Syncing imported data to cloud...");
+                            await window.forceSyncToCloud();
+                            console.log("☁️ Cloud sync complete");
+                        }
+                    } catch (e) {
+                        console.warn("Cloud sync failed (will use local):", e);
+                    }
                     
-                    window.loadCurrentDailyData?.();
-                    window.initApp1?.();
-                    window.initLeagues?.();
-                    window.initScheduleSystem?.();
-                    window.updateTable?.();
-                    
-                    alert("Import successful! Data loaded.");
-                } catch (liveErr) {
-                    console.warn("Live apply failed, reload required:", liveErr);
-                    alert("Import successful! Reloading page...");
+                    // Now reload - session persists, data is in both local AND cloud
                     window.location.reload();
                 }
+                
+                // Show success message
+                alert(
+                    "✅ Import successful!\n\n" +
+                    "Divisions: " + Object.keys(unifiedState.divisions || {}).length + "\n" +
+                    "Bunks: " + (unifiedState.bunks || []).length + "\n\n" +
+                    "Syncing to cloud and reloading..."
+                );
+                
+                // Reset flag before reload
+                _importInProgress = false;
+                input.value = "";
+                
+                // Sync to cloud then reload
+                syncAndReload();
                 
             } catch (err) {
                 console.error("Import failed:", err);
                 alert("Invalid backup file. Error: " + err.message);
+                _importInProgress = false;
+                input.value = "";
             }
         };
+        
+        reader.onerror = function() {
+            console.error("File read error");
+            alert("Failed to read file.");
+            _importInProgress = false;
+            input.value = "";
+        };
+        
         reader.readAsText(file);
-        e.target.value = "";
     }
     window.__campistry_handleFileSelect = handleFileSelect;
     
@@ -546,18 +615,8 @@
         }
         setupEraseAll();
         
-        const exportBtn = document.getElementById("exportBackupBtn");
-        const importBtn = document.getElementById("importBackupBtn");
-        const importInput = document.getElementById("importFileInput");
-        
-        if (exportBtn) {
-            exportBtn.addEventListener("click", exportAllData);
-        }
-        
-        if (importBtn && importInput) {
-            importBtn.addEventListener("click", () => importInput.click());
-            importInput.addEventListener("change", handleFileSelect);
-        }
+        // ⭐ Import/Export buttons are wired by late-bind section
+        // to avoid double-triggering issues
         
         startAutoSaveTimer();
         
@@ -578,19 +637,49 @@
 })();
 
 // ==========================================================
-// LATE-BIND BACKUP / IMPORT WIRING
+// LATE-BIND BACKUP / IMPORT WIRING (prevents double-binding)
 // ==========================================================
 (function bindBackupWhenReady(){
+    let _wired = false;
+    
     function wire() {
+        if (_wired) return;
+        
         const exp = document.getElementById("exportBackupBtn");
         const imp = document.getElementById("importBackupBtn");
         const inp = document.getElementById("importFileInput");
+        
         if (!exp || !imp || !inp) return;
-
-        exp.onclick = window.__campistry_exportAllData;
-        imp.onclick = () => inp.click();
-        inp.onchange = window.__campistry_handleFileSelect;
-
+        
+        // Only wire if not already wired
+        if (!exp._campistryWired) {
+            exp.onclick = function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                window.__campistry_exportAllData?.();
+            };
+            exp._campistryWired = true;
+        }
+        
+        if (!imp._campistryWired) {
+            imp.onclick = function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                inp.click();
+            };
+            imp._campistryWired = true;
+        }
+        
+        if (!inp._campistryWired) {
+            // Remove any existing listeners by cloning
+            const newInp = inp.cloneNode(true);
+            inp.parentNode.replaceChild(newInp, inp);
+            
+            newInp.onchange = window.__campistry_handleFileSelect;
+            newInp._campistryWired = true;
+        }
+        
+        _wired = true;
         console.log("🧬 Backup / Import wired (late bind)");
     }
 
