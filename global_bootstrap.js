@@ -1,23 +1,28 @@
 // =================================================================
-// global_bootstrap.js — Campistry Cloud Boot Gate (FINAL)
+// global_bootstrap.js — Campistry Hydration (FIXED/SIMPLIFIED)
+// 
+// NOTE: Most hydration is now handled by:
+// - cloud_storage_bridge.js (initializes on load)
+// - welcome.js (boots app after auth)
+// 
+// This file just ensures the flag is set if cloud bridge
+// hasn't loaded yet
 // =================================================================
 (function () {
-  'use strict';
+    'use strict';
 
-  async function hydrate() {
-    if (window.__CAMPISTRY_HYDRATED__) return;
+    // Ensure flag exists
+    if (typeof window.__CAMPISTRY_CLOUD_READY__ === 'undefined') {
+        window.__CAMPISTRY_CLOUD_READY__ = false;
+    }
 
-    const state = await window.loadGlobalSettings();
-    localStorage.setItem("CAMPISTRY_LOCAL_CACHE", JSON.stringify(state || {}));
+    // If cloud bridge hasn't initialized in 3 seconds, proceed anyway
+    setTimeout(() => {
+        if (!window.__CAMPISTRY_CLOUD_READY__) {
+            console.warn("⚠️ Cloud bridge timeout - proceeding with local storage");
+            window.__CAMPISTRY_CLOUD_READY__ = true;
+        }
+    }, 3000);
 
-    if (state?.divisions) window.setGlobalDivisions?.(state.divisions);
-    if (state?.bunks) window.setGlobalBunks?.(state.bunks);
-    if (state?.fields) window.setGlobalFields?.(state.fields);
-    if (state?.leagues) window.setGlobalLeagues?.(state.leagues);
-
-    window.__CAMPISTRY_HYDRATED__ = true;
-    console.log("☁️ Campistry hydrated from cloud");
-  }
-
-  hydrate();
+    console.log("🔧 Global bootstrap ready");
 })();
