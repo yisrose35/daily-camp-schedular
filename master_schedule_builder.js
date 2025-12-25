@@ -1,13 +1,11 @@
-
 // =================================================================
-// master_schedule_builder.js (FIXED & TIMELINE INTEGRATED)
-//Published
+// master_schedule_builder.js (UPDATED - ELECTIVE TILE SUPPORT)
+//Beta
 // Updates:
-// 1. Fixed Grid Rendering (Prevents "Just Words" glitch).
-// 2. Added Timeline Gatekeeper to Drag-and-Drop.
-// 3. Aligned Smart Tile prompts with new logic.
-// 4. FIXED: Standardized Activity Types ('activity' -> 'slot')
-// 5. FIXED: Specialty League type typo & Added League Safety Check
+// 1. Added Elective tile type for reserving multiple activities
+// 2. Added "Update [Template Name]" button to save changes to current file.
+// 3. Wired up "Delete Selected Template" button.
+// 4. Tracks 'currentLoadedTemplate' to distinguish between new drafts and existing files.
 // =================================================================
 
 (function(){
@@ -15,6 +13,7 @@
 
 let container=null, palette=null, grid=null;
 let dailySkeleton=[];
+let currentLoadedTemplate = null; // Tracks which template is currently being edited
 
 // --- Constants ---
 const SKELETON_DRAFT_KEY = 'master-schedule-draft';
@@ -27,8 +26,13 @@ function saveDraftToLocalStorage() {
   try {
     if (dailySkeleton && dailySkeleton.length > 0) {
       localStorage.setItem(SKELETON_DRAFT_KEY, JSON.stringify(dailySkeleton));
+      // Persist the loaded name if available so refresh keeps context
+      if(currentLoadedTemplate) {
+          localStorage.setItem(SKELETON_DRAFT_NAME_KEY, currentLoadedTemplate);
+      }
     } else {
       localStorage.removeItem(SKELETON_DRAFT_KEY);
+      localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
     }
   } catch (e) { console.error(e); }
 }
@@ -45,6 +49,7 @@ const TILES=[
   {type:'special', name:'Special Activity', style:'background:#e8f5e9;border:1px solid #43a047;', description:'Special Activity slot only.'},
   {type:'smart', name:'Smart Tile', style:'background:#e3f2fd;border:2px dashed #0288d1;color:#01579b;', description:'Balances 2 activities with a fallback.'},
   {type:'split', name:'Split Activity', style:'background:#fff3e0;border:1px solid #f57c00;', description:'Two activities share the block (Switch halfway).'},
+  {type:'elective', name:'Elective', style:'background:#e1bee7;border:2px solid #8e24aa;color:#4a148c;', description:'Reserve multiple activities for this division only.'},
   {type:'league', name:'League Game', style:'background:#d1c4e9;border:1px solid #5e35b1;', description:'Regular League slot (Full Buyout).'},
   {type:'specialty_league', name:'Specialty League', style:'background:#fff8e1;border:1px solid #f9a825;', description:'Specialty League slot (Full Buyout).'},
   {type:'swim', name:'Swim', style:'background:#bbdefb;border:1px solid #1976d2;', description:'Pinned.'},
@@ -64,6 +69,161 @@ function mapEventNameForOptimizer(name){
   return {type:'pinned',event:name};
 }
 
+// =================================================================
+// Field Selection Helper for Reserved Fields
+// =================================================================
+function promptForReservedFields(eventName) {
+  const globalSettings = window.loadGlobalSettings?.() || {};
+  const app1 = globalSettings.app1 || {};
+  
+  const allFields = (app1.fields || []).map(f => f.name);
+  const specialActivities = (app1.specialActivities || []).map(s => s.name);
+  
+  // Combine fields and special activities as potential "locations"
+  const allLocations = [...new Set([...allFields, ...specialActivities])].sort();
+  
+  if (allLocations.length === 0) {
+    return []; // No fields configured
+  }
+  
+  const fieldInput = prompt(
+    `Which field(s) will "${eventName}" use?\n\n` +
+    `This reserves the field so the scheduler won't assign it to other bunks.\n\n` +
+    `Available fields:\n${allLocations.join(', ')}\n\n` +
+    `Enter field names separated by commas (or leave blank if none):`,
+    ''
+  );
+  
+  if (!fieldInput || !fieldInput.trim()) {
+    return [];
+  }
+  
+  // Parse and validate field names
+  const requested = fieldInput.split(',').map(f => f.trim()).filter(Boolean);
+  const validated = [];
+  const invalid = [];
+  
+  requested.forEach(name => {
+    // Try to match (case-insensitive)
+    const match = allLocations.find(loc => loc.toLowerCase() === name.toLowerCase());
+    if (match) {
+      validated.push(match);
+    } else {
+      invalid.push(name);
+    }
+  });
+  
+  if (invalid.length > 0) {
+    alert(`Warning: These fields were not found and will be ignored:\n${invalid.join(', ')}`);
+  }
+  
+  return validated;
+}
+
+// =================================================================
+// Swim/Pool Alias Handling
+// =================================================================
+const SWIM_POOL_PATTERNS = ['swim', 'pool', 'swimming', 'aqua'];
+
+function isSwimPoolAlias(name) {
+  const lower = (name || '').toLowerCase().trim();
+  return SWIM_POOL_PATTERNS.some(p => lower.includes(p) || p.includes(lower));
+}
+
+function findPoolField(allLocations) {
+  for (const loc of allLocations) {
+    if (isSwimPoolAlias(loc)) return loc;
+  }
+  return null;
+}
+
+// =================================================================
+// Elective Activity Selection Helper
+// =================================================================
+function promptForElectiveActivities(divName) {
+  const globalSettings = window.loadGlobalSettings?.() || {};
+  const app1 = globalSettings.app1 || {};
+  
+  const allFields = (app1.fields || []).map(f => f.name);
+  const specialActivities = (app1.specialActivities || []).map(s => s.name);
+  const allLocations = [...new Set([...allFields, ...specialActivities])].sort();
+  
+  console.log('[Elective] Available locations:', allLocations);
+  
+  if (allLocations.length === 0) {
+    alert('No fields or special activities configured. Please set them up first.');
+    return null;
+  }
+  
+  const poolFieldName = findPoolField(allLocations);
+  console.log('[Elective] Pool field found:', poolFieldName);
+  
+  const activitiesInput = prompt(
+    `ELECTIVE for ${divName}\n\n` +
+    `Enter activities to RESERVE for this division (separated by commas).\n` +
+    `Other divisions will NOT be able to use these during this time.\n\n` +
+    `Available:\n${allLocations.join(', ')}\n\n` +
+    `Tip: "Swim" or "Pool" will work for your swimming area.\n\n` +
+    `Example: Swim, Court 1, Canteen`,
+    ''
+  );
+  
+  if (!activitiesInput || !activitiesInput.trim()) {
+    return null;
+  }
+  
+  // Parse and validate
+  const requested = activitiesInput.split(',').map(s => s.trim()).filter(Boolean);
+  const validated = [];
+  const invalid = [];
+  
+  requested.forEach(name => {
+    console.log(`[Elective] Processing: "${name}"`);
+    
+    // Check for swim/pool aliases FIRST
+    if (isSwimPoolAlias(name)) {
+      console.log(`[Elective] "${name}" is a swim/pool alias`);
+      if (poolFieldName) {
+        if (!validated.includes(poolFieldName)) {
+          validated.push(poolFieldName);
+          console.log(`[Elective] Resolved "${name}" → "${poolFieldName}"`);
+        }
+      } else {
+        // No pool field in settings, add the literal name
+        if (!validated.includes(name)) {
+          validated.push(name);
+          console.log(`[Elective] No pool field found, adding "${name}" as-is`);
+        }
+      }
+      return; // Don't check against allLocations for swim/pool
+    }
+    
+    // Standard matching for non-swim activities
+    const match = allLocations.find(loc => loc.toLowerCase() === name.toLowerCase());
+    if (match) {
+      if (!validated.includes(match)) {
+        validated.push(match);
+      }
+    } else {
+      invalid.push(name);
+    }
+  });
+  
+  console.log('[Elective] Validated:', validated);
+  console.log('[Elective] Invalid:', invalid);
+  
+  if (validated.length === 0) {
+    alert('No valid activities selected. Please try again.');
+    return null;
+  }
+  
+  if (invalid.length > 0) {
+    alert(`Warning: These were not found and will be ignored:\n${invalid.join(', ')}`);
+  }
+  
+  return validated;
+}
+
 // --- Init ---
 function init(){
   container=document.getElementById("master-scheduler-content");
@@ -72,9 +232,12 @@ function init(){
   loadDailySkeleton();
 
   const savedDraft = localStorage.getItem(SKELETON_DRAFT_KEY);
+  const savedDraftName = localStorage.getItem(SKELETON_DRAFT_NAME_KEY);
+
   if (savedDraft) {
     if (confirm("Load unsaved master schedule draft?")) {
       dailySkeleton = JSON.parse(savedDraft);
+      if(savedDraftName) currentLoadedTemplate = savedDraftName;
     } else {
       clearDraftFromLocalStorage();
     }
@@ -111,28 +274,47 @@ function renderTemplateUI(){
   const assignments=window.getSkeletonAssignments?.()||{};
   let loadOptions=names.map(n=>`<option value="${n}">${n}</option>`).join('');
 
+  // Determine button state for "Update"
+  const updateBtnStyle = currentLoadedTemplate ? '' : 'display:none;';
+  const currentNameLabel = currentLoadedTemplate ? `Editing: <b>${currentLoadedTemplate}</b>` : 'New Schedule';
+
   ui.innerHTML=`
+    <div style="margin-bottom:10px;color:#555;">${currentNameLabel}</div>
     <div class="template-toolbar" style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-end;">
-      <div class="template-group"><label>Load Template</label>
+      <div class="template-group"><label>Load Template</label><br>
         <select id="template-load-select" style="padding:6px;"><option value="">-- Select --</option>${loadOptions}</select>
       </div>
-      <div class="template-group"><label>Save As</label><input type="text" id="template-save-name" placeholder="Name..."></div>
-      <div class="template-group">
-        <label>&nbsp;</label>
-        <button id="template-save-btn" style="background:#007bff;color:#fff;">Save</button>
-        <button id="template-clear-btn" style="background:#ff9800;color:#fff;margin-left:8px;">New</button>
+      
+      <!-- UPDATE BUTTON (Only shows if editing existing) -->
+      <div class="template-group" style="${updateBtnStyle}">
+         <label>&nbsp;</label><br>
+         <button id="template-update-btn" style="background:#17a2b8;color:#fff;font-weight:bold;">Update "${currentLoadedTemplate}"</button>
+      </div>
+
+      <div class="template-group"><label>Save As New</label><br>
+        <input type="text" id="template-save-name" placeholder="New Name...">
+        <button id="template-save-btn" style="background:#007bff;color:#fff;">Save As</button>
+      </div>
+      
+      <div class="template-group"><label>&nbsp;</label><br>
+        <button id="template-clear-btn" style="background:#ff9800;color:#fff;">New/Clear</button>
       </div>
     </div>
+
     <details style="margin-top:10px;">
       <summary style="cursor:pointer;color:#007bff;">Assignments & Delete</summary>
       <div style="margin-top:10px;padding:10px;border:1px solid #eee;">
         <div style="display:flex;flex-wrap:wrap;gap:10px;">
-          ${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Default"].map(day=>`
+          ${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Default"].map(day=>`<br>
           <div><label>${day}</label><br><select data-day="${day}" style="width:100px;">${loadOptions}</select></div>`).join('')}
         </div>
         <button id="template-assign-save-btn" style="margin-top:10px;background:#28a745;color:white;">Save Assignments</button>
         <hr>
-        <button id="template-delete-btn" style="background:#c0392b;color:white;">Delete Selected Template</button>
+        <div style="display:flex; align-items:center; gap:10px; margin-top:10px;">
+            <label style="color:#c0392b;">Delete Template:</label>
+            <select id="template-delete-select" style="padding:4px;"><option value="">-- Select to Delete --</option>${loadOptions}</select>
+            <button id="template-delete-btn" style="background:#c0392b;color:white;">Delete Permanently</button>
+        </div>
       </div>
     </details>
   `;
@@ -145,29 +327,50 @@ function renderTemplateUI(){
     const name=loadSel.value;
     if(name && saved[name] && confirm(`Load "${name}"?`)){
       loadSkeletonToBuilder(name);
-      saveName.value=name;
+      // Pre-fill save as name just in case, but rely on update button for edits
+      saveName.value=name; 
     }
   };
 
+  // 1. UPDATE EXISTING
+  const updateBtn = document.getElementById("template-update-btn");
+  if(updateBtn) {
+      updateBtn.onclick = () => {
+          if(currentLoadedTemplate && confirm(`Overwrite existing template "${currentLoadedTemplate}" with current grid?`)){
+              window.saveSkeleton?.(currentLoadedTemplate, dailySkeleton);
+              clearDraftFromLocalStorage();
+              alert("Updated successfully.");
+              renderTemplateUI();
+          }
+      };
+  }
+
+  // 2. SAVE AS NEW
   document.getElementById("template-save-btn").onclick=()=>{
     const name=saveName.value.trim();
-    if(name && confirm(`Save as "${name}"?`)){
-      window.saveSkeleton?.(name, dailySkeleton);
-      clearDraftFromLocalStorage();
-      alert("Saved.");
-      renderTemplateUI();
-    }
+    if(!name) { alert("Please enter a name."); return; }
+    
+    if(saved[name] && !confirm(`"${name}" already exists. Overwrite?`)) return;
+
+    window.saveSkeleton?.(name, dailySkeleton);
+    currentLoadedTemplate = name; // Switch context to this new save
+    clearDraftFromLocalStorage();
+    alert("Saved.");
+    renderTemplateUI();
   };
 
+  // 3. CLEAR / NEW
   document.getElementById("template-clear-btn").onclick=()=>{
     if(confirm("Clear grid and start new?")) {
         dailySkeleton=[];
+        currentLoadedTemplate = null; // Reset context
         clearDraftFromLocalStorage();
         renderGrid();
+        renderTemplateUI();
     }
   };
 
-  // Assignment Selects
+  // 4. ASSIGNMENTS
   ui.querySelectorAll('select[data-day]').forEach(sel=>{
       const day=sel.dataset.day;
       const opt=document.createElement('option');
@@ -181,6 +384,36 @@ function renderTemplateUI(){
       ui.querySelectorAll('select[data-day]').forEach(s=>{ if(s.value) map[s.dataset.day]=s.value; });
       window.saveSkeletonAssignments?.(map);
       alert("Assignments Saved.");
+  };
+
+  // 5. DELETE
+  document.getElementById("template-delete-btn").onclick=()=>{
+      const delSel = document.getElementById("template-delete-select");
+      const nameToDelete = delSel.value;
+      
+      if(!nameToDelete) {
+          alert("Please select a template from the dropdown next to the Delete button.");
+          return;
+      }
+
+      if(confirm(`Are you sure you want to PERMANENTLY DELETE "${nameToDelete}"?`)){
+          if(window.deleteSkeleton) {
+              window.deleteSkeleton(nameToDelete);
+              
+              // If we deleted the one we are looking at, reset context
+              if(currentLoadedTemplate === nameToDelete){
+                  currentLoadedTemplate = null;
+                  dailySkeleton = []; // Optional: Clear grid or keep as unsaved? Let's clear to be safe.
+                  clearDraftFromLocalStorage();
+                  renderGrid();
+              }
+              
+              alert("Deleted.");
+              renderTemplateUI();
+          } else {
+              alert("Error: 'window.deleteSkeleton' function is not defined in your global setup. Please add it to your setup script.");
+          }
+      }
   };
 }
 
@@ -196,9 +429,49 @@ function renderPalette(){
     el.style.borderRadius='5px';
     el.style.cursor='grab';
     el.draggable=true;
-    el.ondragstart=(e)=>{ e.dataTransfer.setData('application/json',JSON.stringify(tile)); };
+    el.title = tile.description || '';
+    
+    // Click handler for tile info
+    el.onclick = (e) => {
+      if (e.detail === 1) { // Single click
+        setTimeout(() => {
+          if (!el.dragging) {
+            showTileInfo(tile);
+          }
+        }, 200);
+      }
+    };
+    
+    el.ondragstart=(e)=>{ 
+      el.dragging = true;
+      e.dataTransfer.setData('application/json',JSON.stringify(tile)); 
+    };
+    el.ondragend = () => { el.dragging = false; };
+    
     palette.appendChild(el);
   });
+}
+
+// --- Tile Info Popup ---
+function showTileInfo(tile) {
+  const descriptions = {
+    'activity': 'ACTIVITY SLOT: A flexible time block where the scheduler assigns either a sport or special activity based on availability and fairness rules.',
+    'sports': 'SPORTS SLOT: Dedicated time for sports activities only. The scheduler will assign an available field and sport, rotating fairly among bunks.',
+    'special': 'SPECIAL ACTIVITY: Time reserved for special activities like Art, Music, Drama, etc. Scheduler assigns based on capacity and usage limits.',
+    'smart': 'SMART TILE: Balances two activities (e.g., Swim/Art) across bunks. One group gets Activity A while another gets Activity B, then they swap. Includes fallback if primary is full.',
+    'split': 'SPLIT ACTIVITY: Divides the time block in half. First half is one activity, second half is another. Good for combining short activities.',
+    'elective': 'ELECTIVE: Reserves specific fields/activities for THIS division only. Other divisions cannot use the selected resources during this time.',
+    'league': 'LEAGUE GAME: Full buyout for a regular league matchup. All bunks in the division play head-to-head games. Fields are locked from other divisions.',
+    'specialty_league': 'SPECIALTY LEAGUE: Similar to regular leagues but for special sports (e.g., Hockey, Flag Football). Multiple games can run on the same field.',
+    'swim': 'SWIM: Pinned swim time. Automatically reserves the pool/swim area for this division.',
+    'lunch': 'LUNCH: Fixed lunch period. No scheduling occurs during this time.',
+    'snacks': 'SNACKS: Fixed snack break. No scheduling occurs during this time.',
+    'dismissal': 'DISMISSAL: End of day marker. Schedule generation stops at this point.',
+    'custom': 'CUSTOM PINNED: Create any fixed event (e.g., "Assembly", "Special Program"). You can optionally reserve specific fields.'
+  };
+  
+  const desc = descriptions[tile.type] || tile.description || 'No description available.';
+  alert(`${tile.name.toUpperCase()}\n\n${desc}`);
 }
 
 // --- RENDER GRID (Fixed) ---
@@ -285,13 +558,27 @@ function renderGrid(){
   addRemoveListeners('.grid-event');
 }
 
-// --- Render Tile ---
+// --- Render Tile (UPDATED to show reserved fields and elective activities) ---
 function renderEventTile(ev, top, height){
     let tile = TILES.find(t=>t.name===ev.event);
     if(!tile && ev.type) tile = TILES.find(t=>t.type===ev.type);
     const style = tile ? tile.style : 'background:#eee;border:1px solid #666;';
     
     let label = `<strong>${ev.event}</strong><br>${ev.startTime}-${ev.endTime}`;
+    
+    // Show reserved fields if any (for pinned events, NOT electives)
+    if (ev.reservedFields && ev.reservedFields.length > 0 && ev.type !== 'elective') {
+        label += `<br><span style="font-size:0.7em;color:#c62828;">📍 ${ev.reservedFields.join(', ')}</span>`;
+    }
+    
+    // Show elective activities
+    if (ev.type === 'elective' && ev.electiveActivities && ev.electiveActivities.length > 0) {
+        const actList = ev.electiveActivities.slice(0, 4).join(', ');
+        const more = ev.electiveActivities.length > 4 ? ` +${ev.electiveActivities.length - 4}` : '';
+        label += `<br><span style="font-size:0.7em;color:#6a1b9a;">🎯 ${actList}${more}</span>`;
+    }
+    
+    // Smart tile fallback info
     if(ev.type==='smart' && ev.smartData){
         label += `<br><span style="font-size:0.75em">F: ${ev.smartData.fallbackActivity} (if ${ev.smartData.fallbackFor.substring(0,4)} busy)</span>`;
     }
@@ -316,8 +603,6 @@ function addDropListeners(selector){
             
             // Calc time
             const rect=cell.getBoundingClientRect();
-            // Relative to grid container logic:
-            // The grid-cell position is relative.
             const offsetY = e.clientY - rect.top;
             
             // Snap to 15 mins
@@ -374,7 +659,65 @@ function addDropListeners(selector){
                     subEvents: [{event:a1}, {event:a2}]
                 };
             }
-            // 3. Standard & League Types - FIXED FOR CORRECT TYPE
+            // 3. ELECTIVE TILE - Reserve multiple activities for this division
+            else if (tileData.type === 'elective') {
+                let st = prompt("Start Time:", startStr); if (!st) return;
+                let et = prompt("End Time:", endStr); if (!et) return;
+                
+                const activities = promptForElectiveActivities(divName);
+                if (!activities || activities.length === 0) return;
+                
+                const eventName = `Elective: ${activities.slice(0, 3).join(', ')}${activities.length > 3 ? '...' : ''}`;
+                
+                newEvent = {
+                    id: Date.now().toString(),
+                    type: 'elective',
+                    event: eventName,
+                    division: divName,
+                    startTime: st,
+                    endTime: et,
+                    electiveActivities: activities,
+                    reservedFields: activities // Also mark as reserved for field conflict detection
+                };
+            }
+            // 4. PINNED TILES WITH FIELD RESERVATION
+            else if (['lunch','snacks','custom','dismissal','swim'].includes(tileData.type)) {
+                let name = tileData.name;
+                let reservedFields = [];
+                
+                if (tileData.type === 'custom') {
+                    name = prompt("Event Name (e.g., 'Special with R. Rosenfeld'):", "Regroup");
+                    if (!name) return;
+                    
+                    // Ask for reserved fields
+                    reservedFields = promptForReservedFields(name);
+                }
+                else if (tileData.type === 'swim') {
+                    // Auto-reserve swim/pool if it exists
+                    const globalSettings = window.loadGlobalSettings?.() || {};
+                    const fields = globalSettings.app1?.fields || [];
+                    const swimField = fields.find(f => 
+                        f.name.toLowerCase().includes('swim') || f.name.toLowerCase().includes('pool')
+                    );
+                    if (swimField) {
+                        reservedFields = [swimField.name];
+                    }
+                }
+                
+                let st = prompt(`${name} Start:`, startStr); if(!st) return;
+                let et = prompt(`${name} End:`, endStr); if(!et) return;
+                
+                newEvent = {
+                    id: Date.now().toString(),
+                    type: 'pinned',
+                    event: name,
+                    division: divName,
+                    startTime: st,
+                    endTime: et,
+                    reservedFields: reservedFields
+                };
+            }
+            // 5. Standard & League Types
             else {
                 let name = tileData.name;
                 let finalType = tileData.type;
@@ -383,14 +726,10 @@ function addDropListeners(selector){
                 if (tileData.type === 'activity') { name = "General Activity Slot"; finalType = 'slot'; }
                 else if (tileData.type === 'sports') { name = "Sports Slot"; finalType = 'slot'; }
                 else if (tileData.type === 'special') { name = "Special Activity"; finalType = 'slot'; }
-                
-                else if(tileData.type==='custom') { name = prompt("Event Name:", "Regroup"); finalType = 'pinned'; }
                 else if(tileData.type==='league') {
                     name = "League Game";
                     finalType = 'league';
                 }
-                
-                // FIX #2: Correctly spelled specialty_league
                 else if(tileData.type === 'specialty_league') { 
                     name = "Specialty League"; 
                     finalType = 'specialty_league'; 
@@ -398,7 +737,7 @@ function addDropListeners(selector){
                 
                 if(!name) return;
 
-                // FIX #3: Safety Auto-fix for League
+                // Safety Auto-fix for League
                 if (/league/i.test(name) && finalType === 'slot') {
                     finalType = 'league';
                 }
@@ -408,7 +747,7 @@ function addDropListeners(selector){
                 
                 newEvent = {
                     id: Date.now().toString(),
-                    type: finalType, // CORRECTED to 'slot' for schedulable items
+                    type: finalType,
                     event: name,
                     division: divName,
                     startTime: st,
@@ -416,7 +755,31 @@ function addDropListeners(selector){
                 };
             }
 
-            if(newEvent){
+            if (newEvent) {
+                // 1. Calculate the New Event's Minute Range
+                const newStartVal = parseTimeToMinutes(newEvent.startTime);
+                const newEndVal = parseTimeToMinutes(newEvent.endTime);
+
+                // 2. FILTER: Remove any existing event in this division that overlaps
+                dailySkeleton = dailySkeleton.filter(existing => {
+                    // Keep events in other columns
+                    if (existing.division !== divName) return true;
+
+                    const exStart = parseTimeToMinutes(existing.startTime);
+                    const exEnd = parseTimeToMinutes(existing.endTime);
+
+                    // Skip invalid data
+                    if (exStart === null || exEnd === null) return true;
+
+                    // OVERLAP CHECK:
+                    // An overlap occurs if (ExistingStart < NewEnd) AND (ExistingEnd > NewStart)
+                    const overlaps = (exStart < newEndVal) && (exEnd > newStartVal);
+
+                    // If it overlaps, return FALSE to remove it (erase the bottom tile)
+                    return !overlaps; 
+                });
+
+                // 3. Add the New Event
                 dailySkeleton.push(newEvent);
                 saveDraftToLocalStorage();
                 renderGrid();
@@ -454,8 +817,12 @@ function loadDailySkeleton(){
 
 function loadSkeletonToBuilder(name){
   const all=window.getSavedSkeletons?.()||{};
-  if(all[name]) dailySkeleton=JSON.parse(JSON.stringify(all[name]));
+  if(all[name]) {
+      dailySkeleton=JSON.parse(JSON.stringify(all[name]));
+      currentLoadedTemplate = name; // Track that we are editing this template
+  }
   renderGrid();
+  renderTemplateUI(); // Re-render UI to show Update button
   saveDraftToLocalStorage();
 }
 
