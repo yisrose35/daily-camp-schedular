@@ -501,18 +501,31 @@
                 
                 // ⭐ Try to sync to cloud BEFORE reload (so cloud doesn't overwrite on next load)
                 async function syncAndReload() {
+                    let cloudSaved = false;
+                    
                     try {
                         // Force sync to cloud if available
                         if (typeof window.forceSyncToCloud === 'function') {
                             console.log("☁️ Syncing imported data to cloud...");
-                            await window.forceSyncToCloud();
-                            console.log("☁️ Cloud sync complete");
+                            cloudSaved = await window.forceSyncToCloud();
+                            console.log("☁️ Cloud sync result:", cloudSaved);
                         }
                     } catch (e) {
-                        console.warn("Cloud sync failed (will use local):", e);
+                        console.error("☁️ Cloud sync error:", e);
                     }
                     
-                    // Now reload - session persists, data is in both local AND cloud
+                    if (!cloudSaved) {
+                        // Warn user that data might not persist after cache clear
+                        alert(
+                            "⚠️ Warning: Cloud sync may have failed.\n\n" +
+                            "Your data is saved locally and will work normally.\n" +
+                            "However, if you clear your browser cache, you may lose this data.\n\n" +
+                            "To verify cloud sync, open browser console and run:\n" +
+                            "testCloudConnection()"
+                        );
+                    }
+                    
+                    // Now reload - session persists, data is in local (and hopefully cloud)
                     window.location.reload();
                 }
                 
