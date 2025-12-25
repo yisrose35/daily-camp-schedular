@@ -1,31 +1,33 @@
 // =================================================================
-// global_authority.js — CAMPISTRY GLOBAL AUTHORITY SPINE
-// FIXED VERSION: Uses localStorage (the original used non-existent supabaseGlobal API)
+// global_authority.js — Campistry Cloud Authority Spine
+// LOCAL CACHE + CANONICAL CLOUD PERSISTENCE
 // =================================================================
 (function () {
   'use strict';
 
   const AUTH_KEY = "campistry_global_registry";
-  
-  // Internal state cache
+
   let _cache = null;
 
-  // ===================================================================
-  // STORAGE LAYER (localStorage with future Supabase sync)
-  // ===================================================================
-  function loadRegistry() {
+  // --------------------------------------------------------------
+  // LOAD (cloud-first)
+  // --------------------------------------------------------------
+  async function loadRegistry() {
     try {
-      // Check cache first
       if (_cache) return _cache;
-      
-      // Load from localStorage
+
+      const cloud = await window.loadGlobalSettings();
+      if (cloud && (cloud.divisions || cloud.bunks)) {
+        _cache = {
+          divisions: cloud.divisions || {},
+          bunks: cloud.bunks || []
+        };
+        localStorage.setItem(AUTH_KEY, JSON.stringify(_cache));
+        return _cache;
+      }
+
       const stored = localStorage.getItem(AUTH_KEY);
       _cache = stored ? JSON.parse(stored) : { divisions: {}, bunks: [] };
-      
-      // Ensure proper structure
-      if (!_cache.divisions) _cache.divisions = {};
-      if (!_cache.bunks) _cache.bunks = [];
-      
       return _cache;
     } catch (e) {
       console.error("Failed to load registry:", e);
@@ -33,47 +35,47 @@
     }
   }
 
-  function saveRegistry(reg) {
+  // --------------------------------------------------------------
+  // SAVE (dual write)
+  // --------------------------------------------------------------
+  async function saveRegistry(reg) {
     try {
       _cache = reg;
       localStorage.setItem(AUTH_KEY, JSON.stringify(reg));
+      await window.saveGlobalSettings("divisions", reg.divisions);
+      await window.saveGlobalSettings("bunks", reg.bunks);
     } catch (e) {
       console.error("Failed to save registry:", e);
     }
   }
 
-  // ===================================================================
-  // PUBLIC AUTHORITY API
-  // ===================================================================
-  
+  // --------------------------------------------------------------
+  // PUBLIC API
+  // --------------------------------------------------------------
   window.getGlobalDivisions = function () {
-    const reg = loadRegistry();
-    return reg.divisions || {};
+    return loadRegistry().divisions || {};
   };
 
   window.getGlobalBunks = function () {
-    const reg = loadRegistry();
-    return reg.bunks || [];
+    return loadRegistry().bunks || [];
   };
 
   window.setGlobalDivisions = function (divs) {
-    const reg = loadRegistry();
-    reg.divisions = structuredClone(divs || {});
-    saveRegistry(reg);
-    console.log("✓ Divisions saved:", Object.keys(reg.divisions).length);
+    loadRegistry().then(reg => {
+      reg.divisions = structuredClone(divs || {});
+      saveRegistry(reg);
+      console.log("☁️ Divisions saved to cloud:", Object.keys(reg.divisions).length);
+    });
   };
 
   window.setGlobalBunks = function (bunks) {
-    const reg = loadRegistry();
-    reg.bunks = structuredClone(bunks || []);
-    saveRegistry(reg);
-    console.log("✓ Bunks saved:", reg.bunks.length);
+    loadRegistry().then(reg => {
+      reg.bunks = structuredClone(bunks || []);
+      saveRegistry(reg);
+      console.log("☁️ Bunks saved to cloud:", reg.bunks.length);
+    });
   };
 
-  // ===================================================================
-  // INITIALIZATION
-  // ===================================================================
-  console.log("🧠 Global Authority initialized");
-  loadRegistry();
+  console.log("🧠 Global Authority cloud spine initialized");
 
 })();
