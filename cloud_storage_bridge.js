@@ -184,17 +184,46 @@
     migrateLegacyData();
     
     // Step 2: Load from local cache first (instant)
-    getLocalCache();
+    const localData = getLocalCache();
     
-    // Step 3: Try to hydrate from cloud (async, non-blocking)
+    // Step 3: Check if we just imported data (has import timestamp within last 30 seconds)
+    const justImported = localData._importTimestamp && 
+                         (Date.now() - localData._importTimestamp) < 30000;
+    
+    if (justImported) {
+      console.log("☁️ Recently imported data detected - skipping cloud overwrite");
+      // Clear the import flag
+      delete localData._importTimestamp;
+      setLocalCache(localData);
+      _initialized = true;
+      window.__CAMPISTRY_CLOUD_READY__ = true;
+      return;
+    }
+    
+    // Step 4: Try to hydrate from cloud (async, non-blocking)
     try {
       const cloudState = await loadFromCloud();
       if (cloudState && Object.keys(cloudState).length > 0) {
-        // Cloud has data - merge with local (cloud wins for conflicts)
-        const local = getLocalCache();
-        const merged = { ...local, ...cloudState };
-        setLocalCache(merged);
-        console.log("☁️ Hydrated from cloud");
+        // Compare timestamps if available
+        const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
+        const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
+        
+        if (cloudTime > localTime) {
+          // Cloud is newer - merge with cloud winning
+          const merged = { ...localData, ...cloudState };
+          setLocalCache(merged);
+          console.log("☁️ Hydrated from cloud (cloud was newer)");
+        } else if (localTime > cloudTime) {
+          // Local is newer - push to cloud
+          console.log("☁️ Local data is newer - will sync to cloud");
+          _cloudSyncPending = true;
+          scheduleCloudSync();
+        } else {
+          // Same time or no timestamps - merge with cloud winning (safe default)
+          const merged = { ...localData, ...cloudState };
+          setLocalCache(merged);
+          console.log("☁️ Hydrated from cloud");
+        }
       }
     } catch (e) {
       console.warn("Cloud hydration failed, using local cache:", e);
