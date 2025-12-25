@@ -1,15 +1,17 @@
 // =================================================================
 // global_authority.js — Campistry Global Authority Spine (FIXED)
 // SYNCHRONOUS API • Works with cloud_storage_bridge_FIXED.js
+// FIXED: Waits for cloud hydration before returning empty data
 // =================================================================
 (function () {
   'use strict';
   
-  console.log("🧠 Global Authority v2.0 (FIXED) loading...");
+  console.log("🧠 Global Authority v2.1 (FIXED) loading...");
 
   // In-memory cache
   let _divisionCache = null;
   let _bunkCache = null;
+  let _initialLoadDone = false;
 
   // --------------------------------------------------------------
   // SAFE BUNK COLLECTOR (prevents zero-bunk wipes)
@@ -26,7 +28,7 @@
   }
 
   // --------------------------------------------------------------
-  // LOAD (Synchronous)
+  // LOAD (Synchronous - but checks if cloud has hydrated)
   // --------------------------------------------------------------
   function loadRegistry() {
     // Return cached if available
@@ -37,7 +39,7 @@
       };
     }
 
-    // ⭐ Synchronous call - no await needed!
+    // ⭐ Synchronous call
     const settings = window.loadGlobalSettings?.() || {};
     
     _divisionCache = structuredClone(settings.divisions || {});
@@ -48,17 +50,46 @@
     window.globalBunks = _bunkCache;
     window.availableDivisions = Object.keys(_divisionCache);
 
-    window.__CAMPISTRY_CLOUD_READY__ = true;
-    
     console.log("🧠 Registry loaded:", {
       divisions: Object.keys(_divisionCache).length,
       bunks: _bunkCache.length
     });
     
+    _initialLoadDone = true;
+    
     return {
       divisions: _divisionCache,
       bunks: _bunkCache
     };
+  }
+
+  // --------------------------------------------------------------
+  // RELOAD FROM STORAGE (call after cloud hydration)
+  // --------------------------------------------------------------
+  function reloadFromStorage() {
+    console.log("🧠 Reloading registry from storage...");
+    
+    // Clear cache to force re-read
+    _divisionCache = null;
+    _bunkCache = null;
+    
+    // Reload
+    const result = loadRegistry();
+    
+    // Notify app to refresh UI
+    if (result.divisions && Object.keys(result.divisions).length > 0) {
+      console.log("🧠 Registry reloaded with data, triggering UI refresh...");
+      
+      // Re-init UI components if they exist
+      setTimeout(() => {
+        window.initApp1?.();
+        window.initLeagues?.();
+        window.initScheduleSystem?.();
+        window.updateTable?.();
+      }, 100);
+    }
+    
+    return result;
   }
 
   // --------------------------------------------------------------
@@ -111,15 +142,22 @@
     saveRegistry();
   };
 
-  // Force refresh from storage
+  // Force refresh from storage (call after cloud hydration)
   window.refreshGlobalRegistry = function() {
-    _divisionCache = null;
-    _bunkCache = null;
-    return loadRegistry();
+    return reloadFromStorage();
   };
 
-  // Initialize immediately
-  loadRegistry();
+  // ⭐ Listen for cloud hydration event
+  window.addEventListener('campistry-cloud-hydrated', function() {
+    console.log("🧠 Cloud hydration event received, reloading registry...");
+    reloadFromStorage();
+  });
+
+  // Don't load immediately - wait for cloud bridge to signal it's ready
+  // The initial load will happen when welcome.js calls refreshGlobalRegistry()
+  // or when getGlobalDivisions/getGlobalBunks is first called
+  
+  window.__CAMPISTRY_CLOUD_READY__ = window.__CAMPISTRY_CLOUD_READY__ || false;
   
   console.log("🧠 Global Authority ready (synchronous API)");
 
