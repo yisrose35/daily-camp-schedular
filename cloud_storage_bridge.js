@@ -1,4 +1,3 @@
-
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
 // FIXED VERSION: Proper sync/async handling + consolidated storage
@@ -84,6 +83,19 @@
   }
   
   function setLocalCache(state) {
+    // ⭐ CRITICAL: Ensure divisions/bunks are at root level
+    // They might only be inside app1
+    if (state.app1) {
+      if ((!state.divisions || Object.keys(state.divisions).length === 0) && 
+          state.app1.divisions && Object.keys(state.app1.divisions).length > 0) {
+        state.divisions = state.app1.divisions;
+      }
+      if ((!state.bunks || state.bunks.length === 0) && 
+          state.app1.bunks && state.app1.bunks.length > 0) {
+        state.bunks = state.app1.bunks;
+      }
+    }
+    
     _memoryCache = state;
     try {
       localStorage.setItem(UNIFIED_CACHE_KEY, JSON.stringify(state));
@@ -153,13 +165,31 @@
         return null;
       }
       
+      let state = data?.state || null;
+      
+      // ⭐ CRITICAL: Ensure divisions/bunks are at root level
+      // They might be stored in app1 from older saves
+      if (state && state.app1) {
+        if ((!state.divisions || Object.keys(state.divisions).length === 0) && 
+            state.app1.divisions && Object.keys(state.app1.divisions).length > 0) {
+          state.divisions = state.app1.divisions;
+          console.log("☁️ Copied divisions from app1 to root");
+        }
+        if ((!state.bunks || state.bunks.length === 0) && 
+            state.app1.bunks && state.app1.bunks.length > 0) {
+          state.bunks = state.app1.bunks;
+          console.log("☁️ Copied bunks from app1 to root");
+        }
+      }
+      
       console.log("☁️ Cloud data loaded:", {
-        hasState: !!data?.state,
-        divisions: Object.keys(data?.state?.divisions || {}).length,
-        bunks: (data?.state?.bunks || []).length
+        hasState: !!state,
+        divisions: Object.keys(state?.divisions || {}).length,
+        bunks: (state?.bunks || []).length,
+        app1_divisions: Object.keys(state?.app1?.divisions || {}).length
       });
       
-      return data?.state || null;
+      return state;
     } catch (e) {
       console.error("☁️ Cloud load failed:", e);
       return null;
@@ -186,12 +216,24 @@
       // Remove internal flags before saving
       const stateToSave = { ...state };
       delete stateToSave._importTimestamp;
+      
+      // ⭐ CRITICAL: Ensure divisions and bunks are at root level
+      // They might only be inside app1, so copy them up
+      if (stateToSave.app1) {
+        if (stateToSave.app1.divisions && Object.keys(stateToSave.app1.divisions).length > 0) {
+          stateToSave.divisions = stateToSave.app1.divisions;
+        }
+        if (stateToSave.app1.bunks && stateToSave.app1.bunks.length > 0) {
+          stateToSave.bunks = stateToSave.app1.bunks;
+        }
+      }
 
       console.log("☁️ Saving to cloud:", {
         camp_id: CAMP_ID,
         user_id: user.id,
         divisions: Object.keys(stateToSave.divisions || {}).length,
-        bunks: (stateToSave.bunks || []).length
+        bunks: (stateToSave.bunks || []).length,
+        app1_divisions: Object.keys(stateToSave.app1?.divisions || {}).length
       });
 
       const { data, error } = await window.supabase
