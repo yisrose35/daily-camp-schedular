@@ -1,6 +1,6 @@
 // ============================================================================
-// campistry_auth.js — FINAL SaaS AUTH ENGINE
-// FIXED VERSION: Better error handling and null checks
+// campistry_auth.js — FINAL SaaS AUTH ENGINE (FIXED)
+// FIXED VERSION: Better error handling, timeout protection, no hanging
 // ============================================================================
 
 (function() {
@@ -42,6 +42,13 @@
             statusEl.style.color = isError ? "#dc2626" : "#059669";
         }
     }
+    
+    function resetButton() {
+        if (beginBtn) {
+            beginBtn.disabled = false;
+            beginBtn.innerText = authMode === "signup" ? "Create Campistry Account" : "Sign In";
+        }
+    }
 
     // Main submit
     if (beginBtn) {
@@ -69,55 +76,108 @@
                 let error = null;
 
                 if (authMode === "signup") {
+                    console.log("🔐 Attempting signup...");
                     const { data, error: signupError } = await supabase.auth.signUp({ email, password });
                     user = data?.user;
                     error = signupError;
 
                     if (user && !error) {
+                        console.log("🔐 Signup successful, creating camp...");
                         await supabase.from("camps").insert([{ name: campName, owner: user.id }]);
                     }
                 } else {
+                    console.log("🔐 Attempting login for:", email);
                     const { data, error: loginError } = await supabase.auth.signInWithPassword({ email, password });
+                    console.log("🔐 Login response:", { hasData: !!data, hasUser: !!data?.user, hasError: !!loginError });
                     user = data?.user;
                     error = loginError;
                 }
 
                 if (error) {
+                    console.error("🔐 Auth error:", error.message);
                     showStatus(error.message || "Authentication failed.", true);
-                    beginBtn.disabled = false;
-                    beginBtn.innerText = authMode === "signup" ? "Create Campistry Account" : "Sign In";
+                    resetButton();
                     return;
                 }
 
                 if (!user) {
+                    console.error("🔐 No user in response");
                     showStatus("Authentication failed. Please try again.", true);
-                    beginBtn.disabled = false;
-                    beginBtn.innerText = authMode === "signup" ? "Create Campistry Account" : "Sign In";
+                    resetButton();
                     return;
                 }
 
+                console.log("🔐 Auth successful for:", user.email);
                 showStatus("Success! Loading Campistry...");
                 
-                document.getElementById("welcome-screen").style.display = "none";
-                document.getElementById("main-app-container").style.display = "block";
+                // Hide welcome screen, show app
+                const welcomeScreen = document.getElementById("welcome-screen");
+                const mainAppContainer = document.getElementById("main-app-container");
+                
+                console.log("🔐 Switching screens...");
+                if (welcomeScreen) welcomeScreen.style.display = "none";
+                if (mainAppContainer) mainAppContainer.style.display = "block";
 
-                bootCampistryApp();
+                // Boot the app
+                console.log("🔐 Calling bootCampistryApp...");
+                try {
+                    await bootCampistryApp();
+                    console.log("🔐 Boot complete");
+                } catch (bootError) {
+                    console.error("🔐 Boot error:", bootError);
+                }
+                
+                // Reset button in case user logs out and back in
+                resetButton();
 
             } catch (e) {
-                console.error("Auth error:", e);
-                showStatus("An unexpected error occurred.", true);
-                beginBtn.disabled = false;
-                beginBtn.innerText = authMode === "signup" ? "Create Campistry Account" : "Sign In";
+                console.error("🔐 Unexpected auth error:", e);
+                showStatus(e.message || "An unexpected error occurred.", true);
+                resetButton();
             }
         };
     }
 
-    function bootCampistryApp() {
+    async function bootCampistryApp() {
         console.log("🚀 Booting Campistry...");
+        
+        // Check if welcome.js already booted the app
+        if (window.__CAMPISTRY_BOOTED__) {
+            console.log("🚀 App already booted by welcome.js");
+            return;
+        }
+        
+        // Wait for cloud to be ready (with timeout)
+        console.log("🚀 Waiting for cloud bridge...");
+        let attempts = 0;
+        while (!window.__CAMPISTRY_CLOUD_READY__ && attempts < 50) {
+            await new Promise(r => setTimeout(r, 100));
+            attempts++;
+        }
+        
+        if (window.__CAMPISTRY_CLOUD_READY__) {
+            console.log("☁️ Cloud ready after", attempts * 100, "ms");
+        } else {
+            console.warn("⚠️ Cloud not ready after 5s, proceeding anyway");
+            // Force the flag so other code can proceed
+            window.__CAMPISTRY_CLOUD_READY__ = true;
+        }
+        
+        // Mark as booted to prevent duplicate boots
+        window.__CAMPISTRY_BOOTED__ = true;
+        
+        // Refresh global registry first
+        console.log("🚀 Refreshing global registry...");
+        window.refreshGlobalRegistry?.();
+        
+        // Initialize components
+        console.log("🚀 Initializing components...");
         window.initCalendar?.();
         window.initApp1?.();
         window.initLeagues?.();
         window.initScheduleSystem?.();
+        window.initDailyAdjustments?.();
+        
         console.log("✅ Campistry loaded");
     }
 
