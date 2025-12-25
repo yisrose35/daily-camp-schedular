@@ -8,6 +8,7 @@
 // - Wider inputs for bunk editing
 // - SyncSpine integration with global_authority.js
 // - FIXED: Cloud First Loading Strategy
+// - PATCHED: Persistent Division Colors
 // =================================================================
 (function () {
 "use strict";
@@ -40,18 +41,80 @@ const defaultSports = [
 let savedSkeletons = {};
 let skeletonAssignments = {};
 
-// Modern Pro Camp accent palette
-const defaultColors = [
-    "#00C896", "#0094FF", "#FF7C3B", "#8A5DFF", "#B5FF3F",
-    "#FF4D4D", "#00A67C", "#6366F1", "#F97316", "#10B981"
-];
-let colorIndex = 0;
-
 // Expose to window
 window.divisions = divisions;
 window.availableDivisions = availableDivisions;
 window.getBunkMetaData = () => bunkMetaData;
 window.getSportMetaData = () => sportMetaData;
+
+// ==========================================================
+// FIXED COLOR INDEX MANAGEMENT (PERSISTENT)
+// ==========================================================
+
+const defaultColors = [
+    "#00C896", // Teal
+    "#6366F1", // Indigo
+    "#F59E0B", // Amber
+    "#EF4444", // Red
+    "#8B5CF6", // Purple
+    "#3B82F6", // Blue
+    "#10B981", // Emerald
+    "#EC4899", // Pink
+    "#F97316", // Orange
+    "#14B8A6", // Cyan
+    "#84CC16", // Lime
+    "#A855F7", // Violet
+    "#06B6D4", // Sky
+    "#F43F5E", // Rose
+    "#22C55E", // Green
+    "#FBBF24", // Yellow
+];
+
+// ⭐ Load persisted color index
+function getColorIndex() {
+    const settings = window.loadGlobalSettings?.() || {};
+    return settings.divisionColorIndex || 0;
+}
+
+// ⭐ Save color index after incrementing
+function incrementColorIndex() {
+    let index = getColorIndex();
+    index++;
+    window.saveGlobalSettings?.('divisionColorIndex', index);
+    return index;
+}
+
+// ⭐ Get next color (persisted)
+function getNextDivisionColor() {
+    const index = getColorIndex();
+    const color = defaultColors[index % defaultColors.length];
+    incrementColorIndex();
+    return color;
+}
+
+// ⭐ Check if a color is already in use
+function isColorInUse(color, divisions) {
+    return Object.values(divisions).some(div => div.color === color);
+}
+
+// ⭐ Get next UNIQUE color that's not already used
+function getNextUniqueDivisionColor(divisions) {
+    const usedColors = new Set(Object.values(divisions).map(d => d.color));
+    
+    // First try to get an unused color from our palette
+    for (let i = 0; i < defaultColors.length; i++) {
+        const index = (getColorIndex() + i) % defaultColors.length;
+        const color = defaultColors[index];
+        if (!usedColors.has(color)) {
+            // Update index to this position + 1 so next time we start fresh
+            window.saveGlobalSettings?.('divisionColorIndex', index + 1);
+            return color;
+        }
+    }
+    
+    // All colors used - just cycle through
+    return getNextDivisionColor();
+}
 
 // -------------------- Shared Theme Helpers --------------------
 function ensureSharedSetupStyles() {
@@ -476,9 +539,10 @@ function handleBulkImport(file) {
                 // Add Div
                 if (!availableDivisions.includes(divName)) {
                     availableDivisions.push(divName);
+                    // Use persistent unique color for imported divisions
                     divisions[divName] = {
                         bunks: [],
-                        color: defaultColors[colorIndex++ % defaultColors.length]
+                        color: getNextUniqueDivisionColor(divisions)
                     };
                     addedDivs++;
                 }
@@ -557,7 +621,7 @@ function renderBulkImportUI() {
       <div style="display:flex; align-items:center; justify-content:space-between; gap:20px;">
         <div style="flex:1;">
           <h3 style="margin:0; font-size:1.1rem; color:#111827; display:flex; align-items:center; gap:8px;">
-             Camp Setup &amp; Configuration
+             Camp Setup & Configuration
              <span style="font-size:0.7rem; background:#8A5DFF; color:white; padding:2px 8px; border-radius:999px;">Step 1</span>
           </h3>
           <p class="muted" style="margin:4px 0 0;">Import data via CSV (Divisions, Bunks, Camper Names) or add manually below.</p>
@@ -602,26 +666,31 @@ function addBunkToDivision(divName, bunkName) {
     window.updateTable?.();
 }
 
+// PATCHED addDivision FUNCTION
 function addDivision() {
     const i = document.getElementById("divisionInput");
-    if (!i) return;
-    const raw = i.value.trim();
+    const raw = (i?.value || "").trim();
+    
     if (!raw) return;
     const name = raw;
+    
     if (availableDivisions.includes(name)) {
         alert("That division already exists.");
         i.value = "";
         return;
     }
-    const color = defaultColors[colorIndex % defaultColors.length];
-    colorIndex++;
+    
+    // ⭐ Use persisted unique color
+    const color = getNextUniqueDivisionColor(divisions);
+    
     availableDivisions.push(name);
     divisions[name] = {
         bunks: [],
-        color,
+        color: color,
         startTime: "",
         endTime: ""
     };
+    
     syncSpine();
     selectedDivision = name;
     i.value = "";
@@ -630,6 +699,8 @@ function addDivision() {
     renderDivisionDetailPane();
     window.initLeaguesTab?.();
     window.updateTable?.();
+    
+    console.log(`✅ Added division "${name}" with color ${color}`);
 }
 
 // -------------------- UI Rendering --------------------
@@ -856,7 +927,8 @@ function renderDivisionDetailPane() {
     bunksCard.innerHTML = `
         <div class="division-mini-header"><span>Bunks in this Division</span></div>
         <p class="division-mini-help">
-            Click to edit name/size.<br>
+            Click to edit name/size.
+
             <strong>Double-click to delete.</strong>
         </p>
     `;
@@ -1094,6 +1166,12 @@ window.saveGlobalSpecialActivities = (updatedActivities) => {
     saveData();
 };
 window.addDivisionBunk = addBunkToDivision;
+
+// EXPORT FOR COLOR USE
+window.getNextDivisionColor = getNextDivisionColor;
+window.getNextUniqueDivisionColor = getNextUniqueDivisionColor;
+window.getColorIndex = getColorIndex;
+window.incrementColorIndex = incrementColorIndex;
 
 // ---------------------------------------------
 // EXPOSE MASTER APP1 OBJECT FOR THE SCHEDULER
