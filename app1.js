@@ -9,10 +9,11 @@
 // - SyncSpine integration with global_authority.js
 // - FIXED: Cloud First Loading Strategy
 // - PATCHED: Persistent Division Colors
+// - FIXED: Uses global_authority as primary data source
 // =================================================================
 (function () {
 "use strict";
-console.log("📋 app1.js loaded");
+console.log("📋 app1.js loaded (FIXED v2.1)");
 
 function syncSpine() {
   window.setGlobalDivisions?.(structuredClone(divisions));
@@ -98,8 +99,8 @@ function isColorInUse(color, divisions) {
 }
 
 // ⭐ Get next UNIQUE color that's not already used
-function getNextUniqueDivisionColor(divisions) {
-    const usedColors = new Set(Object.values(divisions).map(d => d.color));
+function getNextUniqueDivisionColor(divs) {
+    const usedColors = new Set(Object.values(divs || {}).map(d => d?.color).filter(Boolean));
     
     // First try to get an unused color from our palette
     for (let i = 0; i < defaultColors.length; i++) {
@@ -715,7 +716,10 @@ function setupDivisionButtons() {
     }
     availableDivisions.forEach((name) => {
         const obj = divisions[name];
-        if (!obj) return;
+        if (!obj) {
+            console.warn(`📋 Division "${name}" in availableDivisions but not in divisions object`);
+            return;
+        }
         let totalKids = 0;
         (obj.bunks || []).forEach(b => {
             const meta = bunkMetaData[b] || {};
@@ -1050,27 +1054,56 @@ function saveData() {
     window.saveGlobalSettings?.("app1", data);
 }
 
+// =====================================================
 // FIXED: Cloud-First Loading Strategy
-async function loadData() {
+// Uses global_authority as primary source of truth
+// =====================================================
+function loadData() {
     console.log("⏳ App1: Fetching data from cloud...");
     
-    // 1. Wait for Cloud Data
-    const globalData = (await window.loadGlobalSettings?.()) || {};
+    // 1. Get global settings (synchronous now)
+    const globalData = window.loadGlobalSettings?.() || {};
     const data = globalData.app1 || {};
 
     try {
-        // --- CRITICAL FIX START ---
-        // OLD WAY: Trusted Local Storage first (which caused the bug when cache was cleared)
-        // NEW WAY: Trust Cloud Data first. Only use Local as a backup.
+        // --- CRITICAL FIX ---
+        // Use global_authority as the PRIMARY source of truth for divisions/bunks
+        // These are populated by the cloud bridge BEFORE app1 initializes
         
-        divisions = (data.divisions && Object.keys(data.divisions).length > 0)
-            ? data.divisions 
-            : (window.getGlobalDivisions ? window.getGlobalDivisions() : {});
-
-        bunks = (data.bunks && data.bunks.length > 0)
-            ? data.bunks
-            : (window.getGlobalBunks ? window.getGlobalBunks() : []);
-        // --- CRITICAL FIX END ---
+        const globalDivisions = window.getGlobalDivisions?.() || {};
+        const globalBunks = window.getGlobalBunks?.() || [];
+        
+        console.log("📋 App1: Global registry has:", {
+            divisions: Object.keys(globalDivisions).length,
+            bunks: globalBunks.length
+        });
+        console.log("📋 App1: app1 data has:", {
+            divisions: Object.keys(data.divisions || {}).length,
+            bunks: (data.bunks || []).length
+        });
+        
+        // Priority: global_authority > app1 data > empty
+        if (Object.keys(globalDivisions).length > 0) {
+            divisions = structuredClone(globalDivisions);
+            console.log("📋 App1: Using divisions from global_authority");
+        } else if (data.divisions && Object.keys(data.divisions).length > 0) {
+            divisions = structuredClone(data.divisions);
+            console.log("📋 App1: Using divisions from app1 data");
+        } else {
+            divisions = {};
+            console.log("📋 App1: No divisions found");
+        }
+        
+        if (globalBunks.length > 0) {
+            bunks = structuredClone(globalBunks);
+            console.log("📋 App1: Using bunks from global_authority");
+        } else if (data.bunks && data.bunks.length > 0) {
+            bunks = structuredClone(data.bunks);
+            console.log("📋 App1: Using bunks from app1 data");
+        } else {
+            bunks = [];
+            console.log("📋 App1: No bunks found");
+        }
 
         availableDivisions = Object.keys(divisions);
         specialActivities = data.specialActivities || [];
@@ -1079,12 +1112,21 @@ async function loadData() {
         
         // Ensure data integrity
         Object.keys(divisions).forEach(divName => {
-            divisions[divName].startTime = divisions[divName].startTime || "";
-            divisions[divName].endTime = divisions[divName].endTime || "";
-            divisions[divName].bunks = divisions[divName].bunks || [];
-            sortBunksInPlace(divisions[divName].bunks);
-            divisions[divName].color = divisions[divName].color || defaultColors[0];
+            const div = divisions[divName];
+            if (typeof div !== 'object' || div === null) {
+                console.warn(`📋 App1: Invalid division "${divName}", skipping`);
+                delete divisions[divName];
+                return;
+            }
+            div.startTime = div.startTime || "";
+            div.endTime = div.endTime || "";
+            div.bunks = Array.isArray(div.bunks) ? div.bunks : [];
+            sortBunksInPlace(div.bunks);
+            div.color = div.color || getNextUniqueDivisionColor(divisions);
         });
+        
+        // Recalculate after potential deletions
+        availableDivisions = Object.keys(divisions);
         
         window.divisions = divisions;
         window.availableDivisions = availableDivisions;
@@ -1093,14 +1135,18 @@ async function loadData() {
         savedSkeletons = data.savedSkeletons || {};
         skeletonAssignments = data.skeletonAssignments || {};
         
-        console.log("✅ App1: Data loaded successfully.");
+        console.log("✅ App1: Data loaded successfully.", {
+            divisions: availableDivisions,
+            bunks: bunks.length,
+            selectedDivision
+        });
     } catch (e) {
         console.error("Error loading app1 data:", e);
     }
 }
 
 // -------------------- Init --------------------
-async function initApp1() {
+function initApp1() {
     console.log("📋 app1.js: initApp1() called");
     ensureSharedSetupStyles();
     const addDivisionBtn = document.getElementById("addDivisionBtn");
@@ -1112,8 +1158,8 @@ async function initApp1() {
         });
     }
 
-    // FIXED: Wait for data before rendering
-    await loadData();
+    // FIXED: Synchronous load (no await needed)
+    loadData();
 
     const detailPane = document.getElementById("division-detail-pane");
     if (detailPane) {
