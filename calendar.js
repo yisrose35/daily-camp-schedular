@@ -431,25 +431,33 @@
                     console.log("✓ Restored specialty league history");
                 }
                 
-                // Push imported divisions & bunks into cloud authority BEFORE reload
+                // Live apply imported cloud registry into running app (NO reload)
                 try {
-                    if (backup.globalRegistry) {
-                        if (backup.globalRegistry.divisions) {
-                            window.setGlobalDivisions?.(backup.globalRegistry.divisions);
-                        }
-                        if (backup.globalRegistry.bunks) {
-                            window.setGlobalBunks?.(backup.globalRegistry.bunks);
-                        }
+                    const reg = backup.globalRegistry || {};
+                
+                    if (reg.divisions) {
+                        window.setGlobalDivisions?.(reg.divisions);
                     }
-                } catch(e) {
-                    console.error("Cloud push failed:", e);
+                    if (reg.bunks) {
+                        window.setGlobalBunks?.(reg.bunks);
+                    }
+                
+                    // Re-hydrate runtime memory immediately
+                    window.divisions = structuredClone(reg.divisions || {});
+                    window.globalBunks = structuredClone(reg.bunks || []);
+                
+                    window.loadCurrentDailyData?.();
+                    window.initApp1?.();
+                    window.initLeagues?.();
+                    window.initScheduleSystem?.();
+                    window.updateTable?.();
+                
+                    console.log("☁️ Cloud import LIVE APPLIED");
+                    alert("Import successful. Data loaded live — no reload required.");
+                } catch (e) {
+                    console.error("Live apply failed:", e);
+                    alert("Import partially applied — check console.");
                 }
-
-                // Give cloud write a moment to commit, then reload
-                setTimeout(() => {
-                    alert("Import successful. Reloading...");
-                    window.location.reload();
-                }, 1200);
 
             } catch (err) {
                 console.error("Import failed:", err);
