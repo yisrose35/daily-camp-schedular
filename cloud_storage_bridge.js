@@ -30,8 +30,15 @@
   // ------------------------------------------------------------
   // Migrate from legacy keys (one-time)
   // ------------------------------------------------------------
+  let _migrationDone = false;
+  
   function migrateLegacyData() {
+    // Only migrate once per session
+    if (_migrationDone) return;
+    _migrationDone = true;
+    
     if (localStorage.getItem(UNIFIED_CACHE_KEY)) {
+      console.log("☁️ Unified storage exists, skipping migration");
       return; // Already migrated
     }
     
@@ -282,72 +289,106 @@
   // ------------------------------------------------------------
   // Initialize - migrate + hydrate from cloud
   // ------------------------------------------------------------
+  let _initializingPromise = null;
+  
   async function initialize() {
-    if (_initialized) return;
-    
-    // Step 1: Migrate legacy data
-    migrateLegacyData();
-    
-    // Step 2: Load from local cache first (instant)
-    const localData = getLocalCache();
-    
-    // Step 3: Check if we just imported data (has import timestamp within last 30 seconds)
-    const justImported = localData._importTimestamp && 
-                         (Date.now() - localData._importTimestamp) < 30000;
-    
-    if (justImported) {
-      console.log("☁️ Recently imported data detected - skipping cloud overwrite");
-      // Clear the import flag
-      delete localData._importTimestamp;
-      setLocalCache(localData);
-      _initialized = true;
-      window.__CAMPISTRY_CLOUD_READY__ = true;
-      
-      // ⭐ Dispatch event so other modules know cloud is ready
-      window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
+    // If already initialized, return immediately
+    if (_initialized) {
+      console.log("☁️ Already initialized, skipping");
       return;
     }
     
-    // Step 4: Try to hydrate from cloud (async, non-blocking)
-    let hydrated = false;
-    try {
-      const cloudState = await loadFromCloud();
-      if (cloudState && Object.keys(cloudState).length > 0) {
-        // Compare timestamps if available
-        const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
-        const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
-        
-        if (cloudTime > localTime) {
-          // Cloud is newer - merge with cloud winning
-          const merged = { ...localData, ...cloudState };
-          setLocalCache(merged);
-          console.log("☁️ Hydrated from cloud (cloud was newer)");
-          hydrated = true;
-        } else if (localTime > cloudTime) {
-          // Local is newer - push to cloud
-          console.log("☁️ Local data is newer - will sync to cloud");
-          _cloudSyncPending = true;
-          scheduleCloudSync();
-        } else {
-          // Same time or no timestamps - merge with cloud winning (safe default)
-          const merged = { ...localData, ...cloudState };
-          setLocalCache(merged);
-          console.log("☁️ Hydrated from cloud");
-          hydrated = true;
-        }
-      }
-    } catch (e) {
-      console.warn("Cloud hydration failed, using local cache:", e);
+    // If currently initializing, wait for that to complete
+    if (_initializingPromise) {
+      console.log("☁️ Already initializing, waiting...");
+      return _initializingPromise;
     }
     
-    _initialized = true;
-    window.__CAMPISTRY_CLOUD_READY__ = true;
+    // Create a promise that will be resolved when done
+    _initializingPromise = (async () => {
+      console.log("☁️ Starting cloud bridge initialization...");
+      
+      try {
+        // Step 1: Migrate legacy data (only once)
+        migrateLegacyData();
+        
+        // Step 2: Load from local cache first (instant)
+        const localData = getLocalCache();
+        
+        // Step 3: Check if we just imported data (has import timestamp within last 30 seconds)
+        const justImported = localData._importTimestamp && 
+                             (Date.now() - localData._importTimestamp) < 30000;
+        
+        if (justImported) {
+          console.log("☁️ Recently imported data detected - skipping cloud overwrite");
+          // Clear the import flag
+          delete localData._importTimestamp;
+          setLocalCache(localData);
+          return; // Will set flags in finally block
+        }
+        
+        // Step 4: Try to hydrate from cloud (with timeout protection)
+        let hydrated = false;
+        try {
+          // Add timeout to cloud load
+          const cloudPromise = loadFromCloud();
+          const timeoutPromise = new Promise((resolve) => {
+            setTimeout(() => {
+              console.log("☁️ Cloud load timeout after 5s, using local cache");
+              resolve(null);
+            }, 5000);
+          });
+          
+          const cloudState = await Promise.race([cloudPromise, timeoutPromise]);
+          
+          if (cloudState && Object.keys(cloudState).length > 0) {
+            // Compare timestamps if available
+            const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
+            const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
+            
+            if (cloudTime > localTime) {
+              // Cloud is newer - merge with cloud winning
+              const merged = { ...localData, ...cloudState };
+              setLocalCache(merged);
+              console.log("☁️ Hydrated from cloud (cloud was newer)");
+              hydrated = true;
+            } else if (localTime > cloudTime) {
+              // Local is newer - push to cloud
+              console.log("☁️ Local data is newer - will sync to cloud");
+              _cloudSyncPending = true;
+              scheduleCloudSync();
+            } else {
+              // Same time or no timestamps - merge with cloud winning (safe default)
+              const merged = { ...localData, ...cloudState };
+              setLocalCache(merged);
+              console.log("☁️ Hydrated from cloud");
+              hydrated = true;
+            }
+          } else {
+            console.log("☁️ No cloud data available, using local cache");
+          }
+        } catch (e) {
+          console.warn("☁️ Cloud hydration failed, using local cache:", e);
+        }
+        
+        // ⭐ Dispatch event so other modules know cloud is ready and can reload
+        console.log("☁️ Initialization complete, dispatching cloud-hydrated event");
+        window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
+          detail: { hydrated, hasData: Object.keys(getLocalCache().divisions || {}).length > 0 }
+        }));
+        
+      } catch (e) {
+        console.error("☁️ Initialize error:", e);
+      } finally {
+        // Always mark as initialized and ready
+        _initialized = true;
+        window.__CAMPISTRY_CLOUD_READY__ = true;
+        _initializingPromise = null;
+        console.log("☁️ Cloud bridge ready");
+      }
+    })();
     
-    // ⭐ Dispatch event so other modules know cloud is ready and can reload
-    console.log("☁️ Dispatching cloud-hydrated event, hydrated:", hydrated);
-    window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
-      detail: { hydrated, hasData: Object.keys(getLocalCache().divisions || {}).length > 0 }
-    }));
+    return _initializingPromise;
   }
 
   // ------------------------------------------------------------
@@ -453,6 +494,9 @@
   
   // ⭐ CRITICAL: Re-hydrate when user signs in
   // The initial load might fail if user isn't authenticated yet
+  let _rehydrating = false;
+  let _lastAuthTime = 0;
+  
   function setupAuthListener() {
     if (!window.supabase?.auth) {
       // Supabase not ready yet, try again
@@ -463,22 +507,63 @@
     window.supabase.auth.onAuthStateChange(async (event, session) => {
       console.log("☁️ Auth state change:", event);
       
+      // Prevent duplicate handling within 2 seconds
+      const now = Date.now();
+      if (now - _lastAuthTime < 2000) {
+        console.log("☁️ Duplicate auth event within 2s, skipping");
+        return;
+      }
+      _lastAuthTime = now;
+      
       if (event === 'SIGNED_IN' && session?.user) {
+        // Prevent concurrent re-hydrations
+        if (_rehydrating) {
+          console.log("☁️ Already re-hydrating, skipping");
+          return;
+        }
+        _rehydrating = true;
+        
         console.log("☁️ User signed in, re-hydrating from cloud...");
         
-        // Reset initialization flag to allow re-fetch
-        _initialized = false;
-        
-        // Clear memory cache to force re-read
-        _memoryCache = null;
-        
-        // Re-initialize (will fetch from cloud now that user is authenticated)
-        await initialize();
-        
-        // Notify app to refresh
-        window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
-          detail: { hydrated: true, hasData: Object.keys(getLocalCache().divisions || {}).length > 0, afterSignIn: true }
-        }));
+        try {
+          // Reset initialization flag to allow re-fetch
+          _initialized = false;
+          
+          // DON'T clear memory cache - keep local data as fallback
+          // _memoryCache = null;
+          
+          // Re-initialize with timeout protection
+          const timeoutPromise = new Promise((resolve) => {
+            setTimeout(() => {
+              console.log("☁️ Re-hydration timeout after 5s, completing anyway");
+              resolve('timeout');
+            }, 5000);
+          });
+          
+          const initPromise = initialize();
+          
+          await Promise.race([initPromise, timeoutPromise]);
+          
+          // Ensure flags are set even if we timed out
+          _initialized = true;
+          window.__CAMPISTRY_CLOUD_READY__ = true;
+          
+          // Notify app to refresh
+          const hasData = Object.keys(getLocalCache().divisions || {}).length > 0;
+          console.log("☁️ Post-sign-in hydration complete, hasData:", hasData);
+          
+          window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
+            detail: { hydrated: true, hasData, afterSignIn: true }
+          }));
+          
+        } catch (e) {
+          console.error("☁️ Re-hydration error:", e);
+          // Still mark as ready so app can proceed
+          _initialized = true;
+          window.__CAMPISTRY_CLOUD_READY__ = true;
+        } finally {
+          _rehydrating = false;
+        }
       }
     });
     
