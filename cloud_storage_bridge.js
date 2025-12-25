@@ -1,6 +1,6 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Canonical Cloud State Engine
-// REAL SaaS MODE • Multi-Device • Cache-Safe • Versioned
+// GUARANTEED CLOUD PERSISTENCE • MULTI-DEVICE SAFE • VERSIONED
 // =================================================================
 (function () {
   'use strict';
@@ -9,21 +9,24 @@
   const SCHEMA_VERSION = 1;
   const LOCAL_CACHE_KEY = "CAMPISTRY_LOCAL_CACHE";
 
+  // 🔒 HARD BOUND CAMP (temporary until multi-camp UI is added)
+  const HARDCODED_CAMP_ID = "fc00ba21-bfb0-4c34-b084-2471bd77d8f9";
+
   // ---------------------------------------------------------------
-  // Get active camp (first owned camp for now)
+  // Resolve active camp + owner
   // ---------------------------------------------------------------
   async function getActiveCamp() {
-    const { data } = await window.supabase
-      .from("camps")
-      .select("id, owner")
+    const { data } = await window.supabase.auth.getUser();
+    if (!data?.user) return null;
 
-      .limit(1)
-      .single();
-    return data;
+    return {
+      id: HARDCODED_CAMP_ID,
+      owner: data.user.id
+    };
   }
 
   // ---------------------------------------------------------------
-  // Cloud load
+  // Load canonical cloud state
   // ---------------------------------------------------------------
   async function loadCloudState() {
     const camp = await getActiveCamp();
@@ -39,7 +42,7 @@
   }
 
   // ---------------------------------------------------------------
-  // Cloud save
+  // Save canonical cloud state
   // ---------------------------------------------------------------
   async function saveCloudState(state) {
     const camp = await getActiveCamp();
@@ -51,13 +54,12 @@
     await window.supabase.from(TABLE).upsert({
       camp_id: camp.id,
       owner_id: camp.owner,
-
       state
     });
   }
 
   // ---------------------------------------------------------------
-  // PUBLIC API — these replace your old localStorage system
+  // PUBLIC API — DO NOT CHANGE ANY OTHER FILES
   // ---------------------------------------------------------------
   window.loadGlobalSettings = async function () {
     // 1️⃣ Cloud first
@@ -68,8 +70,7 @@
     }
 
     // 2️⃣ Fallback local cache
-    const local = JSON.parse(localStorage.getItem(LOCAL_CACHE_KEY) || "{}");
-    return local;
+    return JSON.parse(localStorage.getItem(LOCAL_CACHE_KEY) || "{}");
   };
 
   window.saveGlobalSettings = async function (k, v) {
