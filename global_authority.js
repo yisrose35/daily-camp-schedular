@@ -1,6 +1,6 @@
 // =================================================================
 // global_authority.js — Campistry Cloud Authority Spine
-// LOCAL CACHE + CANONICAL CLOUD PERSISTENCE
+// CLOUD-FIRST • NO LOCAL OVERWRITE • LIVE SaaS MODE
 // =================================================================
 (function () {
   'use strict';
@@ -10,11 +10,12 @@
   let _cache = null;
 
   // --------------------------------------------------------------
-  // LOAD (cloud-first)
+  // LOAD (cloud-first, no skeleton overwrite)
   // --------------------------------------------------------------
   async function loadRegistry() {
     try {
       if (_cache) return _cache;
+      if (window.__CAMPISTRY_READY__) return _cache;
 
       const cloud = await window.loadGlobalSettings();
       if (cloud && (cloud.divisions || cloud.bunks)) {
@@ -36,7 +37,7 @@
   }
 
   // --------------------------------------------------------------
-  // SAVE (dual write)
+  // SAVE (dual-write)
   // --------------------------------------------------------------
   async function saveRegistry(reg) {
     try {
@@ -64,7 +65,7 @@
     loadRegistry().then(reg => {
       reg.divisions = structuredClone(divs || {});
       saveRegistry(reg);
-      console.log("☁️ Divisions saved to cloud:", Object.keys(reg.divisions).length);
+      console.log("☁️ Divisions saved:", Object.keys(reg.divisions).length);
     });
   };
 
@@ -72,7 +73,7 @@
     loadRegistry().then(reg => {
       reg.bunks = structuredClone(bunks || []);
       saveRegistry(reg);
-      console.log("☁️ Bunks saved to cloud:", reg.bunks.length);
+      console.log("☁️ Bunks saved:", reg.bunks.length);
     });
   };
 
