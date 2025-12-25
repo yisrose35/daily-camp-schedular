@@ -6,7 +6,6 @@
 // - Bulk Import with Camper Names OR Counts
 // - Double-click bunk to DELETE
 // - Wider inputs for bunk editing
-// - Sports Rules modal
 // - SyncSpine integration with global_authority.js
 // =================================================================
 (function () {
@@ -314,35 +313,6 @@ function ensureSharedSetupStyles() {
             width: 100%;
             box-sizing: border-box;
         }
-        /* Sports Modal */
-        .sports-modal-overlay {
-            position: fixed; top: 0; left: 0;
-            width: 100%; height: 100%;
-            background: rgba(0,0,0,0.4); z-index: 9999;
-            display: flex; justify-content: center; align-items: center;
-            backdrop-filter: blur(2px);
-        }
-        .sports-modal {
-            background: white;
-            width: 400px; max-height: 80vh;
-            border-radius: 16px; padding: 24px;
-            overflow-y: auto;
-            box-shadow: 0 20px 50px rgba(0,0,0,0.2);
-        }
-        .sports-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px 0;
-            border-bottom: 1px solid #F3F4F6;
-        }
-        .sport-cap-input {
-            width: 60px;
-            padding: 4px;
-            border: 1px solid #D1D5DB;
-            border-radius: 6px;
-            text-align: center;
-        }
         .muted {
             color: #6B7280;
             font-size: 0.86rem;
@@ -573,8 +543,6 @@ function handleBulkImport(file) {
     reader.readAsText(file);
 }
 
-
-
 function renderBulkImportUI() {
     if (document.getElementById("bulk-data-card")) return;
     const grid = document.querySelector(".setup-grid");
@@ -584,14 +552,23 @@ function renderBulkImportUI() {
     const card = document.createElement("section");
     card.className = "setup-card setup-card-wide bulk-card";
     card.id = "bulk-data-card";
-    
+    card.innerHTML = `
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:20px;">
+        <div style="flex:1;">
+          <h3 style="margin:0; font-size:1.1rem; color:#111827; display:flex; align-items:center; gap:8px;">
+             Camp Setup &amp; Configuration
+             <span style="font-size:0.7rem; background:#8A5DFF; color:white; padding:2px 8px; border-radius:999px;">Step 1</span>
+          </h3>
+          <p class="muted" style="margin:4px 0 0;">Import data via CSV (Divisions, Bunks, Camper Names) or add manually below.</p>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center;">
+            <button id="btn-download-template" style="background:white; border:1px solid #D1D5DB; padding:8px 16px; border-radius:999px; font-size:0.85rem; cursor:pointer;">Template</button>
             <button id="btn-trigger-upload" style="background:#0094FF; color:white; border:none; padding:8px 18px; border-radius:999px; font-size:0.85rem; cursor:pointer; font-weight:600;">Upload CSV</button>
             <input type="file" id="bulk-upload-input" accept=".csv" style="display:none;">
         </div>
       </div>
     `;
     target.prepend(card);
-    
     
     card.querySelector("#btn-download-template").onclick = downloadTemplate;
     const uploadBtn = card.querySelector("#btn-trigger-upload");
