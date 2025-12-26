@@ -1,9 +1,10 @@
 // =================================================================
 // special_activities.js — Modern Pro Camp THEMED VERSION
 // =================================================================
-// VERSION: 2.0 - Comprehensive Refactor
+// VERSION: 2.1 - UI/UX Restored + Code Quality Improvements
 //
 // FIXES APPLIED:
+// - Restored original beta UI/UX design
 // - Fixed stale window.specialActivities reference using getter
 // - Added proper state management with centralized state object
 // - Fixed memory leaks from event handlers
@@ -11,17 +12,15 @@
 // - Added input validation
 // - Consistent event handling with addEventListener
 // - Added Enter key support on ALL inputs
-// - Matched UI/UX to fields.js (accordion sections)
-// - Added Rainy Day availability section
 // - Added debouncing for frequent saves
-// - Centralized constants
 // - Added error handling
+// - Added Rainy Day availability section
 // =================================================================
 (function () {
     'use strict';
 
     // ==================== CONSTANTS ====================
-    const VERSION = "2.0";
+    const VERSION = "2.1";
     const SPECIAL_ID_PREFIX = "special-";
     const DEBOUNCE_MS = 150;
     const MIN_CAPACITY = 2;
@@ -227,35 +226,43 @@
         const style = document.createElement('style');
         style.id = "special-activities-styles";
         style.textContent = `
-            /* Master List */
+            /* Master List - Original Beta Styling */
             .sa-master-list {
+                border-radius: 18px;
                 border: 1px solid #E5E7EB;
-                border-radius: 12px;
-                background: #fff;
-                overflow: hidden;
+                background: #F8FAFC;
+                padding: 6px 6px;
+                box-shadow: 0 8px 20px rgba(15,23,42,0.06);
             }
 
             .sa-list-item {
-                padding: 12px 14px;
-                border-bottom: 1px solid #F3F4F6;
-                cursor: pointer;
+                padding: 10px 12px;
+                border-radius: 14px;
+                margin-bottom: 6px;
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                transition: background 0.15s ease;
+                cursor: pointer;
+                background: #ffffff;
+                border: 1px solid #e5e7eb;
+                box-shadow: 0 3px 8px rgba(15,23,42,0.05);
+                transition: 0.15s ease;
             }
 
             .sa-list-item:last-child {
-                border-bottom: none;
+                margin-bottom: 0;
             }
 
             .sa-list-item:hover {
-                background: #F9FAFB;
+                background: #f1f5f9;
+                transform: translateY(-1px);
             }
 
             .sa-list-item.selected {
-                background: #F0FDF4;
-                border-left: 3px solid #10B981;
+                background: radial-gradient(circle at top left, #ECFDF5, #ffffff 70%);
+                border-color: #00C896;
+                box-shadow: 0 0 0 2px rgba(0,200,150,0.45);
+                font-weight: 600;
             }
 
             .sa-list-item-name {
@@ -265,123 +272,40 @@
             }
 
             .sa-list-item-meta {
-                font-size: 0.75rem;
-                color: #6B7280;
-                margin-left: 6px;
+                font-size: 0.7rem;
+                color: #047857;
+                font-weight: normal;
+                margin-left: 4px;
             }
 
-            /* Accordion Sections - Matching fields.js */
-            .sa-detail-section {
-                margin-bottom: 12px;
+            /* Detail Pane - Original Beta Styling */
+            .sa-detail-pane {
+                border-radius: 18px;
                 border: 1px solid #E5E7EB;
-                border-radius: 12px;
-                background: #fff;
-                overflow: hidden;
+                padding: 20px 22px;
+                background: radial-gradient(circle at top left, #F0F9FF 0%, #FFFFFF 55%, #F8FAFC 100%);
+                box-shadow: 0 14px 36px rgba(15,23,42,0.08);
+                min-height: 380px;
             }
 
-            .sa-detail-section-header {
-                padding: 12px 16px;
-                background: #F9FAFB;
-                cursor: pointer;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                user-select: none;
-                transition: background 0.15s ease;
+            /* Cards within detail pane */
+            .sa-card {
+                background: #ffffff;
+                border: 1px solid #e5e7eb;
+                border-radius: 14px;
+                padding: 16px 16px;
+                margin-bottom: 20px;
+                box-shadow: 0 8px 18px rgba(15,23,42,0.06);
             }
 
-            .sa-detail-section-header:hover {
-                background: #F3F4F6;
-            }
-
-            .sa-detail-section-title {
-                font-size: 0.9rem;
+            .sa-card-header {
                 font-weight: 600;
-                color: #111;
-            }
-
-            .sa-detail-section-summary {
-                font-size: 0.8rem;
-                color: #6B7280;
-                margin-top: 2px;
-            }
-
-            .sa-detail-section-body {
-                display: none;
-                padding: 16px;
-                border-top: 1px solid #E5E7EB;
-            }
-
-            .sa-detail-section-body.open {
-                display: block;
-            }
-
-            /* Chips */
-            .sa-chip {
-                display: inline-block;
-                padding: 4px 10px;
-                border-radius: 999px;
-                font-size: 0.75rem;
-                cursor: pointer;
-                border: 1px solid #E5E7EB;
-                margin-right: 4px;
-                margin-bottom: 4px;
-                transition: all 0.2s ease;
-            }
-
-            .sa-chip.active {
-                background: #10B981;
-                color: white;
-                border-color: #10B981;
-                box-shadow: 0 2px 5px rgba(16, 185, 129, 0.3);
-            }
-
-            .sa-chip.inactive {
-                background: #F3F4F6;
-                color: #374151;
-            }
-
-            .sa-chip:hover {
-                transform: translateY(-1px);
-            }
-
-            /* Priority List */
-            .sa-priority-list-item {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                padding: 8px;
-                background: #F9FAFB;
-                border: 1px solid #E5E7EB;
-                border-radius: 8px;
                 margin-bottom: 6px;
+                font-size: 0.9rem;
+                color: #111827;
             }
 
-            .sa-priority-btn {
-                width: 24px;
-                height: 24px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                border: 1px solid #D1D5DB;
-                border-radius: 4px;
-                background: white;
-                cursor: pointer;
-                font-size: 0.8rem;
-                transition: all 0.15s ease;
-            }
-
-            .sa-priority-btn:hover:not(:disabled) {
-                border-color: #10B981;
-                color: #10B981;
-            }
-
-            .sa-priority-btn:disabled {
-                opacity: 0.4;
-                cursor: default;
-            }
-
-            /* Switch/Toggle */
+            /* Switch/Toggle - Original Style */
             .sa-switch {
                 position: relative;
                 display: inline-block;
@@ -421,32 +345,60 @@
             }
 
             .sa-switch input:checked + .sa-slider {
-                background-color: #10B981;
+                background-color: #00C896;
             }
 
             .sa-switch input:checked + .sa-slider:before {
                 transform: translateX(14px);
             }
 
-            /* Form inputs */
-            .sa-input {
-                padding: 6px 10px;
+            /* Chips - Original Pill Style */
+            .sa-chip {
+                display: inline-block;
+                padding: 6px 12px;
+                border-radius: 999px;
+                font-size: 0.8rem;
+                cursor: pointer;
                 border: 1px solid #D1D5DB;
-                border-radius: 6px;
+                margin-right: 6px;
+                margin-bottom: 6px;
+                transition: all 0.15s ease;
+            }
+
+            .sa-chip.active {
+                background: #00C896;
+                color: #FFFFFF;
+                border-color: #00C896;
+            }
+
+            .sa-chip.inactive {
+                background: #F3F4F6;
+                color: #111827;
+            }
+
+            .sa-chip:hover {
+                transform: translateY(-1px);
+            }
+
+            /* Form inputs - Pill Style */
+            .sa-input {
+                padding: 6px 12px;
+                border: 1px solid #D1D5DB;
+                border-radius: 999px;
                 font-size: 0.9rem;
                 transition: all 0.15s ease;
             }
 
             .sa-input:focus {
                 outline: none;
-                border-color: #10B981;
-                box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+                border-color: #00C896;
+                box-shadow: 0 0 0 2px rgba(0,200,150,0.2);
             }
 
             .sa-select {
-                padding: 6px 10px;
+                padding: 6px 12px;
                 border: 1px solid #D1D5DB;
-                border-radius: 6px;
+                border-radius: 999px;
                 font-size: 0.9rem;
                 background: white;
                 cursor: pointer;
@@ -454,12 +406,12 @@
 
             .sa-select:focus {
                 outline: none;
-                border-color: #10B981;
+                border-color: #00C896;
             }
 
             .sa-btn {
                 padding: 6px 14px;
-                border-radius: 6px;
+                border-radius: 999px;
                 font-size: 0.85rem;
                 cursor: pointer;
                 transition: all 0.15s ease;
@@ -467,12 +419,12 @@
             }
 
             .sa-btn-primary {
-                background: #10B981;
+                background: #00C896;
                 color: white;
             }
 
             .sa-btn-primary:hover {
-                background: #059669;
+                background: #00B085;
             }
 
             .sa-btn-danger {
@@ -495,18 +447,63 @@
             }
 
             .sa-muted {
-                color: #6B7280;
-                font-size: 0.85rem;
+                color: #6b7280;
+                font-size: 0.86rem;
             }
 
-            /* Detail Pane */
-            .sa-detail-pane {
-                border-radius: 18px;
-                border: 1px solid #E5E7EB;
-                padding: 20px 22px;
-                background: linear-gradient(135deg, #F7F9FA 0%, #FFFFFF 55%, #F7F9FA 100%);
-                min-height: 380px;
-                box-shadow: 0 14px 36px rgba(15, 23, 42, 0.08);
+            /* Section separators */
+            .sa-section {
+                margin-top: 16px;
+                padding-top: 14px;
+                border-top: 1px solid #E5E7EB;
+            }
+
+            .sa-section-title {
+                font-weight: 600;
+                font-size: 0.9rem;
+                margin-bottom: 10px;
+                color: #111827;
+            }
+
+            /* Time rules list */
+            .sa-time-rule {
+                padding: 4px 6px;
+                margin: 3px 0;
+                background: #f3f4f6;
+                border-radius: 8px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+
+            /* Rainy Day Cards */
+            .sa-weather-card {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                padding: 14px;
+                border-radius: 10px;
+                margin-bottom: 12px;
+            }
+
+            .sa-weather-card-indoor {
+                background: #ecfdf5;
+                border: 1px solid #a7f3d0;
+            }
+
+            .sa-weather-card-outdoor {
+                background: #fef3c7;
+                border: 1px solid #fcd34d;
+            }
+
+            .sa-weather-card-rainy {
+                background: #dbeafe;
+                border: 1px solid #93c5fd;
+            }
+
+            .sa-weather-card-default {
+                background: #f9fafb;
+                border: 1px solid #e5e7eb;
             }
         `;
         container.appendChild(style);
@@ -523,34 +520,39 @@
 
         container.innerHTML = `
             <div class="setup-grid">
-                <section class="setup-card setup-card-wide" style="border:none; box-shadow:none; background:transparent;">
-                    <div class="setup-card-header" style="margin-bottom:20px;">
+                <section class="setup-card setup-card-wide">
+                    <div class="setup-card-header">
                         <span class="setup-step-pill">Specials</span>
                         <div class="setup-card-text">
                             <h3>Special Activities & Rotations</h3>
-                            <p>Add canteen, electives, trips, lakes, buses, and control availability, sharing, division access, and rotation rules.</p>
+                            <p>
+                                Add canteen, electives, trips, lakes, buses, and control
+                                availability, sharing, division access, and rotation rules.
+                            </p>
                         </div>
                     </div>
-
-                    <div style="display:flex; flex-wrap:wrap; gap:24px;">
-                        <!-- LEFT SIDE: MASTER LIST -->
-                        <div style="flex:1; min-width:280px;">
-                            <div style="display:flex; justify-content:space-between; align-items:end; margin-bottom:8px;">
-                                <div class="setup-subtitle">All Specials</div>
+                    <div style="display:flex; flex-wrap:wrap; gap:22px; margin-top:10px;">
+                        <div style="flex:1; min-width:260px;">
+                            <div class="setup-subtitle">All Specials</div>
+                            <p style="font-size:0.8rem; color:#6b7280;">
+                                Click a special to edit its rules.
+                            </p>
+                            <div class="setup-field-row" style="margin-top:10px;">
+                                <input id="new-special-input" placeholder="New Special (e.g., Canteen)">
+                                <button id="add-special-btn">Add Special</button>
                             </div>
-
-                            <div style="background:white; padding:10px; border-radius:12px; border:1px solid #E5E7EB; margin-bottom:12px; display:flex; gap:8px;">
-                                <input id="new-special-input" placeholder="New Special (e.g., Canteen)" class="sa-input" style="flex:1; border:none;">
-                                <button id="add-special-btn" class="sa-btn sa-btn-secondary">Add</button>
+                            <div id="specials-master-list"
+                                 class="sa-master-list"
+                                 style="margin-top:10px; max-height:460px; overflow:auto;">
                             </div>
-
-                            <div id="specials-master-list" class="sa-master-list" style="max-height:600px; overflow-y:auto;"></div>
                         </div>
-
-                        <!-- RIGHT SIDE: DETAIL PANE -->
-                        <div style="flex:1.4; min-width:340px;">
-                            <div class="setup-subtitle">Special Configuration</div>
-                            <div id="specials-detail-pane" class="sa-detail-pane" style="margin-top:8px;"></div>
+                        <div style="flex:1.3; min-width:330px;">
+                            <div class="setup-subtitle">Special Details</div>
+                            <div id="specials-detail-pane"
+                                 class="sa-detail-pane"
+                                 style="margin-top:10px;">
+                                <p class="sa-muted">Select a special to begin.</p>
+                            </div>
                         </div>
                     </div>
                 </section>
@@ -564,7 +566,7 @@
         const addBtn = document.getElementById("add-special-btn");
         addBtn?.addEventListener("click", addSpecial);
 
-        addSpecialInput?.addEventListener("keydown", (e) => {
+        addSpecialInput?.addEventListener("keyup", (e) => {
             if (e.key === "Enter") addSpecial();
         });
 
@@ -580,11 +582,7 @@
         specialsListEl.innerHTML = "";
 
         if (state.specialActivities.length === 0) {
-            specialsListEl.innerHTML = `
-                <div style="padding:20px; text-align:center; color:#9CA3AF;">
-                    No special activities yet.
-                </div>
-            `;
+            specialsListEl.innerHTML = `<p class="sa-muted">No special activities yet.</p>`;
             return;
         }
 
@@ -606,8 +604,7 @@
             renderDetailPane();
         });
 
-        // Info section
-        const infoDiv = document.createElement("div");
+        // Name section
         const nameEl = document.createElement("span");
         nameEl.className = "sa-list-item-name";
         nameEl.textContent = special.name;
@@ -616,8 +613,7 @@
         if (special.transition.preMin > 0 || special.transition.postMin > 0) {
             const meta = document.createElement("span");
             meta.className = "sa-list-item-meta";
-            meta.textContent = `(${special.transition.preMin}m / ${special.transition.postMin}m)`;
-            meta.style.color = "#047857";
+            meta.textContent = ` (${special.transition.preMin}m / ${special.transition.postMin}m)`;
             nameEl.appendChild(meta);
         }
 
@@ -625,19 +621,18 @@
         if (special.rainyDayOnly) {
             const badge = document.createElement("span");
             badge.className = "sa-list-item-meta";
-            badge.textContent = "🌧️";
+            badge.textContent = " 🌧️";
             badge.title = "Rainy Day Only";
             nameEl.appendChild(badge);
         } else if (special.rainyDayAvailable) {
             const badge = document.createElement("span");
             badge.className = "sa-list-item-meta";
-            badge.textContent = "🏠";
+            badge.textContent = " 🏠";
             badge.title = "Available on Rainy Days";
             nameEl.appendChild(badge);
         }
 
-        infoDiv.appendChild(nameEl);
-        el.appendChild(infoDiv);
+        el.appendChild(nameEl);
 
         // Toggle Switch
         const toggle = document.createElement("label");
@@ -671,12 +666,7 @@
         runCleanups();
 
         if (!state.selectedItemId) {
-            detailPaneEl.innerHTML = `
-                <div style="height:300px; display:flex; align-items:center; justify-content:center;
-                            color:#9CA3AF; border:1px dashed #E5E7EB; border-radius:12px;">
-                    Select a special to edit details
-                </div>
-            `;
+            detailPaneEl.innerHTML = `<p class="sa-muted">Select a special to begin.</p>`;
             return;
         }
 
@@ -684,65 +674,51 @@
         const special = findSpecial(specialName);
 
         if (!special) {
-            detailPaneEl.innerHTML = '<p class="sa-muted">Special not found.</p>';
+            state.selectedItemId = null;
+            detailPaneEl.innerHTML = `<p style="color:red;">Error.</p>`;
             return;
         }
 
         detailPaneEl.innerHTML = "";
 
-        // Header
-        detailPaneEl.appendChild(createDetailHeader(special));
+        const onSave = () => saveData();
+        const onRerender = () => {
+            renderMasterList();
+            renderDetailPane();
+        };
 
-        // Availability Strip
+        // HEADER
+        detailPaneEl.appendChild(createDetailHeader(special, onSave, onRerender));
+
+        // AVAILABILITY STRIP
         detailPaneEl.appendChild(createAvailabilityStrip(special));
 
-        // Accordion Sections
-        detailPaneEl.appendChild(createSection(
-            "Transition & Duration",
-            () => summaryTransition(special),
-            () => renderTransitionContent(special)
-        ));
+        // TRANSITION RULES CARD
+        detailPaneEl.appendChild(createTransitionCard(special, onSave, onRerender));
 
-        detailPaneEl.appendChild(createSection(
-            "Frequency Limits",
-            () => summaryFrequency(special),
-            () => renderFrequencyContent(special)
-        ));
+        // FREQUENCY LIMITS CARD
+        detailPaneEl.appendChild(createFrequencyCard(special, onSave, onRerender));
 
-        detailPaneEl.appendChild(createSection(
-            "Sharing Rules",
-            () => summarySharing(special),
-            () => renderSharingContent(special)
-        ));
+        // WEATHER/RAINY DAY CARD
+        detailPaneEl.appendChild(createWeatherCard(special, onSave, onRerender));
 
-        detailPaneEl.appendChild(createSection(
-            "Access & Restrictions",
-            () => summaryAccess(special),
-            () => renderAccessContent(special)
-        ));
+        // SHARABLE RULES SECTION
+        detailPaneEl.appendChild(renderSharableControls(special, onSave, onRerender));
 
-        detailPaneEl.appendChild(createSection(
-            "Time Rules",
-            () => summaryTime(special),
-            () => renderTimeRulesContent(special)
-        ));
+        // ALLOWED DIVISIONS/BUNKS SECTION
+        detailPaneEl.appendChild(renderAllowedBunksControls(special, onSave, onRerender));
 
-        detailPaneEl.appendChild(createSection(
-            "Weather & Availability",
-            () => summaryWeather(special),
-            () => renderWeatherContent(special)
-        ));
+        // TIME RULES SECTION
+        detailPaneEl.appendChild(renderTimeRulesUI(special, onSave, onRerender));
     }
 
-    function createDetailHeader(special) {
+    function createDetailHeader(special, onSave, onRerender) {
         const header = document.createElement("div");
-        header.style.cssText = "display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; padding-bottom:12px; border-bottom:1px solid #E5E7EB;";
+        header.style.cssText = "display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #E5E7EB; padding-bottom:10px; margin-bottom:16px;";
 
-        // Editable title
-        const title = document.createElement("h2");
+        const title = document.createElement("h3");
+        title.style.cssText = "margin:0; font-size:1.05rem; font-weight:600;";
         title.textContent = special.name;
-        title.style.cssText = "margin:0; font-size:1.25rem; cursor:pointer;";
-        title.title = "Double click to rename";
 
         const cleanup = makeEditable(title, (newName) => {
             const trimmed = newName.trim();
@@ -755,31 +731,21 @@
 
             special.name = trimmed;
             state.selectedItemId = makeSpecialId(trimmed);
-            saveData();
-            renderMasterList();
-            renderDetailPane();
+            onSave();
+            onRerender();
         });
         cleanupFunctions.push(cleanup);
 
-        // Delete button
         const delBtn = document.createElement("button");
-        delBtn.innerHTML = `
-            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="vertical-align:middle;">
-                <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
-            </svg> Delete
-        `;
-        delBtn.className = "sa-btn sa-btn-danger";
-        delBtn.style.display = "flex";
-        delBtn.style.alignItems = "center";
-        delBtn.style.gap = "6px";
+        delBtn.textContent = "Delete";
+        delBtn.style.cssText = "color:#DC2626; border:1px solid #FECACA; background:#fff; border-radius:999px; padding:6px 14px; cursor:pointer;";
 
         delBtn.addEventListener("click", () => {
             if (confirm(`Delete "${special.name}"?`)) {
                 state.specialActivities = state.specialActivities.filter(s => s !== special);
-                saveData();
                 state.selectedItemId = null;
-                renderMasterList();
-                renderDetailPane();
+                onSave();
+                onRerender();
             }
         });
 
@@ -794,262 +760,151 @@
         const isAvailable = special.available;
 
         strip.style.cssText = `
-            padding:12px; border-radius:8px; margin-bottom:20px;
-            background:${isAvailable ? '#ECFDF5' : '#FEF2F2'};
-            border:1px solid ${isAvailable ? '#A7F3D0' : '#FECACA'};
-            color:${isAvailable ? '#065F46' : '#991B1B'};
-            font-size:0.9rem; display:flex; justify-content:space-between;
+            padding: 10px 14px;
+            border-radius: 14px;
+            margin-bottom: 18px;
+            border: 1px solid ${isAvailable ? '#BBF7D0' : '#FECACA'};
+            background: ${isAvailable ? '#ECFDF5' : '#FEF2F2'};
         `;
 
         strip.innerHTML = `
-            <span>Currently <strong>${isAvailable ? 'AVAILABLE' : 'UNAVAILABLE'}</strong></span>
-            <span style="font-size:0.8rem; opacity:0.8;">Toggle in master list</span>
+            Currently <strong>${isAvailable ? 'AVAILABLE' : 'UNAVAILABLE'}</strong>.
+            <span style="opacity:0.7;">(Toggle in the left list)</span>
         `;
 
         return strip;
     }
 
-    // ==================== SECTION BUILDER ====================
+    // ==================== TRANSITION CARD ====================
 
-    function createSection(title, getSummary, buildContent) {
-        const wrap = document.createElement("div");
-        wrap.className = "sa-detail-section";
+    function createTransitionCard(special, onSave, onRerender) {
+        const card = document.createElement("div");
+        card.className = "sa-card";
 
         const header = document.createElement("div");
-        header.className = "sa-detail-section-header";
+        header.className = "sa-card-header";
+        header.textContent = "Transition & Duration Rules";
+        card.appendChild(header);
 
-        const titleWrap = document.createElement("div");
-        titleWrap.innerHTML = `
-            <div class="sa-detail-section-title">${escapeHtml(title)}</div>
-            <div class="sa-detail-section-summary">${escapeHtml(getSummary())}</div>
+        const t = special.transition;
+
+        const container = document.createElement("div");
+        container.innerHTML = `
+            <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+                <label style="font-weight:600; font-size:0.85rem;">Pre-Activity (To):</label>
+                <input type="number" id="pre-min-input" value="${t.preMin}" min="0" step="5" class="sa-input" style="width:60px;">
+                <label style="font-weight:600; font-size:0.85rem;">Post-Activity (From):</label>
+                <input type="number" id="post-min-input" value="${t.postMin}" min="0" step="5" class="sa-input" style="width:60px;">
+            </div>
+
+            <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                <label style="font-weight:600; font-size:0.85rem;">Label:</label>
+                <input type="text" id="buffer-label-input" value="${escapeHtml(t.label)}" class="sa-input" style="width:120px;">
+            </div>
+
+            <!-- Zone Selector -->
+            <div style="margin-top:15px; border-top:1px dashed #E5E7EB; padding-top:10px;">
+                <label style="font-weight:600; font-size:0.85rem;">Location Zone:</label>
+                <select id="zone-select" class="sa-select" style="width:100%; margin-top:5px;"></select>
+                <p class="sa-muted" style="font-size:0.75rem; margin-top:5px;">Required for Buffer Merging and Transport Limits.</p>
+            </div>
+
+            <!-- Occupancy Toggle -->
+            <label style="display:flex; align-items:center; gap:8px; margin-top:10px; cursor:pointer;">
+                <input type="checkbox" id="occupies-field-check" ${t.occupiesField ? 'checked' : ''} style="width:16px; height:16px;">
+                <span style="font-size:0.85rem; font-weight:600;">Buffer Occupies Resource (e.g., Setup/Change)</span>
+            </label>
+            <p class="sa-muted" style="font-size:0.75rem; margin-top:2px; padding-left:25px;">
+                If unchecked (Travel), the resource is available during transition time.
+            </p>
+
+            <!-- Minimum Duration -->
+            <div style="margin-top:15px; border-top:1px dashed #E5E7EB; padding-top:10px;">
+                <label style="font-weight:600; font-size:0.85rem;">Min Activity Duration:</label>
+                <input type="number" id="min-duration-input" value="${t.minDurationMin}" min="0" step="5" class="sa-input" style="width:60px; margin-left:5px;">
+                <span class="sa-muted" style="font-size:0.85rem;">minutes (if less, placement is rejected).</span>
+            </div>
         `;
 
-        const caret = document.createElement("span");
-        caret.innerHTML = `
-            <svg width="20" height="20" fill="none" stroke="#9CA3AF" stroke-width="2" viewBox="0 0 24 24">
-                <path d="M9 5l7 7-7 7"></path>
-            </svg>
-        `;
-        caret.style.transition = "transform 0.2s ease";
-
-        header.appendChild(titleWrap);
-        header.appendChild(caret);
-
-        const body = document.createElement("div");
-        body.className = "sa-detail-section-body";
-
-        let isBuilt = false;
-
-        header.addEventListener("click", () => {
-            const isOpen = body.classList.contains('open');
-
-            if (!isOpen && !isBuilt) {
-                body.innerHTML = "";
-                const content = buildContent();
-                if (content) body.appendChild(content);
-                isBuilt = true;
-            }
-
-            body.classList.toggle('open', !isOpen);
-            caret.style.transform = isOpen ? "rotate(0deg)" : "rotate(90deg)";
-
-            if (isOpen) {
-                const summaryEl = titleWrap.querySelector('.sa-detail-section-summary');
-                if (summaryEl) summaryEl.textContent = getSummary();
-            }
+        // Populate Zones
+        const zones = window.getZones?.() || {};
+        const zoneSelect = container.querySelector('#zone-select');
+        Object.values(zones).forEach(z => {
+            const opt = document.createElement('option');
+            opt.value = z.name;
+            opt.textContent = z.name + (z.isDefault ? ' (Default)' : '');
+            if (z.name === t.zone) opt.selected = true;
+            zoneSelect.appendChild(opt);
         });
 
-        wrap.appendChild(header);
-        wrap.appendChild(body);
-
-        return wrap;
-    }
-
-    // ==================== SUMMARY FUNCTIONS ====================
-
-    function summaryTransition(s) {
-        return `${s.transition.preMin}m Pre / ${s.transition.postMin}m Post`;
-    }
-
-    function summaryFrequency(s) {
-        if (s.maxUsage === null || s.maxUsage === undefined) return "Unlimited";
-        const freq = FREQUENCY_OPTIONS.find(f => f.value === s.frequencyWeeks);
-        return `${s.maxUsage}x per ${freq?.label || 'Summer'}`;
-    }
-
-    function summarySharing(s) {
-        return s.sharableWith.type === "not_sharable"
-            ? "Not sharable"
-            : `Sharable (Max ${s.sharableWith.capacity || 2})`;
-    }
-
-    function summaryAccess(s) {
-        if (!s.limitUsage.enabled) return "Open to All Divisions";
-        const count = Object.keys(s.limitUsage.divisions).length;
-        return `${count} division(s) allowed`;
-    }
-
-    function summaryTime(s) {
-        return s.timeRules.length ? `${s.timeRules.length} rule(s) active` : "Available all day";
-    }
-
-    function summaryWeather(s) {
-        if (s.rainyDayOnly) return "🌧️ Rainy Day Only";
-        if (s.rainyDayAvailable) return "🏠 Indoor (Rain OK)";
-        return "🌳 Outdoor";
-    }
-
-    // ==================== CONTENT BUILDERS ====================
-
-    function renderTransitionContent(special) {
-        const t = special.transition;
-        const container = document.createElement("div");
-
-        const update = () => {
-            saveData();
-            renderMasterList();
+        const updateTransition = () => {
+            t.preMin = parseInt(container.querySelector('#pre-min-input').value, 10) || 0;
+            t.postMin = parseInt(container.querySelector('#post-min-input').value, 10) || 0;
+            t.label = container.querySelector('#buffer-label-input').value.trim() || "Transition";
+            t.zone = container.querySelector('#zone-select').value;
+            t.occupiesField = container.querySelector('#occupies-field-check').checked;
+            t.minDurationMin = parseInt(container.querySelector('#min-duration-input').value, 10) || 0;
+            onSave();
+            onRerender();
         };
 
-        // Time inputs row
-        const timeRow = document.createElement("div");
-        timeRow.style.cssText = "display:flex; gap:12px; margin-bottom:12px; flex-wrap:wrap;";
-
-        timeRow.appendChild(createNumberInput("Pre-Activity (min)", t.preMin, (v) => {
-            t.preMin = v;
-            update();
-        }));
-
-        timeRow.appendChild(createNumberInput("Post-Activity (min)", t.postMin, (v) => {
-            t.postMin = v;
-            update();
-        }));
-
-        container.appendChild(timeRow);
-
-        // Label input
-        const labelRow = document.createElement("div");
-        labelRow.style.cssText = "margin-bottom:12px;";
-        labelRow.innerHTML = '<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">Buffer Label</label>';
-
-        const labelInput = document.createElement("input");
-        labelInput.type = "text";
-        labelInput.value = t.label || "Change Time";
-        labelInput.className = "sa-input";
-        labelInput.style.width = "150px";
-
-        labelInput.addEventListener("change", () => {
-            t.label = labelInput.value.trim() || "Change Time";
-            update();
-        });
-
-        labelInput.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") {
-                t.label = labelInput.value.trim() || "Change Time";
-                update();
+        container.querySelectorAll('input, select').forEach(el => {
+            el.addEventListener('change', updateTransition);
+            if (el.tagName === 'INPUT') {
+                el.addEventListener('keyup', (e) => {
+                    if (e.key === 'Enter') updateTransition();
+                });
             }
         });
 
-        labelRow.appendChild(labelInput);
-        container.appendChild(labelRow);
-
-        // Zone & min duration row
-        const metaRow = document.createElement("div");
-        metaRow.style.cssText = "display:flex; gap:12px; margin-bottom:12px; flex-wrap:wrap;";
-
-        // Zone select
-        const zoneDiv = document.createElement("div");
-        zoneDiv.style.flex = "1";
-        zoneDiv.style.minWidth = "150px";
-        zoneDiv.innerHTML = '<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">Location Zone</label>';
-
-        const zoneSel = document.createElement("select");
-        zoneSel.className = "sa-select";
-        zoneSel.style.width = "100%";
-
-        const zones = window.getZones?.() || {};
-        Object.values(zones).forEach(z => {
-            const opt = document.createElement("option");
-            opt.value = z.name;
-            opt.textContent = z.name + (z.isDefault ? " (Default)" : "");
-            if (z.name === t.zone) opt.selected = true;
-            zoneSel.appendChild(opt);
-        });
-
-        zoneSel.addEventListener("change", () => {
-            t.zone = zoneSel.value;
-            update();
-        });
-
-        zoneDiv.appendChild(zoneSel);
-        metaRow.appendChild(zoneDiv);
-
-        metaRow.appendChild(createNumberInput("Min Duration (min)", t.minDurationMin, (v) => {
-            t.minDurationMin = v;
-            update();
-        }));
-
-        container.appendChild(metaRow);
-
-        // Occupies field checkbox
-        const occLabel = document.createElement("label");
-        occLabel.style.cssText = "display:flex; align-items:center; gap:8px; cursor:pointer;";
-
-        const occCk = document.createElement("input");
-        occCk.type = "checkbox";
-        occCk.checked = t.occupiesField;
-        occCk.addEventListener("change", () => {
-            t.occupiesField = occCk.checked;
-            update();
-        });
-
-        occLabel.appendChild(occCk);
-        occLabel.appendChild(document.createTextNode("Buffer occupies resource (e.g. Setup/Change)"));
-        container.appendChild(occLabel);
-
-        const hint = document.createElement("p");
-        hint.className = "sa-muted";
-        hint.style.marginTop = "4px";
-        hint.style.paddingLeft = "24px";
-        hint.textContent = "If unchecked (Travel), the resource is available during transition time.";
-        container.appendChild(hint);
-
-        return container;
+        card.appendChild(container);
+        return card;
     }
 
-    function renderFrequencyContent(special) {
-        const container = document.createElement("div");
+    // ==================== FREQUENCY CARD ====================
+
+    function createFrequencyCard(special, onSave, onRerender) {
+        const card = document.createElement("div");
+        card.className = "sa-card";
+
+        const header = document.createElement("div");
+        header.className = "sa-card-header";
+        header.textContent = "Frequency Limits";
+        card.appendChild(header);
 
         const render = () => {
-            container.innerHTML = "";
+            // Clear existing content except header
+            while (card.childNodes.length > 1) {
+                card.removeChild(card.lastChild);
+            }
 
             if (special.maxUsage === null || special.maxUsage === undefined) {
-                const noLimitText = document.createElement("p");
-                noLimitText.className = "sa-muted";
+                const noLimitText = document.createElement('p');
                 noLimitText.textContent = "Unlimited usage allowed.";
-                noLimitText.style.marginBottom = "12px";
-                container.appendChild(noLimitText);
+                noLimitText.style.cssText = "margin:0 0 10px; font-size:0.8rem; color:#6b7280;";
+                card.appendChild(noLimitText);
 
-                const addBtn = document.createElement("button");
-                addBtn.textContent = "+ Add Frequency Rule";
-                addBtn.className = "sa-btn sa-btn-primary";
-                addBtn.addEventListener("click", () => {
+                const addLimitBtn = document.createElement("button");
+                addLimitBtn.textContent = "+ Add Frequency Rule";
+                addLimitBtn.className = "sa-btn sa-btn-primary";
+
+                addLimitBtn.addEventListener("click", () => {
                     special.maxUsage = 1;
                     special.frequencyWeeks = 0;
-                    saveData();
+                    onSave();
                     render();
                 });
-                container.appendChild(addBtn);
+                card.appendChild(addLimitBtn);
             } else {
-                const desc = document.createElement("p");
-                desc.className = "sa-muted";
-                desc.textContent = "Bunks are allowed to use this:";
-                desc.style.marginBottom = "12px";
-                container.appendChild(desc);
+                const limitDesc = document.createElement('p');
+                limitDesc.textContent = "Bunks are allowed to play this:";
+                limitDesc.style.cssText = "margin:0 0 8px; font-size:0.8rem; color:#6b7280;";
+                card.appendChild(limitDesc);
 
                 const controlRow = document.createElement("div");
                 controlRow.style.cssText = "display:flex; gap:10px; align-items:center; flex-wrap:wrap;";
 
-                // Count input
+                // Count Input
                 const maxInput = document.createElement("input");
                 maxInput.type = "number";
                 maxInput.min = "1";
@@ -1057,22 +912,26 @@
                 maxInput.className = "sa-input";
                 maxInput.style.width = "60px";
 
-                maxInput.addEventListener("change", () => {
-                    special.maxUsage = Math.max(1, parseInt(maxInput.value, 10) || 1);
-                    saveData();
+                maxInput.addEventListener("input", () => {
+                    const val = maxInput.value.trim();
+                    if (val !== "") {
+                        special.maxUsage = Math.max(1, parseInt(val, 10) || 1);
+                        onSave();
+                    }
                 });
 
-                maxInput.addEventListener("keydown", (e) => {
+                maxInput.addEventListener("keyup", (e) => {
                     if (e.key === "Enter") {
                         special.maxUsage = Math.max(1, parseInt(maxInput.value, 10) || 1);
-                        saveData();
+                        onSave();
                     }
                 });
 
                 const timeLabel = document.createElement("span");
                 timeLabel.textContent = "time(s) per";
+                timeLabel.style.fontSize = "0.85rem";
 
-                // Frequency dropdown
+                // Frequency Dropdown
                 const freqSelect = document.createElement("select");
                 freqSelect.className = "sa-select";
 
@@ -1086,17 +945,18 @@
 
                 freqSelect.addEventListener("change", () => {
                     special.frequencyWeeks = parseInt(freqSelect.value, 10);
-                    saveData();
+                    onSave();
                 });
 
-                // Remove button
+                // Remove Button
                 const removeBtn = document.createElement("button");
                 removeBtn.textContent = "Remove Rule";
                 removeBtn.className = "sa-btn sa-btn-danger";
+
                 removeBtn.addEventListener("click", () => {
                     special.maxUsage = null;
                     special.frequencyWeeks = 0;
-                    saveData();
+                    onSave();
                     render();
                 });
 
@@ -1104,42 +964,160 @@
                 controlRow.appendChild(timeLabel);
                 controlRow.appendChild(freqSelect);
                 controlRow.appendChild(removeBtn);
-                container.appendChild(controlRow);
+                card.appendChild(controlRow);
             }
         };
 
         render();
-        return container;
+        return card;
     }
 
-    function renderSharingContent(special) {
-        const container = document.createElement("div");
-        const rules = special.sharableWith;
+    // ==================== WEATHER CARD ====================
 
-        // Toggle header
+    function createWeatherCard(special, onSave, onRerender) {
+        const card = document.createElement("div");
+        card.className = "sa-card";
+
         const header = document.createElement("div");
-        header.style.cssText = "display:flex; align-items:center; gap:10px;";
+        header.className = "sa-card-header";
+        header.textContent = "Weather & Availability";
+        card.appendChild(header);
 
-        const toggle = createToggle(rules.type !== 'not_sharable', (checked) => {
-            rules.type = checked ? 'all' : 'not_sharable';
+        const render = () => {
+            // Clear existing content except header
+            while (card.childNodes.length > 1) {
+                card.removeChild(card.lastChild);
+            }
+
+            const isIndoor = special.rainyDayAvailable === true;
+            const isRainyOnly = special.rainyDayOnly === true;
+
+            const container = document.createElement("div");
+
+            const desc = document.createElement("p");
+            desc.className = "sa-muted";
+            desc.style.cssText = "margin:0 0 12px;";
+            desc.textContent = "Configure how this special behaves during rainy days.";
+            container.appendChild(desc);
+
+            // Indoor/Outdoor Toggle Card
+            const indoorCard = document.createElement("div");
+            indoorCard.className = `sa-weather-card ${isIndoor ? 'sa-weather-card-indoor' : 'sa-weather-card-outdoor'}`;
+
+            indoorCard.innerHTML = `
+                <span style="font-size: 28px;">${isIndoor ? '🏠' : '🌳'}</span>
+                <div style="flex: 1;">
+                    <div style="font-weight: 600; color: ${isIndoor ? '#065f46' : '#92400e'};">
+                        ${isIndoor ? 'Indoor / Covered' : 'Outdoor'}
+                    </div>
+                    <div style="font-size: 0.85rem; color: ${isIndoor ? '#047857' : '#b45309'};">
+                        ${isIndoor ? 'Available on rainy days' : 'Disabled during rainy days'}
+                    </div>
+                </div>
+            `;
+
+            const indoorToggle = createToggle(isIndoor, (checked) => {
+                special.rainyDayAvailable = checked;
+                if (!checked) {
+                    special.rainyDayOnly = false;
+                }
+                onSave();
+                onRerender();
+            });
+            indoorCard.appendChild(indoorToggle);
+            container.appendChild(indoorCard);
+
+            // Rainy Day Only Toggle Card
+            const rainyCard = document.createElement("div");
+            rainyCard.className = `sa-weather-card ${isRainyOnly ? 'sa-weather-card-rainy' : 'sa-weather-card-default'}`;
+
+            rainyCard.innerHTML = `
+                <span style="font-size: 28px;">🌧️</span>
+                <div style="flex: 1;">
+                    <div style="font-weight: 600; color: ${isRainyOnly ? '#1e40af' : '#374151'};">
+                        Rainy Day Only
+                    </div>
+                    <div style="font-size: 0.85rem; color: ${isRainyOnly ? '#3b82f6' : '#6b7280'};">
+                        ${isRainyOnly ? 'Only available when Rainy Day Mode is active' : 'Available on all days'}
+                    </div>
+                </div>
+            `;
+
+            const rainyToggle = createToggle(isRainyOnly, (checked) => {
+                special.rainyDayOnly = checked;
+                if (checked) {
+                    special.rainyDayAvailable = true;
+                }
+                onSave();
+                onRerender();
+            });
+            rainyCard.appendChild(rainyToggle);
+            container.appendChild(rainyCard);
+
+            // Tips
+            const tips = document.createElement("div");
+            tips.style.cssText = "background:#f9fafb; border-radius:8px; padding:12px; font-size:0.85rem; color:#4b5563; margin-top:12px;";
+            tips.innerHTML = `
+                <strong>💡 Tips:</strong>
+                <ul style="margin:8px 0 0 0; padding-left:20px;">
+                    <li><strong>Indoor activities</strong> (gym, arts & crafts) should be marked as "Indoor/Covered"</li>
+                    <li><strong>Rainy day specials</strong> (movie time, indoor games) should be marked as "Rainy Day Only"</li>
+                    <li><strong>Outdoor activities</strong> (lake, outdoor sports) will be auto-disabled on rainy days</li>
+                </ul>
+            `;
+            container.appendChild(tips);
+
+            card.appendChild(container);
+        };
+
+        render();
+        return card;
+    }
+
+    // ==================== SHARABLE CONTROLS ====================
+
+    function renderSharableControls(special, onSave, onRerender) {
+        const wrap = document.createElement("div");
+        wrap.className = "sa-section";
+
+        const title = document.createElement("div");
+        title.className = "sa-section-title";
+        title.textContent = "Sharing Rules:";
+        wrap.appendChild(title);
+
+        const rules = special.sharableWith;
+        const isSharable = rules.type !== 'not_sharable';
+
+        const row = document.createElement("label");
+        row.style.cssText = "display:flex; align-items:center; gap:10px; cursor:pointer;";
+
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = isSharable;
+        cb.style.cssText = "width:16px; height:16px;";
+        cb.addEventListener("change", () => {
+            rules.type = cb.checked ? "all" : "not_sharable";
             rules.divisions = [];
-            saveData();
-            renderDetailPane();
+            onSave();
+            onRerender();
         });
 
-        header.appendChild(toggle);
-        header.appendChild(document.createTextNode("Allow Sharing (Multiple bunks at once)"));
-        container.appendChild(header);
+        const txt = document.createElement("span");
+        txt.textContent = "Sharable (Multiple bunks at once)";
 
-        // Details if sharing enabled
-        if (rules.type !== 'not_sharable') {
-            const details = document.createElement("div");
-            details.style.cssText = "margin-top:16px; padding-left:12px; border-left:2px solid #E5E7EB;";
+        row.appendChild(cb);
+        row.appendChild(txt);
+        wrap.appendChild(row);
+
+        // If sharable → show division chips & capacity
+        if (isSharable) {
+            const box = document.createElement("div");
+            box.style.cssText = "margin-top:10px; padding-left:20px;";
 
             // Capacity input
             const capRow = document.createElement("div");
-            capRow.style.marginBottom = "12px";
-            capRow.innerHTML = '<span>Max Capacity: </span>';
+            capRow.style.marginBottom = "10px";
+            capRow.innerHTML = '<span style="font-size:0.85rem;">Max Capacity: </span>';
 
             const capIn = document.createElement("input");
             capIn.type = "number";
@@ -1151,386 +1129,314 @@
 
             capIn.addEventListener("change", () => {
                 rules.capacity = Math.max(MIN_CAPACITY, parseInt(capIn.value, 10) || MIN_CAPACITY);
-                saveData();
+                onSave();
             });
 
-            capIn.addEventListener("keydown", (e) => {
+            capIn.addEventListener("keyup", (e) => {
                 if (e.key === "Enter") {
                     rules.capacity = Math.max(MIN_CAPACITY, parseInt(capIn.value, 10) || MIN_CAPACITY);
-                    saveData();
+                    onSave();
                 }
             });
 
             capRow.appendChild(capIn);
-            details.appendChild(capRow);
+            box.appendChild(capRow);
 
-            // Division limit chips
-            const divLabel = document.createElement("div");
-            divLabel.textContent = "Limit sharing to specific divisions (Optional):";
-            divLabel.style.cssText = "font-size:0.85rem; margin-bottom:6px;";
-            details.appendChild(divLabel);
+            const help = document.createElement("div");
+            help.textContent = "Limit to divisions (optional):";
+            help.style.cssText = "font-size:0.82rem; color:#6b7280; margin-bottom:4px;";
+            box.appendChild(help);
 
-            const allDivs = window.availableDivisions || [];
-            const chipWrap = document.createElement("div");
-
-            allDivs.forEach(divName => {
-                const isActive = rules.divisions.includes(divName);
-                const chip = createChip(divName, isActive, () => {
-                    if (isActive) {
-                        rules.divisions = rules.divisions.filter(x => x !== divName);
-                    } else {
-                        rules.divisions.push(divName);
-                    }
-                    rules.type = rules.divisions.length > 0 ? 'custom' : 'all';
-                    saveData();
-                    chip.className = "sa-chip " + (rules.divisions.includes(divName) ? "active" : "inactive");
-                });
-                chipWrap.appendChild(chip);
-            });
-
-            details.appendChild(chipWrap);
-            container.appendChild(details);
+            const chips = createChipPicker(
+                window.availableDivisions || [],
+                rules.divisions,
+                () => {
+                    rules.type = rules.divisions.length ? "custom" : "all";
+                    onSave();
+                    onRerender();
+                }
+            );
+            box.appendChild(chips);
+            wrap.appendChild(box);
         }
 
-        return container;
+        return wrap;
     }
 
-    function renderAccessContent(special) {
-        const container = document.createElement("div");
+    function createChipPicker(all, selected, onToggle) {
+        const box = document.createElement("div");
+        box.style.cssText = "display:flex; flex-wrap:wrap; gap:6px;";
+
+        all.forEach(name => {
+            const active = selected.includes(name);
+            const chip = document.createElement("span");
+            chip.className = "sa-chip " + (active ? "active" : "inactive");
+            chip.textContent = name;
+
+            chip.addEventListener("click", () => {
+                const idx = selected.indexOf(name);
+                if (idx > -1) selected.splice(idx, 1);
+                else selected.push(name);
+                onToggle();
+            });
+
+            box.appendChild(chip);
+        });
+
+        return box;
+    }
+
+    // ==================== ALLOWED BUNKS CONTROLS ====================
+
+    function renderAllowedBunksControls(special, onSave, onRerender) {
+        const wrap = document.createElement("div");
+        wrap.className = "sa-section";
+
+        const title = document.createElement("div");
+        title.className = "sa-section-title";
+        title.textContent = "Allowed Divisions & Bunks:";
+        wrap.appendChild(title);
+
         const rules = special.limitUsage;
 
-        const render = () => {
-            container.innerHTML = "";
+        // TOGGLE - Custom styled toggle
+        const mode = document.createElement("label");
+        mode.style.cssText = "display:flex; align-items:center; gap:12px; margin-top:10px; cursor:pointer;";
 
-            // Mode buttons
-            const modeWrap = document.createElement("div");
-            modeWrap.style.cssText = "display:flex; gap:12px; margin-bottom:16px;";
+        const tAll = document.createElement("span");
+        tAll.textContent = "All Divisions";
+        tAll.style.fontSize = "0.9rem";
 
-            const btnAll = createModeButton("Open to All", !rules.enabled, () => {
-                rules.enabled = false;
-                saveData();
-                render();
+        const track = document.createElement("span");
+        track.style.cssText = `
+            width:44px; height:24px; border-radius:999px;
+            display:inline-block; position:relative;
+            border:1px solid #cbd5e1;
+            background:${rules.enabled ? '#d1d5db' : '#22c55e'};
+            transition:0.2s;
+        `;
+
+        const knob = document.createElement("span");
+        knob.style.cssText = `
+            width:20px; height:20px; border-radius:50%;
+            background:#ffffff; position:absolute;
+            top:1px; left:${rules.enabled ? '21px' : '1px'};
+            transition:0.2s;
+        `;
+        track.appendChild(knob);
+
+        const tSpec = document.createElement("span");
+        tSpec.textContent = "Specific Divisions/Bunks";
+        tSpec.style.fontSize = "0.9rem";
+
+        mode.appendChild(tAll);
+        mode.appendChild(track);
+        mode.appendChild(tSpec);
+
+        mode.addEventListener("click", () => {
+            rules.enabled = !rules.enabled;
+            onSave();
+            onRerender();
+        });
+
+        wrap.appendChild(mode);
+
+        // If NOT enabled → done
+        if (!rules.enabled) return wrap;
+
+        // PANEL
+        const panel = document.createElement("div");
+        panel.style.cssText = "margin-top:12px; padding-left:20px; border-left:3px solid #e5e7eb;";
+
+        const allDivs = window.availableDivisions || [];
+
+        allDivs.forEach(div => {
+            const divWrap = document.createElement("div");
+            divWrap.style.marginTop = "8px";
+
+            const isAllowed = div in rules.divisions;
+            const bunks = window.divisions?.[div]?.bunks || [];
+            const allowedBunks = rules.divisions[div] || [];
+
+            const chip = createLimitChip(div, isAllowed);
+            chip.style.fontWeight = "600";
+            chip.addEventListener("click", () => {
+                if (isAllowed) delete rules.divisions[div];
+                else rules.divisions[div] = [];
+                onSave();
+                onRerender();
             });
+            divWrap.appendChild(chip);
 
-            const btnRes = createModeButton("Specific Divisions", rules.enabled, () => {
-                rules.enabled = true;
-                saveData();
-                render();
-            });
+            // Show bunk chips
+            if (isAllowed && bunks.length > 0) {
+                const bunkBox = document.createElement("div");
+                bunkBox.style.cssText = "display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; padding-left:22px;";
 
-            modeWrap.appendChild(btnAll);
-            modeWrap.appendChild(btnRes);
-            container.appendChild(modeWrap);
-
-            if (rules.enabled) {
-                const panel = document.createElement("div");
-                panel.style.cssText = "padding-left:12px; border-left:2px solid #E5E7EB;";
-
-                const allDivs = window.availableDivisions || [];
-
-                allDivs.forEach(divName => {
-                    const divWrap = document.createElement("div");
-                    divWrap.style.marginBottom = "8px";
-
-                    const isAllowed = divName in rules.divisions;
-                    const bunks = window.divisions?.[divName]?.bunks || [];
-                    const allowedBunks = rules.divisions[divName] || [];
-
-                    // Division chip
-                    const divChip = createChip(divName, isAllowed, () => {
-                        if (isAllowed) {
-                            delete rules.divisions[divName];
-                        } else {
-                            rules.divisions[divName] = [];
-                        }
-                        saveData();
-                        render();
+                if (allowedBunks.length > 0) {
+                    const allChip = createLimitChip("All " + div, false);
+                    allChip.style.borderColor = "#00C896";
+                    allChip.style.color = "#00C896";
+                    allChip.addEventListener("click", () => {
+                        rules.divisions[div] = [];
+                        onSave();
+                        onRerender();
                     });
-                    divChip.style.fontWeight = "600";
-                    divWrap.appendChild(divChip);
+                    bunkBox.appendChild(allChip);
+                }
 
-                    // Bunk chips if division is allowed
-                    if (isAllowed && bunks.length > 0) {
-                        const bunkBox = document.createElement("div");
-                        bunkBox.style.cssText = "display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; padding-left:22px;";
-
-                        // "All bunks" chip if some are selected
-                        if (allowedBunks.length > 0) {
-                            const allChip = createChip(`All ${divName}`, false, () => {
-                                rules.divisions[divName] = [];
-                                saveData();
-                                render();
-                            });
-                            allChip.style.borderColor = "#10B981";
-                            allChip.style.color = "#10B981";
-                            bunkBox.appendChild(allChip);
-                        }
-
-                        bunks.forEach(bunkName => {
-                            const bunkChip = createChip(bunkName, allowedBunks.includes(bunkName), () => {
-                                const idx = allowedBunks.indexOf(bunkName);
-                                if (idx > -1) {
-                                    allowedBunks.splice(idx, 1);
-                                } else {
-                                    allowedBunks.push(bunkName);
-                                }
-                                saveData();
-                                render();
-                            });
-                            bunkBox.appendChild(bunkChip);
-                        });
-
-                        divWrap.appendChild(bunkBox);
-                    }
-
-                    panel.appendChild(divWrap);
+                bunks.forEach(b => {
+                    const bc = createLimitChip(b, allowedBunks.includes(b));
+                    bc.addEventListener("click", () => {
+                        const idx = allowedBunks.indexOf(b);
+                        if (idx > -1) allowedBunks.splice(idx, 1);
+                        else allowedBunks.push(b);
+                        onSave();
+                        onRerender();
+                    });
+                    bunkBox.appendChild(bc);
                 });
 
-                container.appendChild(panel);
-            }
-        };
-
-        render();
-        return container;
-    }
-
-    function renderTimeRulesContent(special) {
-        const container = document.createElement("div");
-
-        const render = () => {
-            container.innerHTML = "";
-
-            // Existing rules
-            if (special.timeRules.length > 0) {
-                special.timeRules.forEach((rule, i) => {
-                    const row = document.createElement("div");
-                    row.style.cssText = `
-                        display:flex; justify-content:space-between; align-items:center;
-                        background:#F9FAFB; padding:8px; margin-bottom:6px;
-                        border-radius:6px; border:1px solid #E5E7EB;
-                    `;
-
-                    const color = rule.type === 'Available' ? '#059669' : '#DC2626';
-                    row.innerHTML = `
-                        <span><strong style="color:${color}">${escapeHtml(rule.type)}</strong>:
-                            ${escapeHtml(rule.start)} to ${escapeHtml(rule.end)}</span>
-                    `;
-
-                    const delBtn = document.createElement("button");
-                    delBtn.textContent = "✕";
-                    delBtn.style.cssText = "border:none; background:transparent; color:#9CA3AF; cursor:pointer; font-size:1rem;";
-                    delBtn.addEventListener("click", () => {
-                        special.timeRules.splice(i, 1);
-                        saveData();
-                        render();
-                    });
-
-                    row.appendChild(delBtn);
-                    container.appendChild(row);
-                });
-            } else {
-                container.innerHTML = '<div class="sa-muted" style="margin-bottom:10px;">No specific time rules (Available all day).</div>';
+                divWrap.appendChild(bunkBox);
             }
 
-            // Add new rule form
-            const addRow = document.createElement("div");
-            addRow.style.cssText = "display:flex; gap:8px; margin-top:12px; padding-top:12px; border-top:1px dashed #E5E7EB; flex-wrap:wrap; align-items:center;";
+            panel.appendChild(divWrap);
+        });
 
-            const typeSel = document.createElement("select");
-            typeSel.innerHTML = '<option>Available</option><option>Unavailable</option>';
-            typeSel.className = "sa-select";
-
-            const startIn = document.createElement("input");
-            startIn.placeholder = "9:00am";
-            startIn.className = "sa-input";
-            startIn.style.width = "80px";
-
-            const endIn = document.createElement("input");
-            endIn.placeholder = "10:00am";
-            endIn.className = "sa-input";
-            endIn.style.width = "80px";
-
-            const addRule = () => {
-                if (!startIn.value || !endIn.value) {
-                    alert("Please enter both start and end times.");
-                    return;
-                }
-
-                const startMins = parseTimeToMinutes(startIn.value);
-                const endMins = parseTimeToMinutes(endIn.value);
-
-                if (startMins === null) {
-                    alert("Invalid start time format. Use format like 9:00am");
-                    return;
-                }
-
-                if (endMins === null) {
-                    alert("Invalid end time format. Use format like 10:00am");
-                    return;
-                }
-
-                if (startMins >= endMins) {
-                    alert("End time must be after start time.");
-                    return;
-                }
-
-                special.timeRules.push({
-                    type: typeSel.value,
-                    start: startIn.value,
-                    end: endIn.value
-                });
-
-                saveData();
-                render();
-            };
-
-            const addBtn = document.createElement("button");
-            addBtn.textContent = "Add";
-            addBtn.className = "sa-btn sa-btn-secondary";
-            addBtn.addEventListener("click", addRule);
-
-            // Enter key support
-            startIn.addEventListener("keydown", (e) => {
-                if (e.key === "Enter") addRule();
-            });
-            endIn.addEventListener("keydown", (e) => {
-                if (e.key === "Enter") addRule();
-            });
-
-            addRow.appendChild(typeSel);
-            addRow.appendChild(startIn);
-            addRow.appendChild(document.createTextNode(" to "));
-            addRow.appendChild(endIn);
-            addRow.appendChild(addBtn);
-
-            container.appendChild(addRow);
-        };
-
-        render();
-        return container;
+        wrap.appendChild(panel);
+        return wrap;
     }
 
-    function renderWeatherContent(special) {
-        const container = document.createElement("div");
+    function createLimitChip(text, active) {
+        const c = document.createElement("span");
+        c.className = "sa-chip " + (active ? "active" : "inactive");
+        c.textContent = text;
+        return c;
+    }
 
-        const render = () => {
-            const isIndoor = special.rainyDayAvailable === true;
-            const isRainyOnly = special.rainyDayOnly === true;
+    // ==================== TIME RULES UI ====================
 
-            container.innerHTML = `
-                <div style="margin-bottom: 16px;">
-                    <p style="font-size: 0.85rem; color: #6b7280; margin: 0 0 12px 0;">
-                        Configure how this special activity behaves during rainy days.
-                    </p>
+    function renderTimeRulesUI(special, onSave, onRerender) {
+        const wrap = document.createElement("div");
+        wrap.className = "sa-section";
+        wrap.style.paddingLeft = "14px";
+        wrap.style.borderLeft = "3px solid #e5e7eb";
 
-                    <!-- Indoor/Outdoor Toggle -->
-                    <div style="display: flex; align-items: center; gap: 12px; padding: 14px;
-                                background: ${isIndoor ? '#ecfdf5' : '#fef3c7'};
-                                border: 1px solid ${isIndoor ? '#a7f3d0' : '#fcd34d'};
-                                border-radius: 10px; margin-bottom: 12px;">
-                        <span style="font-size: 28px;">${isIndoor ? '🏠' : '🌳'}</span>
-                        <div style="flex: 1;">
-                            <div style="font-weight: 600; color: ${isIndoor ? '#065f46' : '#92400e'};">
-                                ${isIndoor ? 'Indoor / Covered' : 'Outdoor'}
-                            </div>
-                            <div style="font-size: 0.85rem; color: ${isIndoor ? '#047857' : '#b45309'};">
-                                ${isIndoor ? 'Available on rainy days' : 'Disabled during rainy days'}
-                            </div>
-                        </div>
-                        <label class="sa-switch">
-                            <input type="checkbox" id="rainy-available-toggle" ${isIndoor ? 'checked' : ''}>
-                            <span class="sa-slider"></span>
-                        </label>
-                    </div>
+        const title = document.createElement("div");
+        title.className = "sa-section-title";
+        title.textContent = "Global Time Rules:";
+        wrap.appendChild(title);
 
-                    <!-- Rainy Day Only Toggle -->
-                    <div style="display: flex; align-items: center; gap: 12px; padding: 14px;
-                                background: ${isRainyOnly ? '#dbeafe' : '#f9fafb'};
-                                border: 1px solid ${isRainyOnly ? '#93c5fd' : '#e5e7eb'};
-                                border-radius: 10px;">
-                        <span style="font-size: 28px;">🌧️</span>
-                        <div style="flex: 1;">
-                            <div style="font-weight: 600; color: ${isRainyOnly ? '#1e40af' : '#374151'};">
-                                Rainy Day Only
-                            </div>
-                            <div style="font-size: 0.85rem; color: ${isRainyOnly ? '#3b82f6' : '#6b7280'};">
-                                ${isRainyOnly ? 'Only available when Rainy Day Mode is active' : 'Available on all days'}
-                            </div>
-                        </div>
-                        <label class="sa-switch">
-                            <input type="checkbox" id="rainy-only-toggle" ${isRainyOnly ? 'checked' : ''}>
-                            <span class="sa-slider"></span>
-                        </label>
-                    </div>
-                </div>
+        if (!special.timeRules) special.timeRules = [];
 
-                <div style="background: #f9fafb; border-radius: 8px; padding: 12px; font-size: 0.85rem; color: #4b5563;">
-                    <strong>💡 Tips:</strong>
-                    <ul style="margin: 8px 0 0 0; padding-left: 20px;">
-                        <li><strong>Indoor activities</strong> (gym, arts & crafts) should be marked as "Indoor/Covered"</li>
-                        <li><strong>Rainy day specials</strong> (movie time, indoor games) should be marked as "Rainy Day Only"</li>
-                        <li><strong>Outdoor activities</strong> (lake, outdoor sports) will be auto-disabled on rainy days</li>
-                    </ul>
-                </div>
+        const list = document.createElement("div");
+
+        if (special.timeRules.length === 0) {
+            list.innerHTML = `<p class="sa-muted" style="margin:0;">Available all day</p>`;
+        }
+
+        special.timeRules.forEach((rule, idx) => {
+            const row = document.createElement("div");
+            row.className = "sa-time-rule";
+
+            row.innerHTML = `
+                <span>
+                    <strong style="color:${rule.type === 'Available' ? '#059669' : '#DC2626'};">
+                        ${escapeHtml(rule.type)}
+                    </strong>
+                    from ${escapeHtml(rule.start)} to ${escapeHtml(rule.end)}
+                </span>
             `;
 
-            // Bind toggles
-            const availableToggle = container.querySelector('#rainy-available-toggle');
-            availableToggle?.addEventListener('change', () => {
-                special.rainyDayAvailable = availableToggle.checked;
-                // If marking as outdoor, also disable rainy-only
-                if (!availableToggle.checked) {
-                    special.rainyDayOnly = false;
-                }
-                saveData();
-                renderMasterList();
-                render();
+            const x = document.createElement("button");
+            x.textContent = "✖";
+            x.style.cssText = "background:transparent; border:none; cursor:pointer; color:#9CA3AF; font-size:1rem;";
+            x.addEventListener("click", () => {
+                special.timeRules.splice(idx, 1);
+                onSave();
+                onRerender();
             });
+            row.appendChild(x);
+            list.appendChild(row);
+        });
 
-            const rainyOnlyToggle = container.querySelector('#rainy-only-toggle');
-            rainyOnlyToggle?.addEventListener('change', () => {
-                special.rainyDayOnly = rainyOnlyToggle.checked;
-                // If marking as rainy-only, also mark as indoor
-                if (rainyOnlyToggle.checked) {
-                    special.rainyDayAvailable = true;
-                }
-                saveData();
-                renderMasterList();
-                render();
+        wrap.appendChild(list);
+
+        // Add rule form
+        const form = document.createElement("div");
+        form.style.cssText = "margin-top:10px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;";
+
+        const sel = document.createElement("select");
+        sel.className = "sa-select";
+        sel.innerHTML = `
+            <option value="Available">Available</option>
+            <option value="Unavailable">Unavailable</option>
+        `;
+
+        const s = document.createElement("input");
+        s.placeholder = "9:00am";
+        s.className = "sa-input";
+        s.style.width = "90px";
+
+        const txt = document.createElement("span");
+        txt.textContent = " to ";
+        txt.style.margin = "0 4px";
+
+        const e = document.createElement("input");
+        e.placeholder = "10:00am";
+        e.className = "sa-input";
+        e.style.width = "90px";
+
+        const addRule = () => {
+            if (!s.value || !e.value) {
+                alert("Enter both times.");
+                return;
+            }
+            if (parseTimeToMinutes(s.value) === null) {
+                alert("Invalid start time format. Use format like 9:00am");
+                return;
+            }
+            if (parseTimeToMinutes(e.value) === null) {
+                alert("Invalid end time format. Use format like 10:00am");
+                return;
+            }
+            if (parseTimeToMinutes(s.value) >= parseTimeToMinutes(e.value)) {
+                alert("End must be after start.");
+                return;
+            }
+
+            special.timeRules.push({
+                type: sel.value,
+                start: s.value,
+                end: e.value
             });
+            onSave();
+            onRerender();
         };
 
-        render();
-        return container;
+        const add = document.createElement("button");
+        add.textContent = "Add";
+        add.className = "sa-btn sa-btn-secondary";
+        add.addEventListener("click", addRule);
+
+        s.addEventListener("keyup", (e) => {
+            if (e.key === "Enter") addRule();
+        });
+        e.addEventListener("keyup", (e) => {
+            if (e.key === "Enter") addRule();
+        });
+
+        form.appendChild(sel);
+        form.appendChild(s);
+        form.appendChild(txt);
+        form.appendChild(e);
+        form.appendChild(add);
+        wrap.appendChild(form);
+
+        return wrap;
     }
 
     // ==================== UI HELPERS ====================
-
-    function createNumberInput(label, value, onChange) {
-        const div = document.createElement("div");
-        div.innerHTML = `<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">${escapeHtml(label)}</label>`;
-
-        const input = document.createElement("input");
-        input.type = "number";
-        input.min = "0";
-        input.step = "5";
-        input.value = String(value);
-        input.className = "sa-input";
-        input.style.width = "80px";
-
-        input.addEventListener("change", () => {
-            onChange(Math.max(0, parseInt(input.value, 10) || 0));
-        });
-
-        input.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") {
-                onChange(Math.max(0, parseInt(input.value, 10) || 0));
-            }
-        });
-
-        div.appendChild(input);
-        return div;
-    }
 
     function createToggle(checked, onChange) {
         const label = document.createElement("label");
@@ -1550,28 +1456,6 @@
         return label;
     }
 
-    function createChip(text, isActive, onClick) {
-        const chip = document.createElement("span");
-        chip.className = "sa-chip " + (isActive ? "active" : "inactive");
-        chip.textContent = text;
-        chip.addEventListener("click", onClick);
-        return chip;
-    }
-
-    function createModeButton(text, isActive, onClick) {
-        const btn = document.createElement("button");
-        btn.textContent = text;
-        btn.style.cssText = `
-            flex:1; padding:8px; border-radius:6px; cursor:pointer; transition:all 0.2s;
-            background:${isActive ? '#ECFDF5' : '#fff'};
-            color:${isActive ? '#047857' : '#333'};
-            border:1px solid ${isActive ? '#10B981' : '#E5E7EB'};
-            font-weight:${isActive ? '600' : '400'};
-        `;
-        btn.addEventListener("click", onClick);
-        return btn;
-    }
-
     /**
      * Make an element editable on double-click
      * Returns cleanup function
@@ -1585,11 +1469,10 @@
             const oldValue = el.textContent;
 
             const input = document.createElement("input");
+            input.type = "text";
             input.value = oldValue;
             input.className = "sa-input";
-            input.style.fontSize = "inherit";
-            input.style.fontWeight = "inherit";
-            input.style.width = Math.max(120, el.offsetWidth + 20) + "px";
+            input.style.cssText = "min-width:120px; font-size:inherit; font-weight:inherit;";
 
             const finalize = (save = true) => {
                 const newValue = input.value.trim();
@@ -1604,7 +1487,7 @@
             };
 
             input.addEventListener("blur", () => finalize(true));
-            input.addEventListener("keydown", (e) => {
+            input.addEventListener("keyup", (e) => {
                 if (e.key === "Enter") {
                     e.preventDefault();
                     finalize(true);
@@ -1632,7 +1515,7 @@
         if (!name) return;
 
         if (state.specialActivities.some(s => s.name.toLowerCase() === name.toLowerCase())) {
-            alert("A special with that name already exists.");
+            alert("Special already exists.");
             return;
         }
 
