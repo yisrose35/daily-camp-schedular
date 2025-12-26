@@ -39,79 +39,166 @@ function initLocationsTab(){
         .locations-master-list { border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; overflow: hidden; }
         .locations-list-item { padding: 12px 14px; border-bottom: 1px solid #f3f4f6; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.15s, border-color 0.15s, box-shadow 0.18s, transform 0.08s; }
         .locations-list-item:last-child { border-bottom: none; }
-        .locations-list-item:hover { background: #f9fafb; border-color: #c7d2fe; box-shadow: 0 4px 12px rgba(37,99,235,0.1); transform: translateY(-0.5px); }
-        .locations-list-item.selected { background: #eff6ff; border-left: 3px solid #3b82f6; box-shadow: 0 0 0 1px rgba(59,130,246,0.35), 0 8px 20px rgba(37,99,235,0.15); }
+        .locations-list-item:hover { background: #f9fafb; transform: translateY(-0.5px); }
+        .locations-list-item.selected { background: #eff6ff; border-left: 3px solid #2563eb; }
         .locations-list-item-name { font-weight: 500; color: #111827; font-size: 0.9rem; }
         .locations-list-item-meta { font-size: 0.75rem; color: #6b7280; margin-left: 6px; }
-        .locations-list-item-badge { font-size: 0.65rem; padding: 2px 6px; border-radius: 999px; background: linear-gradient(135deg, #2563eb, #0ea5e9); color: #eff6ff; margin-left: 8px; box-shadow: 0 2px 6px rgba(37,99,235,0.3); }
+        .locations-list-item-badge { font-size: 0.65rem; padding: 2px 8px; border-radius: 999px; background: linear-gradient(135deg, #2563eb, #0ea5e9); color: #fff; margin-left: 8px; font-weight: 500; }
 
         /* Detail Section Accordion */
-        .loc-detail-section { margin-bottom: 12px; border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; position: relative; }
+        .loc-detail-section { margin-bottom: 12px; border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; }
         .loc-detail-section-header { padding: 12px 16px; background: #f9fafb; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; border-radius: 11px; transition: background 0.15s; }
         .loc-detail-section-header:hover { background: #f3f4f6; }
         .loc-detail-section-title { font-size: 0.9rem; font-weight: 600; color: #111827; }
         .loc-detail-section-summary { font-size: 0.8rem; color: #6b7280; margin-top: 2px; }
         .loc-detail-section-body { display: none; padding: 16px; border-top: 1px solid #e5e7eb; }
 
-        /* Multi-select dropdown - FIXED for visibility */
+        /* Multi-select dropdown trigger */
         .multi-select-dropdown { position: relative; }
         .multi-select-trigger { 
-            width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 999px; 
-            background: #fff; cursor: pointer; display: flex; justify-content: space-between; 
-            align-items: center; min-height: 42px; flex-wrap: wrap; gap: 4px;
+            width: 100%; 
+            padding: 10px 14px; 
+            border: 1px solid #d1d5db; 
+            border-radius: 10px; 
+            background: #fff; 
+            cursor: pointer; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            min-height: 44px; 
+            flex-wrap: wrap; 
+            gap: 6px;
             transition: border-color 0.15s, box-shadow 0.15s;
         }
         .multi-select-trigger:hover { border-color: #9ca3af; }
-        .multi-select-trigger.open { border-color: #2563eb; box-shadow: 0 0 0 1px rgba(37,99,235,0.35); }
-        .multi-select-placeholder { color: #9ca3af; }
+        .multi-select-trigger.open { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.15); }
+        .multi-select-placeholder { color: #9ca3af; font-size: 0.9rem; }
         .multi-select-tag { 
-            background: #dbeafe; color: #1d4ed8; padding: 3px 10px; border-radius: 999px; 
-            font-size: 0.8rem; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;
+            background: #dbeafe; 
+            color: #1e40af; 
+            padding: 4px 10px; 
+            border-radius: 6px; 
+            font-size: 0.8rem; 
+            font-weight: 500; 
+            display: inline-flex; 
+            align-items: center; 
+            gap: 6px;
+            border: 1px solid #bfdbfe;
         }
-        .multi-select-tag-remove { cursor: pointer; opacity: 0.7; font-size: 0.9rem; }
+        .multi-select-tag-remove { 
+            cursor: pointer; 
+            opacity: 0.6; 
+            font-size: 1rem; 
+            line-height: 1;
+            transition: opacity 0.15s;
+        }
         .multi-select-tag-remove:hover { opacity: 1; }
+        
+        /* Multi-select dropdown panel - FIXED positioning */
         .multi-select-options { 
-            position: fixed; z-index: 99999;
-            background: #fff; border: 1px solid #d1d5db; border-radius: 12px; 
-            max-height: 250px; overflow-y: auto;
-            box-shadow: 0 10px 40px rgba(15,23,42,0.2); display: none;
+            position: fixed; 
+            z-index: 999999;
+            background: #fff; 
+            border: 1px solid #e5e7eb; 
+            border-radius: 12px; 
+            overflow-y: auto;
+            overflow-x: hidden;
+            overscroll-behavior: contain;
+            box-shadow: 0 20px 50px rgba(15,23,42,0.2), 0 0 0 1px rgba(0,0,0,0.05);
+            display: none;
         }
         .multi-select-options.show { display: block; }
         .multi-select-option { 
-            padding: 10px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px;
+            padding: 12px 14px; 
+            cursor: pointer; 
+            display: flex; 
+            align-items: center; 
+            gap: 10px;
             transition: background 0.1s;
+            border-bottom: 1px solid #f3f4f6;
         }
-        .multi-select-option:hover { background: #f3f4f6; }
+        .multi-select-option:last-child { border-bottom: none; }
+        .multi-select-option:hover { background: #f9fafb; }
         .multi-select-option.selected { background: #eff6ff; }
-        .multi-select-checkbox { width: 16px; height: 16px; accent-color: #2563eb; }
+        .multi-select-option.disabled { opacity: 0.5; cursor: not-allowed; }
+        .multi-select-option.disabled:hover { background: transparent; }
+        .multi-select-checkbox { 
+            width: 18px; 
+            height: 18px; 
+            accent-color: #2563eb; 
+            flex-shrink: 0;
+        }
+        .multi-select-option-label { 
+            flex: 1; 
+            font-size: 0.9rem; 
+            color: #111827;
+        }
+        .multi-select-option-badge {
+            font-size: 0.7rem;
+            color: #dc2626;
+            background: #fef2f2;
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid #fecaca;
+        }
 
         /* Location item in list */
         .location-item { 
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 10px 12px; background: #f9fafb; border: 1px solid #e5e7eb; 
-            border-radius: 999px; margin-bottom: 6px; transition: all 0.15s;
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center;
+            padding: 12px 14px; 
+            background: #f9fafb; 
+            border: 1px solid #e5e7eb; 
+            border-radius: 10px; 
+            margin-bottom: 8px; 
+            transition: all 0.15s;
         }
-        .location-item:hover { background: #eff6ff; border-color: #c7d2fe; }
-        .location-item-name { font-weight: 500; color: #111827; }
+        .location-item:hover { background: #eff6ff; border-color: #bfdbfe; }
+        .location-item-name { font-weight: 500; color: #111827; font-size: 0.9rem; }
         .location-item-actions { display: flex; gap: 8px; align-items: center; }
         .location-delete-btn { 
-            background: transparent; border: none; color: #dc2626; cursor: pointer;
-            padding: 4px 8px; border-radius: 999px; font-size: 0.85rem; transition: background 0.15s;
+            background: transparent; 
+            border: none; 
+            color: #dc2626; 
+            cursor: pointer;
+            padding: 6px 10px; 
+            border-radius: 6px; 
+            font-size: 0.85rem; 
+            transition: background 0.15s;
         }
         .location-delete-btn:hover { background: #fee2e2; }
 
         /* Form inputs */
         .loc-input {
-            padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 999px;
-            font-size: 0.85rem; transition: all 0.15s ease; width: 100%; box-sizing: border-box;
+            padding: 10px 14px; 
+            border: 1px solid #d1d5db; 
+            border-radius: 10px;
+            font-size: 0.9rem; 
+            transition: all 0.15s ease; 
+            width: 100%; 
+            box-sizing: border-box;
+            background: #fff;
         }
         .loc-input:focus {
-            outline: none; border-color: #2563eb;
-            box-shadow: 0 0 0 1px rgba(37,99,235,0.35);
+            outline: none; 
+            border-color: #2563eb;
+            box-shadow: 0 0 0 3px rgba(37,99,235,0.15);
         }
         .loc-input-small { width: 80px; text-align: center; }
 
         .loc-muted { color: #6b7280; font-size: 0.85rem; }
+        
+        /* Empty state */
+        .loc-empty-state {
+            text-align: center;
+            padding: 24px 16px;
+            background: #f9fafb;
+            border: 1px dashed #d1d5db;
+            border-radius: 10px;
+            color: #6b7280;
+            font-size: 0.9rem;
+        }
     `;
     container.appendChild(style);
 
@@ -138,16 +225,16 @@ function initLocationsTab(){
                     </div>
                     <svg width="20" height="20" fill="none" stroke="#6B7280" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
                 </div>
-                <div class="loc-detail-section-body" style="display:block;">
+                <div class="loc-detail-section-body" style="display:none;">
                     <p class="loc-muted" style="margin-top:0; margin-bottom:12px;">
                         Set default locations for pinned tiles. When Lunch, Swim, etc. are scheduled, 
                         the location is automatically assigned.
                     </p>
                     <div id="pinned-defaults-list"></div>
-                    <div style="display:flex; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid #e5e7eb;">
-                        <input id="new-pinned-tile-input" placeholder="Tile name (e.g., Assembly)" class="loc-input" style="flex:1;">
+                    <div style="display:flex; gap:8px; margin-top:16px; padding-top:16px; border-top:1px solid #e5e7eb; align-items:center;">
+                        <input id="new-pinned-tile-input" placeholder="Tile name (e.g., Lunch)" class="loc-input" style="flex:1;">
                         <select id="new-pinned-tile-location" class="loc-input" style="flex:1;"></select>
-                        <button id="add-pinned-default-btn" style="background:#111827; color:white; border:none; border-radius:999px; padding:6px 14px; font-size:0.85rem; cursor:pointer; white-space:nowrap;">Add Default</button>
+                        <button id="add-pinned-default-btn" style="background:#111827; color:white; border:none; border-radius:8px; padding:10px 16px; font-size:0.85rem; cursor:pointer; white-space:nowrap; font-weight:500;">Add</button>
                     </div>
                 </div>
               </div>
@@ -160,9 +247,9 @@ function initLocationsTab(){
                     <div class="setup-subtitle">Zones</div>
                 </div>
                 
-                <div style="background:white; padding:10px; border-radius:999px; border:1px solid #e5e7eb; margin-bottom:12px; display:flex; gap:8px;">
-                  <input id="new-zone-input" placeholder="New Zone (e.g., Lake Area)" class="loc-input" style="flex:1; border:none;">
-                  <button id="add-zone-btn" style="background:#111827; color:white; border:none; border-radius:999px; padding:6px 14px; font-size:0.85rem; cursor:pointer;">Add</button>
+                <div style="background:white; padding:8px 8px 8px 16px; border-radius:12px; border:1px solid #e5e7eb; margin-bottom:12px; display:flex; gap:8px; align-items:center;">
+                  <input id="new-zone-input" placeholder="New Zone (e.g., Lake Area)" class="loc-input" style="flex:1; border:none; padding:8px 0;">
+                  <button id="add-zone-btn" style="background:#111827; color:white; border:none; border-radius:8px; padding:8px 16px; font-size:0.85rem; cursor:pointer; font-weight:500;">Add</button>
                 </div>
 
                 <div id="zones-master-list" class="locations-master-list" style="max-height:500px; overflow-y:auto;"></div>
@@ -571,27 +658,45 @@ function renderFieldsSection(zone){
         optionsPanel.innerHTML = "";
         
         if(fieldNames.length === 0){
-            optionsPanel.innerHTML = `<div style="padding:12px; color:#9CA3AF; text-align:center;">No fields created yet. Go to Fields tab to create some.</div>`;
+            const emptyMsg = document.createElement("div");
+            emptyMsg.style.cssText = "padding: 16px; color: #6b7280; text-align: center; font-size: 0.9rem;";
+            emptyMsg.textContent = "No fields created yet. Go to Fields tab to create some.";
+            optionsPanel.appendChild(emptyMsg);
             return;
         }
+        
+        // Add header
+        const header = document.createElement("div");
+        header.style.cssText = "padding: 10px 14px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; font-size: 0.75rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.03em; position: sticky; top: 0; z-index: 1;";
+        header.textContent = `${fieldNames.length} field${fieldNames.length !== 1 ? 's' : ''} available`;
+        optionsPanel.appendChild(header);
         
         fieldNames.forEach(fieldName => {
             const isSelected = zone.fields.includes(fieldName);
             const isAssignedElsewhere = assignedElsewhere.has(fieldName);
             
             const option = document.createElement("div");
-            option.className = "multi-select-option" + (isSelected ? " selected" : "");
+            option.className = "multi-select-option" + (isSelected ? " selected" : "") + (isAssignedElsewhere ? " disabled" : "");
+            
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.className = "multi-select-checkbox";
+            checkbox.checked = isSelected;
+            checkbox.disabled = isAssignedElsewhere;
+            
+            const label = document.createElement("span");
+            label.className = "multi-select-option-label";
+            label.textContent = fieldName;
+            
+            option.appendChild(checkbox);
+            option.appendChild(label);
             
             if(isAssignedElsewhere){
-                option.style.opacity = "0.5";
-                option.style.cursor = "not-allowed";
+                const badge = document.createElement("span");
+                badge.className = "multi-select-option-badge";
+                badge.textContent = "In another zone";
+                option.appendChild(badge);
             }
-            
-            option.innerHTML = `
-                <input type="checkbox" class="multi-select-checkbox" ${isSelected ? 'checked' : ''} ${isAssignedElsewhere ? 'disabled' : ''}>
-                <span>${escapeHtml(fieldName)}</span>
-                ${isAssignedElsewhere ? '<span style="font-size:0.75rem; color:#DC2626; margin-left:auto;">(in another zone)</span>' : ''}
-            `;
             
             if(!isAssignedElsewhere){
                 option.onclick = (e) => {
@@ -618,9 +723,27 @@ function renderFieldsSection(zone){
     // Position dropdown using fixed positioning to escape any overflow containers
     const positionDropdown = () => {
         const rect = trigger.getBoundingClientRect();
-        optionsPanel.style.top = (rect.bottom + 4) + 'px';
+        const viewportHeight = window.innerHeight;
+        const spaceBelow = viewportHeight - rect.bottom - 20; // 20px padding from bottom
+        const spaceAbove = rect.top - 20; // 20px padding from top
+        
+        // Determine max height based on available space
+        let maxHeight = Math.min(300, Math.max(spaceBelow, spaceAbove));
+        
+        // Position below if enough space, otherwise above
+        if(spaceBelow >= 150 || spaceBelow >= spaceAbove) {
+            optionsPanel.style.top = (rect.bottom + 4) + 'px';
+            optionsPanel.style.bottom = 'auto';
+            maxHeight = Math.min(300, spaceBelow);
+        } else {
+            optionsPanel.style.bottom = (viewportHeight - rect.top + 4) + 'px';
+            optionsPanel.style.top = 'auto';
+            maxHeight = Math.min(300, spaceAbove);
+        }
+        
         optionsPanel.style.left = rect.left + 'px';
         optionsPanel.style.width = rect.width + 'px';
+        optionsPanel.style.maxHeight = maxHeight + 'px';
     };
     
     // Toggle dropdown
@@ -684,15 +807,10 @@ function renderLocationsSection(zone){
     
     const renderContent = () => {
         container.innerHTML = `
-            <p class="loc-muted" style="margin-top:0; margin-bottom:16px;">
-                Locations are physical spaces (Pool, Lunchroom, Gym) that activities use. 
-                <strong>Only one activity can occupy a location at a time</strong> — but unlimited bunks 
-                can participate in that activity.
-            </p>
             <div id="locations-list"></div>
-            <div style="display:flex; gap:8px; margin-top:12px; padding-top:12px; border-top:1px dashed #E5E7EB;">
-                <input type="text" id="new-location-input" class="loc-input" placeholder="New location name (e.g., Lunchroom)" style="flex:1;">
-                <button id="add-location-btn" style="background:#111827; color:white; border:none; border-radius:999px; padding:8px 16px; cursor:pointer; font-weight:500; font-size:0.85rem;">Add Location</button>
+            <div style="display:flex; gap:8px; margin-top:16px; padding-top:16px; border-top:1px solid #e5e7eb; align-items:center;">
+                <input type="text" id="new-location-input" class="loc-input" placeholder="New location (e.g., Lunchroom)" style="flex:1;">
+                <button id="add-location-btn" style="background:#111827; color:white; border:none; border-radius:8px; padding:10px 16px; cursor:pointer; font-weight:500; font-size:0.85rem; white-space:nowrap;">Add</button>
             </div>
         `;
         
@@ -700,18 +818,17 @@ function renderLocationsSection(zone){
         const locationNames = Object.keys(zone.locations || {}).sort();
         
         if(locationNames.length === 0){
-            listEl.innerHTML = `<div class="loc-muted" style="text-align:center; padding:20px; background:#F9FAFB; border-radius:8px;">No locations created yet</div>`;
+            listEl.innerHTML = `<div class="loc-empty-state">No locations created yet</div>`;
         } else {
             locationNames.forEach(locName => {
                 const item = document.createElement("div");
                 item.className = "location-item";
                 item.innerHTML = `
                     <div class="location-item-name">
-                        <span style="margin-right:8px;">📍</span>${escapeHtml(locName)}
+                        <span style="margin-right:6px;">📍</span>${escapeHtml(locName)}
                     </div>
                     <div class="location-item-actions">
-                        <span class="loc-muted" style="font-size:0.8rem;">1 activity at a time</span>
-                        <button class="location-delete-btn" data-loc="${escapeHtml(locName)}">Delete</button>
+                        <button class="location-delete-btn" data-loc="${escapeHtml(locName)}">✕ Remove</button>
                     </div>
                 `;
                 
