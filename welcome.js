@@ -72,9 +72,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     async function bootOnce() {
         if (booted) return;
         
-        // Check if campistry_auth.js already booted
+        // Check if already booted by another script
         if (window.__CAMPISTRY_BOOTED__) {
-            console.log("🚀 App already booted by campistry_auth.js");
+            console.log("🚀 App already booted");
             booted = true;
             return;
         }
@@ -88,48 +88,34 @@ document.addEventListener("DOMContentLoaded", async () => {
         console.log("🚀 Booting Campistry OS...");
 
         try {
-            // Step 1: Initialize calendar first (sets up storage access)
-            if (typeof window.initCalendar === 'function') {
-                window.initCalendar();
-                console.log("✓ Calendar initialized");
+            // Initialize calendar first
+            window.initCalendar?.();
+            console.log("✓ Calendar initialized");
+
+            // Wait for cloud data with short timeout
+            if (!window.__CAMPISTRY_CLOUD_READY__) {
+                console.log("⏳ Waiting for cloud...");
+                await new Promise((resolve) => {
+                    const handler = () => {
+                        window.removeEventListener('campistry-cloud-hydrated', handler);
+                        clearTimeout(timeout);
+                        resolve();
+                    };
+                    window.addEventListener('campistry-cloud-hydrated', handler);
+                    const timeout = setTimeout(() => {
+                        window.removeEventListener('campistry-cloud-hydrated', handler);
+                        console.warn("⚠️ Cloud timeout");
+                        window.__CAMPISTRY_CLOUD_READY__ = true;
+                        resolve();
+                    }, 3000);
+                });
             }
-
-            // Step 2: Wait for cloud hydration
-            // The cloud bridge will dispatch 'campistry-cloud-hydrated' when ready
-            const cloudReadyPromise = new Promise((resolve) => {
-                // If already ready, resolve immediately
-                if (window.__CAMPISTRY_CLOUD_READY__) {
-                    console.log("☁️ Cloud already ready");
-                    resolve();
-                    return;
-                }
-                
-                // Otherwise wait for event
-                const handler = (e) => {
-                    console.log("☁️ Cloud hydration event received:", e.detail);
-                    window.removeEventListener('campistry-cloud-hydrated', handler);
-                    resolve();
-                };
-                window.addEventListener('campistry-cloud-hydrated', handler);
-                
-                // Timeout fallback after 5 seconds
-                setTimeout(() => {
-                    window.removeEventListener('campistry-cloud-hydrated', handler);
-                    console.warn("⚠️ Cloud hydration timeout - proceeding anyway");
-                    window.__CAMPISTRY_CLOUD_READY__ = true;
-                    resolve();
-                }, 5000);
-            });
-
-            await cloudReadyPromise;
-            console.log("☁️ Cloud storage ready");
-
-            // Step 3: Now initialize UI components (cloud data is available)
+            
+            console.log("☁️ Cloud ready");
             initializeUIComponents();
 
         } catch (e) {
             console.error("Boot error:", e);
-            // Try to init anyway
             initializeUIComponents();
         }
     }
