@@ -685,18 +685,27 @@ function renderActivities(item, allSports){
             b.title = "Double-click to remove this custom activity";
         }
 
+       let clickTimer = null;
         b.onclick = ()=>{
-            if(item.activities.includes(s)) item.activities = item.activities.filter(x=>x!==s);
-            else item.activities.push(s);
-            saveData(); 
-            b.className = "activity-button" + (item.activities.includes(s) ? " active" : "");
+            if(clickTimer) {
+                clearTimeout(clickTimer);
+                clickTimer = null;
+                return; // Double-click detected, let ondblclick handle it
+            }
+            clickTimer = setTimeout(() => {
+                clickTimer = null;
+                if(item.activities.includes(s)) item.activities = item.activities.filter(x=>x!==s);
+                else item.activities.push(s);
+                saveData(); 
+                b.className = "activity-button" + (item.activities.includes(s) ? " active" : "");
 
-            // Update summary without rerendering everything
-            const summaryEl = b.closest('.detail-section').querySelector('.detail-section-summary');
-            if(summaryEl) summaryEl.textContent = summaryActivities(item);
+                // Update summary without rerendering everything
+                const summaryEl = b.closest('.detail-section').querySelector('.detail-section-summary');
+                if(summaryEl) summaryEl.textContent = summaryActivities(item);
 
-            // Re-render sport rules section to show updated sports
-            renderSportRulesSection();
+                // Re-render sport rules section to show updated sports
+                renderSportRulesSection();
+            }, 250);
         };
 
         // Double-click to delete custom activities
