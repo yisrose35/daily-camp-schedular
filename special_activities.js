@@ -4,6 +4,7 @@
 // 1. Layout: Apple-inspired Two-Pane with Collapsible Detail Sections.
 // 2. Logic: Retains all Transition, Sharing, Frequency, and Time Rules.
 // 3. Style: Matches fields.js for consistent UI/UX across the app.
+// 4. Update: Added Location Dropdown for Special Activities.
 // ============================================================================
 (function() {
 'use strict';
@@ -203,6 +204,9 @@ function loadData() {
         s.preferences = s.preferences || { enabled: false, exclusive: false, list: [] };
         s.maxUsage = (s.maxUsage !== undefined && s.maxUsage !== "") ? s.maxUsage : null;
         s.frequencyWeeks = s.frequencyWeeks || 0;
+        
+        // Location Initialization
+        s.location = s.location || null;
 
         // Transition fields
         s.transition = s.transition || {
@@ -481,6 +485,9 @@ function renderDetailPane() {
         detailPaneEl.appendChild(rainyBanner);
     }
 
+    // -- LOCATION DROPDOWN (NEW) --
+    detailPaneEl.appendChild(renderLocationDropdown(item));
+
     // -- 3. ACCORDION SECTIONS --
     
     // Transition & Zone Rules
@@ -575,6 +582,44 @@ function summaryTime(item) {
 //------------------------------------------------------------------
 // CONTENT RENDERERS
 //------------------------------------------------------------------
+
+// 0. LOCATION DROPDOWN HELPER
+function renderLocationDropdown(item) {
+    const container = document.createElement("div");
+    container.style.cssText = "margin-bottom: 20px; padding: 16px; background: #F0F9FF; border: 1px solid #BAE6FD; border-radius: 12px;";
+    
+    // Get all locations from the locations.js module
+    const allLocations = window.getAllLocations?.() || [];
+    
+    let optionsHtml = '<option value="">No specific location</option>';
+    allLocations.forEach(loc => {
+        const selected = item.location === loc.name ? 'selected' : '';
+        optionsHtml += `<option value="${loc.name}" ${selected}>${loc.displayName}</option>`;
+    });
+    
+    container.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+            <span style="font-size: 1.2rem;">📍</span>
+            <div>
+                <div style="font-weight: 600; color: #0369A1; font-size: 0.95rem;">Location</div>
+                <div style="font-size: 0.8rem; color: #0284C7;">Where does this activity take place?</div>
+            </div>
+        </div>
+        <select id="special-location-select" style="width: 100%; padding: 10px 12px; border: 1px solid #7DD3FC; border-radius: 8px; font-size: 0.9rem; background: white;">
+            ${optionsHtml}
+        </select>
+        <p style="margin: 8px 0 0 0; font-size: 0.8rem; color: #0369A1;">
+            ⓘ Activities at the same location cannot be scheduled at the same time.
+        </p>
+    `;
+    
+    container.querySelector('#special-location-select').onchange = function() {
+        item.location = this.value || null;
+        saveData();
+    };
+    
+    return container;
+}
 
 // 1. TRANSITION & ZONE
 function renderTransition(item) {
@@ -1225,6 +1270,7 @@ function addSpecial() {
         frequencyWeeks: 0,
         rainyDayExclusive: false,
         rainyDayAvailable: true,
+        location: null,
         transition: {
             preMin: 0,
             postMin: 0,
@@ -1269,6 +1315,7 @@ function addRainyDayActivity() {
         rainyDayExclusive: true,  // This is the key difference
         rainyDayOnly: true,       // Legacy support for daily_adjustments.js
         rainyDayAvailable: true,
+        location: null,
         transition: {
             preMin: 0,
             postMin: 0,
