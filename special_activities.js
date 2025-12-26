@@ -9,10 +9,13 @@
 'use strict';
 
 let specialActivities = [];
+let rainyDayActivities = [];
 let selectedItemId = null;
 let specialsListEl = null;
+let rainyDayListEl = null;
 let detailPaneEl = null;
 let addSpecialInput = null;
+let addRainyDayInput = null;
 
 //------------------------------------------------------------------
 // INIT
@@ -79,6 +82,34 @@ function initSpecialActivitiesTab() {
         .sa-priority-btn:disabled { opacity: 0.4; cursor: default; }
 
         .sa-muted { color: #6B7280; font-size: 0.85rem; }
+
+        /* Rainy Day List Styles */
+        .sa-rainy-list { 
+            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); 
+            border-color: #7dd3fc !important; 
+        }
+        .sa-rainy-list .sa-list-item { 
+            border-color: #bae6fd; 
+        }
+        .sa-rainy-list .sa-list-item:hover { 
+            background: #e0f2fe; 
+        }
+        .sa-rainy-list .sa-list-item.selected { 
+            background: linear-gradient(135deg, #bae6fd 0%, #e0f2fe 100%); 
+            border-left: 3px solid #0284c7; 
+        }
+        .sa-rainy-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            background: linear-gradient(135deg, #0ea5e9, #0284c7);
+            color: white;
+            border-radius: 999px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            margin-left: 6px;
+        }
     `;
     container.appendChild(style);
 
@@ -96,8 +127,9 @@ function initSpecialActivitiesTab() {
             </div>
 
             <div style="display:flex; flex-wrap:wrap; gap:24px;">
-              <!-- LEFT SIDE: MASTER LIST -->
+              <!-- LEFT SIDE: MASTER LISTS -->
               <div style="flex:1; min-width:280px;">
+                <!-- Regular Special Activities -->
                 <div style="display:flex; justify-content:space-between; align-items:end; margin-bottom:8px;">
                     <div class="setup-subtitle">All Specials</div>
                 </div>
@@ -106,7 +138,22 @@ function initSpecialActivitiesTab() {
                   <input id="new-special-input" placeholder="New Special (e.g., Canteen)" style="flex:1; border:none; outline:none; font-size:0.9rem;">
                   <button id="add-special-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
                 </div>
-                <div id="specials-master-list" class="sa-master-list" style="max-height:600px; overflow-y:auto;"></div>
+                <div id="specials-master-list" class="sa-master-list" style="max-height:280px; overflow-y:auto;"></div>
+
+                <!-- Rainy Day Special Activities -->
+                <div style="margin-top:24px;">
+                  <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+                    <span style="font-size:1.2rem;">🌧️</span>
+                    <div class="setup-subtitle" style="margin:0;">Rainy Day Activities</div>
+                  </div>
+                  <p style="font-size:0.75rem; color:#6B7280; margin:0 0 8px 0;">Exclusively available during rainy days</p>
+                  
+                  <div style="background:linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 100%); padding:10px; border-radius:12px; border:1px solid #7dd3fc; margin-bottom:12px; display:flex; gap:8px;">
+                    <input id="new-rainy-day-input" placeholder="New Rainy Day Activity" style="flex:1; border:none; outline:none; font-size:0.9rem; background:transparent;">
+                    <button id="add-rainy-day-btn" style="background:#0284c7; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
+                  </div>
+                  <div id="rainy-day-master-list" class="sa-master-list sa-rainy-list" style="max-height:200px; overflow-y:auto;"></div>
+                </div>
               </div>
 
               <!-- RIGHT SIDE: DETAIL PANE -->
@@ -120,13 +167,19 @@ function initSpecialActivitiesTab() {
     container.appendChild(contentWrapper);
 
     specialsListEl = document.getElementById("specials-master-list");
+    rainyDayListEl = document.getElementById("rainy-day-master-list");
     detailPaneEl = document.getElementById("specials-detail-pane");
     addSpecialInput = document.getElementById("new-special-input");
+    addRainyDayInput = document.getElementById("new-rainy-day-input");
 
     document.getElementById("add-special-btn").onclick = addSpecial;
     addSpecialInput.onkeyup = e => { if (e.key === "Enter") addSpecial(); };
 
+    document.getElementById("add-rainy-day-btn").onclick = addRainyDayActivity;
+    addRainyDayInput.onkeyup = e => { if (e.key === "Enter") addRainyDayActivity(); };
+
     renderMasterList();
+    renderRainyDayList();
     renderDetailPane();
 }
 
@@ -134,10 +187,14 @@ function initSpecialActivitiesTab() {
 // DATA LOADING
 //------------------------------------------------------------------
 function loadData() {
-    specialActivities = window.getGlobalSpecialActivities?.() || [];
+    const allActivities = window.getGlobalSpecialActivities?.() || [];
     
-    // Ensure data completeness
-    specialActivities.forEach(s => {
+    // Separate regular and rainy day exclusive activities
+    specialActivities = [];
+    rainyDayActivities = [];
+    
+    allActivities.forEach(s => {
+        // Ensure data completeness
         s.available = s.available !== false;
         s.timeRules = s.timeRules || [];
         s.sharableWith = s.sharableWith || { type: 'not_sharable', divisions: [], capacity: 2 };
@@ -156,11 +213,29 @@ function loadData() {
             occupiesField: true,
             minDurationMin: 0
         };
+
+        // Weather / Rainy Day fields
+        s.rainyDayAvailable = s.rainyDayAvailable ?? true;
+        s.rainyDayExclusive = s.rainyDayExclusive ?? false;
+        
+        // Also support legacy property name from daily_adjustments.js
+        if (s.rainyDayOnly === true) {
+            s.rainyDayExclusive = true;
+        }
+        
+        // Separate into appropriate list
+        if (s.rainyDayExclusive) {
+            rainyDayActivities.push(s);
+        } else {
+            specialActivities.push(s);
+        }
     });
 }
 
 function saveData() {
-    window.saveGlobalSpecialActivities?.(specialActivities);
+    // Combine both lists for saving
+    const allActivities = [...specialActivities, ...rainyDayActivities];
+    window.saveGlobalSpecialActivities?.(allActivities);
 }
 
 //------------------------------------------------------------------
@@ -175,17 +250,35 @@ function renderMasterList() {
     }
     
     specialActivities.forEach(item => {
-        specialsListEl.appendChild(createMasterListItem(item));
+        specialsListEl.appendChild(createMasterListItem(item, false));
     });
 }
 
-function createMasterListItem(item) {
+function renderRainyDayList() {
+    rainyDayListEl.innerHTML = "";
+    
+    if (rainyDayActivities.length === 0) {
+        rainyDayListEl.innerHTML = `<div style="padding:16px; text-align:center; color:#0369a1; font-size:0.85rem;">
+            <span style="font-size:1.5rem;">☔</span><br>
+            No rainy day activities yet.<br>
+            <span style="font-size:0.75rem; opacity:0.7;">Add activities that only appear during rainy days.</span>
+        </div>`;
+        return;
+    }
+    
+    rainyDayActivities.forEach(item => {
+        rainyDayListEl.appendChild(createMasterListItem(item, true));
+    });
+}
+
+function createMasterListItem(item, isRainyDay = false) {
     const id = `special-${item.name}`;
     const el = document.createElement("div");
     el.className = "sa-list-item" + (id === selectedItemId ? " selected" : "");
     el.onclick = () => { 
         selectedItemId = id; 
         renderMasterList(); 
+        renderRainyDayList();
         renderDetailPane(); 
     };
 
@@ -194,6 +287,14 @@ function createMasterListItem(item) {
     const nameEl = document.createElement("div");
     nameEl.className = "sa-list-item-name";
     nameEl.textContent = item.name;
+
+    // Add rainy day badge for rainy exclusive items
+    if (isRainyDay) {
+        const badge = document.createElement("span");
+        badge.className = "sa-rainy-badge";
+        badge.innerHTML = "🌧️ Rainy Only";
+        nameEl.appendChild(badge);
+    }
 
     // Add meta info (Transition times)
     if (item.transition.preMin > 0 || item.transition.postMin > 0) {
@@ -242,7 +343,15 @@ function renderDetailPane() {
     }
 
     const [, name] = selectedItemId.split(/-(.+)/);
-    const item = specialActivities.find(s => s.name === name);
+    
+    // Search in both regular and rainy day activities
+    let item = specialActivities.find(s => s.name === name);
+    let isRainyDayItem = false;
+    
+    if (!item) {
+        item = rainyDayActivities.find(s => s.name === name);
+        isRainyDayItem = true;
+    }
     
     if (!item) {
         detailPaneEl.innerHTML = `<p class='sa-muted'>Not found.</p>`;
@@ -259,6 +368,11 @@ function renderDetailPane() {
     header.style.alignItems = "center";
     header.style.marginBottom = "16px";
 
+    const titleContainer = document.createElement("div");
+    titleContainer.style.display = "flex";
+    titleContainer.style.alignItems = "center";
+    titleContainer.style.gap = "10px";
+
     const title = document.createElement("h2");
     title.textContent = item.name;
     title.style.margin = "0";
@@ -270,8 +384,18 @@ function renderDetailPane() {
         selectedItemId = `special-${newName}`;
         saveData();
         renderMasterList();
+        renderRainyDayList();
         renderDetailPane();
     });
+    titleContainer.appendChild(title);
+
+    // Add rainy day badge in detail pane header
+    if (isRainyDayItem) {
+        const badge = document.createElement("span");
+        badge.style.cssText = "display:inline-flex; align-items:center; gap:4px; padding:4px 10px; background:linear-gradient(135deg, #0ea5e9, #0284c7); color:white; border-radius:999px; font-size:0.75rem; font-weight:600;";
+        badge.innerHTML = "🌧️ Rainy Day Only";
+        titleContainer.appendChild(badge);
+    }
 
     const delBtn = document.createElement("button");
     delBtn.innerHTML = `
@@ -289,15 +413,20 @@ function renderDetailPane() {
     delBtn.style.alignItems = "center";
     delBtn.onclick = () => {
         if (confirm(`Delete "${item.name}"?`)) {
-            specialActivities = specialActivities.filter(s => s.name !== item.name);
+            if (isRainyDayItem) {
+                rainyDayActivities = rainyDayActivities.filter(s => s.name !== item.name);
+            } else {
+                specialActivities = specialActivities.filter(s => s.name !== item.name);
+            }
             saveData();
             selectedItemId = null;
             renderMasterList();
+            renderRainyDayList();
             renderDetailPane();
         }
     };
 
-    header.appendChild(title);
+    header.appendChild(titleContainer);
     header.appendChild(delBtn);
     detailPaneEl.appendChild(header);
 
@@ -306,14 +435,51 @@ function renderDetailPane() {
     availability.style.padding = "12px";
     availability.style.borderRadius = "8px";
     availability.style.marginBottom = "20px";
-    availability.style.background = item.available ? "#ECFDF5" : "#FEF2F2";
-    availability.style.border = item.available ? "1px solid #A7F3D0" : "1px solid #FECACA";
-    availability.style.color = item.available ? "#065F46" : "#991B1B";
+    
+    if (isRainyDayItem) {
+        availability.style.background = item.available ? "linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%)" : "#FEF2F2";
+        availability.style.border = item.available ? "1px solid #7dd3fc" : "1px solid #FECACA";
+        availability.style.color = item.available ? "#0369a1" : "#991B1B";
+    } else {
+        availability.style.background = item.available ? "#ECFDF5" : "#FEF2F2";
+        availability.style.border = item.available ? "1px solid #A7F3D0" : "1px solid #FECACA";
+        availability.style.color = item.available ? "#065F46" : "#991B1B";
+    }
+    
     availability.style.fontSize = "0.9rem";
     availability.style.display = "flex";
     availability.style.justifyContent = "space-between";
-    availability.innerHTML = `<span>Special is <strong>${item.available ? 'AVAILABLE' : 'UNAVAILABLE'}</strong></span> <span style="font-size:0.8rem; opacity:0.8;">Toggle in master list</span>`;
+    
+    let statusText = item.available ? 'AVAILABLE' : 'UNAVAILABLE';
+    if (isRainyDayItem && item.available) {
+        statusText = 'AVAILABLE ON RAINY DAYS';
+    }
+    
+    availability.innerHTML = `<span>Special is <strong>${statusText}</strong></span> <span style="font-size:0.8rem; opacity:0.8;">Toggle in master list</span>`;
     detailPaneEl.appendChild(availability);
+
+    // -- Rainy Day Info Banner for rainy items --
+    if (isRainyDayItem) {
+        const rainyBanner = document.createElement("div");
+        rainyBanner.style.cssText = `
+            background: linear-gradient(135deg, #0c4a6e 0%, #164e63 100%);
+            color: #f0f9ff;
+            padding: 14px 16px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        `;
+        rainyBanner.innerHTML = `
+            <span style="font-size:24px;">☔</span>
+            <div>
+                <strong style="display:block; margin-bottom:2px;">Rainy Day Exclusive Activity</strong>
+                <span style="font-size:0.85rem; opacity:0.85;">This activity will only appear in the schedule when Rainy Day Mode is activated.</span>
+            </div>
+        `;
+        detailPaneEl.appendChild(rainyBanner);
+    }
 
     // -- 3. ACCORDION SECTIONS --
     
@@ -1041,7 +1207,9 @@ function addSpecial() {
     const n = addSpecialInput.value.trim();
     if (!n) return;
     
-    if (specialActivities.some(s => s.name.toLowerCase() === n.toLowerCase())) {
+    // Check both lists for name conflicts
+    if (specialActivities.some(s => s.name.toLowerCase() === n.toLowerCase()) ||
+        rainyDayActivities.some(s => s.name.toLowerCase() === n.toLowerCase())) {
         alert("A special activity with that name already exists.");
         return;
     }
@@ -1055,6 +1223,8 @@ function addSpecial() {
         timeRules: [],
         maxUsage: null,
         frequencyWeeks: 0,
+        rainyDayExclusive: false,
+        rainyDayAvailable: true,
         transition: {
             preMin: 0,
             postMin: 0,
@@ -1069,6 +1239,51 @@ function addSpecial() {
     saveData();
     selectedItemId = `special-${n}`;
     renderMasterList();
+    renderRainyDayList();
+    renderDetailPane();
+}
+
+//------------------------------------------------------------------
+// ADD RAINY DAY ACTIVITY
+//------------------------------------------------------------------
+function addRainyDayActivity() {
+    const n = addRainyDayInput.value.trim();
+    if (!n) return;
+    
+    // Check both lists for name conflicts
+    if (specialActivities.some(s => s.name.toLowerCase() === n.toLowerCase()) ||
+        rainyDayActivities.some(s => s.name.toLowerCase() === n.toLowerCase())) {
+        alert("A special activity with that name already exists.");
+        return;
+    }
+
+    rainyDayActivities.push({
+        name: n,
+        available: true,
+        sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
+        limitUsage: { enabled: false, divisions: {} },
+        preferences: { enabled: false, exclusive: false, list: [] },
+        timeRules: [],
+        maxUsage: null,
+        frequencyWeeks: 0,
+        rainyDayExclusive: true,  // This is the key difference
+        rainyDayOnly: true,       // Legacy support for daily_adjustments.js
+        rainyDayAvailable: true,
+        transition: {
+            preMin: 0,
+            postMin: 0,
+            label: "Change Time",
+            zone: window.DEFAULT_ZONE_NAME || "Default",
+            occupiesField: true,
+            minDurationMin: 0
+        }
+    });
+
+    addRainyDayInput.value = "";
+    saveData();
+    selectedItemId = `special-${n}`;
+    renderMasterList();
+    renderRainyDayList();
     renderDetailPane();
 }
 
@@ -1139,14 +1354,48 @@ function parseTimeToMinutes(str) {
 //------------------------------------------------------------------
 window.initSpecialActivitiesTab = initSpecialActivitiesTab;
 window.specialActivities = specialActivities;
+window.rainyDayActivities = rainyDayActivities;
 
 // Export getters for external access
 window.getSpecialActivities = function() {
     return specialActivities;
 };
 
+window.getRainyDayActivities = function() {
+    return rainyDayActivities;
+};
+
+window.getAllSpecialActivities = function() {
+    return [...specialActivities, ...rainyDayActivities];
+};
+
 window.getSpecialActivityByName = function(name) {
-    return specialActivities.find(s => s.name === name);
+    let item = specialActivities.find(s => s.name === name);
+    if (!item) {
+        item = rainyDayActivities.find(s => s.name === name);
+    }
+    return item;
+};
+
+// Check if rainy day mode is active (for scheduler integration)
+window.isRainyDayModeActive = function() {
+    const dailyData = window.loadCurrentDailyData?.() || {};
+    return dailyData.rainyDayMode === true;
+};
+
+// Get available special activities based on weather
+window.getAvailableSpecialActivities = function() {
+    const isRainy = window.isRainyDayModeActive?.() || false;
+    
+    if (isRainy) {
+        // Rainy day: return regular specials that are rainy-available + rainy day exclusives
+        const regularAvailable = specialActivities.filter(s => s.available && s.rainyDayAvailable !== false);
+        const rainyAvailable = rainyDayActivities.filter(s => s.available);
+        return [...regularAvailable, ...rainyAvailable];
+    } else {
+        // Normal day: return only regular specials (not rainy day exclusives)
+        return specialActivities.filter(s => s.available);
+    }
 };
 
 })();
