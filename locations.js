@@ -36,88 +36,82 @@ function initLocationsTab(){
     const style = document.createElement('style');
     style.innerHTML = `
         /* Two-pane layout styles */
-        .locations-master-list { border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
-        .locations-list-item { padding: 12px 14px; border-bottom: 1px solid #F3F4F6; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.15s; }
+        .locations-master-list { border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; overflow: hidden; }
+        .locations-list-item { padding: 12px 14px; border-bottom: 1px solid #f3f4f6; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.15s, border-color 0.15s, box-shadow 0.18s, transform 0.08s; }
         .locations-list-item:last-child { border-bottom: none; }
-        .locations-list-item:hover { background: #F9FAFB; }
-        .locations-list-item.selected { background: #EFF6FF; border-left: 3px solid #3B82F6; }
-        .locations-list-item-name { font-weight: 500; color: #1F2937; font-size: 0.9rem; }
-        .locations-list-item-meta { font-size: 0.75rem; color: #6B7280; margin-left: 6px; }
-        .locations-list-item-badge { font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; background: #DBEAFE; color: #1E40AF; margin-left: 8px; }
+        .locations-list-item:hover { background: #f9fafb; border-color: #c7d2fe; box-shadow: 0 4px 12px rgba(37,99,235,0.1); transform: translateY(-0.5px); }
+        .locations-list-item.selected { background: #eff6ff; border-left: 3px solid #3b82f6; box-shadow: 0 0 0 1px rgba(59,130,246,0.35), 0 8px 20px rgba(37,99,235,0.15); }
+        .locations-list-item-name { font-weight: 500; color: #111827; font-size: 0.9rem; }
+        .locations-list-item-meta { font-size: 0.75rem; color: #6b7280; margin-left: 6px; }
+        .locations-list-item-badge { font-size: 0.65rem; padding: 2px 6px; border-radius: 999px; background: linear-gradient(135deg, #2563eb, #0ea5e9); color: #eff6ff; margin-left: 8px; box-shadow: 0 2px 6px rgba(37,99,235,0.3); }
 
         /* Detail Section Accordion */
-        .loc-detail-section { margin-bottom: 12px; border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
-        .loc-detail-section-header { padding: 12px 16px; background: #F9FAFB; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; }
-        .loc-detail-section-header:hover { background: #F3F4F6; }
-        .loc-detail-section-title { font-size: 0.9rem; font-weight: 600; color: #111; }
-        .loc-detail-section-summary { font-size: 0.8rem; color: #6B7280; margin-top: 2px; }
-        .loc-detail-section-body { display: none; padding: 16px; border-top: 1px solid #E5E7EB; }
+        .loc-detail-section { margin-bottom: 12px; border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; position: relative; }
+        .loc-detail-section-header { padding: 12px 16px; background: #f9fafb; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; border-radius: 11px; transition: background 0.15s; }
+        .loc-detail-section-header:hover { background: #f3f4f6; }
+        .loc-detail-section-title { font-size: 0.9rem; font-weight: 600; color: #111827; }
+        .loc-detail-section-summary { font-size: 0.8rem; color: #6b7280; margin-top: 2px; }
+        .loc-detail-section-body { display: none; padding: 16px; border-top: 1px solid #e5e7eb; }
 
-        /* Multi-select dropdown */
+        /* Multi-select dropdown - FIXED for visibility */
         .multi-select-dropdown { position: relative; }
         .multi-select-trigger { 
-            width: 100%; padding: 10px 12px; border: 1px solid #D1D5DB; border-radius: 8px; 
+            width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 999px; 
             background: #fff; cursor: pointer; display: flex; justify-content: space-between; 
             align-items: center; min-height: 42px; flex-wrap: wrap; gap: 4px;
+            transition: border-color 0.15s, box-shadow 0.15s;
         }
-        .multi-select-trigger:hover { border-color: #9CA3AF; }
-        .multi-select-trigger.open { border-color: #3B82F6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2); }
-        .multi-select-placeholder { color: #9CA3AF; }
+        .multi-select-trigger:hover { border-color: #9ca3af; }
+        .multi-select-trigger.open { border-color: #2563eb; box-shadow: 0 0 0 1px rgba(37,99,235,0.35); }
+        .multi-select-placeholder { color: #9ca3af; }
         .multi-select-tag { 
-            background: #DBEAFE; color: #1E40AF; padding: 2px 8px; border-radius: 4px; 
-            font-size: 0.8rem; display: inline-flex; align-items: center; gap: 4px;
+            background: #dbeafe; color: #1d4ed8; padding: 3px 10px; border-radius: 999px; 
+            font-size: 0.8rem; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;
         }
-        .multi-select-tag-remove { cursor: pointer; opacity: 0.7; }
+        .multi-select-tag-remove { cursor: pointer; opacity: 0.7; font-size: 0.9rem; }
         .multi-select-tag-remove:hover { opacity: 1; }
         .multi-select-options { 
-            position: absolute; top: 100%; left: 0; right: 0; z-index: 100;
-            background: #fff; border: 1px solid #D1D5DB; border-radius: 8px; 
-            margin-top: 4px; max-height: 200px; overflow-y: auto;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1); display: none;
+            position: fixed; z-index: 99999;
+            background: #fff; border: 1px solid #d1d5db; border-radius: 12px; 
+            max-height: 250px; overflow-y: auto;
+            box-shadow: 0 10px 40px rgba(15,23,42,0.2); display: none;
         }
         .multi-select-options.show { display: block; }
         .multi-select-option { 
             padding: 10px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px;
             transition: background 0.1s;
         }
-        .multi-select-option:hover { background: #F3F4F6; }
-        .multi-select-option.selected { background: #EFF6FF; }
-        .multi-select-checkbox { width: 16px; height: 16px; accent-color: #3B82F6; }
+        .multi-select-option:hover { background: #f3f4f6; }
+        .multi-select-option.selected { background: #eff6ff; }
+        .multi-select-checkbox { width: 16px; height: 16px; accent-color: #2563eb; }
 
         /* Location item in list */
         .location-item { 
             display: flex; justify-content: space-between; align-items: center;
-            padding: 10px 12px; background: #F9FAFB; border: 1px solid #E5E7EB; 
-            border-radius: 8px; margin-bottom: 6px;
+            padding: 10px 12px; background: #f9fafb; border: 1px solid #e5e7eb; 
+            border-radius: 999px; margin-bottom: 6px; transition: all 0.15s;
         }
-        .location-item-name { font-weight: 500; color: #374151; }
+        .location-item:hover { background: #eff6ff; border-color: #c7d2fe; }
+        .location-item-name { font-weight: 500; color: #111827; }
         .location-item-actions { display: flex; gap: 8px; align-items: center; }
         .location-delete-btn { 
-            background: transparent; border: none; color: #DC2626; cursor: pointer;
-            padding: 4px 8px; border-radius: 4px; font-size: 0.85rem;
+            background: transparent; border: none; color: #dc2626; cursor: pointer;
+            padding: 4px 8px; border-radius: 999px; font-size: 0.85rem; transition: background 0.15s;
         }
-        .location-delete-btn:hover { background: #FEE2E2; }
+        .location-delete-btn:hover { background: #fee2e2; }
 
         /* Form inputs */
         .loc-input {
-            padding: 8px 12px; border: 1px solid #D1D5DB; border-radius: 6px;
-            font-size: 0.9rem; transition: all 0.15s ease; width: 100%; box-sizing: border-box;
+            padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 999px;
+            font-size: 0.85rem; transition: all 0.15s ease; width: 100%; box-sizing: border-box;
         }
         .loc-input:focus {
-            outline: none; border-color: #3B82F6;
-            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+            outline: none; border-color: #2563eb;
+            box-shadow: 0 0 0 1px rgba(37,99,235,0.35);
         }
         .loc-input-small { width: 80px; text-align: center; }
 
-        .loc-muted { color: #6B7280; font-size: 0.85rem; }
-
-        /* Info callout */
-        .loc-info-callout {
-            background: #F0F9FF; border: 1px solid #BAE6FD; border-radius: 8px;
-            padding: 12px 16px; font-size: 0.85rem; color: #0369A1;
-            display: flex; align-items: flex-start; gap: 10px; margin-bottom: 16px;
-        }
-        .loc-info-callout svg { flex-shrink: 0; margin-top: 2px; }
+        .loc-muted { color: #6b7280; font-size: 0.85rem; }
     `;
     container.appendChild(style);
 
@@ -134,19 +128,6 @@ function initLocationsTab(){
               </div>
             </div>
 
-            <div class="loc-info-callout">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <path d="M12 16v-4M12 8h.01"></path>
-                </svg>
-                <div>
-                    <strong>How Locations Work:</strong> Each location (Pool, Lunchroom, etc.) can only have 
-                    <strong>one activity at a time</strong>. Multiple bunks can participate in that activity, 
-                    but no other activity can use that space simultaneously. For example, if Lunch is in the 
-                    Lunchroom, Skits cannot happen there at the same time.
-                </div>
-            </div>
-
             <!-- PINNED TILE DEFAULTS SECTION -->
             <div id="pinned-tile-defaults-section" style="margin-bottom:24px;">
               <div class="loc-detail-section">
@@ -159,14 +140,14 @@ function initLocationsTab(){
                 </div>
                 <div class="loc-detail-section-body" style="display:block;">
                     <p class="loc-muted" style="margin-top:0; margin-bottom:12px;">
-                        When you drop a pinned tile (Lunch, Swim, etc.) in the Master Builder or Daily Adjustments, 
-                        you'll be prompted to select a location. These defaults pre-fill that dropdown.
+                        Set default locations for pinned tiles. When Lunch, Swim, etc. are scheduled, 
+                        the location is automatically assigned.
                     </p>
                     <div id="pinned-defaults-list"></div>
-                    <div style="display:flex; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid #E5E7EB;">
+                    <div style="display:flex; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid #e5e7eb;">
                         <input id="new-pinned-tile-input" placeholder="Tile name (e.g., Assembly)" class="loc-input" style="flex:1;">
                         <select id="new-pinned-tile-location" class="loc-input" style="flex:1;"></select>
-                        <button id="add-pinned-default-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 14px; font-size:0.8rem; cursor:pointer; white-space:nowrap;">Add Default</button>
+                        <button id="add-pinned-default-btn" style="background:#111827; color:white; border:none; border-radius:999px; padding:6px 14px; font-size:0.85rem; cursor:pointer; white-space:nowrap;">Add Default</button>
                     </div>
                 </div>
               </div>
@@ -179,9 +160,9 @@ function initLocationsTab(){
                     <div class="setup-subtitle">Zones</div>
                 </div>
                 
-                <div style="background:white; padding:10px; border-radius:12px; border:1px solid #E5E7EB; margin-bottom:12px; display:flex; gap:8px;">
+                <div style="background:white; padding:10px; border-radius:999px; border:1px solid #e5e7eb; margin-bottom:12px; display:flex; gap:8px;">
                   <input id="new-zone-input" placeholder="New Zone (e.g., Lake Area)" class="loc-input" style="flex:1; border:none;">
-                  <button id="add-zone-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
+                  <button id="add-zone-btn" style="background:#111827; color:white; border:none; border-radius:999px; padding:6px 14px; font-size:0.85rem; cursor:pointer;">Add</button>
                 </div>
 
                 <div id="zones-master-list" class="locations-master-list" style="max-height:500px; overflow-y:auto;"></div>
@@ -371,7 +352,7 @@ function renderDetailPane(){
     if(!zone.isDefault){
         const delBtn = document.createElement("button");
         delBtn.innerHTML = `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg> Delete`;
-        delBtn.style.cssText = "color:#DC2626; background:#FEF2F2; border:1px solid #FECACA; padding:6px 12px; border-radius:6px; cursor:pointer; display:flex; gap:6px; align-items:center;";
+        delBtn.style.cssText = "color:#dc2626; background:#fef2f2; border:1px solid #fecaca; padding:6px 12px; border-radius:999px; cursor:pointer; display:flex; gap:6px; align-items:center; font-size:0.85rem;";
         delBtn.onclick = () => {
             if(confirm(`Delete zone "${zone.name}"? Fields will be unassigned.`)){
                 delete locationZones[zone.name];
@@ -391,7 +372,7 @@ function renderDetailPane(){
     // -- DEFAULT INDICATOR --
     if(zone.isDefault){
         const defaultStrip = document.createElement("div");
-        defaultStrip.style.cssText = "padding:10px 14px; background:#DBEAFE; border:1px solid #93C5FD; border-radius:8px; margin-bottom:16px; color:#1E40AF; font-size:0.85rem;";
+        defaultStrip.style.cssText = "padding:10px 14px; background:linear-gradient(135deg, rgba(37,99,235,0.1), rgba(14,165,233,0.1)); border:1px solid rgba(59,130,246,0.3); border-radius:999px; margin-bottom:16px; color:#1d4ed8; font-size:0.85rem;";
         defaultStrip.innerHTML = `<strong>Default Zone</strong> — Fields not assigned to any zone will use these settings.`;
         detailPaneEl.appendChild(defaultStrip);
     }
@@ -634,6 +615,14 @@ function renderFieldsSection(zone){
     
     renderOptions();
     
+    // Position dropdown using fixed positioning to escape any overflow containers
+    const positionDropdown = () => {
+        const rect = trigger.getBoundingClientRect();
+        optionsPanel.style.top = (rect.bottom + 4) + 'px';
+        optionsPanel.style.left = rect.left + 'px';
+        optionsPanel.style.width = rect.width + 'px';
+    };
+    
     // Toggle dropdown
     trigger.onclick = (e) => {
         if(e.target.classList.contains('multi-select-tag-remove')){
@@ -648,20 +637,36 @@ function renderFieldsSection(zone){
         }
         
         const isOpen = optionsPanel.classList.contains('show');
+        
+        if(!isOpen){
+            positionDropdown();
+        }
+        
         optionsPanel.classList.toggle('show');
         trigger.classList.toggle('open');
     };
     
+    // Reposition on scroll/resize while open
+    const repositionHandler = () => {
+        if(optionsPanel.classList.contains('show')){
+            positionDropdown();
+        }
+    };
+    window.addEventListener('scroll', repositionHandler, true);
+    window.addEventListener('resize', repositionHandler);
+    
     // Close on click outside
     document.addEventListener('click', (e) => {
-        if(!multiSelectContainer.contains(e.target)){
+        if(!multiSelectContainer.contains(e.target) && !optionsPanel.contains(e.target)){
             optionsPanel.classList.remove('show');
             trigger.classList.remove('open');
         }
     });
     
     multiSelectContainer.appendChild(trigger);
-    multiSelectContainer.appendChild(optionsPanel);
+    
+    // Append options panel to body so it escapes all containers
+    document.body.appendChild(optionsPanel);
     
     return container;
 }
@@ -687,7 +692,7 @@ function renderLocationsSection(zone){
             <div id="locations-list"></div>
             <div style="display:flex; gap:8px; margin-top:12px; padding-top:12px; border-top:1px dashed #E5E7EB;">
                 <input type="text" id="new-location-input" class="loc-input" placeholder="New location name (e.g., Lunchroom)" style="flex:1;">
-                <button id="add-location-btn" style="background:#3B82F6; color:white; border:none; border-radius:6px; padding:8px 16px; cursor:pointer; font-weight:500;">Add Location</button>
+                <button id="add-location-btn" style="background:#111827; color:white; border:none; border-radius:999px; padding:8px 16px; cursor:pointer; font-weight:500; font-size:0.85rem;">Add Location</button>
             </div>
         `;
         
