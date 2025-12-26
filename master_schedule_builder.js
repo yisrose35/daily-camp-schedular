@@ -1,11 +1,12 @@
 // =================================================================
 // master_schedule_builder.js (UPDATED - ELECTIVE TILE SUPPORT)
-//Beta
+// Beta
 // Updates:
 // 1. Added Elective tile type for reserving multiple activities
 // 2. Added "Update [Template Name]" button to save changes to current file.
 // 3. Wired up "Delete Selected Template" button.
 // 4. Tracks 'currentLoadedTemplate' to distinguish between new drafts and existing files.
+// 5. Auto-assigns default locations to pinned tiles if configured.
 // =================================================================
 
 (function(){
@@ -75,17 +76,17 @@ function mapEventNameForOptimizer(name){
 function promptForReservedFields(eventName) {
   const globalSettings = window.loadGlobalSettings?.() || {};
   const app1 = globalSettings.app1 || {};
-  
+   
   const allFields = (app1.fields || []).map(f => f.name);
   const specialActivities = (app1.specialActivities || []).map(s => s.name);
-  
+   
   // Combine fields and special activities as potential "locations"
   const allLocations = [...new Set([...allFields, ...specialActivities])].sort();
-  
+   
   if (allLocations.length === 0) {
     return []; // No fields configured
   }
-  
+   
   const fieldInput = prompt(
     `Which field(s) will "${eventName}" use?\n\n` +
     `This reserves the field so the scheduler won't assign it to other bunks.\n\n` +
@@ -93,16 +94,16 @@ function promptForReservedFields(eventName) {
     `Enter field names separated by commas (or leave blank if none):`,
     ''
   );
-  
+   
   if (!fieldInput || !fieldInput.trim()) {
     return [];
   }
-  
+   
   // Parse and validate field names
   const requested = fieldInput.split(',').map(f => f.trim()).filter(Boolean);
   const validated = [];
   const invalid = [];
-  
+   
   requested.forEach(name => {
     // Try to match (case-insensitive)
     const match = allLocations.find(loc => loc.toLowerCase() === name.toLowerCase());
@@ -112,11 +113,11 @@ function promptForReservedFields(eventName) {
       invalid.push(name);
     }
   });
-  
+   
   if (invalid.length > 0) {
     alert(`Warning: These fields were not found and will be ignored:\n${invalid.join(', ')}`);
   }
-  
+   
   return validated;
 }
 
@@ -143,21 +144,21 @@ function findPoolField(allLocations) {
 function promptForElectiveActivities(divName) {
   const globalSettings = window.loadGlobalSettings?.() || {};
   const app1 = globalSettings.app1 || {};
-  
+   
   const allFields = (app1.fields || []).map(f => f.name);
   const specialActivities = (app1.specialActivities || []).map(s => s.name);
   const allLocations = [...new Set([...allFields, ...specialActivities])].sort();
-  
+   
   console.log('[Elective] Available locations:', allLocations);
-  
+   
   if (allLocations.length === 0) {
     alert('No fields or special activities configured. Please set them up first.');
     return null;
   }
-  
+   
   const poolFieldName = findPoolField(allLocations);
   console.log('[Elective] Pool field found:', poolFieldName);
-  
+   
   const activitiesInput = prompt(
     `ELECTIVE for ${divName}\n\n` +
     `Enter activities to RESERVE for this division (separated by commas).\n` +
@@ -167,19 +168,19 @@ function promptForElectiveActivities(divName) {
     `Example: Swim, Court 1, Canteen`,
     ''
   );
-  
+   
   if (!activitiesInput || !activitiesInput.trim()) {
     return null;
   }
-  
+   
   // Parse and validate
   const requested = activitiesInput.split(',').map(s => s.trim()).filter(Boolean);
   const validated = [];
   const invalid = [];
-  
+   
   requested.forEach(name => {
     console.log(`[Elective] Processing: "${name}"`);
-    
+     
     // Check for swim/pool aliases FIRST
     if (isSwimPoolAlias(name)) {
       console.log(`[Elective] "${name}" is a swim/pool alias`);
@@ -197,7 +198,7 @@ function promptForElectiveActivities(divName) {
       }
       return; // Don't check against allLocations for swim/pool
     }
-    
+     
     // Standard matching for non-swim activities
     const match = allLocations.find(loc => loc.toLowerCase() === name.toLowerCase());
     if (match) {
@@ -208,19 +209,19 @@ function promptForElectiveActivities(divName) {
       invalid.push(name);
     }
   });
-  
+   
   console.log('[Elective] Validated:', validated);
   console.log('[Elective] Invalid:', invalid);
-  
+   
   if (validated.length === 0) {
     alert('No valid activities selected. Please try again.');
     return null;
   }
-  
+   
   if (invalid.length > 0) {
     alert(`Warning: These were not found and will be ignored:\n${invalid.join(', ')}`);
   }
-  
+   
   return validated;
 }
 
@@ -228,7 +229,7 @@ function promptForElectiveActivities(divName) {
 function init(){
   container=document.getElementById("master-scheduler-content");
   if(!container) return;
-  
+   
   loadDailySkeleton();
 
   const savedDraft = localStorage.getItem(SKELETON_DRAFT_KEY);
@@ -256,10 +257,10 @@ function init(){
       .grid-cell{position:relative; border-right:1px solid #ccc; background:#fff;}
     </style>
   `;
-  
+   
   palette=document.getElementById("scheduler-palette");
   grid=document.getElementById("scheduler-grid");
-  
+   
   renderTemplateUI();
   renderPalette();
   renderGrid();
@@ -284,7 +285,7 @@ function renderTemplateUI(){
       <div class="template-group"><label>Load Template</label><br>
         <select id="template-load-select" style="padding:6px;"><option value="">-- Select --</option>${loadOptions}</select>
       </div>
-      
+       
       <!-- UPDATE BUTTON (Only shows if editing existing) -->
       <div class="template-group" style="${updateBtnStyle}">
          <label>&nbsp;</label><br>
@@ -295,7 +296,7 @@ function renderTemplateUI(){
         <input type="text" id="template-save-name" placeholder="New Name...">
         <button id="template-save-btn" style="background:#007bff;color:#fff;">Save As</button>
       </div>
-      
+       
       <div class="template-group"><label>&nbsp;</label><br>
         <button id="template-clear-btn" style="background:#ff9800;color:#fff;">New/Clear</button>
       </div>
@@ -322,7 +323,7 @@ function renderTemplateUI(){
   // Bindings
   const loadSel=document.getElementById("template-load-select");
   const saveName=document.getElementById("template-save-name");
-  
+   
   loadSel.onchange=()=>{
     const name=loadSel.value;
     if(name && saved[name] && confirm(`Load "${name}"?`)){
@@ -349,7 +350,7 @@ function renderTemplateUI(){
   document.getElementById("template-save-btn").onclick=()=>{
     const name=saveName.value.trim();
     if(!name) { alert("Please enter a name."); return; }
-    
+   
     if(saved[name] && !confirm(`"${name}" already exists. Overwrite?`)) return;
 
     window.saveSkeleton?.(name, dailySkeleton);
@@ -390,7 +391,7 @@ function renderTemplateUI(){
   document.getElementById("template-delete-btn").onclick=()=>{
       const delSel = document.getElementById("template-delete-select");
       const nameToDelete = delSel.value;
-      
+       
       if(!nameToDelete) {
           alert("Please select a template from the dropdown next to the Delete button.");
           return;
@@ -399,7 +400,7 @@ function renderTemplateUI(){
       if(confirm(`Are you sure you want to PERMANENTLY DELETE "${nameToDelete}"?`)){
           if(window.deleteSkeleton) {
               window.deleteSkeleton(nameToDelete);
-              
+               
               // If we deleted the one we are looking at, reset context
               if(currentLoadedTemplate === nameToDelete){
                   currentLoadedTemplate = null;
@@ -407,7 +408,7 @@ function renderTemplateUI(){
                   clearDraftFromLocalStorage();
                   renderGrid();
               }
-              
+               
               alert("Deleted.");
               renderTemplateUI();
           } else {
@@ -469,7 +470,7 @@ function showTileInfo(tile) {
     'dismissal': 'DISMISSAL: End of day marker. Schedule generation stops at this point.',
     'custom': 'CUSTOM PINNED: Create any fixed event (e.g., "Assembly", "Special Program"). You can optionally reserve specific fields.'
   };
-  
+   
   const desc = descriptions[tile.type] || tile.description || 'No description available.';
   alert(`${tile.name.toUpperCase()}\n\n${desc}`);
 }
@@ -504,7 +505,7 @@ function renderGrid(){
 
   // Build HTML
   let html=`<div style="display:grid; grid-template-columns:60px repeat(${availableDivisions.length}, 1fr); position:relative; min-width:800px;">`;
-  
+   
   // Header Row
   html+=`<div style="grid-row:1; position:sticky; top:0; background:#fff; z-index:10; border-bottom:1px solid #999; padding:8px; font-weight:bold;">Time</div>`;
   availableDivisions.forEach((divName,i)=>{
@@ -525,9 +526,9 @@ function renderGrid(){
       const div=divisions[divName];
       const s=parseTimeToMinutes(div?.startTime);
       const e=parseTimeToMinutes(div?.endTime);
-      
+       
       html+=`<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row:2; grid-column:${i+2}; height:${totalHeight}px;">`;
-      
+       
       // Grey out unavailable times
       if(s!==null && s>earliestMin){
           html+=`<div class="grid-disabled" style="top:0; height:${(s-earliestMin)*PIXELS_PER_MINUTE}px;"></div>`;
@@ -564,28 +565,52 @@ function renderEventTile(ev, top, height){
     if(!tile && ev.type) tile = TILES.find(t=>t.type===ev.type);
     const style = tile ? tile.style : 'background:#eee;border:1px solid #666;';
     
-    let label = `<strong>${ev.event}</strong><br>${ev.startTime}-${ev.endTime}`;
+    // Main Content
+    let innerHtml = `
+        <div class="tile-header">
+            <strong>${ev.event}</strong>
+            <div style="font-size:0.8em">${ev.startTime}-${ev.endTime}</div>
+        </div>
+    `;
     
-    // Show reserved fields if any (for pinned events, NOT electives)
-    if (ev.reservedFields && ev.reservedFields.length > 0 && ev.type !== 'elective') {
-        label += `<br><span style="font-size:0.7em;color:#c62828;">📍 ${ev.reservedFields.join(', ')}</span>`;
+    // 1. LOCATION INDICATOR (New Feature)
+    if(ev.location) {
+        innerHtml += `
+            <div class="tile-location-badge" style="
+                font-size: 0.75rem; 
+                color: #c62828; 
+                margin-top: 2px; 
+                display: flex; 
+                align-items: center; 
+                gap: 2px;
+                font-weight: 500;
+            ">
+                <span>📍</span>
+                <span>${ev.location}</span>
+            </div>
+        `;
+    }
+    // 2. Fallback: Reserved Fields (if location is missing but reservedFields exist)
+    else if (ev.reservedFields && ev.reservedFields.length > 0 && ev.type !== 'elective') {
+        innerHtml += `<div style="font-size:0.7em;color:#c62828;margin-top:2px;">📍 ${ev.reservedFields.join(', ')}</div>`;
     }
     
     // Show elective activities
     if (ev.type === 'elective' && ev.electiveActivities && ev.electiveActivities.length > 0) {
         const actList = ev.electiveActivities.slice(0, 4).join(', ');
         const more = ev.electiveActivities.length > 4 ? ` +${ev.electiveActivities.length - 4}` : '';
-        label += `<br><span style="font-size:0.7em;color:#6a1b9a;">🎯 ${actList}${more}</span>`;
+        innerHtml += `<div style="font-size:0.7em;color:#6a1b9a;margin-top:2px;">🎯 ${actList}${more}</div>`;
     }
     
     // Smart tile fallback info
     if(ev.type==='smart' && ev.smartData){
-        label += `<br><span style="font-size:0.75em">F: ${ev.smartData.fallbackActivity} (if ${ev.smartData.fallbackFor.substring(0,4)} busy)</span>`;
+        innerHtml += `<div style="font-size:0.75em;margin-top:2px;">F: ${ev.smartData.fallbackActivity} (if ${ev.smartData.fallbackFor.substring(0,4)} busy)</div>`;
     }
 
+    // Return the complete tile HTML
     return `<div class="grid-event" data-id="${ev.id}" title="Click to remove" 
-            style="${style}; position:absolute; top:${top}px; height:${height}px; width:96%; left:2%; padding:2px; font-size:0.85rem; overflow:hidden; border-radius:4px; cursor:pointer;">
-            ${label}
+            style="${style}; position:absolute; top:${top}px; height:${height}px; width:96%; left:2%; padding:2px; font-size:0.85rem; overflow:hidden; border-radius:4px; cursor:pointer; display:flex; flex-direction:column;">
+            ${innerHtml}
             </div>`;
 }
 
@@ -684,23 +709,37 @@ function addDropListeners(selector){
             else if (['lunch','snacks','custom','dismissal','swim'].includes(tileData.type)) {
                 let name = tileData.name;
                 let reservedFields = [];
+                let location = null;
+                
+                // NEW: Auto-assign location from defaults if available
+                location = window.getPinnedTileDefaultLocation?.(tileData.type) || null;
+                if (location) {
+                    reservedFields = [location]; // Sync to reservedFields so it appears in UI
+                }
                 
                 if (tileData.type === 'custom') {
                     name = prompt("Event Name (e.g., 'Special with R. Rosenfeld'):", "Regroup");
                     if (!name) return;
                     
-                    // Ask for reserved fields
-                    reservedFields = promptForReservedFields(name);
+                    // Ask for reserved fields (Manual override)
+                    const manualFields = promptForReservedFields(name);
+                    if (manualFields.length > 0) {
+                        reservedFields = manualFields;
+                        location = manualFields[0]; // Sync location
+                    }
                 }
                 else if (tileData.type === 'swim') {
-                    // Auto-reserve swim/pool if it exists
-                    const globalSettings = window.loadGlobalSettings?.() || {};
-                    const fields = globalSettings.app1?.fields || [];
-                    const swimField = fields.find(f => 
-                        f.name.toLowerCase().includes('swim') || f.name.toLowerCase().includes('pool')
-                    );
-                    if (swimField) {
-                        reservedFields = [swimField.name];
+                    // Only auto-discover if no default location was configured
+                    if (reservedFields.length === 0) {
+                        const globalSettings = window.loadGlobalSettings?.() || {};
+                        const fields = globalSettings.app1?.fields || [];
+                        const swimField = fields.find(f => 
+                            f.name.toLowerCase().includes('swim') || f.name.toLowerCase().includes('pool')
+                        );
+                        if (swimField) {
+                            reservedFields = [swimField.name];
+                            location = swimField.name;
+                        }
                     }
                 }
                 
@@ -714,7 +753,8 @@ function addDropListeners(selector){
                     division: divName,
                     startTime: st,
                     endTime: et,
-                    reservedFields: reservedFields
+                    reservedFields: reservedFields,
+                    location: location // Store location as requested
                 };
             }
             // 5. Standard & League Types
