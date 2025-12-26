@@ -743,7 +743,18 @@ function renderActivities(item, allSports){
                     
                 if(confirm(msg)) {
                     item.activities = item.activities.filter(x => x !== s);
+                    
+                    // Remove from all fields to ensure it's gone globally
+                    fields.forEach(f => {
+                        f.activities = f.activities.filter(x => x !== s);
+                    });
+                    
+                    // Remove from sport metadata
+                    delete sportMetaData[s];
+                    
+                    // Also call global remove if it exists
                     window.removeGlobalSport?.(s);
+                    
                     saveData();
                     
                     // Re-render the activities section with fresh global sports list
