@@ -705,13 +705,20 @@ function renderActivities(item, allSports){
 
                 // Re-render sport rules section to show updated sports
                 renderSportRulesSection();
-            }, 250);
+            }, 450);
         };
 
+        
         // Double-click to delete custom activities
         b.ondblclick = (e) => {
             e.preventDefault();
             e.stopPropagation();
+            
+            // Cancel any pending single-click action
+            if(clickTimer) {
+                clearTimeout(clickTimer);
+                clickTimer = null;
+            }
             
             // Check how many fields use this sport
             const fieldsUsingSport = fields.filter(f => f.activities.includes(s));
