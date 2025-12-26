@@ -275,24 +275,44 @@
     }
   }
   
-  // Debounced cloud sync
+  // Debounced cloud sync - REDUCED to 500ms for faster saves
   let _syncTimeout = null;
+  let _syncInProgress = false;
+  
   function scheduleCloudSync() {
     console.log("☁️ Scheduling cloud sync...");
     if (_syncTimeout) {
-      console.log("☁️ Clearing previous sync timeout");
       clearTimeout(_syncTimeout);
     }
     _syncTimeout = setTimeout(async () => {
-      console.log("☁️ Cloud sync timeout fired, pending:", _cloudSyncPending);
       if (!_cloudSyncPending) {
-        console.log("☁️ No pending sync, skipping");
         return;
       }
+      if (_syncInProgress) {
+        // Already syncing, reschedule
+        scheduleCloudSync();
+        return;
+      }
+      _syncInProgress = true;
       _cloudSyncPending = false;
       console.log("☁️ Performing cloud sync...");
       await saveToCloud(getLocalCache());
-    }, 2000); // 2 second debounce
+      _syncInProgress = false;
+    }, 500); // 500ms debounce - fast but prevents spam
+  }
+  
+  // Immediate sync for critical operations
+  async function syncNow() {
+    if (_syncTimeout) clearTimeout(_syncTimeout);
+    _cloudSyncPending = false;
+    if (_syncInProgress) {
+      console.log("☁️ Sync already in progress, waiting...");
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    _syncInProgress = true;
+    const result = await saveToCloud(getLocalCache());
+    _syncInProgress = false;
+    return result;
   }
 
   // ------------------------------------------------------------
@@ -301,19 +321,14 @@
   let _initializingPromise = null;
   
   async function initialize() {
-    // If already initialized, return immediately
     if (_initialized) {
-      console.log("☁️ Already initialized, skipping");
       return;
     }
     
-    // If currently initializing, wait for that to complete
     if (_initializingPromise) {
-      console.log("☁️ Already initializing, waiting...");
       return _initializingPromise;
     }
     
-    // Create a promise that will be resolved when done
     _initializingPromise = (async () => {
       console.log("☁️ Starting cloud bridge initialization...");
       
@@ -324,87 +339,64 @@
         // Step 2: Load from local cache first (instant)
         const localData = getLocalCache();
         
-        // Step 3: Check if we just imported data (has import timestamp within last 30 seconds)
+        // Step 3: Check if we just imported data
         const justImported = localData._importTimestamp && 
                              (Date.now() - localData._importTimestamp) < 30000;
         
         if (justImported) {
           console.log("☁️ Recently imported data detected - skipping cloud overwrite");
-          // Clear the import flag
           delete localData._importTimestamp;
           setLocalCache(localData);
-          return; // Will set flags in finally block
+          return;
         }
         
-        // Step 4: Try to hydrate from cloud (with timeout protection)
-        let hydrated = false;
+        // Step 4: Check if user is authenticated
+        // If not, skip cloud fetch - auth listener will handle it after sign-in
+        let user = null;
         try {
-          // Check if user is authenticated FIRST
-          const user = await getUser();
-          
-          if (!user) {
-            console.log("☁️ No user yet - will load from cloud after sign-in");
-            // Don't wait for cloud, just use local cache
-          } else {
-            // User is authenticated, try to load from cloud
-            console.log("☁️ User authenticated, loading from cloud...");
-            
-            // Add timeout to cloud load
-            const cloudPromise = loadFromCloud();
-            const timeoutPromise = new Promise((resolve) => {
-              setTimeout(() => {
-                console.log("☁️ Cloud load timeout after 5s, using local cache");
-                resolve(null);
-              }, 5000);
-            });
-            
-            const cloudState = await Promise.race([cloudPromise, timeoutPromise]);
-            
-            if (cloudState && Object.keys(cloudState).length > 0) {
-              // Compare timestamps if available
-              const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
-              const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
-              
-              if (cloudTime > localTime) {
-                // Cloud is newer - merge with cloud winning
-                const merged = { ...localData, ...cloudState };
-                setLocalCache(merged);
-                console.log("☁️ Hydrated from cloud (cloud was newer)");
-                hydrated = true;
-              } else if (localTime > cloudTime) {
-                // Local is newer - push to cloud
-                console.log("☁️ Local data is newer - will sync to cloud");
-                _cloudSyncPending = true;
-                scheduleCloudSync();
-              } else {
-                // Same time or no timestamps - merge with cloud winning (safe default)
-                const merged = { ...localData, ...cloudState };
-                setLocalCache(merged);
-                console.log("☁️ Hydrated from cloud");
-                hydrated = true;
-              }
-            } else {
-              console.log("☁️ No cloud data available, using local cache");
-            }
-          }
+          const { data } = await window.supabase?.auth?.getUser() || {};
+          user = data?.user;
         } catch (e) {
-          console.warn("☁️ Cloud hydration failed, using local cache:", e);
+          // Ignore auth errors during init
         }
         
-        // ⭐ Dispatch event so other modules know cloud is ready and can reload
-        console.log("☁️ Initialization complete, dispatching cloud-hydrated event");
-        window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
-          detail: { hydrated, hasData: Object.keys(getLocalCache().divisions || {}).length > 0 }
-        }));
+        if (!user) {
+          console.log("☁️ No user - skipping cloud fetch (will load after sign-in)");
+          return;
+        }
+        
+        // Step 5: User is authenticated, fetch from cloud
+        console.log("☁️ User authenticated, fetching from cloud...");
+        const cloudState = await loadFromCloud();
+        
+        if (cloudState && Object.keys(cloudState).length > 0) {
+          const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
+          const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
+          
+          if (cloudTime >= localTime) {
+            const merged = { ...localData, ...cloudState };
+            setLocalCache(merged);
+            console.log("☁️ Hydrated from cloud");
+          } else {
+            console.log("☁️ Local data is newer - will sync to cloud");
+            _cloudSyncPending = true;
+            scheduleCloudSync();
+          }
+        }
         
       } catch (e) {
         console.error("☁️ Initialize error:", e);
       } finally {
-        // Always mark as initialized and ready
         _initialized = true;
         window.__CAMPISTRY_CLOUD_READY__ = true;
         _initializingPromise = null;
-        console.log("☁️ Cloud bridge ready");
+        
+        const hasData = Object.keys(getLocalCache().divisions || {}).length > 0;
+        console.log("☁️ Cloud bridge ready, hasData:", hasData);
+        
+        window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
+          detail: { hydrated: true, hasData }
+        }));
       }
     })();
     
@@ -458,8 +450,6 @@
   // Force immediate cloud sync
   window.forceSyncToCloud = async function() {
     console.log("☁️ Force sync to cloud requested");
-    _cloudSyncPending = false;
-    if (_syncTimeout) clearTimeout(_syncTimeout);
     
     // Clear import flag if present
     const state = getLocalCache();
@@ -469,10 +459,13 @@
       setLocalCache(state);
     }
     
-    const success = await saveToCloud(getLocalCache());
+    const success = await syncNow();
     console.log("☁️ Force sync result:", success ? "SUCCESS" : "FAILED");
     return success;
   };
+  
+  // Sync immediately (alias)
+  window.syncNow = syncNow;
   
   // Clear import flag manually
   window.clearImportFlag = function() {
@@ -544,13 +537,11 @@
   initialize().catch(e => console.error("Cloud bridge init failed:", e));
   
   // ⭐ CRITICAL: Re-hydrate when user signs in
-  // The initial load might fail if user isn't authenticated yet
   let _rehydrating = false;
   let _lastAuthTime = 0;
   
   function setupAuthListener() {
     if (!window.supabase?.auth) {
-      // Supabase not ready yet, try again
       setTimeout(setupAuthListener, 500);
       return;
     }
@@ -567,7 +558,6 @@
       _lastAuthTime = now;
       
       if (event === 'SIGNED_IN' && session?.user) {
-        // Prevent concurrent re-hydrations
         if (_rehydrating) {
           console.log("☁️ Already re-hydrating, skipping");
           return;
@@ -577,24 +567,50 @@
         console.log("☁️ User signed in, fetching data from cloud...");
         
         try {
-          // ⭐ CRITICAL: Force fresh fetch from cloud
-          // Don't wait for old initialize() - do a direct cloud fetch
-          const cloudState = await loadFromCloud();
+          // ⭐ Direct cloud fetch - no initialize() overhead
+          const startTime = Date.now();
           
-          if (cloudState && Object.keys(cloudState).length > 0) {
+          const { data, error } = await window.supabase
+            .from(TABLE)
+            .select("state")
+            .eq("camp_id", CAMP_ID)
+            .single();
+          
+          const fetchTime = Date.now() - startTime;
+          console.log(`☁️ Cloud fetch completed in ${fetchTime}ms`);
+          
+          if (error) {
+            if (error.code !== 'PGRST116') {
+              console.error("☁️ Cloud fetch error:", error.message);
+            } else {
+              console.log("☁️ No cloud data yet (new user)");
+            }
+          } else if (data?.state) {
+            let cloudState = data.state;
+            
+            // Copy divisions from app1 to root if needed
+            if (cloudState.app1?.divisions && Object.keys(cloudState.app1.divisions).length > 0) {
+              if (!cloudState.divisions || Object.keys(cloudState.divisions).length === 0) {
+                cloudState.divisions = cloudState.app1.divisions;
+              }
+            }
+            if (cloudState.app1?.bunks && cloudState.app1.bunks.length > 0) {
+              if (!cloudState.bunks || cloudState.bunks.length === 0) {
+                cloudState.bunks = cloudState.app1.bunks;
+              }
+            }
+            
             console.log("☁️ Cloud data retrieved:", {
               divisions: Object.keys(cloudState.divisions || {}).length,
               bunks: (cloudState.bunks || []).length
             });
             
-            // Merge with any local data (cloud wins)
+            // Update local cache
             const localData = getLocalCache();
             const merged = { ...localData, ...cloudState };
             setLocalCache(merged);
             
             console.log("☁️ Local cache updated from cloud");
-          } else {
-            console.log("☁️ No cloud data found");
           }
           
           // Mark as ready
@@ -602,7 +618,7 @@
           _initializingPromise = null;
           window.__CAMPISTRY_CLOUD_READY__ = true;
           
-          // Notify app to refresh
+          // Notify app
           const hasData = Object.keys(getLocalCache().divisions || {}).length > 0;
           console.log("☁️ Post-sign-in hydration complete, hasData:", hasData);
           
@@ -612,10 +628,13 @@
           
         } catch (e) {
           console.error("☁️ Re-hydration error:", e);
-          // Still mark as ready so app can proceed
           _initialized = true;
           _initializingPromise = null;
           window.__CAMPISTRY_CLOUD_READY__ = true;
+          
+          window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
+            detail: { hydrated: false, hasData: false, afterSignIn: true, error: true }
+          }));
         } finally {
           _rehydrating = false;
         }
