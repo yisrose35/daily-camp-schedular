@@ -28,6 +28,9 @@ function initFieldsTab(){
     
     loadData();
 
+    // Clear any existing content first
+    container.innerHTML = "";
+
     // Inject Styles for the new UI and the inner controls
     const style = document.createElement('style');
     style.innerHTML = `
@@ -175,7 +178,9 @@ function initFieldsTab(){
     `;
     container.appendChild(style);
 
-    container.innerHTML += `
+    // Create the main content wrapper
+    const contentWrapper = document.createElement('div');
+    contentWrapper.innerHTML = `
         <div class="setup-grid">
           <section class="setup-card setup-card-wide" style="border:none; box-shadow:none; background:transparent;">
             <div class="setup-card-header" style="margin-bottom:20px;">
@@ -212,6 +217,8 @@ function initFieldsTab(){
             </div>
           </section>
         </div>`;
+
+    container.appendChild(contentWrapper);
 
     fieldsListEl = document.getElementById("fields-master-list");
     detailPaneEl = document.getElementById("fields-detail-pane");
@@ -662,10 +669,22 @@ function renderActivities(item, allSports){
     wrap.style.gap = "8px"; 
     wrap.style.marginBottom = "12px";
 
+    // Get the list of "built-in" sports that exist across all fields (for determining custom sports)
+    const globalSports = window.getAllGlobalSports?.() || [];
+
     allSports.forEach(s=>{
         const b = document.createElement("button");
         b.textContent = s;
         b.className = "activity-button" + (item.activities.includes(s) ? " active" : "");
+        
+        // Check if this is a custom sport (only exists on this field)
+        const isCustom = !globalSports.includes(s) || 
+            (item.activities.includes(s) && fields.filter(f => f.activities.includes(s)).length === 1);
+        
+        if(isCustom && item.activities.includes(s)) {
+            b.title = "Double-click to remove this custom activity";
+        }
+
         b.onclick = ()=>{
             if(item.activities.includes(s)) item.activities = item.activities.filter(x=>x!==s);
             else item.activities.push(s);
@@ -679,6 +698,50 @@ function renderActivities(item, allSports){
             // Re-render sport rules section to show updated sports
             renderSportRulesSection();
         };
+
+        // Double-click to delete custom activities
+        b.ondblclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            // Check how many fields use this sport
+            const fieldsUsingSport = fields.filter(f => f.activities.includes(s));
+            
+            if(fieldsUsingSport.length === 1 && fieldsUsingSport[0] === item) {
+                // This is a custom sport only on this field
+                if(confirm(`Remove "${s}" from activities? This will delete this custom activity.`)) {
+                    item.activities = item.activities.filter(x => x !== s);
+                    window.removeGlobalSport?.(s);
+                    saveData();
+                    
+                    // Re-render the activities section
+                    const parentBody = box.parentElement;
+                    if(parentBody) {
+                        parentBody.innerHTML = '';
+                        parentBody.appendChild(renderActivities(item, window.getAllGlobalSports?.() || []));
+                    }
+                    
+                    // Update summary
+                    const summaryEl = box.closest('.detail-section')?.querySelector('.detail-section-summary');
+                    if(summaryEl) summaryEl.textContent = summaryActivities(item);
+                    
+                    renderSportRulesSection();
+                }
+            } else if(fieldsUsingSport.length > 1) {
+                // Sport is used by multiple fields - just remove from this field
+                if(confirm(`Remove "${s}" from this field? (Other fields still use this activity)`)) {
+                    item.activities = item.activities.filter(x => x !== s);
+                    saveData();
+                    b.className = "activity-button";
+                    
+                    const summaryEl = b.closest('.detail-section')?.querySelector('.detail-section-summary');
+                    if(summaryEl) summaryEl.textContent = summaryActivities(item);
+                    
+                    renderSportRulesSection();
+                }
+            }
+        };
+
         wrap.appendChild(b);
     });
 
@@ -695,13 +758,32 @@ function renderActivities(item, allSports){
             window.addGlobalSport?.(s);
             if(!item.activities.includes(s)) item.activities.push(s);
             saveData(); 
-            renderDetailPane();
+            
+            // Re-render the activities section in place
+            const parentBody = box.parentElement;
+            if(parentBody) {
+                parentBody.innerHTML = '';
+                parentBody.appendChild(renderActivities(item, window.getAllGlobalSports?.() || []));
+            }
+            
+            // Update summary
+            const summaryEl = box.closest('.detail-section')?.querySelector('.detail-section-summary');
+            if(summaryEl) summaryEl.textContent = summaryActivities(item);
+            
             renderSportRulesSection();
         }
     };
 
+    // Help text
+    const helpText = document.createElement("div");
+    helpText.style.fontSize = "0.75rem";
+    helpText.style.color = "#9CA3AF";
+    helpText.style.marginTop = "8px";
+    helpText.textContent = "💡 Tip: Double-click an activity to remove it";
+
     box.appendChild(wrap);
     box.appendChild(add);
+    box.appendChild(helpText);
     return box;
 }
 
@@ -780,72 +862,86 @@ function renderTransition(item){
 // 3. SHARING
 function renderSharing(item){
     const container = document.createElement("div");
-    const rules = item.sharableWith;
 
-    const tog = document.createElement("label"); 
-    tog.className = "switch";
-    const cb = document.createElement("input"); 
-    cb.type = "checkbox";
-    cb.checked = rules.type !== 'not_sharable';
-
-    cb.onchange = ()=>{
-        rules.type = cb.checked ? 'all' : 'not_sharable';
-        rules.divisions = [];
-        saveData();
-        renderDetailPane();
+    // Helper to update the summary in the accordion header
+    const updateSummary = () => {
+        const summaryEl = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if(summaryEl) summaryEl.textContent = summarySharing(item);
     };
 
-    const sl = document.createElement("span"); 
-    sl.className = "slider";
-    tog.appendChild(cb); 
-    tog.appendChild(sl);
-    
-    const header = document.createElement("div");
-    header.style.display="flex"; header.style.alignItems="center"; header.style.gap="10px";
-    header.appendChild(tog);
-    header.appendChild(document.createTextNode("Allow Sharing (Multiple bunks at once)"));
-    container.appendChild(header);
+    // Main render function for this section
+    const renderContent = () => {
+        container.innerHTML = "";
+        
+        const rules = item.sharableWith;
 
-    if(rules.type !== 'not_sharable'){
-        const det = document.createElement("div");
-        det.style.marginTop="16px"; det.style.paddingLeft="12px"; det.style.borderLeft="2px solid #E5E7EB";
+        const tog = document.createElement("label"); 
+        tog.className = "switch";
+        const cb = document.createElement("input"); 
+        cb.type = "checkbox";
+        cb.checked = rules.type !== 'not_sharable';
 
-        // Capacity
-        const capRow = document.createElement("div");
-        capRow.style.marginBottom="12px";
-        capRow.innerHTML = `<span>Max Capacity: </span>`;
-        const capIn = document.createElement("input"); 
-        capIn.type="number"; capIn.min="2"; capIn.value=rules.capacity;
-        capIn.style.width="60px"; capIn.style.marginLeft="8px"; capIn.style.padding="4px";
-        capIn.onchange = ()=>{ rules.capacity = Math.max(2, parseInt(capIn.value)||2); saveData(); };
-        capRow.appendChild(capIn);
-        det.appendChild(capRow);
+        cb.onchange = ()=>{
+            rules.type = cb.checked ? 'all' : 'not_sharable';
+            rules.divisions = [];
+            saveData();
+            renderContent();
+            updateSummary();
+        };
 
-        // Limit Divisions
-        const divLabel = document.createElement("div");
-        divLabel.textContent = "Limit sharing to specific divisions (Optional):";
-        divLabel.style.fontSize="0.85rem"; divLabel.style.marginBottom="6px";
-        det.appendChild(divLabel);
+        const sl = document.createElement("span"); 
+        sl.className = "slider";
+        tog.appendChild(cb); 
+        tog.appendChild(sl);
+        
+        const header = document.createElement("div");
+        header.style.display="flex"; header.style.alignItems="center"; header.style.gap="10px";
+        header.appendChild(tog);
+        header.appendChild(document.createTextNode("Allow Sharing (Multiple bunks at once)"));
+        container.appendChild(header);
 
-        const allDivs = window.availableDivisions || [];
-        allDivs.forEach(d => {
-            const isActive = rules.divisions.includes(d);
-            const chip = document.createElement("span");
-            chip.className = "chip " + (isActive ? "active" : "inactive");
-            chip.textContent = d;
-            chip.onclick = ()=>{
-                if(isActive) rules.divisions = rules.divisions.filter(x=>x!==d);
-                else rules.divisions.push(d);
-                rules.type = rules.divisions.length > 0 ? 'custom' : 'all';
-                saveData();
-                chip.className = "chip " + (rules.divisions.includes(d) ? "active" : "inactive");
-            };
-            det.appendChild(chip);
-        });
+        if(rules.type !== 'not_sharable'){
+            const det = document.createElement("div");
+            det.style.marginTop="16px"; det.style.paddingLeft="12px"; det.style.borderLeft="2px solid #E5E7EB";
 
-        container.appendChild(det);
-    }
+            // Capacity
+            const capRow = document.createElement("div");
+            capRow.style.marginBottom="12px";
+            capRow.innerHTML = `<span>Max Capacity: </span>`;
+            const capIn = document.createElement("input"); 
+            capIn.type="number"; capIn.min="2"; capIn.value=rules.capacity;
+            capIn.style.width="60px"; capIn.style.marginLeft="8px"; capIn.style.padding="4px";
+            capIn.onchange = ()=>{ rules.capacity = Math.max(2, parseInt(capIn.value)||2); saveData(); };
+            capRow.appendChild(capIn);
+            det.appendChild(capRow);
 
+            // Limit Divisions
+            const divLabel = document.createElement("div");
+            divLabel.textContent = "Limit sharing to specific divisions (Optional):";
+            divLabel.style.fontSize="0.85rem"; divLabel.style.marginBottom="6px";
+            det.appendChild(divLabel);
+
+            const allDivs = window.availableDivisions || [];
+            allDivs.forEach(d => {
+                const isActive = rules.divisions.includes(d);
+                const chip = document.createElement("span");
+                chip.className = "chip " + (isActive ? "active" : "inactive");
+                chip.textContent = d;
+                chip.onclick = ()=>{
+                    if(isActive) rules.divisions = rules.divisions.filter(x=>x!==d);
+                    else rules.divisions.push(d);
+                    rules.type = rules.divisions.length > 0 ? 'custom' : 'all';
+                    saveData();
+                    chip.className = "chip " + (rules.divisions.includes(d) ? "active" : "inactive");
+                };
+                det.appendChild(chip);
+            });
+
+            container.appendChild(det);
+        }
+    };
+
+    renderContent();
     return container;
 }
 
