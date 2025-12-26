@@ -1,1562 +1,1152 @@
-// =================================================================
-// special_activities.js — Modern Pro Camp THEMED VERSION
-// =================================================================
-// VERSION: 2.1 - UI/UX Restored + Code Quality Improvements
-//
-// FIXES APPLIED:
-// - Restored original beta UI/UX design
-// - Fixed stale window.specialActivities reference using getter
-// - Added proper state management with centralized state object
-// - Fixed memory leaks from event handlers
-// - Added XSS protection via escapeHtml()
-// - Added input validation
-// - Consistent event handling with addEventListener
-// - Added Enter key support on ALL inputs
-// - Added debouncing for frequent saves
-// - Added error handling
-// - Added Rainy Day availability section
-// =================================================================
-(function () {
-    'use strict';
+// ============================================================================
+// special_activities.js — MERGED: FIELDS.JS UX STYLE
+// ============================================================================
+// 1. Layout: Apple-inspired Two-Pane with Collapsible Detail Sections.
+// 2. Logic: Retains all Transition, Sharing, Frequency, and Time Rules.
+// 3. Style: Matches fields.js for consistent UI/UX across the app.
+// ============================================================================
+(function() {
+'use strict';
 
-    // ==================== CONSTANTS ====================
-    const VERSION = "2.1";
-    const SPECIAL_ID_PREFIX = "special-";
-    const DEBOUNCE_MS = 150;
-    const MIN_CAPACITY = 2;
-    const DEFAULT_CAPACITY = 2;
+let specialActivities = [];
+let selectedItemId = null;
+let specialsListEl = null;
+let detailPaneEl = null;
+let addSpecialInput = null;
 
-    const DEFAULT_TRANSITION = Object.freeze({
-        preMin: 0,
-        postMin: 0,
-        label: "Change Time",
-        zone: "Default",
-        occupiesField: true,
-        minDurationMin: 0
+//------------------------------------------------------------------
+// INIT
+//------------------------------------------------------------------
+function initSpecialActivitiesTab() {
+    const container = document.getElementById("special_activities");
+    if (!container) return;
+
+    loadData();
+    container.innerHTML = "";
+
+    // Inject Styles (matching fields.js)
+    const style = document.createElement('style');
+    style.innerHTML = `
+        /* Master List Styles */
+        .sa-master-list { border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
+        .sa-list-item { padding: 12px 14px; border-bottom: 1px solid #F3F4F6; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.15s; }
+        .sa-list-item:last-child { border-bottom: none; }
+        .sa-list-item:hover { background: #F9FAFB; }
+        .sa-list-item.selected { background: #F0FDF4; border-left: 3px solid #10B981; }
+        .sa-list-item-name { font-weight: 500; color: #1F2937; font-size: 0.9rem; }
+        .sa-list-item-meta { font-size: 0.75rem; color: #6B7280; margin-left: 6px; }
+
+        /* Accordion / Collapsible Sections */
+        .sa-detail-section { margin-bottom: 12px; border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
+        .sa-detail-section-header { padding: 12px 16px; background: #F9FAFB; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; }
+        .sa-detail-section-header:hover { background: #F3F4F6; }
+        .sa-detail-section-title { font-size: 0.9rem; font-weight: 600; color: #111; }
+        .sa-detail-section-summary { font-size: 0.8rem; color: #6B7280; margin-top: 2px; }
+        .sa-detail-section-body { display: none; padding: 16px; border-top: 1px solid #E5E7EB; }
+
+        /* Chips */
+        .sa-chip { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; cursor: pointer; border: 1px solid #E5E7EB; margin-right: 4px; margin-bottom: 4px; transition: all 0.2s; }
+        .sa-chip.active { background: #10B981; color: white; border-color: #10B981; box-shadow: 0 2px 5px rgba(16, 185, 129, 0.3); }
+        .sa-chip.inactive { background: #F3F4F6; color: #374151; }
+        .sa-chip:hover { transform: translateY(-1px); }
+
+        /* Switch/Toggle */
+        .sa-switch { position: relative; display: inline-block; width: 34px; height: 20px; flex-shrink: 0; }
+        .sa-switch input { opacity: 0; width: 0; height: 0; }
+        .sa-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
+        .sa-slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        .sa-switch input:checked + .sa-slider { background-color: #10B981; }
+        .sa-switch input:checked + .sa-slider:before { transform: translateX(14px); }
+
+        /* Form inputs */
+        .sa-field-input {
+            padding: 6px 10px;
+            border: 1px solid #D1D5DB;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            transition: all 0.15s ease;
+        }
+        .sa-field-input:focus {
+            outline: none;
+            border-color: #10B981;
+            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+        }
+
+        /* Priority List */
+        .sa-priority-list-item { display: flex; align-items: center; gap: 10px; padding: 8px; background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; margin-bottom: 6px; }
+        .sa-priority-btn { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px solid #D1D5DB; border-radius: 4px; background: white; cursor: pointer; font-size: 0.8rem; transition: all 0.15s; }
+        .sa-priority-btn:hover:not(:disabled) { border-color: #10B981; color: #10B981; }
+        .sa-priority-btn:disabled { opacity: 0.4; cursor: default; }
+
+        .sa-muted { color: #6B7280; font-size: 0.85rem; }
+    `;
+    container.appendChild(style);
+
+    // Create the main content wrapper
+    const contentWrapper = document.createElement('div');
+    contentWrapper.innerHTML = `
+        <div class="setup-grid">
+          <section class="setup-card setup-card-wide" style="border:none; box-shadow:none; background:transparent;">
+            <div class="setup-card-header" style="margin-bottom:20px;">
+              <span class="setup-step-pill">Specials</span>
+              <div class="setup-card-text">
+                <h3>Special Activities & Rotations</h3>
+                <p>Add canteen, electives, trips, lakes, buses, and control availability, sharing, division access, and rotation rules.</p>
+              </div>
+            </div>
+
+            <div style="display:flex; flex-wrap:wrap; gap:24px;">
+              <!-- LEFT SIDE: MASTER LIST -->
+              <div style="flex:1; min-width:280px;">
+                <div style="display:flex; justify-content:space-between; align-items:end; margin-bottom:8px;">
+                    <div class="setup-subtitle">All Specials</div>
+                </div>
+                
+                <div style="background:white; padding:10px; border-radius:12px; border:1px solid #E5E7EB; margin-bottom:12px; display:flex; gap:8px;">
+                  <input id="new-special-input" placeholder="New Special (e.g., Canteen)" style="flex:1; border:none; outline:none; font-size:0.9rem;">
+                  <button id="add-special-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
+                </div>
+                <div id="specials-master-list" class="sa-master-list" style="max-height:600px; overflow-y:auto;"></div>
+              </div>
+
+              <!-- RIGHT SIDE: DETAIL PANE -->
+              <div style="flex:1.4; min-width:340px;">
+                <div class="setup-subtitle">Special Configuration</div>
+                <div id="specials-detail-pane" style="margin-top:8px;"></div>
+              </div>
+            </div>
+          </section>
+        </div>`;
+    container.appendChild(contentWrapper);
+
+    specialsListEl = document.getElementById("specials-master-list");
+    detailPaneEl = document.getElementById("specials-detail-pane");
+    addSpecialInput = document.getElementById("new-special-input");
+
+    document.getElementById("add-special-btn").onclick = addSpecial;
+    addSpecialInput.onkeyup = e => { if (e.key === "Enter") addSpecial(); };
+
+    renderMasterList();
+    renderDetailPane();
+}
+
+//------------------------------------------------------------------
+// DATA LOADING
+//------------------------------------------------------------------
+function loadData() {
+    specialActivities = window.getGlobalSpecialActivities?.() || [];
+    
+    // Ensure data completeness
+    specialActivities.forEach(s => {
+        s.available = s.available !== false;
+        s.timeRules = s.timeRules || [];
+        s.sharableWith = s.sharableWith || { type: 'not_sharable', divisions: [], capacity: 2 };
+        if (!s.sharableWith.capacity) s.sharableWith.capacity = 2;
+        s.limitUsage = s.limitUsage || { enabled: false, divisions: {} };
+        s.preferences = s.preferences || { enabled: false, exclusive: false, list: [] };
+        s.maxUsage = (s.maxUsage !== undefined && s.maxUsage !== "") ? s.maxUsage : null;
+        s.frequencyWeeks = s.frequencyWeeks || 0;
+
+        // Transition fields
+        s.transition = s.transition || {
+            preMin: 0,
+            postMin: 0,
+            label: "Change Time",
+            zone: window.DEFAULT_ZONE_NAME || "Default",
+            occupiesField: true,
+            minDurationMin: 0
+        };
     });
+}
 
-    const DEFAULT_SHARABLE = Object.freeze({
-        type: "not_sharable",
-        divisions: [],
-        capacity: DEFAULT_CAPACITY
+function saveData() {
+    window.saveGlobalSpecialActivities?.(specialActivities);
+}
+
+//------------------------------------------------------------------
+// LEFT LIST (Master List)
+//------------------------------------------------------------------
+function renderMasterList() {
+    specialsListEl.innerHTML = "";
+    
+    if (specialActivities.length === 0) {
+        specialsListEl.innerHTML = `<div style="padding:20px; text-align:center; color:#9CA3AF;">No special activities yet.</div>`;
+        return;
+    }
+    
+    specialActivities.forEach(item => {
+        specialsListEl.appendChild(createMasterListItem(item));
     });
+}
 
-    const DEFAULT_LIMIT_USAGE = Object.freeze({
-        enabled: false,
-        divisions: {}
-    });
-
-    const FREQUENCY_OPTIONS = Object.freeze([
-        { value: 0, label: "Summer (Lifetime)" },
-        { value: 1, label: "1 Week (7 Days)" },
-        { value: 2, label: "2 Weeks (14 Days)" },
-        { value: 3, label: "3 Weeks (21 Days)" },
-        { value: 4, label: "4 Weeks (28 Days)" }
-    ]);
-
-    // ==================== STATE ====================
-    const state = {
-        specialActivities: [],
-        selectedItemId: null
+function createMasterListItem(item) {
+    const id = `special-${item.name}`;
+    const el = document.createElement("div");
+    el.className = "sa-list-item" + (id === selectedItemId ? " selected" : "");
+    el.onclick = () => { 
+        selectedItemId = id; 
+        renderMasterList(); 
+        renderDetailPane(); 
     };
 
-    // DOM References
-    let specialsListEl = null;
-    let detailPaneEl = null;
-    let addSpecialInput = null;
+    const infoDiv = document.createElement("div");
+    
+    const nameEl = document.createElement("div");
+    nameEl.className = "sa-list-item-name";
+    nameEl.textContent = item.name;
 
-    // Cleanup tracking
-    let cleanupFunctions = [];
-
-    // ==================== UTILITIES ====================
-
-    function deepClone(obj) {
-        if (obj === null || obj === undefined) return obj;
-        try {
-            return structuredClone(obj);
-        } catch {
-            return JSON.parse(JSON.stringify(obj));
-        }
+    // Add meta info (Transition times)
+    if (item.transition.preMin > 0 || item.transition.postMin > 0) {
+        const meta = document.createElement("span");
+        meta.className = "sa-list-item-meta";
+        meta.textContent = `(${item.transition.preMin}m / ${item.transition.postMin}m)`;
+        nameEl.appendChild(meta);
     }
 
-    function debounce(fn, delay = DEBOUNCE_MS) {
-        let timeoutId;
-        return function (...args) {
-            clearTimeout(timeoutId);
-            timeoutId = setTimeout(() => fn.apply(this, args), delay);
-        };
+    infoDiv.appendChild(nameEl);
+    el.appendChild(infoDiv);
+
+    // Toggle Switch
+    const tog = document.createElement("label");
+    tog.className = "sa-switch";
+    tog.onclick = e => e.stopPropagation();
+
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = item.available;
+    cb.onchange = () => { 
+        item.available = cb.checked; 
+        saveData(); 
+        renderDetailPane(); 
+    };
+
+    const slider = document.createElement("span");
+    slider.className = "sa-slider";
+    tog.appendChild(cb);
+    tog.appendChild(slider);
+    el.appendChild(tog);
+
+    return el;
+}
+
+//------------------------------------------------------------------
+// RIGHT PANEL — APPLE STYLE COLLAPSIBLE SECTIONS
+//------------------------------------------------------------------
+function renderDetailPane() {
+    if (!selectedItemId) {
+        detailPaneEl.innerHTML = `
+            <div style="height:300px; display:flex; align-items:center; justify-content:center; color:#9CA3AF; border:1px dashed #E5E7EB; border-radius:12px;">
+                Select a special to edit details
+            </div>`;
+        return;
     }
 
-    function escapeHtml(str) {
-        if (str === null || str === undefined) return "";
-        const div = document.createElement("div");
-        div.textContent = String(str);
-        return div.innerHTML;
+    const [, name] = selectedItemId.split(/-(.+)/);
+    const item = specialActivities.find(s => s.name === name);
+    
+    if (!item) {
+        detailPaneEl.innerHTML = `<p class='sa-muted'>Not found.</p>`;
+        selectedItemId = null;
+        return;
     }
 
-    function parseTimeToMinutes(str) {
-        if (!str || typeof str !== "string") return null;
-
-        let s = str.trim().toLowerCase();
-        let meridiem = null;
-
-        if (s.endsWith("am") || s.endsWith("pm")) {
-            meridiem = s.endsWith("am") ? "am" : "pm";
-            s = s.replace(/am|pm/gi, "").trim();
-        }
-
-        const match = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-        if (!match) return null;
-
-        let hours = parseInt(match[1], 10);
-        const minutes = parseInt(match[2], 10);
-
-        if (isNaN(hours) || isNaN(minutes) || minutes < 0 || minutes > 59) {
-            return null;
-        }
-
-        if (meridiem) {
-            if (hours === 12) hours = meridiem === "am" ? 0 : 12;
-            else if (meridiem === "pm" && hours < 12) hours += 12;
-        }
-
-        return hours * 60 + minutes;
-    }
-
-    function makeSpecialId(name) {
-        return SPECIAL_ID_PREFIX + name;
-    }
-
-    function extractSpecialName(id) {
-        if (!id || !id.startsWith(SPECIAL_ID_PREFIX)) return null;
-        return id.slice(SPECIAL_ID_PREFIX.length);
-    }
-
-    function findSpecial(name) {
-        return state.specialActivities.find(s => s.name === name);
-    }
-
-    function runCleanups() {
-        cleanupFunctions.forEach(fn => {
-            try { fn(); } catch (e) { /* ignore */ }
-        });
-        cleanupFunctions = [];
-    }
-
-    // ==================== DATA MANAGEMENT ====================
-
-    function loadData() {
-        try {
-            state.specialActivities = window.getGlobalSpecialActivities?.() || [];
-            state.specialActivities.forEach(normalizeSpecial);
-        } catch (e) {
-            console.error("Error loading special activities:", e);
-            state.specialActivities = [];
-        }
-    }
-
-    function normalizeSpecial(special) {
-        if (!special || typeof special !== 'object') return;
-
-        special.available = special.available !== false;
-        special.timeRules = Array.isArray(special.timeRules) ? special.timeRules : [];
-
-        // Normalize sharableWith
-        if (!special.sharableWith || typeof special.sharableWith !== 'object') {
-            special.sharableWith = deepClone(DEFAULT_SHARABLE);
-        } else {
-            special.sharableWith.type = special.sharableWith.type || "not_sharable";
-            special.sharableWith.divisions = Array.isArray(special.sharableWith.divisions)
-                ? special.sharableWith.divisions : [];
-            special.sharableWith.capacity = Math.max(
-                MIN_CAPACITY,
-                parseInt(special.sharableWith.capacity, 10) || DEFAULT_CAPACITY
-            );
-        }
-
-        // Normalize limitUsage
-        if (!special.limitUsage || typeof special.limitUsage !== 'object') {
-            special.limitUsage = deepClone(DEFAULT_LIMIT_USAGE);
-        } else {
-            special.limitUsage.enabled = Boolean(special.limitUsage.enabled);
-            special.limitUsage.divisions = special.limitUsage.divisions || {};
-        }
-
-        // Normalize maxUsage
-        special.maxUsage = (special.maxUsage !== undefined && special.maxUsage !== "" && special.maxUsage !== null)
-            ? Math.max(1, parseInt(special.maxUsage, 10) || 1)
-            : null;
-        special.frequencyWeeks = parseInt(special.frequencyWeeks, 10) || 0;
-
-        // Normalize transition
-        if (!special.transition || typeof special.transition !== 'object') {
-            special.transition = {
-                ...DEFAULT_TRANSITION,
-                zone: window.DEFAULT_ZONE_NAME || "Default"
-            };
-        } else {
-            special.transition.preMin = Math.max(0, parseInt(special.transition.preMin, 10) || 0);
-            special.transition.postMin = Math.max(0, parseInt(special.transition.postMin, 10) || 0);
-            special.transition.label = special.transition.label || "Change Time";
-            special.transition.zone = special.transition.zone || window.DEFAULT_ZONE_NAME || "Default";
-            special.transition.occupiesField = special.transition.occupiesField !== false;
-            special.transition.minDurationMin = Math.max(0, parseInt(special.transition.minDurationMin, 10) || 0);
-        }
-
-        // Rainy day defaults
-        special.rainyDayAvailable = special.rainyDayAvailable === true;
-        special.rainyDayOnly = special.rainyDayOnly === true;
-    }
-
-    function saveData() {
-        try {
-            window.saveGlobalSpecialActivities?.(state.specialActivities);
-        } catch (e) {
-            console.error("Error saving special activities:", e);
-        }
-    }
-
-    const debouncedSave = debounce(saveData, DEBOUNCE_MS);
-
-    // ==================== STYLES ====================
-
-    function injectStyles(container) {
-        if (document.getElementById("special-activities-styles")) return;
-
-        const style = document.createElement('style');
-        style.id = "special-activities-styles";
-        style.textContent = `
-            /* Master List - Original Beta Styling */
-            .sa-master-list {
-                border-radius: 18px;
-                border: 1px solid #E5E7EB;
-                background: #F8FAFC;
-                padding: 6px 6px;
-                box-shadow: 0 8px 20px rgba(15,23,42,0.06);
-            }
-
-            .sa-list-item {
-                padding: 10px 12px;
-                border-radius: 14px;
-                margin-bottom: 6px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                cursor: pointer;
-                background: #ffffff;
-                border: 1px solid #e5e7eb;
-                box-shadow: 0 3px 8px rgba(15,23,42,0.05);
-                transition: 0.15s ease;
-            }
-
-            .sa-list-item:last-child {
-                margin-bottom: 0;
-            }
-
-            .sa-list-item:hover {
-                background: #f1f5f9;
-                transform: translateY(-1px);
-            }
-
-            .sa-list-item.selected {
-                background: radial-gradient(circle at top left, #ECFDF5, #ffffff 70%);
-                border-color: #00C896;
-                box-shadow: 0 0 0 2px rgba(0,200,150,0.45);
-                font-weight: 600;
-            }
-
-            .sa-list-item-name {
-                font-weight: 500;
-                color: #1F2937;
-                font-size: 0.9rem;
-            }
-
-            .sa-list-item-meta {
-                font-size: 0.7rem;
-                color: #047857;
-                font-weight: normal;
-                margin-left: 4px;
-            }
-
-            /* Detail Pane - Original Beta Styling */
-            .sa-detail-pane {
-                border-radius: 18px;
-                border: 1px solid #E5E7EB;
-                padding: 20px 22px;
-                background: radial-gradient(circle at top left, #F0F9FF 0%, #FFFFFF 55%, #F8FAFC 100%);
-                box-shadow: 0 14px 36px rgba(15,23,42,0.08);
-                min-height: 380px;
-            }
-
-            /* Cards within detail pane */
-            .sa-card {
-                background: #ffffff;
-                border: 1px solid #e5e7eb;
-                border-radius: 14px;
-                padding: 16px 16px;
-                margin-bottom: 20px;
-                box-shadow: 0 8px 18px rgba(15,23,42,0.06);
-            }
-
-            .sa-card-header {
-                font-weight: 600;
-                margin-bottom: 6px;
-                font-size: 0.9rem;
-                color: #111827;
-            }
-
-            /* Switch/Toggle - Original Style */
-            .sa-switch {
-                position: relative;
-                display: inline-block;
-                width: 34px;
-                height: 20px;
-                flex-shrink: 0;
-            }
-
-            .sa-switch input {
-                opacity: 0;
-                width: 0;
-                height: 0;
-            }
-
-            .sa-slider {
-                position: absolute;
-                cursor: pointer;
-                top: 0;
-                left: 0;
-                right: 0;
-                bottom: 0;
-                background-color: #ccc;
-                transition: 0.3s ease;
-                border-radius: 34px;
-            }
-
-            .sa-slider:before {
-                position: absolute;
-                content: "";
-                height: 14px;
-                width: 14px;
-                left: 3px;
-                bottom: 3px;
-                background-color: white;
-                transition: 0.3s ease;
-                border-radius: 50%;
-            }
-
-            .sa-switch input:checked + .sa-slider {
-                background-color: #00C896;
-            }
-
-            .sa-switch input:checked + .sa-slider:before {
-                transform: translateX(14px);
-            }
-
-            /* Chips - Original Pill Style */
-            .sa-chip {
-                display: inline-block;
-                padding: 6px 12px;
-                border-radius: 999px;
-                font-size: 0.8rem;
-                cursor: pointer;
-                border: 1px solid #D1D5DB;
-                margin-right: 6px;
-                margin-bottom: 6px;
-                transition: all 0.15s ease;
-            }
-
-            .sa-chip.active {
-                background: #00C896;
-                color: #FFFFFF;
-                border-color: #00C896;
-            }
-
-            .sa-chip.inactive {
-                background: #F3F4F6;
-                color: #111827;
-            }
-
-            .sa-chip:hover {
-                transform: translateY(-1px);
-            }
-
-            /* Form inputs - Pill Style */
-            .sa-input {
-                padding: 6px 12px;
-                border: 1px solid #D1D5DB;
-                border-radius: 999px;
-                font-size: 0.9rem;
-                transition: all 0.15s ease;
-            }
-
-            .sa-input:focus {
-                outline: none;
-                border-color: #00C896;
-                box-shadow: 0 0 0 2px rgba(0,200,150,0.2);
-            }
-
-            .sa-select {
-                padding: 6px 12px;
-                border: 1px solid #D1D5DB;
-                border-radius: 999px;
-                font-size: 0.9rem;
-                background: white;
-                cursor: pointer;
-            }
-
-            .sa-select:focus {
-                outline: none;
-                border-color: #00C896;
-            }
-
-            .sa-btn {
-                padding: 6px 14px;
-                border-radius: 999px;
-                font-size: 0.85rem;
-                cursor: pointer;
-                transition: all 0.15s ease;
-                border: none;
-            }
-
-            .sa-btn-primary {
-                background: #00C896;
-                color: white;
-            }
-
-            .sa-btn-primary:hover {
-                background: #00B085;
-            }
-
-            .sa-btn-danger {
-                background: #FEE2E2;
-                color: #DC2626;
-                border: 1px solid #FECACA;
-            }
-
-            .sa-btn-danger:hover {
-                background: #FECACA;
-            }
-
-            .sa-btn-secondary {
-                background: #111;
-                color: white;
-            }
-
-            .sa-btn-secondary:hover {
-                background: #333;
-            }
-
-            .sa-muted {
-                color: #6b7280;
-                font-size: 0.86rem;
-            }
-
-            /* Section separators */
-            .sa-section {
-                margin-top: 16px;
-                padding-top: 14px;
-                border-top: 1px solid #E5E7EB;
-            }
-
-            .sa-section-title {
-                font-weight: 600;
-                font-size: 0.9rem;
-                margin-bottom: 10px;
-                color: #111827;
-            }
-
-            /* Time rules list */
-            .sa-time-rule {
-                padding: 4px 6px;
-                margin: 3px 0;
-                background: #f3f4f6;
-                border-radius: 8px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-            }
-
-            /* Rainy Day Cards */
-            .sa-weather-card {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                padding: 14px;
-                border-radius: 10px;
-                margin-bottom: 12px;
-            }
-
-            .sa-weather-card-indoor {
-                background: #ecfdf5;
-                border: 1px solid #a7f3d0;
-            }
-
-            .sa-weather-card-outdoor {
-                background: #fef3c7;
-                border: 1px solid #fcd34d;
-            }
-
-            .sa-weather-card-rainy {
-                background: #dbeafe;
-                border: 1px solid #93c5fd;
-            }
-
-            .sa-weather-card-default {
-                background: #f9fafb;
-                border: 1px solid #e5e7eb;
-            }
-        `;
-        container.appendChild(style);
-    }
-
-    // ==================== INIT ====================
-
-    function initSpecialActivitiesTab() {
-        const container = document.getElementById("special_activities");
-        if (!container) return;
-
-        loadData();
-        injectStyles(container);
-
-        container.innerHTML = `
-            <div class="setup-grid">
-                <section class="setup-card setup-card-wide">
-                    <div class="setup-card-header">
-                        <span class="setup-step-pill">Specials</span>
-                        <div class="setup-card-text">
-                            <h3>Special Activities & Rotations</h3>
-                            <p>
-                                Add canteen, electives, trips, lakes, buses, and control
-                                availability, sharing, division access, and rotation rules.
-                            </p>
-                        </div>
-                    </div>
-                    <div style="display:flex; flex-wrap:wrap; gap:22px; margin-top:10px;">
-                        <div style="flex:1; min-width:260px;">
-                            <div class="setup-subtitle">All Specials</div>
-                            <p style="font-size:0.8rem; color:#6b7280;">
-                                Click a special to edit its rules.
-                            </p>
-                            <div class="setup-field-row" style="margin-top:10px;">
-                                <input id="new-special-input" placeholder="New Special (e.g., Canteen)">
-                                <button id="add-special-btn">Add Special</button>
-                            </div>
-                            <div id="specials-master-list"
-                                 class="sa-master-list"
-                                 style="margin-top:10px; max-height:460px; overflow:auto;">
-                            </div>
-                        </div>
-                        <div style="flex:1.3; min-width:330px;">
-                            <div class="setup-subtitle">Special Details</div>
-                            <div id="specials-detail-pane"
-                                 class="sa-detail-pane"
-                                 style="margin-top:10px;">
-                                <p class="sa-muted">Select a special to begin.</p>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-            </div>
-        `;
-
-        specialsListEl = document.getElementById("specials-master-list");
-        detailPaneEl = document.getElementById("specials-detail-pane");
-        addSpecialInput = document.getElementById("new-special-input");
-
-        const addBtn = document.getElementById("add-special-btn");
-        addBtn?.addEventListener("click", addSpecial);
-
-        addSpecialInput?.addEventListener("keyup", (e) => {
-            if (e.key === "Enter") addSpecial();
-        });
-
-        renderMasterList();
-        renderDetailPane();
-    }
-
-    // ==================== MASTER LIST ====================
-
-    function renderMasterList() {
-        if (!specialsListEl) return;
-
-        specialsListEl.innerHTML = "";
-
-        if (state.specialActivities.length === 0) {
-            specialsListEl.innerHTML = `<p class="sa-muted">No special activities yet.</p>`;
-            return;
-        }
-
-        const fragment = document.createDocumentFragment();
-        state.specialActivities.forEach(special => {
-            fragment.appendChild(createMasterListItem(special));
-        });
-        specialsListEl.appendChild(fragment);
-    }
-
-    function createMasterListItem(special) {
-        const id = makeSpecialId(special.name);
-        const el = document.createElement("div");
-        el.className = "sa-list-item" + (id === state.selectedItemId ? " selected" : "");
-
-        el.addEventListener("click", () => {
-            state.selectedItemId = id;
-            renderMasterList();
-            renderDetailPane();
-        });
-
-        // Name section
-        const nameEl = document.createElement("span");
-        nameEl.className = "sa-list-item-name";
-        nameEl.textContent = special.name;
-
-        // Add transition meta if present
-        if (special.transition.preMin > 0 || special.transition.postMin > 0) {
-            const meta = document.createElement("span");
-            meta.className = "sa-list-item-meta";
-            meta.textContent = ` (${special.transition.preMin}m / ${special.transition.postMin}m)`;
-            nameEl.appendChild(meta);
-        }
-
-        // Add rainy day indicator
-        if (special.rainyDayOnly) {
-            const badge = document.createElement("span");
-            badge.className = "sa-list-item-meta";
-            badge.textContent = " 🌧️";
-            badge.title = "Rainy Day Only";
-            nameEl.appendChild(badge);
-        } else if (special.rainyDayAvailable) {
-            const badge = document.createElement("span");
-            badge.className = "sa-list-item-meta";
-            badge.textContent = " 🏠";
-            badge.title = "Available on Rainy Days";
-            nameEl.appendChild(badge);
-        }
-
-        el.appendChild(nameEl);
-
-        // Toggle Switch
-        const toggle = document.createElement("label");
-        toggle.className = "sa-switch";
-        toggle.addEventListener("click", (e) => e.stopPropagation());
-
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.checked = special.available;
-        checkbox.addEventListener("change", () => {
-            special.available = checkbox.checked;
-            saveData();
-            renderDetailPane();
-        });
-
-        const slider = document.createElement("span");
-        slider.className = "sa-slider";
-
-        toggle.appendChild(checkbox);
-        toggle.appendChild(slider);
-        el.appendChild(toggle);
-
-        return el;
-    }
-
-    // ==================== DETAIL PANE ====================
-
-    function renderDetailPane() {
-        if (!detailPaneEl) return;
-
-        runCleanups();
-
-        if (!state.selectedItemId) {
-            detailPaneEl.innerHTML = `<p class="sa-muted">Select a special to begin.</p>`;
-            return;
-        }
-
-        const specialName = extractSpecialName(state.selectedItemId);
-        const special = findSpecial(specialName);
-
-        if (!special) {
-            state.selectedItemId = null;
-            detailPaneEl.innerHTML = `<p style="color:red;">Error.</p>`;
-            return;
-        }
-
-        detailPaneEl.innerHTML = "";
-
-        const onSave = () => saveData();
-        const onRerender = () => {
-            renderMasterList();
-            renderDetailPane();
-        };
-
-        // HEADER
-        detailPaneEl.appendChild(createDetailHeader(special, onSave, onRerender));
-
-        // AVAILABILITY STRIP
-        detailPaneEl.appendChild(createAvailabilityStrip(special));
-
-        // TRANSITION RULES CARD
-        detailPaneEl.appendChild(createTransitionCard(special, onSave, onRerender));
-
-        // FREQUENCY LIMITS CARD
-        detailPaneEl.appendChild(createFrequencyCard(special, onSave, onRerender));
-
-        // WEATHER/RAINY DAY CARD
-        detailPaneEl.appendChild(createWeatherCard(special, onSave, onRerender));
-
-        // SHARABLE RULES SECTION
-        detailPaneEl.appendChild(renderSharableControls(special, onSave, onRerender));
-
-        // ALLOWED DIVISIONS/BUNKS SECTION
-        detailPaneEl.appendChild(renderAllowedBunksControls(special, onSave, onRerender));
-
-        // TIME RULES SECTION
-        detailPaneEl.appendChild(renderTimeRulesUI(special, onSave, onRerender));
-    }
-
-    function createDetailHeader(special, onSave, onRerender) {
-        const header = document.createElement("div");
-        header.style.cssText = "display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #E5E7EB; padding-bottom:10px; margin-bottom:16px;";
-
-        const title = document.createElement("h3");
-        title.style.cssText = "margin:0; font-size:1.05rem; font-weight:600;";
-        title.textContent = special.name;
-
-        const cleanup = makeEditable(title, (newName) => {
-            const trimmed = newName.trim();
-            if (!trimmed) return;
-
-            if (state.specialActivities.some(s => s !== special && s.name.toLowerCase() === trimmed.toLowerCase())) {
-                alert("A special with that name already exists.");
-                return;
-            }
-
-            special.name = trimmed;
-            state.selectedItemId = makeSpecialId(trimmed);
-            onSave();
-            onRerender();
-        });
-        cleanupFunctions.push(cleanup);
-
-        const delBtn = document.createElement("button");
-        delBtn.textContent = "Delete";
-        delBtn.style.cssText = "color:#DC2626; border:1px solid #FECACA; background:#fff; border-radius:999px; padding:6px 14px; cursor:pointer;";
-
-        delBtn.addEventListener("click", () => {
-            if (confirm(`Delete "${special.name}"?`)) {
-                state.specialActivities = state.specialActivities.filter(s => s !== special);
-                state.selectedItemId = null;
-                onSave();
-                onRerender();
-            }
-        });
-
-        header.appendChild(title);
-        header.appendChild(delBtn);
-
-        return header;
-    }
-
-    function createAvailabilityStrip(special) {
-        const strip = document.createElement("div");
-        const isAvailable = special.available;
-
-        strip.style.cssText = `
-            padding: 10px 14px;
-            border-radius: 14px;
-            margin-bottom: 18px;
-            border: 1px solid ${isAvailable ? '#BBF7D0' : '#FECACA'};
-            background: ${isAvailable ? '#ECFDF5' : '#FEF2F2'};
-        `;
-
-        strip.innerHTML = `
-            Currently <strong>${isAvailable ? 'AVAILABLE' : 'UNAVAILABLE'}</strong>.
-            <span style="opacity:0.7;">(Toggle in the left list)</span>
-        `;
-
-        return strip;
-    }
-
-    // ==================== TRANSITION CARD ====================
-
-    function createTransitionCard(special, onSave, onRerender) {
-        const card = document.createElement("div");
-        card.className = "sa-card";
-
-        const header = document.createElement("div");
-        header.className = "sa-card-header";
-        header.textContent = "Transition & Duration Rules";
-        card.appendChild(header);
-
-        const t = special.transition;
-
-        const container = document.createElement("div");
-        container.innerHTML = `
-            <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
-                <label style="font-weight:600; font-size:0.85rem;">Pre-Activity (To):</label>
-                <input type="number" id="pre-min-input" value="${t.preMin}" min="0" step="5" class="sa-input" style="width:60px;">
-                <label style="font-weight:600; font-size:0.85rem;">Post-Activity (From):</label>
-                <input type="number" id="post-min-input" value="${t.postMin}" min="0" step="5" class="sa-input" style="width:60px;">
-            </div>
-
-            <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
-                <label style="font-weight:600; font-size:0.85rem;">Label:</label>
-                <input type="text" id="buffer-label-input" value="${escapeHtml(t.label)}" class="sa-input" style="width:120px;">
-            </div>
-
-            <!-- Zone Selector -->
-            <div style="margin-top:15px; border-top:1px dashed #E5E7EB; padding-top:10px;">
-                <label style="font-weight:600; font-size:0.85rem;">Location Zone:</label>
-                <select id="zone-select" class="sa-select" style="width:100%; margin-top:5px;"></select>
-                <p class="sa-muted" style="font-size:0.75rem; margin-top:5px;">Required for Buffer Merging and Transport Limits.</p>
-            </div>
-
-            <!-- Occupancy Toggle -->
-            <label style="display:flex; align-items:center; gap:8px; margin-top:10px; cursor:pointer;">
-                <input type="checkbox" id="occupies-field-check" ${t.occupiesField ? 'checked' : ''} style="width:16px; height:16px;">
-                <span style="font-size:0.85rem; font-weight:600;">Buffer Occupies Resource (e.g., Setup/Change)</span>
-            </label>
-            <p class="sa-muted" style="font-size:0.75rem; margin-top:2px; padding-left:25px;">
-                If unchecked (Travel), the resource is available during transition time.
-            </p>
-
-            <!-- Minimum Duration -->
-            <div style="margin-top:15px; border-top:1px dashed #E5E7EB; padding-top:10px;">
-                <label style="font-weight:600; font-size:0.85rem;">Min Activity Duration:</label>
-                <input type="number" id="min-duration-input" value="${t.minDurationMin}" min="0" step="5" class="sa-input" style="width:60px; margin-left:5px;">
-                <span class="sa-muted" style="font-size:0.85rem;">minutes (if less, placement is rejected).</span>
-            </div>
-        `;
-
-        // Populate Zones
-        const zones = window.getZones?.() || {};
-        const zoneSelect = container.querySelector('#zone-select');
-        Object.values(zones).forEach(z => {
-            const opt = document.createElement('option');
-            opt.value = z.name;
-            opt.textContent = z.name + (z.isDefault ? ' (Default)' : '');
-            if (z.name === t.zone) opt.selected = true;
-            zoneSelect.appendChild(opt);
-        });
-
-        const updateTransition = () => {
-            t.preMin = parseInt(container.querySelector('#pre-min-input').value, 10) || 0;
-            t.postMin = parseInt(container.querySelector('#post-min-input').value, 10) || 0;
-            t.label = container.querySelector('#buffer-label-input').value.trim() || "Transition";
-            t.zone = container.querySelector('#zone-select').value;
-            t.occupiesField = container.querySelector('#occupies-field-check').checked;
-            t.minDurationMin = parseInt(container.querySelector('#min-duration-input').value, 10) || 0;
-            onSave();
-            onRerender();
-        };
-
-        container.querySelectorAll('input, select').forEach(el => {
-            el.addEventListener('change', updateTransition);
-            if (el.tagName === 'INPUT') {
-                el.addEventListener('keyup', (e) => {
-                    if (e.key === 'Enter') updateTransition();
-                });
-            }
-        });
-
-        card.appendChild(container);
-        return card;
-    }
-
-    // ==================== FREQUENCY CARD ====================
-
-    function createFrequencyCard(special, onSave, onRerender) {
-        const card = document.createElement("div");
-        card.className = "sa-card";
-
-        const header = document.createElement("div");
-        header.className = "sa-card-header";
-        header.textContent = "Frequency Limits";
-        card.appendChild(header);
-
-        const render = () => {
-            // Clear existing content except header
-            while (card.childNodes.length > 1) {
-                card.removeChild(card.lastChild);
-            }
-
-            if (special.maxUsage === null || special.maxUsage === undefined) {
-                const noLimitText = document.createElement('p');
-                noLimitText.textContent = "Unlimited usage allowed.";
-                noLimitText.style.cssText = "margin:0 0 10px; font-size:0.8rem; color:#6b7280;";
-                card.appendChild(noLimitText);
-
-                const addLimitBtn = document.createElement("button");
-                addLimitBtn.textContent = "+ Add Frequency Rule";
-                addLimitBtn.className = "sa-btn sa-btn-primary";
-
-                addLimitBtn.addEventListener("click", () => {
-                    special.maxUsage = 1;
-                    special.frequencyWeeks = 0;
-                    onSave();
-                    render();
-                });
-                card.appendChild(addLimitBtn);
-            } else {
-                const limitDesc = document.createElement('p');
-                limitDesc.textContent = "Bunks are allowed to play this:";
-                limitDesc.style.cssText = "margin:0 0 8px; font-size:0.8rem; color:#6b7280;";
-                card.appendChild(limitDesc);
-
-                const controlRow = document.createElement("div");
-                controlRow.style.cssText = "display:flex; gap:10px; align-items:center; flex-wrap:wrap;";
-
-                // Count Input
-                const maxInput = document.createElement("input");
-                maxInput.type = "number";
-                maxInput.min = "1";
-                maxInput.value = String(special.maxUsage);
-                maxInput.className = "sa-input";
-                maxInput.style.width = "60px";
-
-                maxInput.addEventListener("input", () => {
-                    const val = maxInput.value.trim();
-                    if (val !== "") {
-                        special.maxUsage = Math.max(1, parseInt(val, 10) || 1);
-                        onSave();
-                    }
-                });
-
-                maxInput.addEventListener("keyup", (e) => {
-                    if (e.key === "Enter") {
-                        special.maxUsage = Math.max(1, parseInt(maxInput.value, 10) || 1);
-                        onSave();
-                    }
-                });
-
-                const timeLabel = document.createElement("span");
-                timeLabel.textContent = "time(s) per";
-                timeLabel.style.fontSize = "0.85rem";
-
-                // Frequency Dropdown
-                const freqSelect = document.createElement("select");
-                freqSelect.className = "sa-select";
-
-                FREQUENCY_OPTIONS.forEach(opt => {
-                    const option = document.createElement("option");
-                    option.value = String(opt.value);
-                    option.textContent = opt.label;
-                    if (special.frequencyWeeks === opt.value) option.selected = true;
-                    freqSelect.appendChild(option);
-                });
-
-                freqSelect.addEventListener("change", () => {
-                    special.frequencyWeeks = parseInt(freqSelect.value, 10);
-                    onSave();
-                });
-
-                // Remove Button
-                const removeBtn = document.createElement("button");
-                removeBtn.textContent = "Remove Rule";
-                removeBtn.className = "sa-btn sa-btn-danger";
-
-                removeBtn.addEventListener("click", () => {
-                    special.maxUsage = null;
-                    special.frequencyWeeks = 0;
-                    onSave();
-                    render();
-                });
-
-                controlRow.appendChild(maxInput);
-                controlRow.appendChild(timeLabel);
-                controlRow.appendChild(freqSelect);
-                controlRow.appendChild(removeBtn);
-                card.appendChild(controlRow);
-            }
-        };
-
-        render();
-        return card;
-    }
-
-    // ==================== WEATHER CARD ====================
-
-    function createWeatherCard(special, onSave, onRerender) {
-        const card = document.createElement("div");
-        card.className = "sa-card";
-
-        const header = document.createElement("div");
-        header.className = "sa-card-header";
-        header.textContent = "Weather & Availability";
-        card.appendChild(header);
-
-        const render = () => {
-            // Clear existing content except header
-            while (card.childNodes.length > 1) {
-                card.removeChild(card.lastChild);
-            }
-
-            const isIndoor = special.rainyDayAvailable === true;
-            const isRainyOnly = special.rainyDayOnly === true;
-
-            const container = document.createElement("div");
-
-            const desc = document.createElement("p");
-            desc.className = "sa-muted";
-            desc.style.cssText = "margin:0 0 12px;";
-            desc.textContent = "Configure how this special behaves during rainy days.";
-            container.appendChild(desc);
-
-            // Indoor/Outdoor Toggle Card
-            const indoorCard = document.createElement("div");
-            indoorCard.className = `sa-weather-card ${isIndoor ? 'sa-weather-card-indoor' : 'sa-weather-card-outdoor'}`;
-
-            indoorCard.innerHTML = `
-                <span style="font-size: 28px;">${isIndoor ? '🏠' : '🌳'}</span>
-                <div style="flex: 1;">
-                    <div style="font-weight: 600; color: ${isIndoor ? '#065f46' : '#92400e'};">
-                        ${isIndoor ? 'Indoor / Covered' : 'Outdoor'}
-                    </div>
-                    <div style="font-size: 0.85rem; color: ${isIndoor ? '#047857' : '#b45309'};">
-                        ${isIndoor ? 'Available on rainy days' : 'Disabled during rainy days'}
-                    </div>
-                </div>
-            `;
-
-            const indoorToggle = createToggle(isIndoor, (checked) => {
-                special.rainyDayAvailable = checked;
-                if (!checked) {
-                    special.rainyDayOnly = false;
-                }
-                onSave();
-                onRerender();
-            });
-            indoorCard.appendChild(indoorToggle);
-            container.appendChild(indoorCard);
-
-            // Rainy Day Only Toggle Card
-            const rainyCard = document.createElement("div");
-            rainyCard.className = `sa-weather-card ${isRainyOnly ? 'sa-weather-card-rainy' : 'sa-weather-card-default'}`;
-
-            rainyCard.innerHTML = `
-                <span style="font-size: 28px;">🌧️</span>
-                <div style="flex: 1;">
-                    <div style="font-weight: 600; color: ${isRainyOnly ? '#1e40af' : '#374151'};">
-                        Rainy Day Only
-                    </div>
-                    <div style="font-size: 0.85rem; color: ${isRainyOnly ? '#3b82f6' : '#6b7280'};">
-                        ${isRainyOnly ? 'Only available when Rainy Day Mode is active' : 'Available on all days'}
-                    </div>
-                </div>
-            `;
-
-            const rainyToggle = createToggle(isRainyOnly, (checked) => {
-                special.rainyDayOnly = checked;
-                if (checked) {
-                    special.rainyDayAvailable = true;
-                }
-                onSave();
-                onRerender();
-            });
-            rainyCard.appendChild(rainyToggle);
-            container.appendChild(rainyCard);
-
-            // Tips
-            const tips = document.createElement("div");
-            tips.style.cssText = "background:#f9fafb; border-radius:8px; padding:12px; font-size:0.85rem; color:#4b5563; margin-top:12px;";
-            tips.innerHTML = `
-                <strong>💡 Tips:</strong>
-                <ul style="margin:8px 0 0 0; padding-left:20px;">
-                    <li><strong>Indoor activities</strong> (gym, arts & crafts) should be marked as "Indoor/Covered"</li>
-                    <li><strong>Rainy day specials</strong> (movie time, indoor games) should be marked as "Rainy Day Only"</li>
-                    <li><strong>Outdoor activities</strong> (lake, outdoor sports) will be auto-disabled on rainy days</li>
-                </ul>
-            `;
-            container.appendChild(tips);
-
-            card.appendChild(container);
-        };
-
-        render();
-        return card;
-    }
-
-    // ==================== SHARABLE CONTROLS ====================
-
-    function renderSharableControls(special, onSave, onRerender) {
-        const wrap = document.createElement("div");
-        wrap.className = "sa-section";
-
-        const title = document.createElement("div");
-        title.className = "sa-section-title";
-        title.textContent = "Sharing Rules:";
-        wrap.appendChild(title);
-
-        const rules = special.sharableWith;
-        const isSharable = rules.type !== 'not_sharable';
-
-        const row = document.createElement("label");
-        row.style.cssText = "display:flex; align-items:center; gap:10px; cursor:pointer;";
-
-        const cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.checked = isSharable;
-        cb.style.cssText = "width:16px; height:16px;";
-        cb.addEventListener("change", () => {
-            rules.type = cb.checked ? "all" : "not_sharable";
-            rules.divisions = [];
-            onSave();
-            onRerender();
-        });
-
-        const txt = document.createElement("span");
-        txt.textContent = "Sharable (Multiple bunks at once)";
-
-        row.appendChild(cb);
-        row.appendChild(txt);
-        wrap.appendChild(row);
-
-        // If sharable → show division chips & capacity
-        if (isSharable) {
-            const box = document.createElement("div");
-            box.style.cssText = "margin-top:10px; padding-left:20px;";
-
-            // Capacity input
-            const capRow = document.createElement("div");
-            capRow.style.marginBottom = "10px";
-            capRow.innerHTML = '<span style="font-size:0.85rem;">Max Capacity: </span>';
-
-            const capIn = document.createElement("input");
-            capIn.type = "number";
-            capIn.min = String(MIN_CAPACITY);
-            capIn.value = String(rules.capacity || DEFAULT_CAPACITY);
-            capIn.className = "sa-input";
-            capIn.style.width = "60px";
-            capIn.style.marginLeft = "8px";
-
-            capIn.addEventListener("change", () => {
-                rules.capacity = Math.max(MIN_CAPACITY, parseInt(capIn.value, 10) || MIN_CAPACITY);
-                onSave();
-            });
-
-            capIn.addEventListener("keyup", (e) => {
-                if (e.key === "Enter") {
-                    rules.capacity = Math.max(MIN_CAPACITY, parseInt(capIn.value, 10) || MIN_CAPACITY);
-                    onSave();
-                }
-            });
-
-            capRow.appendChild(capIn);
-            box.appendChild(capRow);
-
-            const help = document.createElement("div");
-            help.textContent = "Limit to divisions (optional):";
-            help.style.cssText = "font-size:0.82rem; color:#6b7280; margin-bottom:4px;";
-            box.appendChild(help);
-
-            const chips = createChipPicker(
-                window.availableDivisions || [],
-                rules.divisions,
-                () => {
-                    rules.type = rules.divisions.length ? "custom" : "all";
-                    onSave();
-                    onRerender();
-                }
-            );
-            box.appendChild(chips);
-            wrap.appendChild(box);
-        }
-
-        return wrap;
-    }
-
-    function createChipPicker(all, selected, onToggle) {
-        const box = document.createElement("div");
-        box.style.cssText = "display:flex; flex-wrap:wrap; gap:6px;";
-
-        all.forEach(name => {
-            const active = selected.includes(name);
-            const chip = document.createElement("span");
-            chip.className = "sa-chip " + (active ? "active" : "inactive");
-            chip.textContent = name;
-
-            chip.addEventListener("click", () => {
-                const idx = selected.indexOf(name);
-                if (idx > -1) selected.splice(idx, 1);
-                else selected.push(name);
-                onToggle();
-            });
-
-            box.appendChild(chip);
-        });
-
-        return box;
-    }
-
-    // ==================== ALLOWED BUNKS CONTROLS ====================
-
-    function renderAllowedBunksControls(special, onSave, onRerender) {
-        const wrap = document.createElement("div");
-        wrap.className = "sa-section";
-
-        const title = document.createElement("div");
-        title.className = "sa-section-title";
-        title.textContent = "Allowed Divisions & Bunks:";
-        wrap.appendChild(title);
-
-        const rules = special.limitUsage;
-
-        // TOGGLE - Custom styled toggle
-        const mode = document.createElement("label");
-        mode.style.cssText = "display:flex; align-items:center; gap:12px; margin-top:10px; cursor:pointer;";
-
-        const tAll = document.createElement("span");
-        tAll.textContent = "All Divisions";
-        tAll.style.fontSize = "0.9rem";
-
-        const track = document.createElement("span");
-        track.style.cssText = `
-            width:44px; height:24px; border-radius:999px;
-            display:inline-block; position:relative;
-            border:1px solid #cbd5e1;
-            background:${rules.enabled ? '#d1d5db' : '#22c55e'};
-            transition:0.2s;
-        `;
-
-        const knob = document.createElement("span");
-        knob.style.cssText = `
-            width:20px; height:20px; border-radius:50%;
-            background:#ffffff; position:absolute;
-            top:1px; left:${rules.enabled ? '21px' : '1px'};
-            transition:0.2s;
-        `;
-        track.appendChild(knob);
-
-        const tSpec = document.createElement("span");
-        tSpec.textContent = "Specific Divisions/Bunks";
-        tSpec.style.fontSize = "0.9rem";
-
-        mode.appendChild(tAll);
-        mode.appendChild(track);
-        mode.appendChild(tSpec);
-
-        mode.addEventListener("click", () => {
-            rules.enabled = !rules.enabled;
-            onSave();
-            onRerender();
-        });
-
-        wrap.appendChild(mode);
-
-        // If NOT enabled → done
-        if (!rules.enabled) return wrap;
-
-        // PANEL
-        const panel = document.createElement("div");
-        panel.style.cssText = "margin-top:12px; padding-left:20px; border-left:3px solid #e5e7eb;";
-
-        const allDivs = window.availableDivisions || [];
-
-        allDivs.forEach(div => {
-            const divWrap = document.createElement("div");
-            divWrap.style.marginTop = "8px";
-
-            const isAllowed = div in rules.divisions;
-            const bunks = window.divisions?.[div]?.bunks || [];
-            const allowedBunks = rules.divisions[div] || [];
-
-            const chip = createLimitChip(div, isAllowed);
-            chip.style.fontWeight = "600";
-            chip.addEventListener("click", () => {
-                if (isAllowed) delete rules.divisions[div];
-                else rules.divisions[div] = [];
-                onSave();
-                onRerender();
-            });
-            divWrap.appendChild(chip);
-
-            // Show bunk chips
-            if (isAllowed && bunks.length > 0) {
-                const bunkBox = document.createElement("div");
-                bunkBox.style.cssText = "display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; padding-left:22px;";
-
-                if (allowedBunks.length > 0) {
-                    const allChip = createLimitChip("All " + div, false);
-                    allChip.style.borderColor = "#00C896";
-                    allChip.style.color = "#00C896";
-                    allChip.addEventListener("click", () => {
-                        rules.divisions[div] = [];
-                        onSave();
-                        onRerender();
-                    });
-                    bunkBox.appendChild(allChip);
-                }
-
-                bunks.forEach(b => {
-                    const bc = createLimitChip(b, allowedBunks.includes(b));
-                    bc.addEventListener("click", () => {
-                        const idx = allowedBunks.indexOf(b);
-                        if (idx > -1) allowedBunks.splice(idx, 1);
-                        else allowedBunks.push(b);
-                        onSave();
-                        onRerender();
-                    });
-                    bunkBox.appendChild(bc);
-                });
-
-                divWrap.appendChild(bunkBox);
-            }
-
-            panel.appendChild(divWrap);
-        });
-
-        wrap.appendChild(panel);
-        return wrap;
-    }
-
-    function createLimitChip(text, active) {
-        const c = document.createElement("span");
-        c.className = "sa-chip " + (active ? "active" : "inactive");
-        c.textContent = text;
-        return c;
-    }
-
-    // ==================== TIME RULES UI ====================
-
-    function renderTimeRulesUI(special, onSave, onRerender) {
-        const wrap = document.createElement("div");
-        wrap.className = "sa-section";
-        wrap.style.paddingLeft = "14px";
-        wrap.style.borderLeft = "3px solid #e5e7eb";
-
-        const title = document.createElement("div");
-        title.className = "sa-section-title";
-        title.textContent = "Global Time Rules:";
-        wrap.appendChild(title);
-
-        if (!special.timeRules) special.timeRules = [];
-
-        const list = document.createElement("div");
-
-        if (special.timeRules.length === 0) {
-            list.innerHTML = `<p class="sa-muted" style="margin:0;">Available all day</p>`;
-        }
-
-        special.timeRules.forEach((rule, idx) => {
-            const row = document.createElement("div");
-            row.className = "sa-time-rule";
-
-            row.innerHTML = `
-                <span>
-                    <strong style="color:${rule.type === 'Available' ? '#059669' : '#DC2626'};">
-                        ${escapeHtml(rule.type)}
-                    </strong>
-                    from ${escapeHtml(rule.start)} to ${escapeHtml(rule.end)}
-                </span>
-            `;
-
-            const x = document.createElement("button");
-            x.textContent = "✖";
-            x.style.cssText = "background:transparent; border:none; cursor:pointer; color:#9CA3AF; font-size:1rem;";
-            x.addEventListener("click", () => {
-                special.timeRules.splice(idx, 1);
-                onSave();
-                onRerender();
-            });
-            row.appendChild(x);
-            list.appendChild(row);
-        });
-
-        wrap.appendChild(list);
-
-        // Add rule form
-        const form = document.createElement("div");
-        form.style.cssText = "margin-top:10px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;";
-
-        const sel = document.createElement("select");
-        sel.className = "sa-select";
-        sel.innerHTML = `
-            <option value="Available">Available</option>
-            <option value="Unavailable">Unavailable</option>
-        `;
-
-        const s = document.createElement("input");
-        s.placeholder = "9:00am";
-        s.className = "sa-input";
-        s.style.width = "90px";
-
-        const txt = document.createElement("span");
-        txt.textContent = " to ";
-        txt.style.margin = "0 4px";
-
-        const e = document.createElement("input");
-        e.placeholder = "10:00am";
-        e.className = "sa-input";
-        e.style.width = "90px";
-
-        const addRule = () => {
-            if (!s.value || !e.value) {
-                alert("Enter both times.");
-                return;
-            }
-            if (parseTimeToMinutes(s.value) === null) {
-                alert("Invalid start time format. Use format like 9:00am");
-                return;
-            }
-            if (parseTimeToMinutes(e.value) === null) {
-                alert("Invalid end time format. Use format like 10:00am");
-                return;
-            }
-            if (parseTimeToMinutes(s.value) >= parseTimeToMinutes(e.value)) {
-                alert("End must be after start.");
-                return;
-            }
-
-            special.timeRules.push({
-                type: sel.value,
-                start: s.value,
-                end: e.value
-            });
-            onSave();
-            onRerender();
-        };
-
-        const add = document.createElement("button");
-        add.textContent = "Add";
-        add.className = "sa-btn sa-btn-secondary";
-        add.addEventListener("click", addRule);
-
-        s.addEventListener("keyup", (e) => {
-            if (e.key === "Enter") addRule();
-        });
-        e.addEventListener("keyup", (e) => {
-            if (e.key === "Enter") addRule();
-        });
-
-        form.appendChild(sel);
-        form.appendChild(s);
-        form.appendChild(txt);
-        form.appendChild(e);
-        form.appendChild(add);
-        wrap.appendChild(form);
-
-        return wrap;
-    }
-
-    // ==================== UI HELPERS ====================
-
-    function createToggle(checked, onChange) {
-        const label = document.createElement("label");
-        label.className = "sa-switch";
-
-        const input = document.createElement("input");
-        input.type = "checkbox";
-        input.checked = checked;
-        input.addEventListener("change", () => onChange(input.checked));
-
-        const slider = document.createElement("span");
-        slider.className = "sa-slider";
-
-        label.appendChild(input);
-        label.appendChild(slider);
-
-        return label;
-    }
-
-    /**
-     * Make an element editable on double-click
-     * Returns cleanup function
-     */
-    function makeEditable(el, onSave) {
-        if (!el) return () => {};
-
-        const handleDblClick = (e) => {
-            e.stopPropagation();
-
-            const oldValue = el.textContent;
-
-            const input = document.createElement("input");
-            input.type = "text";
-            input.value = oldValue;
-            input.className = "sa-input";
-            input.style.cssText = "min-width:120px; font-size:inherit; font-weight:inherit;";
-
-            const finalize = (save = true) => {
-                const newValue = input.value.trim();
-                if (save && newValue && newValue !== oldValue) {
-                    onSave(newValue);
-                } else {
-                    el.textContent = oldValue;
-                    if (input.parentNode) {
-                        input.replaceWith(el);
-                    }
-                }
-            };
-
-            input.addEventListener("blur", () => finalize(true));
-            input.addEventListener("keyup", (e) => {
-                if (e.key === "Enter") {
-                    e.preventDefault();
-                    finalize(true);
-                } else if (e.key === "Escape") {
-                    e.preventDefault();
-                    finalize(false);
-                }
-            });
-
-            el.replaceWith(input);
-            input.focus();
-            input.select();
-        };
-
-        el.addEventListener("dblclick", handleDblClick);
-
-        return () => el.removeEventListener("dblclick", handleDblClick);
-    }
-
-    // ==================== SPECIAL OPERATIONS ====================
-
-    function addSpecial() {
-        const name = addSpecialInput?.value?.trim();
-
-        if (!name) return;
-
-        if (state.specialActivities.some(s => s.name.toLowerCase() === name.toLowerCase())) {
-            alert("Special already exists.");
-            return;
-        }
-
-        const newSpecial = {
-            name: name,
-            available: true,
-            sharableWith: deepClone(DEFAULT_SHARABLE),
-            limitUsage: deepClone(DEFAULT_LIMIT_USAGE),
-            timeRules: [],
-            maxUsage: null,
-            frequencyWeeks: 0,
-            transition: {
-                ...DEFAULT_TRANSITION,
-                zone: window.DEFAULT_ZONE_NAME || "Default"
-            },
-            rainyDayAvailable: false,
-            rainyDayOnly: false
-        };
-
-        state.specialActivities.push(newSpecial);
-        addSpecialInput.value = "";
-
+    detailPaneEl.innerHTML = "";
+
+    // -- 1. HEADER (Title & Delete) --
+    const header = document.createElement("div");
+    header.style.display = "flex";
+    header.style.justifyContent = "space-between";
+    header.style.alignItems = "center";
+    header.style.marginBottom = "16px";
+
+    const title = document.createElement("h2");
+    title.textContent = item.name;
+    title.style.margin = "0";
+    title.style.fontSize = "1.25rem";
+    title.title = "Double click to rename";
+    makeEditable(title, newName => {
+        if (!newName.trim()) return;
+        item.name = newName;
+        selectedItemId = `special-${newName}`;
         saveData();
-
-        state.selectedItemId = makeSpecialId(name);
         renderMasterList();
         renderDetailPane();
-    }
-
-    // ==================== WINDOW EXPORTS ====================
-
-    window.initSpecialActivitiesTab = initSpecialActivitiesTab;
-
-    // Use getter for fresh reference
-    Object.defineProperty(window, 'specialActivities', {
-        get: () => state.specialActivities,
-        configurable: true
     });
 
-    // Export helpers
-    window.getSpecialActivities = () => state.specialActivities;
-    window.getSpecialByName = findSpecial;
+    const delBtn = document.createElement("button");
+    delBtn.innerHTML = `
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+        </svg> Delete`;
+    delBtn.style.color = "#DC2626";
+    delBtn.style.background = "#FEF2F2";
+    delBtn.style.border = "1px solid #FECACA";
+    delBtn.style.padding = "6px 12px";
+    delBtn.style.borderRadius = "6px";
+    delBtn.style.cursor = "pointer";
+    delBtn.style.display = "flex";
+    delBtn.style.gap = "6px";
+    delBtn.style.alignItems = "center";
+    delBtn.onclick = () => {
+        if (confirm(`Delete "${item.name}"?`)) {
+            specialActivities = specialActivities.filter(s => s.name !== item.name);
+            saveData();
+            selectedItemId = null;
+            renderMasterList();
+            renderDetailPane();
+        }
+    };
+
+    header.appendChild(title);
+    header.appendChild(delBtn);
+    detailPaneEl.appendChild(header);
+
+    // -- 2. AVAILABILITY STRIP --
+    const availability = document.createElement("div");
+    availability.style.padding = "12px";
+    availability.style.borderRadius = "8px";
+    availability.style.marginBottom = "20px";
+    availability.style.background = item.available ? "#ECFDF5" : "#FEF2F2";
+    availability.style.border = item.available ? "1px solid #A7F3D0" : "1px solid #FECACA";
+    availability.style.color = item.available ? "#065F46" : "#991B1B";
+    availability.style.fontSize = "0.9rem";
+    availability.style.display = "flex";
+    availability.style.justifyContent = "space-between";
+    availability.innerHTML = `<span>Special is <strong>${item.available ? 'AVAILABLE' : 'UNAVAILABLE'}</strong></span> <span style="font-size:0.8rem; opacity:0.8;">Toggle in master list</span>`;
+    detailPaneEl.appendChild(availability);
+
+    // -- 3. ACCORDION SECTIONS --
+    
+    // Transition & Zone Rules
+    detailPaneEl.appendChild(createSection("Transition & Zone Rules", summaryTransition(item), 
+        () => renderTransition(item)));
+
+    // Frequency Limits
+    detailPaneEl.appendChild(createSection("Frequency Limits", summaryFrequency(item), 
+        () => renderFrequency(item)));
+
+    // Sharing Rules
+    detailPaneEl.appendChild(createSection("Sharing Rules", summarySharing(item), 
+        () => renderSharing(item)));
+
+    // Access & Restrictions
+    detailPaneEl.appendChild(createSection("Access & Restrictions", summaryAccess(item), 
+        () => renderAccess(item)));
+
+    // Time Rules
+    detailPaneEl.appendChild(createSection("Time Rules", summaryTime(item), 
+        () => renderTimeRules(item)));
+}
+
+//------------------------------------------------------------------
+// SECTION BUILDER (Accordion UX)
+//------------------------------------------------------------------
+function createSection(title, summary, builder) {
+    const wrap = document.createElement("div");
+    wrap.className = "sa-detail-section";
+
+    const head = document.createElement("div");
+    head.className = "sa-detail-section-header";
+
+    const t = document.createElement("div");
+    t.innerHTML = `<div class="sa-detail-section-title">${escapeHtml(title)}</div><div class="sa-detail-section-summary">${escapeHtml(summary)}</div>`;
+
+    const caret = document.createElement("span");
+    caret.innerHTML = `<svg width="20" height="20" fill="none" stroke="#9CA3AF" stroke-width="2" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"></path></svg>`;
+    caret.style.transition = "transform 0.2s";
+
+    head.appendChild(t);
+    head.appendChild(caret);
+
+    const body = document.createElement("div");
+    body.className = "sa-detail-section-body";
+
+    head.onclick = () => {
+        const open = body.style.display === "block";
+        body.style.display = open ? "none" : "block";
+        caret.style.transform = open ? "rotate(0deg)" : "rotate(90deg)";
+        if (!open && !body.dataset.built) {
+            body.innerHTML = "";
+            body.appendChild(builder());
+            body.dataset.built = "1";
+        }
+    };
+
+    wrap.appendChild(head);
+    wrap.appendChild(body);
+    return wrap;
+}
+
+//------------------------------------------------------------------
+// SUMMARY GENERATORS
+//------------------------------------------------------------------
+function summaryTransition(item) { 
+    return `${item.transition.preMin}m Pre / ${item.transition.postMin}m Post`; 
+}
+
+function summaryFrequency(item) {
+    if (item.maxUsage === null || item.maxUsage === undefined) {
+        return "Unlimited usage";
+    }
+    const freqLabels = { 0: "Summer", 1: "Week", 2: "2 Weeks", 3: "3 Weeks", 4: "4 Weeks" };
+    return `${item.maxUsage}x per ${freqLabels[item.frequencyWeeks] || "Summer"}`;
+}
+
+function summarySharing(item) { 
+    return item.sharableWith.type === "not_sharable" ? "Not sharable" : `Sharable (Max ${item.sharableWith.capacity})`; 
+}
+
+function summaryAccess(item) {
+    if (!item.limitUsage.enabled) return "Open to All Divisions";
+    if (item.preferences?.exclusive) return "Exclusive to specific divisions";
+    return "Priority/Restrictions Active";
+}
+
+function summaryTime(item) { 
+    return item.timeRules.length ? `${item.timeRules.length} rule(s) active` : "Available all day"; 
+}
+
+//------------------------------------------------------------------
+// CONTENT RENDERERS
+//------------------------------------------------------------------
+
+// 1. TRANSITION & ZONE
+function renderTransition(item) {
+    const t = item.transition;
+    const container = document.createElement("div");
+    
+    const update = () => { 
+        saveData(); 
+        renderMasterList(); 
+        // Update summary
+        const summaryEl = container.closest('.sa-detail-section')?.querySelector('.sa-detail-section-summary');
+        if (summaryEl) summaryEl.textContent = summaryTransition(item);
+    };
+
+    // Times Row
+    const timeRow = document.createElement("div");
+    timeRow.style.display = "flex";
+    timeRow.style.gap = "12px";
+    timeRow.style.marginBottom = "12px";
+    timeRow.style.flexWrap = "wrap";
+
+    const mkInput = (lbl, val, setter) => {
+        const d = document.createElement("div");
+        d.innerHTML = `<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">${lbl}</label>`;
+        const i = document.createElement("input");
+        i.type = "number";
+        i.min = "0";
+        i.step = "5";
+        i.value = val;
+        i.className = "sa-field-input";
+        i.style.width = "80px";
+        i.onchange = () => { setter(parseInt(i.value) || 0); update(); };
+        d.appendChild(i);
+        return d;
+    };
+
+    timeRow.appendChild(mkInput("Pre-Buffer (min)", t.preMin, v => t.preMin = v));
+    timeRow.appendChild(mkInput("Post-Buffer (min)", t.postMin, v => t.postMin = v));
+    container.appendChild(timeRow);
+
+    // Label & Zone Row
+    const metaRow = document.createElement("div");
+    metaRow.style.display = "flex";
+    metaRow.style.gap = "12px";
+    metaRow.style.marginBottom = "12px";
+    metaRow.style.flexWrap = "wrap";
+
+    // Label Input
+    const labelDiv = document.createElement("div");
+    labelDiv.style.flex = "1";
+    labelDiv.style.minWidth = "120px";
+    labelDiv.innerHTML = `<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">Label</label>`;
+    const labelIn = document.createElement("input");
+    labelIn.type = "text";
+    labelIn.value = t.label;
+    labelIn.className = "sa-field-input";
+    labelIn.style.width = "100%";
+    labelIn.onchange = () => { t.label = labelIn.value.trim() || "Transition"; update(); };
+    labelDiv.appendChild(labelIn);
+    metaRow.appendChild(labelDiv);
+
+    // Zone Select
+    const zoneDiv = document.createElement("div");
+    zoneDiv.style.flex = "1";
+    zoneDiv.style.minWidth = "120px";
+    zoneDiv.innerHTML = `<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">Zone (Location)</label>`;
+    const zoneSel = document.createElement("select");
+    zoneSel.className = "sa-field-input";
+    zoneSel.style.width = "100%";
+    const zones = window.getZones?.() || {};
+    Object.values(zones).forEach(z => {
+        const opt = document.createElement("option");
+        opt.value = z.name;
+        opt.textContent = z.name + (z.isDefault ? " (Default)" : "");
+        if (z.name === t.zone) opt.selected = true;
+        zoneSel.appendChild(opt);
+    });
+    zoneSel.onchange = () => { t.zone = zoneSel.value; update(); };
+    zoneDiv.appendChild(zoneSel);
+    metaRow.appendChild(zoneDiv);
+
+    // Min Duration
+    metaRow.appendChild(mkInput("Min Duration (min)", t.minDurationMin, v => t.minDurationMin = v));
+
+    container.appendChild(metaRow);
+
+    // Occupancy Toggle
+    const occLabel = document.createElement("label");
+    occLabel.style.display = "flex";
+    occLabel.style.alignItems = "center";
+    occLabel.style.gap = "8px";
+    occLabel.style.cursor = "pointer";
+    occLabel.style.marginTop = "8px";
+
+    const occCk = document.createElement("input");
+    occCk.type = "checkbox";
+    occCk.checked = t.occupiesField;
+    occCk.onchange = () => { t.occupiesField = occCk.checked; update(); };
+
+    occLabel.appendChild(occCk);
+    occLabel.appendChild(document.createTextNode("Buffer occupies resource (e.g. Setup/Change)"));
+    container.appendChild(occLabel);
+
+    const hint = document.createElement("p");
+    hint.className = "sa-muted";
+    hint.style.fontSize = "0.75rem";
+    hint.style.marginTop = "4px";
+    hint.style.paddingLeft = "22px";
+    hint.textContent = "If unchecked (Travel), the resource is available during transition time.";
+    container.appendChild(hint);
+
+    return container;
+}
+
+// 2. FREQUENCY LIMITS
+function renderFrequency(item) {
+    const container = document.createElement("div");
+
+    const updateSummary = () => {
+        const summaryEl = container.closest('.sa-detail-section')?.querySelector('.sa-detail-section-summary');
+        if (summaryEl) summaryEl.textContent = summaryFrequency(item);
+    };
+
+    const renderContent = () => {
+        container.innerHTML = "";
+
+        if (item.maxUsage === null || item.maxUsage === undefined) {
+            // No limit set
+            const noLimitBox = document.createElement("div");
+            noLimitBox.style.padding = "16px";
+            noLimitBox.style.background = "#F9FAFB";
+            noLimitBox.style.borderRadius = "8px";
+            noLimitBox.style.textAlign = "center";
+            noLimitBox.innerHTML = `
+                <p style="margin:0 0 12px; color:#6B7280;">Unlimited usage allowed.</p>
+                <button id="add-freq-rule" style="background:#10B981; color:white; border:none; padding:8px 20px; border-radius:999px; cursor:pointer; font-weight:500;">
+                    + Add Frequency Rule
+                </button>
+            `;
+            container.appendChild(noLimitBox);
+
+            container.querySelector('#add-freq-rule').onclick = () => {
+                item.maxUsage = 1;
+                item.frequencyWeeks = 0;
+                saveData();
+                renderContent();
+                updateSummary();
+            };
+        } else {
+            // Has limit
+            const desc = document.createElement("p");
+            desc.className = "sa-muted";
+            desc.style.marginBottom = "12px";
+            desc.textContent = "Bunks are allowed to use this special:";
+            container.appendChild(desc);
+
+            const controlRow = document.createElement("div");
+            controlRow.style.display = "flex";
+            controlRow.style.gap = "10px";
+            controlRow.style.alignItems = "center";
+            controlRow.style.flexWrap = "wrap";
+
+            // Count Input
+            const maxInput = document.createElement("input");
+            maxInput.type = "number";
+            maxInput.min = "1";
+            maxInput.value = item.maxUsage;
+            maxInput.className = "sa-field-input";
+            maxInput.style.width = "60px";
+            maxInput.onchange = () => {
+                const val = parseInt(maxInput.value) || 1;
+                item.maxUsage = Math.max(1, val);
+                saveData();
+                updateSummary();
+            };
+
+            const timeLabel = document.createElement("span");
+            timeLabel.textContent = "time(s) per";
+            timeLabel.style.fontSize = "0.85rem";
+
+            // Frequency Dropdown
+            const freqSelect = document.createElement("select");
+            freqSelect.className = "sa-field-input";
+            const opts = [
+                { v: 0, t: "Summer (Lifetime)" },
+                { v: 1, t: "1 Week (7 Days)" },
+                { v: 2, t: "2 Weeks (14 Days)" },
+                { v: 3, t: "3 Weeks (21 Days)" },
+                { v: 4, t: "4 Weeks (28 Days)" }
+            ];
+            opts.forEach(o => {
+                const op = document.createElement("option");
+                op.value = o.v;
+                op.textContent = o.t;
+                if (item.frequencyWeeks === o.v) op.selected = true;
+                freqSelect.appendChild(op);
+            });
+            freqSelect.onchange = () => {
+                item.frequencyWeeks = parseInt(freqSelect.value, 10);
+                saveData();
+                updateSummary();
+            };
+
+            // Remove Button
+            const removeBtn = document.createElement("button");
+            removeBtn.textContent = "Remove Rule";
+            removeBtn.style.background = "#FEE2E2";
+            removeBtn.style.color = "#DC2626";
+            removeBtn.style.border = "1px solid #FECACA";
+            removeBtn.style.padding = "6px 12px";
+            removeBtn.style.borderRadius = "6px";
+            removeBtn.style.cursor = "pointer";
+            removeBtn.onclick = () => {
+                item.maxUsage = null;
+                item.frequencyWeeks = 0;
+                saveData();
+                renderContent();
+                updateSummary();
+            };
+
+            controlRow.appendChild(maxInput);
+            controlRow.appendChild(timeLabel);
+            controlRow.appendChild(freqSelect);
+            controlRow.appendChild(removeBtn);
+            container.appendChild(controlRow);
+        }
+    };
+
+    renderContent();
+    return container;
+}
+
+// 3. SHARING RULES
+function renderSharing(item) {
+    const container = document.createElement("div");
+
+    const updateSummary = () => {
+        const summaryEl = container.closest('.sa-detail-section')?.querySelector('.sa-detail-section-summary');
+        if (summaryEl) summaryEl.textContent = summarySharing(item);
+    };
+
+    const renderContent = () => {
+        container.innerHTML = "";
+
+        const rules = item.sharableWith;
+
+        // Toggle
+        const tog = document.createElement("label");
+        tog.className = "sa-switch";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = rules.type !== 'not_sharable';
+        cb.onchange = () => {
+            rules.type = cb.checked ? 'all' : 'not_sharable';
+            rules.divisions = [];
+            saveData();
+            renderContent();
+            updateSummary();
+        };
+        const sl = document.createElement("span");
+        sl.className = "sa-slider";
+        tog.appendChild(cb);
+        tog.appendChild(sl);
+
+        const header = document.createElement("div");
+        header.style.display = "flex";
+        header.style.alignItems = "center";
+        header.style.gap = "10px";
+        header.appendChild(tog);
+        header.appendChild(document.createTextNode("Allow Sharing (Multiple bunks at once)"));
+        container.appendChild(header);
+
+        if (rules.type !== 'not_sharable') {
+            const det = document.createElement("div");
+            det.style.marginTop = "16px";
+            det.style.paddingLeft = "12px";
+            det.style.borderLeft = "2px solid #E5E7EB";
+
+            // Capacity
+            const capRow = document.createElement("div");
+            capRow.style.marginBottom = "12px";
+            capRow.innerHTML = `<span style="font-size:0.85rem;">Max Capacity: </span>`;
+            const capIn = document.createElement("input");
+            capIn.type = "number";
+            capIn.min = "2";
+            capIn.value = rules.capacity;
+            capIn.className = "sa-field-input";
+            capIn.style.width = "60px";
+            capIn.style.marginLeft = "8px";
+            capIn.onchange = () => { 
+                rules.capacity = Math.max(2, parseInt(capIn.value) || 2); 
+                saveData(); 
+                updateSummary();
+            };
+            capRow.appendChild(capIn);
+            det.appendChild(capRow);
+
+            // Limit Divisions
+            const divLabel = document.createElement("div");
+            divLabel.textContent = "Limit sharing to specific divisions (Optional):";
+            divLabel.style.fontSize = "0.85rem";
+            divLabel.style.marginBottom = "6px";
+            det.appendChild(divLabel);
+
+            const chipWrap = document.createElement("div");
+            const allDivs = window.availableDivisions || [];
+            allDivs.forEach(d => {
+                const isActive = rules.divisions.includes(d);
+                const chip = document.createElement("span");
+                chip.className = "sa-chip " + (isActive ? "active" : "inactive");
+                chip.textContent = d;
+                chip.onclick = () => {
+                    if (isActive) rules.divisions = rules.divisions.filter(x => x !== d);
+                    else rules.divisions.push(d);
+                    rules.type = rules.divisions.length > 0 ? 'custom' : 'all';
+                    saveData();
+                    chip.className = "sa-chip " + (rules.divisions.includes(d) ? "active" : "inactive");
+                };
+                chipWrap.appendChild(chip);
+            });
+            det.appendChild(chipWrap);
+            container.appendChild(det);
+        }
+    };
+
+    renderContent();
+    return container;
+}
+
+// 4. ACCESS & RESTRICTIONS
+function renderAccess(item) {
+    const container = document.createElement("div");
+
+    const updateSummary = () => {
+        const summaryEl = container.closest('.sa-detail-section')?.querySelector('.sa-detail-section-summary');
+        if (summaryEl) summaryEl.textContent = summaryAccess(item);
+    };
+
+    const renderContent = () => {
+        container.innerHTML = "";
+
+        const rules = item.limitUsage;
+        const prefs = item.preferences;
+
+        // Toggle Mode Buttons
+        const modeWrap = document.createElement("div");
+        modeWrap.style.display = "flex";
+        modeWrap.style.gap = "12px";
+        modeWrap.style.marginBottom = "16px";
+
+        const btnAll = document.createElement("button");
+        btnAll.textContent = "Open to All";
+        btnAll.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${!rules.enabled ? '#ECFDF5' : '#fff'}; color:${!rules.enabled ? '#047857' : '#333'}; border-color:${!rules.enabled ? '#10B981' : '#E5E7EB'}; font-weight:${!rules.enabled ? '600' : '400'}; transition:all 0.2s;`;
+
+        const btnRes = document.createElement("button");
+        btnRes.textContent = "Restricted / Priority";
+        btnRes.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${rules.enabled ? '#ECFDF5' : '#fff'}; color:${rules.enabled ? '#047857' : '#333'}; border-color:${rules.enabled ? '#10B981' : '#E5E7EB'}; font-weight:${rules.enabled ? '600' : '400'}; transition:all 0.2s;`;
+
+        btnAll.onclick = () => {
+            rules.enabled = false;
+            prefs.enabled = false;
+            saveData();
+            renderContent();
+            updateSummary();
+        };
+
+        btnRes.onclick = () => {
+            rules.enabled = true;
+            prefs.enabled = true;
+            saveData();
+            renderContent();
+            updateSummary();
+        };
+
+        modeWrap.appendChild(btnAll);
+        modeWrap.appendChild(btnRes);
+        container.appendChild(modeWrap);
+
+        if (rules.enabled) {
+            const body = document.createElement("div");
+
+            // Exclusive Checkbox
+            const exLabel = document.createElement("label");
+            exLabel.style.display = "flex";
+            exLabel.style.alignItems = "center";
+            exLabel.style.gap = "8px";
+            exLabel.style.marginBottom = "12px";
+            exLabel.style.cursor = "pointer";
+
+            const exCk = document.createElement("input");
+            exCk.type = "checkbox";
+            exCk.checked = prefs.exclusive;
+            exCk.onchange = () => { 
+                prefs.exclusive = exCk.checked; 
+                saveData(); 
+                updateSummary(); 
+            };
+
+            exLabel.appendChild(exCk);
+            exLabel.appendChild(document.createTextNode("Exclusive Mode (Only allowed divisions can use this)"));
+            body.appendChild(exLabel);
+
+            // Priority List Header
+            const pHeader = document.createElement("div");
+            pHeader.textContent = "Priority Order (Top = First Choice):";
+            pHeader.style.fontSize = "0.85rem";
+            pHeader.style.fontWeight = "600";
+            pHeader.style.marginBottom = "6px";
+            body.appendChild(pHeader);
+
+            const listContainer = document.createElement("div");
+
+            prefs.list = (prefs.list || []).filter(d => rules.divisions.hasOwnProperty(d));
+
+            if (prefs.list.length === 0) {
+                listContainer.innerHTML = `<div class="sa-muted" style="font-size:0.8rem; font-style:italic; padding:4px;">No priority divisions set. Add below.</div>`;
+            }
+
+            prefs.list.forEach((divName, idx) => {
+                const row = document.createElement("div");
+                row.className = "sa-priority-list-item";
+                row.innerHTML = `<span style="font-weight:bold; color:#10B981; width:20px;">${idx + 1}</span> <span style="flex:1;">${escapeHtml(divName)}</span>`;
+
+                const ctrls = document.createElement("div");
+                ctrls.style.display = "flex";
+                ctrls.style.gap = "4px";
+
+                const mkBtn = (txt, fn, dis) => {
+                    const b = document.createElement("button");
+                    b.className = "sa-priority-btn";
+                    b.textContent = txt;
+                    if (dis) b.disabled = true;
+                    else b.onclick = fn;
+                    return b;
+                };
+
+                ctrls.appendChild(mkBtn("↑", () => {
+                    [prefs.list[idx - 1], prefs.list[idx]] = [prefs.list[idx], prefs.list[idx - 1]];
+                    saveData();
+                    renderContent();
+                }, idx === 0));
+
+                ctrls.appendChild(mkBtn("↓", () => {
+                    [prefs.list[idx + 1], prefs.list[idx]] = [prefs.list[idx], prefs.list[idx + 1]];
+                    saveData();
+                    renderContent();
+                }, idx === prefs.list.length - 1));
+
+                const rm = mkBtn("✕", () => {
+                    prefs.list = prefs.list.filter(d => d !== divName);
+                    saveData();
+                    renderContent();
+                }, false);
+                rm.style.color = "#DC2626";
+                rm.style.borderColor = "#FECACA";
+                ctrls.appendChild(rm);
+
+                row.appendChild(ctrls);
+                listContainer.appendChild(row);
+            });
+
+            body.appendChild(listContainer);
+
+            // Division Selector Chips
+            const divHeader = document.createElement("div");
+            divHeader.textContent = "Allowed Divisions (Click to add/remove from priority):";
+            divHeader.style.fontSize = "0.85rem";
+            divHeader.style.fontWeight = "600";
+            divHeader.style.marginTop = "16px";
+            divHeader.style.marginBottom = "6px";
+            body.appendChild(divHeader);
+
+            const chipWrap = document.createElement("div");
+            const availableDivisions = window.availableDivisions || [];
+
+            availableDivisions.forEach(divName => {
+                const isAllowed = divName in rules.divisions;
+                const c = document.createElement("span");
+                c.className = "sa-chip " + (isAllowed ? "active" : "inactive");
+                c.textContent = divName;
+                c.onclick = () => {
+                    if (isAllowed) {
+                        delete rules.divisions[divName];
+                        prefs.list = prefs.list.filter(d => d !== divName);
+                    } else {
+                        rules.divisions[divName] = [];
+                        if (!prefs.list.includes(divName)) prefs.list.push(divName);
+                    }
+                    saveData();
+                    renderContent();
+                };
+                chipWrap.appendChild(c);
+            });
+
+            body.appendChild(chipWrap);
+            container.appendChild(body);
+        }
+    };
+
+    renderContent();
+    return container;
+}
+
+// 5. TIME RULES
+function renderTimeRules(item) {
+    const container = document.createElement("div");
+
+    const updateSummary = () => {
+        const summaryEl = container.closest('.sa-detail-section')?.querySelector('.sa-detail-section-summary');
+        if (summaryEl) summaryEl.textContent = summaryTime(item);
+    };
+
+    const renderContent = () => {
+        container.innerHTML = "";
+
+        // Existing Rules
+        if (item.timeRules.length > 0) {
+            item.timeRules.forEach((r, i) => {
+                const row = document.createElement("div");
+                row.style.display = "flex";
+                row.style.justifyContent = "space-between";
+                row.style.alignItems = "center";
+                row.style.background = "#F9FAFB";
+                row.style.padding = "8px";
+                row.style.marginBottom = "6px";
+                row.style.borderRadius = "6px";
+                row.style.border = "1px solid #E5E7EB";
+
+                const txt = document.createElement("span");
+                txt.innerHTML = `<strong style="color:${r.type === 'Available' ? '#059669' : '#DC2626'}">${escapeHtml(r.type)}</strong>: ${escapeHtml(r.start)} to ${escapeHtml(r.end)}`;
+
+                const del = document.createElement("button");
+                del.textContent = "✕";
+                del.style.border = "none";
+                del.style.background = "transparent";
+                del.style.color = "#9CA3AF";
+                del.style.cursor = "pointer";
+                del.onclick = () => {
+                    item.timeRules.splice(i, 1);
+                    saveData();
+                    renderContent();
+                    updateSummary();
+                };
+
+                row.appendChild(txt);
+                row.appendChild(del);
+                container.appendChild(row);
+            });
+        } else {
+            container.innerHTML = `<div class="sa-muted" style="font-size:0.8rem; margin-bottom:10px;">No specific time rules (Available all day).</div>`;
+        }
+
+        // Add New Row
+        const addRow = document.createElement("div");
+        addRow.style.display = "flex";
+        addRow.style.gap = "8px";
+        addRow.style.marginTop = "12px";
+        addRow.style.paddingTop = "12px";
+        addRow.style.borderTop = "1px dashed #E5E7EB";
+        addRow.style.flexWrap = "wrap";
+        addRow.style.alignItems = "center";
+
+        const typeSel = document.createElement("select");
+        typeSel.innerHTML = `<option>Available</option><option>Unavailable</option>`;
+        typeSel.className = "sa-field-input";
+
+        const startIn = document.createElement("input");
+        startIn.placeholder = "9:00am";
+        startIn.className = "sa-field-input";
+        startIn.style.width = "80px";
+
+        const endIn = document.createElement("input");
+        endIn.placeholder = "10:00am";
+        endIn.className = "sa-field-input";
+        endIn.style.width = "80px";
+
+        const btn = document.createElement("button");
+        btn.textContent = "Add";
+        btn.style.background = "#111";
+        btn.style.color = "white";
+        btn.style.border = "none";
+        btn.style.borderRadius = "6px";
+        btn.style.padding = "6px 16px";
+        btn.style.cursor = "pointer";
+
+        btn.onclick = () => {
+            if (!startIn.value || !endIn.value) {
+                alert("Please enter both start and end times.");
+                return;
+            }
+            if (parseTimeToMinutes(startIn.value) === null) {
+                alert("Invalid Start Time format. Use format like 9:00am");
+                return;
+            }
+            if (parseTimeToMinutes(endIn.value) === null) {
+                alert("Invalid End Time format. Use format like 10:00am");
+                return;
+            }
+            if (parseTimeToMinutes(startIn.value) >= parseTimeToMinutes(endIn.value)) {
+                alert("End time must be after start time.");
+                return;
+            }
+            item.timeRules.push({ 
+                type: typeSel.value, 
+                start: startIn.value, 
+                end: endIn.value 
+            });
+            saveData();
+            renderContent();
+            updateSummary();
+        };
+
+        addRow.appendChild(typeSel);
+        addRow.appendChild(startIn);
+        addRow.appendChild(document.createTextNode(" to "));
+        addRow.appendChild(endIn);
+        addRow.appendChild(btn);
+
+        container.appendChild(addRow);
+    };
+
+    renderContent();
+    return container;
+}
+
+//------------------------------------------------------------------
+// ADD SPECIAL
+//------------------------------------------------------------------
+function addSpecial() {
+    const n = addSpecialInput.value.trim();
+    if (!n) return;
+    
+    if (specialActivities.some(s => s.name.toLowerCase() === n.toLowerCase())) {
+        alert("A special activity with that name already exists.");
+        return;
+    }
+
+    specialActivities.push({
+        name: n,
+        available: true,
+        sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
+        limitUsage: { enabled: false, divisions: {} },
+        preferences: { enabled: false, exclusive: false, list: [] },
+        timeRules: [],
+        maxUsage: null,
+        frequencyWeeks: 0,
+        transition: {
+            preMin: 0,
+            postMin: 0,
+            label: "Change Time",
+            zone: window.DEFAULT_ZONE_NAME || "Default",
+            occupiesField: true,
+            minDurationMin: 0
+        }
+    });
+
+    addSpecialInput.value = "";
+    saveData();
+    selectedItemId = `special-${n}`;
+    renderMasterList();
+    renderDetailPane();
+}
+
+//------------------------------------------------------------------
+// HELPERS
+//------------------------------------------------------------------
+function escapeHtml(str) {
+    if (str === null || str === undefined) return "";
+    const div = document.createElement("div");
+    div.textContent = String(str);
+    return div.innerHTML;
+}
+
+function makeEditable(el, save) {
+    el.ondblclick = () => {
+        const inp = document.createElement("input");
+        inp.value = el.textContent;
+        inp.style.fontSize = "inherit";
+        inp.style.fontWeight = "inherit";
+        inp.style.border = "1px solid #10B981";
+        inp.style.outline = "none";
+        inp.style.borderRadius = "4px";
+        inp.style.padding = "2px 6px";
+        inp.style.width = Math.max(100, el.offsetWidth + 20) + "px";
+        el.replaceWith(inp);
+        inp.focus();
+        inp.select();
+
+        const finish = () => {
+            const newVal = inp.value.trim();
+            if (newVal && newVal !== el.textContent) {
+                save(newVal);
+            } else {
+                if (inp.parentNode) inp.replaceWith(el);
+            }
+        };
+
+        inp.onblur = finish;
+        inp.onkeyup = e => {
+            if (e.key === "Enter") finish();
+            if (e.key === "Escape") { inp.replaceWith(el); }
+        };
+    };
+}
+
+function parseTimeToMinutes(str) {
+    if (!str || typeof str !== "string") return null;
+    let s = str.trim().toLowerCase();
+    let mer = null;
+    if (s.endsWith("am") || s.endsWith("pm")) {
+        mer = s.endsWith("am") ? "am" : "pm";
+        s = s.replace(/am|pm/g, "").trim();
+    }
+    const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+    if (!m) return null;
+    let hh = parseInt(m[1], 10);
+    const mm = parseInt(m[2], 10);
+    if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
+    if (mer) {
+        if (hh === 12) hh = mer === "am" ? 0 : 12;
+        else if (mer === "pm") hh += 12;
+    }
+    return hh * 60 + mm;
+}
+
+//------------------------------------------------------------------
+// EXPORTS
+//------------------------------------------------------------------
+window.initSpecialActivitiesTab = initSpecialActivitiesTab;
+window.specialActivities = specialActivities;
+
+// Export getters for external access
+window.getSpecialActivities = function() {
+    return specialActivities;
+};
+
+window.getSpecialActivityByName = function(name) {
+    return specialActivities.find(s => s.name === name);
+};
 
 })();
