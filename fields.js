@@ -705,7 +705,7 @@ function renderActivities(item, allSports){
 
                 // Re-render sport rules section to show updated sports
                 renderSportRulesSection();
-            }, 450);
+            }, 400);
         };
 
         
