@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v10 - RAINY DAY + LOCATION AWARE)
+// scheduler_core_main.js (FIXED v10 - RAINY DAY + LOCATION AWARE + SCHEDULER API)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
@@ -86,7 +86,7 @@
     }
 
     // -------------------------------------------------------------------------
-    // LOCATION CONFLICT HELPERS
+    // LOCATION CONFLICT HELPERS (Internal & Exported API)
     // -------------------------------------------------------------------------
     
     /**
@@ -127,6 +127,7 @@
             }
             
             // Only register if not already registered (first activity wins/claims the type)
+            // Or if existing registration matches activity (reinforce)
             if (!window.locationUsageBySlot[slotIdx][locationName]) {
                 window.locationUsageBySlot[slotIdx][locationName] = {
                     activity: activityName,
@@ -166,7 +167,26 @@
         return getLocationForActivity(skeletonEvent.event);
     }
 
-    // Export Location Helpers
+    // --- PART 6: SCHEDULER API EXPORTS ---
+    
+    // 1. Reset Location Usage
+    window.resetLocationUsage = function() {
+        window.locationUsageBySlot = {};
+        console.log("[LOCATION] Usage tracking reset.");
+    };
+
+    // 2. Check Location Availability (Adapter for External Scheduler)
+    window.isLocationAvailable = function(locationName, slots, activityName) {
+        return canScheduleAtLocation(activityName, locationName, slots);
+    };
+
+    // 3. Register Location Usage (Adapter for External Scheduler)
+    window.registerLocationUsage = function(slotIdxOrArray, locationName, activityName, divisionName) {
+        const slots = Array.isArray(slotIdxOrArray) ? slotIdxOrArray : [slotIdxOrArray];
+        registerActivityAtLocation(activityName, locationName, slots, divisionName);
+    };
+
+    // 4. Standard Exports
     window.canScheduleAtLocation = canScheduleAtLocation;
     window.registerActivityAtLocation = registerActivityAtLocation;
     window.getLocationForActivity = getLocationForActivity;
@@ -474,7 +494,13 @@
         
         // ★★★ RESET disabled fields & Location Usage at start of each run ★★★
         window.currentDisabledFields = [];
-        window.locationUsageBySlot = {}; // Reset location usage
+        
+        // Use the API method if available, otherwise manual reset
+        if (window.resetLocationUsage) {
+            window.resetLocationUsage();
+        } else {
+            window.locationUsageBySlot = {}; 
+        }
         
         const Utils = window.SchedulerCoreUtils;
         const config = Utils.loadAndFilterData();
