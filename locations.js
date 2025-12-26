@@ -5,6 +5,7 @@
 // 1. ZONES - Physical areas with transition times (Main Campus, #2 School, etc.)
 // 2. FIELDS IN ZONE - Which sports fields belong to each zone
 // 3. LOCATIONS/FACILITIES - Non-field spaces (Pool, Lunchroom, Gym, Auditorium)
+// 4. PINNED TILE DEFAULTS - Default locations for Lunch, Swim, Snacks, etc.
 //
 // KEY CONCEPT: Location capacity = 1 ACTIVITY at a time (unlimited bunks)
 // If Lunch is happening in Lunchroom, 20 bunks can be there.
@@ -14,6 +15,7 @@
 'use strict';
 
 let locationZones = {};
+let pinnedTileDefaults = {};  // { "Lunch": "Lunchroom", "Swim": "Pool", etc. }
 let selectedZoneId = null;
 let zonesListEl = null;
 let detailPaneEl = null;
@@ -145,6 +147,31 @@ function initLocationsTab(){
                 </div>
             </div>
 
+            <!-- PINNED TILE DEFAULTS SECTION -->
+            <div id="pinned-tile-defaults-section" style="margin-bottom:24px;">
+              <div class="loc-detail-section">
+                <div class="loc-detail-section-header" onclick="this.parentElement.classList.toggle('expanded'); this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'block' ? 'none' : 'block';">
+                    <div>
+                        <div class="loc-detail-section-title">📍 Pinned Tile Default Locations</div>
+                        <div class="loc-detail-section-summary" id="pinned-defaults-summary">Set default locations for Lunch, Swim, Snacks, etc.</div>
+                    </div>
+                    <svg width="20" height="20" fill="none" stroke="#6B7280" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
+                </div>
+                <div class="loc-detail-section-body" style="display:block;">
+                    <p class="loc-muted" style="margin-top:0; margin-bottom:12px;">
+                        When you drop a pinned tile (Lunch, Swim, etc.) in the Master Builder or Daily Adjustments, 
+                        you'll be prompted to select a location. These defaults pre-fill that dropdown.
+                    </p>
+                    <div id="pinned-defaults-list"></div>
+                    <div style="display:flex; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid #E5E7EB;">
+                        <input id="new-pinned-tile-input" placeholder="Tile name (e.g., Assembly)" class="loc-input" style="flex:1;">
+                        <select id="new-pinned-tile-location" class="loc-input" style="flex:1;"></select>
+                        <button id="add-pinned-default-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 14px; font-size:0.8rem; cursor:pointer; white-space:nowrap;">Add Default</button>
+                    </div>
+                </div>
+              </div>
+            </div>
+
             <div style="display:flex; flex-wrap:wrap; gap:24px;">
               <!-- LEFT SIDE: ZONES LIST -->
               <div style="flex:1; min-width:280px;">
@@ -178,6 +205,9 @@ function initLocationsTab(){
     document.getElementById("add-zone-btn").onclick = addZone;
     addZoneInput.onkeyup = e => { if(e.key === "Enter") addZone(); };
 
+    // Initialize pinned tile defaults section
+    initPinnedTileDefaultsSection();
+
     renderZonesList();
     renderDetailPane();
 }
@@ -188,6 +218,7 @@ function initLocationsTab(){
 function loadData(){
     const settings = window.loadGlobalSettings?.() || {};
     locationZones = settings.locationZones || {};
+    pinnedTileDefaults = settings.pinnedTileDefaults || {};
 
     // Create default "Main Campus" zone if none exist
     if(Object.keys(locationZones).length === 0){
@@ -213,7 +244,9 @@ function loadData(){
 function saveData(){
     const settings = window.loadGlobalSettings?.() || {};
     settings.locationZones = locationZones;
+    settings.pinnedTileDefaults = pinnedTileDefaults;
     window.saveGlobalSettings?.("locationZones", locationZones);
+    window.saveGlobalSettings?.("pinnedTileDefaults", pinnedTileDefaults);
 }
 
 //------------------------------------------------------------------
@@ -750,6 +783,145 @@ function addZone(){
 }
 
 //------------------------------------------------------------------
+// PINNED TILE DEFAULTS (Hub for managing default locations)
+//------------------------------------------------------------------
+function initPinnedTileDefaultsSection(){
+    const listEl = document.getElementById("pinned-defaults-list");
+    const tileInput = document.getElementById("new-pinned-tile-input");
+    const locationSelect = document.getElementById("new-pinned-tile-location");
+    const addBtn = document.getElementById("add-pinned-default-btn");
+    
+    if(!listEl || !tileInput || !locationSelect || !addBtn) return;
+    
+    // Populate location dropdown
+    populateLocationDropdown(locationSelect);
+    
+    // Add button handler
+    addBtn.onclick = () => {
+        const tileName = tileInput.value.trim();
+        const location = locationSelect.value;
+        
+        if(!tileName){
+            alert("Please enter a tile name (e.g., Lunch, Swim, Assembly)");
+            return;
+        }
+        if(!location){
+            alert("Please select a location");
+            return;
+        }
+        
+        pinnedTileDefaults[tileName] = location;
+        saveData();
+        tileInput.value = "";
+        renderPinnedTileDefaults();
+    };
+    
+    tileInput.onkeyup = (e) => { if(e.key === "Enter") addBtn.click(); };
+    
+    // Initial render
+    renderPinnedTileDefaults();
+}
+
+function populateLocationDropdown(selectEl){
+    selectEl.innerHTML = '<option value="">-- Select Location --</option>';
+    
+    const allLocations = window.getAllLocations?.() || [];
+    
+    if(allLocations.length === 0){
+        selectEl.innerHTML += '<option value="" disabled>(Create locations in zones below first)</option>';
+        return;
+    }
+    
+    allLocations.forEach(loc => {
+        const opt = document.createElement("option");
+        opt.value = loc.name;
+        opt.textContent = loc.displayName;
+        selectEl.appendChild(opt);
+    });
+}
+
+function renderPinnedTileDefaults(){
+    const listEl = document.getElementById("pinned-defaults-list");
+    const summaryEl = document.getElementById("pinned-defaults-summary");
+    const locationSelect = document.getElementById("new-pinned-tile-location");
+    
+    if(!listEl) return;
+    
+    // Re-populate location dropdown (in case new locations were added)
+    if(locationSelect) populateLocationDropdown(locationSelect);
+    
+    const defaults = Object.entries(pinnedTileDefaults);
+    
+    // Update summary
+    if(summaryEl){
+        if(defaults.length === 0){
+            summaryEl.textContent = "No defaults set yet";
+        } else {
+            summaryEl.textContent = defaults.map(([tile, loc]) => `${tile} → ${loc}`).join(", ");
+        }
+    }
+    
+    // Render list
+    if(defaults.length === 0){
+        listEl.innerHTML = `
+            <div style="padding:16px; text-align:center; color:#9CA3AF; border:1px dashed #E5E7EB; border-radius:8px;">
+                No defaults configured yet. Add common pinned tiles like Lunch, Swim, Snacks above.
+            </div>`;
+        return;
+    }
+    
+    listEl.innerHTML = "";
+    
+    defaults.sort((a, b) => a[0].localeCompare(b[0])).forEach(([tileName, location]) => {
+        const row = document.createElement("div");
+        row.className = "location-item";
+        row.innerHTML = `
+            <div style="display:flex; align-items:center; gap:12px;">
+                <span class="location-item-name">${escapeHtml(tileName)}</span>
+                <span style="color:#6B7280;">→</span>
+                <span style="color:#3B82F6; font-weight:500;">${escapeHtml(location)}</span>
+            </div>
+            <div class="location-item-actions">
+                <select class="loc-input" style="width:auto; padding:4px 8px; font-size:0.85rem;" data-tile="${escapeHtml(tileName)}">
+                    ${generateLocationOptions(location)}
+                </select>
+                <button class="location-delete-btn" data-tile="${escapeHtml(tileName)}">✕</button>
+            </div>
+        `;
+        
+        // Change location handler
+        const select = row.querySelector("select");
+        select.onchange = () => {
+            pinnedTileDefaults[tileName] = select.value;
+            saveData();
+            renderPinnedTileDefaults();
+        };
+        
+        // Delete handler
+        const delBtn = row.querySelector(".location-delete-btn");
+        delBtn.onclick = () => {
+            delete pinnedTileDefaults[tileName];
+            saveData();
+            renderPinnedTileDefaults();
+        };
+        
+        listEl.appendChild(row);
+    });
+}
+
+function generateLocationOptions(selectedLocation){
+    const allLocations = window.getAllLocations?.() || [];
+    let html = '<option value="">-- None --</option>';
+    
+    allLocations.forEach(loc => {
+        const selected = loc.name === selectedLocation ? 'selected' : '';
+        html += `<option value="${escapeHtml(loc.name)}" ${selected}>${escapeHtml(loc.displayName)}</option>`;
+    });
+    
+    return html;
+}
+
+//------------------------------------------------------------------
 // HELPERS
 //------------------------------------------------------------------
 function escapeHtml(str) {
@@ -875,6 +1047,29 @@ window.registerLocationUsage = function(slotIndex, locationName, activity, divis
 window.resetLocationUsage = function(){
     window.locationUsageBySlot = {};
 };
+
+// Get default location for a pinned tile type
+window.getPinnedTileDefaultLocation = function(tileType){
+    const settings = window.loadGlobalSettings?.() || {};
+    return settings.pinnedTileDefaults?.[tileType] || null;
+};
+
+// Get all pinned tile defaults
+window.getPinnedTileDefaults = function(){
+    const settings = window.loadGlobalSettings?.() || {};
+    return settings.pinnedTileDefaults || {};
+};
+
+// Set a pinned tile default location (can be called from other modules)
+window.setPinnedTileDefaultLocation = function(tileType, locationName){
+    const settings = window.loadGlobalSettings?.() || {};
+    settings.pinnedTileDefaults = settings.pinnedTileDefaults || {};
+    settings.pinnedTileDefaults[tileType] = locationName;
+    window.saveGlobalSettings?.("pinnedTileDefaults", settings.pinnedTileDefaults);
+};
+
+// Refresh pinned tile defaults UI (call after adding locations)
+window.refreshPinnedTileDefaultsUI = renderPinnedTileDefaults;
 
 console.log("[LOCATIONS] Location Zones module loaded");
 
