@@ -1,14 +1,16 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v9 - RAINY DAY AWARE + GLOBAL DISABLED EXPOSURE)
+// scheduler_core_main.js (FIXED v10 - RAINY DAY + LOCATION AWARE)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
-// 1. Initialize GlobalFieldLocks (RESET)
-// 2. Process Bunk Overrides (pinned specific bunks) - NOW WITH PROPER HANDLING
+// 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
+// 2. Process Bunk Overrides (pinned specific bunks)
+//    - Checks Location Conflicts for Specials
 //    - Personal Trips: Pinned tiles, no field usage
 //    - Sports: Register field usage for capacity tracking
-//    - Specials: Register field usage for capacity tracking
+//    - Specials: Register field/location usage
 // 2.5. Process Elective Tiles - Lock fields for other divisions
 // 3. Process Skeleton Blocks - identify leagues, smart tiles, activities
+//    - Register Location Usage for Pinned Blocks
 // 4. ★ SPECIALTY LEAGUES FIRST ★ - Lock their fields globally
 // 5. ★ REGULAR LEAGUES SECOND ★ - Lock their fields globally
 // 6. Process Smart Tiles - respect all locks
@@ -82,6 +84,94 @@
             regularAvailable
         };
     }
+
+    // -------------------------------------------------------------------------
+    // LOCATION CONFLICT HELPERS
+    // -------------------------------------------------------------------------
+    
+    /**
+     * Check if a location-based activity can be scheduled at the given slots
+     */
+    function canScheduleAtLocation(activityName, locationName, slots) {
+        if (!locationName) return true; // No location constraint
+        
+        const usage = window.locationUsageBySlot || {};
+        
+        for (const slotIdx of slots) {
+            const slotUsage = usage[slotIdx]?.[locationName];
+            if (slotUsage) {
+                // Location is in use - check if it's the SAME activity
+                // (Multiple bunks doing "Lunch" at Lunchroom is OK)
+                // (One bunk doing "Skits" while another does "Lunch" is NOT OK)
+                if (slotUsage.activity.toLowerCase() !== activityName.toLowerCase()) {
+                    console.log(`[LOCATION_CONFLICT] ${activityName} blocked at ${locationName} - ${slotUsage.activity} already scheduled`);
+                    return false;
+                }
+            }
+        }
+        
+        return true;
+    }
+
+    /**
+     * Register that an activity is using a location at specific time slots
+     */
+    function registerActivityAtLocation(activityName, locationName, slots, divisionName) {
+        if (!locationName) return;
+        
+        window.locationUsageBySlot = window.locationUsageBySlot || {};
+        
+        for (const slotIdx of slots) {
+            if (!window.locationUsageBySlot[slotIdx]) {
+                window.locationUsageBySlot[slotIdx] = {};
+            }
+            
+            // Only register if not already registered (first activity wins/claims the type)
+            if (!window.locationUsageBySlot[slotIdx][locationName]) {
+                window.locationUsageBySlot[slotIdx][locationName] = {
+                    activity: activityName,
+                    division: divisionName,
+                    timestamp: Date.now()
+                };
+                console.log(`[LOCATION] Registered ${activityName} at ${locationName} for slot ${slotIdx}`);
+            }
+        }
+    }
+
+    /**
+     * Get the location for a special activity by name
+     */
+    function getLocationForActivity(activityName) {
+        if (!activityName) return null;
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const specials = globalSettings.app1?.specialActivities || [];
+        
+        const special = specials.find(s => 
+            s.name.toLowerCase() === activityName.toLowerCase()
+        );
+        
+        return special?.location || null;
+    }
+
+    /**
+     * Get the location for a pinned event from skeleton
+     */
+    function getLocationForPinnedEvent(skeletonEvent) {
+        // Check if the event has a location assigned directly
+        if (skeletonEvent.location) {
+            return skeletonEvent.location;
+        }
+        
+        // Check if it's a special activity with a location
+        return getLocationForActivity(skeletonEvent.event);
+    }
+
+    // Export Location Helpers
+    window.canScheduleAtLocation = canScheduleAtLocation;
+    window.registerActivityAtLocation = registerActivityAtLocation;
+    window.getLocationForActivity = getLocationForActivity;
+    window.getLocationForPinnedEvent = getLocationForPinnedEvent;
+
 
     // -------------------------------------------------------------------------
     // SWIM/POOL ALIAS SYSTEM
@@ -379,11 +469,12 @@
     // =========================================================================
     window.runSkeletonOptimizer = function (manualSkeleton, externalOverrides) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v9 - RAINY DAY AWARE) ★★★");
+        console.log("★★★ OPTIMIZER STARTED (v10 - RAINY DAY + LOCATION AWARE) ★★★");
         console.log("=".repeat(70));
         
-        // ★★★ RESET disabled fields at start of each run ★★★
+        // ★★★ RESET disabled fields & Location Usage at start of each run ★★★
         window.currentDisabledFields = [];
+        window.locationUsageBySlot = {}; // Reset location usage
         
         const Utils = window.SchedulerCoreUtils;
         const config = Utils.loadAndFilterData();
@@ -456,12 +547,6 @@
 
             console.log(`[RainyDay] Total disabled fields: ${disabledFields.length}`);
             console.log(`[RainyDay] Disabled: ${disabledFields.join(', ')}`);
-            
-            // Note: We don't need to explicitly "enable" rainy-day-only specials here 
-            // because they are likely in masterSpecials already. 
-            // The filtering logic (which is in logic fillers) uses the rainyDayOnly flag.
-            // Since we are only updating core_main, we ensure the disabledFields list is correct
-            // so smart tiles and other logic in this file don't use outdoor fields.
         } else {
             // Even when not rainy day, expose disabled fields (from manual overrides)
             window.currentDisabledFields = disabledFields || [];
@@ -499,6 +584,7 @@
         // - Personal Trips: Treated as pinned (no field usage)
         // - Sports: Register field usage for capacity tracking
         // - Specials: Register field usage for capacity tracking
+        // - Checks Location Conflicts for Specials
         // =========================================================================
         console.log("\n[STEP 2] Processing bunk overrides...");
         const bunkOverrides = window.loadCurrentDailyData?.().bunkActivityOverrides || [];
@@ -608,6 +694,13 @@
                     console.warn(`  → Special ${activityName} is LOCKED for ${divName}, cannot assign to ${bunk}`);
                     return;
                 }
+
+                // ★★★ LOCATION CONFLICT CHECK ★★★
+                const locName = getLocationForActivity(activityName);
+                if (locName && !canScheduleAtLocation(activityName, locName, slots)) {
+                     console.warn(`[BunkOverride] ${activityName} blocked for ${bunk} - location ${locName} in use`);
+                     return;
+                }
                 
                 // Check capacity
                 const props = activityProperties[activityName] || {};
@@ -648,6 +741,10 @@
                     false,
                     activityProperties
                 );
+                
+                // ★★★ REGISTER LOCATION USAGE ★★★
+                registerActivityAtLocation(activityName, locName, slots, divName);
+
                 console.log(`  → Special ${activityName} assigned to ${bunk}`);
                 
             } else {
@@ -864,6 +961,13 @@
 
                 if ((item.type === "pinned" || !isGenerated) && !isSchedulable && item.type !== "smart" && !hasBuffer) {
                     if (disabledFields.includes(finalName) || disabledSpecials.includes(finalName)) return;
+                    
+                    // ★★★ REGISTER LOCATION USAGE FOR PINNED EVENTS ★★★
+                    const locName = getLocationForPinnedEvent(item);
+                    if (locName) {
+                         registerActivityAtLocation(item.event, locName, slots, divName);
+                    }
+
                     bunkList.forEach(b => {
                         // ★★★ SKIP BUNKS WITH OVERRIDES ★★★
                         const existing = window.scheduleAssignments[b]?.[slots[0]];
@@ -1193,6 +1297,33 @@ window.debugRainyDayMode = function() {
     const overrides = dailyData.overrides || {};
     console.log(`  Disabled Fields: ${(overrides.disabledFields || []).join(', ') || 'none'}`);
     console.log(`  Pre-Rainy Disabled: ${(dailyData.preRainyDayDisabledFields || []).join(', ') || 'none'}`);
+    
+    console.log('\n' + '='.repeat(60));
+};
+
+window.debugLocationUsage = function() {
+    console.log('\n' + '='.repeat(60));
+    console.log('LOCATION USAGE DEBUG');
+    console.log('='.repeat(60));
+    
+    const usage = window.locationUsageBySlot || {};
+    const slots = Object.keys(usage).sort((a, b) => parseInt(a) - parseInt(b));
+    
+    if (slots.length === 0) {
+        console.log('No location usage registered.');
+        return;
+    }
+    
+    slots.forEach(slotIdx => {
+        const slotUsage = usage[slotIdx];
+        const locations = Object.keys(slotUsage);
+        
+        console.log(`\nSlot ${slotIdx}:`);
+        locations.forEach(loc => {
+            const info = slotUsage[loc];
+            console.log(`  📍 ${loc}: ${info.activity} (${info.division})`);
+        });
+    });
     
     console.log('\n' + '='.repeat(60));
 };
