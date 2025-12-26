@@ -1,5 +1,5 @@
 // =================================================================
-// daily_adjustments.js  (v3.1 - MERGED: Beta Features + Published)
+// daily_adjustments.js  (v3.2 - Updated: Default Locations)
 // - Grid/tiles EXACTLY match master_schedule_builder.js
 // - Professional Rainy Day Mode toggle with animations
 // - Drag-to-reposition with live preview
@@ -9,6 +9,7 @@
 // - Full Bunk-Specific Overrides UI
 // - Full Resource Availability with Detail Pane
 // - Smart Tiles passed to Core Optimizer for capacity awareness
+// - Integration with getPinnedTileDefaultLocation for Pinned Events
 // =================================================================
 (function() {
 'use strict';
@@ -572,8 +573,16 @@ function renderEventTile(ev, top, height) {
   } else {
     content = `<div style="font-weight:600;line-height:1.3;">${eventName}</div><div style="font-size:${timeSize};opacity:0.85;">${timeStr}</div>`;
     
-    if (ev.reservedFields && ev.reservedFields.length > 0 && adjustedHeight > 60 && ev.type !== 'elective') {
-      content += `<div style="font-size:0.65rem;color:#c62828;margin-top:2px;">📍 ${ev.reservedFields.join(', ')}</div>`;
+    // UPDATED: Location rendering with location badge
+    const locationDisplay = ev.location || (ev.reservedFields && ev.reservedFields.length > 0 ? ev.reservedFields.join(', ') : null);
+    
+    if (locationDisplay && adjustedHeight > 60 && ev.type !== 'elective') {
+      content += `
+        <div class="tile-location-badge" style="font-size:0.7rem;color:#c62828;margin-top:2px;display:flex;align-items:center;gap:3px;">
+          <span>📍</span>
+          <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${locationDisplay}</span>
+        </div>
+      `;
     }
     
     if (ev.type === 'elective' && ev.electiveActivities && adjustedHeight > 50) {
@@ -983,16 +992,43 @@ function addDropListeners(gridEl) {
       else if (['lunch', 'snacks', 'custom', 'dismissal', 'swim'].includes(tileData.type)) {
         let name = tileData.name;
         let reservedFields = [];
+        let defaultLocation = null;
+
+        // NEW: Check global default location logic first
+        if (window.getPinnedTileDefaultLocation) {
+            defaultLocation = window.getPinnedTileDefaultLocation(tileData.type);
+            if (defaultLocation) {
+                reservedFields = [defaultLocation];
+            }
+        }
+
         if (tileData.type === 'custom') {
           name = prompt("Event Name:", "Regroup"); if (!name) return;
-          reservedFields = promptForReservedFields(name);
+          // Custom prompt overrides default if user enters something, but we respect the default if they leave it blank?
+          // Actually, promptForReservedFields is explicit.
+          const manualFields = promptForReservedFields(name);
+          if (manualFields && manualFields.length > 0) reservedFields = manualFields;
         } else if (tileData.type === 'swim') {
-          const swimField = (masterSettings.app1.fields || []).find(f => f.name.toLowerCase().includes('swim') || f.name.toLowerCase().includes('pool'));
-          if (swimField) reservedFields = [swimField.name];
+          // Fallback if no default location set via new API
+          if (reservedFields.length === 0) {
+             const swimField = (masterSettings.app1.fields || []).find(f => f.name.toLowerCase().includes('swim') || f.name.toLowerCase().includes('pool'));
+             if (swimField) reservedFields = [swimField.name];
+          }
         }
+        
         let st = prompt(name + " Start:", startStr); if (!st) return;
         let et = prompt(name + " End:", endStr); if (!et) return;
-        newEvent = { id: Date.now().toString(), type: 'pinned', event: name, division: divName, startTime: st, endTime: et, reservedFields };
+        
+        newEvent = { 
+            id: Date.now().toString(), 
+            type: 'pinned', 
+            event: name, 
+            division: divName, 
+            startTime: st, 
+            endTime: et, 
+            reservedFields,
+            location: defaultLocation || (reservedFields.length > 0 ? reservedFields[0] : null) // Add location property
+        };
       }
       // Handle LEAGUE tiles
       else if (tileData.type === 'league') {
