@@ -705,7 +705,7 @@ function renderActivities(item, allSports){
 
                 // Re-render sport rules section to show updated sports
                 renderSportRulesSection();
-            }, 400);
+            }, 300);
         };
 
         
@@ -723,14 +723,30 @@ function renderActivities(item, allSports){
             // Check how many fields use this sport
             const fieldsUsingSport = fields.filter(f => f.activities.includes(s));
             
-            if(fieldsUsingSport.length === 1 && fieldsUsingSport[0] === item) {
-                // This is a custom sport only on this field
-                if(confirm(`Remove "${s}" from activities? This will delete this custom activity.`)) {
+            if(fieldsUsingSport.length > 1) {
+                // Sport is used by multiple fields - just remove from this field
+                if(confirm(`Remove "${s}" from this field? (Other fields still use this activity)`)) {
+                    item.activities = item.activities.filter(x => x !== s);
+                    saveData();
+                    b.className = "activity-button";
+                    
+                    const summaryEl = b.closest('.detail-section')?.querySelector('.detail-section-summary');
+                    if(summaryEl) summaryEl.textContent = summaryActivities(item);
+                    
+                    renderSportRulesSection();
+                }
+            } else {
+                // Sport is only on this field (or not on any field) - delete it globally
+                const msg = fieldsUsingSport.length === 1 
+                    ? `Remove "${s}"? This will delete this activity completely.`
+                    : `Delete "${s}" from all activities?`;
+                    
+                if(confirm(msg)) {
                     item.activities = item.activities.filter(x => x !== s);
                     window.removeGlobalSport?.(s);
                     saveData();
                     
-                    // Re-render the activities section
+                    // Re-render the activities section with fresh global sports list
                     const parentBody = box.parentElement;
                     if(parentBody) {
                         parentBody.innerHTML = '';
@@ -739,18 +755,6 @@ function renderActivities(item, allSports){
                     
                     // Update summary
                     const summaryEl = box.closest('.detail-section')?.querySelector('.detail-section-summary');
-                    if(summaryEl) summaryEl.textContent = summaryActivities(item);
-                    
-                    renderSportRulesSection();
-                }
-            } else if(fieldsUsingSport.length > 1) {
-                // Sport is used by multiple fields - just remove from this field
-                if(confirm(`Remove "${s}" from this field? (Other fields still use this activity)`)) {
-                    item.activities = item.activities.filter(x => x !== s);
-                    saveData();
-                    b.className = "activity-button";
-                    
-                    const summaryEl = b.closest('.detail-section')?.querySelector('.detail-section-summary');
                     if(summaryEl) summaryEl.textContent = summaryActivities(item);
                     
                     renderSportRulesSection();
