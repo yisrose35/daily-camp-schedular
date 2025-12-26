@@ -141,55 +141,49 @@
     async function bootCampistryApp() {
         console.log("🚀 Booting Campistry...");
         
-        // Check if welcome.js already booted the app
+        // Check if already booted
         if (window.__CAMPISTRY_BOOTED__) {
-            console.log("🚀 App already booted by welcome.js");
+            console.log("🚀 App already booted");
             return;
         }
         
-        // ⭐ Wait for cloud hydration event (this fires AFTER cloud data is loaded)
+        // ⭐ Wait for cloud hydration event with short timeout
         console.log("🚀 Waiting for cloud data...");
         
         const cloudReady = await new Promise((resolve) => {
-            // If already ready with data, proceed
-            const cache = JSON.parse(localStorage.getItem('CAMPISTRY_UNIFIED_STATE') || '{}');
-            if (Object.keys(cache.divisions || {}).length > 0) {
-                console.log("🚀 Local cache has data, proceeding");
-                resolve(true);
-                return;
-            }
-            
-            // Wait for cloud hydration event
+            // Set up event listener
             const handler = (e) => {
-                console.log("🚀 Cloud hydration event received:", e.detail);
+                console.log("🚀 Cloud hydration event received");
                 window.removeEventListener('campistry-cloud-hydrated', handler);
+                clearTimeout(timeout);
                 resolve(true);
             };
             window.addEventListener('campistry-cloud-hydrated', handler);
             
-            // Timeout after 8 seconds
-            setTimeout(() => {
+            // Short timeout - cloud fetch should be fast
+            const timeout = setTimeout(() => {
+                console.warn("⚠️ Cloud timeout after 3s, checking cache...");
                 window.removeEventListener('campistry-cloud-hydrated', handler);
-                console.warn("⚠️ Cloud hydration timeout after 8s");
-                resolve(false);
-            }, 8000);
+                
+                // Check if we have data in cache already
+                const cache = JSON.parse(localStorage.getItem('CAMPISTRY_UNIFIED_STATE') || '{}');
+                if (Object.keys(cache.divisions || {}).length > 0) {
+                    console.log("✓ Found data in cache");
+                    resolve(true);
+                } else {
+                    console.warn("⚠️ No data in cache");
+                    resolve(false);
+                }
+            }, 3000);
         });
         
-        if (cloudReady) {
-            console.log("☁️ Cloud ready, initializing app...");
-        } else {
-            console.warn("⚠️ Proceeding without cloud data");
-        }
-        
-        // Mark as booted to prevent duplicate boots
+        // Mark as booted
         window.__CAMPISTRY_BOOTED__ = true;
+        window.__CAMPISTRY_CLOUD_READY__ = true;
         
-        // Refresh global registry first
-        console.log("🚀 Refreshing global registry...");
+        // Refresh registry and initialize
+        console.log("🚀 Initializing UI...");
         window.refreshGlobalRegistry?.();
-        
-        // Initialize components
-        console.log("🚀 Initializing components...");
         window.initCalendar?.();
         window.initApp1?.();
         window.initLeagues?.();
