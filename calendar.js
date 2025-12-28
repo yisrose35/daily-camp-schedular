@@ -1,14 +1,15 @@
 // =================================================================
-// calendar.js (FIXED)
+// calendar.js (FIXED v2.1)
 //
 // FIXES:
-// - Uses unified storage key for export/import
-// - Proper backup/restore with all data
+// - Uses resetCloudState() for full erase (updates memory cache + cloud)
+// - Uses clearCloudKeys() for partial resets (New Half, etc.)
+// - Proper async/await flow for all reset operations
 // - Division color index persistence
 // =================================================================
 (function() {
     'use strict';
-    console.log("🗓️ calendar.js v2.0 (FIXED) loaded");
+    console.log("🗓️ calendar.js v2.1 (FIXED) loaded");
     
     // ==========================================================
     // 1. STORAGE KEYS - UNIFIED
@@ -20,7 +21,7 @@
     // Daily data (separate - changes frequently)
     const DAILY_DATA_KEY = "campDailyData_v1";
     const ROTATION_HISTORY_KEY = "campRotationHistory_v1";
-    const AUTO_SAVE_KEY = "campAutoSave_v2"; // Bumped version
+    const AUTO_SAVE_KEY = "campAutoSave_v2";
     
     // Smart tile histories
     const SMART_TILE_HISTORY_KEY = "smartTileHistory_v1";
@@ -151,25 +152,37 @@
     };
     
     // ==========================================================
-    // RESET ALL ACTIVITY / SPECIAL ROTATION
+    // RESET ALL ACTIVITY / SPECIAL ROTATION (FIXED)
     // ==========================================================
     window.eraseRotationHistory = async function() {
         try {
+            console.log("🔄 Erasing rotation history...");
+            
+            // Clear localStorage items
             localStorage.removeItem(ROTATION_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
             
-            // Clear from global settings (cloud-synced)
-            window.saveGlobalSettings?.('manualUsageOffsets', undefined);
-            window.saveGlobalSettings?.('historicalCounts', {});
-            
-            // ⭐ Wait for cloud sync before reloading
-            if (typeof window.forceSyncToCloud === 'function') {
-                console.log("☁️ Syncing rotation reset to cloud...");
-                await window.forceSyncToCloud();
+            // ⭐ Use clearCloudKeys to properly update memory cache AND cloud
+            if (typeof window.clearCloudKeys === 'function') {
+                console.log("☁️ Clearing cloud keys for rotation history...");
+                await window.clearCloudKeys([
+                    'manualUsageOffsets',
+                    'historicalCounts',
+                    'smartTileHistory'
+                ]);
+            } else {
+                // Fallback if clearCloudKeys not available
+                window.saveGlobalSettings?.('manualUsageOffsets', undefined);
+                window.saveGlobalSettings?.('historicalCounts', {});
+                window.saveGlobalSettings?.('smartTileHistory', {});
+                
+                if (typeof window.forceSyncToCloud === 'function') {
+                    await window.forceSyncToCloud();
+                }
             }
             
-            console.log("All rotation histories cleared.");
+            console.log("✅ All rotation histories cleared.");
             alert("Activity & Smart Tile History reset successfully!");
             window.location.reload();
         } catch (e) {
@@ -179,7 +192,7 @@
     };
     
     // ==========================================================
-    // START NEW HALF
+    // START NEW HALF (FIXED)
     // ==========================================================
     window.startNewHalf = async function() {
         const confirmed = confirm(
@@ -204,7 +217,7 @@
             console.log("⭐ STARTING NEW HALF - Resetting Counters ⭐");
             console.log("=".repeat(50));
             
-            // Clear localStorage items
+            // Clear localStorage items (non-cloud-synced)
             localStorage.removeItem(ROTATION_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
@@ -212,16 +225,26 @@
             localStorage.removeItem(SPECIALTY_LEAGUE_HISTORY_KEY);
             localStorage.removeItem(DAILY_DATA_KEY);
             
-            // Clear cloud-synced settings
-            window.saveGlobalSettings?.('leagueRoundState', {});
-            window.saveGlobalSettings?.('manualUsageOffsets', undefined);
-            window.saveGlobalSettings?.('historicalCounts', {});
-            
-            // ⭐ Wait for cloud sync before reloading
-            if (typeof window.forceSyncToCloud === 'function') {
-                console.log("☁️ Syncing reset to cloud...");
-                await window.forceSyncToCloud();
-                console.log("☁️ Cloud sync complete");
+            // ⭐ Use clearCloudKeys to properly update memory cache AND cloud
+            if (typeof window.clearCloudKeys === 'function') {
+                console.log("☁️ Clearing cloud keys for new half...");
+                await window.clearCloudKeys([
+                    'leagueRoundState',
+                    'manualUsageOffsets', 
+                    'historicalCounts',
+                    'smartTileHistory'
+                ]);
+                console.log("☁️ Cloud keys cleared");
+            } else {
+                // Fallback
+                window.saveGlobalSettings?.('leagueRoundState', {});
+                window.saveGlobalSettings?.('manualUsageOffsets', undefined);
+                window.saveGlobalSettings?.('historicalCounts', {});
+                window.saveGlobalSettings?.('smartTileHistory', {});
+                
+                if (typeof window.forceSyncToCloud === 'function') {
+                    await window.forceSyncToCloud();
+                }
             }
             
             console.log("⭐ NEW HALF RESET COMPLETE ⭐");
@@ -240,11 +263,12 @@
     };
     
     // ==========================================================
-    // 5. ERASE ALL DATA
+    // 5. ERASE ALL DATA (FIXED - Uses resetCloudState)
     // ==========================================================
     function setupEraseAll() {
         const btn = document.getElementById("eraseAllBtn");
         if (!btn) return;
+        
         btn.onclick = async function() {
             if (!confirm("Erase ALL settings, schedules, and rotation histories?\nThis cannot be undone.")) return;
             
@@ -252,65 +276,89 @@
             btn.disabled = true;
             btn.textContent = "Erasing...";
             
-            // Clear everything from localStorage
-            const keysToRemove = [
-                UNIFIED_CACHE_KEY,
-                DAILY_DATA_KEY,
-                ROTATION_HISTORY_KEY,
-                AUTO_SAVE_KEY,
-                SMART_TILE_HISTORY_KEY,
-                SMART_TILE_SPECIAL_HISTORY_KEY,
-                LEAGUE_HISTORY_KEY,
-                SPECIALTY_LEAGUE_HISTORY_KEY,
-                LEGACY_GLOBAL_SETTINGS_KEY,
-                LEGACY_GLOBAL_REGISTRY_KEY,
-                "CAMPISTRY_LOCAL_CACHE",
-                "campSchedulerData",
-                "fixedActivities_v2",
-                "leagues",
-                "camp_league_round_state",
-                "camp_league_sport_rotation",
-                "scheduleAssignments",
-                "leagueAssignments"
-            ];
-            
-            keysToRemove.forEach(key => localStorage.removeItem(key));
-            
-            // ⭐ Save empty state to cloud
             try {
-                const emptyState = {
-                    divisions: {},
-                    bunks: [],
-                    app1: {
+                console.log("🗑️ Starting full data erase...");
+                
+                // Clear all localStorage keys (non-cloud items)
+                const localOnlyKeys = [
+                    DAILY_DATA_KEY,
+                    ROTATION_HISTORY_KEY,
+                    AUTO_SAVE_KEY,
+                    SMART_TILE_HISTORY_KEY,
+                    SMART_TILE_SPECIAL_HISTORY_KEY,
+                    LEAGUE_HISTORY_KEY,
+                    SPECIALTY_LEAGUE_HISTORY_KEY,
+                    "campSchedulerData",
+                    "fixedActivities_v2",
+                    "leagues",
+                    "camp_league_round_state",
+                    "camp_league_sport_rotation",
+                    "scheduleAssignments",
+                    "leagueAssignments"
+                ];
+                
+                localOnlyKeys.forEach(key => {
+                    localStorage.removeItem(key);
+                    console.log("  Removed:", key);
+                });
+                
+                // ⭐ Use resetCloudState to properly clear memory cache, localStorage, AND cloud
+                if (typeof window.resetCloudState === 'function') {
+                    console.log("☁️ Resetting cloud state...");
+                    const success = await window.resetCloudState();
+                    console.log("☁️ Cloud reset result:", success ? "SUCCESS" : "FAILED");
+                    
+                    if (!success) {
+                        alert("⚠️ Warning: Cloud sync may have failed.\nLocal data has been cleared, but cloud data may persist.");
+                    }
+                } else {
+                    // Fallback: Clear localStorage keys manually
+                    console.log("⚠️ resetCloudState not available, using fallback...");
+                    
+                    const emptyState = {
                         divisions: {},
                         bunks: [],
-                        fields: [],
-                        specialActivities: [],
-                        allSports: [],
-                        bunkMetaData: {},
-                        sportMetaData: {},
-                        savedSkeletons: {},
-                        skeletonAssignments: {}
-                    },
-                    locationZones: {},
-                    pinnedTileDefaults: {},
-                    leaguesByName: {},
-                    leagueRoundState: {},
-                    updated_at: new Date().toISOString()
-                };
-                
-                localStorage.setItem(UNIFIED_CACHE_KEY, JSON.stringify(emptyState));
-                
-                if (typeof window.forceSyncToCloud === 'function') {
-                    console.log("☁️ Clearing cloud data...");
-                    const success = await window.forceSyncToCloud();
-                    console.log("☁️ Cloud clear result:", success);
+                        app1: {
+                            divisions: {},
+                            bunks: [],
+                            fields: [],
+                            specialActivities: [],
+                            allSports: [],
+                            bunkMetaData: {},
+                            sportMetaData: {},
+                            savedSkeletons: {},
+                            skeletonAssignments: {}
+                        },
+                        locationZones: {},
+                        pinnedTileDefaults: {},
+                        leaguesByName: {},
+                        leagueRoundState: {},
+                        updated_at: new Date().toISOString()
+                    };
+                    
+                    const emptyJSON = JSON.stringify(emptyState);
+                    localStorage.setItem(UNIFIED_CACHE_KEY, emptyJSON);
+                    localStorage.setItem(LEGACY_GLOBAL_SETTINGS_KEY, emptyJSON);
+                    localStorage.setItem("CAMPISTRY_LOCAL_CACHE", emptyJSON);
+                    localStorage.setItem(LEGACY_GLOBAL_REGISTRY_KEY, JSON.stringify({
+                        divisions: {},
+                        bunks: []
+                    }));
+                    
+                    if (typeof window.forceSyncToCloud === 'function') {
+                        await window.forceSyncToCloud();
+                    }
                 }
+                
+                console.log("✅ Full data erase complete");
+                window.location.reload();
+                
             } catch (e) {
-                console.error("Failed to clear cloud data:", e);
+                console.error("Erase failed:", e);
+                btn.disabled = false;
+                btn.textContent = "Erase All Camp Data";
+                alert("Error erasing data: " + e.message);
             }
-            
-            window.location.reload();
         };
     }
     
@@ -341,10 +389,16 @@
     // ==========================================================
     function exportAllData() {
         try {
-            // ⭐ Read from unified key
+            // ⭐ Read from unified key (which is synced with memory cache)
             let globalSettings = {};
             try {
-                globalSettings = JSON.parse(localStorage.getItem(UNIFIED_CACHE_KEY) || "{}");
+                // Prefer loadGlobalSettings() as it reads from memory cache
+                globalSettings = window.loadGlobalSettings?.() || {};
+                
+                // Fallback to localStorage if empty
+                if (Object.keys(globalSettings).length === 0) {
+                    globalSettings = JSON.parse(localStorage.getItem(UNIFIED_CACHE_KEY) || "{}");
+                }
             } catch (e) {
                 console.warn("Could not load unified settings:", e);
             }
@@ -546,12 +600,11 @@
                     fields: (unifiedState.fields || unifiedState.app1?.fields || []).length
                 });
                 
-                // ⭐ Try to sync to cloud BEFORE reload (so cloud doesn't overwrite on next load)
+                // ⭐ Sync to cloud BEFORE reload
                 async function syncAndReload() {
                     let cloudSaved = false;
                     
                     try {
-                        // Force sync to cloud if available
                         if (typeof window.forceSyncToCloud === 'function') {
                             console.log("☁️ Syncing imported data to cloud...");
                             cloudSaved = await window.forceSyncToCloud();
@@ -562,7 +615,6 @@
                     }
                     
                     if (!cloudSaved) {
-                        // Warn user that data might not persist after cache clear
                         alert(
                             "⚠️ Warning: Cloud sync may have failed.\n\n" +
                             "Your data is saved locally and will work normally.\n" +
@@ -572,7 +624,6 @@
                         );
                     }
                     
-                    // Now reload - session persists, data is in local (and hopefully cloud)
                     window.location.reload();
                 }
                 
@@ -588,7 +639,6 @@
                 _importInProgress = false;
                 input.value = "";
                 
-                // Sync to cloud then reload
                 syncAndReload();
                 
             } catch (err) {
@@ -615,9 +665,12 @@
     // ==========================================================
     function performAutoSave(silent = true) {
         try {
+            // ⭐ Read from loadGlobalSettings to get memory cache (most current)
+            const currentState = window.loadGlobalSettings?.() || {};
+            
             const snapshot = {
                 timestamp: Date.now(),
-                [UNIFIED_CACHE_KEY]: localStorage.getItem(UNIFIED_CACHE_KEY),
+                [UNIFIED_CACHE_KEY]: JSON.stringify(currentState),
                 [DAILY_DATA_KEY]: localStorage.getItem(DAILY_DATA_KEY),
                 [ROTATION_HISTORY_KEY]: localStorage.getItem(ROTATION_HISTORY_KEY),
                 [LEAGUE_HISTORY_KEY]: localStorage.getItem(LEAGUE_HISTORY_KEY),
@@ -637,7 +690,7 @@
         performAutoSave(false);
     };
     
-    window.restoreAutoSave = function() {
+    window.restoreAutoSave = async function() {
         try {
             const raw = localStorage.getItem(AUTO_SAVE_KEY);
             if (!raw) return alert("No auto-save available.");
@@ -657,6 +710,12 @@
             if (snap[UNIFIED_CACHE_KEY]) {
                 localStorage.setItem(LEGACY_GLOBAL_SETTINGS_KEY, snap[UNIFIED_CACHE_KEY]);
                 localStorage.setItem("CAMPISTRY_LOCAL_CACHE", snap[UNIFIED_CACHE_KEY]);
+            }
+            
+            // ⭐ Sync to cloud after restore
+            if (typeof window.forceSyncToCloud === 'function') {
+                console.log("☁️ Syncing restored data to cloud...");
+                await window.forceSyncToCloud();
             }
             
             alert("Auto-save restored. Reloading...");
@@ -682,13 +741,9 @@
             datePicker.addEventListener("change", onDateChanged);
         }
         setupEraseAll();
-        
-        // ⭐ Import/Export buttons are wired by late-bind section
-        // to avoid double-triggering issues
-        
         startAutoSaveTimer();
         
-        console.log("🗓️ Calendar initialized (FIXED v2.0)");
+        console.log("🗓️ Calendar initialized (FIXED v2.1)");
     }
     
     window.initCalendar = initCalendar;
