@@ -1,5 +1,5 @@
 // ============================================================================
-// rainy_day_manager.js — RAINY DAY MODE SYSTEM (v2.0)
+// rainy_day_manager.js — RAINY DAY MODE SYSTEM (v2.1)
 // ============================================================================
 // Professional rainy day scheduling with:
 // - Field rain availability configuration
@@ -8,6 +8,7 @@
 // - Automatic schedule adjustments
 // - ★ NEW: Auto-skeleton switch (swap to rainy day skeleton template)
 // - ★ NEW: Mid-day mode (reschedule from current time forward only)
+// - ★ NEW: Cloud Sync integration for all state changes
 // ============================================================================
 
 (function() {
@@ -18,6 +19,22 @@
 // =============================================================
 let rainyDaySpecials = [];
 let isRainyDayMode = false;
+
+// =============================================================
+// HELPER: CLOUD SYNC
+// =============================================================
+// ⭐ Cloud sync scheduler for rainy day changes
+let _rainyDaySyncTimeout = null;
+
+function scheduleRainyDayCloudSync() {
+    clearTimeout(_rainyDaySyncTimeout);
+    _rainyDaySyncTimeout = setTimeout(() => {
+        if (typeof window.forceSyncToCloud === 'function') {
+            console.log("☁️ [RainyDay] Syncing to cloud...");
+            window.forceSyncToCloud();
+        }
+    }, 300);
+}
 
 // =============================================================
 // LOAD + SAVE
@@ -35,11 +52,15 @@ function loadRainyDayData() {
 
 function saveRainyDaySpecials() {
     window.saveGlobalSettings?.("rainyDaySpecials", rainyDaySpecials);
+    scheduleRainyDayCloudSync();
 }
 
 function saveRainyDayMode(enabled) {
     isRainyDayMode = enabled;
     window.saveCurrentDailyData?.("rainyDayMode", enabled);
+    
+    // ⭐ Schedule cloud sync for rainy day state
+    scheduleRainyDayCloudSync();
 }
 
 function uid() {
@@ -64,6 +85,7 @@ function getRainyDaySkeletonName() {
 function setRainyDaySkeletonName(skeletonName) {
     window.saveGlobalSettings?.("rainyDaySkeletonName", skeletonName);
     console.log(`[RainyDay] Rainy day skeleton set to: ${skeletonName || 'none'}`);
+    scheduleRainyDayCloudSync(); // ⭐ Sync change
 }
 
 /**
@@ -94,6 +116,7 @@ function backupCurrentSkeleton() {
     if (currentSkeleton.length > 0) {
         window.saveCurrentDailyData?.("preRainyDayManualSkeleton", JSON.parse(JSON.stringify(currentSkeleton)));
         console.log(`[RainyDay] Backed up current skeleton (${currentSkeleton.length} blocks)`);
+        // Note: No sync needed here as this is usually part of a larger operation that will sync
         return true;
     }
     return false;
@@ -149,6 +172,7 @@ function isAutoSkeletonSwitchEnabled() {
  */
 function setAutoSkeletonSwitch(enabled) {
     window.saveGlobalSettings?.("rainyDayAutoSkeletonSwitch", enabled);
+    scheduleRainyDayCloudSync(); // ⭐ Sync change
 }
 
 // =============================================================
@@ -203,6 +227,7 @@ function getCurrentTimeMinutes() {
 function setMidDayRainyStartTime(timeMinutes) {
     window.saveCurrentDailyData?.("rainyDayStartTime", timeMinutes);
     console.log(`[RainyDay] Mid-day start time set to: ${minutesToTime(timeMinutes)}`);
+    scheduleRainyDayCloudSync(); // ⭐ Sync change
 }
 
 /**
@@ -218,6 +243,7 @@ function getMidDayRainyStartTime() {
  */
 function clearMidDayRainyStartTime() {
     window.saveCurrentDailyData?.("rainyDayStartTime", null);
+    scheduleRainyDayCloudSync(); // ⭐ Sync change
 }
 
 /**
@@ -332,6 +358,7 @@ function setFieldRainyDayStatus(fieldName, available) {
     if (field) {
         field.rainyDayAvailable = available;
         window.saveGlobalSettings?.("app1", g.app1);
+        scheduleRainyDayCloudSync(); // ⭐ Sync change
     }
 }
 
@@ -368,6 +395,7 @@ function setSpecialRainyDayStatus(specialName, { isRainyDayOnly, availableOnRain
         if (isRainyDayOnly !== undefined) special.rainyDayOnly = isRainyDayOnly;
         if (availableOnRainyDay !== undefined) special.availableOnRainyDay = availableOnRainyDay;
         window.saveGlobalSettings?.("app1", g.app1);
+        scheduleRainyDayCloudSync(); // ⭐ Sync change
     }
 }
 
@@ -423,6 +451,9 @@ function activateRainyDayMode(options = {}) {
     
     console.log(`[RainyDay] Activated! Disabled ${unavailableFields.length} outdoor fields. Skeleton switched: ${skeletonSwitched}`);
     
+    // Final sync for all the operations above
+    scheduleRainyDayCloudSync();
+
     return {
         disabledFields: unavailableFields,
         availableFields: getRainyDayAvailableFields(),
@@ -488,6 +519,9 @@ function activateMidDayRainyMode(startTime, options = {}) {
     console.log(`[RainyDay] Mid-day mode activated from ${minutesToTime(startMin)}!`);
     console.log(`[RainyDay] ${getPreservedSlotIndices().length} slots will be preserved.`);
     
+    // Final sync for all operations
+    scheduleRainyDayCloudSync();
+
     return {
         startTime: startMin,
         startTimeStr: minutesToTime(startMin),
@@ -517,6 +551,9 @@ function deactivateRainyDayMode() {
     }
     
     console.log(`[RainyDay] Deactivated! Restored normal field availability.`);
+    
+    // Sync deactivation
+    scheduleRainyDayCloudSync();
 }
 
 function isRainyDayActive() {
@@ -1610,6 +1647,6 @@ window.RainyDayManager = {
     getCurrentTimeMinutes: getCurrentTimeMinutes
 };
 
-console.log("[RainyDay] Rainy Day Manager v2.0 loaded (with Auto-Skeleton & Mid-Day Mode)");
+console.log("[RainyDay] Rainy Day Manager v2.1 loaded (with Auto-Skeleton, Mid-Day Mode & Cloud Sync)");
 
 })();
