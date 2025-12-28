@@ -418,10 +418,13 @@
     const state = getLocalCache();
     state[key] = value;
     
-    // Clear import timestamp if present (it's been used, don't need it anymore)
+    // ⭐ CRITICAL: Update timestamp so local changes aren't overwritten by cloud
+    state.updated_at = new Date().toISOString();
+    
+    // Clear import timestamp if present
     if (state._importTimestamp) {
-      console.log("☁️ Clearing import timestamp flag");
-      delete state._importTimestamp;
+        console.log("☁️ Clearing import timestamp flag");
+        delete state._importTimestamp;
     }
     
     setLocalCache(state);
