@@ -1,15 +1,15 @@
 // =================================================================
-// calendar.js (FIXED v2.2)
+// calendar.js (FIXED v2.3)
 //
 // FIXES:
 // - Uses setCloudState() for imports (updates memory cache + cloud)
-// - Re-initializes UI after import WITHOUT page reload
+// - Page reload after import (maintains auth session)
 // - Uses resetCloudState() for full erase
 // - Uses clearCloudKeys() for partial resets
 // =================================================================
 (function() {
     'use strict';
-    console.log("🗓️ calendar.js v2.2 (FIXED) loaded");
+    console.log("🗓️ calendar.js v2.3 (FIXED) loaded");
     
     // ==========================================================
     // 1. STORAGE KEYS - UNIFIED
@@ -446,7 +446,7 @@
     }
     
     // ==========================================================
-    // 8. BACKUP / RESTORE (FIXED - No Reload Import)
+    // 8. BACKUP / RESTORE (FIXED - Reload after import)
     // ==========================================================
     function exportAllData() {
         try {
@@ -638,18 +638,16 @@
                 _importInProgress = false;
                 input.value = "";
                 
-                // ⭐ Re-initialize UI without page reload
+                // ⭐ Show success and reload page (session persists in Supabase)
                 alert(
                     "✅ Import successful!\n\n" +
                     "Divisions: " + Object.keys(unifiedState.divisions || {}).length + "\n" +
                     "Bunks: " + (unifiedState.bunks || []).length + "\n\n" +
-                    "Refreshing UI..."
+                    "Reloading..."
                 );
                 
-                // Short delay to let alert close, then refresh UI
-                setTimeout(() => {
-                    reinitializeUI();
-                }, 100);
+                // Reload page - Supabase session persists in localStorage
+                window.location.reload();
                 
             } catch (err) {
                 console.error("Import failed:", err);
@@ -725,8 +723,8 @@
                 }
             }
             
-            alert("Auto-save restored. Refreshing UI...");
-            reinitializeUI();
+            alert("Auto-save restored. Reloading...");
+            window.location.reload();
         } catch (e) {
             console.error("Restore error:", e);
             alert("Failed to restore backup.");
@@ -750,7 +748,7 @@
         setupEraseAll();
         startAutoSaveTimer();
         
-        console.log("🗓️ Calendar initialized (FIXED v2.2)");
+        console.log("🗓️ Calendar initialized (FIXED v2.3)");
     }
     
     window.initCalendar = initCalendar;
