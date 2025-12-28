@@ -1,12 +1,16 @@
 // =================================================================
-// master_schedule_builder.js (UPDATED - ELECTIVE TILE SUPPORT)
-// Beta
+// master_schedule_builder.js (UPDATED - ADVANCED GRID INTERACTION)
+// Beta v2.0
 // Updates:
 // 1. Added Elective tile type for reserving multiple activities
 // 2. Added "Update [Template Name]" button to save changes to current file.
 // 3. Wired up "Delete Selected Template" button.
 // 4. Tracks 'currentLoadedTemplate' to distinguish between new drafts and existing files.
 // 5. Auto-assigns default locations to pinned tiles if configured.
+// 6. ADDED: Drag-and-drop repositioning of existing tiles.
+// 7. ADDED: Resize handles (top/bottom) with 5-minute snapping.
+// 8. ADDED: Live drop previews and resize tooltips.
+// 9. CHANGED: Deletion now requires DOUBLE-CLICK to prevent accidental clicks.
 // =================================================================
 
 (function(){
@@ -21,6 +25,7 @@ const SKELETON_DRAFT_KEY = 'master-schedule-draft';
 const SKELETON_DRAFT_NAME_KEY = 'master-schedule-draft-name';
 const PIXELS_PER_MINUTE=2;
 const INCREMENT_MINS=30;
+const SNAP_MINS = 5;
 
 // --- Persistence ---
 function saveDraftToLocalStorage() {
@@ -76,17 +81,17 @@ function mapEventNameForOptimizer(name){
 function promptForReservedFields(eventName) {
   const globalSettings = window.loadGlobalSettings?.() || {};
   const app1 = globalSettings.app1 || {};
-   
+    
   const allFields = (app1.fields || []).map(f => f.name);
   const specialActivities = (app1.specialActivities || []).map(s => s.name);
-   
+    
   // Combine fields and special activities as potential "locations"
   const allLocations = [...new Set([...allFields, ...specialActivities])].sort();
-   
+    
   if (allLocations.length === 0) {
     return []; // No fields configured
   }
-   
+    
   const fieldInput = prompt(
     `Which field(s) will "${eventName}" use?\n\n` +
     `This reserves the field so the scheduler won't assign it to other bunks.\n\n` +
@@ -94,16 +99,16 @@ function promptForReservedFields(eventName) {
     `Enter field names separated by commas (or leave blank if none):`,
     ''
   );
-   
+    
   if (!fieldInput || !fieldInput.trim()) {
     return [];
   }
-   
+    
   // Parse and validate field names
   const requested = fieldInput.split(',').map(f => f.trim()).filter(Boolean);
   const validated = [];
   const invalid = [];
-   
+    
   requested.forEach(name => {
     // Try to match (case-insensitive)
     const match = allLocations.find(loc => loc.toLowerCase() === name.toLowerCase());
@@ -113,11 +118,11 @@ function promptForReservedFields(eventName) {
       invalid.push(name);
     }
   });
-   
+    
   if (invalid.length > 0) {
     alert(`Warning: These fields were not found and will be ignored:\n${invalid.join(', ')}`);
   }
-   
+    
   return validated;
 }
 
@@ -144,21 +149,21 @@ function findPoolField(allLocations) {
 function promptForElectiveActivities(divName) {
   const globalSettings = window.loadGlobalSettings?.() || {};
   const app1 = globalSettings.app1 || {};
-   
+    
   const allFields = (app1.fields || []).map(f => f.name);
   const specialActivities = (app1.specialActivities || []).map(s => s.name);
   const allLocations = [...new Set([...allFields, ...specialActivities])].sort();
-   
+    
   console.log('[Elective] Available locations:', allLocations);
-   
+    
   if (allLocations.length === 0) {
     alert('No fields or special activities configured. Please set them up first.');
     return null;
   }
-   
+    
   const poolFieldName = findPoolField(allLocations);
   console.log('[Elective] Pool field found:', poolFieldName);
-   
+    
   const activitiesInput = prompt(
     `ELECTIVE for ${divName}\n\n` +
     `Enter activities to RESERVE for this division (separated by commas).\n` +
@@ -168,19 +173,19 @@ function promptForElectiveActivities(divName) {
     `Example: Swim, Court 1, Canteen`,
     ''
   );
-   
+    
   if (!activitiesInput || !activitiesInput.trim()) {
     return null;
   }
-   
+    
   // Parse and validate
   const requested = activitiesInput.split(',').map(s => s.trim()).filter(Boolean);
   const validated = [];
   const invalid = [];
-   
+    
   requested.forEach(name => {
     console.log(`[Elective] Processing: "${name}"`);
-     
+      
     // Check for swim/pool aliases FIRST
     if (isSwimPoolAlias(name)) {
       console.log(`[Elective] "${name}" is a swim/pool alias`);
@@ -198,7 +203,7 @@ function promptForElectiveActivities(divName) {
       }
       return; // Don't check against allLocations for swim/pool
     }
-     
+      
     // Standard matching for non-swim activities
     const match = allLocations.find(loc => loc.toLowerCase() === name.toLowerCase());
     if (match) {
@@ -209,19 +214,19 @@ function promptForElectiveActivities(divName) {
       invalid.push(name);
     }
   });
-   
+    
   console.log('[Elective] Validated:', validated);
   console.log('[Elective] Invalid:', invalid);
-   
+    
   if (validated.length === 0) {
     alert('No valid activities selected. Please try again.');
     return null;
   }
-   
+    
   if (invalid.length > 0) {
     alert(`Warning: These were not found and will be ignored:\n${invalid.join(', ')}`);
   }
-   
+    
   return validated;
 }
 
@@ -229,7 +234,7 @@ function promptForElectiveActivities(divName) {
 function init(){
   container=document.getElementById("master-scheduler-content");
   if(!container) return;
-   
+    
   loadDailySkeleton();
 
   const savedDraft = localStorage.getItem(SKELETON_DRAFT_KEY);
@@ -255,12 +260,31 @@ function init(){
       .grid-disabled{position:absolute;width:100%;background-color:#80808040;background-image:linear-gradient(-45deg,#0000001a 25%,transparent 25%,transparent 50%,#0000001a 50%,#0000001a 75%,transparent 75%,transparent);background-size:20px 20px;z-index:1;pointer-events:none}
       .grid-event{z-index:2;position:relative;box-shadow:0 1px 3px rgba(0,0,0,0.2);}
       .grid-cell{position:relative; border-right:1px solid #ccc; background:#fff;}
+      
+      /* NEW: Resize handles */
+      .resize-handle { position:absolute; left:0; right:0; height:10px; cursor:ns-resize; z-index:5; opacity:0; transition:opacity 0.15s; }
+      .resize-handle-top { top:-2px; }
+      .resize-handle-bottom { bottom:-2px; }
+      .grid-event:hover .resize-handle { opacity:1; background:rgba(37,99,235,0.3); }
+      .grid-event.resizing { box-shadow:0 0 0 2px #2563eb, 0 4px 12px rgba(37,99,235,0.25) !important; z-index:100 !important; }
+      
+      /* NEW: Resize tooltip */
+      #resize-tooltip { position:fixed; padding:10px 14px; background:#111827; color:#fff; border-radius:8px; font-size:0.9em; font-weight:600; pointer-events:none; z-index:10002; display:none; box-shadow:0 8px 24px rgba(15,23,42,0.35); text-align:center; line-height:1.4; }
+      #resize-tooltip span { font-size:0.85em; opacity:0.7; }
+      
+      /* NEW: Drag ghost */
+      #drag-ghost { position:fixed; padding:10px 14px; background:#ffffff; border:2px solid #2563eb; border-radius:8px; box-shadow:0 8px 24px rgba(37,99,235,0.25); pointer-events:none; z-index:10001; display:none; font-size:0.9em; color:#111827; }
+      #drag-ghost span { color:#6b7280; }
+      
+      /* NEW: Drop preview */
+      .drop-preview { display:none; position:absolute; left:2%; width:96%; background:rgba(37,99,235,0.15); border:2px dashed #2563eb; border-radius:4px; pointer-events:none; z-index:5; }
+      .preview-time-label { text-align:center; padding:8px 4px; color:#1d4ed8; font-weight:700; font-size:0.9em; background:rgba(255,255,255,0.95); border-radius:3px; margin:4px; box-shadow:0 2px 6px rgba(0,0,0,0.1); }
     </style>
   `;
-   
+    
   palette=document.getElementById("scheduler-palette");
   grid=document.getElementById("scheduler-grid");
-   
+    
   renderTemplateUI();
   renderPalette();
   renderGrid();
@@ -285,7 +309,7 @@ function renderTemplateUI(){
       <div class="template-group"><label>Load Template</label><br>
         <select id="template-load-select" style="padding:6px;"><option value="">-- Select --</option>${loadOptions}</select>
       </div>
-       
+        
       <!-- UPDATE BUTTON (Only shows if editing existing) -->
       <div class="template-group" style="${updateBtnStyle}">
          <label>&nbsp;</label><br>
@@ -296,7 +320,7 @@ function renderTemplateUI(){
         <input type="text" id="template-save-name" placeholder="New Name...">
         <button id="template-save-btn" style="background:#007bff;color:#fff;">Save As</button>
       </div>
-       
+        
       <div class="template-group"><label>&nbsp;</label><br>
         <button id="template-clear-btn" style="background:#ff9800;color:#fff;">New/Clear</button>
       </div>
@@ -323,7 +347,7 @@ function renderTemplateUI(){
   // Bindings
   const loadSel=document.getElementById("template-load-select");
   const saveName=document.getElementById("template-save-name");
-   
+    
   loadSel.onchange=()=>{
     const name=loadSel.value;
     if(name && saved[name] && confirm(`Load "${name}"?`)){
@@ -350,7 +374,7 @@ function renderTemplateUI(){
   document.getElementById("template-save-btn").onclick=()=>{
     const name=saveName.value.trim();
     if(!name) { alert("Please enter a name."); return; }
-   
+    
     if(saved[name] && !confirm(`"${name}" already exists. Overwrite?`)) return;
 
     window.saveSkeleton?.(name, dailySkeleton);
@@ -391,7 +415,7 @@ function renderTemplateUI(){
   document.getElementById("template-delete-btn").onclick=()=>{
       const delSel = document.getElementById("template-delete-select");
       const nameToDelete = delSel.value;
-       
+        
       if(!nameToDelete) {
           alert("Please select a template from the dropdown next to the Delete button.");
           return;
@@ -400,7 +424,7 @@ function renderTemplateUI(){
       if(confirm(`Are you sure you want to PERMANENTLY DELETE "${nameToDelete}"?`)){
           if(window.deleteSkeleton) {
               window.deleteSkeleton(nameToDelete);
-               
+                
               // If we deleted the one we are looking at, reset context
               if(currentLoadedTemplate === nameToDelete){
                   currentLoadedTemplate = null;
@@ -408,7 +432,7 @@ function renderTemplateUI(){
                   clearDraftFromLocalStorage();
                   renderGrid();
               }
-               
+                
               alert("Deleted.");
               renderTemplateUI();
           } else {
@@ -470,7 +494,7 @@ function showTileInfo(tile) {
     'dismissal': 'DISMISSAL: End of day marker. Schedule generation stops at this point.',
     'custom': 'CUSTOM PINNED: Create any fixed event (e.g., "Assembly", "Special Program"). You can optionally reserve specific fields.'
   };
-   
+    
   const desc = descriptions[tile.type] || tile.description || 'No description available.';
   alert(`${tile.name.toUpperCase()}\n\n${desc}`);
 }
@@ -505,7 +529,7 @@ function renderGrid(){
 
   // Build HTML
   let html=`<div style="display:grid; grid-template-columns:60px repeat(${availableDivisions.length}, 1fr); position:relative; min-width:800px;">`;
-   
+    
   // Header Row
   html+=`<div style="grid-row:1; position:sticky; top:0; background:#fff; z-index:10; border-bottom:1px solid #999; padding:8px; font-weight:bold;">Time</div>`;
   availableDivisions.forEach((divName,i)=>{
@@ -526,9 +550,9 @@ function renderGrid(){
       const div=divisions[divName];
       const s=parseTimeToMinutes(div?.startTime);
       const e=parseTimeToMinutes(div?.endTime);
-       
+        
       html+=`<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row:2; grid-column:${i+2}; height:${totalHeight}px;">`;
-       
+        
       // Grey out unavailable times
       if(s!==null && s>earliestMin){
           html+=`<div class="grid-disabled" style="top:0; height:${(s-earliestMin)*PIXELS_PER_MINUTE}px;"></div>`;
@@ -547,16 +571,20 @@ function renderGrid(){
               html+=renderEventTile(ev, top, height);
           }
       });
-
+      
+      html+=`<div class="drop-preview"></div>`; // NEW: Drop preview container
       html+=`</div>`;
   });
 
   html+=`</div>`;
   grid.innerHTML=html;
+  grid.dataset.earliestMin = earliestMin;
 
   // Bind Events
   addDropListeners('.grid-cell');
-  addRemoveListeners('.grid-event');
+  addDragToRepositionListeners(grid); // NEW: Drag existing tiles
+  addResizeListeners(grid); // NEW: Resize handles
+  addRemoveListeners('.grid-event'); // UPDATED: Double-click to remove
 }
 
 // --- Render Tile (UPDATED to show reserved fields and elective activities) ---
@@ -607,10 +635,12 @@ function renderEventTile(ev, top, height){
         innerHtml += `<div style="font-size:0.75em;margin-top:2px;">F: ${ev.smartData.fallbackActivity} (if ${ev.smartData.fallbackFor.substring(0,4)} busy)</div>`;
     }
 
-    // Return the complete tile HTML
-    return `<div class="grid-event" data-id="${ev.id}" title="Click to remove" 
+    // Return the complete tile HTML with resize handles
+    return `<div class="grid-event" data-id="${ev.id}" draggable="true" title="${ev.event} (${ev.startTime}-${ev.endTime}) - Double-click to remove" 
             style="${style}; position:absolute; top:${top}px; height:${height}px; width:96%; left:2%; padding:2px; font-size:0.85rem; overflow:hidden; border-radius:4px; cursor:pointer; display:flex; flex-direction:column;">
+            <div class="resize-handle resize-handle-top"></div>
             ${innerHtml}
+            <div class="resize-handle resize-handle-bottom"></div>
             </div>`;
 }
 
@@ -622,6 +652,29 @@ function addDropListeners(selector){
         cell.ondrop=e=>{
             e.preventDefault();
             cell.style.background='';
+
+            // NEW: Handle moving existing tiles
+            if (e.dataTransfer.types.includes('text/event-move')) {
+                const eventId = e.dataTransfer.getData('text/event-move');
+                const event = dailySkeleton.find(ev => ev.id === eventId);
+                if (!event) return;
+                
+                const divName = cell.dataset.div;
+                const cellStartMin = parseInt(cell.dataset.startMin, 10);
+                const rect = cell.getBoundingClientRect();
+                const y = e.clientY - rect.top;
+                const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
+                
+                const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
+                event.division = divName;
+                event.startTime = minutesToTime(cellStartMin + snapMin);
+                event.endTime = minutesToTime(cellStartMin + snapMin + duration);
+                
+                saveDraftToLocalStorage();
+                renderGrid();
+                return;
+            }
+
             const tileData=JSON.parse(e.dataTransfer.getData('application/json'));
             const divName=cell.dataset.div;
             const earliestMin=parseInt(cell.dataset.startMin);
@@ -830,8 +883,9 @@ function addDropListeners(selector){
 
 function addRemoveListeners(selector){
     grid.querySelectorAll(selector).forEach(el=>{
-        el.onclick=e=>{
+        el.ondblclick=e=>{ // Changed to double-click
             e.stopPropagation();
+            if (e.target.classList.contains('resize-handle')) return; // Don't delete if clicking handle
             if(confirm("Delete this block?")){
                 const id=el.dataset.id;
                 dailySkeleton = dailySkeleton.filter(x=>x.id!==id);
@@ -840,6 +894,197 @@ function addRemoveListeners(selector){
             }
         };
     });
+}
+
+// =================================================================
+// RESIZE FUNCTIONALITY
+// =================================================================
+function addResizeListeners(gridEl) {
+  const earliestMin = parseInt(gridEl.dataset.earliestMin, 10) || 540;
+  
+  let tooltip = document.getElementById('resize-tooltip');
+  if (!tooltip) {
+    tooltip = document.createElement('div');
+    tooltip.id = 'resize-tooltip';
+    document.body.appendChild(tooltip);
+  }
+  
+  gridEl.querySelectorAll('.grid-event').forEach(tile => {
+    const topHandle = tile.querySelector('.resize-handle-top');
+    const bottomHandle = tile.querySelector('.resize-handle-bottom');
+    
+    [topHandle, bottomHandle].forEach(handle => {
+      if (!handle) return;
+      const direction = handle.classList.contains('resize-handle-top') ? 'top' : 'bottom';
+      let isResizing = false, startY = 0, startTop = 0, startHeight = 0, eventId = null;
+      
+      handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        isResizing = true;
+        startY = e.clientY;
+        startTop = parseInt(tile.style.top, 10);
+        startHeight = tile.offsetHeight;
+        eventId = tile.dataset.id;
+        tile.classList.add('resizing');
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      });
+      
+      function onMouseMove(e) {
+        if (!isResizing) return;
+        const event = dailySkeleton.find(ev => ev.id === eventId);
+        if (!event) return;
+        
+        const deltaY = e.clientY - startY;
+        let newTop = startTop, newHeight = startHeight;
+        
+        if (direction === 'bottom') {
+          newHeight = Math.max(SNAP_MINS * PIXELS_PER_MINUTE, startHeight + deltaY);
+          newHeight = Math.round(newHeight / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE);
+        } else {
+          const maxDelta = startHeight - (SNAP_MINS * PIXELS_PER_MINUTE);
+          const constrainedDelta = Math.min(deltaY, maxDelta);
+          const snappedDelta = Math.round(constrainedDelta / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE);
+          newTop = startTop + snappedDelta;
+          newHeight = startHeight - snappedDelta;
+        }
+        
+        tile.style.top = newTop + 'px';
+        tile.style.height = newHeight + 'px';
+        
+        const newStartMin = earliestMin + (newTop / PIXELS_PER_MINUTE);
+        const newEndMin = newStartMin + (newHeight / PIXELS_PER_MINUTE);
+        const duration = newEndMin - newStartMin;
+        const durationStr = duration < 60 ? `${duration}m` : `${Math.floor(duration/60)}h${duration%60 > 0 ? duration%60+'m' : ''}`;
+        
+        tooltip.innerHTML = `${minutesToTime(newStartMin)} - ${minutesToTime(newEndMin)}<br><span>${durationStr}</span>`;
+        tooltip.style.display = 'block';
+        tooltip.style.left = (e.clientX + 15) + 'px';
+        tooltip.style.top = (e.clientY - 40) + 'px';
+      }
+      
+      function onMouseUp() {
+        if (!isResizing) return;
+        isResizing = false;
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        tile.classList.remove('resizing');
+        tooltip.style.display = 'none';
+        
+        const event = dailySkeleton.find(ev => ev.id === eventId);
+        if (!event) return;
+        
+        const divisions = window.divisions || {};
+        const div = divisions[event.division] || {};
+        const divStartMin = parseTimeToMinutes(div.startTime) || 540;
+        const divEndMin = parseTimeToMinutes(div.endTime) || 960;
+        
+        const newTop = parseInt(tile.style.top, 10);
+        const newHeightPx = parseInt(tile.style.height, 10);
+        const newStartMin = earliestMin + (newTop / PIXELS_PER_MINUTE);
+        const newEndMin = newStartMin + (newHeightPx / PIXELS_PER_MINUTE);
+        
+        event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
+        event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
+        
+        saveDraftToLocalStorage();
+        renderGrid();
+      }
+      
+      handle.addEventListener('dragstart', (e) => { e.preventDefault(); e.stopPropagation(); });
+    });
+  });
+}
+
+// =================================================================
+// DRAG-TO-REPOSITION FUNCTIONALITY
+// =================================================================
+function addDragToRepositionListeners(gridEl) {
+  const earliestMin = parseInt(gridEl.dataset.earliestMin, 10) || 540;
+  
+  let ghost = document.getElementById('drag-ghost');
+  if (!ghost) {
+    ghost = document.createElement('div');
+    ghost.id = 'drag-ghost';
+    document.body.appendChild(ghost);
+  }
+  
+  let dragData = null;
+  
+  gridEl.querySelectorAll('.grid-event').forEach(tile => {
+    tile.addEventListener('dragstart', (e) => {
+      if (e.target.classList.contains('resize-handle')) { e.preventDefault(); return; }
+      
+      const eventId = tile.dataset.id;
+      const event = dailySkeleton.find(ev => ev.id === eventId);
+      if (!event) return;
+      
+      const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
+      dragData = { type: 'move', id: eventId, event, duration };
+      
+      e.dataTransfer.setData('text/event-move', eventId);
+      e.dataTransfer.effectAllowed = 'move';
+      
+      ghost.innerHTML = `<strong>${event.event}</strong><br><span>${event.startTime} - ${event.endTime}</span>`;
+      ghost.style.display = 'block';
+      
+      const img = new Image();
+      img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      e.dataTransfer.setDragImage(img, 0, 0);
+      
+      tile.style.opacity = '0.4';
+    });
+    
+    tile.addEventListener('drag', (e) => {
+      if (e.clientX === 0 && e.clientY === 0) return;
+      ghost.style.left = (e.clientX + 12) + 'px';
+      ghost.style.top = (e.clientY + 12) + 'px';
+    });
+    
+    tile.addEventListener('dragend', () => {
+      tile.style.opacity = '1';
+      ghost.style.display = 'none';
+      dragData = null;
+      gridEl.querySelectorAll('.drop-preview').forEach(p => { p.style.display = 'none'; p.innerHTML = ''; });
+      gridEl.querySelectorAll('.grid-cell').forEach(c => c.style.background = '');
+    });
+  });
+  
+  gridEl.querySelectorAll('.grid-cell').forEach(cell => {
+    const preview = cell.querySelector('.drop-preview'); // Use the existing one
+    
+    cell.addEventListener('dragover', (e) => {
+      const isEventMove = e.dataTransfer.types.includes('text/event-move');
+      const isNewTile = e.dataTransfer.types.includes('application/json');
+      if (!isEventMove && !isNewTile) return;
+      
+      e.preventDefault();
+      e.dataTransfer.dropEffect = isEventMove ? 'move' : 'copy';
+      cell.style.background = '#e6fffa';
+      
+      if (isEventMove && dragData && preview) {
+        const rect = cell.getBoundingClientRect();
+        const y = e.clientY - rect.top;
+        const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
+        const cellStartMin = parseInt(cell.dataset.startMin, 10);
+        const previewStartTime = minutesToTime(cellStartMin + snapMin);
+        const previewEndTime = minutesToTime(cellStartMin + snapMin + dragData.duration);
+        
+        preview.style.display = 'block';
+        preview.style.top = (snapMin * PIXELS_PER_MINUTE) + 'px';
+        preview.style.height = (dragData.duration * PIXELS_PER_MINUTE) + 'px';
+        preview.innerHTML = `<div class="preview-time-label">${previewStartTime} - ${previewEndTime}</div>`;
+      }
+    });
+    
+    cell.addEventListener('dragleave', (e) => {
+      if (!cell.contains(e.relatedTarget)) {
+        cell.style.background = '';
+        if (preview) { preview.style.display = 'none'; preview.innerHTML = ''; }
+      }
+    });
+  });
 }
 
 // --- Helpers ---
