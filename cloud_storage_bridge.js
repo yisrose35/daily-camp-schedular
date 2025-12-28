@@ -1,11 +1,12 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
 // FIXED VERSION: Proper sync/async handling + consolidated storage
+// v2.1 - Added resetCloudState and clearCloudKeys for proper resets
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v2.0 (FIXED)");
+  console.log("☁️ Campistry Cloud Bridge v2.1 (FIXED)");
 
   const TABLE = "camp_state";
   
@@ -448,6 +449,86 @@
     setLocalCache(state);
     await saveToCloud(state);
     return state;
+  };
+  
+  // ⭐ RESET ALL DATA - Properly clears memory cache, localStorage, AND cloud
+  window.resetCloudState = async function(newState = null) {
+    console.log("☁️ resetCloudState called - clearing all data");
+    
+    // Build empty state if not provided
+    const emptyState = newState || {
+      divisions: {},
+      bunks: [],
+      app1: {
+        divisions: {},
+        bunks: [],
+        fields: [],
+        specialActivities: [],
+        allSports: [],
+        bunkMetaData: {},
+        sportMetaData: {},
+        savedSkeletons: {},
+        skeletonAssignments: {}
+      },
+      locationZones: {},
+      pinnedTileDefaults: {},
+      leaguesByName: {},
+      leagueRoundState: {},
+      specialtyLeagues: {},
+      smartTileHistory: {},
+      manualUsageOffsets: {},
+      historicalCounts: {},
+      updated_at: new Date().toISOString()
+    };
+    
+    // ⭐ CRITICAL: Update memory cache FIRST
+    _memoryCache = emptyState;
+    
+    // Save to localStorage
+    try {
+      const stateJSON = JSON.stringify(emptyState);
+      localStorage.setItem(UNIFIED_CACHE_KEY, stateJSON);
+      localStorage.setItem(LEGACY_KEYS.globalSettings, stateJSON);
+      localStorage.setItem(LEGACY_KEYS.localCache, stateJSON);
+      localStorage.setItem(LEGACY_KEYS.globalRegistry, JSON.stringify({
+        divisions: {},
+        bunks: []
+      }));
+      console.log("☁️ Local storage cleared");
+    } catch (e) {
+      console.error("☁️ Failed to clear localStorage:", e);
+    }
+    
+    // Sync to cloud
+    const success = await syncNow();
+    console.log("☁️ Cloud reset result:", success ? "SUCCESS" : "FAILED");
+    return success;
+  };
+  
+  // ⭐ CLEAR SPECIFIC KEYS - For partial resets (like New Half)
+  window.clearCloudKeys = async function(keysToReset) {
+    console.log("☁️ clearCloudKeys called for:", keysToReset);
+    
+    const state = getLocalCache();
+    
+    // Reset specified keys to empty values
+    keysToReset.forEach(key => {
+      if (key === 'leagueRoundState') state.leagueRoundState = {};
+      else if (key === 'manualUsageOffsets') delete state.manualUsageOffsets;
+      else if (key === 'historicalCounts') state.historicalCounts = {};
+      else if (key === 'smartTileHistory') state.smartTileHistory = {};
+      else state[key] = undefined;
+    });
+    
+    state.updated_at = new Date().toISOString();
+    
+    // Update memory cache and localStorage
+    setLocalCache(state);
+    
+    // Sync to cloud
+    const success = await syncNow();
+    console.log("☁️ Partial reset result:", success ? "SUCCESS" : "FAILED");
+    return success;
   };
   
   // Force immediate cloud sync
