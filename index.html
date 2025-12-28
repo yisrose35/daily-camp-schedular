@@ -6,13 +6,51 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     
     <link rel="stylesheet" href="styles.css" />
+    
+    <!-- ⭐ Inline script to prevent white screen - runs immediately -->
+    <script>
+    (function() {
+        // Check if user likely has a session (auth token in localStorage)
+        try {
+            var keys = Object.keys(localStorage);
+            var hasAuth = keys.some(function(k) { 
+                return k.includes('-auth-token') || k.includes('supabase.auth'); 
+            });
+            
+            // Set a flag for later scripts
+            window.__CAMPISTRY_LIKELY_AUTHENTICATED__ = hasAuth;
+        } catch(e) {
+            window.__CAMPISTRY_LIKELY_AUTHENTICATED__ = false;
+        }
+    })();
+    </script>
+    
+    <style>
+        /* ⭐ Initial states - prevent flash */
+        #welcome-screen { display: none; }
+        #main-app-container { display: none; }
+        
+        /* Show appropriate screen based on auth check */
+        body.show-welcome #welcome-screen { display: flex !important; }
+        body.show-app #main-app-container { display: block !important; }
+    </style>
 </head>
 <body>
+<!-- ⭐ Immediately set body class based on auth state -->
+<script>
+(function() {
+    if (window.__CAMPISTRY_LIKELY_AUTHENTICATED__) {
+        document.body.classList.add('show-app');
+    } else {
+        document.body.classList.add('show-welcome');
+    }
+})();
+</script>
+
 <!-- =============================================================== -->
 <!-- WELCOME SCREEN (Campistry Auth) -->
-<!-- ⭐ FIXED: Hidden by default to prevent flash during session check -->
 <!-- =============================================================== -->
-<div id="welcome-screen" class="campistry-welcome" style="display:none;">
+<div id="welcome-screen" class="campistry-welcome">
     <img
         src="https://placehold.co/150x150/111827/ffffff?text=CAMPISTRY"
         alt="Campistry Logo"
@@ -34,7 +72,7 @@
 <!-- =============================================================== -->
 <!-- MAIN APP WRAPPER -->
 <!-- =============================================================== -->
-<div id="main-app-container" style="display:none;">
+<div id="main-app-container">
     <div class="app-shell">
         <!-- =========================================================== -->
         <!-- HEADER -->
