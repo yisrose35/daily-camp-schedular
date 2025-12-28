@@ -153,16 +153,20 @@
     // ==========================================================
     // RESET ALL ACTIVITY / SPECIAL ROTATION
     // ==========================================================
-    window.eraseRotationHistory = function() {
+    window.eraseRotationHistory = async function() {
         try {
             localStorage.removeItem(ROTATION_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
             
-            const settings = window.loadGlobalSettings?.() || {};
-            if (settings.manualUsageOffsets) {
-                delete settings.manualUsageOffsets;
-                window.saveGlobalSettings?.('manualUsageOffsets', undefined);
+            // Clear from global settings (cloud-synced)
+            window.saveGlobalSettings?.('manualUsageOffsets', undefined);
+            window.saveGlobalSettings?.('historicalCounts', {});
+            
+            // ⭐ Wait for cloud sync before reloading
+            if (typeof window.forceSyncToCloud === 'function') {
+                console.log("☁️ Syncing rotation reset to cloud...");
+                await window.forceSyncToCloud();
             }
             
             console.log("All rotation histories cleared.");
@@ -177,7 +181,7 @@
     // ==========================================================
     // START NEW HALF
     // ==========================================================
-    window.startNewHalf = function() {
+    window.startNewHalf = async function() {
         const confirmed = confirm(
             "🏕️ START NEW HALF\n\n" +
             "This will reset:\n" +
@@ -200,6 +204,7 @@
             console.log("⭐ STARTING NEW HALF - Resetting Counters ⭐");
             console.log("=".repeat(50));
             
+            // Clear localStorage items
             localStorage.removeItem(ROTATION_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
@@ -207,13 +212,16 @@
             localStorage.removeItem(SPECIALTY_LEAGUE_HISTORY_KEY);
             localStorage.removeItem(DAILY_DATA_KEY);
             
-            // Clear league round state from global settings
+            // Clear cloud-synced settings
             window.saveGlobalSettings?.('leagueRoundState', {});
+            window.saveGlobalSettings?.('manualUsageOffsets', undefined);
+            window.saveGlobalSettings?.('historicalCounts', {});
             
-            // Clear manual offsets
-            const settings = window.loadGlobalSettings?.() || {};
-            if (settings.manualUsageOffsets) {
-                window.saveGlobalSettings?.('manualUsageOffsets', undefined);
+            // ⭐ Wait for cloud sync before reloading
+            if (typeof window.forceSyncToCloud === 'function') {
+                console.log("☁️ Syncing reset to cloud...");
+                await window.forceSyncToCloud();
+                console.log("☁️ Cloud sync complete");
             }
             
             console.log("⭐ NEW HALF RESET COMPLETE ⭐");
@@ -237,10 +245,14 @@
     function setupEraseAll() {
         const btn = document.getElementById("eraseAllBtn");
         if (!btn) return;
-        btn.onclick = function() {
+        btn.onclick = async function() {
             if (!confirm("Erase ALL settings, schedules, and rotation histories?\nThis cannot be undone.")) return;
             
-            // Clear everything
+            // Show loading state
+            btn.disabled = true;
+            btn.textContent = "Erasing...";
+            
+            // Clear everything from localStorage
             const keysToRemove = [
                 UNIFIED_CACHE_KEY,
                 DAILY_DATA_KEY,
@@ -263,6 +275,41 @@
             ];
             
             keysToRemove.forEach(key => localStorage.removeItem(key));
+            
+            // ⭐ Save empty state to cloud
+            try {
+                const emptyState = {
+                    divisions: {},
+                    bunks: [],
+                    app1: {
+                        divisions: {},
+                        bunks: [],
+                        fields: [],
+                        specialActivities: [],
+                        allSports: [],
+                        bunkMetaData: {},
+                        sportMetaData: {},
+                        savedSkeletons: {},
+                        skeletonAssignments: {}
+                    },
+                    locationZones: {},
+                    pinnedTileDefaults: {},
+                    leaguesByName: {},
+                    leagueRoundState: {},
+                    updated_at: new Date().toISOString()
+                };
+                
+                localStorage.setItem(UNIFIED_CACHE_KEY, JSON.stringify(emptyState));
+                
+                if (typeof window.forceSyncToCloud === 'function') {
+                    console.log("☁️ Clearing cloud data...");
+                    const success = await window.forceSyncToCloud();
+                    console.log("☁️ Cloud clear result:", success);
+                }
+            } catch (e) {
+                console.error("Failed to clear cloud data:", e);
+            }
+            
             window.location.reload();
         };
     }
