@@ -75,7 +75,10 @@
         const container = document.getElementById("camper-locator");
         if (!container) return;
 
+        // Always reload roster fresh from storage
         loadRoster();
+        const camperCount = Object.keys(camperRoster).length;
+        console.log("🔍 Camper Locator loaded", camperCount, "campers");
 
         container.innerHTML = `
             <div class="setup-grid">
@@ -90,11 +93,11 @@
                     </div>
 
                     <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:end; margin-top:15px;">
-                        <div style="flex:2; min-width:250px;">
+                        <div style="flex:2; min-width:250px; position:relative;">
                             <label style="font-weight:600; font-size:0.9rem; color:#444;">Camper Name</label>
                             <input id="loc-search-input" placeholder="Start typing name (e.g. Moshe)..." 
                                    style="width:100%; padding:10px; font-size:1.1rem; border:2px solid #0284c7; border-radius:8px;">
-                            <div id="loc-search-suggestions" style="display:none; position:absolute; background:white; border:1px solid #ccc; max-height:200px; overflow-y:auto; width:300px; z-index:1000; border-radius:0 0 8px 8px; box-shadow:0 4px 10px rgba(0,0,0,0.1);"></div>
+                            <div id="loc-search-suggestions" style="display:none; position:absolute; background:white; border:1px solid #ccc; max-height:200px; overflow-y:auto; width:100%; z-index:1000; border-radius:0 0 8px 8px; box-shadow:0 4px 10px rgba(0,0,0,0.1);"></div>
                         </div>
 
                         <div style="flex:1; min-width:150px;">
@@ -104,13 +107,13 @@
                             </select>
                         </div>
 
-                        <button id="loc-search-btn" style="padding:10px 24px; background:#0284c7; color:white; font-weight:bold; font-size:1rem; border:none; border-radius:8px;">
+                        <button id="loc-search-btn" style="padding:10px 24px; background:#0284c7; color:white; font-weight:bold; font-size:1rem; border:none; border-radius:8px; cursor:pointer;">
                             Find 🔍
                         </button>
                     </div>
 
                     <div id="loc-result-display" style="margin-top:20px; padding:20px; background:white; border-radius:12px; border:1px solid #e0f2fe; min-height:80px; display:none;">
-                        </div>
+                    </div>
                 </section>
 
                 <section class="setup-card setup-card-wide">
@@ -122,17 +125,18 @@
                         </div>
                     </div>
 
-                    <div style="margin-bottom:15px; display:flex; gap:15px;">
-                        <input id="loc-filter-roster" placeholder="Filter roster..." style="padding:6px 12px; width:200px;">
+                    <div style="margin-bottom:15px; display:flex; gap:15px; align-items:center; flex-wrap:wrap;">
+                        <input id="loc-filter-roster" placeholder="Filter by name, division, or bunk..." style="padding:8px 12px; width:280px; border:1px solid #ccc; border-radius:6px;">
+                        <span id="loc-roster-count" style="color:#666; font-size:0.9rem;"></span>
                     </div>
 
-                    <div style="max-height:500px; overflow-y:auto; border:1px solid #eee; border-radius:8px;">
+                    <div style="max-height:600px; overflow-y:auto; border:1px solid #eee; border-radius:8px;">
                         <table class="report-table" style="margin:0;">
-                            <thead style="position:sticky; top:0; z-index:10;">
+                            <thead style="position:sticky; top:0; z-index:10; background:white;">
                                 <tr>
-                                    <th>Camper Name</th>
-                                    <th>Division</th>
-                                    <th>Bunk</th>
+                                    <th style="cursor:pointer;" onclick="window._sortCamperRoster('name')">Camper Name ↕</th>
+                                    <th style="cursor:pointer;" onclick="window._sortCamperRoster('division')">Division ↕</th>
+                                    <th style="cursor:pointer;" onclick="window._sortCamperRoster('bunk')">Bunk ↕</th>
                                     <th>Assigned Team</th>
                                 </tr>
                             </thead>
@@ -167,11 +171,32 @@
             if (e.target !== searchInput) suggestionsBox.style.display = 'none';
         });
 
-        // 3. Roster Filter
-        rosterFilter.onkeyup = () => renderRoster(rosterFilter.value);
+        // 3. Roster Filter (debounced)
+        let filterTimeout = null;
+        rosterFilter.onkeyup = () => {
+            clearTimeout(filterTimeout);
+            filterTimeout = setTimeout(() => renderRoster(rosterFilter.value), 150);
+        };
 
-        // Initial Render
+        // Initial Render - show ALL campers
         renderRoster();
+    };
+
+    // =============================================================
+    // SORTING STATE
+    // =============================================================
+    let sortField = 'name';
+    let sortDirection = 'asc';
+    
+    window._sortCamperRoster = function(field) {
+        if (sortField === field) {
+            sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+            sortField = field;
+            sortDirection = 'asc';
+        }
+        const filter = document.getElementById("loc-filter-roster")?.value || "";
+        renderRoster(filter);
     };
 
     // =============================================================
@@ -189,8 +214,8 @@
             return;
         }
 
-        box.innerHTML = matches.slice(0, 10).map(name => 
-            `<div class="suggestion-item" style="padding:8px; cursor:pointer; hover:bg-gray-100;">${name}</div>`
+        box.innerHTML = matches.slice(0, 15).map(name => 
+            `<div class="suggestion-item" style="padding:10px 12px; cursor:pointer; border-bottom:1px solid #eee;">${name} <span style="color:#888; font-size:0.85rem;">(${camperRoster[name].bunk})</span></div>`
         ).join("");
         
         box.style.display = 'block';
@@ -198,7 +223,8 @@
         // Add click handlers
         box.querySelectorAll('.suggestion-item').forEach(div => {
             div.onclick = () => {
-                input.value = div.textContent;
+                const name = div.textContent.split(' (')[0].trim();
+                input.value = name;
                 box.style.display = 'none';
                 document.getElementById("loc-search-btn").click();
             };
@@ -219,7 +245,7 @@
 
         if (!camperName) {
             resultContainer.style.display = 'block';
-            resultContainer.innerHTML = `<h3 style="color:red; margin:0;">🚫 Camper "${nameQuery}" not found.</h3><p>Please check the roster database below.</p>`;
+            resultContainer.innerHTML = `<h3 style="color:red; margin:0;">🚫 Camper "${nameQuery}" not found.</h3><p>Please check the roster database below or import campers via Setup tab.</p>`;
             return;
         }
 
@@ -291,7 +317,7 @@
         }
 
         resultContainer.innerHTML = `
-            <div style="display:flex; align-items:center; gap:20px;">
+            <div style="display:flex; align-items:center; gap:20px; flex-wrap:wrap;">
                 <div style="font-size:3rem;">${icon}</div>
                 <div>
                     <h2 style="margin:0; color:#333;">${camperName}</h2>
@@ -309,46 +335,108 @@
     }
 
     // =============================================================
-    // ROSTER TABLE RENDERER
+    // ROSTER TABLE RENDERER - NOW SHOWS ALL CAMPERS
     // =============================================================
     function renderRoster(filter = "") {
         listContainer.innerHTML = "";
         
-        const campers = Object.keys(camperRoster).sort();
-        const teams = getAllTeams(); // Helper to get all known teams from leagues.js
+        const campers = Object.keys(camperRoster);
+        const teams = getAllTeams();
+        const countEl = document.getElementById("loc-roster-count");
+        
+        // Filter campers
+        let filtered = campers;
+        if (filter) {
+            const lowerFilter = filter.toLowerCase();
+            filtered = campers.filter(name => {
+                const data = camperRoster[name];
+                return name.toLowerCase().includes(lowerFilter) ||
+                       (data.division || "").toLowerCase().includes(lowerFilter) ||
+                       (data.bunk || "").toLowerCase().includes(lowerFilter);
+            });
+        }
+        
+        // Sort campers
+        filtered.sort((a, b) => {
+            let valA, valB;
+            if (sortField === 'name') {
+                valA = a.toLowerCase();
+                valB = b.toLowerCase();
+            } else if (sortField === 'division') {
+                valA = (camperRoster[a].division || "").toLowerCase();
+                valB = (camperRoster[b].division || "").toLowerCase();
+            } else if (sortField === 'bunk') {
+                valA = (camperRoster[a].bunk || "").toLowerCase();
+                valB = (camperRoster[b].bunk || "").toLowerCase();
+            }
+            
+            if (sortDirection === 'asc') {
+                return valA.localeCompare(valB, undefined, { numeric: true });
+            } else {
+                return valB.localeCompare(valA, undefined, { numeric: true });
+            }
+        });
 
-        let count = 0;
+        // Update count display
+        if (countEl) {
+            if (filter) {
+                countEl.textContent = `Showing ${filtered.length} of ${campers.length} campers`;
+            } else {
+                countEl.textContent = `${campers.length} campers total`;
+            }
+        }
 
-        campers.forEach(name => {
-            if (filter && !name.toLowerCase().includes(filter.toLowerCase())) return;
-            if (count > 50 && filter.length === 0) return; // Lazy load limit for empty search
+        // Show message if no campers
+        if (campers.length === 0) {
+            listContainer.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:30px; color:#666;">
+                <strong>No campers in database.</strong><br><br>
+                Import campers via CSV in the <strong>Setup tab</strong>.<br>
+                Use format: Division, Bunk Name, Camper Name
+            </td></tr>`;
+            return;
+        }
 
+        if (filtered.length === 0) {
+            listContainer.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:20px; color:#666;">No campers match "${filter}"</td></tr>`;
+            return;
+        }
+
+        // Build team options once
+        let teamOptions = `<option value="">-- Assign Team --</option>`;
+        teams.forEach(t => {
+            teamOptions += `<option value="${t}">${t}</option>`;
+        });
+
+        // Render ALL filtered campers (no limit!)
+        const fragment = document.createDocumentFragment();
+        
+        filtered.forEach(name => {
             const data = camperRoster[name];
             const row = document.createElement("tr");
 
-            // Build Team Options
-            let teamOptions = `<option value="">-- Assign Team --</option>`;
-            teams.forEach(t => {
-                const selected = data.team === t ? "selected" : "";
-                teamOptions += `<option value="${t}" ${selected}>${t}</option>`;
-            });
+            // Build options with current selection
+            let currentOptions = teamOptions.replace(
+                `value="${data.team}"`,
+                `value="${data.team}" selected`
+            );
 
             row.innerHTML = `
                 <td style="font-weight:600;">${name}</td>
-                <td>${data.division}</td>
-                <td>${data.bunk}</td>
+                <td>${data.division || "-"}</td>
+                <td>${data.bunk || "-"}</td>
                 <td>
-                    <select class="team-selector" data-name="${name}" style="padding:4px; border-radius:4px; border:1px solid #ccc; width:100%;">
-                        ${teamOptions}
+                    <select class="team-selector" data-name="${name}" style="padding:4px 8px; border-radius:4px; border:1px solid #ccc; width:100%; max-width:200px;">
+                        ${currentOptions}
                     </select>
                 </td>
             `;
 
-            listContainer.appendChild(row);
-            count++;
+            fragment.appendChild(row);
         });
+        
+        listContainer.appendChild(fragment);
 
-        // Add Listeners
+        // Add Listeners for team selectors
         listContainer.querySelectorAll(".team-selector").forEach(sel => {
             sel.onchange = (e) => {
                 const camperName = e.target.dataset.name;
@@ -357,10 +445,6 @@
                 saveRoster();
             };
         });
-
-        if (campers.length === 0) {
-            listContainer.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:20px;">No campers found. Import roster via Setup tab.</td></tr>`;
-        }
     }
 
     // Get all teams from the League System to populate dropdowns
