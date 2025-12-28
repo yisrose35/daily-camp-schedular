@@ -240,6 +240,15 @@ function saveData() {
     // Combine both lists for saving
     const allActivities = [...specialActivities, ...rainyDayActivities];
     window.saveGlobalSpecialActivities?.(allActivities);
+    
+    // ⭐ Trigger cloud sync to ensure data persists
+    if (typeof window.forceSyncToCloud === 'function') {
+        // Use a slight delay to batch multiple rapid saves
+        clearTimeout(window._specialActivitiesSyncTimeout);
+        window._specialActivitiesSyncTimeout = setTimeout(() => {
+            window.forceSyncToCloud();
+        }, 500);
+    }
 }
 
 //------------------------------------------------------------------
@@ -673,7 +682,7 @@ function renderTransition(item) {
     labelDiv.style.minWidth = "120px";
     labelDiv.innerHTML = `<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">Label</label>`;
     const labelIn = document.createElement("input");
-    labelIn.type = "text";
+    i.type = "text";
     labelIn.value = t.label;
     labelIn.className = "sa-field-input";
     labelIn.style.width = "100%";
