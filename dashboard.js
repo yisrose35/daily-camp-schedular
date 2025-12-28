@@ -65,7 +65,7 @@
         
         if (!window.supabase) {
             console.error('Supabase not available');
-            window.location.href = 'landing.html';
+            window.location.href = 'index.html';
             return;
         }
         
@@ -74,7 +74,7 @@
             
             if (!session?.user) {
                 console.log('No session, redirecting to landing');
-                window.location.href = 'landing.html';
+                window.location.href = 'index.html';
                 return;
             }
             
@@ -86,7 +86,7 @@
             
         } catch (e) {
             console.error('Auth check failed:', e);
-            window.location.href = 'landing.html';
+            window.location.href = 'index.html';
         }
     }
 
@@ -355,11 +355,11 @@
     window.handleLogout = async function() {
         try {
             await window.supabase.auth.signOut();
-            window.location.href = 'landing.html';
+            window.location.href = 'index.html';
         } catch (e) {
             console.error('Logout error:', e);
             // Force redirect anyway
-            window.location.href = 'landing.html';
+            window.location.href = 'index.html';
         }
     };
 
@@ -377,7 +377,7 @@
             console.log('Auth state changed:', event);
             
             if (event === 'SIGNED_OUT') {
-                window.location.href = 'landing.html';
+                window.location.href = 'index.html';
             }
         });
     }
