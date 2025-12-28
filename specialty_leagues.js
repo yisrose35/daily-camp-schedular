@@ -147,6 +147,14 @@
 
     function saveData() {
         window.saveGlobalSettings?.("specialtyLeagues", specialtyLeagues);
+        
+        // ⭐ Trigger cloud sync
+        if (typeof window.forceSyncToCloud === 'function') {
+            clearTimeout(window._specialtyLeaguesSyncTimeout);
+            window._specialtyLeaguesSyncTimeout = setTimeout(() => {
+                window.forceSyncToCloud();
+            }, 500);
+        }
     }
 
     // =============================================================
@@ -195,7 +203,7 @@
                             <div id="sl-detail-pane" class="detail-pane"
                                  style="margin-top:8px; min-height:380px;">
                                  <p class="muted">
-                                     Select a specialty league to edit configuration and view standings.
+                                    Select a specialty league to edit configuration and view standings.
                                  </p>
                             </div>
                         </div>
