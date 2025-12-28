@@ -1,12 +1,12 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
 // FIXED VERSION: Proper sync/async handling + consolidated storage
-// v2.1 - Added resetCloudState and clearCloudKeys for proper resets
+// v2.2 - Added setCloudState for live imports without page reload
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v2.1 (FIXED)");
+  console.log("☁️ Campistry Cloud Bridge v2.2 (FIXED)");
 
   const TABLE = "camp_state";
   
@@ -34,20 +34,18 @@
   let _migrationDone = false;
   
   function migrateLegacyData() {
-    // Only migrate once per session
     if (_migrationDone) return;
     _migrationDone = true;
     
     if (localStorage.getItem(UNIFIED_CACHE_KEY)) {
       console.log("☁️ Unified storage exists, skipping migration");
-      return; // Already migrated
+      return;
     }
     
     console.log("🔄 Migrating legacy storage keys...");
     
     let merged = {};
     
-    // Priority order: globalSettings > localCache > globalRegistry
     try {
       const gs = JSON.parse(localStorage.getItem(LEGACY_KEYS.globalSettings) || "{}");
       merged = { ...merged, ...gs };
@@ -60,7 +58,6 @@
     
     try {
       const gr = JSON.parse(localStorage.getItem(LEGACY_KEYS.globalRegistry) || "{}");
-      // Global registry has divisions/bunks at root level
       if (gr.divisions) merged.divisions = gr.divisions;
       if (gr.bunks) merged.bunks = gr.bunks;
     } catch (e) { console.warn("Legacy migration: globalRegistry parse failed", e); }
@@ -91,8 +88,7 @@
   }
   
   function setLocalCache(state) {
-    // ⭐ CRITICAL: Ensure divisions/bunks are at root level
-    // They might only be inside app1
+    // Ensure divisions/bunks are at root level
     if (state.app1) {
       if ((!state.divisions || Object.keys(state.divisions).length === 0) && 
           state.app1.divisions && Object.keys(state.app1.divisions).length > 0) {
@@ -107,8 +103,6 @@
     _memoryCache = state;
     try {
       localStorage.setItem(UNIFIED_CACHE_KEY, JSON.stringify(state));
-      
-      // ⭐ Also write to legacy keys for backward compatibility
       localStorage.setItem(LEGACY_KEYS.globalSettings, JSON.stringify(state));
       localStorage.setItem(LEGACY_KEYS.localCache, JSON.stringify(state));
       localStorage.setItem(LEGACY_KEYS.globalRegistry, JSON.stringify({
@@ -131,7 +125,6 @@
       }
       const { data, error } = await window.supabase.auth.getUser();
       if (error) {
-        // Auth session missing is expected before sign-in, don't log as error
         if (error.message?.includes('session')) {
           console.log("☁️ No auth session yet (user not signed in)");
         } else {
@@ -158,7 +151,6 @@
       
       const user = await getUser();
       if (!user) {
-        // No user is expected before sign-in, don't log as warning
         console.log("☁️ No user yet - will load from cloud after sign-in");
         return null;
       }
@@ -172,7 +164,6 @@
         .single();
 
       if (error) {
-        // PGRST116 = no rows found, which is OK for new users
         if (error.code === 'PGRST116') {
           console.log("☁️ No cloud data found (new user or first sync)");
           return null;
@@ -183,8 +174,6 @@
       
       let state = data?.state || null;
       
-      // ⭐ CRITICAL: Ensure divisions/bunks are at root level
-      // They might be stored in app1 from older saves
       if (state && state.app1) {
         if ((!state.divisions || Object.keys(state.divisions).length === 0) && 
             state.app1.divisions && Object.keys(state.app1.divisions).length > 0) {
@@ -201,8 +190,7 @@
       console.log("☁️ Cloud data loaded:", {
         hasState: !!state,
         divisions: Object.keys(state?.divisions || {}).length,
-        bunks: (state?.bunks || []).length,
-        app1_divisions: Object.keys(state?.app1?.divisions || {}).length
+        bunks: (state?.bunks || []).length
       });
       
       return state;
@@ -225,16 +213,12 @@
         return false;
       }
 
-      // Add metadata
       state.schema_version = SCHEMA_VERSION;
       state.updated_at = new Date().toISOString();
       
-      // Remove internal flags before saving
       const stateToSave = { ...state };
       delete stateToSave._importTimestamp;
       
-      // ⭐ CRITICAL: Ensure divisions and bunks are at root level
-      // They might only be inside app1, so copy them up
       if (stateToSave.app1) {
         if (stateToSave.app1.divisions && Object.keys(stateToSave.app1.divisions).length > 0) {
           stateToSave.divisions = stateToSave.app1.divisions;
@@ -248,8 +232,7 @@
         camp_id: CAMP_ID,
         user_id: user.id,
         divisions: Object.keys(stateToSave.divisions || {}).length,
-        bunks: (stateToSave.bunks || []).length,
-        app1_divisions: Object.keys(stateToSave.app1?.divisions || {}).length
+        bunks: (stateToSave.bunks || []).length
       });
 
       const { data, error } = await window.supabase
@@ -276,7 +259,7 @@
     }
   }
   
-  // Debounced cloud sync - REDUCED to 500ms for faster saves
+  // Debounced cloud sync
   let _syncTimeout = null;
   let _syncInProgress = false;
   
@@ -290,7 +273,6 @@
         return;
       }
       if (_syncInProgress) {
-        // Already syncing, reschedule
         scheduleCloudSync();
         return;
       }
@@ -299,7 +281,7 @@
       console.log("☁️ Performing cloud sync...");
       await saveToCloud(getLocalCache());
       _syncInProgress = false;
-    }, 500); // 500ms debounce - fast but prevents spam
+    }, 500);
   }
   
   // Immediate sync for critical operations
@@ -334,13 +316,10 @@
       console.log("☁️ Starting cloud bridge initialization...");
       
       try {
-        // Step 1: Migrate legacy data (only once)
         migrateLegacyData();
         
-        // Step 2: Load from local cache first (instant)
         const localData = getLocalCache();
         
-        // Step 3: Check if we just imported data
         const justImported = localData._importTimestamp && 
                              (Date.now() - localData._importTimestamp) < 30000;
         
@@ -351,8 +330,6 @@
           return;
         }
         
-        // Step 4: Check if user is authenticated
-        // If not, skip cloud fetch - auth listener will handle it after sign-in
         let user = null;
         try {
           const { data } = await window.supabase?.auth?.getUser() || {};
@@ -366,7 +343,6 @@
           return;
         }
         
-        // Step 5: User is authenticated, fetch from cloud
         console.log("☁️ User authenticated, fetching from cloud...");
         const cloudState = await loadFromCloud();
         
@@ -408,21 +384,16 @@
   // PUBLIC API - SYNCHRONOUS (with background cloud sync)
   // ------------------------------------------------------------
   
-  // ⭐ SYNCHRONOUS loadGlobalSettings
   window.loadGlobalSettings = function() {
     return getLocalCache();
   };
   
-  // ⭐ SYNCHRONOUS saveGlobalSettings  
   window.saveGlobalSettings = function(key, value) {
     console.log("☁️ saveGlobalSettings called:", key);
     const state = getLocalCache();
     state[key] = value;
-    
-    // ⭐ CRITICAL: Update timestamp so local changes aren't overwritten by cloud
     state.updated_at = new Date().toISOString();
     
-    // Clear import timestamp if present
     if (state._importTimestamp) {
         console.log("☁️ Clearing import timestamp flag");
         delete state._importTimestamp;
@@ -430,14 +401,12 @@
     
     setLocalCache(state);
     
-    // Schedule background cloud sync
     _cloudSyncPending = true;
     scheduleCloudSync();
     
     return state;
   };
   
-  // Async version for explicit cloud operations
   window.loadGlobalSettingsAsync = async function() {
     await initialize();
     return getLocalCache();
@@ -451,11 +420,66 @@
     return state;
   };
   
+  // ⭐ SET/IMPORT STATE - Updates memory cache and localStorage
+  // This is used for IMPORTS to work WITHOUT page reload
+  window.setCloudState = async function(newState, syncToCloud = true) {
+    console.log("☁️ setCloudState called - importing data");
+    
+    if (!newState || typeof newState !== 'object') {
+      console.error("☁️ setCloudState: Invalid state provided");
+      return false;
+    }
+    
+    // Ensure divisions/bunks are at root level
+    if (newState.app1) {
+      if (newState.app1.divisions && Object.keys(newState.app1.divisions).length > 0) {
+        if (!newState.divisions || Object.keys(newState.divisions).length === 0) {
+          newState.divisions = newState.app1.divisions;
+        }
+      }
+      if (newState.app1.bunks && newState.app1.bunks.length > 0) {
+        if (!newState.bunks || newState.bunks.length === 0) {
+          newState.bunks = newState.app1.bunks;
+        }
+      }
+    }
+    
+    // Add timestamp
+    newState.updated_at = new Date().toISOString();
+    
+    // ⭐ CRITICAL: Update memory cache FIRST
+    _memoryCache = newState;
+    
+    // Save to localStorage
+    try {
+      const stateJSON = JSON.stringify(newState);
+      localStorage.setItem(UNIFIED_CACHE_KEY, stateJSON);
+      localStorage.setItem(LEGACY_KEYS.globalSettings, stateJSON);
+      localStorage.setItem(LEGACY_KEYS.localCache, stateJSON);
+      localStorage.setItem(LEGACY_KEYS.globalRegistry, JSON.stringify({
+        divisions: newState.divisions || {},
+        bunks: newState.bunks || []
+      }));
+      console.log("☁️ State imported to memory cache and localStorage");
+    } catch (e) {
+      console.error("☁️ Failed to save imported state:", e);
+      return false;
+    }
+    
+    // Sync to cloud if requested
+    if (syncToCloud) {
+      const success = await syncNow();
+      console.log("☁️ Cloud sync after import:", success ? "SUCCESS" : "FAILED");
+      return success;
+    }
+    
+    return true;
+  };
+  
   // ⭐ RESET ALL DATA - Properly clears memory cache, localStorage, AND cloud
   window.resetCloudState = async function(newState = null) {
     console.log("☁️ resetCloudState called - clearing all data");
     
-    // Build empty state if not provided
     const emptyState = newState || {
       divisions: {},
       bunks: [],
@@ -481,10 +505,8 @@
       updated_at: new Date().toISOString()
     };
     
-    // ⭐ CRITICAL: Update memory cache FIRST
     _memoryCache = emptyState;
     
-    // Save to localStorage
     try {
       const stateJSON = JSON.stringify(emptyState);
       localStorage.setItem(UNIFIED_CACHE_KEY, stateJSON);
@@ -499,7 +521,6 @@
       console.error("☁️ Failed to clear localStorage:", e);
     }
     
-    // Sync to cloud
     const success = await syncNow();
     console.log("☁️ Cloud reset result:", success ? "SUCCESS" : "FAILED");
     return success;
@@ -511,7 +532,6 @@
     
     const state = getLocalCache();
     
-    // Reset specified keys to empty values
     keysToReset.forEach(key => {
       if (key === 'leagueRoundState') state.leagueRoundState = {};
       else if (key === 'manualUsageOffsets') delete state.manualUsageOffsets;
@@ -522,10 +542,8 @@
     
     state.updated_at = new Date().toISOString();
     
-    // Update memory cache and localStorage
     setLocalCache(state);
     
-    // Sync to cloud
     const success = await syncNow();
     console.log("☁️ Partial reset result:", success ? "SUCCESS" : "FAILED");
     return success;
@@ -535,7 +553,6 @@
   window.forceSyncToCloud = async function() {
     console.log("☁️ Force sync to cloud requested");
     
-    // Clear import flag if present
     const state = getLocalCache();
     if (state._importTimestamp) {
       console.log("☁️ Clearing import timestamp before sync");
@@ -548,10 +565,8 @@
     return success;
   };
   
-  // Sync immediately (alias)
   window.syncNow = syncNow;
   
-  // Clear import flag manually
   window.clearImportFlag = function() {
     const state = getLocalCache();
     if (state._importTimestamp) {
@@ -563,7 +578,6 @@
     }
   };
   
-  // Force cloud refresh
   window.forceRefreshFromCloud = async function() {
     const cloudState = await loadFromCloud();
     if (cloudState) {
@@ -574,20 +588,18 @@
     return getLocalCache();
   };
   
-  // ⭐ Diagnostic function - call from console to test cloud
+  // ⭐ Diagnostic function
   window.testCloudConnection = async function() {
     console.log("=".repeat(50));
     console.log("☁️ CLOUD CONNECTION TEST");
     console.log("=".repeat(50));
     
-    // Test 1: Supabase available?
     console.log("1. Supabase available:", !!window.supabase);
     if (!window.supabase) {
       console.error("❌ Supabase not loaded!");
       return false;
     }
     
-    // Test 2: User authenticated?
     const user = await getUser();
     console.log("2. User authenticated:", !!user, user?.email);
     if (!user) {
@@ -595,7 +607,6 @@
       return false;
     }
     
-    // Test 3: Can read from cloud?
     console.log("3. Testing cloud read...");
     const cloudData = await loadFromCloud();
     console.log("   Cloud data exists:", !!cloudData);
@@ -604,7 +615,6 @@
       console.log("   Bunks:", (cloudData.bunks || []).length);
     }
     
-    // Test 4: Can write to cloud?
     console.log("4. Testing cloud write...");
     const localData = getLocalCache();
     const saveSuccess = await saveToCloud(localData);
@@ -620,7 +630,7 @@
   // Start initialization
   initialize().catch(e => console.error("Cloud bridge init failed:", e));
   
-  // ⭐ CRITICAL: Re-hydrate when user signs in
+  // Re-hydrate when user signs in
   let _rehydrating = false;
   let _lastAuthTime = 0;
   
@@ -633,7 +643,6 @@
     window.supabase.auth.onAuthStateChange(async (event, session) => {
       console.log("☁️ Auth state change:", event);
       
-      // Prevent duplicate handling within 2 seconds
       const now = Date.now();
       if (now - _lastAuthTime < 2000) {
         console.log("☁️ Duplicate auth event within 2s, skipping");
@@ -651,7 +660,6 @@
         console.log("☁️ User signed in, fetching data from cloud...");
         
         try {
-          // ⭐ Direct cloud fetch - no initialize() overhead
           const startTime = Date.now();
           
           const { data, error } = await window.supabase
@@ -672,7 +680,6 @@
           } else if (data?.state) {
             let cloudState = data.state;
             
-            // Copy divisions from app1 to root if needed
             if (cloudState.app1?.divisions && Object.keys(cloudState.app1.divisions).length > 0) {
               if (!cloudState.divisions || Object.keys(cloudState.divisions).length === 0) {
                 cloudState.divisions = cloudState.app1.divisions;
@@ -689,7 +696,6 @@
               bunks: (cloudState.bunks || []).length
             });
             
-            // Update local cache
             const localData = getLocalCache();
             const merged = { ...localData, ...cloudState };
             setLocalCache(merged);
@@ -697,12 +703,10 @@
             console.log("☁️ Local cache updated from cloud");
           }
           
-          // Mark as ready
           _initialized = true;
           _initializingPromise = null;
           window.__CAMPISTRY_CLOUD_READY__ = true;
           
-          // Notify app
           const hasData = Object.keys(getLocalCache().divisions || {}).length > 0;
           console.log("☁️ Post-sign-in hydration complete, hasData:", hasData);
           
@@ -728,7 +732,6 @@
     console.log("☁️ Auth listener registered");
   }
   
-  // Setup auth listener
   setupAuthListener();
   
   console.log("☁️ Cloud Bridge API ready (sync + background cloud)");
