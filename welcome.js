@@ -1,10 +1,10 @@
 // ============================================================================
-// welcome.js — CAMPISTRY CLOUD BOOT ENGINE (FIXED)
+// welcome.js — CAMPISTRY CLOUD BOOT ENGINE (UPDATED)
 // 
-// FIXES:
-// - Proper async/await for cloud hydration
-// - Waits for cloud-hydrated event before initializing UI
-// - Graceful degradation if cloud fails
+// UPDATED FOR LANDING PAGE FLOW:
+// - If user is already authenticated (logged in via landing page), skip
+//   the welcome screen entirely and go straight to the app
+// - Welcome screen only shows if NOT authenticated
 // ============================================================================
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -68,7 +68,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
     }
 
-    // ⭐ FIXED: Proper async boot with cloud hydration wait
+    // ⭐ Boot the app (skip welcome screen)
     async function bootOnce() {
         if (booted) return;
         
@@ -82,6 +82,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         booted = true;
         window.__CAMPISTRY_BOOTED__ = true;
 
+        // ⭐ SKIP WELCOME SCREEN - go straight to app
         if (welcomeScreen) welcomeScreen.style.display = 'none';
         if (mainAppContainer) mainAppContainer.style.display = 'block';
 
@@ -120,7 +121,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
     }
 
-    // Check for existing session
+    // ⭐ CHECK FOR EXISTING SESSION FIRST
+    // If user logged in via landing page, they'll already have a session
     let session = null;
     try {
         const res = await window.supabase.auth.getSession();
@@ -131,30 +133,33 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     if (session?.user) {
+        // ⭐ USER IS ALREADY LOGGED IN - skip welcome, boot app immediately
+        console.log("[AUTH] User already authenticated:", session.user.email);
         await bootOnce();
     } else {
-        if (welcomeScreen) welcomeScreen.style.display = 'flex';
-        if (mainAppContainer) mainAppContainer.style.display = 'none';
+        // ⭐ NO SESSION - Redirect to landing page for login
+        console.log("[AUTH] No session - redirecting to landing page");
+        window.location.href = 'landing.html';
+        return;
     }
 
     // Listen for auth state changes
     window.supabase.auth.onAuthStateChange(async (event, session) => {
         console.log("[AUTH] State change:", event);
 
-        if (event === 'SIGNED_IN' && session?.user) {
+        if (event === 'SIGNED_IN' && session?.user && !booted) {
+            // If somehow signed in while on this page, boot the app
             await bootOnce();
         }
 
         if (event === 'SIGNED_OUT') {
-            booted = false;
-            window.__CAMPISTRY_BOOTED__ = false;
-            if (welcomeScreen) welcomeScreen.style.display = 'flex';
-            if (mainAppContainer) mainAppContainer.style.display = 'none';
+            // ⭐ ON LOGOUT: Redirect to landing page
+            console.log("[AUTH] Signed out - redirecting to landing page");
+            window.location.href = 'landing.html';
         }
     });
     
     // ⭐ Listen for post-sign-in cloud hydration
-    // This happens when user signs in and cloud data is loaded AFTER initial boot
     window.addEventListener('campistry-cloud-hydrated', function(e) {
         if (e.detail?.afterSignIn && e.detail?.hasData) {
             console.log("🔄 Post-sign-in cloud hydration detected, refreshing UI...");
