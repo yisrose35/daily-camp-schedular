@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard | Campistry</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+    <!-- ========================================= -->
+    <!-- NAVIGATION -->
+    <!-- ========================================= -->
+    <nav class="nav">
+        <div class="nav-inner">
+            <a href="landing.html" class="nav-logo">
+                <span class="logo-icon">⛺</span>
+                <span class="logo-text">Campistry</span>
+            </a>
+            <div class="nav-actions">
+                <span class="nav-user" id="navUserEmail"></span>
+                <button class="btn-ghost" onclick="handleLogout()">Sign Out</button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- ========================================= -->
+    <!-- MAIN DASHBOARD -->
+    <!-- ========================================= -->
+    <main class="dashboard">
+        <!-- Welcome Header -->
+        <header class="dashboard-header">
+            <div class="welcome-section">
+                <h1 class="welcome-title">Welcome back, <span id="campNameDisplay">Your Camp</span>!</h1>
+                <p class="welcome-sub">Manage your camp and access all Campistry products from here.</p>
+            </div>
+        </header>
+
+        <!-- Dashboard Grid -->
+        <div class="dashboard-grid">
+            <!-- ===== CAMP PROFILE CARD ===== -->
+            <section class="dashboard-card profile-card">
+                <div class="card-header">
+                    <h2>Camp Profile</h2>
+                    <button class="btn-edit" id="editProfileBtn" onclick="toggleEditMode()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                        Edit
+                    </button>
+                </div>
+                
+                <div class="profile-content" id="profileView">
+                    <div class="profile-row">
+                        <span class="profile-label">Camp Name</span>
+                        <span class="profile-value" id="profileCampName">—</span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="profile-label">Address</span>
+                        <span class="profile-value" id="profileAddress">Not set</span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="profile-label">Email</span>
+                        <span class="profile-value" id="profileEmail">—</span>
+                    </div>
+                </div>
+
+                <!-- Edit Form (hidden by default) -->
+                <form class="profile-edit-form" id="profileEditForm" style="display: none;">
+                    <div class="form-group">
+                        <label for="editCampName">Camp Name</label>
+                        <input type="text" id="editCampName" placeholder="Enter camp name">
+                    </div>
+                    <div class="form-group">
+                        <label for="editAddress">Address</label>
+                        <input type="text" id="editAddress" placeholder="123 Camp Road, City, State">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn-secondary" onclick="cancelEdit()">Cancel</button>
+                        <button type="submit" class="btn-primary">Save Changes</button>
+                    </div>
+                    <div id="profileError" class="form-error"></div>
+                    <div id="profileSuccess" class="form-success"></div>
+                </form>
+            </section>
+
+            <!-- ===== ACCOUNT SETTINGS CARD ===== -->
+            <section class="dashboard-card account-card">
+                <div class="card-header">
+                    <h2>Account Settings</h2>
+                </div>
+                
+                <div class="account-section">
+                    <h3>Change Password</h3>
+                    <form id="passwordForm" class="password-form">
+                        <div class="form-group">
+                            <label for="newPassword">New Password</label>
+                            <input type="password" id="newPassword" placeholder="Enter new password" minlength="6">
+                        </div>
+                        <div class="form-group">
+                            <label for="confirmPassword">Confirm Password</label>
+                            <input type="password" id="confirmPassword" placeholder="Confirm new password">
+                        </div>
+                        <button type="submit" class="btn-primary">Update Password</button>
+                        <div id="passwordError" class="form-error"></div>
+                        <div id="passwordSuccess" class="form-success"></div>
+                    </form>
+                </div>
+            </section>
+
+            <!-- ===== STATS CARD ===== -->
+            <section class="dashboard-card stats-card">
+                <div class="card-header">
+                    <h2>Camp Overview</h2>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-value" id="statDivisions">0</span>
+                        <span class="stat-label">Divisions</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="statBunks">0</span>
+                        <span class="stat-label">Bunks</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="statCampers">—</span>
+                        <span class="stat-label">Campers</span>
+                    </div>
+                </div>
+                <p class="stats-note">Camper count will be available with Campistry Me</p>
+            </section>
+        </div>
+
+        <!-- ===== PRODUCTS SECTION ===== -->
+        <section class="products-section">
+            <h2 class="section-title">Your Products</h2>
+            <div class="products-grid">
+                <!-- FLOW -->
+                <a href="index.html" class="product-tile product-flow">
+                    <div class="product-icon">📅</div>
+                    <div class="product-info">
+                        <h3>Campistry Flow</h3>
+                        <p>Daily scheduling & activity management</p>
+                    </div>
+                    <span class="product-status active">Active</span>
+                    <div class="product-arrow">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
+                    </div>
+                </a>
+
+                <!-- GO -->
+                <div class="product-tile product-go disabled">
+                    <div class="product-icon">🚌</div>
+                    <div class="product-info">
+                        <h3>Campistry Go</h3>
+                        <p>Bus routing & transportation</p>
+                    </div>
+                    <span class="product-status coming-soon">Coming Soon</span>
+                </div>
+
+                <!-- ME -->
+                <div class="product-tile product-me disabled">
+                    <div class="product-icon">👤</div>
+                    <div class="product-info">
+                        <h3>Campistry Me</h3>
+                        <p>Camper portal & parent communication</p>
+                    </div>
+                    <span class="product-status coming-soon">Coming Soon</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== QUICK LINKS ===== -->
+        <section class="quick-links">
+            <a href="mailto:Campistry@gmail.com" class="quick-link">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                    <polyline points="22,6 12,13 2,6"/>
+                </svg>
+                Contact Support
+            </a>
+            <a href="landing.html#pricing" class="quick-link">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
+                    <line x1="1" y1="10" x2="23" y2="10"/>
+                </svg>
+                Billing & Pricing
+            </a>
+        </section>
+    </main>
+
+    <!-- ========================================= -->
+    <!-- SCRIPTS -->
+    <!-- ========================================= -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="supabase_client.js"></script>
+    <script src="dashboard.js"></script>
+</body>
+</html>
