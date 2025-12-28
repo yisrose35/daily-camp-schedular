@@ -1,7 +1,9 @@
 // =================================================================
-// daily_adjustments.js  (v3.2 - Updated: Default Locations)
+// daily_adjustments.js  (v3.3 - Updated: Rainy Day Mid-Day & Auto-Skeleton)
 // - Grid/tiles EXACTLY match master_schedule_builder.js
 // - Professional Rainy Day Mode toggle with animations
+// - ★ NEW: Mid-day rainy mode (preserve morning schedule)
+// - ★ NEW: Auto-skeleton switch (swap to rainy day template)
 // - Drag-to-reposition with live preview
 // - Resize handles on tiles (drag edges)
 // - Conflict highlighting using styles.css palette
@@ -80,11 +82,60 @@ const TILES = [
 ];
 
 // =================================================================
-// RAINY DAY MODE - UI Components
+// RAINY DAY MODE - UI Components (Enhanced with Mid-Day & Auto-Skeleton)
 // =================================================================
 function isRainyDayActive() {
   const dailyData = window.loadCurrentDailyData?.() || {};
   return dailyData.rainyDayMode === true;
+}
+
+function isMidDayModeActive() {
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  return dailyData.rainyDayStartTime !== null && dailyData.rainyDayStartTime !== undefined;
+}
+
+function getMidDayStartTime() {
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  return dailyData.rainyDayStartTime || null;
+}
+
+function getPreservedSlotCount() {
+  const startTime = getMidDayStartTime();
+  if (startTime === null) return 0;
+  const times = window.unifiedTimes || [];
+  let count = 0;
+  for (let i = 0; i < times.length; i++) {
+    const slot = times[i];
+    if (slot && slot.start) {
+      const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+      if (slotStart < startTime) count++;
+    }
+  }
+  return count;
+}
+
+function isAutoSkeletonSwitchEnabled() {
+  const g = window.loadGlobalSettings?.() || {};
+  return g.rainyDayAutoSkeletonSwitch === true;
+}
+
+function setAutoSkeletonSwitch(enabled) {
+  window.saveGlobalSettings?.("rainyDayAutoSkeletonSwitch", enabled);
+}
+
+function getRainyDaySkeletonName() {
+  const g = window.loadGlobalSettings?.() || {};
+  return g.rainyDaySkeletonName || null;
+}
+
+function setRainyDaySkeletonName(name) {
+  window.saveGlobalSettings?.("rainyDaySkeletonName", name);
+}
+
+function getAvailableSkeletons() {
+  const g = window.loadGlobalSettings?.() || {};
+  const savedSkeletons = g.app1?.savedSkeletons || {};
+  return Object.keys(savedSkeletons).sort();
 }
 
 function getRainyDayStats() {
@@ -102,7 +153,13 @@ function getRainyDayStats() {
 
 function renderRainyDayToggle() {
   const isActive = isRainyDayActive();
+  const isMidDay = isMidDayModeActive();
+  const midDayStartTime = getMidDayStartTime();
+  const preservedSlots = getPreservedSlotCount();
   const stats = getRainyDayStats();
+  const autoSwitch = isAutoSkeletonSwitchEnabled();
+  const rainySkeletonName = getRainyDaySkeletonName();
+  const availableSkeletons = getAvailableSkeletons();
   
   // Generate rain drops for animation
   let rainDrops = '';
@@ -113,6 +170,23 @@ function renderRainyDayToggle() {
     const height = 12 + Math.random() * 18;
     rainDrops += `<div class="rain-drop" style="left: ${left}%; animation-delay: ${delay}s; animation-duration: ${duration}s; height: ${height}px;"></div>`;
   }
+  
+  // Skeleton options
+  const skeletonOptions = availableSkeletons.map(name => 
+    `<option value="${name}" ${name === rainySkeletonName ? 'selected' : ''}>${name}</option>`
+  ).join('');
+  
+  // Mid-day info
+  const midDayInfo = isMidDay ? `
+    <div class="rainy-midday-info" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding: 0 20px 12px;">
+      <span class="rainy-midday-badge">
+        ⏰ Started at ${minutesToTime(midDayStartTime)}
+      </span>
+      <span class="rainy-preserved-badge">
+        📋 ${preservedSlots} slot${preservedSlots !== 1 ? 's' : ''} preserved
+      </span>
+    </div>
+  ` : '';
   
   return `
     <div class="rainy-day-card ${isActive ? 'active' : 'inactive'}" id="rainy-day-card">
@@ -126,7 +200,9 @@ function renderRainyDayToggle() {
           <div>
             <h3 class="rainy-day-title">Rainy Day Mode</h3>
             <p class="rainy-day-subtitle">
-              ${isActive ? 'Indoor schedule active — outdoor fields disabled' : 'Normal schedule — all fields available'}
+              ${isActive 
+                ? (isMidDay ? 'Mid-day mode — morning schedule preserved' : 'Indoor schedule active — outdoor fields disabled')
+                : 'Normal schedule — all fields available'}
             </p>
           </div>
         </div>
@@ -134,7 +210,7 @@ function renderRainyDayToggle() {
         <div class="rainy-toggle-container">
           <span class="rainy-status-badge ${isActive ? 'active' : 'inactive'}">
             <span class="status-dot ${isActive ? 'active' : 'inactive'}"></span>
-            ${isActive ? 'ACTIVE' : 'INACTIVE'}
+            ${isActive ? (isMidDay ? 'MID-DAY' : 'ACTIVE') : 'INACTIVE'}
           </span>
           
           <label class="rainy-toggle">
@@ -146,6 +222,8 @@ function renderRainyDayToggle() {
           </label>
         </div>
       </div>
+      
+      ${midDayInfo}
       
       <div class="rainy-stats-row" style="position: relative; z-index: 1;">
         <div class="rainy-stat-item">
@@ -164,59 +242,279 @@ function renderRainyDayToggle() {
           <span>Rainy Day Activities</span>
         </div>
       </div>
+      
+      <!-- Settings Panel -->
+      <div class="rainy-settings-panel" style="position: relative; z-index: 1;">
+        <div class="rainy-settings-row">
+          <div>
+            <span class="rainy-settings-label">Auto-Switch Skeleton</span>
+            <div class="rainy-settings-sublabel">Automatically load rainy day template</div>
+          </div>
+          <label class="rainy-mini-toggle">
+            <input type="checkbox" id="rainy-auto-skeleton-toggle" ${autoSwitch ? 'checked' : ''}>
+            <span class="rainy-mini-track"></span>
+            <span class="rainy-mini-thumb"></span>
+          </label>
+        </div>
+        
+        <div class="rainy-settings-row">
+          <div>
+            <span class="rainy-settings-label">Rainy Day Skeleton</span>
+            <div class="rainy-settings-sublabel">Template to use when rainy mode activates</div>
+          </div>
+          <select id="rainy-skeleton-select" class="rainy-settings-select" ${!autoSwitch ? 'disabled' : ''}>
+            <option value="">-- Select Template --</option>
+            ${skeletonOptions}
+          </select>
+        </div>
+        
+        <div class="rainy-settings-row" style="margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.1);">
+          <div>
+            <span class="rainy-settings-label">Mid-Day Activation</span>
+            <div class="rainy-settings-sublabel">Preserve morning schedule, rain starts now</div>
+          </div>
+          <button id="rainy-midday-btn" class="rainy-midday-btn primary" ${isActive ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''}>
+            ⏰ Start From Now
+          </button>
+        </div>
+      </div>
     </div>
   `;
 }
 
 function bindRainyDayToggle() {
   const toggle = document.getElementById('rainy-day-toggle-input');
-  if (!toggle) return;
+  const autoSkeletonToggle = document.getElementById('rainy-auto-skeleton-toggle');
+  const skeletonSelect = document.getElementById('rainy-skeleton-select');
+  const midDayBtn = document.getElementById('rainy-midday-btn');
   
-  toggle.addEventListener('change', function() {
-    const newState = this.checked;
-    const dailyData = window.loadCurrentDailyData?.() || {};
-    const overrides = dailyData.overrides || {};
-    const stats = getRainyDayStats();
-    
-    if (newState) {
-      // ACTIVATE RAINY DAY MODE
-      if (!dailyData.preRainyDayDisabledFields) {
-        window.saveCurrentDailyData?.("preRainyDayDisabledFields", overrides.disabledFields || []);
+  // Main toggle
+  if (toggle) {
+    toggle.addEventListener('change', function() {
+      const newState = this.checked;
+      
+      if (newState) {
+        activateFullDayRainyMode();
+      } else {
+        deactivateRainyDayMode();
       }
       
-      const existingDisabled = overrides.disabledFields || [];
-      const newDisabled = [...new Set([...existingDisabled, ...stats.outdoorFieldNames])];
-      
-      overrides.disabledFields = newDisabled;
-      currentOverrides.disabledFields = newDisabled;
-      window.saveCurrentDailyData?.("overrides", overrides);
-      window.saveCurrentDailyData?.("rainyDayMode", true);
-      
-      showRainyDayNotification(true, stats.outdoorFieldNames.length);
-    } else {
-      // DEACTIVATE RAINY DAY MODE
-      const preRainyDisabled = dailyData.preRainyDayDisabledFields || [];
-      overrides.disabledFields = preRainyDisabled;
-      currentOverrides.disabledFields = preRainyDisabled;
-      window.saveCurrentDailyData?.("overrides", overrides);
-      window.saveCurrentDailyData?.("preRainyDayDisabledFields", null);
-      window.saveCurrentDailyData?.("rainyDayMode", false);
-      
-      showRainyDayNotification(false);
-    }
-    
-    // Re-render
-    const rainyContainer = document.getElementById('rainy-day-container');
-    if (rainyContainer) {
-      rainyContainer.innerHTML = renderRainyDayToggle();
-      bindRainyDayToggle();
-    }
-    
-    renderResourceOverridesUI();
-  });
+      rerenderRainyDayUI();
+      renderResourceOverridesUI();
+    });
+  }
+  
+  // Auto-skeleton toggle
+  if (autoSkeletonToggle) {
+    autoSkeletonToggle.addEventListener('change', function() {
+      setAutoSkeletonSwitch(this.checked);
+      rerenderRainyDayUI();
+    });
+  }
+  
+  // Skeleton select
+  if (skeletonSelect) {
+    skeletonSelect.addEventListener('change', function() {
+      setRainyDaySkeletonName(this.value || null);
+    });
+  }
+  
+  // Mid-day button
+  if (midDayBtn && !midDayBtn.disabled) {
+    midDayBtn.addEventListener('click', function() {
+      activateMidDayRainyMode();
+      rerenderRainyDayUI();
+      renderResourceOverridesUI();
+    });
+  }
 }
 
-function showRainyDayNotification(activated, disabledCount = 0) {
+function rerenderRainyDayUI() {
+  const rainyContainer = document.getElementById('rainy-day-container');
+  if (rainyContainer) {
+    rainyContainer.innerHTML = renderRainyDayToggle();
+    bindRainyDayToggle();
+  }
+}
+
+function activateFullDayRainyMode() {
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const overrides = dailyData.overrides || {};
+  const stats = getRainyDayStats();
+  
+  // Store original disabled fields
+  if (!dailyData.preRainyDayDisabledFields) {
+    window.saveCurrentDailyData?.("preRainyDayDisabledFields", overrides.disabledFields || []);
+  }
+  
+  // Disable outdoor fields
+  const existingDisabled = overrides.disabledFields || [];
+  const newDisabled = [...new Set([...existingDisabled, ...stats.outdoorFieldNames])];
+  
+  overrides.disabledFields = newDisabled;
+  currentOverrides.disabledFields = newDisabled;
+  window.saveCurrentDailyData?.("overrides", overrides);
+  window.saveCurrentDailyData?.("rainyDayMode", true);
+  window.saveCurrentDailyData?.("rainyDayStartTime", null); // Full day mode
+  
+  // Auto-switch skeleton if enabled
+  let skeletonSwitched = false;
+  if (isAutoSkeletonSwitchEnabled()) {
+    skeletonSwitched = switchToRainySkeleton();
+  }
+  
+  showRainyDayNotification(true, stats.outdoorFieldNames.length, false, skeletonSwitched);
+}
+
+function activateMidDayRainyMode() {
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const overrides = dailyData.overrides || {};
+  const stats = getRainyDayStats();
+  
+  // Get current time in minutes
+  const now = new Date();
+  const currentTimeMin = now.getHours() * 60 + now.getMinutes();
+  
+  // Store original disabled fields
+  if (!dailyData.preRainyDayDisabledFields) {
+    window.saveCurrentDailyData?.("preRainyDayDisabledFields", overrides.disabledFields || []);
+  }
+  
+  // Backup preserved schedule
+  backupPreservedSchedule(currentTimeMin);
+  
+  // Disable outdoor fields
+  const existingDisabled = overrides.disabledFields || [];
+  const newDisabled = [...new Set([...existingDisabled, ...stats.outdoorFieldNames])];
+  
+  overrides.disabledFields = newDisabled;
+  currentOverrides.disabledFields = newDisabled;
+  window.saveCurrentDailyData?.("overrides", overrides);
+  window.saveCurrentDailyData?.("rainyDayMode", true);
+  window.saveCurrentDailyData?.("rainyDayStartTime", currentTimeMin);
+  
+  // Auto-switch skeleton if enabled
+  let skeletonSwitched = false;
+  if (isAutoSkeletonSwitchEnabled()) {
+    skeletonSwitched = switchToRainySkeleton();
+  }
+  
+  const preservedCount = getPreservedSlotCount();
+  showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched, preservedCount);
+}
+
+function backupPreservedSchedule(startTimeMin) {
+  const times = window.unifiedTimes || [];
+  const schedules = window.scheduleAssignments || {};
+  const preserved = [];
+  
+  // Find slots before the start time
+  for (let i = 0; i < times.length; i++) {
+    const slot = times[i];
+    if (slot && slot.start) {
+      const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+      if (slotStart < startTimeMin) {
+        preserved.push(i);
+      }
+    }
+  }
+  
+  if (preserved.length === 0) return null;
+  
+  const backup = {};
+  Object.keys(schedules).forEach(bunk => {
+    backup[bunk] = {};
+    preserved.forEach(slotIdx => {
+      if (schedules[bunk]?.[slotIdx]) {
+        backup[bunk][slotIdx] = JSON.parse(JSON.stringify(schedules[bunk][slotIdx]));
+      }
+    });
+  });
+  
+  window.saveCurrentDailyData?.("preservedScheduleBackup", backup);
+  console.log(`[RainyDay] Backed up ${preserved.length} preserved slots`);
+  return backup;
+}
+
+function switchToRainySkeleton() {
+  const skeletonName = getRainyDaySkeletonName();
+  if (!skeletonName) {
+    console.log("[RainyDay] No rainy day skeleton configured");
+    return false;
+  }
+  
+  const g = window.loadGlobalSettings?.() || {};
+  const savedSkeletons = g.app1?.savedSkeletons || {};
+  const skeleton = savedSkeletons[skeletonName];
+  
+  if (!skeleton || skeleton.length === 0) {
+    console.warn(`[RainyDay] Rainy day skeleton "${skeletonName}" not found or empty`);
+    return false;
+  }
+  
+  // Backup current skeleton
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const currentSkeleton = dailyData.manualSkeleton || [];
+  if (currentSkeleton.length > 0) {
+    window.saveCurrentDailyData?.("preRainyDayManualSkeleton", JSON.parse(JSON.stringify(currentSkeleton)));
+  }
+  
+  // Load rainy skeleton
+  window.saveCurrentDailyData?.("manualSkeleton", JSON.parse(JSON.stringify(skeleton)));
+  dailyOverrideSkeleton = JSON.parse(JSON.stringify(skeleton));
+  window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+  
+  // Re-render grid
+  const gridEl = document.getElementById("daily-skeleton-grid");
+  if (gridEl) renderGrid(gridEl);
+  
+  console.log(`[RainyDay] Loaded rainy day skeleton "${skeletonName}"`);
+  return true;
+}
+
+function deactivateRainyDayMode() {
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const preRainyDisabled = dailyData.preRainyDayDisabledFields || [];
+  
+  const overrides = dailyData.overrides || {};
+  overrides.disabledFields = preRainyDisabled;
+  currentOverrides.disabledFields = preRainyDisabled;
+  
+  window.saveCurrentDailyData?.("overrides", overrides);
+  window.saveCurrentDailyData?.("preRainyDayDisabledFields", null);
+  window.saveCurrentDailyData?.("rainyDayMode", false);
+  window.saveCurrentDailyData?.("rainyDayStartTime", null);
+  window.saveCurrentDailyData?.("preservedScheduleBackup", null);
+  
+  // Restore original skeleton if auto-switch was enabled
+  if (isAutoSkeletonSwitchEnabled()) {
+    restorePreRainySkeleton();
+  }
+  
+  showRainyDayNotification(false);
+}
+
+function restorePreRainySkeleton() {
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const backup = dailyData.preRainyDayManualSkeleton;
+  
+  if (backup && backup.length > 0) {
+    window.saveCurrentDailyData?.("manualSkeleton", JSON.parse(JSON.stringify(backup)));
+    window.saveCurrentDailyData?.("preRainyDayManualSkeleton", null);
+    dailyOverrideSkeleton = JSON.parse(JSON.stringify(backup));
+    window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+    
+    // Re-render grid
+    const gridEl = document.getElementById("daily-skeleton-grid");
+    if (gridEl) renderGrid(gridEl);
+    
+    console.log(`[RainyDay] Restored pre-rainy skeleton`);
+    return true;
+  }
+  return false;
+}
+
+function showRainyDayNotification(activated, disabledCount = 0, isMidDay = false, skeletonSwitched = false, preservedCount = 0) {
   const notif = document.createElement('div');
   notif.id = 'rainy-notification';
   notif.style.cssText = `
@@ -239,11 +537,20 @@ function showRainyDayNotification(activated, disabledCount = 0) {
     notif.style.background = 'linear-gradient(135deg, #0c4a6e, #164e63)';
     notif.style.color = '#f0f9ff';
     notif.style.border = '1px solid rgba(14, 165, 233, 0.4)';
+    
+    let subtitle = `${disabledCount} outdoor field${disabledCount !== 1 ? 's' : ''} disabled`;
+    if (isMidDay) {
+      subtitle = `${preservedCount} slot${preservedCount !== 1 ? 's' : ''} preserved • ${disabledCount} field${disabledCount !== 1 ? 's' : ''} disabled`;
+    }
+    if (skeletonSwitched) {
+      subtitle += ' • Skeleton switched';
+    }
+    
     notif.innerHTML = `
-      <span style="font-size: 24px;">🌧️</span>
+      <span style="font-size: 24px;">${isMidDay ? '⏰' : '🌧️'}</span>
       <div>
-        <div style="font-weight: 600; font-size: 0.95rem;">Rainy Day Mode Activated</div>
-        <div style="font-size: 0.8rem; opacity: 0.85; margin-top: 2px;">${disabledCount} outdoor field${disabledCount !== 1 ? 's' : ''} disabled</div>
+        <div style="font-weight: 600; font-size: 0.95rem;">${isMidDay ? 'Mid-Day Rainy Mode Activated' : 'Rainy Day Mode Activated'}</div>
+        <div style="font-size: 0.8rem; opacity: 0.85; margin-top: 2px;">${subtitle}</div>
       </div>
     `;
   } else {
@@ -1254,6 +1561,38 @@ function init() {
       @keyframes rainFall { 0% { transform: translateY(-100%); opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { transform: translateY(200px); opacity: 0; } }
       @keyframes slideInNotif { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
       
+      /* RAINY DAY SETTINGS PANEL */
+      .rainy-settings-panel { padding: 16px 20px; border-top: 1px solid rgba(255,255,255,0.1); }
+      .rainy-day-card.inactive .rainy-settings-panel { border-top-color: #e2e8f0; background: #fafafa; }
+      .rainy-day-card.active .rainy-settings-panel { background: rgba(0,0,0,0.15); }
+      .rainy-settings-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 12px; }
+      .rainy-settings-row:last-child { margin-bottom: 0; }
+      .rainy-settings-label { font-size: 0.85rem; font-weight: 500; }
+      .rainy-day-card.inactive .rainy-settings-label { color: #475569; }
+      .rainy-day-card.active .rainy-settings-label { color: #e0f2fe; }
+      .rainy-settings-sublabel { font-size: 0.75rem; opacity: 0.7; }
+      .rainy-settings-select { padding: 8px 12px; border-radius: 8px; font-size: 0.85rem; min-width: 180px; }
+      .rainy-day-card.inactive .rainy-settings-select { background: white; border: 1px solid #d1d5db; color: #374151; }
+      .rainy-day-card.active .rainy-settings-select { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: #f0f9ff; }
+      .rainy-day-card.active .rainy-settings-select option { background: #0c4a6e; color: #f0f9ff; }
+      
+      /* Mini toggle for settings */
+      .rainy-mini-toggle { position: relative; width: 40px; height: 20px; cursor: pointer; display: inline-block; }
+      .rainy-mini-toggle input { opacity: 0; width: 0; height: 0; }
+      .rainy-mini-track { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #d1d5db; border-radius: 20px; transition: 0.3s; }
+      .rainy-mini-toggle input:checked + .rainy-mini-track { background: #10b981; }
+      .rainy-mini-thumb { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: white; border-radius: 50%; transition: 0.3s; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+      .rainy-mini-toggle input:checked ~ .rainy-mini-thumb { left: 22px; }
+      
+      /* Mid-day button */
+      .rainy-midday-btn { padding: 10px 16px; border-radius: 10px; font-size: 0.85rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.2s ease; border: none; }
+      .rainy-midday-btn.primary { background: linear-gradient(135deg, #f59e0b, #d97706); color: white; }
+      .rainy-midday-btn.primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3); }
+      
+      /* Mid-day badges */
+      .rainy-midday-badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; background: rgba(245, 158, 11, 0.2); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 999px; font-size: 0.75rem; font-weight: 600; color: #fbbf24; }
+      .rainy-preserved-badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; background: rgba(34, 197, 94, 0.2); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 999px; font-size: 0.75rem; font-weight: 600; color: #4ade80; }
+      
       /* Resource toggles */
       .resource-toggle-row { display:flex; align-items:center; justify-content:space-between; padding:8px 12px; background:#fff; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:6px; transition:background 0.15s, border-color 0.15s; }
       .resource-toggle-row:hover { background:#f9fafb; border-color:#d1d5db; }
@@ -1881,5 +2220,10 @@ function createCheckbox(name, isChecked) {
 window.initDailyAdjustments = init;
 window.parseTimeToMinutes = parseTimeToMinutes;
 window.minutesToTime = minutesToTime;
+
+// Expose rainy day functions for external use
+window.isRainyDayActive = isRainyDayActive;
+window.isMidDayModeActive = isMidDayModeActive;
+window.getMidDayStartTime = getMidDayStartTime;
 
 })();
