@@ -1,5 +1,5 @@
 // =================================================================
-// daily_adjustments.js  (v3.3 - Updated: Rainy Day Mid-Day & Auto-Skeleton)
+// daily_adjustments.js  (v3.4 - Updated: Enhanced Rainy Day UI)
 // - Grid/tiles EXACTLY match master_schedule_builder.js
 // - Professional Rainy Day Mode toggle with animations
 // - ★ NEW: Mid-day rainy mode (preserve morning schedule)
@@ -142,7 +142,7 @@ function getRainyDayStats() {
   const g = window.loadGlobalSettings?.() || {};
   const fields = g.app1?.fields || [];
   const specials = g.app1?.specialActivities || [];
-  
+   
   return {
     indoorFields: fields.filter(f => f.rainyDayAvailable === true).length,
     outdoorFields: fields.filter(f => f.rainyDayAvailable !== true).length,
@@ -160,7 +160,7 @@ function renderRainyDayToggle() {
   const autoSwitch = isAutoSkeletonSwitchEnabled();
   const rainySkeletonName = getRainyDaySkeletonName();
   const availableSkeletons = getAvailableSkeletons();
-  
+   
   // Generate rain drops for animation
   let rainDrops = '';
   for (let i = 0; i < 18; i++) {
@@ -170,12 +170,12 @@ function renderRainyDayToggle() {
     const height = 12 + Math.random() * 18;
     rainDrops += `<div class="rain-drop" style="left: ${left}%; animation-delay: ${delay}s; animation-duration: ${duration}s; height: ${height}px;"></div>`;
   }
-  
+   
   // Skeleton options
   const skeletonOptions = availableSkeletons.map(name => 
     `<option value="${name}" ${name === rainySkeletonName ? 'selected' : ''}>${name}</option>`
   ).join('');
-  
+   
   // Mid-day info
   const midDayInfo = isMidDay ? `
     <div class="rainy-midday-info" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding: 0 20px 12px;">
@@ -187,11 +187,11 @@ function renderRainyDayToggle() {
       </span>
     </div>
   ` : '';
-  
+   
   return `
     <div class="rainy-day-card ${isActive ? 'active' : 'inactive'}" id="rainy-day-card">
       <div class="rain-animation-container">${rainDrops}</div>
-      
+       
       <div class="rainy-day-header" style="position: relative; z-index: 1;">
         <div class="rainy-day-title-section">
           <div class="rainy-day-icon">
@@ -208,11 +208,15 @@ function renderRainyDayToggle() {
         </div>
         
         <div class="rainy-toggle-container">
+          <button id="rainy-settings-btn" class="rainy-settings-btn" style="display:flex;align-items:center;gap:6px;padding:6px 12px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:8px;color:#64748b;cursor:pointer;font-size:0.85rem;margin-right:8px;">
+            ⚙️ Settings
+          </button>
+           
           <span class="rainy-status-badge ${isActive ? 'active' : 'inactive'}">
             <span class="status-dot ${isActive ? 'active' : 'inactive'}"></span>
             ${isActive ? (isMidDay ? 'MID-DAY' : 'ACTIVE') : 'INACTIVE'}
           </span>
-          
+           
           <label class="rainy-toggle">
             <input type="checkbox" id="rainy-day-toggle-input" ${isActive ? 'checked' : ''}>
             <span class="rainy-toggle-track"></span>
@@ -222,9 +226,9 @@ function renderRainyDayToggle() {
           </label>
         </div>
       </div>
-      
+       
       ${midDayInfo}
-      
+       
       <div class="rainy-stats-row" style="position: relative; z-index: 1;">
         <div class="rainy-stat-item">
           <span>🏠</span>
@@ -241,14 +245,21 @@ function renderRainyDayToggle() {
           <strong>${stats.rainySpecials}</strong>
           <span>Rainy Day Activities</span>
         </div>
+        ${!isActive ? `
+        <div class="rainy-stat-item" style="margin-left:auto;">
+          <button id="rainy-midday-btn" class="rainy-midday-btn primary" style="padding:8px 14px;border-radius:8px;font-size:0.85rem;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;border:none;background:linear-gradient(135deg, #f59e0b, #d97706);color:white;">
+            ⏰ Start Mid-Day Mode
+          </button>
+        </div>
+        ` : ''}
       </div>
-      
-      <!-- Settings Panel -->
-      <div class="rainy-settings-panel" style="position: relative; z-index: 1;">
+       
+      <!-- Settings Panel (Hidden by default) -->
+      <div id="rainy-settings-panel" class="rainy-settings-panel" style="position: relative; z-index: 1; display:none;">
         <div class="rainy-settings-row">
           <div>
             <span class="rainy-settings-label">Auto-Switch Skeleton</span>
-            <div class="rainy-settings-sublabel">Automatically load rainy day template</div>
+            <div class="rainy-settings-sublabel">Automatically load rainy day template when activating</div>
           </div>
           <label class="rainy-mini-toggle">
             <input type="checkbox" id="rainy-auto-skeleton-toggle" ${autoSwitch ? 'checked' : ''}>
@@ -267,16 +278,6 @@ function renderRainyDayToggle() {
             ${skeletonOptions}
           </select>
         </div>
-        
-        <div class="rainy-settings-row" style="margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.1);">
-          <div>
-            <span class="rainy-settings-label">Mid-Day Activation</span>
-            <div class="rainy-settings-sublabel">Preserve morning schedule, rain starts now</div>
-          </div>
-          <button id="rainy-midday-btn" class="rainy-midday-btn primary" ${isActive ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''}>
-            ⏰ Start From Now
-          </button>
-        </div>
       </div>
     </div>
   `;
@@ -287,23 +288,38 @@ function bindRainyDayToggle() {
   const autoSkeletonToggle = document.getElementById('rainy-auto-skeleton-toggle');
   const skeletonSelect = document.getElementById('rainy-skeleton-select');
   const midDayBtn = document.getElementById('rainy-midday-btn');
-  
+  const settingsBtn = document.getElementById('rainy-settings-btn');
+  const settingsPanel = document.getElementById('rainy-settings-panel');
+   
+  // Settings button toggle
+  if (settingsBtn && settingsPanel) {
+    settingsBtn.addEventListener('click', function() {
+      const isOpen = settingsPanel.style.display !== 'none';
+      settingsPanel.style.display = isOpen ? 'none' : 'block';
+      settingsBtn.innerHTML = isOpen ? '⚙️ Settings' : '⚙️ Close Settings';
+    });
+  }
+   
   // Main toggle
   if (toggle) {
     toggle.addEventListener('change', function() {
       const newState = this.checked;
-      
+       
       if (newState) {
         activateFullDayRainyMode();
       } else {
         deactivateRainyDayMode();
       }
-      
+       
       rerenderRainyDayUI();
       renderResourceOverridesUI();
+       
+      // IMPORTANT: Re-render the skeleton grid
+      const gridEl = document.getElementById("daily-skeleton-grid");
+      if (gridEl) renderGrid(gridEl);
     });
   }
-  
+   
   // Auto-skeleton toggle
   if (autoSkeletonToggle) {
     autoSkeletonToggle.addEventListener('change', function() {
@@ -311,20 +327,26 @@ function bindRainyDayToggle() {
       rerenderRainyDayUI();
     });
   }
-  
+   
   // Skeleton select
   if (skeletonSelect) {
     skeletonSelect.addEventListener('change', function() {
       setRainyDaySkeletonName(this.value || null);
     });
   }
-  
+   
   // Mid-day button
   if (midDayBtn && !midDayBtn.disabled) {
     midDayBtn.addEventListener('click', function() {
-      activateMidDayRainyMode();
-      rerenderRainyDayUI();
-      renderResourceOverridesUI();
+      if (confirm('Start Mid-Day Mode?\n\nThis will:\n• Preserve current morning schedule\n• Switch to rainy day mode from now onwards\n• Disable outdoor fields')) {
+        activateMidDayRainyMode();
+        rerenderRainyDayUI();
+        renderResourceOverridesUI();
+        
+        // Re-render the skeleton grid
+        const gridEl = document.getElementById("daily-skeleton-grid");
+        if (gridEl) renderGrid(gridEl);
+      }
     });
   }
 }
@@ -503,11 +525,11 @@ function restorePreRainySkeleton() {
     window.saveCurrentDailyData?.("preRainyDayManualSkeleton", null);
     dailyOverrideSkeleton = JSON.parse(JSON.stringify(backup));
     window.dailyOverrideSkeleton = dailyOverrideSkeleton;
-    
+     
     // Re-render grid
     const gridEl = document.getElementById("daily-skeleton-grid");
     if (gridEl) renderGrid(gridEl);
-    
+     
     console.log(`[RainyDay] Restored pre-rainy skeleton`);
     return true;
   }
@@ -569,7 +591,7 @@ function showRainyDayNotification(activated, disabledCount = 0, isMidDay = false
   document.body.appendChild(notif);
   
   setTimeout(() => {
-    notif.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+    notif.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1);';
     notif.style.transform = 'translateX(120%)';
     notif.style.opacity = '0';
     setTimeout(() => notif.remove(), 300);
@@ -1614,6 +1636,21 @@ function init() {
       .sport-override-list { margin-top:15px; padding-top:15px; border-top:1px solid #eee; }
       .sport-override-list label { display:block; margin:5px 0 5px 10px; font-size:1.0em; }
       .sport-override-list label input { margin-right:8px; vertical-align:middle; }
+
+      /* NEW CSS ADDITIONS */
+      .rainy-settings-btn:hover {
+        background: rgba(255,255,255,0.15) !important;
+        border-color: rgba(255,255,255,0.3) !important;
+      }
+
+      .rainy-day-card.active .rainy-settings-btn {
+        color: #e0f2fe;
+      }
+
+      .rainy-midday-btn:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+      }
     </style>
     
     <div style="padding:15px;background:#f9f9f9;border:1px solid #ddd;border-radius:8px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
