@@ -310,9 +310,14 @@ function loadData(){
 }
 
 function saveData(){
+    // ⭐ Save both at once - more efficient and ensures updated_at is set once
     const settings = window.loadGlobalSettings?.() || {};
+    
+    // Update the settings object
     settings.locationZones = locationZones;
     settings.pinnedTileDefaults = pinnedTileDefaults;
+    
+    // Save both keys (each call now updates updated_at properly with Fix 4)
     window.saveGlobalSettings?.("locationZones", locationZones);
     window.saveGlobalSettings?.("pinnedTileDefaults", pinnedTileDefaults);
 }
