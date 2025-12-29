@@ -156,10 +156,11 @@
     async function loadStats() {
         try {
             // Try to get from camp_state table (cloud storage)
+            // Fix #1: Changed owner_id to camp_id as requested
             const { data, error } = await window.supabase
                 .from('camp_state')
                 .select('state')
-                .eq('owner_id', currentUser.id)
+                .eq('camp_id', currentUser.id) 
                 .single();
             
             if (data?.state) {
@@ -280,10 +281,15 @@
                     campData = data;
                 }
                 
-                // Update user metadata
-                await window.supabase.auth.updateUser({
+                // Fix #2: Added error handling for metadata update
+                const { error: metaError } = await window.supabase.auth.updateUser({
                     data: { camp_name: newCampName }
                 });
+
+                if (metaError) {
+                    console.error('Failed to update camp name metadata:', metaError);
+                    throw metaError;
+                }
                 
                 // Update UI
                 if (campNameDisplay) campNameDisplay.textContent = newCampName;
