@@ -280,6 +280,8 @@
             return m;
         }, {});
 
+        const globalSettings = window.loadGlobalSettings?.() || {};
+
         return {
             activities: filteredActivities,
             blocks,
@@ -293,8 +295,8 @@
             allActivities: masterActivities,
             h2hActivities,
             fieldsBySport,     // <<<<<< SMART LEAGUE ENGINE NEEDS THIS
-            masterLeagues: window.masterLeagues || {},
-            masterSpecialtyLeagues: window.masterSpecialtyLeagues || {},
+            masterLeagues: window.masterLeagues || window.leaguesByName || {},
+            masterSpecialtyLeagues: globalSettings.specialtyLeagues || window.masterSpecialtyLeagues || {},
 
             disabledFields: dailyOverrides.disabledFields || [],
             disabledSpecials: dailyOverrides.disabledSpecials || [],
