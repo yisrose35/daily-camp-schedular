@@ -160,7 +160,15 @@
         // Check rotation history for timestamps
         const rotationHistory = window.loadRotationHistory?.() || { bunks: {} };
         const bunkHistory = rotationHistory.bunks?.[bunkName] || {};
-        const lastTimestamp = bunkHistory[activityName];
+        
+        // Try exact match first, then case-insensitive
+        let lastTimestamp = bunkHistory[activityName];
+        if (!lastTimestamp) {
+            const matchingKey = Object.keys(bunkHistory).find(k => 
+                k.toLowerCase().trim() === actLower
+            );
+            if (matchingKey) lastTimestamp = bunkHistory[matchingKey];
+        }
         
         if (lastTimestamp) {
             const now = Date.now();
@@ -926,7 +934,8 @@
     };
 
     // Expose config for tuning
-    window.ROTATION_CONFIG = ROTATION_CONFIG;
+    // Deep freeze to prevent runtime modification
+    window.ROTATION_CONFIG = Object.freeze(JSON.parse(JSON.stringify(ROTATION_CONFIG)));
 
     console.log('[FILLERS] Smart Rotation v4 loaded - Super smart activity distribution enabled');
 
