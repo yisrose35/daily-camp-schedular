@@ -18,6 +18,14 @@ let detailPaneEl = null;
 let addSpecialInput = null;
 let addRainyDayInput = null;
 
+// Fix #1: Ensure sync happens on page unload
+window.addEventListener('beforeunload', () => {
+    if (window._specialActivitiesSyncTimeout) {
+        clearTimeout(window._specialActivitiesSyncTimeout);
+        window.forceSyncToCloud?.();
+    }
+});
+
 //------------------------------------------------------------------
 // INIT
 //------------------------------------------------------------------
@@ -682,7 +690,8 @@ function renderTransition(item) {
     labelDiv.style.minWidth = "120px";
     labelDiv.innerHTML = `<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">Label</label>`;
     const labelIn = document.createElement("input");
-    i.type = "text";
+    // Fix #2: Correctly set input type
+    labelIn.type = "text";
     labelIn.value = t.label;
     labelIn.className = "sa-field-input";
     labelIn.style.width = "100%";
