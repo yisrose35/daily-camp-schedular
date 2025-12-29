@@ -139,7 +139,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     } else {
         // ⭐ NO SESSION - Redirect to landing page for login
         console.log("[AUTH] No session - redirecting to landing page");
-        window.location.href = 'index.html';
+        window.location.href = 'landing.html';
         return;
     }
 
@@ -155,7 +155,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (event === 'SIGNED_OUT') {
             // ⭐ ON LOGOUT: Redirect to landing page
             console.log("[AUTH] Signed out - redirecting to landing page");
-            window.location.href = 'index.html';
+            window.location.href = 'landing.html';
         }
     });
     
