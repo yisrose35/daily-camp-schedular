@@ -8,32 +8,11 @@
     <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-<!-- =============================================================== -->
-<!-- WELCOME SCREEN (Campistry Auth) -->
-<!-- =============================================================== -->
-<div id="welcome-screen" class="campistry-welcome">
-    <img
-        src="https://placehold.co/150x150/111827/ffffff?text=CAMPISTRY"
-        alt="Campistry Logo"
-        class="welcome-logo"
-    />
-    <h2 class="welcome-title">Welcome to Campistry</h2>
-    <p class="welcome-sub">Sign in or create your Campistry account.</p>
-    <div class="welcome-toggle">
-        <button id="mode-login" class="welcome-toggle-btn active">Sign In</button>
-        <button id="mode-signup" class="welcome-toggle-btn">Create Account</button>
-    </div>
-    <input type="email" id="auth-email" placeholder="Email" class="welcome-input"/>
-    <input type="password" id="auth-password" placeholder="Password" class="welcome-input"/>
-    <input type="text" id="camp-name-input" placeholder="Camp Name" class="welcome-input"/>
-    <button id="begin-btn" class="welcome-primary-btn">Sign In</button>
-    <div id="auth-status" class="welcome-status"></div>
-</div>
 
 <!-- =============================================================== -->
 <!-- MAIN APP WRAPPER -->
 <!-- =============================================================== -->
-<div id="main-app-container" style="display:none;">
+<div id="main-app-container">
     <div class="app-shell">
         <!-- =========================================================== -->
         <!-- HEADER -->
@@ -41,7 +20,7 @@
         <header class="app-header">
             <div class="header-left">
                 <!-- DASHBOARD LINK -->
-                <a href="dashboard.html" class="back-to-dashboard" style="margin-right: 15px; text-decoration: none; color: inherit; font-weight: bold;">← Dashboard</a>
+                <a href="dashboard.html" style="color:#0D7C5C; text-decoration:none; font-weight:500; margin-right:16px;">← Dashboard</a>
 
                 <!-- Hamburger -->
                 <button id="hamburgerBtn" class="hamburger-btn" aria-label="Toggle Navigation">
