@@ -143,7 +143,8 @@
     // GET TODAY'S MATCHUPS FOR A LEAGUE
     // =========================================================================
     function getLeagueMatchupsForToday(league, history) {
-        const { id, teams, conferences, allowInterConference, interConferencePriority } = league;
+        const leagueId = league.id || league.name;
+        const { teams, conferences, allowInterConference, interConferencePriority } = league;
         
         if (!teams || teams.length < 2) return [];
         
@@ -156,7 +157,7 @@
                 const confTeams = conferences[confName] || [];
                 const roundRobin = generateRoundRobin(confTeams);
                 
-                const confKey = `${id}|${confName}`;
+                const confKey = `${leagueId}|${confName}`;
                 const currentRound = (history.conferenceRounds[confKey] || 0) % Math.max(1, roundRobin.length);
                 
                 if (roundRobin[currentRound]) {
@@ -172,7 +173,7 @@
                 const conf1Teams = conferences[conferenceNames[0]] || [];
                 const conf2Teams = conferences[conferenceNames[1]] || [];
                 
-                const interKey = `${id}|inter`;
+                const interKey = `${leagueId}|inter`;
                 const interRound = (history.conferenceRounds[interKey] || 0) % Math.max(1, Math.max(conf1Teams.length, conf2Teams.length));
                 
                 conf1Teams.forEach((team1, idx) => {
@@ -193,7 +194,7 @@
             }
         } else {
             const roundRobin = generateRoundRobin(teams);
-            const currentRound = (history.roundCounters[id] || 0) % Math.max(1, roundRobin.length);
+            const currentRound = (history.roundCounters[leagueId] || 0) % Math.max(1, roundRobin.length);
             
             if (roundRobin[currentRound]) {
                 matchups = roundRobin[currentRound].map(m => ({
@@ -211,7 +212,8 @@
     // ★★★ CRITICAL: ASSIGN MATCHUPS WITH GLOBAL LOCK CHECK ★★★
     // =========================================================================
     function assignMatchupsToFieldsAndSlots(matchups, league, history, slots) {
-        const { id, fields, gamesPerFieldSlot } = league;
+        const leagueId = league.id || league.name;
+        const { fields, gamesPerFieldSlot } = league;
         
         if (!fields || fields.length === 0) {
             console.warn(`[SpecialtyLeagues] No fields for league ${league.name}`);
@@ -243,7 +245,7 @@
         if (workingMatchups.length > totalSlotsAvailable) {
             workingMatchups = workingMatchups.map(m => ({
                 ...m,
-                waitScore: getWaitPriorityScore(m.teamA, m.teamB, history.lastSlotOrder, id)
+                waitScore: getWaitPriorityScore(m.teamA, m.teamB, history.lastSlotOrder, leagueId)
             }));
             workingMatchups.sort((a, b) => b.waitScore - a.waitScore);
             workingMatchups = workingMatchups.slice(0, totalSlotsAvailable);
@@ -258,7 +260,7 @@
         
         workingMatchups = workingMatchups.map(m => ({
             ...m,
-            waitScore: getWaitPriorityScore(m.teamA, m.teamB, history.lastSlotOrder, id)
+            waitScore: getWaitPriorityScore(m.teamA, m.teamB, history.lastSlotOrder, leagueId)
         }));
         workingMatchups.sort((a, b) => b.waitScore - a.waitScore);
         
@@ -274,7 +276,7 @@
                 const maxGames = gamesPerFieldSlot || 3;
                 
                 if (currentGames < maxGames && currentGames < minGames) {
-                    const rotationScore = getFieldRotationScore(matchup.teamA, matchup.teamB, field, history.teamFieldRotation, availableFields, id);
+                    const rotationScore = getFieldRotationScore(matchup.teamA, matchup.teamB, field, history.teamFieldRotation, availableFields, leagueId);
                     
                     if (currentGames < minGames || (currentGames === minGames && rotationScore > 0)) {
                         minGames = currentGames;
@@ -314,16 +316,20 @@
     // UPDATE HISTORY AFTER SCHEDULING
     // =========================================================================
     function updateHistoryAfterScheduling(league, assignments, history) {
-        const { id, conferences } = league;
-        const currentDate = window.currentScheduleDate || new Date().toISOString().slice(0, 10);
+        const leagueId = league.id || league.name;
+        const { conferences } = league;
+        
+        const now = new Date();
+        const currentDate = window.currentScheduleDate || 
+            `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
         
         if (!history.lastScheduledDate) history.lastScheduledDate = {};
-        const isNewDay = history.lastScheduledDate[id] !== currentDate;
+        const isNewDay = history.lastScheduledDate[leagueId] !== currentDate;
         
         if (isNewDay) {
             assignments.forEach(game => {
-                const keyA = `${id}|${game.teamA}`;
-                const keyB = `${id}|${game.teamB}`;
+                const keyA = `${leagueId}|${game.teamA}`;
+                const keyB = `${leagueId}|${game.teamB}`;
                 
                 if (!history.teamFieldRotation[keyA]) history.teamFieldRotation[keyA] = [];
                 if (!history.teamFieldRotation[keyB]) history.teamFieldRotation[keyB] = [];
@@ -334,7 +340,7 @@
                 history.lastSlotOrder[keyB] = game.slotOrder;
                 
                 const matchupKey = [game.teamA, game.teamB].sort().join('|');
-                const fullKey = `${id}|${matchupKey}`;
+                const fullKey = `${leagueId}|${matchupKey}`;
                 if (!history.matchupHistory[fullKey]) history.matchupHistory[fullKey] = [];
                 history.matchupHistory[fullKey].push(currentDate);
             });
@@ -343,19 +349,19 @@
             
             if (conferenceNames.length > 0) {
                 conferenceNames.forEach(conf => {
-                    const confKey = `${id}|${conf}`;
+                    const confKey = `${leagueId}|${conf}`;
                     history.conferenceRounds[confKey] = (history.conferenceRounds[confKey] || 0) + 1;
                 });
                 
                 if (league.allowInterConference) {
-                    const interKey = `${id}|inter`;
+                    const interKey = `${leagueId}|inter`;
                     history.conferenceRounds[interKey] = (history.conferenceRounds[interKey] || 0) + 1;
                 }
             } else {
-                history.roundCounters[id] = (history.roundCounters[id] || 0) + 1;
+                history.roundCounters[leagueId] = (history.roundCounters[leagueId] || 0) + 1;
             }
             
-            history.lastScheduledDate[id] = currentDate;
+            history.lastScheduledDate[leagueId] = currentDate;
             
             console.log(`[SpecialtyLeagues] New day (${currentDate}) - incremented round counter`);
         } else {
@@ -429,6 +435,8 @@
                 continue;
             }
             
+            const leagueId = league.id || league.name;
+
             console.log(`[SpecialtyLeagues] Using league: ${league.name}`);
             console.log(`[SpecialtyLeagues] Teams: ${(league.teams || []).join(', ')}`);
             console.log(`[SpecialtyLeagues] Configured Fields: ${(league.fields || []).join(', ')}`);
@@ -498,7 +506,7 @@
                 `${a.teamA} vs ${a.teamB} — ${a.field}`
             );
             
-            const roundNum = (history.roundCounters[league.id] || 0) + 1;
+            const roundNum = (history.roundCounters[leagueId] || 0) + 1;
             const gameLabel = `${league.name} Game ${roundNum}`;
             
             // Fill all blocks
