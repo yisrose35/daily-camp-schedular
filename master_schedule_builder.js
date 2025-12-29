@@ -1,6 +1,6 @@
 // =================================================================
-// master_schedule_builder.js (UPDATED - ADVANCED GRID INTERACTION)
-// Beta v2.0
+// master_schedule_builder.js (UPDATED - ADVANCED GRID INTERACTION + MOBILE)
+// Beta v2.1
 // Updates:
 // 1. Added Elective tile type for reserving multiple activities
 // 2. Added "Update [Template Name]" button to save changes to current file.
@@ -11,6 +11,7 @@
 // 7. ADDED: Resize handles (top/bottom) with 5-minute snapping.
 // 8. ADDED: Live drop previews and resize tooltips.
 // 9. CHANGED: Deletion now requires DOUBLE-CLICK to prevent accidental clicks.
+// 10. ADDED: Mobile Touch Support (Drag from palette to grid).
 // =================================================================
 
 (function(){
@@ -473,6 +474,51 @@ function renderPalette(){
     };
     el.ondragend = () => { el.dragging = false; };
     
+    // MOBILE TOUCH SUPPORT
+    let touchStartY = 0;
+    el.addEventListener('touchstart', (e) => {
+      touchStartY = e.touches[0].clientY;
+      el.dataset.tileData = JSON.stringify(tile);
+      el.style.opacity = '0.6';
+    });
+    
+    el.addEventListener('touchend', (e) => {
+      el.style.opacity = '1';
+      const touch = e.changedTouches[0];
+      const touchEndY = touch.clientY;
+      
+      // 1. Detect if it was just a tap (minimal movement)
+      if (Math.abs(touchEndY - touchStartY) < 10) {
+        showTileInfo(tile);
+        return;
+      }
+
+      // 2. Detect Drop Location (Manual Logic for Mobile)
+      // Since touchend fires on the source element (the palette tile),
+      // we must use elementFromPoint to find what we are "dropping" onto.
+      const elementAtPoint = document.elementFromPoint(touch.clientX, touch.clientY);
+      const cell = elementAtPoint ? elementAtPoint.closest('.grid-cell') : null;
+      
+      if (cell && cell.ondrop) {
+         // Create a fake drop event to reuse the existing logic
+         const fakeEvent = {
+           preventDefault: () => {},
+           clientX: touch.clientX,
+           clientY: touch.clientY,
+           dataTransfer: {
+             getData: (type) => {
+               if (type === 'application/json') return JSON.stringify(tile);
+               return '';
+             },
+             types: ['application/json']
+           }
+         };
+         
+         // Trigger the drop logic on the cell
+         cell.ondrop(fakeEvent);
+      }
+    });
+    
     palette.appendChild(el);
   });
 }
@@ -776,10 +822,10 @@ function addDropListeners(selector){
                     
                     // Ask for reserved fields (Manual override)
                     const manualFields = promptForReservedFields(name);
-                   if (manualFields.length > 0) {
-    reservedFields = manualFields;
-    location = manualFields.length === 1 ? manualFields[0] : null; // Only set location if single field
-}
+                    if (manualFields.length > 0) {
+                        reservedFields = manualFields;
+                        location = manualFields.length === 1 ? manualFields[0] : null; // Only set location if single field
+                    }
                 }
                 else if (tileData.type === 'swim') {
                     // Only auto-discover if no default location was configured
