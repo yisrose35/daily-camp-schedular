@@ -1,12 +1,12 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
 // FIXED VERSION: Proper sync/async handling + consolidated storage
-// v2.2 - Added setCloudState for live imports without page reload
+// v2.3 - Fixed getCampId() for Supabase v2 + proper user isolation
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v2.2 (FIXED)");
+  console.log("☁️ Campistry Cloud Bridge v2.3 (FIXED)");
 
   const TABLE = "camp_state";
   
@@ -20,43 +20,73 @@
     globalRegistry: "campistry_global_registry"
   };
   
+  // ============================================================================
+  // CAMP ID MANAGEMENT - User Isolation
+  // ============================================================================
+  
   // Cache the camp ID once we have it
-let _cachedCampId = null;
+  let _cachedCampId = null;
 
-function getCampId() {
+  function getCampId() {
     // Return cached value if available
-    if (_cachedCampId) return _cachedCampId;
+    if (_cachedCampId) {
+      return _cachedCampId;
+    }
     
-    // Try to get from current session (synchronous access)
+    // Try to find Supabase session in localStorage (v2 format)
+    // Supabase v2 stores auth in keys like: sb-<project-ref>-auth-token
     try {
-        // Access the session from Supabase's internal state
-        const session = window.supabase?.auth?.session;
-        if (session?.user?.id) {
-            _cachedCampId = session.user.id;
-            return _cachedCampId;
-        }
-    } catch (e) {}
-    
-    // Try localStorage where Supabase stores session
-    try {
-        const storedSession = localStorage.getItem('sb-' + window.SUPABASE_URL?.split('//')[1]?.split('.')[0] + '-auth-token');
-        if (storedSession) {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
+          const storedSession = localStorage.getItem(key);
+          if (storedSession) {
             const parsed = JSON.parse(storedSession);
-            if (parsed?.user?.id) {
-                _cachedCampId = parsed.user.id;
-                return _cachedCampId;
+            // Supabase v2 stores user in different structures depending on version
+            const userId = parsed?.user?.id || 
+                          parsed?.currentSession?.user?.id ||
+                          parsed?.session?.user?.id;
+            if (userId) {
+              _cachedCampId = userId;
+              localStorage.setItem('campistry_user_id', userId);
+              console.log("☁️ getCampId: Found user ID from Supabase storage");
+              return _cachedCampId;
             }
+          }
         }
-    } catch (e) {}
+      }
+    } catch (e) {
+      console.warn("☁️ getCampId: Error reading Supabase storage:", e);
+    }
     
-    // Fallback for development/testing
-    return localStorage.getItem('campistry_camp_id') || "demo_camp_001";
-}
+    // Try our own cached user ID (persists across page reloads)
+    const cachedUserId = localStorage.getItem('campistry_user_id');
+    if (cachedUserId && cachedUserId !== 'demo_camp_001') {
+      _cachedCampId = cachedUserId;
+      console.log("☁️ getCampId: Using cached user ID");
+      return _cachedCampId;
+    }
+    
+    // Fallback for development/testing - should not happen in production
+    console.warn("☁️ getCampId: No user ID found, using fallback");
+    return "demo_camp_001";
+  }
 
-// Call this when auth state changes to update the cache
-function updateCampIdCache(userId) {
-    _cachedCampId = userId;
-}
+  // Call this when auth state changes to update the cache
+  function updateCampIdCache(userId) {
+    if (userId) {
+      _cachedCampId = userId;
+      localStorage.setItem('campistry_user_id', userId);
+      console.log("☁️ updateCampIdCache: User ID cached");
+    }
+  }
+  
+  // Clear the cache on sign out
+  function clearCampIdCache() {
+    _cachedCampId = null;
+    localStorage.removeItem('campistry_user_id');
+    console.log("☁️ clearCampIdCache: User ID cache cleared");
+  }
 
   const SCHEMA_VERSION = 2;
 
@@ -170,6 +200,8 @@ function updateCampIdCache(userId) {
         return null;
       }
       if (data?.user) {
+        // Update the cache whenever we successfully get the user
+        updateCampIdCache(data.user.id);
         console.log("☁️ Current user:", data.user.email);
       }
       return data?.user || null;
@@ -192,12 +224,13 @@ function updateCampIdCache(userId) {
         return null;
       }
       
-      console.log("☁️ Loading from cloud for user:", user.id);
+      const campId = getCampId();
+      console.log("☁️ Loading from cloud for camp_id:", campId.substring(0, 8) + "...");
       
       const { data, error } = await window.supabase
         .from(TABLE)
         .select("state")
-        .eq("camp_id", getCampId())
+        .eq("camp_id", campId)
         .single();
 
       if (error) {
@@ -250,6 +283,14 @@ function updateCampIdCache(userId) {
         return false;
       }
 
+      const campId = getCampId();
+      
+      // Sanity check - don't save if using demo fallback
+      if (campId === "demo_camp_001") {
+        console.error("☁️ Cannot save to cloud: no valid camp_id (still using demo fallback)");
+        return false;
+      }
+
       state.schema_version = SCHEMA_VERSION;
       state.updated_at = new Date().toISOString();
       
@@ -266,8 +307,8 @@ function updateCampIdCache(userId) {
       }
 
       console.log("☁️ Saving to cloud:", {
-        camp_id: getCampId(),
-        user_id: user.id,
+        camp_id: campId.substring(0, 8) + "...",
+        user_id: user.id.substring(0, 8) + "...",
         divisions: Object.keys(stateToSave.divisions || {}).length,
         bunks: (stateToSave.bunks || []).length
       });
@@ -275,7 +316,7 @@ function updateCampIdCache(userId) {
       const { data, error } = await window.supabase
         .from(TABLE)
         .upsert({
-          camp_id: getCampId(),
+          camp_id: campId,
           owner_id: user.id,
           state: stateToSave
         }, {
@@ -371,6 +412,9 @@ function updateCampIdCache(userId) {
         try {
           const { data } = await window.supabase?.auth?.getUser() || {};
           user = data?.user;
+          if (user) {
+            updateCampIdCache(user.id);
+          }
         } catch (e) {
           // Ignore auth errors during init
         }
@@ -539,6 +583,7 @@ function updateCampIdCache(userId) {
       smartTileHistory: {},
       manualUsageOffsets: {},
       historicalCounts: {},
+      rotationHistory: { bunks: {}, leagues: {} },
       updated_at: new Date().toISOString()
     };
     
@@ -571,10 +616,11 @@ function updateCampIdCache(userId) {
     
     keysToReset.forEach(key => {
       if (key === 'leagueRoundState') state.leagueRoundState = {};
-      else if (key === 'manualUsageOffsets') delete state.manualUsageOffsets;
+      else if (key === 'manualUsageOffsets') state.manualUsageOffsets = {};
       else if (key === 'historicalCounts') state.historicalCounts = {};
       else if (key === 'smartTileHistory') state.smartTileHistory = {};
-      else delete state[key]; // Fix #2 - 🟡 MEDIUM: Proper delete
+      else if (key === 'rotationHistory') state.rotationHistory = { bunks: {}, leagues: {} };
+      else delete state[key];
     });
     
     state.updated_at = new Date().toISOString();
@@ -644,7 +690,11 @@ function updateCampIdCache(userId) {
       return false;
     }
     
-    console.log("3. Testing cloud read...");
+    const campId = getCampId();
+    console.log("3. Camp ID:", campId.substring(0, 8) + "...");
+    console.log("   (Full ID):", campId);
+    
+    console.log("4. Testing cloud read...");
     const cloudData = await loadFromCloud();
     console.log("   Cloud data exists:", !!cloudData);
     if (cloudData) {
@@ -652,7 +702,7 @@ function updateCampIdCache(userId) {
       console.log("   Bunks:", (cloudData.bunks || []).length);
     }
     
-    console.log("4. Testing cloud write...");
+    console.log("5. Testing cloud write...");
     const localData = getLocalCache();
     const saveSuccess = await saveToCloud(localData);
     console.log("   Save success:", saveSuccess);
@@ -662,6 +712,26 @@ function updateCampIdCache(userId) {
     console.log("=".repeat(50));
     
     return saveSuccess;
+  };
+  
+  // ⭐ Debug function to see current state
+  window.debugCloudState = function() {
+    console.log("=".repeat(50));
+    console.log("☁️ CLOUD STATE DEBUG");
+    console.log("=".repeat(50));
+    console.log("Cached Camp ID:", _cachedCampId);
+    console.log("Stored Camp ID:", localStorage.getItem('campistry_user_id'));
+    console.log("Initialized:", _initialized);
+    console.log("Sync Pending:", _cloudSyncPending);
+    console.log("Sync In Progress:", _syncInProgress);
+    
+    const state = getLocalCache();
+    console.log("Local State Keys:", Object.keys(state));
+    console.log("Divisions:", Object.keys(state.divisions || {}).length);
+    console.log("Bunks:", (state.bunks || []).length);
+    console.log("=".repeat(50));
+    
+    return state;
   };
 
   // Start initialization
@@ -687,6 +757,15 @@ function updateCampIdCache(userId) {
       }
       _lastAuthTime = now;
       
+      // Handle sign out - clear the cache
+      if (event === 'SIGNED_OUT') {
+        console.log("☁️ User signed out, clearing cache");
+        clearCampIdCache();
+        _memoryCache = null;
+        _initialized = false;
+        return;
+      }
+      
       if (event === 'SIGNED_IN' && session?.user) {
         if (_rehydrating) {
           console.log("☁️ Already re-hydrating, skipping");
@@ -694,18 +773,20 @@ function updateCampIdCache(userId) {
         }
         _rehydrating = true;
         
-        console.log("☁️ User signed in, fetching data from cloud...");
-        // Update camp ID cache with user ID
-if (session?.user?.id) {
-    updateCampIdCache(session.user.id);
-}
+        // ⭐ CRITICAL: Update camp ID cache FIRST before any queries
+        updateCampIdCache(session.user.id);
+        console.log("☁️ User signed in:", session.user.email);
+        
         try {
+          const campId = getCampId();
+          console.log("☁️ Fetching data from cloud with camp_id:", campId.substring(0, 8) + "...");
+          
           const startTime = Date.now();
           
           const { data, error } = await window.supabase
             .from(TABLE)
             .select("state")
-            .eq("camp_id", getCampId())
+            .eq("camp_id", campId)
             .single();
           
           const fetchTime = Date.now() - startTime;
@@ -774,34 +855,38 @@ if (session?.user?.id) {
   
   setupAuthListener();
   
-  // Fix #3 - 🔴 CRITICAL: Add Missing Functions
   // ============================================================================
   // ROTATION HISTORY FUNCTIONS
   // ============================================================================
 
   window.loadRotationHistory = function() {
-      const g = window.loadGlobalSettings?.() || {};
-      return g.rotationHistory || { bunks: {}, leagues: {} };
+    const g = window.loadGlobalSettings?.() || {};
+    return g.rotationHistory || { bunks: {}, leagues: {} };
   };
 
   window.saveRotationHistory = function(history) {
-      window.saveGlobalSettings?.("rotationHistory", history);
-      window.forceSyncToCloud?.();
+    window.saveGlobalSettings?.("rotationHistory", history);
+    window.forceSyncToCloud?.();
   };
 
   window.loadHistoricalCounts = function() {
-      const g = window.loadGlobalSettings?.() || {};
-      return g.historicalCounts || {};
+    const g = window.loadGlobalSettings?.() || {};
+    return g.historicalCounts || {};
   };
 
   window.saveHistoricalCounts = function(counts) {
-      window.saveGlobalSettings?.("historicalCounts", counts);
-      window.forceSyncToCloud?.();
+    window.saveGlobalSettings?.("historicalCounts", counts);
+    window.forceSyncToCloud?.();
   };
 
   window.loadYesterdayHistory = function() {
-      const g = window.loadGlobalSettings?.() || {};
-      return g.yesterdayHistory || {};
+    const g = window.loadGlobalSettings?.() || {};
+    return g.yesterdayHistory || {};
+  };
+  
+  window.saveYesterdayHistory = function(history) {
+    window.saveGlobalSettings?.("yesterdayHistory", history);
+    window.forceSyncToCloud?.();
   };
 
   console.log("☁️ Cloud Bridge API ready (sync + background cloud)");
