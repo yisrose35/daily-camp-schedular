@@ -540,10 +540,19 @@
         // ★★★ STEP 0: INITIALIZE GLOBAL FIELD LOCKS ★★★
         // =========================================================================
         console.log("\n[INIT] Resetting GlobalFieldLocks...");
+        // Fix #1: Added stub fallback for GlobalFieldLocks
         if (window.GlobalFieldLocks) {
             window.GlobalFieldLocks.reset();
         } else {
-            console.error("[INIT] ❌ GlobalFieldLocks not loaded! Field locking will not work!");
+            console.error("[INIT] ❌ GlobalFieldLocks not loaded! Creating stub fallback.");
+            // Provide stub implementation to prevent crashes
+            window.GlobalFieldLocks = {
+                reset: () => {},
+                isFieldLocked: () => null,
+                lockFieldForDivision: () => {},
+                filterAvailableFields: (fields) => fields,
+                debugPrintLocks: () => console.log("GlobalFieldLocks stub - no locks")
+            };
         }
 
         // Scan skeleton for field reservations
@@ -617,7 +626,12 @@
         
         bunkOverrides.forEach(override => {
             const activityName = override.activity;
-            const overrideType = override.type; // 'trip', 'sport', or 'special'
+            // Fix #2: Added fallback and validation for overrideType
+            const overrideType = override.type || 'special';
+            if (!['trip', 'sport', 'special'].includes(overrideType)) {
+                console.warn(`[BunkOverride] Unknown type "${overrideType}", treating as special`);
+            }
+
             const startMin = Utils.parseTimeToMinutes(override.startTime);
             const endMin = Utils.parseTimeToMinutes(override.endTime);
             const slots = Utils.findSlotsForRange(startMin, endMin);
