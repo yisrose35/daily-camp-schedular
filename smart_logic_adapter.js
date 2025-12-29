@@ -14,24 +14,15 @@
     // =========================================================================
     // STORAGE KEYS
     // =========================================================================
-    const PRIORITY_KEY = "smartTilePriority_v2";
-
+    
     function loadPriorityQueue() {
-        try {
-            const raw = localStorage.getItem(PRIORITY_KEY);
-            return raw ? JSON.parse(raw) : {};
-        } catch (e) {
-            console.error("[SmartTile] Failed to load priority queue:", e);
-            return {};
-        }
+        const g = window.loadGlobalSettings?.() || {};
+        return g.smartTilePriority || [];
     }
 
     function savePriorityQueue(queue) {
-        try {
-            localStorage.setItem(PRIORITY_KEY, JSON.stringify(queue));
-        } catch (e) {
-            console.error("[SmartTile] Failed to save priority queue:", e);
-        }
+        window.saveGlobalSettings?.("smartTilePriority", queue);
+        window.forceSyncToCloud?.();
     }
 
     // =========================================================================
@@ -65,8 +56,10 @@
                lower.includes("special");
     }
 
+    const DEBUG_SMART_TILE = window.DEBUG_SMART_TILE || false;
+
     function log(...args) {
-        console.log("[SmartTile]", ...args);
+        if (DEBUG_SMART_TILE) console.log("[SmartTile]", ...args);
     }
 
     // =========================================================================
@@ -89,20 +82,13 @@
      */
     function getCanonicalSwimName(name, activityProps) {
         if (!isSwimOrPool(name)) return name;
+        if (!activityProps) return name;
         
-        // Look for Pool in activity properties first
-        const poolNames = ['Pool', 'pool', 'Swimming Pool', 'swimming pool'];
-        for (const pn of poolNames) {
-            if (activityProps?.[pn]) return pn;
-        }
+        // Find any pool-related key in activity properties
+        const allKeys = Object.keys(activityProps);
+        const poolKey = allKeys.find(k => isSwimOrPool(k));
         
-        // Look for Swim
-        const swimNames = ['Swim', 'swim', 'Swimming', 'swimming'];
-        for (const sn of swimNames) {
-            if (activityProps?.[sn]) return sn;
-        }
-        
-        return name; // Return original if no match found
+        return poolKey || name;
     }
 
     // =========================================================================
@@ -111,13 +97,11 @@
     
     /**
      * Checks if a specific division is allowed to use this special activity.
-     * 
-     * Checks:
+     * * Checks:
      * 1. GlobalFieldLocks (elective locks)
      * 2. limitUsage.enabled + limitUsage.divisions
      * 3. preferences.exclusive + preferences.list
-     * 
-     * @param {string} divisionName - The division to check
+     * * @param {string} divisionName - The division to check
      * @param {object} props - The activity properties
      * @param {string} specialName - The name of the special activity
      * @param {number[]} slots - The slot indices to check
@@ -177,12 +161,10 @@
 
     /**
      * Checks if a specific BUNK can use this special activity.
-     * 
-     * Checks:
+     * * Checks:
      * 1. Division-level access (via canDivisionUseSpecial)
      * 2. Bunk-level restrictions (limitUsage.divisions[div] array)
-     * 
-     * @param {string} bunkName - The bunk to check
+     * * @param {string} bunkName - The bunk to check
      * @param {string} divisionName - The division this bunk belongs to
      * @param {object} props - The activity properties
      * @param {string} specialName - The name of the special
@@ -227,14 +209,12 @@
     /**
      * Returns which special activities are OPEN during [startMin, endMin]
      * AND available to the specified division.
-     * 
-     * This queries:
+     * * This queries:
      * 1. window.getGlobalSpecialActivities() - master list
      * 2. activityProps - for availability, time rules, capacity, restrictions
      * 3. dailyFieldAvailability - for daily overrides
      * 4. GlobalFieldLocks - for elective locks
-     * 
-     * @param {number} startMin - Block start time in minutes
+     * * @param {number} startMin - Block start time in minutes
      * @param {number} endMin - Block end time in minutes
      * @param {string} divisionName - The division to check access for
      * @param {object} activityProps - Activity properties map
@@ -368,8 +348,7 @@
 
     /**
      * Checks if a bunk can use a specific special activity.
-     * 
-     * Checks:
+     * * Checks:
      * 1. Bunk-level access (limitUsage.divisions[div] array)
      * 2. maxUsage limits from historical counts
      * 3. GlobalFieldLocks
