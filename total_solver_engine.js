@@ -33,7 +33,9 @@
     // ============================================================================
     // ROTATION CONFIGURATION
     // ============================================================================
-    const ROTATION_CONFIG = {
+    
+    // Use shared config from scheduler_logic_fillers.js if available
+    const ROTATION_CONFIG = window.ROTATION_CONFIG || {
         // Hard rules
         SAME_DAY_PENALTY: Infinity,           // NEVER allow same activity twice in one day
         
@@ -58,6 +60,12 @@
         FREQUENCY_WEIGHT: 0.8,
         VARIETY_WEIGHT: 1.2
     };
+
+    // Penalty constants for clarity
+    const PENALTY_BLOCKED = 999999;
+    const PENALTY_ACTIVITY_MISMATCH = 888888;
+    const PENALTY_MAX_VALID = 500000;
+    const PENALTY_FREE_FALLBACK = 100000;
 
     // ============================================================================
     // HELPERS
@@ -374,7 +382,7 @@
         const rotationPenalty = calculateRotationPenalty(bunk, act, block);
         
         if (rotationPenalty === Infinity) {
-            return 999999; // Blocked by rotation rules
+            return PENALTY_BLOCKED; // Blocked by rotation rules
         }
         
         penalty += rotationPenalty;
@@ -426,13 +434,13 @@
             }
             
             if (fieldCount >= maxCapacity) {
-                return 999999;
+                return PENALTY_BLOCKED;
             }
             
             if (fieldCount > 0 && existingActivities.size > 0) {
                 const myActivity = (act || '').toLowerCase().trim();
                 if (!existingActivities.has(myActivity)) {
-                    return 888888;
+                    return PENALTY_ACTIVITY_MISMATCH;
                 }
             }
 
@@ -488,7 +496,7 @@
             if (idx !== -1) {
                 penalty -= (50 - idx * 5); 
             } else if (props.preferences.exclusive) {
-                return 999999; 
+                return PENALTY_BLOCKED; 
             } else {
                 penalty += 2000; 
             }
@@ -534,7 +542,7 @@
     /**
      * ★★★ BUILD CANDIDATE OPTIONS - WITH GLOBAL LOCK FILTERING ★★★
      */
-    function buildAllCandidateOptions(config, blockSlots) {
+    function buildAllCandidateOptions(config, blockSlots, divisionContext) {
         const options = [];
         const seenKeys = new Set();
         
@@ -553,7 +561,7 @@
             
             (f.activities || []).forEach(sport => {
                 if (window.GlobalFieldLocks && blockSlots && blockSlots.length > 0) {
-                    const lockInfo = window.GlobalFieldLocks.isFieldLocked(f.name, blockSlots);
+                    const lockInfo = window.GlobalFieldLocks.isFieldLocked(f.name, blockSlots, divisionContext);
                     if (lockInfo) {
                         return;
                     }
@@ -579,7 +587,7 @@
             }
             
             if (window.GlobalFieldLocks && blockSlots && blockSlots.length > 0) {
-                const lockInfo = window.GlobalFieldLocks.isFieldLocked(s.name, blockSlots);
+                const lockInfo = window.GlobalFieldLocks.isFieldLocked(s.name, blockSlots, divisionContext);
                 if (lockInfo) {
                     return;
                 }
@@ -610,7 +618,7 @@
                 }
                 
                 if (window.GlobalFieldLocks && blockSlots && blockSlots.length > 0) {
-                    const lockInfo = window.GlobalFieldLocks.isFieldLocked(fieldName, blockSlots);
+                    const lockInfo = window.GlobalFieldLocks.isFieldLocked(fieldName, blockSlots, divisionContext);
                     if (lockInfo) {
                         return;
                     }
@@ -645,7 +653,7 @@
         const disabledFields = window.currentDisabledFields || globalConfig.disabledFields || [];
         
         // Rebuild options for this specific block's slots
-        const blockOptions = buildAllCandidateOptions(globalConfig, slots);
+        const blockOptions = buildAllCandidateOptions(globalConfig, slots, block.divName);
         
         for (const cand of blockOptions) {
             if (disabledFields.includes(cand.field)) {
@@ -679,7 +687,7 @@
                 };
                 const cost = calculatePenaltyCost(block, pick);
                 
-                if (cost < 500000) {
+                if (cost < PENALTY_MAX_VALID) {
                     picks.push({ pick, cost });
                 }
             }
@@ -692,7 +700,7 @@
         // Free as fallback with very high penalty
         picks.push({ 
             pick: { field: "Free", sport: null, _activity: "Free" }, 
-            cost: 100000
+            cost: PENALTY_FREE_FALLBACK
         });
         
         return picks;
@@ -737,7 +745,7 @@
         let iterations = 0;
         const SAFETY_LIMIT = 100000;
 
-        allCandidateOptions = buildAllCandidateOptions(config, []);
+        allCandidateOptions = buildAllCandidateOptions(config, [], null);
         
         if (allCandidateOptions.length === 0) {
             console.warn('[SOLVER] Warning: Limited candidate options available');
