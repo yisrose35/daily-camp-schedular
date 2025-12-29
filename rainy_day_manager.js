@@ -481,9 +481,17 @@ function activateMidDayRainyMode(startTime, options = {}) {
         startMin = getCurrentTimeMinutes();
     }
     
+    // Fix #1 - 🟡 MEDIUM: Mid-Day Mode No Future Validation
     if (startMin === null) {
         console.error("[RainyDay] Invalid start time for mid-day mode");
         return null;
+    }
+
+    // Warn if time is in the past
+    const now = new Date();
+    const currentMin = now.getHours() * 60 + now.getMinutes();
+    if (startMin < currentMin) {
+        console.warn(`[RainyDay] Start time is before current time - proceeding anyway`);
     }
     
     saveRainyDayMode(true);
