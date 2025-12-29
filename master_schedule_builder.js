@@ -776,10 +776,10 @@ function addDropListeners(selector){
                     
                     // Ask for reserved fields (Manual override)
                     const manualFields = promptForReservedFields(name);
-                    if (manualFields.length > 0) {
-                        reservedFields = manualFields;
-                        location = manualFields[0]; // Sync location
-                    }
+                   if (manualFields.length > 0) {
+    reservedFields = manualFields;
+    location = manualFields.length === 1 ? manualFields[0] : null; // Only set location if single field
+}
                 }
                 else if (tileData.type === 'swim') {
                     // Only auto-discover if no default location was configured
