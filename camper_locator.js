@@ -236,6 +236,9 @@
     function performSearch(nameQuery, timeValue) {
         if (!nameQuery) return;
         
+        // Fix #1: Reload roster to catch any updates from other tabs
+        loadRoster();
+        
         // Find exact match or best guess
         const keys = Object.keys(camperRoster);
         const exact = keys.find(k => k.toLowerCase() === nameQuery.toLowerCase());
@@ -289,8 +292,11 @@
                     detailsHtml = `We know ${camper.bunk} is playing leagues, but <strong>${camperName}</strong> has no team assigned.<br>
                                    <a href="#" onclick="document.getElementById('loc-filter-roster').value='${camperName}'; document.getElementById('loc-filter-roster').focus(); document.getElementById('loc-filter-roster').dispatchEvent(new Event('keyup')); return false;">Assign a team below</a> to see exact field.`;
                 } else {
-                    // Look up the game
-                    const leagueData = window.leagueAssignments?.[camper.division]?.[slotIdx];
+                    // Fix #2: Added null check for camper.division
+                    const leagueData = camper.division 
+                        ? window.leagueAssignments?.[camper.division]?.[slotIdx]
+                        : null;
+                        
                     let match = null;
                     
                     if (leagueData && leagueData.matchups) {
