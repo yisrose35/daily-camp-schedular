@@ -28,31 +28,25 @@
   // STORAGE
   // =================================================================
 
-  const STORAGE_KEY = 'conflictRules_v5';
-  
   // Rules stored as: { "Swim": "warn", "Lunch": "notice", "League Game": "ignore" }
   let tileRules = {};
   let customTiles = []; // User-added custom tile names
 
   function loadRules() {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        tileRules = parsed.rules || parsed || {};
-        customTiles = parsed.customTiles || [];
-      }
-    } catch {}
+        const g = window.loadGlobalSettings?.() || {};
+        tileRules = g.conflictRules || {};
+        customTiles = g.customConflictTiles || [];
+    } catch (e) {
+        console.error('[ConflictDetector] Failed to load rules:', e);
+    }
     return tileRules;
   }
 
   function saveRules() {
-    try { 
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        rules: tileRules,
-        customTiles: customTiles
-      })); 
-    } catch {}
+    window.saveGlobalSettings?.("conflictRules", tileRules);
+    window.saveGlobalSettings?.("customConflictTiles", customTiles);
+    window.forceSyncToCloud?.();
   }
 
   function getRules() {
