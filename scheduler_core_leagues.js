@@ -1,4 +1,3 @@
-
 // ============================================================================
 // scheduler_core_leagues.js (FIXED v5 - PROPER DAY-AWARE COUNTER)
 //
@@ -226,6 +225,39 @@
         return assignments;
     }
 
+    // Helper function for transactional updates (Fix #1)
+    function processLeagueRound(league, history) {
+        const dayId = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const leagueName = league.name;
+        
+        const updates = {
+            roundCounters: {},
+            lastScheduledDay: null,
+            dayStartRoundUpdates: null
+        };
+
+        const dayStartRound = history.dayStartRound[leagueName] || {};
+        const lastDay = history.lastScheduledDay[leagueName];
+        const isNewDay = (lastDay !== dayId);
+
+        if (isNewDay) {
+            // ★ NEW DAY: Record current counter as this day's starting point
+            const currentCounter = history.roundCounters[leagueName] || 0;
+            updates.dayStartRoundUpdates = { [dayId]: currentCounter };
+            updates.lastScheduledDay = dayId;
+            console.log(`[RegularLeagues] 🆕 New day for "${leagueName}" - starting at Game ${currentCounter + 1}`);
+        } else {
+            // ★ SAME DAY REGENERATE: Reset counter to day's starting point
+            const startVal = dayStartRound[dayId];
+            if (startVal !== undefined) {
+                console.log(`[RegularLeagues] 🔄 Same-day regenerate for "${leagueName}" - resetting to Game ${startVal + 1}`);
+                updates.roundCounters[leagueName] = startVal;
+            }
+        }
+        
+        return updates;
+    }
+
     // =========================================================================
     // ★★★ MAIN REGULAR LEAGUE PROCESSOR ★★★
     // =========================================================================
@@ -258,33 +290,35 @@
         console.log(`[RegularLeagues] Current day: "${dayId}"`);
 
         // ★★★ PRE-PROCESS: Reset counters for same-day regeneration ★★★
-        // This happens ONCE at the start, before any time slots are processed
+        // Uses transaction-like behavior to prevent race conditions (Fix #1)
+        const leagueUpdates = new Map();
+
         for (const league of Object.values(masterLeagues)) {
             if (!league.enabled) continue;
             
-            const leagueName = league.name;
-            if (!history.dayStartRound[leagueName]) {
-                history.dayStartRound[leagueName] = {};
-            }
-            
-            const lastDay = history.lastScheduledDay[leagueName];
-            const isNewDay = (lastDay !== dayId);
-            
-            if (isNewDay) {
-                // ★ NEW DAY: Record current counter as this day's starting point
-                const currentCounter = history.roundCounters[leagueName] || 0;
-                history.dayStartRound[leagueName][dayId] = currentCounter;
-                history.lastScheduledDay[leagueName] = dayId;
-                console.log(`[RegularLeagues] 🆕 New day for "${leagueName}" - starting at Game ${currentCounter + 1}`);
-            } else {
-                // ★ SAME DAY REGENERATE: Reset counter to day's starting point
-                const dayStart = history.dayStartRound[leagueName][dayId];
-                if (dayStart !== undefined) {
-                    console.log(`[RegularLeagues] 🔄 Same-day regenerate for "${leagueName}" - resetting to Game ${dayStart + 1}`);
-                    history.roundCounters[leagueName] = dayStart;
-                }
+            // Calculate updates but store in leagueUpdates, don't modify history yet
+            const updates = processLeagueRound(league, history);
+            if (updates) {
+                leagueUpdates.set(league.name, updates);
             }
         }
+
+        // Apply all updates at once
+        leagueUpdates.forEach((update, leagueName) => {
+            Object.assign(history.roundCounters, update.roundCounters || {});
+            if (update.lastScheduledDay) {
+                history.lastScheduledDay = history.lastScheduledDay || {};
+                history.lastScheduledDay[leagueName] = update.lastScheduledDay;
+            }
+            if (update.dayStartRoundUpdates) {
+                history.dayStartRound = history.dayStartRound || {};
+                history.dayStartRound[leagueName] = history.dayStartRound[leagueName] || {};
+                Object.assign(history.dayStartRound[leagueName], update.dayStartRoundUpdates);
+            }
+        });
+
+        // Save once at the end
+        saveLeagueHistory(history);
 
         // Group blocks by time
         const blocksByTime = {};
