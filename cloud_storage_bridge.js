@@ -20,7 +20,16 @@
     globalRegistry: "campistry_global_registry"
   };
   
-  const CAMP_ID = "fc00ba21-bfb0-4c34-b084-2471bd77d8f9";
+  // Fix #1 - 🔴 CRITICAL: Dynamic CAMP_ID
+  function getCampId() {
+    const user = window.supabase?.auth?.getUser?.();
+    if (user?.data?.user?.id) {
+        return user.data.user.id;
+    }
+    // Fallback for development/testing
+    return localStorage.getItem('campistry_camp_id') || "demo_camp_001";
+  }
+
   const SCHEMA_VERSION = 2;
 
   // In-memory cache for synchronous access
@@ -160,7 +169,7 @@
       const { data, error } = await window.supabase
         .from(TABLE)
         .select("state")
-        .eq("camp_id", CAMP_ID)
+        .eq("camp_id", getCampId())
         .single();
 
       if (error) {
@@ -229,7 +238,7 @@
       }
 
       console.log("☁️ Saving to cloud:", {
-        camp_id: CAMP_ID,
+        camp_id: getCampId(),
         user_id: user.id,
         divisions: Object.keys(stateToSave.divisions || {}).length,
         bunks: (stateToSave.bunks || []).length
@@ -238,7 +247,7 @@
       const { data, error } = await window.supabase
         .from(TABLE)
         .upsert({
-          camp_id: CAMP_ID,
+          camp_id: getCampId(),
           owner_id: user.id,
           state: stateToSave
         }, {
@@ -537,7 +546,7 @@
       else if (key === 'manualUsageOffsets') delete state.manualUsageOffsets;
       else if (key === 'historicalCounts') state.historicalCounts = {};
       else if (key === 'smartTileHistory') state.smartTileHistory = {};
-      else state[key] = undefined;
+      else delete state[key]; // Fix #2 - 🟡 MEDIUM: Proper delete
     });
     
     state.updated_at = new Date().toISOString();
@@ -665,7 +674,7 @@
           const { data, error } = await window.supabase
             .from(TABLE)
             .select("state")
-            .eq("camp_id", CAMP_ID)
+            .eq("camp_id", getCampId())
             .single();
           
           const fetchTime = Date.now() - startTime;
@@ -734,6 +743,36 @@
   
   setupAuthListener();
   
+  // Fix #3 - 🔴 CRITICAL: Add Missing Functions
+  // ============================================================================
+  // ROTATION HISTORY FUNCTIONS
+  // ============================================================================
+
+  window.loadRotationHistory = function() {
+      const g = window.loadGlobalSettings?.() || {};
+      return g.rotationHistory || { bunks: {}, leagues: {} };
+  };
+
+  window.saveRotationHistory = function(history) {
+      window.saveGlobalSettings?.("rotationHistory", history);
+      window.forceSyncToCloud?.();
+  };
+
+  window.loadHistoricalCounts = function() {
+      const g = window.loadGlobalSettings?.() || {};
+      return g.historicalCounts || {};
+  };
+
+  window.saveHistoricalCounts = function(counts) {
+      window.saveGlobalSettings?.("historicalCounts", counts);
+      window.forceSyncToCloud?.();
+  };
+
+  window.loadYesterdayHistory = function() {
+      const g = window.loadGlobalSettings?.() || {};
+      return g.yesterdayHistory || {};
+  };
+
   console.log("☁️ Cloud Bridge API ready (sync + background cloud)");
 
 })();
