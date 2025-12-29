@@ -134,7 +134,8 @@ const SWIM_POOL_PATTERNS = ['swim', 'pool', 'swimming', 'aqua'];
 
 function isSwimPoolAlias(name) {
   const lower = (name || '').toLowerCase().trim();
-  return SWIM_POOL_PATTERNS.some(p => lower.includes(p) || p.includes(lower));
+  // Fix #1: Removed backwards check (p.includes(lower)) to prevent false positives
+  return SWIM_POOL_PATTERNS.some(p => lower.includes(p));
 }
 
 function findPoolField(allLocations) {
@@ -364,6 +365,9 @@ function renderTemplateUI(){
       updateBtn.onclick = () => {
           if(currentLoadedTemplate && confirm(`Overwrite existing template "${currentLoadedTemplate}" with current grid?`)){
               window.saveSkeleton?.(currentLoadedTemplate, dailySkeleton);
+              // Fix #2: Explicit sync
+              window.forceSyncToCloud?.();
+              
               clearDraftFromLocalStorage();
               alert("Updated successfully.");
               renderTemplateUI();
@@ -379,6 +383,9 @@ function renderTemplateUI(){
     if(saved[name] && !confirm(`"${name}" already exists. Overwrite?`)) return;
 
     window.saveSkeleton?.(name, dailySkeleton);
+    // Fix #2: Explicit sync
+    window.forceSyncToCloud?.();
+    
     currentLoadedTemplate = name; // Switch context to this new save
     clearDraftFromLocalStorage();
     alert("Saved.");
@@ -409,6 +416,9 @@ function renderTemplateUI(){
       const map={};
       ui.querySelectorAll('select[data-day]').forEach(s=>{ if(s.value) map[s.dataset.day]=s.value; });
       window.saveSkeletonAssignments?.(map);
+      // Fix #2: Explicit sync
+      window.forceSyncToCloud?.();
+      
       alert("Assignments Saved.");
   };
 
@@ -425,6 +435,8 @@ function renderTemplateUI(){
       if(confirm(`Are you sure you want to PERMANENTLY DELETE "${nameToDelete}"?`)){
           if(window.deleteSkeleton) {
               window.deleteSkeleton(nameToDelete);
+              // Fix #2: Explicit sync
+              window.forceSyncToCloud?.();
                 
               // If we deleted the one we are looking at, reset context
               if(currentLoadedTemplate === nameToDelete){
