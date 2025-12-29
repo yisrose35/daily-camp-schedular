@@ -1,5 +1,5 @@
 // =================================================================
-// daily_adjustments.js  (v3.5 - Updated: Mobile Touch Support)
+// daily_adjustments.js  (v3.6 - Updated: Fixes for Cloud Sync & Touch)
 // - Grid/tiles EXACTLY match master_schedule_builder.js
 // - Professional Rainy Day Mode toggle with animations
 // - ★ NEW: Mid-day rainy mode (preserve morning schedule)
@@ -146,6 +146,7 @@ function getRainyDaySkeletonName() {
 
 function setRainyDaySkeletonName(name) {
   window.saveGlobalSettings?.("rainyDaySkeletonName", name);
+  window.forceSyncToCloud?.();
 }
 
 function getAvailableSkeletons() {
@@ -1456,7 +1457,16 @@ function addDropListeners(gridEl) {
   
       if (!draggedTile || !draggedTile.dataset.tileData) return;
   
-      const tileData = JSON.parse(draggedTile.dataset.tileData);
+      // Parse data BEFORE resetting opacity
+      let tileData;
+      try {
+        tileData = JSON.parse(draggedTile.dataset.tileData);
+      } catch (err) {
+        console.error('[TouchDrop] Failed to parse tile data:', err);
+        return;
+      }
+      
+      // Reset opacity AFTER parsing
       draggedTile.style.opacity = '1';
   
       // Trigger the same drop logic by creating a mock event
