@@ -51,6 +51,9 @@
         if (mer) {
             if (hh === 12) hh = mer === "am" ? 0 : 12;
             else if (mer === "pm") hh += 12;
+        } else {
+            // Assume PM for afternoon hours (1-6)
+            if (hh >= 1 && hh <= 6) hh += 12;
         }
         return hh * 60 + mm;
     }
@@ -141,6 +144,17 @@
             // Ensure standing entries exist for all teams
             l.teams.forEach(t => {
                 if (!l.standings[t]) l.standings[t] = { w: 0, l: 0, t: 0 };
+            });
+        });
+
+        // Ensure ALL teams have standing entries
+        Object.values(specialtyLeagues).forEach(l => {
+            if (!l.standings) l.standings = {};
+            
+            (l.teams || []).forEach(t => {
+                if (!l.standings[t]) {
+                    l.standings[t] = { w: 0, l: 0, t: 0 };
+                }
             });
         });
     }
