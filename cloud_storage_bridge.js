@@ -1,17 +1,20 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
 // FIXED VERSION: Proper sync/async handling + consolidated storage
-// v2.3 - Fixed getCampId() for Supabase v2 + proper user isolation
+// v2.4 - Added query timeouts to prevent hanging + better error handling
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v2.3 (FIXED)");
+  console.log("☁️ Campistry Cloud Bridge v2.4 (FIXED)");
 
   const TABLE = "camp_state";
   
   // ⭐ UNIFIED storage key - consolidates all previous keys
   const UNIFIED_CACHE_KEY = "CAMPISTRY_UNIFIED_STATE";
+  
+  // Timeout for Supabase queries (5 seconds)
+  const QUERY_TIMEOUT_MS = 5000;
   
   // Legacy keys we'll migrate from (read-only, for migration)
   const LEGACY_KEYS = {
@@ -21,20 +24,29 @@
   };
   
   // ============================================================================
+  // UTILITY: Promise with timeout
+  // ============================================================================
+  function withTimeout(promise, ms, errorMessage = "Operation timed out") {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error(errorMessage)), ms)
+      )
+    ]);
+  }
+  
+  // ============================================================================
   // CAMP ID MANAGEMENT - User Isolation
   // ============================================================================
   
-  // Cache the camp ID once we have it
   let _cachedCampId = null;
 
   function getCampId() {
-    // Return cached value if available
     if (_cachedCampId) {
       return _cachedCampId;
     }
     
     // Try to find Supabase session in localStorage (v2 format)
-    // Supabase v2 stores auth in keys like: sb-<project-ref>-auth-token
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
@@ -42,7 +54,6 @@
           const storedSession = localStorage.getItem(key);
           if (storedSession) {
             const parsed = JSON.parse(storedSession);
-            // Supabase v2 stores user in different structures depending on version
             const userId = parsed?.user?.id || 
                           parsed?.currentSession?.user?.id ||
                           parsed?.session?.user?.id;
@@ -59,7 +70,7 @@
       console.warn("☁️ getCampId: Error reading Supabase storage:", e);
     }
     
-    // Try our own cached user ID (persists across page reloads)
+    // Try our own cached user ID
     const cachedUserId = localStorage.getItem('campistry_user_id');
     if (cachedUserId && cachedUserId !== 'demo_camp_001') {
       _cachedCampId = cachedUserId;
@@ -67,12 +78,10 @@
       return _cachedCampId;
     }
     
-    // Fallback for development/testing - should not happen in production
     console.warn("☁️ getCampId: No user ID found, using fallback");
     return "demo_camp_001";
   }
 
-  // Call this when auth state changes to update the cache
   function updateCampIdCache(userId) {
     if (userId) {
       _cachedCampId = userId;
@@ -81,7 +90,6 @@
     }
   }
   
-  // Clear the cache on sign out
   function clearCampIdCache() {
     _cachedCampId = null;
     localStorage.removeItem('campistry_user_id');
@@ -90,7 +98,6 @@
 
   const SCHEMA_VERSION = 2;
 
-  // In-memory cache for synchronous access
   let _memoryCache = null;
   let _cloudSyncPending = false;
   let _initialized = false;
@@ -155,7 +162,6 @@
   }
   
   function setLocalCache(state) {
-    // Ensure divisions/bunks are at root level
     if (state.app1) {
       if ((!state.divisions || Object.keys(state.divisions).length === 0) && 
           state.app1.divisions && Object.keys(state.app1.divisions).length > 0) {
@@ -182,7 +188,7 @@
   }
 
   // ------------------------------------------------------------
-  // Cloud operations (ASYNC - background sync)
+  // Cloud operations (ASYNC - with timeouts to prevent hanging)
   // ------------------------------------------------------------
   async function getUser() {
     try {
@@ -190,23 +196,28 @@
         console.log("☁️ Supabase not available yet");
         return null;
       }
-      const { data, error } = await window.supabase.auth.getUser();
+      
+      const { data, error } = await withTimeout(
+        window.supabase.auth.getUser(),
+        QUERY_TIMEOUT_MS,
+        "getUser timed out"
+      );
+      
       if (error) {
         if (error.message?.includes('session')) {
-          console.log("☁️ No auth session yet (user not signed in)");
+          console.log("☁️ No auth session yet");
         } else {
           console.warn("☁️ getUser error:", error.message);
         }
         return null;
       }
       if (data?.user) {
-        // Update the cache whenever we successfully get the user
         updateCampIdCache(data.user.id);
         console.log("☁️ Current user:", data.user.email);
       }
       return data?.user || null;
     } catch (e) {
-      console.warn("☁️ Failed to get user:", e);
+      console.warn("☁️ Failed to get user:", e.message);
       return null;
     }
   }
@@ -227,11 +238,16 @@
       const campId = getCampId();
       console.log("☁️ Loading from cloud for camp_id:", campId.substring(0, 8) + "...");
       
-      const { data, error } = await window.supabase
-        .from(TABLE)
-        .select("state")
-        .eq("camp_id", campId)
-        .single();
+      // Use timeout to prevent hanging on RLS issues
+      const { data, error } = await withTimeout(
+        window.supabase
+          .from(TABLE)
+          .select("state")
+          .eq("camp_id", campId)
+          .single(),
+        QUERY_TIMEOUT_MS,
+        "Cloud load query timed out - check RLS policies"
+      );
 
       if (error) {
         if (error.code === 'PGRST116') {
@@ -248,12 +264,10 @@
         if ((!state.divisions || Object.keys(state.divisions).length === 0) && 
             state.app1.divisions && Object.keys(state.app1.divisions).length > 0) {
           state.divisions = state.app1.divisions;
-          console.log("☁️ Copied divisions from app1 to root");
         }
         if ((!state.bunks || state.bunks.length === 0) && 
             state.app1.bunks && state.app1.bunks.length > 0) {
           state.bunks = state.app1.bunks;
-          console.log("☁️ Copied bunks from app1 to root");
         }
       }
       
@@ -265,7 +279,7 @@
       
       return state;
     } catch (e) {
-      console.error("☁️ Cloud load failed:", e);
+      console.error("☁️ Cloud load failed:", e.message);
       return null;
     }
   }
@@ -285,9 +299,8 @@
 
       const campId = getCampId();
       
-      // Sanity check - don't save if using demo fallback
       if (campId === "demo_camp_001") {
-        console.error("☁️ Cannot save to cloud: no valid camp_id (still using demo fallback)");
+        console.error("☁️ Cannot save to cloud: no valid camp_id");
         return false;
       }
 
@@ -308,21 +321,24 @@
 
       console.log("☁️ Saving to cloud:", {
         camp_id: campId.substring(0, 8) + "...",
-        user_id: user.id.substring(0, 8) + "...",
         divisions: Object.keys(stateToSave.divisions || {}).length,
         bunks: (stateToSave.bunks || []).length
       });
 
-      const { data, error } = await window.supabase
-        .from(TABLE)
-        .upsert({
-          camp_id: campId,
-          owner_id: user.id,
-          state: stateToSave
-        }, {
-          onConflict: 'camp_id'
-        })
-        .select();
+      // Use timeout to prevent hanging
+      const { error } = await withTimeout(
+        window.supabase
+          .from(TABLE)
+          .upsert({
+            camp_id: campId,
+            owner_id: user.id,
+            state: stateToSave
+          }, {
+            onConflict: 'camp_id'
+          }),
+        QUERY_TIMEOUT_MS,
+        "Cloud save timed out - check RLS policies"
+      );
       
       if (error) {
         console.error("☁️ Cloud save error:", error.message, error.code, error.details);
@@ -332,7 +348,7 @@
       console.log("☁️ ✅ Saved to cloud successfully");
       return true;
     } catch (e) {
-      console.error("☁️ Cloud save failed:", e);
+      console.error("☁️ Cloud save failed:", e.message);
       return false;
     }
   }
@@ -342,14 +358,11 @@
   let _syncInProgress = false;
   
   function scheduleCloudSync() {
-    console.log("☁️ Scheduling cloud sync...");
     if (_syncTimeout) {
       clearTimeout(_syncTimeout);
     }
     _syncTimeout = setTimeout(async () => {
-      if (!_cloudSyncPending) {
-        return;
-      }
+      if (!_cloudSyncPending) return;
       if (_syncInProgress) {
         scheduleCloudSync();
         return;
@@ -362,7 +375,6 @@
     }, 500);
   }
   
-  // Immediate sync for critical operations
   async function syncNow() {
     if (_syncTimeout) clearTimeout(_syncTimeout);
     _cloudSyncPending = false;
@@ -377,18 +389,13 @@
   }
 
   // ------------------------------------------------------------
-  // Initialize - migrate + hydrate from cloud
+  // Initialize
   // ------------------------------------------------------------
   let _initializingPromise = null;
   
   async function initialize() {
-    if (_initialized) {
-      return;
-    }
-    
-    if (_initializingPromise) {
-      return _initializingPromise;
-    }
+    if (_initialized) return;
+    if (_initializingPromise) return _initializingPromise;
     
     _initializingPromise = (async () => {
       console.log("☁️ Starting cloud bridge initialization...");
@@ -405,22 +412,31 @@
           console.log("☁️ Recently imported data detected - skipping cloud overwrite");
           delete localData._importTimestamp;
           setLocalCache(localData);
+          _initialized = true;
+          window.__CAMPISTRY_CLOUD_READY__ = true;
           return;
         }
         
+        // Try to get user with timeout
         let user = null;
         try {
-          const { data } = await window.supabase?.auth?.getUser() || {};
+          const { data } = await withTimeout(
+            window.supabase?.auth?.getUser() || Promise.resolve({}),
+            3000,
+            "Auth check timed out"
+          );
           user = data?.user;
           if (user) {
             updateCampIdCache(user.id);
           }
         } catch (e) {
-          // Ignore auth errors during init
+          console.log("☁️ Auth check timed out, continuing with local data");
         }
         
         if (!user) {
-          console.log("☁️ No user - skipping cloud fetch (will load after sign-in)");
+          console.log("☁️ No user - using local data (will sync after sign-in)");
+          _initialized = true;
+          window.__CAMPISTRY_CLOUD_READY__ = true;
           return;
         }
         
@@ -462,7 +478,7 @@
   }
 
   // ------------------------------------------------------------
-  // PUBLIC API - SYNCHRONOUS (with background cloud sync)
+  // PUBLIC API
   // ------------------------------------------------------------
   
   window.loadGlobalSettings = function() {
@@ -470,14 +486,12 @@
   };
   
   window.saveGlobalSettings = function(key, value) {
-    console.log("☁️ saveGlobalSettings called:", key);
     const state = getLocalCache();
     state[key] = value;
     state.updated_at = new Date().toISOString();
     
     if (state._importTimestamp) {
-        console.log("☁️ Clearing import timestamp flag");
-        delete state._importTimestamp;
+      delete state._importTimestamp;
     }
     
     setLocalCache(state);
@@ -501,8 +515,6 @@
     return state;
   };
   
-  // ⭐ SET/IMPORT STATE - Updates memory cache and localStorage
-  // This is used for IMPORTS to work WITHOUT page reload
   window.setCloudState = async function(newState, syncToCloud = true) {
     console.log("☁️ setCloudState called - importing data");
     
@@ -511,7 +523,6 @@
       return false;
     }
     
-    // Ensure divisions/bunks are at root level
     if (newState.app1) {
       if (newState.app1.divisions && Object.keys(newState.app1.divisions).length > 0) {
         if (!newState.divisions || Object.keys(newState.divisions).length === 0) {
@@ -525,13 +536,9 @@
       }
     }
     
-    // Add timestamp
     newState.updated_at = new Date().toISOString();
-    
-    // ⭐ CRITICAL: Update memory cache FIRST
     _memoryCache = newState;
     
-    // Save to localStorage
     try {
       const stateJSON = JSON.stringify(newState);
       localStorage.setItem(UNIFIED_CACHE_KEY, stateJSON);
@@ -541,13 +548,12 @@
         divisions: newState.divisions || {},
         bunks: newState.bunks || []
       }));
-      console.log("☁️ State imported to memory cache and localStorage");
+      console.log("☁️ State imported to localStorage");
     } catch (e) {
       console.error("☁️ Failed to save imported state:", e);
       return false;
     }
     
-    // Sync to cloud if requested
     if (syncToCloud) {
       const success = await syncNow();
       console.log("☁️ Cloud sync after import:", success ? "SUCCESS" : "FAILED");
@@ -557,9 +563,8 @@
     return true;
   };
   
-  // ⭐ RESET ALL DATA - Properly clears memory cache, localStorage, AND cloud
   window.resetCloudState = async function(newState = null) {
-    console.log("☁️ resetCloudState called - clearing all data");
+    console.log("☁️ resetCloudState called");
     
     const emptyState = newState || {
       divisions: {},
@@ -608,7 +613,6 @@
     return success;
   };
   
-  // ⭐ CLEAR SPECIFIC KEYS - For partial resets (like New Half)
   window.clearCloudKeys = async function(keysToReset) {
     console.log("☁️ clearCloudKeys called for:", keysToReset);
     
@@ -624,7 +628,6 @@
     });
     
     state.updated_at = new Date().toISOString();
-    
     setLocalCache(state);
     
     const success = await syncNow();
@@ -632,13 +635,11 @@
     return success;
   };
   
-  // Force immediate cloud sync
   window.forceSyncToCloud = async function() {
     console.log("☁️ Force sync to cloud requested");
     
     const state = getLocalCache();
     if (state._importTimestamp) {
-      console.log("☁️ Clearing import timestamp before sync");
       delete state._importTimestamp;
       setLocalCache(state);
     }
@@ -656,8 +657,6 @@
       delete state._importTimestamp;
       setLocalCache(state);
       console.log("☁️ Import timestamp cleared");
-    } else {
-      console.log("☁️ No import timestamp to clear");
     }
   };
   
@@ -683,23 +682,27 @@
       return false;
     }
     
+    console.log("2. Getting user...");
     const user = await getUser();
-    console.log("2. User authenticated:", !!user, user?.email);
+    console.log("   User authenticated:", !!user, user?.email || "");
     if (!user) {
       console.error("❌ Not logged in!");
       return false;
     }
     
     const campId = getCampId();
-    console.log("3. Camp ID:", campId.substring(0, 8) + "...");
-    console.log("   (Full ID):", campId);
+    console.log("3. Camp ID:", campId);
     
     console.log("4. Testing cloud read...");
-    const cloudData = await loadFromCloud();
-    console.log("   Cloud data exists:", !!cloudData);
-    if (cloudData) {
-      console.log("   Divisions:", Object.keys(cloudData.divisions || {}).length);
-      console.log("   Bunks:", (cloudData.bunks || []).length);
+    try {
+      const cloudData = await loadFromCloud();
+      console.log("   Cloud data exists:", !!cloudData);
+      if (cloudData) {
+        console.log("   Divisions:", Object.keys(cloudData.divisions || {}).length);
+        console.log("   Bunks:", (cloudData.bunks || []).length);
+      }
+    } catch (e) {
+      console.error("   Read failed:", e.message);
     }
     
     console.log("5. Testing cloud write...");
@@ -714,7 +717,6 @@
     return saveSuccess;
   };
   
-  // ⭐ Debug function to see current state
   window.debugCloudState = function() {
     console.log("=".repeat(50));
     console.log("☁️ CLOUD STATE DEBUG");
@@ -723,7 +725,6 @@
     console.log("Stored Camp ID:", localStorage.getItem('campistry_user_id'));
     console.log("Initialized:", _initialized);
     console.log("Sync Pending:", _cloudSyncPending);
-    console.log("Sync In Progress:", _syncInProgress);
     
     const state = getLocalCache();
     console.log("Local State Keys:", Object.keys(state));
@@ -737,7 +738,7 @@
   // Start initialization
   initialize().catch(e => console.error("Cloud bridge init failed:", e));
   
-  // Re-hydrate when user signs in
+  // Auth listener
   let _rehydrating = false;
   let _lastAuthTime = 0;
   
@@ -752,12 +753,11 @@
       
       const now = Date.now();
       if (now - _lastAuthTime < 2000) {
-        console.log("☁️ Duplicate auth event within 2s, skipping");
+        console.log("☁️ Duplicate auth event, skipping");
         return;
       }
       _lastAuthTime = now;
       
-      // Handle sign out - clear the cache
       if (event === 'SIGNED_OUT') {
         console.log("☁️ User signed out, clearing cache");
         clearCampIdCache();
@@ -773,7 +773,6 @@
         }
         _rehydrating = true;
         
-        // ⭐ CRITICAL: Update camp ID cache FIRST before any queries
         updateCampIdCache(session.user.id);
         console.log("☁️ User signed in:", session.user.email);
         
@@ -783,18 +782,23 @@
           
           const startTime = Date.now();
           
-          const { data, error } = await window.supabase
-            .from(TABLE)
-            .select("state")
-            .eq("camp_id", campId)
-            .single();
+          // Use timeout to prevent hanging
+          const { data, error } = await withTimeout(
+            window.supabase
+              .from(TABLE)
+              .select("state")
+              .eq("camp_id", campId)
+              .single(),
+            QUERY_TIMEOUT_MS,
+            "Sign-in cloud fetch timed out"
+          );
           
           const fetchTime = Date.now() - startTime;
           console.log(`☁️ Cloud fetch completed in ${fetchTime}ms`);
           
           if (error) {
             if (error.code !== 'PGRST116') {
-              console.error("☁️ Cloud fetch error:", error.message);
+              console.error("☁️ Cloud fetch error:", error.message, error.code);
             } else {
               console.log("☁️ No cloud data yet (new user)");
             }
@@ -836,9 +840,8 @@
           }));
           
         } catch (e) {
-          console.error("☁️ Re-hydration error:", e);
+          console.error("☁️ Re-hydration error:", e.message);
           _initialized = true;
-          _initializingPromise = null;
           window.__CAMPISTRY_CLOUD_READY__ = true;
           
           window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
