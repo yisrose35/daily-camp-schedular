@@ -1,0 +1,38 @@
+<svg width="180" height="50" viewBox="0 0 180 50" xmlns="http://www.w3.org/2000/svg">
+  <!-- Go Logo - Transportation/Movement Theme -->
+  <defs>
+    <linearGradient id="goGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#F59E0B;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#FCD34D;stop-opacity:1" />
+    </linearGradient>
+    <filter id="goGlow">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Campistry -->
+  <text x="5" y="20" font-family="'Outfit', sans-serif" font-size="16" font-weight="600" fill="#64748B">Campistry</text>
+  
+  <!-- Go with bus/movement icon -->
+  <g transform="translate(0, 25)">
+    <!-- Bus icon simplified -->
+    <rect x="6" y="6" width="16" height="12" rx="2" fill="none" stroke="url(#goGradient)" stroke-width="2" opacity="0.3"/>
+    <line x1="6" y1="10" x2="22" y2="10" stroke="url(#goGradient)" stroke-width="1.5"/>
+    <circle cx="10" cy="19" r="1.5" fill="url(#goGradient)"/>
+    <circle cx="18" cy="19" r="1.5" fill="url(#goGradient)"/>
+    <rect x="9" y="7" width="3" height="2" fill="url(#goGradient)" opacity="0.6"/>
+    <rect x="16" y="7" width="3" height="2" fill="url(#goGradient)" opacity="0.6"/>
+    
+    <!-- Go text -->
+    <text x="30" y="18" font-family="'Outfit', sans-serif" font-size="22" font-weight="700" fill="url(#goGradient)" filter="url(#goGlow)">Go</text>
+    
+    <!-- Motion lines -->
+    <line x1="75" y1="8" x2="85" y2="8" stroke="url(#goGradient)" stroke-width="2" opacity="0.3" stroke-linecap="round"/>
+    <line x1="80" y1="12" x2="95" y2="12" stroke="url(#goGradient)" stroke-width="2" opacity="0.4" stroke-linecap="round"/>
+    <line x1="85" y1="16" x2="100" y2="16" stroke="url(#goGradient)" stroke-width="2" opacity="0.5" stroke-linecap="round"/>
+  </g>
+</svg>
