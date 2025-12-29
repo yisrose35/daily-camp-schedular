@@ -598,6 +598,14 @@ function renderTransitionSection(zone){
 // FIELDS SECTION (Multi-select dropdown)
 //------------------------------------------------------------------
 function renderFieldsSection(zone){
+    // Clean up any orphaned dropdown panels
+    const existingPanels = document.querySelectorAll('.multi-select-options');
+    existingPanels.forEach(p => {
+        if (!document.querySelector('.multi-select-trigger.open')) {
+            p.remove();
+        }
+    });
+
     const container = document.createElement("div");
     
     const updateSummary = () => {
@@ -869,6 +877,9 @@ function renderLocationsSection(zone){
             addInput.value = "";
             renderContent();
             updateSummary();
+
+            // Refresh pinned tile defaults dropdown
+            window.refreshPinnedTileDefaultsUI?.();
         };
         
         addBtn.onclick = doAdd;
