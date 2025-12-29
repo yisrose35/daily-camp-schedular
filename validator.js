@@ -1,4 +1,3 @@
-
 // =================================================================
 // validator.js
 //
@@ -30,6 +29,20 @@ function validateSchedule() {
         };
     });
 
+    // Fix #1: Also load Special Activity definitions
+    const specialActivities = window.getGlobalSpecialActivities?.() || 
+        (app1.specialActivities || []);
+
+    specialActivities.forEach(s => {
+        let limit = 1;
+        if (s.sharableWith?.capacity) {
+            limit = parseInt(s.sharableWith.capacity) || 1;
+        } else if (s.sharableWith?.type === 'all' || s.sharable) {
+            limit = 2;
+        }
+        fieldRules[s.name] = { limit };
+    });
+
     const errors = [];
     const usageMap = {}; // slotIndex -> fieldName -> count
 
@@ -45,7 +58,9 @@ function validateSchedule() {
             // We filter out "Free", "No Field", etc. as they don't consume a resource.
             if (entry && entry.field && !["Free", "No Field", "No Game", "Unassigned League"].includes(entry.field)) {
                 
-                const fName = (typeof entry.field === 'string') ? entry.field : entry.field.name;
+                // Fix #2: Use Consistent Field Name Resolution
+                const fName = window.SchedulerCoreUtils?.fieldLabel?.(entry.field) 
+                    || (typeof entry.field === 'string' ? entry.field : entry.field?.name);
 
                 // Only validate capacity if it's a REAL field defined in Setup.
                 // Virtual events like "Lunch" or "Swim" are ignored unless they are defined as fields.
