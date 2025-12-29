@@ -166,13 +166,21 @@
             if (props.sharableWith?.capacity) capacityLimit = parseInt(props.sharableWith.capacity);
             else if (props.sharable || props.sharableWith?.type === 'all' || props.sharableWith?.type === 'custom') capacityLimit = 2;
             let myWeight = 1;
+
+            // Fix #1: Find bunk's division first to pass context
+            const divisions = window.divisions || {};
+            const divisionName = Object.keys(divisions).find(d => 
+                divisions[d].bunks?.includes(bunk)
+            ) || null;
+
             const isAvailable = window.SchedulerCoreUtils.timeline.checkAvailability(
                 resolvedName, 
                 startMin, 
                 endMin, 
                 myWeight, 
-                capacityLimit,
-                bunk 
+                capacityLimit, 
+                bunk,
+                divisionName  // Add division context
             );
             if (!isAvailable) {
                 const currentPeak = window.SchedulerCoreUtils.timeline.getPeakUsage(resolvedName, startMin, endMin, bunk);
