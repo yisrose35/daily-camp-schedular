@@ -348,7 +348,7 @@ function renderSportRulesSection() {
                     ⚡ Sports Rules
                 </div>
                 <span id="sport-rules-caret" style="transform: rotate(0deg); transition: transform 0.2s; color:#6B7280;">
-                     <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
+                      <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
                 </span>
             </div>
             
@@ -364,7 +364,7 @@ function renderSportRulesSection() {
                     ${sportsHTML}
                 </div>
                 <div style="margin-top:20px; text-align:right;">
-                     <button id="save-sport-rules-btn" style="background:#10B981; color:white; border:none; padding:8px 24px; border-radius:999px; cursor:pointer; font-weight:600; font-size:0.9rem; box-shadow: 0 2px 5px rgba(16,185,129,0.3);">
+                      <button id="save-sport-rules-btn" style="background:#10B981; color:white; border:none; padding:8px 24px; border-radius:999px; cursor:pointer; font-weight:600; font-size:0.9rem; box-shadow: 0 2px 5px rgba(16,185,129,0.3);">
                         Save Rules
                     </button>
                 </div>
