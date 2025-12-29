@@ -20,15 +20,43 @@
     globalRegistry: "campistry_global_registry"
   };
   
-  // Fix #1 - 🔴 CRITICAL: Dynamic CAMP_ID
-  function getCampId() {
-    const user = window.supabase?.auth?.getUser?.();
-    if (user?.data?.user?.id) {
-        return user.data.user.id;
-    }
+  // Cache the camp ID once we have it
+let _cachedCampId = null;
+
+function getCampId() {
+    // Return cached value if available
+    if (_cachedCampId) return _cachedCampId;
+    
+    // Try to get from current session (synchronous access)
+    try {
+        // Access the session from Supabase's internal state
+        const session = window.supabase?.auth?.session;
+        if (session?.user?.id) {
+            _cachedCampId = session.user.id;
+            return _cachedCampId;
+        }
+    } catch (e) {}
+    
+    // Try localStorage where Supabase stores session
+    try {
+        const storedSession = localStorage.getItem('sb-' + window.SUPABASE_URL?.split('//')[1]?.split('.')[0] + '-auth-token');
+        if (storedSession) {
+            const parsed = JSON.parse(storedSession);
+            if (parsed?.user?.id) {
+                _cachedCampId = parsed.user.id;
+                return _cachedCampId;
+            }
+        }
+    } catch (e) {}
+    
     // Fallback for development/testing
     return localStorage.getItem('campistry_camp_id') || "demo_camp_001";
-  }
+}
+
+// Call this when auth state changes to update the cache
+function updateCampIdCache(userId) {
+    _cachedCampId = userId;
+}
 
   const SCHEMA_VERSION = 2;
 
