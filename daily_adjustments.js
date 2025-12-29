@@ -1351,7 +1351,10 @@ function addDropListeners(gridEl) {
           // Custom prompt overrides default if user enters something, but we respect the default if they leave it blank?
           // Actually, promptForReservedFields is explicit.
           const manualFields = promptForReservedFields(name);
-          if (manualFields && manualFields.length > 0) reservedFields = manualFields;
+if (manualFields && manualFields.length > 0) {
+    reservedFields = manualFields;
+    location = manualFields.length === 1 ? manualFields[0] : null;
+}
         } else if (tileData.type === 'swim') {
           // Fallback if no default location set via new API
           if (reservedFields.length === 0) {
