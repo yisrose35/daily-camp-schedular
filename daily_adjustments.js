@@ -1,5 +1,5 @@
 // =================================================================
-// daily_adjustments.js  (v3.4 - Updated: Enhanced Rainy Day UI)
+// daily_adjustments.js  (v3.5 - Updated: Mobile Touch Support)
 // - Grid/tiles EXACTLY match master_schedule_builder.js
 // - Professional Rainy Day Mode toggle with animations
 // - ★ NEW: Mid-day rainy mode (preserve morning schedule)
@@ -12,6 +12,7 @@
 // - Full Resource Availability with Detail Pane
 // - Smart Tiles passed to Core Optimizer for capacity awareness
 // - Integration with getPinnedTileDefaultLocation for Pinned Events
+// - ★ UPDATED: Mobile Touch Support for Drag & Drop
 // =================================================================
 (function() {
 'use strict';
@@ -793,8 +794,9 @@ function renderPalette(paletteEl) {
     el.draggable = true;
     el.title = tile.description || 'Click for info';
     
+    // Click handler for tile info
     el.onclick = (e) => {
-      if (e.detail === 1) {
+      if (e.detail === 1) { // Single click
         setTimeout(() => {
           if (!el.dragging) {
             showTileInfo(tile);
@@ -809,6 +811,24 @@ function renderPalette(paletteEl) {
       e.dataTransfer.effectAllowed = 'copy';
     };
     el.ondragend = () => { el.dragging = false; };
+
+    // MOBILE TOUCH SUPPORT
+    let touchStartY = 0;
+    el.addEventListener('touchstart', (e) => {
+      touchStartY = e.touches[0].clientY;
+      el.dataset.tileData = JSON.stringify(tile);
+      el.style.opacity = '0.6';
+    });
+    
+    el.addEventListener('touchend', (e) => {
+      el.style.opacity = '1';
+      const touchEndY = e.changedTouches[0].clientY;
+      
+      // If minimal movement, treat as click
+      if (Math.abs(touchEndY - touchStartY) < 10) {
+        showTileInfo(tile);
+      }
+    });
     
     paletteEl.appendChild(el);
   });
@@ -1351,10 +1371,10 @@ function addDropListeners(gridEl) {
           // Custom prompt overrides default if user enters something, but we respect the default if they leave it blank?
           // Actually, promptForReservedFields is explicit.
           const manualFields = promptForReservedFields(name);
-if (manualFields && manualFields.length > 0) {
-    reservedFields = manualFields;
-    location = manualFields.length === 1 ? manualFields[0] : null;
-}
+          if (manualFields && manualFields.length > 0) {
+            reservedFields = manualFields;
+            location = manualFields.length === 1 ? manualFields[0] : null;
+          }
         } else if (tileData.type === 'swim') {
           // Fallback if no default location set via new API
           if (reservedFields.length === 0) {
@@ -1417,6 +1437,43 @@ if (manualFields && manualFields.length > 0) {
         renderGrid(gridEl);
       }
     };
+
+    // MOBILE TOUCH DROP SUPPORT
+    cell.addEventListener('touchend', (e) => {
+      // In daily_adjustments.js, the palette ID is 'daily-skeleton-palette'
+      const paletteEl = document.getElementById('daily-skeleton-palette');
+      if (!paletteEl) return;
+  
+      const touch = e.changedTouches[0];
+      const elementAtPoint = document.elementFromPoint(touch.clientX, touch.clientY);
+  
+      // Verify we touched this cell or inside it
+      if (!elementAtPoint || !cell.contains(elementAtPoint)) return;
+  
+      // Find if we touched a palette tile
+      const tiles = Array.from(paletteEl.querySelectorAll('.grid-tile-draggable'));
+      const draggedTile = tiles.find(t => t.style.opacity === '0.6');
+  
+      if (!draggedTile || !draggedTile.dataset.tileData) return;
+  
+      const tileData = JSON.parse(draggedTile.dataset.tileData);
+      draggedTile.style.opacity = '1';
+  
+      // Trigger the same drop logic by creating a mock event
+      const fakeEvent = {
+        preventDefault: () => {},
+        clientY: touch.clientY,
+        dataTransfer: {
+          types: ['application/json'], // Required for check in ondrop
+          getData: (format) => {
+             if (format === 'application/json') return JSON.stringify(tileData);
+             return '';
+          }
+        }
+      };
+  
+      if (cell.ondrop) cell.ondrop(fakeEvent);
+    });
   });
 }
 
