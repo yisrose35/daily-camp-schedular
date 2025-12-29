@@ -1493,9 +1493,13 @@
             get sportMetaData() { return state.sportMetaData; }
         };
         
-        // Also update direct window references for backward compatibility
+        // Fix #2 - 🔴 CRITICAL: State/Window Sync
+        // Keep window references as direct references (not copies)
+        // so external code mutations are reflected in state
         window.divisions = state.divisions;
         window.availableDivisions = state.availableDivisions;
+        window.bunks = state.bunks;
+        window.allSports = state.allSports;
     }
 
     // ==================== INITIALIZATION ====================
@@ -1549,6 +1553,19 @@
         if (s && !state.allSports.find(sp => sp.toLowerCase() === s.toLowerCase())) {
             state.allSports.push(s);
             saveData();
+        }
+    };
+
+    // Fix #1 - 🟠 HIGH: Missing removeGlobalSport Export
+    window.removeGlobalSport = (sportName) => {
+        if (!sportName) return;
+        const idx = state.allSports.findIndex(sp => 
+            sp.toLowerCase() === sportName.toLowerCase()
+        );
+        if (idx !== -1) {
+            state.allSports.splice(idx, 1);
+            saveData();
+            window.forceSyncToCloud?.();
         }
     };
     
