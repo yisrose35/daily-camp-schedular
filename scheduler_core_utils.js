@@ -20,7 +20,7 @@
     window.TRANSITION_TYPE = TRANSITION_TYPE;
     
     // DEBUG MODE - Set to true to see why canBlockFit fails
-    const DEBUG_FITS = false; 
+    const DEBUG_FITS = window.SCHEDULER_DEBUG_FITS || false; 
 
     const Utils = {};
 
@@ -905,5 +905,8 @@
         isReserved: Utils.isFieldReserved,
         parseTimeToMinutes: Utils.parseTimeToMinutes
     };
+
+    // Export parseTimeToMinutes globally for consistency across modules
+    window.parseTimeToMinutes = Utils.parseTimeToMinutes;
 
 })();
