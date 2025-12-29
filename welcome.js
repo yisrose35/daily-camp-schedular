@@ -1,27 +1,37 @@
 // ============================================================================
-// welcome.js — CAMPISTRY BOOT ENGINE (MINIMAL)
+// welcome.js — CAMPISTRY BOOT ENGINE (PROTECTED)
 // 
-// No welcome screen. No auth checks. Dashboard already verified authentication.
-// This script just boots the app immediately.
+// Updated to include Auth Protection and Session Verification.
 // ============================================================================
 
 document.addEventListener("DOMContentLoaded", async () => {
     console.log("🚀 Starting Campistry Flow...");
 
-    // Show main app immediately
+    // Wait for Supabase to be available before checking session
+    let attempts = 0;
+    while (!window.supabase && attempts < 30) {
+        await new Promise(r => setTimeout(r, 100));
+        attempts++;
+    }
+
+    // --- FIX #1: Auth Protection ---
+    // Check for valid session before showing app or proceeding
+    const { data: { session } } = await window.supabase?.auth?.getSession() || { data: { session: null } };
+    
+    if (!session) {
+        console.warn('[Welcome] No active session, redirecting to login');
+        window.location.href = 'landing.html';
+        return; // Halt execution
+    }
+    // -------------------------------
+
+    // Show main app immediately once session is verified
     const mainAppContainer = document.getElementById('main-app-container');
     if (mainAppContainer) mainAppContainer.style.display = 'block';
 
     // Hide welcome screen if it exists
     const welcomeScreen = document.getElementById('welcome-screen');
     if (welcomeScreen) welcomeScreen.style.display = 'none';
-
-    // Wait for Supabase (needed for cloud sync, not for auth)
-    let attempts = 0;
-    while (!window.supabase && attempts < 30) {
-        await new Promise(r => setTimeout(r, 100));
-        attempts++;
-    }
 
     // Boot the app
     await bootApp();
