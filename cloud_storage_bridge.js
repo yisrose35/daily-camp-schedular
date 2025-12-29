@@ -695,7 +695,10 @@ function updateCampIdCache(userId) {
         _rehydrating = true;
         
         console.log("☁️ User signed in, fetching data from cloud...");
-        
+        // Update camp ID cache with user ID
+if (session?.user?.id) {
+    updateCampIdCache(session.user.id);
+}
         try {
           const startTime = Date.now();
           
