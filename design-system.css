@@ -106,39 +106,6 @@ body {
     min-height: 100vh;
 }
 
-/* ============================================
-   Logo Components
-   ============================================ */
-
-.logo-campistry {
-    display: inline-block;
-    height: 32px;
-    transition: transform var(--transition-base) var(--ease-out);
-}
-
-.logo-campistry:hover {
-    transform: translateY(-1px);
-}
-
-.logo-flow,
-.logo-go,
-.logo-me {
-    display: inline-block;
-    height: 40px;
-    transition: all var(--transition-base) var(--ease-out);
-}
-
-.logo-flow:hover {
-    filter: drop-shadow(var(--glow-green));
-}
-
-.logo-go:hover {
-    filter: drop-shadow(var(--glow-gold));
-}
-
-.logo-me:hover {
-    filter: drop-shadow(var(--glow-purple));
-}
 
 /* ============================================
    Card System
