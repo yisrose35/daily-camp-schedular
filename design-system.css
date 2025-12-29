@@ -1,0 +1,573 @@
+/* ============================================
+   Campistry Design System
+   Unified styles across all products
+   ============================================ */
+
+:root {
+    /* Brand Colors */
+    --camp-green: #0D7C5C;
+    --camp-green-light: #10B981;
+    --camp-green-dark: #065F46;
+    --camp-forest: #064E3B;
+    
+    --camp-gold: #F59E0B;
+    --camp-gold-light: #FCD34D;
+    
+    /* Product Colors */
+    --flow-color: #0D7C5C;
+    --flow-light: #10B981;
+    --go-color: #F59E0B;
+    --go-light: #FCD34D;
+    --me-color: #8B5CF6;
+    --me-light: #A78BFA;
+    
+    /* Neutrals */
+    --slate-50: #F8FAFC;
+    --slate-100: #F1F5F9;
+    --slate-200: #E2E8F0;
+    --slate-300: #CBD5E1;
+    --slate-400: #94A3B8;
+    --slate-500: #64748B;
+    --slate-600: #475569;
+    --slate-700: #334155;
+    --slate-800: #1E293B;
+    --slate-900: #0F172A;
+    --slate-950: #020617;
+    
+    /* Background */
+    --bg-primary: #FAFCFB;
+    --bg-secondary: #FFFFFF;
+    --bg-tertiary: #F8FAFC;
+    
+    /* Typography */
+    --font-display: 'Playfair Display', Georgia, serif;
+    --font-body: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+    
+    /* Border Radius System */
+    --radius-xs: 6px;
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-xl: 20px;
+    --radius-2xl: 24px;
+    --radius-full: 999px;
+    
+    /* Shadow System */
+    --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.05);
+    --shadow-sm: 0 2px 4px rgba(15, 23, 42, 0.06);
+    --shadow-md: 0 4px 8px rgba(15, 23, 42, 0.08);
+    --shadow-lg: 0 8px 16px rgba(15, 23, 42, 0.1);
+    --shadow-xl: 0 12px 24px rgba(15, 23, 42, 0.12);
+    --shadow-2xl: 0 20px 40px rgba(15, 23, 42, 0.15);
+    
+    /* Glow Effects */
+    --glow-green: 0 0 20px rgba(13, 124, 92, 0.3);
+    --glow-gold: 0 0 20px rgba(245, 158, 11, 0.3);
+    --glow-purple: 0 0 20px rgba(139, 92, 246, 0.3);
+    
+    /* Spacing Scale */
+    --space-xs: 4px;
+    --space-sm: 8px;
+    --space-md: 16px;
+    --space-lg: 24px;
+    --space-xl: 32px;
+    --space-2xl: 48px;
+    
+    /* Transitions */
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-fast: 150ms;
+    --transition-base: 250ms;
+    --transition-slow: 350ms;
+}
+
+/* ============================================
+   Base Styles
+   ============================================ */
+
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--slate-800);
+    background: var(--bg-primary);
+    min-height: 100vh;
+}
+
+/* ============================================
+   Logo Components
+   ============================================ */
+
+.logo-campistry {
+    display: inline-block;
+    height: 32px;
+    transition: transform var(--transition-base) var(--ease-out);
+}
+
+.logo-campistry:hover {
+    transform: translateY(-1px);
+}
+
+.logo-flow,
+.logo-go,
+.logo-me {
+    display: inline-block;
+    height: 40px;
+    transition: all var(--transition-base) var(--ease-out);
+}
+
+.logo-flow:hover {
+    filter: drop-shadow(var(--glow-green));
+}
+
+.logo-go:hover {
+    filter: drop-shadow(var(--glow-gold));
+}
+
+.logo-me:hover {
+    filter: drop-shadow(var(--glow-purple));
+}
+
+/* ============================================
+   Card System
+   ============================================ */
+
+.card {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--slate-200);
+    padding: var(--space-lg);
+    box-shadow: var(--shadow-md);
+    transition: all var(--transition-base) var(--ease-out);
+}
+
+.card:hover {
+    box-shadow: var(--shadow-lg);
+    transform: translateY(-2px);
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-md);
+    padding-bottom: var(--space-md);
+    border-bottom: 1px solid var(--slate-200);
+}
+
+.card-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--slate-900);
+}
+
+/* Product-specific card accents */
+.card-flow {
+    border-left: 4px solid var(--flow-color);
+}
+
+.card-go {
+    border-left: 4px solid var(--go-color);
+}
+
+.card-me {
+    border-left: 4px solid var(--me-color);
+}
+
+/* ============================================
+   Button System
+   ============================================ */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-sm);
+    padding: 10px 20px;
+    font-family: var(--font-body);
+    font-size: 0.9rem;
+    font-weight: 600;
+    border-radius: var(--radius-full);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all var(--transition-base) var(--ease-out);
+    text-decoration: none;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Primary Button */
+.btn-primary {
+    color: white;
+    background: linear-gradient(135deg, var(--camp-green) 0%, var(--camp-green-light) 100%);
+    box-shadow: 0 4px 12px rgba(13, 124, 92, 0.3);
+}
+
+.btn-primary:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(13, 124, 92, 0.4);
+}
+
+/* Secondary Button */
+.btn-secondary {
+    color: var(--slate-700);
+    background: white;
+    border-color: var(--slate-300);
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: var(--slate-50);
+    border-color: var(--slate-400);
+}
+
+/* Ghost Button */
+.btn-ghost {
+    color: var(--slate-700);
+    background: transparent;
+    border-color: var(--slate-300);
+}
+
+.btn-ghost:hover:not(:disabled) {
+    background: var(--slate-100);
+}
+
+/* Product-specific buttons */
+.btn-flow {
+    color: white;
+    background: linear-gradient(135deg, var(--flow-color) 0%, var(--flow-light) 100%);
+    box-shadow: 0 4px 12px rgba(13, 124, 92, 0.3);
+}
+
+.btn-flow:hover:not(:disabled) {
+    box-shadow: 0 6px 16px rgba(13, 124, 92, 0.4), var(--glow-green);
+}
+
+.btn-go {
+    color: white;
+    background: linear-gradient(135deg, var(--go-color) 0%, var(--go-light) 100%);
+    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+}
+
+.btn-go:hover:not(:disabled) {
+    box-shadow: 0 6px 16px rgba(245, 158, 11, 0.4), var(--glow-gold);
+}
+
+.btn-me {
+    color: white;
+    background: linear-gradient(135deg, var(--me-color) 0%, var(--me-light) 100%);
+    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+}
+
+.btn-me:hover:not(:disabled) {
+    box-shadow: 0 6px 16px rgba(139, 92, 246, 0.4), var(--glow-purple);
+}
+
+/* ============================================
+   Form Elements
+   ============================================ */
+
+.form-input,
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="date"],
+input[type="time"],
+input[type="number"],
+select,
+textarea {
+    width: 100%;
+    padding: 10px 14px;
+    font-family: var(--font-body);
+    font-size: 0.95rem;
+    color: var(--slate-900);
+    background: white;
+    border: 1px solid var(--slate-300);
+    border-radius: var(--radius-md);
+    transition: all var(--transition-base) var(--ease-out);
+}
+
+.form-input:focus,
+input:focus,
+select:focus,
+textarea:focus {
+    outline: none;
+    border-color: var(--camp-green);
+    box-shadow: 0 0 0 3px rgba(13, 124, 92, 0.1);
+}
+
+.form-label {
+    display: block;
+    margin-bottom: var(--space-xs);
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--slate-700);
+}
+
+/* ============================================
+   Badge System
+   ============================================ */
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-radius: var(--radius-full);
+}
+
+.badge-success {
+    background: #ECFDF5;
+    color: #059669;
+}
+
+.badge-warning {
+    background: #FEF3C7;
+    color: #D97706;
+}
+
+.badge-info {
+    background: #DBEAFE;
+    color: #0284C7;
+}
+
+.badge-neutral {
+    background: var(--slate-100);
+    color: var(--slate-600);
+}
+
+/* Product badges */
+.badge-flow {
+    background: rgba(13, 124, 92, 0.1);
+    color: var(--flow-color);
+}
+
+.badge-go {
+    background: rgba(245, 158, 11, 0.1);
+    color: var(--go-color);
+}
+
+.badge-me {
+    background: rgba(139, 92, 246, 0.1);
+    color: var(--me-color);
+}
+
+/* ============================================
+   Navigation
+   ============================================ */
+
+.nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--slate-200);
+    padding: 16px 24px;
+    box-shadow: var(--shadow-sm);
+}
+
+.nav-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.nav-logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-decoration: none;
+    transition: transform var(--transition-base) var(--ease-out);
+}
+
+.nav-logo:hover {
+    transform: translateY(-1px);
+}
+
+/* ============================================
+   Product Tiles
+   ============================================ */
+
+.product-tile {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-lg);
+    background: white;
+    border: 2px solid var(--slate-200);
+    border-radius: var(--radius-xl);
+    text-decoration: none;
+    color: inherit;
+    transition: all var(--transition-slow) var(--ease-out);
+    overflow: hidden;
+}
+
+.product-tile::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, transparent 0%, rgba(13, 124, 92, 0.03) 100%);
+    opacity: 0;
+    transition: opacity var(--transition-base);
+}
+
+.product-tile:not(.disabled):hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-xl);
+}
+
+.product-tile:not(.disabled):hover::before {
+    opacity: 1;
+}
+
+.product-tile.disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Product-specific tile styles */
+.product-tile-flow {
+    border-left: 4px solid var(--flow-color);
+}
+
+.product-tile-flow:not(.disabled):hover {
+    border-color: var(--flow-color);
+    box-shadow: var(--shadow-xl), var(--glow-green);
+}
+
+.product-tile-go {
+    border-left: 4px solid var(--go-color);
+}
+
+.product-tile-go:not(.disabled):hover {
+    border-color: var(--go-color);
+    box-shadow: var(--shadow-xl), var(--glow-gold);
+}
+
+.product-tile-me {
+    border-left: 4px solid var(--me-color);
+}
+
+.product-tile-me:not(.disabled):hover {
+    border-color: var(--me-color);
+    box-shadow: var(--shadow-xl), var(--glow-purple);
+}
+
+/* ============================================
+   Animations
+   ============================================ */
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateX(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.fade-in {
+    animation: fadeIn var(--transition-slow) var(--ease-out);
+}
+
+.slide-in {
+    animation: slideIn var(--transition-slow) var(--ease-out);
+}
+
+/* ============================================
+   Utility Classes
+   ============================================ */
+
+.text-center { text-align: center; }
+.text-left { text-align: left; }
+.text-right { text-align: right; }
+
+.font-display { font-family: var(--font-display); }
+.font-body { font-family: var(--font-body); }
+
+.text-green { color: var(--camp-green); }
+.text-gold { color: var(--camp-gold); }
+.text-flow { color: var(--flow-color); }
+.text-go { color: var(--go-color); }
+.text-me { color: var(--me-color); }
+
+.bg-green { background-color: var(--camp-green); }
+.bg-gold { background-color: var(--camp-gold); }
+.bg-flow { background-color: var(--flow-color); }
+.bg-go { background-color: var(--go-color); }
+.bg-me { background-color: var(--me-color); }
+
+.shadow-sm { box-shadow: var(--shadow-sm); }
+.shadow-md { box-shadow: var(--shadow-md); }
+.shadow-lg { box-shadow: var(--shadow-lg); }
+.shadow-xl { box-shadow: var(--shadow-xl); }
+
+.rounded { border-radius: var(--radius-md); }
+.rounded-lg { border-radius: var(--radius-lg); }
+.rounded-xl { border-radius: var(--radius-xl); }
+.rounded-full { border-radius: var(--radius-full); }
+
+/* ============================================
+   Responsive
+   ============================================ */
+
+@media (max-width: 768px) {
+    :root {
+        --space-lg: 16px;
+        --space-xl: 24px;
+        --space-2xl: 32px;
+    }
+    
+    .card {
+        padding: var(--space-md);
+    }
+    
+    .btn {
+        padding: 8px 16px;
+        font-size: 0.85rem;
+    }
+}
