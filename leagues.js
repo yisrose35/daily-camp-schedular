@@ -47,6 +47,8 @@
     
     function saveLeaguesData() {
         window.saveGlobalSettings?.('leaguesByName', leaguesByName);
+        // Fix #1: Force sync to cloud to ensure persistence
+        window.forceSyncToCloud?.();
     }
     
     function loadLeaguesData() {
@@ -786,7 +788,10 @@
         var daily = window.loadCurrentDailyData?.() || {};
         var skeleton = daily.manualSkeleton || [];
         var assignments = daily.scheduleAssignments || {};
-        var divisions = window.divisions || {};
+        
+        // Fix #2: Load fresh from settings instead of window cache
+        var globalSettings = window.loadGlobalSettings?.() || {};
+        var divisions = globalSettings.app1?.divisions || window.divisions || {};
         
         var saveButton = target.parentElement.querySelector('[data-role="save-game-results"]');
         
