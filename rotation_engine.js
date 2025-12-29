@@ -76,10 +76,17 @@
         const activities = new Set();
         const schedule = window.scheduleAssignments?.[bunkName] || [];
         
+        // Fix #1: Enhanced activity detection logic
         for (let i = 0; i < beforeSlotIndex && i < schedule.length; i++) {
             const entry = schedule[i];
-            if (entry && entry._activity && !entry._isTransition && !entry.continuation) {
-                activities.add(entry._activity.toLowerCase().trim());
+            if (!entry || entry._isTransition || entry.continuation) continue;
+            
+            // Check multiple property names for activity
+            const activityName = entry._activity || entry.sport || 
+                (typeof entry.field === 'string' ? entry.field : entry.field?.name);
+            
+            if (activityName) {
+                activities.add(activityName.toLowerCase().trim());
             }
         }
         
