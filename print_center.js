@@ -59,7 +59,11 @@ function findFirstSlotForTime(startMin) {
 }
 
 function getEntry(bunk, slotIndex) {
-  const assignments = window.scheduleAssignments || {};
+  // Fix #1 - 🟡 MEDIUM: Stale Data Reference
+  // Use loadCurrentDailyData to get the fresh schedule, falling back to window globals only if needed
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const assignments = dailyData.scheduleAssignments || window.scheduleAssignments || {};
+  
   if (bunk && assignments[bunk] && assignments[bunk][slotIndex]) {
     return assignments[bunk][slotIndex];
   }
