@@ -1388,17 +1388,24 @@ window.initFieldsTab = initFieldsTab;
 window.fields = fields;
 
 // Export sport metadata getter for scheduler
+// Reads directly from global settings so it works before Fields tab is opened
 window.getSportMetaData = function() {
-    return sportMetaData;
+    const settings = window.loadGlobalSettings?.() || {};
+    const app1 = settings.app1 || {};
+    return app1.sportMetaData || {};
 };
 
 // Export for external access
+// Reads directly from global settings so it works before Fields tab is opened
 window.getFields = function() {
-    return fields;
+    const settings = window.loadGlobalSettings?.() || {};
+    const app1 = settings.app1 || {};
+    return app1.fields || [];
 };
 
 window.getFieldByName = function(name) {
-    return fields.find(f => f.name === name);
+    const allFields = window.getFields();
+    return allFields.find(f => f.name === name);
 };
 
 })();
