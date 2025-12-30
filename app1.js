@@ -2,7 +2,7 @@
 // app1.js — MERGED: Beta Camper Roster + Published SyncSpine
 //
 // THEME: Modern Pro Camp (Emerald/White)
-// VERSION: 3.0 - Comprehensive Refactor
+// VERSION: 3.1 - Wired "Erase All" to Cloud Bridge
 // 
 // FIXES APPLIED:
 // - Fixed stale window reference issues (divisions/bunks)
@@ -20,7 +20,7 @@
     "use strict";
     
     // ==================== CONSTANTS ====================
-    const VERSION = "3.0";
+    const VERSION = "3.1";
     const CLICK_DELAY_MS = 300;
     const DEBOUNCE_MS = 150;
     const DEFAULT_BUNK_SIZE = 0;
@@ -1524,6 +1524,43 @@
         if (detailPane) {
             detailPane.classList.add("detail-pane");
             detailPane.style.marginTop = "8px";
+        }
+        
+        // --- 🟢 NEW: Wire up the Erase All Button ---
+        const eraseAllBtn = document.getElementById("eraseAllBtn");
+        if (eraseAllBtn) {
+            // Remove old listeners by cloning
+            const newBtn = eraseAllBtn.cloneNode(true);
+            eraseAllBtn.parentNode.replaceChild(newBtn, eraseAllBtn);
+            
+            newBtn.addEventListener("click", async () => {
+                if (confirm("⚠️ WARNING: This will delete ALL camp data, divisions, bunks, and schedules.\n\nThis action cannot be undone.\n\nAre you sure?")) {
+                    const confirm2 = confirm("Are you absolutely sure? All data will be lost forever.");
+                    if (confirm2) {
+                        if (window.resetCloudState) {
+                            newBtn.textContent = "Erasing...";
+                            newBtn.disabled = true;
+                            newBtn.style.opacity = "0.7";
+                            
+                            const success = await window.resetCloudState();
+                            
+                            if (success) {
+                                alert("All data erased successfully.");
+                                window.location.reload();
+                            } else {
+                                alert("Error erasing data from cloud. Please check connection.");
+                                newBtn.textContent = "Erase All Camp Data";
+                                newBtn.disabled = false;
+                                newBtn.style.opacity = "1";
+                            }
+                        } else {
+                            // Fallback if bridge isn't loaded
+                            localStorage.clear();
+                            window.location.reload();
+                        }
+                    }
+                }
+            });
         }
         
         // Initial render
