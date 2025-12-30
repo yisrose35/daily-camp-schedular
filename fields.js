@@ -1,11 +1,13 @@
 // ============================================================================
 // fields.js — MERGED: NEW UX + SPORT PLAYER REQS + RAINY DAY AVAILABILITY
+// CLOUD SYNC PATCH APPLIED
 // ============================================================================
 // 1. Layout: Apple-inspired Two-Pane with Collapsible Detail Sections.
 // 2. Logic: Retains all Transition, Sharing, Priority, and Sport Logic.
 // 3. Fix: Access & Restrictions toggle stays open and updates locally.
 // 4. Feat: Sport Player Requirements section.
 // 5. NEW: Weather & Availability (Rainy Day Mode configuration).
+// 6. SYNC: Explicit Cloud Sync trigger added to saveData.
 // ============================================================================
 (function(){
 'use strict';
@@ -267,11 +269,25 @@ function loadData(){
 }
 
 function saveData(){
-    const settings = window.loadGlobalSettings?.() || {};
-    settings.app1 = settings.app1 || {};
-    settings.app1.fields = fields;
-    settings.app1.sportMetaData = sportMetaData;
-    window.saveGlobalSettings?.("app1", settings.app1);
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+        settings.app1 = settings.app1 || {};
+        settings.app1.fields = fields;
+        settings.app1.sportMetaData = sportMetaData;
+        window.saveGlobalSettings?.("app1", settings.app1);
+        
+        // ⭐ CLOUD SYNC FIX: Explicitly request cloud sync after saving
+        if (typeof window.requestCloudSync === 'function') {
+            window.requestCloudSync();
+            // console.log("☁️ Fields: Cloud sync requested");
+        }
+        
+        // Expose globally for other modules
+        window.fields = fields;
+        // Window.sportMetaData is usually exposed via getter, but we update the internal state
+    } catch (e) {
+        console.error("Failed to save fields data:", e);
+    }
 }
 
 //------------------------------------------------------------------
