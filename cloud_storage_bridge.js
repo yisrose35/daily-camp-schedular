@@ -1,19 +1,21 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: Increased timeouts + Retry logic for large datasets
-// v2.5 - Fixes "Sign-in cloud fetch timed out" on large accounts
+// FIXED VERSION: v2.6 (Massive Data Support)
+// - Timeout increased to 60 seconds
+// - Restored "Saving" logs
+// - Better error handling for uploads
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v2.5 (High Latency Fix)");
+  console.log("☁️ Campistry Cloud Bridge v2.6 (60s Timeout)");
 
   const TABLE = "camp_state";
   const UNIFIED_CACHE_KEY = "CAMPISTRY_UNIFIED_STATE";
   
-  // ⭐ INCREASED TIMEOUT: 5000ms -> 20000ms (20 seconds)
-  // Large datasets (like the one in your logs) need more time to download.
-  const QUERY_TIMEOUT_MS = 20000; 
+  // ⭐ TIMEOUT: 60 Seconds
+  // Your data is large, so we need to give it plenty of time.
+  const QUERY_TIMEOUT_MS = 60000; 
   
   const LEGACY_KEYS = {
     globalSettings: "campGlobalSettings_v1",
@@ -46,14 +48,12 @@
   }
   
   // ============================================================================
-  // CAMP ID MANAGEMENT - User Isolation
+  // CAMP ID MANAGEMENT
   // ============================================================================
-  
   let _cachedCampId = null;
 
   function getCampId() {
     if (_cachedCampId) return _cachedCampId;
-    
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
@@ -73,13 +73,11 @@
     } catch (e) {
       console.warn("☁️ getCampId: Error reading Supabase storage:", e);
     }
-    
     const cachedUserId = localStorage.getItem('campistry_user_id');
     if (cachedUserId && cachedUserId !== 'demo_camp_001') {
       _cachedCampId = cachedUserId;
       return _cachedCampId;
     }
-    
     return "demo_camp_001";
   }
 
@@ -101,7 +99,7 @@
   let _initialized = false;
 
   // ------------------------------------------------------------
-  // Migrate from legacy keys (one-time)
+  // Migrate from legacy keys
   // ------------------------------------------------------------
   let _migrationDone = false;
   function migrateLegacyData() {
@@ -139,7 +137,6 @@
   }
   
   function setLocalCache(state) {
-    // Hoist app1 data if root is empty
     if (state.app1) {
       if ((!state.divisions || Object.keys(state.divisions).length === 0) && 
           state.app1.divisions) {
@@ -149,7 +146,6 @@
         state.bunks = state.app1.bunks;
       }
     }
-    
     _memoryCache = state;
     try {
       const str = JSON.stringify(state);
@@ -169,7 +165,7 @@
       if (!window.supabase) return null;
       const { data, error } = await withTimeout(
         window.supabase.auth.getUser(),
-        5000, // Keep short timeout for auth checks
+        5000, 
         "getUser timed out"
       );
       if (error) return null;
@@ -183,14 +179,12 @@
   async function loadFromCloud() {
     try {
       if (!window.supabase) return null;
-      
       const user = await getUser();
       if (!user) return null;
       
       const campId = getCampId();
       console.log("☁️ Loading from cloud for camp_id:", campId.substring(0, 8) + "...");
       
-      // Retry logic added here
       const fetchOperation = async () => {
         return await window.supabase
           .from(TABLE)
@@ -199,9 +193,8 @@
           .single();
       };
 
-      // Use longer timeout and retry wrapper
       const { data, error } = await withTimeout(
-        withRetry(fetchOperation, 1, 1000), // Retry once if it fails
+        withRetry(fetchOperation, 1, 2000), 
         QUERY_TIMEOUT_MS,
         "Cloud load query timed out"
       );
@@ -217,7 +210,6 @@
       
       let state = data?.state || null;
       
-      // Ensure data is hoisted correctly immediately upon load
       if (state && state.app1) {
          if ((!state.divisions || Object.keys(state.divisions).length === 0) && 
             state.app1.divisions) {
@@ -227,7 +219,6 @@
           state.bunks = state.app1.bunks;
         }
       }
-      
       return state;
     } catch (e) {
       console.error("☁️ Cloud load failed:", e.message);
@@ -239,7 +230,10 @@
     try {
       if (!window.supabase) return false;
       const user = await getUser();
-      if (!user) return false;
+      if (!user) {
+         console.warn("☁️ Save skipped: No user logged in");
+         return false;
+      }
 
       const campId = getCampId();
       if (campId === "demo_camp_001") return false;
@@ -250,11 +244,13 @@
       const stateToSave = { ...state };
       delete stateToSave._importTimestamp;
       
-      // Ensure we are saving complete data
       if (stateToSave.app1) {
          if (stateToSave.app1.divisions) stateToSave.divisions = stateToSave.app1.divisions;
          if (stateToSave.app1.bunks) stateToSave.bunks = stateToSave.app1.bunks;
       }
+
+      // ⭐ LOGGING RESTORED
+      console.log(`☁️ Saving to cloud... (Payload size approx: ${JSON.stringify(stateToSave).length} chars)`);
 
       const { error } = await withTimeout(
         window.supabase
@@ -264,8 +260,8 @@
             owner_id: user.id,
             state: stateToSave
           }, { onConflict: 'camp_id' }),
-        QUERY_TIMEOUT_MS,
-        "Cloud save timed out"
+        QUERY_TIMEOUT_MS, // 60 seconds allowed
+        "Cloud save timed out - upload too slow"
       );
       
       if (error) {
@@ -276,7 +272,7 @@
       console.log("☁️ ✅ Saved to cloud successfully");
       return true;
     } catch (e) {
-      console.error("☁️ Cloud save failed:", e.message);
+      console.error("☁️ Cloud save CRITICAL FAILURE:", e.message);
       return false;
     }
   }
@@ -295,10 +291,9 @@
       }
       _syncInProgress = true;
       _cloudSyncPending = false;
-      console.log("☁️ Performing cloud sync...");
       await saveToCloud(getLocalCache());
       _syncInProgress = false;
-    }, 2000); // Increased debounce to prevent rapid-fire saves
+    }, 2000);
   }
   
   async function syncNow() {
@@ -306,6 +301,7 @@
     _cloudSyncPending = false;
     if (_syncInProgress) await new Promise(r => setTimeout(r, 1000));
     _syncInProgress = true;
+    console.log("☁️ syncNow: Starting manual sync...");
     const result = await saveToCloud(getLocalCache());
     _syncInProgress = false;
     return result;
@@ -327,7 +323,6 @@
         migrateLegacyData();
         const localData = getLocalCache();
         
-        // Try to get user
         let user = null;
         try {
           const { data } = await withTimeout(window.supabase?.auth?.getUser() || Promise.resolve({}), 3000);
@@ -343,7 +338,6 @@
         }
         
         console.log("☁️ User authenticated, fetching from cloud...");
-        // This will now use the longer timeout
         const cloudState = await loadFromCloud();
         
         if (cloudState && Object.keys(cloudState).length > 0) {
@@ -394,7 +388,10 @@
     if (!newState) return false;
     newState.updated_at = new Date().toISOString();
     setLocalCache(newState);
-    if (syncToCloud) await syncNow();
+    if (syncToCloud) {
+        console.log("☁️ setCloudState: Triggering sync...");
+        await syncNow();
+    }
     return true;
   };
 
@@ -406,7 +403,7 @@
   };
 
   // ------------------------------------------------------------
-  // AUTH LISTENER (The critical part for your issue)
+  // AUTH LISTENER
   // ------------------------------------------------------------
   let _rehydrating = false;
   let _lastAuthTime = 0;
@@ -439,11 +436,10 @@
         
         try {
           const campId = getCampId();
-          console.log("☁️ Fetching data (High Timeout) for camp_id:", campId);
+          console.log("☁️ Fetching data (60s Limit) for camp_id:", campId);
           
           const startTime = Date.now();
           
-          // Use the increased timeout here too
           const fetchOp = async () => window.supabase
               .from(TABLE)
               .select("state")
@@ -451,8 +447,8 @@
               .single();
               
           const { data, error } = await withTimeout(
-            withRetry(fetchOp, 1, 1000), // Retry once
-            QUERY_TIMEOUT_MS, // 20 seconds
+            withRetry(fetchOp, 1, 2000), 
+            QUERY_TIMEOUT_MS, 
             "Sign-in cloud fetch timed out"
           );
           
@@ -464,7 +460,6 @@
             const cloudState = data.state;
             const merged = { ...getLocalCache(), ...cloudState };
             
-            // Explicit hoist check
             if (merged.app1) {
                 if (!merged.divisions || Object.keys(merged.divisions).length === 0) {
                     merged.divisions = merged.app1.divisions || {};
@@ -475,22 +470,19 @@
             }
             
             setLocalCache(merged);
-            console.log("☁️ Local cache updated from cloud. Items:", (merged.bunks||[]).length);
+            console.log("☁️ Local cache updated from cloud.");
           }
           
           _initialized = true;
           window.__CAMPISTRY_CLOUD_READY__ = true;
           
           const hasData = Object.keys(getLocalCache().divisions || {}).length > 0;
-          
           window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
             detail: { hydrated: true, hasData, afterSignIn: true }
           }));
           
         } catch (e) {
           console.error("☁️ Re-hydration error:", e.message);
-          
-          // Even on error, we must signal ready so the app doesn't hang
           _initialized = true;
           window.__CAMPISTRY_CLOUD_READY__ = true;
           window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
@@ -506,7 +498,6 @@
   setupAuthListener();
   initialize().catch(e => console.error("Cloud bridge init failed:", e));
 
-  // Forward compatibility
   window.syncNow = syncNow;
   window.loadRotationHistory = () => (window.loadGlobalSettings() || {}).rotationHistory || {};
   window.saveRotationHistory = (h) => { window.saveGlobalSettings("rotationHistory", h); };
