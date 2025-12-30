@@ -10,6 +10,21 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="design-system.css">
     <link rel="stylesheet" href="landing.css">
+    <style>
+        /* Inline style for the link to look decent immediately before CSS update */
+        .forgot-password-link {
+            display: block;
+            text-align: right;
+            font-size: 0.85rem;
+            color: #6B7280;
+            text-decoration: none;
+            margin-top: 0.25rem;
+        }
+        .forgot-password-link:hover {
+            text-decoration: underline;
+            color: #111;
+        }
+    </style>
 </head>
 <body>
     <!-- ========================================= -->
@@ -406,7 +421,8 @@
                 <!-- Password -->
                 <div class="form-group">
                     <label for="password">Password</label>
-                    <input type="password" id="password" placeholder="••••••••" required>
+                    <input type="password" id="password" placeholder="••••••••" required minlength="6">
+                    <a href="#" class="forgot-password-link" onclick="closeAuthModal(); openResetModal(); return false;">Forgot Password?</a>
                 </div>
                 
                 <!-- Access Code (signup only) -->
@@ -422,6 +438,69 @@
             
             <div class="modal-footer">
                 <p>By continuing, you agree to our <a href="#">Terms</a> and <a href="#">Privacy Policy</a>.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================================
+         PASSWORD RESET MODAL - Add this to landing.html
+         ============================================================================
+         INSTRUCTIONS:
+         1. Add this HTML block after your existing auth modal (before </body>)
+         2. Add the CSS styles below to landing.css
+         3. Add the "Forgot Password?" link to your login form
+         ============================================================================ -->
+    <!-- =============================================================== -->
+    <!-- PASSWORD RESET MODAL -->
+    <!-- =============================================================== -->
+    <div id="resetPasswordModal" class="auth-modal" style="display:none;">
+        <div class="auth-modal-overlay"></div>
+        <div class="auth-modal-content">
+            <button class="auth-modal-close" onclick="closeResetModal()">&times;</button>
+            
+            <!-- Request Reset View -->
+            <div id="resetRequestView">
+                <h2 class="auth-modal-title">Reset Password</h2>
+                <p class="auth-modal-subtitle">Enter your email and we'll send you a reset link.</p>
+                
+                <form id="resetRequestForm" class="auth-form">
+                    <div class="form-group">
+                        <label for="resetEmail">Email Address</label>
+                        <input type="email" id="resetEmail" placeholder="your@email.com" required />
+                    </div>
+                    <div id="resetError" class="auth-error"></div>
+                    <div id="resetSuccess" class="auth-success"></div>
+                    <button type="submit" id="resetSubmit" class="btn btn-primary btn-block">
+                        Send Reset Link
+                    </button>
+                </form>
+                
+                <p class="auth-footer">
+                    Remember your password? 
+                    <a href="#" onclick="closeResetModal(); openAuthModal('login'); return false;">Sign In</a>
+                </p>
+            </div>
+            
+            <!-- Update Password View (after clicking email link) -->
+            <div id="updatePasswordView" style="display:none;">
+                <h2 class="auth-modal-title">Set New Password</h2>
+                <p class="auth-modal-subtitle">Enter your new password below.</p>
+                
+                <form id="updatePasswordForm" class="auth-form">
+                    <div class="form-group">
+                        <label for="newPassword">New Password</label>
+                        <input type="password" id="newPassword" placeholder="••••••••" required minlength="6" />
+                    </div>
+                    <div class="form-group">
+                        <label for="confirmPassword">Confirm Password</label>
+                        <input type="password" id="confirmPassword" placeholder="••••••••" required minlength="6" />
+                    </div>
+                    <div id="updateError" class="auth-error"></div>
+                    <div id="updateSuccess" class="auth-success"></div>
+                    <button type="submit" id="updateSubmit" class="btn btn-primary btn-block">
+                        Update Password
+                    </button>
+                </form>
             </div>
         </div>
     </div>
