@@ -236,7 +236,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     return;
                 }
                 if (accessCode !== GLOBAL_ACCESS_CODE) {
-                    showAuthError('Invalid access code. Contact campistry@gmail.com for access.');
+                    showAuthError('Invalid access code. Contact campistryoffice@gmail.com for access.');
                     return;
                 }
             }
