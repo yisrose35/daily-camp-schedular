@@ -13,9 +13,9 @@
   const TABLE = "camp_state";
   const UNIFIED_CACHE_KEY = "CAMPISTRY_UNIFIED_STATE";
   
-  // ⭐ TIMEOUT: 60 Seconds
+  // ⭐ TIMEOUT: 10 Seconds
   // Your data is large, so we need to give it plenty of time.
-  const QUERY_TIMEOUT_MS = 60000; 
+  const QUERY_TIMEOUT_MS = 10000; 
   
   const LEGACY_KEYS = {
     globalSettings: "campGlobalSettings_v1",
