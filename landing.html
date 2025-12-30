@@ -3,26 +3,213 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Campistry — Camp Management Made Simple</title>
-    <meta name="description" content="The complete camp management platform. Scheduling, transportation, and camper communication — all in one place.">
+    <title>Campistry — Smart Camp Management</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="design-system.css">
     <link rel="stylesheet" href="landing.css">
+    
+    <!-- Inline critical styles for auth modals -->
     <style>
-        /* Inline style for the link to look decent immediately before CSS update */
+        /* Auth Modal Base */
+        .auth-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .auth-modal-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(4px);
+        }
+        .auth-modal-content {
+            position: relative;
+            background: white;
+            padding: 32px;
+            border-radius: 16px;
+            width: 100%;
+            max-width: 420px;
+            margin: 20px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        }
+        .auth-modal-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #6B7280;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+        }
+        .auth-modal-close:hover {
+            background: #F3F4F6;
+        }
+        .auth-modal-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #1F2937;
+            margin-bottom: 8px;
+        }
+        .auth-modal-subtitle {
+            color: #6B7280;
+            margin-bottom: 24px;
+        }
+        
+        /* Modal Toggle */
+        .modal-toggle {
+            display: flex;
+            background: #F3F4F6;
+            border-radius: 10px;
+            padding: 4px;
+            margin-bottom: 24px;
+        }
+        .modal-toggle-btn {
+            flex: 1;
+            padding: 10px 16px;
+            border: none;
+            background: transparent;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            color: #6B7280;
+            transition: all 0.2s;
+        }
+        .modal-toggle-btn.active {
+            background: white;
+            color: #1F2937;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        
+        /* Form Styles */
+        .auth-form .form-group {
+            margin-bottom: 16px;
+        }
+        .auth-form label {
+            display: block;
+            font-weight: 500;
+            color: #374151;
+            margin-bottom: 6px;
+            font-size: 0.9rem;
+        }
+        .auth-form input {
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid #D1D5DB;
+            border-radius: 10px;
+            font-size: 1rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            box-sizing: border-box;
+        }
+        .auth-form input:focus {
+            outline: none;
+            border-color: #0D7C5C;
+            box-shadow: 0 0 0 3px rgba(13, 124, 92, 0.1);
+        }
+        .auth-form input:disabled {
+            background: #F3F4F6;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+        
+        /* Buttons */
+        .btn-block {
+            width: 100%;
+            padding: 14px 20px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: #0D7C5C;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #0A6349;
+        }
+        .btn-primary:disabled {
+            background: #9CA3AF;
+            cursor: not-allowed;
+        }
+        
+        /* Messages */
+        .auth-error {
+            background: #FEF2F2;
+            color: #DC2626;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 0.9rem;
+            display: none;
+        }
+        .auth-error:not(:empty) {
+            display: block;
+        }
+        .auth-success {
+            display: none;
+            background: #ECFDF5;
+            color: #047857;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 0.9rem;
+            text-align: center;
+            border: 1px solid #A7F3D0;
+        }
+        
+        /* Footer */
+        .auth-footer {
+            text-align: center;
+            margin-top: 20px;
+            color: #6B7280;
+            font-size: 0.9rem;
+        }
+        .auth-footer a {
+            color: #0D7C5C;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .auth-footer a:hover {
+            text-decoration: underline;
+        }
+        
+        /* Forgot Password Link */
         .forgot-password-link {
             display: block;
-            text-align: right;
+            margin-top: 8px;
             font-size: 0.85rem;
-            color: #6B7280;
+            color: #0D7C5C;
             text-decoration: none;
-            margin-top: 0.25rem;
+            text-align: right;
         }
         .forgot-password-link:hover {
             text-decoration: underline;
-            color: #111;
+        }
+        
+        /* Form hint */
+        .form-hint {
+            font-size: 0.8rem;
+            color: #6B7280;
+            margin-top: 4px;
         }
     </style>
 </head>
@@ -32,21 +219,24 @@
     <!-- ========================================= -->
     <nav class="nav">
         <div class="nav-inner">
-            <a href="#" class="nav-logo">
+            <a href="landing.html" class="nav-logo">
                 <span class="logo-icon">⛺</span>
                 <span class="logo-text">Campistry</span>
             </a>
             <div class="nav-links">
-                <a href="#products">Products</a>
                 <a href="#features">Features</a>
+                <a href="#products">Products</a>
                 <a href="#pricing">Pricing</a>
             </div>
-            <button class="nav-mobile-toggle" aria-label="Toggle menu">
-                <span></span><span></span><span></span>
-            </button>
-            <div class="nav-actions">
+            <!-- Logged Out State -->
+            <div class="nav-actions" id="navActions">
                 <button class="btn-ghost" onclick="openAuthModal('login')">Sign In</button>
                 <button class="btn-primary" onclick="openAuthModal('signup')">Get Started</button>
+            </div>
+            <!-- Logged In State -->
+            <div class="nav-actions nav-actions-loggedin" id="navActionsLoggedIn" style="display: none;">
+                <a href="dashboard.html" class="btn-ghost">Dashboard</a>
+                <button class="btn-primary" onclick="handleLogout()">Sign Out</button>
             </div>
         </div>
     </nav>
@@ -56,118 +246,31 @@
     <!-- ========================================= -->
     <section class="hero">
         <div class="hero-content">
-            <div class="hero-badge">
-                <span class="badge-dot"></span>
-                Early Access — Limited Availability
-            </div>
-            <h1 class="hero-title">
-                Camp scheduling<br>
-                <span class="title-accent">in under 10 minutes</span>
-            </h1>
-            <p class="hero-sub">
-                Campistry Flow handles the complexity of daily schedules — divisions, rotations, 
-                leagues, rainy days — so you can focus on what matters: your campers.
-            </p>
+            <h1 class="hero-title">Camp scheduling,<br><span class="hero-highlight">simplified.</span></h1>
+            <p class="hero-subtitle">Create professional daily schedules in minutes, not hours. Built for head counselors who want to spend less time planning and more time leading.</p>
             <div class="hero-cta">
-                <button class="btn-primary btn-large" onclick="openAuthModal('signup')">
-                    Start Free Trial
-                </button>
-                <a href="#demo" class="btn-ghost btn-large">
-                    Watch Demo
-                </a>
-            </div>
-            <div class="hero-stats">
-                <div class="stat">
-                    <span class="stat-value">10 min</span>
-                    <span class="stat-label">Avg Schedule Time</span>
-                </div>
-                <div class="stat-divider"></div>
-                <div class="stat">
-                    <span class="stat-value">100%</span>
-                    <span class="stat-label">Fair Rotation</span>
-                </div>
-                <div class="stat-divider"></div>
-                <div class="stat">
-                    <span class="stat-value">1-Click</span>
-                    <span class="stat-label">Rainy Day Mode</span>
-                </div>
+                <button class="btn-primary btn-large" onclick="openAuthModal('signup')">Start Free Trial</button>
+                <a href="#demo" class="btn-ghost btn-large">Watch Demo</a>
             </div>
         </div>
         <div class="hero-visual">
-            <div class="schedule-mockup">
+            <div class="hero-mockup">
                 <div class="mockup-header">
-                    <span class="mockup-dot red"></span>
-                    <span class="mockup-dot yellow"></span>
-                    <span class="mockup-dot green"></span>
-                    <span class="mockup-title">Daily Schedule — July 15</span>
+                    <span class="mockup-dot"></span>
+                    <span class="mockup-dot"></span>
+                    <span class="mockup-dot"></span>
                 </div>
-                <div class="mockup-grid">
-                    <div class="mockup-time">9:00</div>
-                    <div class="mockup-block b1">Juniors • Pool</div>
-                    <div class="mockup-block b2">Seniors • Baseball</div>
-                    <div class="mockup-time">10:00</div>
-                    <div class="mockup-block b3">Juniors • Arts</div>
-                    <div class="mockup-block b4">Seniors • Pool</div>
-                    <div class="mockup-time">11:00</div>
-                    <div class="mockup-block b2">Juniors • Soccer</div>
-                    <div class="mockup-block b1">Seniors • League</div>
+                <div class="mockup-content">
+                    <div class="mockup-schedule">
+                        <div class="mockup-time">9:00 AM</div>
+                        <div class="mockup-block mockup-block-green">Morning Assembly</div>
+                        <div class="mockup-time">10:00 AM</div>
+                        <div class="mockup-block mockup-block-blue">Swimming - Pool A</div>
+                        <div class="mockup-block mockup-block-purple">Arts & Crafts</div>
+                        <div class="mockup-time">11:30 AM</div>
+                        <div class="mockup-block mockup-block-orange">Sports League</div>
+                    </div>
                 </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- ========================================= -->
-    <!-- PRODUCTS SECTION -->
-    <!-- ========================================= -->
-    <section id="products" class="products">
-        <div class="section-header">
-            <span class="section-eyebrow">The Platform</span>
-            <h2 class="section-title">Everything Your Camp Needs</h2>
-            <p class="section-sub">Three powerful products, one unified platform.</p>
-        </div>
-        <div class="products-grid">
-            <!-- FLOW -->
-            <div class="product-card product-flow">
-                <div class="product-badge">Available Now</div>
-                <div class="product-icon">📅</div>
-                <h3>Campistry Flow</h3>
-                <p>Intelligent daily scheduling that handles divisions, rotations, leagues, and last-minute changes.</p>
-                <ul class="product-features">
-                    <li>Auto-generated schedules</li>
-                    <li>Fair activity rotation</li>
-                    <li>Rainy day mode</li>
-                    <li>League management</li>
-                    <li>Real-time adjustments</li>
-                </ul>
-                <button class="product-cta" onclick="openAuthModal('signup')">Get Started</button>
-            </div>
-            <!-- GO -->
-            <div class="product-card product-go">
-                <div class="product-badge coming-soon">Coming Soon</div>
-                <div class="product-icon">🚌</div>
-                <h3>Campistry Go</h3>
-                <p>Smart bus routing and transportation management for pickup and dropoff.</p>
-                <ul class="product-features">
-                    <li>Route optimization</li>
-                    <li>Parent notifications</li>
-                    <li>Real-time tracking</li>
-                    <li>Attendance sync</li>
-                </ul>
-                <button class="product-cta disabled" disabled>Coming 2026</button>
-            </div>
-            <!-- ME -->
-            <div class="product-card product-me">
-                <div class="product-badge coming-soon">Coming Soon</div>
-                <div class="product-icon">👤</div>
-                <h3>Campistry Me</h3>
-                <p>Camper profiles, parent portal, and communication hub.</p>
-                <ul class="product-features">
-                    <li>Camper database</li>
-                    <li>Parent messaging</li>
-                    <li>Photo sharing</li>
-                    <li>Forms & waivers</li>
-                </ul>
-                <button class="product-cta disabled" disabled>Coming 2026</button>
             </div>
         </div>
     </section>
@@ -177,55 +280,87 @@
     <!-- ========================================= -->
     <section id="features" class="features">
         <div class="section-header">
-            <span class="section-eyebrow">Why Campistry</span>
-            <h2 class="section-title">Built by Camp People, for Camp People</h2>
+            <h2>Everything you need to run a smooth camp day</h2>
+            <p>Powerful features designed specifically for camp operations</p>
         </div>
         <div class="features-grid">
             <div class="feature-card">
-                <div class="feature-icon">⚡</div>
-                <h4>Lightning Fast</h4>
-                <p>Generate a full day's schedule in under 10 minutes. No more late nights with spreadsheets.</p>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">🎯</div>
-                <h4>Fair Rotations</h4>
-                <p>Our algorithm ensures every bunk gets equal time at popular activities. No more complaints.</p>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">🌧️</div>
-                <h4>Rainy Day Ready</h4>
-                <p>One click transforms your schedule for indoor activities. Instant, automatic, done.</p>
+                <div class="feature-icon">🗓️</div>
+                <h3>Smart Scheduling</h3>
+                <p>Drag-and-drop interface with automatic conflict detection and field allocation.</p>
             </div>
             <div class="feature-card">
                 <div class="feature-icon">🏆</div>
-                <h4>League Manager</h4>
-                <p>Round-robin tournaments, standings, and schedules — all handled automatically.</p>
+                <h3>League Management</h3>
+                <p>Run tournaments and leagues with automatic bracket generation and standings.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🌧️</div>
+                <h3>Rainy Day Mode</h3>
+                <p>Instantly switch to backup schedules when weather changes your plans.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">📍</div>
+                <h3>Camper Locator</h3>
+                <p>Know exactly where every bunk is at any moment throughout the day.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🖨️</div>
+                <h3>Print Center</h3>
+                <p>Generate beautiful printable schedules for staff and campers.</p>
             </div>
             <div class="feature-card">
                 <div class="feature-icon">☁️</div>
-                <h4>Cloud Synced</h4>
-                <p>Access your schedules from any device. Changes sync instantly across your team.</p>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">🛡️</div>
-                <h4>Conflict-Free</h4>
-                <p>Smart detection prevents double-bookings and scheduling conflicts before they happen.</p>
+                <h3>Cloud Sync</h3>
+                <p>Access your schedules from anywhere. Changes sync instantly across all devices.</p>
             </div>
         </div>
     </section>
 
     <!-- ========================================= -->
-    <!-- DEMO SECTION -->
+    <!-- PRODUCTS SECTION -->
     <!-- ========================================= -->
-    <section id="demo" class="demo">
+    <section id="products" class="products">
         <div class="section-header">
-            <span class="section-eyebrow">See It In Action</span>
-            <h2 class="section-title">Watch How Easy It Is</h2>
+            <h2>The Campistry Suite</h2>
+            <p>Three products working together to streamline your entire operation</p>
         </div>
-        <div class="demo-video">
-            <div class="video-placeholder">
-                <div class="play-button">▶</div>
-                <p>Product Demo Coming Soon</p>
+        <div class="products-grid">
+            <div class="product-card product-flow">
+                <div class="product-badge">Available Now</div>
+                <div class="product-icon">🌊</div>
+                <h3>Campistry Flow</h3>
+                <p>Smart daily scheduling for head counselors. Create, manage, and distribute daily schedules with ease.</p>
+                <ul class="product-features">
+                    <li>Drag-and-drop scheduling</li>
+                    <li>Automatic conflict detection</li>
+                    <li>League & tournament management</li>
+                    <li>Rainy day backup plans</li>
+                </ul>
+            </div>
+            <div class="product-card product-go">
+                <div class="product-badge product-badge-soon">Coming Soon</div>
+                <div class="product-icon">🚐</div>
+                <h3>Campistry Go</h3>
+                <p>Transportation management for trips, buses, and off-campus activities.</p>
+                <ul class="product-features">
+                    <li>Bus route planning</li>
+                    <li>Trip coordination</li>
+                    <li>Vehicle tracking</li>
+                    <li>Parent notifications</li>
+                </ul>
+            </div>
+            <div class="product-card product-me">
+                <div class="product-badge product-badge-soon">Coming Soon</div>
+                <div class="product-icon">👤</div>
+                <h3>Campistry Me</h3>
+                <p>Personal portals for campers, staff, and parents to stay connected.</p>
+                <ul class="product-features">
+                    <li>Camper profiles</li>
+                    <li>Staff scheduling</li>
+                    <li>Parent communication</li>
+                    <li>Photo sharing</li>
+                </ul>
             </div>
         </div>
     </section>
@@ -235,121 +370,47 @@
     <!-- ========================================= -->
     <section id="pricing" class="pricing">
         <div class="section-header">
-            <span class="section-eyebrow">Simple Pricing</span>
-            <h2 class="section-title">Early Access Special</h2>
-            <p class="section-sub">Lock in your rate before June 1, 2026</p>
+            <h2>Simple, transparent pricing</h2>
+            <p>Start free, upgrade when you're ready</p>
         </div>
-
-        <div class="pricing-grid pricing-grid-two">
-            <!-- EARLY ACCESS -->
-            <div class="pricing-card featured">
-                <div class="pricing-popular">Best Value</div>
-                <div class="pricing-header">
-                    <h3>Early Access</h3>
-                    <p>Available until June 1, 2026</p>
-                </div>
-                <div class="pricing-price">
-                    <span class="price-currency">$</span>
-                    <span class="price-value">100</span>
-                    <span class="price-period">today</span>
-                </div>
-                <div class="pricing-plus">
-                    <span>+</span>
-                    <div class="pricing-price-secondary">
-                        <span class="price-currency">$</span>
-                        <span class="price-value-small">1,000</span>
-                        <span class="price-period">at camp time</span>
-                    </div>
-                </div>
-                <ul class="pricing-features">
-                    <li>Full Campistry Flow access</li>
-                    <li>Unlimited divisions & bunks</li>
-                    <li>Cloud sync across devices</li>
-                    <li><strong>Direct line to the founder</strong></li>
-                    <li><strong>Custom features for your camp</strong></li>
-                    <li>Priority support</li>
-                </ul>
-                <button class="pricing-cta primary" onclick="openAuthModal('signup')">Get Early Access</button>
-                <p class="pricing-note">Offer expires June 1, 2026</p>
-            </div>
-
-            <!-- STANDARD -->
+        <div class="pricing-grid">
             <div class="pricing-card">
-                <div class="pricing-header">
-                    <h3>Standard</h3>
-                    <p>Starting June 1, 2026</p>
-                </div>
-                <div class="pricing-price">
-                    <span class="price-currency">$</span>
-                    <span class="price-value">1,500</span>
-                    <span class="price-period">/season</span>
-                </div>
+                <h3>Starter</h3>
+                <div class="price">Free</div>
+                <p class="price-desc">Perfect for trying Campistry</p>
                 <ul class="pricing-features">
-                    <li>Full Campistry Flow access</li>
-                    <li>Unlimited divisions & bunks</li>
-                    <li>Cloud sync across devices</li>
+                    <li>Up to 100 campers</li>
+                    <li>Basic scheduling</li>
                     <li>Email support</li>
-                    <li>Standard onboarding</li>
                 </ul>
-                <button class="pricing-cta" onclick="openAuthModal('signup')">Join Waitlist</button>
+                <button class="btn-outline" onclick="openAuthModal('signup')">Get Started</button>
+            </div>
+            <div class="pricing-card pricing-card-featured">
+                <div class="pricing-badge">Most Popular</div>
+                <h3>Pro</h3>
+                <div class="price">$99<span>/summer</span></div>
+                <p class="price-desc">For established camps</p>
+                <ul class="pricing-features">
+                    <li>Unlimited campers</li>
+                    <li>All Flow features</li>
+                    <li>Priority support</li>
+                    <li>Cloud backup</li>
+                </ul>
+                <button class="btn-primary" onclick="openAuthModal('signup')">Start Free Trial</button>
+            </div>
+            <div class="pricing-card">
+                <h3>Enterprise</h3>
+                <div class="price">Custom</div>
+                <p class="price-desc">For large organizations</p>
+                <ul class="pricing-features">
+                    <li>Multiple camps</li>
+                    <li>Custom integrations</li>
+                    <li>Dedicated support</li>
+                    <li>SLA guarantee</li>
+                </ul>
+                <button class="btn-outline" onclick="window.location.href='mailto:campistry@gmail.com'">Contact Sales</button>
             </div>
         </div>
-
-        <div class="pricing-contact">
-            <p>Questions? Reach out at <a href="mailto:Campistry@gmail.com">Campistry@gmail.com</a></p>
-            <p class="contact-response">We aim to respond within 9 hours</p>
-        </div>
-    </section>
-
-    <!-- ========================================= -->
-    <!-- TESTIMONIALS -->
-    <!-- ========================================= -->
-    <section class="testimonials">
-        <div class="section-header">
-            <span class="section-eyebrow">Testimonials</span>
-            <h2 class="section-title">What Directors Are Saying</h2>
-        </div>
-        <div class="testimonials-grid">
-            <div class="testimonial">
-                <p class="testimonial-quote">"Campistry cut our scheduling time from 3 hours to 15 minutes. It's been a game-changer for our head staff."</p>
-                <div class="testimonial-author">
-                    <div class="author-avatar">MK</div>
-                    <div class="author-info">
-                        <span class="author-name">Camp Director</span>
-                        <span class="author-camp">Day Camp, NY</span>
-                    </div>
-                </div>
-            </div>
-            <div class="testimonial">
-                <p class="testimonial-quote">"The rainy day feature alone is worth it. One click and we're completely rescheduled for indoors."</p>
-                <div class="testimonial-author">
-                    <div class="author-avatar">JS</div>
-                    <div class="author-info">
-                        <span class="author-name">Head Counselor</span>
-                        <span class="author-camp">Summer Camp, NJ</span>
-                    </div>
-                </div>
-            </div>
-            <div class="testimonial">
-                <p class="testimonial-quote">"Finally, software that understands how camps actually work. The league scheduler is brilliant."</p>
-                <div class="testimonial-author">
-                    <div class="author-avatar">DR</div>
-                    <div class="author-info">
-                        <span class="author-name">Program Director</span>
-                        <span class="author-camp">Sports Camp, PA</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- ========================================= -->
-    <!-- FINAL CTA -->
-    <!-- ========================================= -->
-    <section class="final-cta">
-        <h2>Ready to simplify your summer?</h2>
-        <p>Join camps that are scheduling smarter, not harder.</p>
-        <button class="btn-primary btn-large" onclick="openAuthModal('signup')">Get Started Today</button>
     </section>
 
     <!-- ========================================= -->
@@ -360,101 +421,87 @@
             <div class="footer-brand">
                 <span class="logo-icon">⛺</span>
                 <span class="logo-text">Campistry</span>
-                <p>Camp management, simplified.</p>
+                <p>Making camp management effortless.</p>
             </div>
             <div class="footer-links">
                 <div class="footer-col">
                     <h4>Product</h4>
-                    <a href="#products">Flow</a>
-                    <a href="#products">Go</a>
-                    <a href="#products">Me</a>
-                </div>
-                <div class="footer-col">
-                    <h4>Company</h4>
+                    <a href="#features">Features</a>
                     <a href="#pricing">Pricing</a>
                     <a href="#demo">Demo</a>
                 </div>
                 <div class="footer-col">
                     <h4>Support</h4>
-                    <a href="mailto:Campistry@gmail.com">Campistry@gmail.com</a>
-                    <span class="footer-note">Response within 9 hours</span>
+                    <a href="mailto:campistry@gmail.com">campistry@gmail.com</a>
+                    <span class="footer-note">Response within 24 hours</span>
                 </div>
             </div>
         </div>
         <div class="footer-bottom">
-            <p>© 2025 Campistry. All rights reserved.</p>
+            <p>&copy; 2025 Campistry. All rights reserved.</p>
         </div>
     </footer>
 
     <!-- ========================================= -->
     <!-- AUTH MODAL -->
     <!-- ========================================= -->
-    <div id="authModal" class="modal">
-        <div class="modal-backdrop" onclick="closeAuthModal()"></div>
-        <div class="modal-content">
-            <button class="modal-close" onclick="closeAuthModal()">×</button>
+    <div id="authModal" class="auth-modal">
+        <div class="auth-modal-overlay" onclick="closeAuthModal()"></div>
+        <div class="auth-modal-content">
+            <button class="auth-modal-close" onclick="closeAuthModal()">&times;</button>
             
-            <div class="modal-header">
-                <span class="logo-icon">⛺</span>
-                <h2 id="modalTitle">Welcome Back</h2>
-                <p id="modalSubtitle">Sign in to access your dashboard</p>
-            </div>
+            <h2 class="auth-modal-title" id="modalTitle">Welcome Back</h2>
+            <p class="auth-modal-subtitle" id="modalSubtitle">Sign in to your Campistry account.</p>
             
+            <!-- Toggle Buttons -->
             <div class="modal-toggle">
                 <button class="modal-toggle-btn active" data-mode="login">Sign In</button>
                 <button class="modal-toggle-btn" data-mode="signup">Create Account</button>
             </div>
             
-            <form id="authForm" class="modal-form">
+            <form id="authForm" class="auth-form">
                 <!-- Camp Name (signup only) -->
                 <div class="form-group" id="campNameGroup" style="display: none;">
                     <label for="campName">Camp Name</label>
-                    <input type="text" id="campName" placeholder="e.g. Camp Sunshine">
+                    <input type="text" id="campName" placeholder="e.g. Camp Sunshine" />
                 </div>
                 
                 <!-- Email -->
                 <div class="form-group">
-                    <label for="email">Email</label>
-                    <input type="email" id="email" placeholder="you@yourcamp.com" required>
+                    <label for="authEmail">Email Address</label>
+                    <input type="email" id="authEmail" placeholder="your@email.com" required />
                 </div>
                 
                 <!-- Password -->
                 <div class="form-group">
-                    <label for="password">Password</label>
-                    <input type="password" id="password" placeholder="••••••••" required minlength="6">
+                    <label for="authPassword">Password</label>
+                    <input type="password" id="authPassword" placeholder="••••••••" required minlength="6" />
                     <a href="#" class="forgot-password-link" onclick="closeAuthModal(); openResetModal(); return false;">Forgot Password?</a>
                 </div>
                 
                 <!-- Access Code (signup only) -->
                 <div class="form-group" id="accessCodeGroup" style="display: none;">
-                    <label for="accessCode">Early Access Code</label>
-                    <input type="text" id="accessCode" placeholder="Enter your access code">
-                    <span class="form-hint">Don't have a code? Contact Campistry@gmail.com</span>
+                    <label for="accessCode">Access Code</label>
+                    <input type="text" id="accessCode" placeholder="Enter your access code" />
+                    <p class="form-hint">Contact us to get an access code</p>
                 </div>
                 
-                <button type="submit" class="form-submit" id="formSubmit">Sign In</button>
-                <div id="authError" class="form-error"></div>
+                <div id="authError" class="auth-error"></div>
+                
+                <button type="submit" id="formSubmit" class="btn-primary btn-block">Sign In</button>
             </form>
             
-            <div class="modal-footer">
-                <p>By continuing, you agree to our <a href="#">Terms</a> and <a href="#">Privacy Policy</a>.</p>
-            </div>
+            <p class="auth-footer">
+                By continuing, you agree to our <a href="#">Terms</a> and <a href="#">Privacy Policy</a>.
+            </p>
         </div>
     </div>
 
-    <!-- ============================================================================
-         PASSWORD RESET MODAL - Add this to landing.html
-         ============================================================================
-         INSTRUCTIONS:
-         1. Add this HTML block after your existing auth modal (before </body>)
-         2. Add the CSS styles below to landing.css
-         3. Add the "Forgot Password?" link to your login form
-         ============================================================================ -->
-    <!-- =============================================================== -->
+    <!-- ========================================= -->
     <!-- PASSWORD RESET MODAL -->
-    <!-- =============================================================== -->
-    <div id="resetPasswordModal" class="auth-modal" style="display:none;">
-        <div class="auth-modal-overlay"></div>
+    <!-- ========================================= -->
+    <div id="resetPasswordModal" class="auth-modal">
+        <div class="auth-modal-overlay" onclick="closeResetModal()"></div>
         <div class="auth-modal-content">
             <button class="auth-modal-close" onclick="closeResetModal()">&times;</button>
             
@@ -470,7 +517,7 @@
                     </div>
                     <div id="resetError" class="auth-error"></div>
                     <div id="resetSuccess" class="auth-success"></div>
-                    <button type="submit" id="resetSubmit" class="btn btn-primary btn-block">
+                    <button type="submit" id="resetSubmit" class="btn-primary btn-block">
                         Send Reset Link
                     </button>
                 </form>
@@ -497,7 +544,7 @@
                     </div>
                     <div id="updateError" class="auth-error"></div>
                     <div id="updateSuccess" class="auth-success"></div>
-                    <button type="submit" id="updateSubmit" class="btn btn-primary btn-block">
+                    <button type="submit" id="updateSubmit" class="btn-primary btn-block">
                         Update Password
                     </button>
                 </form>
@@ -508,7 +555,6 @@
     <!-- ========================================= -->
     <!-- SCRIPTS -->
     <!-- ========================================= -->
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="supabase_client.js"></script>
     <script src="landing.js"></script>
 </body>
