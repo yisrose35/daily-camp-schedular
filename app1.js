@@ -2,7 +2,7 @@
 // app1.js — MERGED: Beta Camper Roster + Published SyncSpine
 //
 // THEME: Modern Pro Camp (Emerald/White)
-// VERSION: 3.1 - Wired "Erase All" to Cloud Bridge
+// VERSION: 3.4 - Import Uses Immediate Cloud Sync
 // 
 // FIXES APPLIED:
 // - Fixed stale window reference issues (divisions/bunks)
@@ -20,7 +20,7 @@
     "use strict";
     
     // ==================== CONSTANTS ====================
-    const VERSION = "3.1";
+    const VERSION = "3.4";
     const CLICK_DELAY_MS = 300;
     const DEBOUNCE_MS = 150;
     const DEFAULT_BUNK_SIZE = 0;
@@ -883,6 +883,13 @@
             saveData();
             setupDivisionButtons();
             renderDivisionDetailPane();
+            
+            // 🔥 IMMEDIATE CLOUD SYNC
+            if (window.setCloudState) {
+                console.log("☁️ Triggering immediate cloud sync for imported CSV...");
+                const fullState = window.loadGlobalSettings?.();
+                window.setCloudState(fullState);
+            }
             
             alert(
                 `Import Complete!\n` +
