@@ -68,7 +68,8 @@ body {
     font-size: 16px;
     line-height: 1.6;
     color: var(--text);
-    background: var(--bg);
+    /* Removed solid background to allow fixed bg to show */
+    background: transparent;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overflow-x: hidden;
@@ -96,6 +97,77 @@ ul {
 }
 
 /* ============================================= */
+/* BACKGROUND (Fixed Full Page) */
+/* ============================================= */
+
+.page-bg {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: -1;
+    overflow: hidden;
+    background: var(--bg);
+    pointer-events: none;
+}
+
+.bg-gradient {
+    position: absolute;
+    inset: 0;
+    background: 
+        radial-gradient(ellipse 100% 80% at 50% 20%, rgba(16, 185, 129, 0.08) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 50% at 80% 80%, rgba(14, 165, 233, 0.06) 0%, transparent 50%),
+        radial-gradient(ellipse 60% 50% at 20% 80%, rgba(245, 158, 11, 0.05) 0%, transparent 50%);
+}
+
+.bg-shapes {
+    position: absolute;
+    inset: 0;
+}
+
+.shape {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(60px);
+    opacity: 0.4;
+    animation: float 20s ease-in-out infinite;
+}
+
+.shape-1 {
+    width: 400px;
+    height: 400px;
+    background: var(--camp-green-light);
+    top: 10%;
+    right: 10%;
+    animation-delay: 0s;
+}
+
+.shape-2 {
+    width: 300px;
+    height: 300px;
+    background: var(--go-color);
+    bottom: 20%;
+    left: 5%;
+    animation-delay: -7s;
+}
+
+.shape-3 {
+    width: 250px;
+    height: 250px;
+    background: var(--me-color);
+    top: 60%;
+    right: 20%;
+    animation-delay: -14s;
+}
+
+@keyframes float {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(30px, -30px) scale(1.05); }
+    66% { transform: translate(-20px, 20px) scale(0.95); }
+}
+
+/* ============================================= */
 /* LOGO PLACEHOLDERS */
 /* ============================================= */
 
@@ -110,12 +182,6 @@ ul {
     color: white;
     font-size: 1.4rem;
     flex-shrink: 0;
-    /* When you have a logo, use:
-       background-image: url('your-logo.svg');
-       background-size: contain;
-       background-repeat: no-repeat;
-       background-position: center;
-       and remove the inner span */
 }
 
 .logo-placeholder.small {
@@ -147,7 +213,7 @@ ul {
     right: 0;
     z-index: 100;
     padding: 16px 24px;
-    background: rgba(250, 252, 251, 0.92);
+    background: rgba(250, 252, 251, 0.85); /* Increased transparency */
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border-bottom: 1px solid rgba(0, 0, 0, 0.06);
@@ -232,7 +298,7 @@ ul {
 }
 
 .btn-ghost:hover {
-    background: var(--slate-100);
+    background: rgba(241, 245, 249, 0.8);
     color: var(--slate-900);
 }
 
@@ -289,69 +355,7 @@ ul {
     align-items: center;
     justify-content: center;
     padding: 140px 24px 100px;
-    overflow: hidden;
-}
-
-.hero-bg {
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-}
-
-.hero-gradient {
-    position: absolute;
-    inset: 0;
-    background: 
-        radial-gradient(ellipse 100% 80% at 50% 20%, rgba(16, 185, 129, 0.08) 0%, transparent 60%),
-        radial-gradient(ellipse 60% 50% at 80% 80%, rgba(14, 165, 233, 0.06) 0%, transparent 50%),
-        radial-gradient(ellipse 60% 50% at 20% 80%, rgba(245, 158, 11, 0.05) 0%, transparent 50%);
-}
-
-.hero-shapes {
-    position: absolute;
-    inset: 0;
-    overflow: hidden;
-}
-
-.shape {
-    position: absolute;
-    border-radius: 50%;
-    filter: blur(60px);
-    opacity: 0.4;
-    animation: float 20s ease-in-out infinite;
-}
-
-.shape-1 {
-    width: 400px;
-    height: 400px;
-    background: var(--camp-green-light);
-    top: 10%;
-    right: 10%;
-    animation-delay: 0s;
-}
-
-.shape-2 {
-    width: 300px;
-    height: 300px;
-    background: var(--go-color);
-    bottom: 20%;
-    left: 5%;
-    animation-delay: -7s;
-}
-
-.shape-3 {
-    width: 250px;
-    height: 250px;
-    background: var(--me-color);
-    top: 60%;
-    right: 20%;
-    animation-delay: -14s;
-}
-
-@keyframes float {
-    0%, 100% { transform: translate(0, 0) scale(1); }
-    33% { transform: translate(30px, -30px) scale(1.05); }
-    66% { transform: translate(-20px, 20px) scale(0.95); }
+    /* Hero is transparent to show the fixed bg */
 }
 
 .hero-content {
@@ -376,7 +380,8 @@ ul {
     align-items: center;
     gap: 10px;
     padding: 10px 20px;
-    background: white;
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(8px);
     border: 1px solid var(--slate-200);
     border-radius: 999px;
     font-size: 0.9rem;
@@ -470,7 +475,8 @@ ul {
     font-size: 1.05rem;
     font-weight: 600;
     color: var(--slate-700);
-    background: white;
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(4px);
     border: 2px solid var(--slate-200);
     border-radius: 14px;
     transition: all 0.3s ease;
@@ -499,11 +505,13 @@ ul {
     font-size: 2rem;
     font-weight: 600;
     color: var(--camp-green);
+    white-space: nowrap; /* Forces one line */
 }
 
 .stat-label {
     font-size: 0.85rem;
     color: var(--slate-500);
+    white-space: nowrap; /* Forces one line */
 }
 
 .stat-divider {
@@ -574,7 +582,9 @@ ul {
 
 .products {
     padding: var(--section-padding) 24px;
-    background: white;
+    background: rgba(255, 255, 255, 0.75); /* Translucent */
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
 }
 
 .products-grid {
@@ -588,7 +598,7 @@ ul {
 .product-card {
     position: relative;
     padding: 36px;
-    background: var(--slate-50);
+    background: rgba(248, 250, 252, 0.8);
     border-radius: 24px;
     border: 1px solid var(--slate-200);
     transition: all 0.4s var(--ease-out);
@@ -597,6 +607,7 @@ ul {
 .product-card:hover {
     transform: translateY(-8px);
     box-shadow: 0 24px 48px rgba(0, 0, 0, 0.1);
+    background: rgba(255, 255, 255, 0.95);
 }
 
 .product-flow { border-top: 4px solid var(--flow-color); }
@@ -717,7 +728,9 @@ ul {
 .features {
     position: relative;
     padding: var(--section-padding) 24px;
-    background: var(--camp-forest);
+    background: rgba(6, 78, 59, 0.95); /* Translucent forest green */
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     overflow: hidden;
 }
 
@@ -776,7 +789,9 @@ ul {
 
 .demo {
     padding: var(--section-padding) 24px;
-    background: var(--slate-50);
+    background: rgba(248, 250, 252, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
 }
 
 .demo-container {
@@ -861,7 +876,7 @@ ul {
     display: flex;
     gap: 16px;
     padding: 24px;
-    background: white;
+    background: rgba(255, 255, 255, 0.9);
     border-radius: 16px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
 }
@@ -890,7 +905,9 @@ ul {
 
 .pricing {
     padding: var(--section-padding) 24px;
-    background: white;
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
 }
 
 .pricing-grid {
@@ -908,7 +925,7 @@ ul {
 .pricing-card {
     position: relative;
     padding: 40px;
-    background: var(--slate-50);
+    background: rgba(248, 250, 252, 0.8);
     border: 2px solid var(--slate-200);
     border-radius: 24px;
     transition: all 0.3s ease;
@@ -917,10 +934,11 @@ ul {
 .pricing-card:hover {
     transform: translateY(-4px);
     box-shadow: 0 16px 32px rgba(0, 0, 0, 0.08);
+    background: rgba(255, 255, 255, 0.9);
 }
 
 .pricing-card.featured {
-    background: white;
+    background: rgba(255, 255, 255, 0.95);
     border: 2px solid var(--camp-green);
     box-shadow: 0 16px 48px rgba(13, 124, 92, 0.15);
 }
@@ -1075,7 +1093,7 @@ ul {
     text-align: center;
     margin-top: 48px;
     padding: 32px;
-    background: var(--slate-50);
+    background: rgba(248, 250, 252, 0.8);
     border-radius: 16px;
     max-width: 500px;
     margin-left: auto;
@@ -1108,7 +1126,9 @@ ul {
 
 .cta-section {
     padding: var(--section-padding) 24px;
-    background: linear-gradient(135deg, var(--camp-green) 0%, var(--camp-forest) 100%);
+    background: linear-gradient(135deg, rgba(13, 124, 92, 0.95) 0%, rgba(6, 78, 59, 0.95) 100%);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     text-align: center;
 }
 
@@ -1173,6 +1193,8 @@ ul {
     background: var(--slate-950);
     color: white;
     padding: 72px 24px 32px;
+    position: relative;
+    z-index: 2; /* Ensure footer sits above bg */
 }
 
 .footer-main {
