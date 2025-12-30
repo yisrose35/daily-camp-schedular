@@ -13,8 +13,8 @@
   // ⭐ UNIFIED storage key - consolidates all previous keys
   const UNIFIED_CACHE_KEY = "CAMPISTRY_UNIFIED_STATE";
   
-  // Timeout for Supabase queries (10 seconds)
-  const QUERY_TIMEOUT_MS = 10000;
+  // Timeout for Supabase queries (30 seconds)
+  const QUERY_TIMEOUT_MS = 30000;
   
   // Legacy keys we'll migrate from (read-only, for migration)
   const LEGACY_KEYS = {
