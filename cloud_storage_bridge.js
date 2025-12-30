@@ -1,11 +1,11 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v3.1 (Direct REST Mode + Reset Functionality)
+// FIXED VERSION: v3.4 (Direct REST Mode + Reset + Immediate Sync + Smart Init)
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v3.1 (DIRECT REST + RESET)");
+  console.log("☁️ Campistry Cloud Bridge v3.4 (DIRECT REST + RESET + SYNC + SMART INIT)");
 
   // DIRECT CONFIGURATION (Bypasses SDK initialization issues)
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -209,7 +209,7 @@
   }
   
   // ============================================================================
-  // 🟢 NEW: RESET FUNCTIONALITY (Missing from previous version)
+  // 🟢 NEW: RESET & IMPORT FUNCTIONALITY
   // ============================================================================
   window.resetCloudState = async function() {
     console.log("☁️ [REST] Resetting Cloud State (ERASE ALL)...");
@@ -238,6 +238,38 @@
     
     // Push empty state to cloud
     return await saveToCloud(emptyState);
+  };
+
+  // Import state (JSON file upload) -> Save Locally -> Push to Cloud Immediately
+  window.setCloudState = async function(newState) {
+    console.log("☁️ [REST] Importing new state...");
+    
+    if (!newState || typeof newState !== 'object') {
+        console.error("☁️ [REST] Invalid state object for import");
+        return false;
+    }
+
+    // Ensure metadata
+    newState.updated_at = new Date().toISOString();
+    newState.schema_version = SCHEMA_VERSION;
+
+    // 1. Save to Local Storage Immediately
+    setLocalCache(newState);
+    console.log("☁️ [REST] Imported state saved to local storage.");
+
+    // 2. Push to Cloud Immediately (Background)
+    console.log("☁️ [REST] Pushing imported state to cloud...");
+    const cloudSuccess = await saveToCloud(newState);
+    
+    if (cloudSuccess) {
+        console.log("☁️ [REST] Import synced to cloud successfully.");
+    } else {
+        console.warn("☁️ [REST] Import saved locally but cloud sync failed (will retry later).");
+        _cloudSyncPending = true;
+        scheduleCloudSync();
+    }
+
+    return true;
   };
 
   // ============================================================================
@@ -273,32 +305,62 @@
     
     console.log("☁️ Initializing Cloud Bridge...");
     const localData = getLocalCache();
-    
-    if (localData._importTimestamp && (Date.now() - localData._importTimestamp) < 30000) {
-      console.log("☁️ Skipping cloud load (Just Imported)");
-      delete localData._importTimestamp;
-      setLocalCache(localData);
-      finishInit(true);
-      return;
+    const hasLocalData = localData && Object.keys(localData).length > 0 && 
+                         (Object.keys(localData.divisions || {}).length > 0 || 
+                          (localData.app1 && Object.keys(localData.app1.divisions || {}).length > 0));
+
+    // 1. Check Local Storage First
+    if (hasLocalData) {
+        console.log("☁️ Local data found. Using local data first.");
+        
+        // If "Just Imported" flag exists, trust local implicitly and push to cloud
+        if (localData._importTimestamp && (Date.now() - localData._importTimestamp) < 60000) {
+             console.log("☁️ Fresh import detected. Pushing to cloud...");
+             delete localData._importTimestamp;
+             setLocalCache(localData);
+             saveToCloud(localData); // Background push
+             finishInit(true);
+             return;
+        }
+        
+        // If normal local data, we still check cloud *in background* for newer version
+        // But we resolve init immediately to show UI
+        finishInit(true);
+        
+        // Background check for cloud updates (Hybrid Sync)
+        loadFromCloud().then(cloudState => {
+            if (cloudState) {
+                const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
+                const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
+                
+                // Only overwrite local if cloud is strictly newer
+                if (cloudTime > localTime) {
+                    console.log("☁️ Cloud has newer data. Updating local in background...");
+                    setLocalCache({ ...localData, ...cloudState });
+                    
+                    // Dispatch event to refresh UI if needed (optional)
+                    // window.location.reload(); // Aggressive refresh
+                    console.log("☁️ Local state updated from cloud background check.");
+                } else {
+                    console.log("☁️ Local data is up-to-date or newer than cloud.");
+                }
+            }
+        });
+        return;
     }
 
+    // 2. If Local Empty, Fetch from Cloud
+    console.log("☁️ Local storage empty. Fetching from cloud...");
     const cloudState = await loadFromCloud();
     
     if (cloudState) {
-       const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
-       const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
-       
-       if (cloudTime >= localTime) {
-         setLocalCache({ ...localData, ...cloudState });
-         console.log("☁️ Hydrated from Cloud (Cloud was newer)");
-       } else {
-         console.log("☁️ Local is newer, pushing to cloud...");
-         _cloudSyncPending = true;
-         scheduleCloudSync();
-       }
+       console.log("☁️ Data found in Cloud. Hydrating...");
+       setLocalCache(cloudState);
+       finishInit(true);
+    } else {
+       console.log("☁️ No data in Cloud either. Starting fresh.");
+       finishInit(false);
     }
-    
-    finishInit(true);
   }
 
   function finishInit(hasData) {
@@ -333,6 +395,8 @@
             if (event === 'SIGNED_IN' && session) {
                 console.log("☁️ Auth Change: Signed In -> Loading Data...");
                 updateCampIdCache(session.user.id);
+                // Reset init flag to allow re-check on sign-in
+                _initialized = false; 
                 await initialize();
             } else if (event === 'SIGNED_OUT') {
                 clearCampIdCache();
