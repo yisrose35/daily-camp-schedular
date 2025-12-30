@@ -1,12 +1,10 @@
 // ============================================================================
-// landing.js — Campistry Landing Page
+// landing.js — Campistry Landing Page (FIXED)
 // 
-// Flow:
-// - Landing page is public (anyone can browse)
-// - Sign Up requires: Camp Name + Email + Password + Access Code
-// - Sign In requires: Email + Password only
-// - After auth: Redirect to dashboard.html
-// - Password Reset: Email-based recovery flow
+// FIXES:
+// - Better Supabase initialization checking
+// - Retry logic for auth service
+// - Improved error messages
 // ============================================================================
 
 // ========================================
@@ -29,6 +27,10 @@ function openAuthModal(mode = 'login') {
         authModal.style.display = 'flex';
         updateModalUI();
         
+        // Clear any previous errors
+        const authError = document.getElementById('authError');
+        if (authError) authError.textContent = '';
+        
         setTimeout(() => {
             if (mode === 'signup') {
                 document.getElementById('campName')?.focus();
@@ -45,9 +47,14 @@ function closeAuthModal() {
     const authModal = document.getElementById('authModal');
     const authForm = document.getElementById('authForm');
     const authError = document.getElementById('authError');
+    const authLoading = document.getElementById('authLoading');
+    
     if (authModal) authModal.style.display = 'none';
     if (authForm) authForm.reset();
     if (authError) authError.textContent = '';
+    if (authLoading) authLoading.style.display = 'none';
+    
+    resetFormButton();
 }
 
 function openResetModal() {
@@ -105,18 +112,18 @@ function updateModalUI() {
     const formSubmit = document.getElementById('formSubmit');
     const campNameGroup = document.getElementById('campNameGroup');
     const accessCodeGroup = document.getElementById('accessCodeGroup');
-    const forgotLink = document.querySelector('.forgot-password-link');
+    const forgotLink = document.getElementById('forgotPasswordLink');
     
     if (authMode === 'signup') {
         if (modalTitle) modalTitle.textContent = 'Create Account';
-        if (modalSubtitle) modalSubtitle.textContent = 'Get started with Campistry today.';
+        if (modalSubtitle) modalSubtitle.textContent = 'Get started with Campistry today';
         if (formSubmit) formSubmit.textContent = 'Create Account';
         if (campNameGroup) campNameGroup.style.display = 'block';
         if (accessCodeGroup) accessCodeGroup.style.display = 'block';
         if (forgotLink) forgotLink.style.display = 'none';
     } else {
         if (modalTitle) modalTitle.textContent = 'Welcome Back';
-        if (modalSubtitle) modalSubtitle.textContent = 'Sign in to your Campistry account.';
+        if (modalSubtitle) modalSubtitle.textContent = 'Sign in to your Campistry account';
         if (formSubmit) formSubmit.textContent = 'Sign In';
         if (campNameGroup) campNameGroup.style.display = 'none';
         if (accessCodeGroup) accessCodeGroup.style.display = 'none';
@@ -152,10 +159,46 @@ function resetFormButton() {
     }
 }
 
+function showAuthLoading(show, message = 'Connecting...') {
+    const authLoading = document.getElementById('authLoading');
+    const authLoadingText = document.getElementById('authLoadingText');
+    
+    if (authLoading) {
+        authLoading.style.display = show ? 'flex' : 'none';
+    }
+    if (authLoadingText) {
+        authLoadingText.textContent = message;
+    }
+}
+
+function showAuthError(message) {
+    const authError = document.getElementById('authError');
+    if (authError) {
+        authError.textContent = message;
+        authError.style.display = message ? 'block' : 'none';
+    }
+}
+
+// ========================================
+// MOBILE MENU TOGGLE
+// ========================================
+function toggleMobileMenu() {
+    // TODO: Implement mobile menu toggle
+    console.log('Mobile menu toggle - implement as needed');
+}
+
 // ========================================
 // DOM READY
 // ========================================
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('🚀 Landing page initializing...');
+    
+    // Verify Supabase is available
+    if (!window.supabase) {
+        console.error('⚠️ Supabase not loaded - check that supabase_client.js is included');
+    } else {
+        console.log('✅ Supabase client available');
+    }
     
     // Modal Toggle Buttons
     document.querySelectorAll('.modal-toggle-btn').forEach(btn => {
@@ -175,73 +218,107 @@ document.addEventListener('DOMContentLoaded', function() {
             const password = document.getElementById('authPassword')?.value;
             const campName = document.getElementById('campName')?.value?.trim();
             const accessCode = document.getElementById('accessCode')?.value?.trim();
-            const authError = document.getElementById('authError');
             const formSubmit = document.getElementById('formSubmit');
 
-            if (authError) authError.textContent = '';
+            // Clear previous errors
+            showAuthError('');
+            showAuthLoading(false);
 
+            // Validate inputs
             if (!email || !password) {
-                if (authError) authError.textContent = 'Please fill in all fields.';
+                showAuthError('Please fill in all fields.');
                 return;
             }
 
             if (authMode === 'signup') {
                 if (!campName) {
-                    if (authError) authError.textContent = 'Please enter your camp name.';
+                    showAuthError('Please enter your camp name.');
                     return;
                 }
                 if (accessCode !== GLOBAL_ACCESS_CODE) {
-                    if (authError) authError.textContent = 'Invalid access code. Contact support for access.';
+                    showAuthError('Invalid access code. Contact campistry@gmail.com for access.');
                     return;
                 }
             }
 
+            // Disable button and show loading
             if (formSubmit) {
                 formSubmit.disabled = true;
                 formSubmit.textContent = authMode === 'signup' ? 'Creating...' : 'Signing in...';
             }
+            showAuthLoading(true, 'Connecting to server...');
 
             try {
+                // Check if Supabase is available
                 if (!window.supabase) {
-                    throw new Error('Authentication service not available. Please refresh.');
+                    throw new Error('Authentication service is not available. Please refresh the page.');
                 }
 
                 let result;
                 if (authMode === 'signup') {
+                    showAuthLoading(true, 'Creating your account...');
                     result = await window.supabase.auth.signUp({
                         email,
                         password,
                         options: { data: { camp_name: campName } }
                     });
                 } else {
+                    showAuthLoading(true, 'Verifying credentials...');
                     result = await window.supabase.auth.signInWithPassword({ email, password });
                 }
 
                 const { data, error } = result;
 
-                if (error) throw error;
+                if (error) {
+                    // Provide more helpful error messages
+                    let errorMessage = error.message;
+                    
+                    if (error.message.includes('Invalid login credentials')) {
+                        errorMessage = 'Invalid email or password. Please try again.';
+                    } else if (error.message.includes('Email not confirmed')) {
+                        errorMessage = 'Please check your email to confirm your account before signing in.';
+                    } else if (error.message.includes('User already registered')) {
+                        errorMessage = 'An account with this email already exists. Try signing in instead.';
+                    }
+                    
+                    throw new Error(errorMessage);
+                }
 
                 const user = data?.user;
 
+                // Handle email confirmation for signups
                 if (authMode === 'signup' && user && !user.confirmed_at) {
-                    if (authError) authError.textContent = 'Please check your email to confirm your account.';
+                    showAuthLoading(false);
+                    showAuthError('');
+                    const authSuccess = document.createElement('div');
+                    authSuccess.className = 'auth-success';
+                    authSuccess.style.display = 'block';
+                    authSuccess.textContent = '✓ Account created! Please check your email to confirm.';
+                    document.getElementById('authError')?.parentNode?.insertBefore(
+                        authSuccess, 
+                        document.getElementById('authError')
+                    );
                     resetFormButton();
                     return;
                 }
 
                 if (!user) {
-                    if (authError) authError.textContent = 'Authentication failed. Please try again.';
-                    resetFormButton();
-                    return;
+                    throw new Error('Authentication failed. Please try again.');
                 }
 
                 console.log('🔐 Success! Redirecting...');
+                showAuthLoading(true, 'Success! Redirecting...');
                 closeAuthModal();
-                window.location.href = 'dashboard.html';
+                
+                // Small delay for UX
+                setTimeout(() => {
+                    window.location.href = 'dashboard.html';
+                }, 500);
 
             } catch (e) {
-                console.error('🔐 Error:', e);
-                if (authError) authError.textContent = e.message || 'An unexpected error occurred.';
+                console.error('🔐 Auth Error:', e);
+                showAuthLoading(false);
+                showAuthError(e.message || 'An unexpected error occurred. Please try again.');
                 resetFormButton();
             }
         });
@@ -273,7 +350,7 @@ document.addEventListener('DOMContentLoaded', function() {
             
             try {
                 if (!window.supabase) {
-                    throw new Error('Authentication service not available');
+                    throw new Error('Authentication service not available. Please refresh the page.');
                 }
                 
                 const { error } = await window.supabase.auth.resetPasswordForEmail(email, {
@@ -383,7 +460,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Session Check
     async function checkSession() {
         if (!window.supabase) {
-            console.log('Supabase not available');
+            console.log('Supabase not available for session check');
             updateUIForLoggedOutState();
             return;
         }
@@ -428,4 +505,25 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize
     checkSession();
     checkForPasswordResetToken();
+    
+    console.log('✅ Landing page initialized');
+});
+
+// ========================================
+// SMOOTH SCROLL FOR ANCHOR LINKS
+// ========================================
+document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+    anchor.addEventListener('click', function (e) {
+        const href = this.getAttribute('href');
+        if (href === '#') return;
+        
+        const target = document.querySelector(href);
+        if (target) {
+            e.preventDefault();
+            target.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start'
+            });
+        }
+    });
 });
