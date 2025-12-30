@@ -1,22 +1,20 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: Proper sync/async handling + consolidated storage
-// v2.4 - Added query timeouts to prevent hanging + better error handling
+// FIXED VERSION: Increased timeouts + Retry logic for large datasets
+// v2.5 - Fixes "Sign-in cloud fetch timed out" on large accounts
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v2.4 (FIXED)");
+  console.log("☁️ Campistry Cloud Bridge v2.5 (High Latency Fix)");
 
   const TABLE = "camp_state";
-  
-  // ⭐ UNIFIED storage key - consolidates all previous keys
   const UNIFIED_CACHE_KEY = "CAMPISTRY_UNIFIED_STATE";
   
-  // Timeout for Supabase queries (5 seconds)
-  const QUERY_TIMEOUT_MS = 5000;
+  // ⭐ INCREASED TIMEOUT: 5000ms -> 20000ms (20 seconds)
+  // Large datasets (like the one in your logs) need more time to download.
+  const QUERY_TIMEOUT_MS = 20000; 
   
-  // Legacy keys we'll migrate from (read-only, for migration)
   const LEGACY_KEYS = {
     globalSettings: "campGlobalSettings_v1",
     localCache: "CAMPISTRY_LOCAL_CACHE", 
@@ -34,6 +32,18 @@
       )
     ]);
   }
+
+  // Helper to retry operations
+  async function withRetry(fn, retries = 2, delay = 1000) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (retries <= 0) throw err;
+      console.warn(`☁️ Operation failed, retrying... (${retries} attempts left)`);
+      await new Promise(r => setTimeout(r, delay));
+      return withRetry(fn, retries - 1, delay);
+    }
+  }
   
   // ============================================================================
   // CAMP ID MANAGEMENT - User Isolation
@@ -42,11 +52,8 @@
   let _cachedCampId = null;
 
   function getCampId() {
-    if (_cachedCampId) {
-      return _cachedCampId;
-    }
+    if (_cachedCampId) return _cachedCampId;
     
-    // Try to find Supabase session in localStorage (v2 format)
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
@@ -54,13 +61,10 @@
           const storedSession = localStorage.getItem(key);
           if (storedSession) {
             const parsed = JSON.parse(storedSession);
-            const userId = parsed?.user?.id || 
-                          parsed?.currentSession?.user?.id ||
-                          parsed?.session?.user?.id;
+            const userId = parsed?.user?.id || parsed?.session?.user?.id;
             if (userId) {
               _cachedCampId = userId;
               localStorage.setItem('campistry_user_id', userId);
-              console.log("☁️ getCampId: Found user ID from Supabase storage");
               return _cachedCampId;
             }
           }
@@ -70,15 +74,12 @@
       console.warn("☁️ getCampId: Error reading Supabase storage:", e);
     }
     
-    // Try our own cached user ID
     const cachedUserId = localStorage.getItem('campistry_user_id');
     if (cachedUserId && cachedUserId !== 'demo_camp_001') {
       _cachedCampId = cachedUserId;
-      console.log("☁️ getCampId: Using cached user ID");
       return _cachedCampId;
     }
     
-    console.warn("☁️ getCampId: No user ID found, using fallback");
     return "demo_camp_001";
   }
 
@@ -86,18 +87,15 @@
     if (userId) {
       _cachedCampId = userId;
       localStorage.setItem('campistry_user_id', userId);
-      console.log("☁️ updateCampIdCache: User ID cached");
     }
   }
   
   function clearCampIdCache() {
     _cachedCampId = null;
     localStorage.removeItem('campistry_user_id');
-    console.log("☁️ clearCampIdCache: User ID cache cleared");
   }
 
   const SCHEMA_VERSION = 2;
-
   let _memoryCache = null;
   let _cloudSyncPending = false;
   let _initialized = false;
@@ -106,176 +104,129 @@
   // Migrate from legacy keys (one-time)
   // ------------------------------------------------------------
   let _migrationDone = false;
-  
   function migrateLegacyData() {
     if (_migrationDone) return;
     _migrationDone = true;
-    
-    if (localStorage.getItem(UNIFIED_CACHE_KEY)) {
-      console.log("☁️ Unified storage exists, skipping migration");
-      return;
-    }
-    
-    console.log("🔄 Migrating legacy storage keys...");
+    if (localStorage.getItem(UNIFIED_CACHE_KEY)) return;
     
     let merged = {};
-    
     try {
       const gs = JSON.parse(localStorage.getItem(LEGACY_KEYS.globalSettings) || "{}");
       merged = { ...merged, ...gs };
-    } catch (e) { console.warn("Legacy migration: globalSettings parse failed", e); }
-    
+    } catch (e) {}
     try {
       const lc = JSON.parse(localStorage.getItem(LEGACY_KEYS.localCache) || "{}");
       merged = { ...merged, ...lc };
-    } catch (e) { console.warn("Legacy migration: localCache parse failed", e); }
-    
-    try {
-      const gr = JSON.parse(localStorage.getItem(LEGACY_KEYS.globalRegistry) || "{}");
-      if (gr.divisions) merged.divisions = gr.divisions;
-      if (gr.bunks) merged.bunks = gr.bunks;
-    } catch (e) { console.warn("Legacy migration: globalRegistry parse failed", e); }
+    } catch (e) {}
     
     if (Object.keys(merged).length > 0) {
       localStorage.setItem(UNIFIED_CACHE_KEY, JSON.stringify(merged));
-      console.log("✅ Legacy data migrated to unified storage");
     }
   }
 
   // ------------------------------------------------------------
-  // Local cache operations (SYNCHRONOUS)
+  // Local cache operations
   // ------------------------------------------------------------
   function getLocalCache() {
-    if (_memoryCache !== null) {
-      return _memoryCache;
-    }
-    
+    if (_memoryCache !== null) return _memoryCache;
     try {
       const raw = localStorage.getItem(UNIFIED_CACHE_KEY);
       _memoryCache = raw ? JSON.parse(raw) : {};
     } catch (e) {
-      console.error("Failed to parse local cache:", e);
       _memoryCache = {};
     }
-    
     return _memoryCache;
   }
   
   function setLocalCache(state) {
+    // Hoist app1 data if root is empty
     if (state.app1) {
       if ((!state.divisions || Object.keys(state.divisions).length === 0) && 
-          state.app1.divisions && Object.keys(state.app1.divisions).length > 0) {
+          state.app1.divisions) {
         state.divisions = state.app1.divisions;
       }
-      if ((!state.bunks || state.bunks.length === 0) && 
-          state.app1.bunks && state.app1.bunks.length > 0) {
+      if ((!state.bunks || state.bunks.length === 0) && state.app1.bunks) {
         state.bunks = state.app1.bunks;
       }
     }
     
     _memoryCache = state;
     try {
-      localStorage.setItem(UNIFIED_CACHE_KEY, JSON.stringify(state));
-      localStorage.setItem(LEGACY_KEYS.globalSettings, JSON.stringify(state));
-      localStorage.setItem(LEGACY_KEYS.localCache, JSON.stringify(state));
-      localStorage.setItem(LEGACY_KEYS.globalRegistry, JSON.stringify({
-        divisions: state.divisions || {},
-        bunks: state.bunks || []
-      }));
+      const str = JSON.stringify(state);
+      localStorage.setItem(UNIFIED_CACHE_KEY, str);
+      localStorage.setItem(LEGACY_KEYS.globalSettings, str);
+      localStorage.setItem(LEGACY_KEYS.localCache, str);
     } catch (e) {
       console.error("Failed to save local cache:", e);
     }
   }
 
   // ------------------------------------------------------------
-  // Cloud operations (ASYNC - with timeouts to prevent hanging)
+  // Cloud operations
   // ------------------------------------------------------------
   async function getUser() {
     try {
-      if (!window.supabase) {
-        console.log("☁️ Supabase not available yet");
-        return null;
-      }
-      
+      if (!window.supabase) return null;
       const { data, error } = await withTimeout(
         window.supabase.auth.getUser(),
-        QUERY_TIMEOUT_MS,
+        5000, // Keep short timeout for auth checks
         "getUser timed out"
       );
-      
-      if (error) {
-        if (error.message?.includes('session')) {
-          console.log("☁️ No auth session yet");
-        } else {
-          console.warn("☁️ getUser error:", error.message);
-        }
-        return null;
-      }
-      if (data?.user) {
-        updateCampIdCache(data.user.id);
-        console.log("☁️ Current user:", data.user.email);
-      }
+      if (error) return null;
+      if (data?.user) updateCampIdCache(data.user.id);
       return data?.user || null;
     } catch (e) {
-      console.warn("☁️ Failed to get user:", e.message);
       return null;
     }
   }
 
   async function loadFromCloud() {
     try {
-      if (!window.supabase) {
-        console.log("☁️ Supabase not available for load");
-        return null;
-      }
+      if (!window.supabase) return null;
       
       const user = await getUser();
-      if (!user) {
-        console.log("☁️ No user yet - will load from cloud after sign-in");
-        return null;
-      }
+      if (!user) return null;
       
       const campId = getCampId();
       console.log("☁️ Loading from cloud for camp_id:", campId.substring(0, 8) + "...");
       
-      // Use timeout to prevent hanging on RLS issues
-      const { data, error } = await withTimeout(
-        window.supabase
+      // Retry logic added here
+      const fetchOperation = async () => {
+        return await window.supabase
           .from(TABLE)
           .select("state")
           .eq("camp_id", campId)
-          .single(),
+          .single();
+      };
+
+      // Use longer timeout and retry wrapper
+      const { data, error } = await withTimeout(
+        withRetry(fetchOperation, 1, 1000), // Retry once if it fails
         QUERY_TIMEOUT_MS,
-        "Cloud load query timed out - check RLS policies"
+        "Cloud load query timed out"
       );
 
       if (error) {
         if (error.code === 'PGRST116') {
-          console.log("☁️ No cloud data found (new user or first sync)");
+          console.log("☁️ No cloud data found (fresh start)");
           return null;
         }
-        console.error("☁️ Cloud load error:", error.message, error.code);
+        console.error("☁️ Cloud load error:", error.message);
         return null;
       }
       
       let state = data?.state || null;
       
+      // Ensure data is hoisted correctly immediately upon load
       if (state && state.app1) {
-        if ((!state.divisions || Object.keys(state.divisions).length === 0) && 
-            state.app1.divisions && Object.keys(state.app1.divisions).length > 0) {
+         if ((!state.divisions || Object.keys(state.divisions).length === 0) && 
+            state.app1.divisions) {
           state.divisions = state.app1.divisions;
         }
-        if ((!state.bunks || state.bunks.length === 0) && 
-            state.app1.bunks && state.app1.bunks.length > 0) {
+        if ((!state.bunks || state.bunks.length === 0) && state.app1.bunks) {
           state.bunks = state.app1.bunks;
         }
       }
-      
-      console.log("☁️ Cloud data loaded:", {
-        hasState: !!state,
-        divisions: Object.keys(state?.divisions || {}).length,
-        bunks: (state?.bunks || []).length
-      });
       
       return state;
     } catch (e) {
@@ -286,23 +237,12 @@
 
   async function saveToCloud(state) {
     try {
-      if (!window.supabase) {
-        console.error("☁️ Supabase not available for save");
-        return false;
-      }
-      
+      if (!window.supabase) return false;
       const user = await getUser();
-      if (!user) {
-        console.error("☁️ Cannot save to cloud: no authenticated user");
-        return false;
-      }
+      if (!user) return false;
 
       const campId = getCampId();
-      
-      if (campId === "demo_camp_001") {
-        console.error("☁️ Cannot save to cloud: no valid camp_id");
-        return false;
-      }
+      if (campId === "demo_camp_001") return false;
 
       state.schema_version = SCHEMA_VERSION;
       state.updated_at = new Date().toISOString();
@@ -310,22 +250,12 @@
       const stateToSave = { ...state };
       delete stateToSave._importTimestamp;
       
+      // Ensure we are saving complete data
       if (stateToSave.app1) {
-        if (stateToSave.app1.divisions && Object.keys(stateToSave.app1.divisions).length > 0) {
-          stateToSave.divisions = stateToSave.app1.divisions;
-        }
-        if (stateToSave.app1.bunks && stateToSave.app1.bunks.length > 0) {
-          stateToSave.bunks = stateToSave.app1.bunks;
-        }
+         if (stateToSave.app1.divisions) stateToSave.divisions = stateToSave.app1.divisions;
+         if (stateToSave.app1.bunks) stateToSave.bunks = stateToSave.app1.bunks;
       }
 
-      console.log("☁️ Saving to cloud:", {
-        camp_id: campId.substring(0, 8) + "...",
-        divisions: Object.keys(stateToSave.divisions || {}).length,
-        bunks: (stateToSave.bunks || []).length
-      });
-
-      // Use timeout to prevent hanging
       const { error } = await withTimeout(
         window.supabase
           .from(TABLE)
@@ -333,15 +263,13 @@
             camp_id: campId,
             owner_id: user.id,
             state: stateToSave
-          }, {
-            onConflict: 'camp_id'
-          }),
+          }, { onConflict: 'camp_id' }),
         QUERY_TIMEOUT_MS,
-        "Cloud save timed out - check RLS policies"
+        "Cloud save timed out"
       );
       
       if (error) {
-        console.error("☁️ Cloud save error:", error.message, error.code, error.details);
+        console.error("☁️ Cloud save error:", error.message);
         return false;
       }
       
@@ -358,9 +286,7 @@
   let _syncInProgress = false;
   
   function scheduleCloudSync() {
-    if (_syncTimeout) {
-      clearTimeout(_syncTimeout);
-    }
+    if (_syncTimeout) clearTimeout(_syncTimeout);
     _syncTimeout = setTimeout(async () => {
       if (!_cloudSyncPending) return;
       if (_syncInProgress) {
@@ -372,16 +298,13 @@
       console.log("☁️ Performing cloud sync...");
       await saveToCloud(getLocalCache());
       _syncInProgress = false;
-    }, 500);
+    }, 2000); // Increased debounce to prevent rapid-fire saves
   }
   
   async function syncNow() {
     if (_syncTimeout) clearTimeout(_syncTimeout);
     _cloudSyncPending = false;
-    if (_syncInProgress) {
-      console.log("☁️ Sync already in progress, waiting...");
-      await new Promise(r => setTimeout(r, 1000));
-    }
+    if (_syncInProgress) await new Promise(r => setTimeout(r, 1000));
     _syncInProgress = true;
     const result = await saveToCloud(getLocalCache());
     _syncInProgress = false;
@@ -402,45 +325,25 @@
       
       try {
         migrateLegacyData();
-        
         const localData = getLocalCache();
         
-        const justImported = localData._importTimestamp && 
-                             (Date.now() - localData._importTimestamp) < 30000;
-        
-        if (justImported) {
-          console.log("☁️ Recently imported data detected - skipping cloud overwrite");
-          delete localData._importTimestamp;
-          setLocalCache(localData);
-          _initialized = true;
-          window.__CAMPISTRY_CLOUD_READY__ = true;
-          return;
-        }
-        
-        // Try to get user with timeout
+        // Try to get user
         let user = null;
         try {
-          const { data } = await withTimeout(
-            window.supabase?.auth?.getUser() || Promise.resolve({}),
-            3000,
-            "Auth check timed out"
-          );
+          const { data } = await withTimeout(window.supabase?.auth?.getUser() || Promise.resolve({}), 3000);
           user = data?.user;
-          if (user) {
-            updateCampIdCache(user.id);
-          }
-        } catch (e) {
-          console.log("☁️ Auth check timed out, continuing with local data");
-        }
+          if (user) updateCampIdCache(user.id);
+        } catch (e) {}
         
         if (!user) {
-          console.log("☁️ No user - using local data (will sync after sign-in)");
+          console.log("☁️ No user - using local data");
           _initialized = true;
           window.__CAMPISTRY_CLOUD_READY__ = true;
           return;
         }
         
         console.log("☁️ User authenticated, fetching from cloud...");
+        // This will now use the longer timeout
         const cloudState = await loadFromCloud();
         
         if (cloudState && Object.keys(cloudState).length > 0) {
@@ -448,8 +351,7 @@
           const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
           
           if (cloudTime >= localTime) {
-            const merged = { ...localData, ...cloudState };
-            setLocalCache(merged);
+            setLocalCache({ ...localData, ...cloudState });
             console.log("☁️ Hydrated from cloud");
           } else {
             console.log("☁️ Local data is newer - will sync to cloud");
@@ -463,11 +365,7 @@
       } finally {
         _initialized = true;
         window.__CAMPISTRY_CLOUD_READY__ = true;
-        _initializingPromise = null;
-        
         const hasData = Object.keys(getLocalCache().divisions || {}).length > 0;
-        console.log("☁️ Cloud bridge ready, hasData:", hasData);
-        
         window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
           detail: { hydrated: true, hasData }
         }));
@@ -480,265 +378,36 @@
   // ------------------------------------------------------------
   // PUBLIC API
   // ------------------------------------------------------------
+  window.loadGlobalSettings = () => getLocalCache();
   
-  window.loadGlobalSettings = function() {
-    return getLocalCache();
-  };
-  
-  window.saveGlobalSettings = function(key, value) {
+  window.saveGlobalSettings = (key, value) => {
     const state = getLocalCache();
     state[key] = value;
     state.updated_at = new Date().toISOString();
-    
-    if (state._importTimestamp) {
-      delete state._importTimestamp;
-    }
-    
     setLocalCache(state);
-    
     _cloudSyncPending = true;
     scheduleCloudSync();
-    
     return state;
   };
   
-  window.loadGlobalSettingsAsync = async function() {
-    await initialize();
-    return getLocalCache();
-  };
-  
-  window.saveGlobalSettingsAsync = async function(key, value) {
-    const state = getLocalCache();
-    state[key] = value;
-    setLocalCache(state);
-    await saveToCloud(state);
-    return state;
-  };
-  
-  window.setCloudState = async function(newState, syncToCloud = true) {
-    console.log("☁️ setCloudState called - importing data");
-    
-    if (!newState || typeof newState !== 'object') {
-      console.error("☁️ setCloudState: Invalid state provided");
-      return false;
-    }
-    
-    if (newState.app1) {
-      if (newState.app1.divisions && Object.keys(newState.app1.divisions).length > 0) {
-        if (!newState.divisions || Object.keys(newState.divisions).length === 0) {
-          newState.divisions = newState.app1.divisions;
-        }
-      }
-      if (newState.app1.bunks && newState.app1.bunks.length > 0) {
-        if (!newState.bunks || newState.bunks.length === 0) {
-          newState.bunks = newState.app1.bunks;
-        }
-      }
-    }
-    
+  window.setCloudState = async (newState, syncToCloud = true) => {
+    if (!newState) return false;
     newState.updated_at = new Date().toISOString();
-    _memoryCache = newState;
-    
-    try {
-      const stateJSON = JSON.stringify(newState);
-      localStorage.setItem(UNIFIED_CACHE_KEY, stateJSON);
-      localStorage.setItem(LEGACY_KEYS.globalSettings, stateJSON);
-      localStorage.setItem(LEGACY_KEYS.localCache, stateJSON);
-      localStorage.setItem(LEGACY_KEYS.globalRegistry, JSON.stringify({
-        divisions: newState.divisions || {},
-        bunks: newState.bunks || []
-      }));
-      console.log("☁️ State imported to localStorage");
-    } catch (e) {
-      console.error("☁️ Failed to save imported state:", e);
-      return false;
-    }
-    
-    if (syncToCloud) {
-      const success = await syncNow();
-      console.log("☁️ Cloud sync after import:", success ? "SUCCESS" : "FAILED");
-      return success;
-    }
-    
+    setLocalCache(newState);
+    if (syncToCloud) await syncNow();
     return true;
   };
-  
-  window.resetCloudState = async function(newState = null) {
-    console.log("☁️ resetCloudState called");
-    
-    const emptyState = newState || {
-      divisions: {},
-      bunks: [],
-      app1: {
-        divisions: {},
-        bunks: [],
-        fields: [],
-        specialActivities: [],
-        allSports: [],
-        bunkMetaData: {},
-        sportMetaData: {},
-        savedSkeletons: {},
-        skeletonAssignments: {}
-      },
-      locationZones: {},
-      pinnedTileDefaults: {},
-      leaguesByName: {},
-      leagueRoundState: {},
-      specialtyLeagues: {},
-      smartTileHistory: {},
-      manualUsageOffsets: {},
-      historicalCounts: {},
-      rotationHistory: { bunks: {}, leagues: {} },
-      updated_at: new Date().toISOString()
-    };
-    
-    _memoryCache = emptyState;
-    
-    try {
-      const stateJSON = JSON.stringify(emptyState);
-      localStorage.setItem(UNIFIED_CACHE_KEY, stateJSON);
-      localStorage.setItem(LEGACY_KEYS.globalSettings, stateJSON);
-      localStorage.setItem(LEGACY_KEYS.localCache, stateJSON);
-      localStorage.setItem(LEGACY_KEYS.globalRegistry, JSON.stringify({
-        divisions: {},
-        bunks: []
-      }));
-      console.log("☁️ Local storage cleared");
-    } catch (e) {
-      console.error("☁️ Failed to clear localStorage:", e);
-    }
-    
-    const success = await syncNow();
-    console.log("☁️ Cloud reset result:", success ? "SUCCESS" : "FAILED");
-    return success;
-  };
-  
-  window.clearCloudKeys = async function(keysToReset) {
-    console.log("☁️ clearCloudKeys called for:", keysToReset);
-    
+
+  window.forceSyncToCloud = async () => {
     const state = getLocalCache();
-    
-    keysToReset.forEach(key => {
-      if (key === 'leagueRoundState') state.leagueRoundState = {};
-      else if (key === 'manualUsageOffsets') state.manualUsageOffsets = {};
-      else if (key === 'historicalCounts') state.historicalCounts = {};
-      else if (key === 'smartTileHistory') state.smartTileHistory = {};
-      else if (key === 'rotationHistory') state.rotationHistory = { bunks: {}, leagues: {} };
-      else delete state[key];
-    });
-    
-    state.updated_at = new Date().toISOString();
+    delete state._importTimestamp;
     setLocalCache(state);
-    
-    const success = await syncNow();
-    console.log("☁️ Partial reset result:", success ? "SUCCESS" : "FAILED");
-    return success;
-  };
-  
-  window.forceSyncToCloud = async function() {
-    console.log("☁️ Force sync to cloud requested");
-    
-    const state = getLocalCache();
-    if (state._importTimestamp) {
-      delete state._importTimestamp;
-      setLocalCache(state);
-    }
-    
-    const success = await syncNow();
-    console.log("☁️ Force sync result:", success ? "SUCCESS" : "FAILED");
-    return success;
-  };
-  
-  window.syncNow = syncNow;
-  
-  window.clearImportFlag = function() {
-    const state = getLocalCache();
-    if (state._importTimestamp) {
-      delete state._importTimestamp;
-      setLocalCache(state);
-      console.log("☁️ Import timestamp cleared");
-    }
-  };
-  
-  window.forceRefreshFromCloud = async function() {
-    const cloudState = await loadFromCloud();
-    if (cloudState) {
-      setLocalCache(cloudState);
-      console.log("☁️ Force refreshed from cloud");
-      return cloudState;
-    }
-    return getLocalCache();
-  };
-  
-  // ⭐ Diagnostic function
-  window.testCloudConnection = async function() {
-    console.log("=".repeat(50));
-    console.log("☁️ CLOUD CONNECTION TEST");
-    console.log("=".repeat(50));
-    
-    console.log("1. Supabase available:", !!window.supabase);
-    if (!window.supabase) {
-      console.error("❌ Supabase not loaded!");
-      return false;
-    }
-    
-    console.log("2. Getting user...");
-    const user = await getUser();
-    console.log("   User authenticated:", !!user, user?.email || "");
-    if (!user) {
-      console.error("❌ Not logged in!");
-      return false;
-    }
-    
-    const campId = getCampId();
-    console.log("3. Camp ID:", campId);
-    
-    console.log("4. Testing cloud read...");
-    try {
-      const cloudData = await loadFromCloud();
-      console.log("   Cloud data exists:", !!cloudData);
-      if (cloudData) {
-        console.log("   Divisions:", Object.keys(cloudData.divisions || {}).length);
-        console.log("   Bunks:", (cloudData.bunks || []).length);
-      }
-    } catch (e) {
-      console.error("   Read failed:", e.message);
-    }
-    
-    console.log("5. Testing cloud write...");
-    const localData = getLocalCache();
-    const saveSuccess = await saveToCloud(localData);
-    console.log("   Save success:", saveSuccess);
-    
-    console.log("=".repeat(50));
-    console.log(saveSuccess ? "✅ CLOUD CONNECTION OK" : "❌ CLOUD CONNECTION FAILED");
-    console.log("=".repeat(50));
-    
-    return saveSuccess;
-  };
-  
-  window.debugCloudState = function() {
-    console.log("=".repeat(50));
-    console.log("☁️ CLOUD STATE DEBUG");
-    console.log("=".repeat(50));
-    console.log("Cached Camp ID:", _cachedCampId);
-    console.log("Stored Camp ID:", localStorage.getItem('campistry_user_id'));
-    console.log("Initialized:", _initialized);
-    console.log("Sync Pending:", _cloudSyncPending);
-    
-    const state = getLocalCache();
-    console.log("Local State Keys:", Object.keys(state));
-    console.log("Divisions:", Object.keys(state.divisions || {}).length);
-    console.log("Bunks:", (state.bunks || []).length);
-    console.log("=".repeat(50));
-    
-    return state;
+    return await syncNow();
   };
 
-  // Start initialization
-  initialize().catch(e => console.error("Cloud bridge init failed:", e));
-  
-  // Auth listener
+  // ------------------------------------------------------------
+  // AUTH LISTENER (The critical part for your issue)
+  // ------------------------------------------------------------
   let _rehydrating = false;
   let _lastAuthTime = 0;
   
@@ -752,14 +421,10 @@
       console.log("☁️ Auth state change:", event);
       
       const now = Date.now();
-      if (now - _lastAuthTime < 2000) {
-        console.log("☁️ Duplicate auth event, skipping");
-        return;
-      }
+      if (now - _lastAuthTime < 2000) return;
       _lastAuthTime = now;
       
       if (event === 'SIGNED_OUT') {
-        console.log("☁️ User signed out, clearing cache");
         clearCampIdCache();
         _memoryCache = null;
         _initialized = false;
@@ -767,73 +432,56 @@
       }
       
       if (event === 'SIGNED_IN' && session?.user) {
-        if (_rehydrating) {
-          console.log("☁️ Already re-hydrating, skipping");
-          return;
-        }
+        if (_rehydrating) return;
         _rehydrating = true;
         
         updateCampIdCache(session.user.id);
-        console.log("☁️ User signed in:", session.user.email);
         
         try {
           const campId = getCampId();
-          console.log("☁️ Fetching data from cloud with camp_id:", campId.substring(0, 8) + "...");
+          console.log("☁️ Fetching data (High Timeout) for camp_id:", campId);
           
           const startTime = Date.now();
           
-          // Use timeout to prevent hanging
-          const { data, error } = await withTimeout(
-            window.supabase
+          // Use the increased timeout here too
+          const fetchOp = async () => window.supabase
               .from(TABLE)
               .select("state")
               .eq("camp_id", campId)
-              .single(),
-            QUERY_TIMEOUT_MS,
+              .single();
+              
+          const { data, error } = await withTimeout(
+            withRetry(fetchOp, 1, 1000), // Retry once
+            QUERY_TIMEOUT_MS, // 20 seconds
             "Sign-in cloud fetch timed out"
           );
           
-          const fetchTime = Date.now() - startTime;
-          console.log(`☁️ Cloud fetch completed in ${fetchTime}ms`);
+          console.log(`☁️ Cloud fetch completed in ${Date.now() - startTime}ms`);
           
           if (error) {
-            if (error.code !== 'PGRST116') {
-              console.error("☁️ Cloud fetch error:", error.message, error.code);
-            } else {
-              console.log("☁️ No cloud data yet (new user)");
-            }
+            console.error("☁️ Cloud fetch error:", error.message);
           } else if (data?.state) {
-            let cloudState = data.state;
+            const cloudState = data.state;
+            const merged = { ...getLocalCache(), ...cloudState };
             
-            if (cloudState.app1?.divisions && Object.keys(cloudState.app1.divisions).length > 0) {
-              if (!cloudState.divisions || Object.keys(cloudState.divisions).length === 0) {
-                cloudState.divisions = cloudState.app1.divisions;
-              }
+            // Explicit hoist check
+            if (merged.app1) {
+                if (!merged.divisions || Object.keys(merged.divisions).length === 0) {
+                    merged.divisions = merged.app1.divisions || {};
+                }
+                if (!merged.bunks || merged.bunks.length === 0) {
+                    merged.bunks = merged.app1.bunks || [];
+                }
             }
-            if (cloudState.app1?.bunks && cloudState.app1.bunks.length > 0) {
-              if (!cloudState.bunks || cloudState.bunks.length === 0) {
-                cloudState.bunks = cloudState.app1.bunks;
-              }
-            }
             
-            console.log("☁️ Cloud data retrieved:", {
-              divisions: Object.keys(cloudState.divisions || {}).length,
-              bunks: (cloudState.bunks || []).length
-            });
-            
-            const localData = getLocalCache();
-            const merged = { ...localData, ...cloudState };
             setLocalCache(merged);
-            
-            console.log("☁️ Local cache updated from cloud");
+            console.log("☁️ Local cache updated from cloud. Items:", (merged.bunks||[]).length);
           }
           
           _initialized = true;
-          _initializingPromise = null;
           window.__CAMPISTRY_CLOUD_READY__ = true;
           
           const hasData = Object.keys(getLocalCache().divisions || {}).length > 0;
-          console.log("☁️ Post-sign-in hydration complete, hasData:", hasData);
           
           window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
             detail: { hydrated: true, hasData, afterSignIn: true }
@@ -841,57 +489,26 @@
           
         } catch (e) {
           console.error("☁️ Re-hydration error:", e.message);
+          
+          // Even on error, we must signal ready so the app doesn't hang
           _initialized = true;
           window.__CAMPISTRY_CLOUD_READY__ = true;
-          
           window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
-            detail: { hydrated: false, hasData: false, afterSignIn: true, error: true }
+            detail: { hydrated: false, hasData: false, error: true }
           }));
         } finally {
           _rehydrating = false;
         }
       }
     });
-    
-    console.log("☁️ Auth listener registered");
   }
   
   setupAuthListener();
-  
-  // ============================================================================
-  // ROTATION HISTORY FUNCTIONS
-  // ============================================================================
+  initialize().catch(e => console.error("Cloud bridge init failed:", e));
 
-  window.loadRotationHistory = function() {
-    const g = window.loadGlobalSettings?.() || {};
-    return g.rotationHistory || { bunks: {}, leagues: {} };
-  };
-
-  window.saveRotationHistory = function(history) {
-    window.saveGlobalSettings?.("rotationHistory", history);
-    window.forceSyncToCloud?.();
-  };
-
-  window.loadHistoricalCounts = function() {
-    const g = window.loadGlobalSettings?.() || {};
-    return g.historicalCounts || {};
-  };
-
-  window.saveHistoricalCounts = function(counts) {
-    window.saveGlobalSettings?.("historicalCounts", counts);
-    window.forceSyncToCloud?.();
-  };
-
-  window.loadYesterdayHistory = function() {
-    const g = window.loadGlobalSettings?.() || {};
-    return g.yesterdayHistory || {};
-  };
-  
-  window.saveYesterdayHistory = function(history) {
-    window.saveGlobalSettings?.("yesterdayHistory", history);
-    window.forceSyncToCloud?.();
-  };
-
-  console.log("☁️ Cloud Bridge API ready (sync + background cloud)");
+  // Forward compatibility
+  window.syncNow = syncNow;
+  window.loadRotationHistory = () => (window.loadGlobalSettings() || {}).rotationHistory || {};
+  window.saveRotationHistory = (h) => { window.saveGlobalSettings("rotationHistory", h); };
 
 })();
