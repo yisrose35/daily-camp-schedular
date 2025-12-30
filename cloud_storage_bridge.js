@@ -1,12 +1,11 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: Uses Direct REST Fetch to bypass SDK hangs
-// v3.0 - "Ironclad" Connection Mode
+// FIXED VERSION: v3.1 (Direct REST Mode + Reset Functionality)
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v3.0 (DIRECT REST MODE)");
+  console.log("☁️ Campistry Cloud Bridge v3.1 (DIRECT REST + RESET)");
 
   // DIRECT CONFIGURATION (Bypasses SDK initialization issues)
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -14,23 +13,12 @@
   
   const TABLE = "camp_state";
   const UNIFIED_CACHE_KEY = "CAMPISTRY_UNIFIED_STATE";
-  const QUERY_TIMEOUT_MS = 30000; // 30 seconds
 
   const LEGACY_KEYS = {
     globalSettings: "campGlobalSettings_v1",
     localCache: "CAMPISTRY_LOCAL_CACHE", 
     globalRegistry: "campistry_global_registry"
   };
-
-  // ============================================================================
-  // UTILITY: Helpers
-  // ============================================================================
-  function withTimeout(promise, ms, errorMessage = "Operation timed out") {
-    return Promise.race([
-      promise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error(errorMessage)), ms))
-    ]);
-  }
 
   // ============================================================================
   // CAMP ID MANAGEMENT
@@ -113,7 +101,7 @@
   }
 
   // ============================================================================
-  // DIRECT REST API OPERATIONS (The Fix)
+  // DIRECT REST API OPERATIONS
   // ============================================================================
   
   async function getSessionToken() {
@@ -124,14 +112,11 @@
   }
 
   async function getUser() {
-    // We still use the SDK for Auth because that part usually works OK
-    // If Auth fails, we can't do anything anyway.
     const { data } = await window.supabase.auth.getUser();
     if (data?.user) updateCampIdCache(data.user.id);
     return data?.user;
   }
 
-  // ⭐ DIRECT FETCH LOAD (Bypasses SDK)
   async function loadFromCloud() {
     try {
       const token = await getSessionToken();
@@ -140,7 +125,6 @@
       const campId = getCampId();
       console.log("☁️ [REST] Loading state for:", campId);
 
-      // Raw Fetch Request
       const url = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}&select=state`;
       const response = await fetch(url, {
         method: 'GET',
@@ -170,7 +154,6 @@
     }
   }
 
-  // ⭐ DIRECT FETCH SAVE (Bypasses SDK)
   async function saveToCloud(state) {
     try {
       const user = await getUser();
@@ -181,13 +164,11 @@
       
       if (campId === "demo_camp_001") return false;
 
-      // Prepare Data
       state.schema_version = SCHEMA_VERSION;
       state.updated_at = new Date().toISOString();
       const stateToSave = { ...state };
       delete stateToSave._importTimestamp;
 
-      // Helper to fix missing structures
       if (stateToSave.app1) {
         if (!stateToSave.divisions && stateToSave.app1.divisions) stateToSave.divisions = stateToSave.app1.divisions;
         if (!stateToSave.bunks && stateToSave.app1.bunks) stateToSave.bunks = stateToSave.app1.bunks;
@@ -201,7 +182,6 @@
         state: stateToSave
       };
 
-      // UPSERT via POST with Prefer header
       const url = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}`;
       const response = await fetch(url, {
         method: 'POST',
@@ -209,7 +189,7 @@
           'apikey': SUPABASE_KEY,
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
-          'Prefer': 'resolution=merge-duplicates' // Forces UPSERT
+          'Prefer': 'resolution=merge-duplicates'
         },
         body: JSON.stringify(payload)
       });
@@ -229,7 +209,39 @@
   }
   
   // ============================================================================
-  // SYNC LOGIC
+  // 🟢 NEW: RESET FUNCTIONALITY (Missing from previous version)
+  // ============================================================================
+  window.resetCloudState = async function() {
+    console.log("☁️ [REST] Resetting Cloud State (ERASE ALL)...");
+    
+    // Create clean empty state
+    const emptyState = {
+      divisions: {},
+      bunks: [],
+      app1: {
+        divisions: {}, bunks: [], fields: [], specialActivities: [],
+        allSports: [], bunkMetaData: {}, sportMetaData: {},
+        savedSkeletons: {}, skeletonAssignments: {}
+      },
+      locationZones: {},
+      pinnedTileDefaults: {},
+      leaguesByName: {},
+      leagueRoundState: {},
+      specialtyLeagues: {},
+      smartTileHistory: {},
+      rotationHistory: { bunks: {}, leagues: {} },
+      updated_at: new Date().toISOString()
+    };
+    
+    // Clear local storage
+    setLocalCache(emptyState);
+    
+    // Push empty state to cloud
+    return await saveToCloud(emptyState);
+  };
+
+  // ============================================================================
+  // SYNC LOGIC & INIT
   // ============================================================================
   let _syncTimeout = null;
   let _syncInProgress = false;
@@ -256,16 +268,12 @@
     return result;
   }
 
-  // ============================================================================
-  // INITIALIZATION
-  // ============================================================================
   async function initialize() {
     if (_initialized) return;
     
     console.log("☁️ Initializing Cloud Bridge...");
     const localData = getLocalCache();
     
-    // Check for "Imported" flag
     if (localData._importTimestamp && (Date.now() - localData._importTimestamp) < 30000) {
       console.log("☁️ Skipping cloud load (Just Imported)");
       delete localData._importTimestamp;
@@ -274,11 +282,9 @@
       return;
     }
 
-    // Try to load from cloud
     const cloudState = await loadFromCloud();
     
     if (cloudState) {
-       // Merge Logic
        const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
        const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
        
@@ -319,9 +325,8 @@
   };
   
   window.syncNow = syncNow;
-  window.forceSyncToCloud = syncNow; // Alias
+  window.forceSyncToCloud = syncNow;
 
-  // Listen for Auth Changes to re-trigger load
   setTimeout(() => {
     if(window.supabase) {
         window.supabase.auth.onAuthStateChange(async (event, session) => {
@@ -337,7 +342,6 @@
     }
   }, 500);
 
-  // Start
   initialize();
 
 })();
