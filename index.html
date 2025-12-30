@@ -10,11 +10,58 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="design-system.css" />
     <link rel="stylesheet" href="styles.css" />
+    
+    <!-- ⭐ FIX: Hide app container initially to prevent flash -->
+    <style>
+        #main-app-container {
+            display: none;
+        }
+        #auth-loading-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 50%, #f0fdfa 100%);
+            font-family: 'Outfit', sans-serif;
+        }
+        .auth-loading-spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid #e5e7eb;
+            border-top-color: #10b981;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .auth-loading-text {
+            margin-top: 16px;
+            color: #374151;
+            font-size: 1rem;
+            font-weight: 500;
+        }
+        .auth-loading-subtext {
+            margin-top: 4px;
+            color: #6b7280;
+            font-size: 0.85rem;
+        }
+    </style>
 </head>
 <body>
 
 <!-- =============================================================== -->
-<!-- MAIN APP WRAPPER -->
+<!-- AUTH LOADING SCREEN (Shown while checking session) -->
+<!-- =============================================================== -->
+<div id="auth-loading-screen">
+    <div class="auth-loading-spinner"></div>
+    <div class="auth-loading-text">Loading Campistry Flow</div>
+    <div class="auth-loading-subtext">Checking authentication...</div>
+</div>
+
+<!-- =============================================================== -->
+<!-- MAIN APP WRAPPER (Hidden until authenticated) -->
 <!-- =============================================================== -->
 <div id="main-app-container">
     <div class="app-shell">
@@ -321,7 +368,142 @@
 <script src="cloud_storage_bridge.js"></script>
 <script src="global_authority.js"></script>
 <script src="global_bootstrap.js"></script>
-<script src="campistry_auth.js"></script>
+
+<!-- =============================================================== -->
+<!-- ⭐ AUTH CHECK - Must run before app loads -->
+<!-- =============================================================== -->
+<script>
+(function() {
+    'use strict';
+    
+    const loadingScreen = document.getElementById('auth-loading-screen');
+    const mainApp = document.getElementById('main-app-container');
+    
+    async function checkAuthAndBoot() {
+        console.log("🔐 Checking authentication status...");
+        
+        try {
+            // Wait for Supabase to be ready
+            let attempts = 0;
+            while (!window.supabase && attempts < 20) {
+                await new Promise(r => setTimeout(r, 100));
+                attempts++;
+            }
+            
+            if (!window.supabase) {
+                console.error("🔐 Supabase not available");
+                redirectToLogin();
+                return;
+            }
+            
+            // Check for existing session
+            const { data: { session }, error } = await window.supabase.auth.getSession();
+            
+            if (error) {
+                console.error("🔐 Session check error:", error);
+                redirectToLogin();
+                return;
+            }
+            
+            if (!session) {
+                console.log("🔐 No active session, redirecting to login");
+                redirectToLogin();
+                return;
+            }
+            
+            console.log("🔐 Session found for:", session.user.email);
+            
+            // Update loading text
+            if (loadingScreen) {
+                const subtext = loadingScreen.querySelector('.auth-loading-subtext');
+                if (subtext) subtext.textContent = 'Loading your camp data...';
+            }
+            
+            // Wait for cloud hydration
+            await waitForCloudHydration();
+            
+            // Show the app
+            showApp();
+            
+        } catch (e) {
+            console.error("🔐 Auth check failed:", e);
+            redirectToLogin();
+        }
+    }
+    
+    function redirectToLogin() {
+        // Redirect to landing page for login
+        window.location.href = 'landing.html';
+    }
+    
+    async function waitForCloudHydration() {
+        return new Promise((resolve) => {
+            // Check if already ready
+            if (window.__CAMPISTRY_CLOUD_READY__) {
+                console.log("🔐 Cloud already ready");
+                resolve();
+                return;
+            }
+            
+            // Listen for hydration event
+            const handler = () => {
+                console.log("🔐 Cloud hydration complete");
+                window.removeEventListener('campistry-cloud-hydrated', handler);
+                clearTimeout(timeout);
+                resolve();
+            };
+            
+            window.addEventListener('campistry-cloud-hydrated', handler);
+            
+            // Timeout after 5 seconds
+            const timeout = setTimeout(() => {
+                console.warn("🔐 Cloud hydration timeout, proceeding anyway");
+                window.removeEventListener('campistry-cloud-hydrated', handler);
+                resolve();
+            }, 5000);
+        });
+    }
+    
+    function showApp() {
+        console.log("🔐 Showing application");
+        
+        // Hide loading, show app
+        if (loadingScreen) loadingScreen.style.display = 'none';
+        if (mainApp) mainApp.style.display = 'block';
+        
+        // Mark as booted
+        window.__CAMPISTRY_BOOTED__ = true;
+        
+        // Initialize UI components
+        window.refreshGlobalRegistry?.();
+        window.initCalendar?.();
+        window.initApp1?.();
+        window.initLeagues?.();
+        window.initScheduleSystem?.();
+        window.initDailyAdjustments?.();
+        
+        console.log("✅ Campistry Flow loaded");
+    }
+    
+    // Listen for sign out
+    if (window.supabase) {
+        window.supabase.auth.onAuthStateChange((event, session) => {
+            if (event === 'SIGNED_OUT') {
+                console.log("🔐 User signed out, redirecting...");
+                redirectToLogin();
+            }
+        });
+    }
+    
+    // Start auth check when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', checkAuthAndBoot);
+    } else {
+        // Small delay to ensure Supabase is initialized
+        setTimeout(checkAuthAndBoot, 100);
+    }
+})();
+</script>
 
 <!-- =============================================================== -->
 <!-- CORE APP -->
