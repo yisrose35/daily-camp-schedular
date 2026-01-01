@@ -652,28 +652,44 @@
             window.currentDisabledFields = disabledFields || [];
         }
 
-        // ★★★ FIX: Filter Rainy Day Specials if Mode is OFF ★★★
-        // This ensures downstream logic (Smart Tiles & Solvers) never sees rainy-day-only specials
-        if (!isRainyDayModeActive()) {
-            if (masterSpecials) {
-                const originalCount = masterSpecials.length;
-                
-                // Keep only specials that are NOT exclusive to rainy days
-                // Checks both 'rainyDayOnly' (boolean) and 'rainyDayExclusive' (legacy boolean)
-                masterSpecials = masterSpecials.filter(s => !s.rainyDayOnly && !s.rainyDayExclusive);
-                
-                // Update config references so SmartLogicAdapter sees the filtered list
-                config.masterSpecials = masterSpecials;
-                
-                // Sync specialActivityNames
-                if (config.specialActivityNames) {
-                    const validNames = new Set(masterSpecials.map(s => s.name));
-                    config.specialActivityNames = config.specialActivityNames.filter(n => validNames.has(n));
+        // =========================================================================
+        // ★★★ FIX: Filter Specials based on Rainy Day Mode (STRICT) ★★★
+        // =========================================================================
+        // This ensures the optimizer ONLY sees appropriate activities for the current weather mode.
+
+        const isRainyMode = isRainyDayModeActive();
+
+        if (masterSpecials) {
+            const originalCount = masterSpecials.length;
+
+            masterSpecials = masterSpecials.filter(s => {
+                // 1. If Sunny Day (Mode OFF): Remove Rainy Day Exclusives
+                //    These are activities marked "Rainy Day Only"
+                if (!isRainyMode) {
+                    if (s.rainyDayOnly === true || s.rainyDayExclusive === true) return false;
                 }
-                
-                if (masterSpecials.length < originalCount) {
-                    console.log(`[RainyDay] Filtered out ${originalCount - masterSpecials.length} rainy-day-only specials (Mode OFF)`);
+
+                // 2. If Rainy Day (Mode ON): Remove "Sunny Day Only" items
+                //    These are activities where "Available on Rainy Day" is unchecked
+                if (isRainyMode) {
+                    // Check both property variations for safety
+                    if (s.rainyDayAvailable === false || s.availableOnRainyDay === false) return false;
                 }
+
+                return true;
+            });
+
+            // Sync changes to config references so all downstream logic (Smart Tiles, Solver) obeys the filter
+            config.masterSpecials = masterSpecials;
+
+            // Also sync the name list (used for candidate generation)
+            if (config.specialActivityNames) {
+                const validNames = new Set(masterSpecials.map(s => s.name));
+                config.specialActivityNames = config.specialActivityNames.filter(n => validNames.has(n));
+            }
+
+            if (masterSpecials.length !== originalCount) {
+                console.log(`[RainyDay] Filtered specials from ${originalCount} to ${masterSpecials.length} (Mode: ${isRainyMode ? 'RAINY 🌧️' : 'SUNNY ☀️'})`);
             }
         }
 
@@ -754,7 +770,7 @@
                         _zone: 'offsite'
                     };
                 });
-                console.log(`  → Trip pinned for ${bunk}, no field usage registered`);
+                console.log(`   → Trip pinned for ${bunk}, no field usage registered`);
 
             } else if (overrideType === 'sport') {
                 // =====================================================
@@ -815,7 +831,7 @@
                     _activity: activityName,
                     _bunkOverride: true
                 }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                console.log(`  → Sport ${activityName} assigned to ${bunk} on field ${fieldName}`);
+                console.log(`   → Sport ${activityName} assigned to ${bunk} on field ${fieldName}`);
 
             } else if (overrideType === 'special') {
                 // =====================================================
@@ -823,7 +839,7 @@
                 // =====================================================
                 // Check if the special activity is available (not locked) - pass division context
                 if (window.GlobalFieldLocks?.isFieldLocked(activityName, slots, divName)) {
-                    console.warn(`  → Special ${activityName} is LOCKED for ${divName}, cannot assign to ${bunk}`);
+                    console.warn(`   → Special ${activityName} is LOCKED for ${divName}, cannot assign to ${bunk}`);
                     return;
                 }
 
@@ -854,7 +870,7 @@
                 }
 
                 if (!hasRoom) {
-                    console.warn(`  → Special ${activityName} at capacity, cannot assign to ${bunk}`);
+                    console.warn(`   → Special ${activityName} at capacity, cannot assign to ${bunk}`);
                     return;
                 }
 
@@ -875,11 +891,11 @@
 
                 // ★★★ REGISTER LOCATION USAGE ★★★
                 registerActivityAtLocation(activityName, locName, slots, divName);
-                console.log(`  → Special ${activityName} assigned to ${bunk}`);
+                console.log(`   → Special ${activityName} assigned to ${bunk}`);
 
             } else {
                 // Unknown type - treat as pinned
-                console.warn(`  → Unknown override type "${overrideType}", treating as pinned`);
+                console.warn(`   → Unknown override type "${overrideType}", treating as pinned`);
                 fillBlock({
                     divName,
                     bunk,
@@ -938,7 +954,7 @@
                         electiveDivision,
                         `Elective (${electiveDivision})`
                     );
-                    console.log(`  → Locked "${resolvedName}" for ${electiveDivision} only`);
+                    console.log(`   → Locked "${resolvedName}" for ${electiveDivision} only`);
 
                     // Also lock swim/pool aliases if this is a pool activity
                     if (isSwimOrPool(resolvedName)) {
