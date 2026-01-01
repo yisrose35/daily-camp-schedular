@@ -1,19 +1,19 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v3.5 (Includes Daily Schedules + Direct REST + Smart Init)
+// FIXED VERSION: v3.7 (Visual Feedback + PATCH-First + Schedules)
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v3.5 (SCHEDULES + REST + SYNC)");
+  console.log("☁️ Campistry Cloud Bridge v3.7 (VISUAL FEEDBACK MODE)");
 
-  // DIRECT CONFIGURATION (Bypasses SDK initialization issues)
+  // DIRECT CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
   const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI";
    
   const TABLE = "camp_state";
   const UNIFIED_CACHE_KEY = "CAMPISTRY_UNIFIED_STATE";
-  const DAILY_DATA_KEY = "campDailyData_v1"; // 🟢 Added for Schedule Sync
+  const DAILY_DATA_KEY = "campDailyData_v1"; 
 
   const LEGACY_KEYS = {
     globalSettings: "campGlobalSettings_v1",
@@ -22,21 +22,49 @@
   };
 
   // ============================================================================
+  // UI FEEDBACK (TOAST NOTIFICATIONS)
+  // ============================================================================
+  function showToast(message, type = 'info') {
+      let toast = document.getElementById('cloud-toast');
+      if (!toast) {
+          toast = document.createElement('div');
+          toast.id = 'cloud-toast';
+          toast.style.cssText = `
+              position: fixed; bottom: 20px; right: 20px;
+              padding: 12px 24px; border-radius: 8px; color: white;
+              font-family: sans-serif; font-size: 14px; z-index: 9999;
+              box-shadow: 0 4px 12px rgba(0,0,0,0.15); transition: opacity 0.3s;
+          `;
+          document.body.appendChild(toast);
+      }
+      
+      // Colors
+      if (type === 'success') toast.style.backgroundColor = '#10B981'; // Green
+      else if (type === 'error') toast.style.backgroundColor = '#EF4444'; // Red
+      else toast.style.backgroundColor = '#3B82F6'; // Blue
+
+      toast.textContent = message;
+      toast.style.opacity = '1';
+      
+      // Auto-hide after 3s
+      if (window._toastTimer) clearTimeout(window._toastTimer);
+      window._toastTimer = setTimeout(() => {
+          toast.style.opacity = '0';
+      }, 3000);
+  }
+
+  // ============================================================================
   // CAMP ID MANAGEMENT
   // ============================================================================
   let _cachedCampId = null;
 
   function getCampId() {
     if (_cachedCampId) return _cachedCampId;
-    
-    // Try localStorage
     const cachedUserId = localStorage.getItem('campistry_user_id');
     if (cachedUserId && cachedUserId !== 'demo_camp_001') {
       _cachedCampId = cachedUserId;
       return _cachedCampId;
     }
-
-    // Try finding Supabase session
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
@@ -44,17 +72,15 @@
           const storedSession = localStorage.getItem(key);
           if (storedSession) {
             const parsed = JSON.parse(storedSession);
-            const userId = parsed?.user?.id;
-            if (userId) {
-              _cachedCampId = userId;
-              localStorage.setItem('campistry_user_id', userId);
+            if (parsed?.user?.id) {
+              _cachedCampId = parsed.user.id;
+              localStorage.setItem('campistry_user_id', _cachedCampId);
               return _cachedCampId;
             }
           }
         }
       }
     } catch (e) { console.warn("Error reading storage:", e); }
-    
     return "demo_camp_001";
   }
 
@@ -88,22 +114,17 @@
   }
    
   function setLocalCache(state) {
-    // 🟢 EXTRACT & SAVE SCHEDULES if present in the incoming payload
-    // This happens when loading from cloud or importing a file
     if (state.daily_schedules) {
-        console.log("☁️ Found schedules in state update, saving to dedicated storage...");
+        console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
         try {
             localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(state.daily_schedules));
         } catch(e) { console.error("Failed to save extracted schedules", e); }
-        
-        // Remove from unified cache to keep it clean/compatible
         delete state.daily_schedules; 
     }
 
     _memoryCache = state;
     try {
       localStorage.setItem(UNIFIED_CACHE_KEY, JSON.stringify(state));
-      // Sync legacy keys for compatibility
       localStorage.setItem(LEGACY_KEYS.globalSettings, JSON.stringify(state));
       localStorage.setItem(LEGACY_KEYS.localCache, JSON.stringify(state));
       localStorage.setItem(LEGACY_KEYS.globalRegistry, JSON.stringify({
@@ -116,7 +137,6 @@
   // ============================================================================
   // DIRECT REST API OPERATIONS
   // ============================================================================
-   
   async function getSessionToken() {
     try {
         const { data } = await window.supabase.auth.getSession();
@@ -134,9 +154,7 @@
     try {
       const token = await getSessionToken();
       if (!token) return null;
-
       const campId = getCampId();
-      console.log("☁️ [REST] Loading state for:", campId);
 
       const url = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}&select=state`;
       const response = await fetch(url, {
@@ -148,29 +166,21 @@
         }
       });
 
-      if (!response.ok) {
-        console.error("☁️ [REST] Load Failed:", response.status);
-        return null;
-      }
-
+      if (!response.ok) return null;
       const data = await response.json();
-      if (data && data.length > 0) {
-        console.log("☁️ [REST] ✅ Data received!");
-        return data[0].state;
-      } else {
-        console.log("☁️ [REST] No data found (New User)");
-        return null;
-      }
-    } catch (e) {
-      console.error("☁️ [REST] Error:", e);
-      return null;
-    }
+      return (data && data.length > 0) ? data[0].state : null;
+    } catch (e) { return null; }
   }
 
   async function saveToCloud(state) {
     try {
+      showToast("☁️ Saving Schedule & Settings...", "info");
+      
       const user = await getUser();
-      if (!user) return false;
+      if (!user) {
+          showToast("❌ Not logged in", "error");
+          return false;
+      }
       
       const token = await getSessionToken();
       const campId = getCampId();
@@ -183,32 +193,44 @@
       const stateToSave = { ...state };
       delete stateToSave._importTimestamp;
 
-      // 🟢 INJECT SCHEDULES from LocalStorage into Payload
-      // This ensures daily data is synced alongside settings
+      // 🟢 BUNDLE SCHEDULES
+      // This explicitly reads the generated schedule from storage and adds it to the save payload
       try {
         const schedulesRaw = localStorage.getItem(DAILY_DATA_KEY);
         if (schedulesRaw) {
             stateToSave.daily_schedules = JSON.parse(schedulesRaw);
+            console.log("☁️ Generated schedules bundled into save.");
         }
-      } catch(e) {
-        console.warn("☁️ [REST] Warning: Could not bundle schedules with upload.", e);
+      } catch(e) { console.warn("Bundle error:", e); }
+
+      // 1. TRY PATCH FIRST
+      const patchUrl = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}`;
+      const patchResponse = await fetch(patchUrl, {
+        method: 'PATCH',
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation'
+        },
+        body: JSON.stringify({ 
+            state: stateToSave,
+            owner_id: user.id 
+        })
+      });
+
+      if (patchResponse.ok) {
+          const patchedData = await patchResponse.json();
+          if (patchedData && patchedData.length > 0) {
+              console.log("☁️ [REST] ✅ PATCH Success");
+              showToast("✅ Schedule Saved!", "success");
+              return true;
+          }
       }
 
-      if (stateToSave.app1) {
-        if (!stateToSave.divisions && stateToSave.app1.divisions) stateToSave.divisions = stateToSave.app1.divisions;
-        if (!stateToSave.bunks && stateToSave.app1.bunks) stateToSave.bunks = stateToSave.app1.bunks;
-      }
-
-      console.log("☁️ [REST] Saving via Fetch (Includes Schedules)...");
-
-      const payload = {
-        camp_id: campId,
-        owner_id: user.id,
-        state: stateToSave
-      };
-
-      const url = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}`;
-      const response = await fetch(url, {
+      // 2. IF PATCH FAILED -> POST
+      const postUrl = `${SUPABASE_URL}/rest/v1/${TABLE}`;
+      const postResponse = await fetch(postUrl, {
         method: 'POST',
         headers: {
           'apikey': SUPABASE_KEY,
@@ -216,88 +238,49 @@
           'Content-Type': 'application/json',
           'Prefer': 'resolution=merge-duplicates'
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          camp_id: campId,
+          owner_id: user.id,
+          state: stateToSave
+        })
       });
 
-      if (response.ok) {
-        console.log("☁️ [REST] ✅ Save Successful");
+      if (postResponse.ok) {
+        console.log("☁️ [REST] ✅ POST Success");
+        showToast("✅ Schedule Saved!", "success");
         return true;
       } else {
-        console.error("☁️ [REST] Save Failed:", response.status, response.statusText);
+        console.error("Save Failed:", postResponse.status);
+        showToast("❌ Save Failed (Check Console)", "error");
         return false;
       }
 
     } catch (e) {
-      console.error("☁️ [REST] Save Error:", e);
+      console.error("Save Error:", e);
+      showToast("❌ Network Error", "error");
       return false;
     }
   }
    
   // ============================================================================
-  // 🟢 NEW: RESET & IMPORT FUNCTIONALITY
+  // RESET & IMPORT
   // ============================================================================
   window.resetCloudState = async function() {
-    console.log("☁️ [REST] Resetting Cloud State (ERASE ALL)...");
-    
-    // Create clean empty state
     const emptyState = {
-      divisions: {},
-      bunks: [],
-      app1: {
-        divisions: {}, bunks: [], fields: [], specialActivities: [],
-        allSports: [], bunkMetaData: {}, sportMetaData: {},
-        savedSkeletons: {}, skeletonAssignments: {}
-      },
-      locationZones: {},
-      pinnedTileDefaults: {},
-      leaguesByName: {},
-      leagueRoundState: {},
-      specialtyLeagues: {},
-      smartTileHistory: {},
-      rotationHistory: { bunks: {}, leagues: {} },
+      divisions: {}, bunks: [], app1: { divisions: {}, bunks: [], fields: [], specialActivities: [] },
       updated_at: new Date().toISOString()
     };
-    
-    // Clear local storage for schedules explicitly
     localStorage.removeItem(DAILY_DATA_KEY);
-
-    // Clear local storage for unified state
     setLocalCache(emptyState);
-    
-    // Push empty state to cloud
     return await saveToCloud(emptyState);
   };
 
-  // Import state (JSON file upload) -> Save Locally -> Push to Cloud Immediately
   window.setCloudState = async function(newState) {
-    console.log("☁️ [REST] Importing new state...");
-    
-    if (!newState || typeof newState !== 'object') {
-        console.error("☁️ [REST] Invalid state object for import");
-        return false;
-    }
-
-    // Ensure metadata
+    if (!newState || typeof newState !== 'object') return false;
     newState.updated_at = new Date().toISOString();
-    newState.schema_version = SCHEMA_VERSION;
-
-    // 1. Save to Local Storage Immediately
-    // Note: setLocalCache handles separating schedules to DAILY_DATA_KEY
     setLocalCache(newState);
-    console.log("☁️ [REST] Imported state saved to local storage.");
-
-    // 2. Push to Cloud Immediately (Background)
-    console.log("☁️ [REST] Pushing imported state to cloud...");
     const cloudSuccess = await saveToCloud(newState);
-    
-    if (cloudSuccess) {
-        console.log("☁️ [REST] Import synced to cloud successfully.");
-    } else {
-        console.warn("☁️ [REST] Import saved locally but cloud sync failed (will retry later).");
-        _cloudSyncPending = true;
-        scheduleCloudSync();
-    }
-
+    if (!cloudSuccess) { _cloudSyncPending = true; scheduleCloudSync(); }
     return true;
   };
 
@@ -317,7 +300,7 @@
       _cloudSyncPending = false;
       await saveToCloud(getLocalCache());
       _syncInProgress = false;
-    }, 1000);
+    }, 2000);
   }
    
   async function syncNow() {
@@ -331,63 +314,29 @@
 
   async function initialize() {
     if (_initialized) return;
-    
-    console.log("☁️ Initializing Cloud Bridge...");
     const localData = getLocalCache();
-    const hasLocalData = localData && Object.keys(localData).length > 0 && 
-                          (Object.keys(localData.divisions || {}).length > 0 || 
-                           (localData.app1 && Object.keys(localData.app1.divisions || {}).length > 0));
+    const hasLocalData = localData && (Object.keys(localData).length > 2);
 
-    // 1. Check Local Storage First
     if (hasLocalData) {
-        console.log("☁️ Local data found. Using local data first.");
-        
-        // If "Just Imported" flag exists, trust local implicitly and push to cloud
-        if (localData._importTimestamp && (Date.now() - localData._importTimestamp) < 60000) {
-             console.log("☁️ Fresh import detected. Pushing to cloud...");
-             delete localData._importTimestamp;
-             setLocalCache(localData);
-             saveToCloud(localData); // Background push
-             finishInit(true);
-             return;
-        }
-        
-        // If normal local data, we still check cloud *in background* for newer version
-        // But we resolve init immediately to show UI
         finishInit(true);
-        
-        // Background check for cloud updates (Hybrid Sync)
         loadFromCloud().then(cloudState => {
             if (cloudState) {
                 const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
                 const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
-                
-                // Only overwrite local if cloud is strictly newer
                 if (cloudTime > localTime) {
-                    console.log("☁️ Cloud has newer data. Updating local in background...");
                     setLocalCache({ ...localData, ...cloudState });
-                    
-                    // Dispatch event to refresh UI if needed (optional)
-                    // window.location.reload(); // Aggressive refresh
-                    console.log("☁️ Local state updated from cloud background check.");
-                } else {
-                    console.log("☁️ Local data is up-to-date or newer than cloud.");
+                    showToast("☁️ Data updated from Cloud", "info");
                 }
             }
         });
         return;
     }
 
-    // 2. If Local Empty, Fetch from Cloud
-    console.log("☁️ Local storage empty. Fetching from cloud...");
     const cloudState = await loadFromCloud();
-    
     if (cloudState) {
-       console.log("☁️ Data found in Cloud. Hydrating...");
        setLocalCache(cloudState);
        finishInit(true);
     } else {
-       console.log("☁️ No data in Cloud either. Starting fresh.");
        finishInit(false);
     }
   }
@@ -400,11 +349,8 @@
     }));
   }
 
-  // ============================================================================
   // PUBLIC API
-  // ============================================================================
   window.loadGlobalSettings = () => getLocalCache();
-   
   window.saveGlobalSettings = (key, value) => {
     const state = getLocalCache();
     state[key] = value;
@@ -414,13 +360,9 @@
     scheduleCloudSync();
     return state;
   };
-   
   window.syncNow = syncNow;
   window.forceSyncToCloud = syncNow;
-  
-  // 🟢 Expose Schedule Sync Trigger
   window.scheduleCloudSync = () => {
-    console.log("☁️ Schedule change detected. Queuing cloud sync...");
     _cloudSyncPending = true;
     scheduleCloudSync();
   };
@@ -429,9 +371,7 @@
     if(window.supabase) {
         window.supabase.auth.onAuthStateChange(async (event, session) => {
             if (event === 'SIGNED_IN' && session) {
-                console.log("☁️ Auth Change: Signed In -> Loading Data...");
                 updateCampIdCache(session.user.id);
-                // Reset init flag to allow re-check on sign-in
                 _initialized = false; 
                 await initialize();
             } else if (event === 'SIGNED_OUT') {
@@ -443,5 +383,4 @@
   }, 500);
 
   initialize();
-
 })();
