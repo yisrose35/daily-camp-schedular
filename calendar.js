@@ -1,16 +1,9 @@
 // =================================================================
-// calendar.js (FIXED v2.4 - Auto Cloud Sync)
-//
-// FIXES:
-// - Uses setCloudState() for imports (updates memory cache + cloud)
-// - Page reload after import (maintains auth session)
-// - Uses resetCloudState() for full erase
-// - Uses clearCloudKeys() for partial resets
-// - 🟢 Triggers cloud sync on schedule changes
+// calendar.js (FIXED v2.5 - Trigger Enforcer)
 // =================================================================
 (function() {
     'use strict';
-    console.log("🗓️ calendar.js v2.4 (CLOUD SYNC ENABLED) loaded");
+    console.log("🗓️ calendar.js v2.5 (TRIGGER ENFORCER) loaded");
     
     // ==========================================================
     // 1. STORAGE KEYS - UNIFIED
@@ -117,6 +110,7 @@
 
             // 🟢 TRIGGER CLOUD SYNC
             if (typeof window.scheduleCloudSync === 'function') {
+                console.log("☁️ Triggering cloud sync for schedule change...");
                 window.scheduleCloudSync();
             }
 
@@ -146,12 +140,10 @@
             localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify(hist));
 
             // 🟢 TRIGGER CLOUD SYNC
-            // We consider rotation history vital, so we sync it too via the main bridge
-            // Note: Rotation history is typically part of global settings in some implementations,
-            // but if stored separately, the bridge needs to be aware. 
-            // Currently, the bridge handles unified state. If rotation history needs separate syncing
-            // it should be added to the unified state object before saving.
-            // For now, we assume simple local persistence or handled via global settings elsewhere.
+            // History is critical too!
+             if (typeof window.scheduleCloudSync === 'function') {
+                window.scheduleCloudSync();
+            }
 
         } catch (e) {
             console.error("Failed to save rotation history:", e);
@@ -159,7 +151,7 @@
     };
     
     // ==========================================================
-    // RESET ALL ACTIVITY / SPECIAL ROTATION (FIXED)
+    // RESET ALL ACTIVITY / SPECIAL ROTATION
     // ==========================================================
     window.eraseRotationHistory = async function() {
         try {
@@ -196,7 +188,7 @@
     };
     
     // ==========================================================
-    // START NEW HALF (FIXED)
+    // START NEW HALF
     // ==========================================================
     window.startNewHalf = async function() {
         const confirmed = confirm(
@@ -264,7 +256,7 @@
     };
     
     // ==========================================================
-    // 5. ERASE ALL DATA (FIXED)
+    // 5. ERASE ALL DATA
     // ==========================================================
     function setupEraseAll() {
         const btn = document.getElementById("eraseAllBtn");
@@ -381,7 +373,7 @@
     };
     
     // ==========================================================
-    // ⭐ RE-INITIALIZE UI AFTER IMPORT (No Reload!)
+    // RE-INITIALIZE UI AFTER IMPORT
     // ==========================================================
     function reinitializeUI() {
         console.log("🔄 Re-initializing UI after import...");
@@ -461,7 +453,7 @@
     }
     
     // ==========================================================
-    // 8. BACKUP / RESTORE (FIXED - Reload after import)
+    // 8. BACKUP / RESTORE
     // ==========================================================
     function exportAllData() {
         try {
@@ -776,7 +768,7 @@
         setupEraseAll();
         startAutoSaveTimer();
         
-        console.log("🗓️ Calendar initialized (FIXED v2.4)");
+        console.log("🗓️ Calendar initialized (FIXED v2.5)");
     }
     
     window.initCalendar = initCalendar;
