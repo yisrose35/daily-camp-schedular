@@ -7,6 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="dashboard.css">
     
     <style>
         /* ========================================= */
@@ -432,7 +433,7 @@
                 <span class="logo-text">Campistry</span>
             </a>
             <div class="nav-actions">
-                <span class="nav-user" id="navUserEmail">director@example.com</span>
+                <span class="nav-user" id="navUserEmail">Loading...</span>
                 <button class="btn-ghost" onclick="handleLogout()">Sign Out</button>
             </div>
         </div>
@@ -445,7 +446,7 @@
         <!-- Welcome Header -->
         <header class="dashboard-header">
             <div class="welcome-section">
-                <h1 class="welcome-title">Welcome back, <span id="campNameDisplay">Camp Arrowhead</span>!</h1>
+                <h1 class="welcome-title">Welcome back, <span id="campNameDisplay">Your Camp</span>!</h1>
                 <p class="welcome-sub">Manage your camp and access all Campistry products from here.</p>
             </div>
         </header>
@@ -468,27 +469,27 @@
                 <div class="profile-content" id="profileView">
                     <div class="profile-row">
                         <span class="profile-label">Camp Name</span>
-                        <span class="profile-value" id="profileCampName">Camp Arrowhead</span>
+                        <span class="profile-value" id="profileCampName">—</span>
                     </div>
                     <div class="profile-row">
                         <span class="profile-label">Address</span>
-                        <span class="profile-value" id="profileAddress">123 Lake View Rd, Maine</span>
+                        <span class="profile-value" id="profileAddress">Loading...</span>
                     </div>
                     <div class="profile-row">
                         <span class="profile-label">Email</span>
-                        <span class="profile-value" id="profileEmail">director@example.com</span>
+                        <span class="profile-value" id="profileEmail">Loading...</span>
                     </div>
                 </div>
 
                 <!-- Edit Form (hidden by default) -->
-                <form class="profile-edit-form" id="profileEditForm" style="display: none;" onsubmit="handleProfileSave(event)">
+                <form class="profile-edit-form" id="profileEditForm" style="display: none;">
                     <div class="form-group">
                         <label for="editCampName">Camp Name</label>
-                        <input type="text" id="editCampName" placeholder="Enter camp name" value="Camp Arrowhead">
+                        <input type="text" id="editCampName" placeholder="Enter camp name">
                     </div>
                     <div class="form-group">
                         <label for="editAddress">Address</label>
-                        <input type="text" id="editAddress" placeholder="123 Camp Road, City, State" value="123 Lake View Rd, Maine">
+                        <input type="text" id="editAddress" placeholder="123 Camp Road, City, State">
                     </div>
                     <div class="form-actions">
                         <button type="button" class="btn-secondary" onclick="cancelEdit()">Cancel</button>
@@ -507,7 +508,7 @@
                 
                 <div class="account-section">
                     <h3>Change Password</h3>
-                    <form id="passwordForm" class="password-form" onsubmit="handlePasswordChange(event)">
+                    <form id="passwordForm" class="password-form">
                         <div class="form-group">
                             <label for="newPassword">New Password</label>
                             <input type="password" id="newPassword" placeholder="Enter new password" minlength="6">
@@ -517,6 +518,8 @@
                             <input type="password" id="confirmPassword" placeholder="Confirm new password">
                         </div>
                         <button type="submit" class="btn-primary">Update Password</button>
+                        <div id="passwordError" class="form-error"></div>
+                        <div id="passwordSuccess" class="form-success"></div>
                     </form>
                 </div>
             </section>
@@ -528,15 +531,15 @@
                 </div>
                 <div class="stats-grid">
                     <div class="stat-item">
-                        <span class="stat-value" id="statDivisions">4</span>
+                        <span class="stat-value" id="statDivisions">—</span>
                         <span class="stat-label">Divisions</span>
                     </div>
                     <div class="stat-item">
-                        <span class="stat-value" id="statBunks">24</span>
+                        <span class="stat-value" id="statBunks">—</span>
                         <span class="stat-label">Bunks</span>
                     </div>
                     <div class="stat-item">
-                        <span class="stat-value" id="statCampers">150</span>
+                        <span class="stat-value" id="statCampers">—</span>
                         <span class="stat-label">Campers</span>
                     </div>
                 </div>
@@ -631,7 +634,7 @@
             <h2 class="products-section-title">Your Products</h2>
             <div class="products-grid">
                 <!-- FLOW -->
-                <a href="flow.html" class="product-tile product-flow">
+                <a href="index.html" class="product-tile product-flow">
                     <div class="product-icon">📅</div>
                     <div class="product-info">
                         <h3>Campistry Flow</h3>
@@ -657,7 +660,7 @@
 
                 <!-- ME -->
                 <div class="product-tile product-me disabled">
-                    <div class="product-icon">👤</div>
+                    <div class="product-icon">📱</div>
                     <div class="product-info">
                         <h3>Campistry Me</h3>
                         <p>Camper portal & parent communication</p>
@@ -689,152 +692,17 @@
     <!-- ========================================= -->
     <!-- SCRIPTS -->
     <!-- ========================================= -->
-    <script>
-        // =============================================
-        // Profile Edit Functions
-        // =============================================
-        function toggleEditMode() {
-            document.getElementById('profileView').style.display = 'none';
-            document.getElementById('editProfileBtn').style.display = 'none';
-            document.getElementById('profileEditForm').style.display = 'block';
-            // Clear any previous messages
-            document.getElementById('profileError').textContent = '';
-            document.getElementById('profileSuccess').textContent = '';
-        }
-
-        function cancelEdit() {
-            document.getElementById('profileView').style.display = 'block';
-            document.getElementById('editProfileBtn').style.display = 'flex';
-            document.getElementById('profileEditForm').style.display = 'none';
-        }
-
-        function handleProfileSave(event) {
-            event.preventDefault();
-            
-            const campName = document.getElementById('editCampName').value.trim();
-            const address = document.getElementById('editAddress').value.trim();
-            const errorEl = document.getElementById('profileError');
-            const successEl = document.getElementById('profileSuccess');
-            
-            // Clear messages
-            errorEl.textContent = '';
-            successEl.textContent = '';
-            
-            if (!campName) {
-                errorEl.textContent = 'Camp name is required';
-                return;
-            }
-            
-            // Update display values
-            document.getElementById('profileCampName').textContent = campName;
-            document.getElementById('profileAddress').textContent = address || 'Not set';
-            document.getElementById('campNameDisplay').textContent = campName;
-            
-            // Show success and close form
-            successEl.textContent = 'Profile updated successfully!';
-            
-            setTimeout(() => {
-                cancelEdit();
-            }, 1500);
-            
-            // TODO: Save to Supabase when connected
-            console.log('Profile saved:', { campName, address });
-        }
-
-        // =============================================
-        // Password Change Function
-        // =============================================
-        function handlePasswordChange(event) {
-            event.preventDefault();
-            
-            const newPassword = document.getElementById('newPassword').value;
-            const confirmPassword = document.getElementById('confirmPassword').value;
-            
-            if (!newPassword || newPassword.length < 6) {
-                alert('Password must be at least 6 characters');
-                return;
-            }
-            
-            if (newPassword !== confirmPassword) {
-                alert('Passwords do not match');
-                return;
-            }
-            
-            // TODO: Update password via Supabase
-            alert('Password updated successfully!');
-            document.getElementById('passwordForm').reset();
-        }
-
-        // =============================================
-        // Logout Function
-        // =============================================
-        function handleLogout() {
-            // TODO: Sign out via Supabase
-            if (confirm('Are you sure you want to sign out?')) {
-                console.log('Logging out...');
-                window.location.href = 'index.html';
-            }
-        }
-
-        // =============================================
-        // RBAC Team Section Visibility
-        // =============================================
-        
-        // Show team section only for owners
-        document.addEventListener('campistry-access-loaded', function(e) {
-            const section = document.getElementById('team-access-section');
-            if (section && e.detail.role === 'owner') {
-                section.style.display = 'block';
-                
-                // Hide placeholder content when real UI loads
-                if (window.TeamSubdivisionsUI) {
-                    document.getElementById('subdivisions-placeholder')?.remove();
-                    document.getElementById('team-placeholder')?.remove();
-                    
-                    window.TeamSubdivisionsUI.initialize().then(() => {
-                        window.TeamSubdivisionsUI.renderSubdivisionsCard(
-                            document.getElementById('subdivisions-card')
-                        );
-                        window.TeamSubdivisionsUI.renderTeamCard(
-                            document.getElementById('team-card')
-                        );
-                    });
-                }
-            }
-        });
-
-        // Also check on page load if access is already loaded
-        document.addEventListener('DOMContentLoaded', function() {
-            if (window.AccessControl?.getCurrentRole() === 'owner') {
-                document.getElementById('team-access-section').style.display = 'block';
-            }
-        });
-
-        // =============================================
-        // DEMO MODE: Simulate owner role for testing
-        // Remove this block in production!
-        // =============================================
-        /*
-        window.addEventListener('DOMContentLoaded', () => {
-            console.log("🎭 DEMO MODE: Simulating Owner Role...");
-            
-            // Mock AccessControl
-            window.AccessControl = { getCurrentRole: () => 'owner' };
-            
-            // Trigger the event to show team section
-            const event = new CustomEvent('campistry-access-loaded', { 
-                detail: { role: 'owner' } 
-            });
-            document.dispatchEvent(event);
-        });
-        */
-    </script>
-
-    <!-- 
-    Include these scripts in production:
+    
+    <!-- 1. Load Supabase Client (Connects to database) -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="supabase_client.js"></script>
+
+    <!-- 2. Load Dashboard Logic (Fetches your real data) -->
+    <script src="dashboard.js"></script>
+    
+    <!-- 3. Optional: Access Control and Teams -->
     <script src="access_control.js"></script>
     <script src="team_subdivisions_ui.js"></script>
-    -->
+
 </body>
 </html>
