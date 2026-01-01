@@ -1,18 +1,19 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v3.4 (Direct REST Mode + Reset + Immediate Sync + Smart Init)
+// FIXED VERSION: v3.5 (Includes Daily Schedules + Direct REST + Smart Init)
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v3.4 (DIRECT REST + RESET + SYNC + SMART INIT)");
+  console.log("☁️ Campistry Cloud Bridge v3.5 (SCHEDULES + REST + SYNC)");
 
   // DIRECT CONFIGURATION (Bypasses SDK initialization issues)
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
   const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI";
-  
+   
   const TABLE = "camp_state";
   const UNIFIED_CACHE_KEY = "CAMPISTRY_UNIFIED_STATE";
+  const DAILY_DATA_KEY = "campDailyData_v1"; // 🟢 Added for Schedule Sync
 
   const LEGACY_KEYS = {
     globalSettings: "campGlobalSettings_v1",
@@ -85,8 +86,20 @@
     } catch (e) { _memoryCache = {}; }
     return _memoryCache;
   }
-  
+   
   function setLocalCache(state) {
+    // 🟢 EXTRACT & SAVE SCHEDULES if present in the incoming payload
+    // This happens when loading from cloud or importing a file
+    if (state.daily_schedules) {
+        console.log("☁️ Found schedules in state update, saving to dedicated storage...");
+        try {
+            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(state.daily_schedules));
+        } catch(e) { console.error("Failed to save extracted schedules", e); }
+        
+        // Remove from unified cache to keep it clean/compatible
+        delete state.daily_schedules; 
+    }
+
     _memoryCache = state;
     try {
       localStorage.setItem(UNIFIED_CACHE_KEY, JSON.stringify(state));
@@ -103,7 +116,7 @@
   // ============================================================================
   // DIRECT REST API OPERATIONS
   // ============================================================================
-  
+   
   async function getSessionToken() {
     try {
         const { data } = await window.supabase.auth.getSession();
@@ -164,17 +177,29 @@
       
       if (campId === "demo_camp_001") return false;
 
+      // Prepare Payload
       state.schema_version = SCHEMA_VERSION;
       state.updated_at = new Date().toISOString();
       const stateToSave = { ...state };
       delete stateToSave._importTimestamp;
+
+      // 🟢 INJECT SCHEDULES from LocalStorage into Payload
+      // This ensures daily data is synced alongside settings
+      try {
+        const schedulesRaw = localStorage.getItem(DAILY_DATA_KEY);
+        if (schedulesRaw) {
+            stateToSave.daily_schedules = JSON.parse(schedulesRaw);
+        }
+      } catch(e) {
+        console.warn("☁️ [REST] Warning: Could not bundle schedules with upload.", e);
+      }
 
       if (stateToSave.app1) {
         if (!stateToSave.divisions && stateToSave.app1.divisions) stateToSave.divisions = stateToSave.app1.divisions;
         if (!stateToSave.bunks && stateToSave.app1.bunks) stateToSave.bunks = stateToSave.app1.bunks;
       }
 
-      console.log("☁️ [REST] Saving via Fetch...");
+      console.log("☁️ [REST] Saving via Fetch (Includes Schedules)...");
 
       const payload = {
         camp_id: campId,
@@ -207,7 +232,7 @@
       return false;
     }
   }
-  
+   
   // ============================================================================
   // 🟢 NEW: RESET & IMPORT FUNCTIONALITY
   // ============================================================================
@@ -233,7 +258,10 @@
       updated_at: new Date().toISOString()
     };
     
-    // Clear local storage
+    // Clear local storage for schedules explicitly
+    localStorage.removeItem(DAILY_DATA_KEY);
+
+    // Clear local storage for unified state
     setLocalCache(emptyState);
     
     // Push empty state to cloud
@@ -254,6 +282,7 @@
     newState.schema_version = SCHEMA_VERSION;
 
     // 1. Save to Local Storage Immediately
+    // Note: setLocalCache handles separating schedules to DAILY_DATA_KEY
     setLocalCache(newState);
     console.log("☁️ [REST] Imported state saved to local storage.");
 
@@ -277,7 +306,7 @@
   // ============================================================================
   let _syncTimeout = null;
   let _syncInProgress = false;
-  
+   
   function scheduleCloudSync() {
     if (_syncTimeout) clearTimeout(_syncTimeout);
     _syncTimeout = setTimeout(async () => {
@@ -290,7 +319,7 @@
       _syncInProgress = false;
     }, 1000);
   }
-  
+   
   async function syncNow() {
     if (_syncTimeout) clearTimeout(_syncTimeout);
     _cloudSyncPending = false;
@@ -306,8 +335,8 @@
     console.log("☁️ Initializing Cloud Bridge...");
     const localData = getLocalCache();
     const hasLocalData = localData && Object.keys(localData).length > 0 && 
-                         (Object.keys(localData.divisions || {}).length > 0 || 
-                          (localData.app1 && Object.keys(localData.app1.divisions || {}).length > 0));
+                          (Object.keys(localData.divisions || {}).length > 0 || 
+                           (localData.app1 && Object.keys(localData.app1.divisions || {}).length > 0));
 
     // 1. Check Local Storage First
     if (hasLocalData) {
@@ -375,7 +404,7 @@
   // PUBLIC API
   // ============================================================================
   window.loadGlobalSettings = () => getLocalCache();
-  
+   
   window.saveGlobalSettings = (key, value) => {
     const state = getLocalCache();
     state[key] = value;
@@ -385,9 +414,16 @@
     scheduleCloudSync();
     return state;
   };
-  
+   
   window.syncNow = syncNow;
   window.forceSyncToCloud = syncNow;
+  
+  // 🟢 Expose Schedule Sync Trigger
+  window.scheduleCloudSync = () => {
+    console.log("☁️ Schedule change detected. Queuing cloud sync...");
+    _cloudSyncPending = true;
+    scheduleCloudSync();
+  };
 
   setTimeout(() => {
     if(window.supabase) {
