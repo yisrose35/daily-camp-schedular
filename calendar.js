@@ -1,9 +1,9 @@
 // =================================================================
-// calendar.js (FIXED v2.5 - Trigger Enforcer)
+// calendar.js (FIXED v2.6 - Unified Bridge Saving)
 // =================================================================
 (function() {
     'use strict';
-    console.log("🗓️ calendar.js v2.5 (TRIGGER ENFORCER) loaded");
+    console.log("🗓️ calendar.js v2.6 (UNIFIED BRIDGE SAVING) loaded");
     
     // ==========================================================
     // 1. STORAGE KEYS - UNIFIED
@@ -105,13 +105,22 @@
             const date = window.currentScheduleDate;
             if (!all[date]) all[date] = {};
             all[date][key] = value;
-            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(all));
+            
+            // Add updated_at to the daily data blob itself for consistency
+            all.updated_at = new Date().toISOString();
+            
+            // Update UI reference immediately
             window.currentDailyData = all[date];
 
-            // 🟢 TRIGGER CLOUD SYNC
-            if (typeof window.scheduleCloudSync === 'function') {
-                console.log("☁️ Triggering cloud sync for schedule change...");
-                window.scheduleCloudSync();
+            // 🟢 UNIFIED SAVING: Delegate to Bridge (Same way as Divisions)
+            // 'daily_schedules' is the special key the bridge uses to bundle/unbundle this data
+            if (typeof window.saveGlobalSettings === 'function') {
+                console.log("☁️ Saving daily data via Bridge (Unified Flow)...");
+                window.saveGlobalSettings('daily_schedules', all);
+            } else {
+                // Fallback if bridge is missing
+                console.warn("⚠️ Bridge not found, falling back to local save");
+                localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(all));
             }
 
         } catch (e) {
@@ -140,8 +149,7 @@
             localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify(hist));
 
             // 🟢 TRIGGER CLOUD SYNC
-            // History is critical too!
-             if (typeof window.scheduleCloudSync === 'function') {
+            if (typeof window.scheduleCloudSync === 'function') {
                 window.scheduleCloudSync();
             }
 
@@ -768,7 +776,7 @@
         setupEraseAll();
         startAutoSaveTimer();
         
-        console.log("🗓️ Calendar initialized (FIXED v2.5)");
+        console.log("🗓️ Calendar initialized (FIXED v2.6)");
     }
     
     window.initCalendar = initCalendar;
