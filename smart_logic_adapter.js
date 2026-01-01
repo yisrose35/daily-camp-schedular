@@ -1,10 +1,12 @@
+
 // ============================================================================
-// SmartLogicAdapter V46 (ELECTIVE LOCK + RAINY DAY SUPPORT + MAIN ACT WEATHER CHECK)
+// SmartLogicAdapter V44 (ELECTIVE LOCK SUPPORT + SWIM/POOL ALIAS)
 // ============================================================================
-// CRITICAL FIXES FROM V45:
-// 1. Added isActivityAllowedByWeather check for MAIN activities in Smart Tile
-//    - Ensures Skits (Rainy) isn't used as an "Open" activity on Sunny days
-// 2. Retained V45 fixes (Elective locks, Swim/Pool aliases)
+// CRITICAL FIXES FROM V43:
+// 1. NOW CHECKS GlobalFieldLocks for elective locks (division-aware)
+// 2. When activity is locked, uses fallback instead of leaving empty
+// 3. Swim/Pool interchangeability - treats them as the same resource
+// 4. Better logging for lock conflicts
 // ============================================================================
 
 (function() {
@@ -59,33 +61,6 @@
 
     function log(...args) {
         if (DEBUG_SMART_TILE) console.log("[SmartTile]", ...args);
-    }
-
-    /**
-     * Check if activity is allowed by current weather
-     */
-    function isActivityAllowedByWeather(name, activityProps) {
-        if (!name) return true;
-        const props = activityProps?.[name];
-        if (!props) return true;
-
-        const dailyData = window.loadCurrentDailyData?.() || {};
-        const isRainyDay = dailyData.isRainyDay === true || dailyData.isRainyDay === "true";
-
-        // Check rainy restriction
-        const isRainyActivity = props.weather === 'rainy' || props.rainy === true;
-        if (isRainyActivity && !isRainyDay) {
-            return false;
-        }
-
-        // Check sunny restriction
-        // Assuming 'sunny' generally implies valid for outdoors/not-rainy
-        // If strictly 'sunny' means 'not rainy', enable this:
-        if (isRainyDay && props.weather === 'sunny') {
-             return false;
-        }
-
-        return true;
     }
 
     // =========================================================================
@@ -240,7 +215,6 @@
      * 2. activityProps - for availability, time rules, capacity, restrictions
      * 3. dailyFieldAvailability - for daily overrides
      * 4. GlobalFieldLocks - for elective locks
-     * 5. Rainy Day Manager - for weather constraints
      * * @param {number} startMin - Block start time in minutes
      * @param {number} endMin - Block end time in minutes
      * @param {string} divisionName - The division to check access for
@@ -277,10 +251,6 @@
             log(`  WARNING: No slots found for ${startMin}-${endMin}`);
         }
 
-        // --- RAINY DAY CHECK ---
-        const dailyData = window.loadCurrentDailyData?.() || {};
-        const isRainyDay = dailyData.isRainyDay === true || dailyData.isRainyDay === "true";
-
         combinedSpecials.forEach(special => {
             const specialName = special.name;
             const props = activityProps?.[specialName] || special;
@@ -288,18 +258,6 @@
             // 1. Check if globally enabled
             if (props.available === false) {
                 log(`    ❌ ${specialName}: globally disabled`);
-                return;
-            }
-
-            // 1.5 CHECK WEATHER RESTRICTIONS (NEW)
-            const isRainyActivity = props.weather === 'rainy' || props.rainy === true;
-            if (isRainyActivity && !isRainyDay) {
-                log(`    ❌ ${specialName}: Rainy activity but today is NOT rainy`);
-                return;
-            }
-            
-            if (isRainyDay && props.weather === 'sunny') {
-                log(`    ❌ ${specialName}: Sunny activity but today is rainy`);
                 return;
             }
 
@@ -532,13 +490,13 @@
         },
 
         // =====================================================================
-        // MAIN ASSIGNMENT LOGIC (V46 - ELECTIVE LOCK + RAINY AWARE)
+        // MAIN ASSIGNMENT LOGIC (V44 - ELECTIVE LOCK AWARE)
         // =====================================================================
 
         generateAssignments(bunks, job, historical = {}, specialNames = [], activityProps = {}, masterFields = [], dailyFieldAvailability = {}, yesterdayHistory = {}) {
             
             log("\n" + "=".repeat(70));
-            log(`SMART TILE V46: ${job.division}`);
+            log(`SMART TILE V44: ${job.division}`);
             log(`Main1: ${job.main1}, Main2: ${job.main2}`);
             log(`Fallback: ${job.fallbackActivity} (for ${job.fallbackFor})`);
             log(`Bunks: ${bunks.join(', ')}`);
@@ -555,24 +513,12 @@
             const slotsB = job.blockB ? window.SchedulerCoreUtils?.findSlotsForRange(job.blockB.startMin, job.blockB.endMin) || [] : [];
 
             // -----------------------------------------------------------------
-            // CHECK IF MAIN ACTIVITIES ARE LOCKED (ELECTIVE + WEATHER)
+            // CHECK IF MAIN ACTIVITIES ARE LOCKED (ELECTIVE)
             // -----------------------------------------------------------------
-            let main1LockedA = isMainActivityLocked(main1, divisionName, slotsA, activityProps);
-            let main2LockedA = isMainActivityLocked(main2, divisionName, slotsA, activityProps);
-            let main1LockedB = job.blockB ? isMainActivityLocked(main1, divisionName, slotsB, activityProps) : false;
-            let main2LockedB = job.blockB ? isMainActivityLocked(main2, divisionName, slotsB, activityProps) : false;
-
-            // NEW: Check weather locks for MAIN activities
-            if (!isActivityAllowedByWeather(main1, activityProps)) {
-                log(`⚠️ ${main1} is LOCKED due to WEATHER (Rainy=${window.loadCurrentDailyData?.().isRainyDay})`);
-                main1LockedA = true;
-                if (job.blockB) main1LockedB = true;
-            }
-            if (!isActivityAllowedByWeather(main2, activityProps)) {
-                log(`⚠️ ${main2} is LOCKED due to WEATHER (Rainy=${window.loadCurrentDailyData?.().isRainyDay})`);
-                main2LockedA = true;
-                if (job.blockB) main2LockedB = true;
-            }
+            const main1LockedA = isMainActivityLocked(main1, divisionName, slotsA, activityProps);
+            const main2LockedA = isMainActivityLocked(main2, divisionName, slotsA, activityProps);
+            const main1LockedB = job.blockB ? isMainActivityLocked(main1, divisionName, slotsB, activityProps) : false;
+            const main2LockedB = job.blockB ? isMainActivityLocked(main2, divisionName, slotsB, activityProps) : false;
 
             if (main1LockedA) log(`⚠️ ${main1} is LOCKED for ${divisionName} in Block A`);
             if (main2LockedA) log(`⚠️ ${main2} is LOCKED for ${divisionName} in Block A`);
