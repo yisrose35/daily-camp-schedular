@@ -1,11 +1,12 @@
 // ============================================================================
-// SmartLogicAdapter V44 (ELECTIVE LOCK SUPPORT + SWIM/POOL ALIAS)
+// SmartLogicAdapter V45 (ELECTIVE LOCK + RAINY DAY SUPPORT)
 // ============================================================================
-// CRITICAL FIXES FROM V43:
-// 1. NOW CHECKS GlobalFieldLocks for elective locks (division-aware)
-// 2. When activity is locked, uses fallback instead of leaving empty
-// 3. Swim/Pool interchangeability - treats them as the same resource
-// 4. Better logging for lock conflicts
+// CRITICAL FIXES FROM V44:
+// 1. Added Rainy Day check in getAvailableSpecialsForTimeBlock
+//    - Prevents "rainy" specials from running on non-rainy days
+// 2. NOW CHECKS GlobalFieldLocks for elective locks (division-aware)
+// 3. When activity is locked, uses fallback instead of leaving empty
+// 4. Swim/Pool interchangeability - treats them as the same resource
 // ============================================================================
 
 (function() {
@@ -214,6 +215,7 @@
      * 2. activityProps - for availability, time rules, capacity, restrictions
      * 3. dailyFieldAvailability - for daily overrides
      * 4. GlobalFieldLocks - for elective locks
+     * 5. Rainy Day Manager - for weather constraints
      * * @param {number} startMin - Block start time in minutes
      * @param {number} endMin - Block end time in minutes
      * @param {string} divisionName - The division to check access for
@@ -250,6 +252,10 @@
             log(`  WARNING: No slots found for ${startMin}-${endMin}`);
         }
 
+        // --- RAINY DAY CHECK ---
+        const dailyData = window.loadCurrentDailyData?.() || {};
+        const isRainyDay = dailyData.isRainyDay === true || dailyData.isRainyDay === "true";
+
         combinedSpecials.forEach(special => {
             const specialName = special.name;
             const props = activityProps?.[specialName] || special;
@@ -259,6 +265,20 @@
                 log(`    ❌ ${specialName}: globally disabled`);
                 return;
             }
+
+            // 1.5 CHECK WEATHER RESTRICTIONS (NEW)
+            const isRainyActivity = props.weather === 'rainy' || props.rainy === true;
+            if (isRainyActivity && !isRainyDay) {
+                log(`    ❌ ${specialName}: Rainy activity but today is NOT rainy`);
+                return;
+            }
+            
+            // Optional: If you strictly want to avoid outdoor activities on rainy days
+            // (Only enable if strictly required)
+            // if (isRainyDay && props.weather === 'sunny') {
+            //    log(`    ❌ ${specialName}: Sunny activity but today is rainy`);
+            //    return;
+            // }
 
             // 2. CHECK DIVISION RESTRICTIONS + LOCKS (UPDATED!)
             if (!canDivisionUseSpecial(divisionName, props, specialName, slots)) {
@@ -489,13 +509,13 @@
         },
 
         // =====================================================================
-        // MAIN ASSIGNMENT LOGIC (V44 - ELECTIVE LOCK AWARE)
+        // MAIN ASSIGNMENT LOGIC (V45 - ELECTIVE LOCK + RAINY AWARE)
         // =====================================================================
 
         generateAssignments(bunks, job, historical = {}, specialNames = [], activityProps = {}, masterFields = [], dailyFieldAvailability = {}, yesterdayHistory = {}) {
             
             log("\n" + "=".repeat(70));
-            log(`SMART TILE V44: ${job.division}`);
+            log(`SMART TILE V45: ${job.division}`);
             log(`Main1: ${job.main1}, Main2: ${job.main2}`);
             log(`Fallback: ${job.fallbackActivity} (for ${job.fallbackFor})`);
             log(`Bunks: ${bunks.join(', ')}`);
