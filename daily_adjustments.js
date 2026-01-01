@@ -1,5 +1,5 @@
 // =================================================================
-// daily_adjustments.js  (v3.6 - Updated: Fixes for Cloud Sync & Touch)
+// daily_adjustments.js  (v3.7 - Updated: Custom Bunks, Green Toggles, Crash Fixes)
 // - Grid/tiles EXACTLY match master_schedule_builder.js
 // - Professional Rainy Day Mode toggle with animations
 // - ★ NEW: Mid-day rainy mode (preserve morning schedule)
@@ -8,8 +8,8 @@
 // - Resize handles on tiles (drag edges)
 // - Conflict highlighting using styles.css palette
 // - Displaced tiles panel
-// - Full Bunk-Specific Overrides UI
-// - Full Resource Availability with Detail Pane
+// - Full Bunk-Specific Overrides UI (Updated v3.7)
+// - Full Resource Availability with Detail Pane (Updated v3.7)
 // - Smart Tiles passed to Core Optimizer for capacity awareness
 // - Integration with getPinnedTileDefaultLocation for Pinned Events
 // - ★ UPDATED: Mobile Touch Support for Drag & Drop
@@ -1905,7 +1905,7 @@ function renderTripsForm() {
 }
 
 // =================================================================
-// BUNK OVERRIDES UI - FULL IMPLEMENTATION FROM PUBLISHED
+// BUNK OVERRIDES UI - UPDATED FOR CUSTOM ACTIVITIES (v3.7)
 // =================================================================
 function renderBunkOverridesUI() {
   if (!bunkOverridesContainer) return;
@@ -1915,7 +1915,12 @@ function renderBunkOverridesUI() {
   const availableDivisions = masterSettings.app1.availableDivisions || window.availableDivisions || [];
   const allBunksByDiv = {};
   availableDivisions.forEach(divName => {
-    allBunksByDiv[divName] = (divisions[divName]?.bunks || []).sort();
+    allBunksByDiv[divName] = (divisions[divName]?.bunks || []).sort(function(a, b) {
+        // Fix for Bunk 9 vs 18 sorting in the UI
+        const numA = parseInt(a.match(/\d+/)?.[0] || 0);
+        const numB = parseInt(b.match(/\d+/)?.[0] || 0);
+        return numA - numB || a.localeCompare(b);
+    });
   });
   
   const allSports = (masterSettings.app1.fields || []).flatMap(f => f.activities || []);
@@ -1931,14 +1936,32 @@ function renderBunkOverridesUI() {
   let activityOptions = '<option value="">-- Select an Activity --</option>';
   allActivities.forEach(act => { activityOptions += '<option value="' + act + '">' + act + '</option>'; });
   
+  // UPDATED HTML: Added Custom Activity Input
   form.innerHTML = `
-    <label for="bunk-override-activity" style="display:block;margin-bottom:5px;font-weight:600;">Activity:</label>
-    <select id="bunk-override-activity" style="width:250px;padding:5px;font-size:1em;">${activityOptions}</select>
-    <label for="bunk-override-start" style="display:block;margin-top:10px;font-weight:600;">Start Time:</label>
-    <input id="bunk-override-start" placeholder="e.g., 9:00am" style="margin-right:8px;">
-    <label for="bunk-override-end" style="display:block;margin-top:10px;font-weight:600;">End Time:</label>
-    <input id="bunk-override-end" placeholder="e.g., 10:00am" style="margin-right:8px;">
-    <p style="margin-top:15px;font-weight:600;">Select Bunks:</p>
+    <div style="display:flex; gap: 15px; flex-wrap:wrap;">
+        <div>
+            <label for="bunk-override-activity" style="display:block;margin-bottom:5px;font-weight:600;">Select Activity:</label>
+            <select id="bunk-override-activity" style="width:200px;padding:6px;font-size:1em;border-radius:4px;border:1px solid #ccc;">${activityOptions}</select>
+        </div>
+        <div style="display:flex; align-items:flex-end; padding-bottom:8px; font-weight:bold; color:#666;">OR</div>
+        <div style="flex-grow:1;">
+            <label for="bunk-override-custom" style="display:block;margin-bottom:5px;font-weight:600;">Custom Name (e.g. "Trip"):</label>
+            <input id="bunk-override-custom" type="text" placeholder="Type custom name..." style="width:100%;padding:6px;font-size:1em;border-radius:4px;border:1px solid #ccc;">
+        </div>
+    </div>
+    
+    <div style="display:flex; gap:15px; margin-top:10px;">
+        <div>
+            <label for="bunk-override-start" style="display:block;margin-bottom:5px;font-weight:600;">Start Time:</label>
+            <input id="bunk-override-start" placeholder="e.g., 9:00am" style="padding:6px;border-radius:4px;border:1px solid #ccc;">
+        </div>
+        <div>
+            <label for="bunk-override-end" style="display:block;margin-bottom:5px;font-weight:600;">End Time:</label>
+            <input id="bunk-override-end" placeholder="e.g., 10:00am" style="padding:6px;border-radius:4px;border:1px solid #ccc;">
+        </div>
+    </div>
+
+    <p style="margin-top:15px;font-weight:600;margin-bottom:5px;">Select Bunks:</p>
   `;
   
   availableDivisions.forEach(divName => {
@@ -1947,6 +1970,8 @@ function renderBunkOverridesUI() {
     const divLabel = document.createElement('div');
     divLabel.textContent = divName;
     divLabel.style.fontWeight = 'bold';
+    divLabel.style.fontSize = '0.85em';
+    divLabel.style.color = '#555';
     divLabel.style.marginTop = '8px';
     form.appendChild(divLabel);
     const bunkChipBox = document.createElement('div');
@@ -1965,38 +1990,59 @@ function renderBunkOverridesUI() {
   addBtn.style.background = '#007BFF';
   addBtn.style.color = 'white';
   addBtn.style.marginTop = '15px';
+  addBtn.style.padding = '8px 16px';
   addBtn.onclick = () => {
     const activityEl = form.querySelector('#bunk-override-activity');
+    const customEl = form.querySelector('#bunk-override-custom');
     const startEl = form.querySelector('#bunk-override-start');
     const endEl = form.querySelector('#bunk-override-end');
     const selectedBunks = Array.from(form.querySelectorAll('.bunk-button.selected')).map(el => el.dataset.value);
-    const activity = activityEl.value;
-    const start = startEl.value.trim();
-    const end = endEl.value.trim();
-    if (!activity) { alert('Please select an activity.'); return; }
-    if (!start || !end) { alert('Please enter a start and end time.'); return; }
+    
+    // LOGIC: Use custom text if provided, otherwise use dropdown
+    let activity = customEl.value.trim();
+    let type = 'trip'; // Default to trip behavior (pinned, no field usage) for custom
+    
+    if (!activity) {
+        activity = activityEl.value;
+        // If selected from list, assume it might need a field (type 'special' or 'sport')
+        // The core scheduler handles checking availability for known activities
+        type = 'special'; 
+    }
+    
+    if (!activity) { alert('Please select an activity or enter a custom name.'); return; }
+    if (!startEl.value || !endEl.value) { alert('Please enter a start and end time.'); return; }
     if (selectedBunks.length === 0) { alert('Please select at least one bunk.'); return; }
-    const startMin = parseTimeToMinutes(start);
-    const endMin = parseTimeToMinutes(end);
+    
+    const startMin = parseTimeToMinutes(startEl.value);
+    const endMin = parseTimeToMinutes(endEl.value);
+    
     if (startMin == null || endMin == null || endMin <= startMin) {
       alert('Invalid time range.');
       return;
     }
-    const overrides = window.loadCurrentDailyData?.().bunkActivityOverrides || [];
+    
+    // SAFE LOAD: Handle crash if data structure is missing
+    const dailyData = window.loadCurrentDailyData?.() || {};
+    const overrides = dailyData.bunkActivityOverrides || [];
+    
     selectedBunks.forEach(bunk => {
-      overrides.push({ id: uid(), bunk, activity, startTime: start, endTime: end });
+      overrides.push({ id: uid(), bunk, activity, startTime: startEl.value, endTime: endEl.value, type: type });
     });
+    
     window.saveCurrentDailyData("bunkActivityOverrides", overrides);
     currentOverrides.bunkActivityOverrides = overrides;
+    
     activityEl.value = "";
+    customEl.value = "";
     startEl.value = "";
     endEl.value = "";
-    form.querySelectorAll('.bunk-button.selected').forEach(chip => chip.click());
+    form.querySelectorAll('.bunk-button.selected').forEach(chip => chip.click()); // Deselect
     renderBunkOverridesUI();
   };
   form.appendChild(addBtn);
   bunkOverridesContainer.appendChild(form);
   
+  // Render List of Existing Overrides
   const listContainer = document.createElement('div');
   listContainer.id = "bunk-overrides-list-container";
   const overrides = currentOverrides.bunkActivityOverrides;
@@ -2008,7 +2054,7 @@ function renderBunkOverridesUI() {
       el.className = 'item';
       el.innerHTML = `
         <div style="flex-grow:1;">
-          <div><strong>${item.bunk}</strong> » ${item.activity}</div>
+          <div><strong>${item.bunk}</strong> » <span style="color:#007bff">${item.activity}</span></div>
           <div class="muted" style="font-size:0.9em;">${item.startTime} - ${item.endTime}</div>
         </div>
         <button data-id="${item.id}" style="padding:6px 10px;border-radius:4px;cursor:pointer;background:#c0392b;color:white;border:none;">Remove</button>
@@ -2041,7 +2087,7 @@ function createChip(name, color) {
 }
 
 // =================================================================
-// RESOURCE OVERRIDES UI - WITH RAINY DAY INTEGRATION
+// RESOURCE OVERRIDES UI - WITH RAINY DAY INTEGRATION & GREEN TOGGLES
 // =================================================================
 let selectedOverrideId = null;
 
@@ -2174,7 +2220,7 @@ function createOverrideMasterListItem(type, name, isEnabled, onToggle, isOutdoor
   
   const tog = document.createElement("label");
   tog.className = "switch";
-  tog.style.cssText = 'position:relative;display:inline-block;width:40px;height:20px;';
+  tog.style.cssText = 'position:relative;display:inline-block;width:40px;height:20px;margin-left:auto;';
   tog.title = isRainyDisabled ? "Disabled by Rainy Day Mode" : (isEnabled ? "Click to disable for today" : "Click to enable for today");
   tog.onclick = (e) => e.stopPropagation();
   
@@ -2186,10 +2232,33 @@ function createOverrideMasterListItem(type, name, isEnabled, onToggle, isOutdoor
   
   const sl = document.createElement("span");
   sl.className = "slider";
-  sl.style.cssText = 'position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#ccc;transition:0.4s;border-radius:20px;';
+  // CSS INJECTION: Ensure green background when checked
+  sl.style.cssText = `
+    position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;
+    background-color: ${isEnabled ? '#4caf50' : '#ccc'}; 
+    transition:0.4s;border-radius:20px;
+  `;
   
+  // Dynamic update of slider color
+  cb.addEventListener('change', function() {
+      sl.style.backgroundColor = this.checked ? '#4caf50' : '#ccc';
+  });
+
+  const knob = document.createElement("span");
+  knob.style.cssText = `
+      position:absolute; content:""; height:14px; width:14px; left:3px; bottom:3px; 
+      background-color:white; transition:0.4s; border-radius:50%;
+      transform: ${isEnabled ? 'translateX(20px)' : 'translateX(0)'};
+  `;
+  
+  // Dynamic update of knob position
+  cb.addEventListener('change', function() {
+       knob.style.transform = this.checked ? 'translateX(20px)' : 'translateX(0)';
+  });
+
   tog.appendChild(cb);
   tog.appendChild(sl);
+  sl.appendChild(knob); // Add knob inside slider for simpler DOM
   el.appendChild(tog);
   
   return el;
