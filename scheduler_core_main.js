@@ -1,22 +1,16 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v10 - RAINY DAY + LOCATION AWARE + SCHEDULER API)
+// scheduler_core_main.js (FIXED v11 - STRICT AVAILABILITY + BUNK SORTING + RAINY DAY CHECKS)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
-// 2. Process Bunk Overrides (pinned specific bunks)
-//    - Checks Location Conflicts for Specials
-//    - Personal Trips: Pinned tiles, no field usage
-//    - Sports: Register field usage for capacity tracking
-//    - Specials: Register field/location usage
-// 2.5. Process Elective Tiles - Lock fields for other divisions
-// 3. Process Skeleton Blocks - identify leagues, smart tiles, activities
-//    - Register Location Usage for Pinned Blocks
-// 4. ★ SPECIALTY LEAGUES FIRST ★ - Lock their fields globally
-// 5. ★ REGULAR LEAGUES SECOND ★ - Lock their fields globally
-// 6. Process Smart Tiles - respect all locks
-// 7. Run Total Solver for remaining activities - respect all locks
-//
-// SWIM/POOL ALIAS: "Swim" and "Pool" are treated as the same resource
+// 2. Load Data & Apply Daily Overrides (Strict Availability)
+// 3. Process Bunk Overrides (pinned specific bunks)
+// 4. Process Elective Tiles
+// 5. Process Skeleton Blocks
+// 6. ★ SPECIALTY LEAGUES FIRST ★
+// 7. ★ REGULAR LEAGUES SECOND ★
+// 8. Process Smart Tiles
+// 9. Run Total Solver
 //
 // This ensures NO field double-booking across divisions!
 // ============================================================================
@@ -529,7 +523,7 @@
 
     window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v10 - RAINY DAY + LOCATION AWARE) ★★★");
+        console.log("★★★ OPTIMIZER STARTED (v11 - STRICT AVAILABILITY + BUNK SORTING) ★★★");
         console.log("=".repeat(70));
 
         // ★★★ RESET disabled fields & Location Usage at start of each run ★★★
@@ -547,6 +541,28 @@
         window.activityProperties = config.activityProperties;
         window.unifiedTimes = [];
 
+        // =====================================================================
+        // CRITICAL UPDATE v11: MERGE DAILY FIELD AVAILABILITY INTO PROPERTIES
+        // This ensures the solver respects "Unavailable" times set in Daily Adjustments
+        // =====================================================================
+        let { dailyFieldAvailability } = config;
+        
+        if (dailyFieldAvailability && Object.keys(dailyFieldAvailability).length > 0) {
+            console.log("[OPTIMIZER] Merging Daily Field Availability Rules...");
+            Object.keys(dailyFieldAvailability).forEach(fieldName => {
+                const rules = dailyFieldAvailability[fieldName];
+                if (rules && rules.length > 0) {
+                    if (!window.activityProperties[fieldName]) {
+                        window.activityProperties[fieldName] = {};
+                    }
+                    // OVERWRITE or APPEND? Daily adjustments imply strict override.
+                    // We'll set it as the primary timeRules for today.
+                    window.activityProperties[fieldName].timeRules = rules;
+                    console.log(`   -> Applied ${rules.length} rule(s) to ${fieldName}`);
+                }
+            });
+        }
+
         // Change 'const' to 'let' for disabledFields to allow updates
         let {
             divisions,
@@ -563,9 +579,23 @@
             historicalCounts,
             specialActivityNames,
             bunkMetaData,
-            dailyFieldAvailability,
+            dailyFieldAvailability: _unusedDFA, // Already extracted above
             fieldsBySport
         } = config;
+
+        // =========================================================================
+        // CRITICAL FIX v11: NUMERIC BUNK SORTING
+        // Ensure Bunk 9 comes before Bunk 18
+        // =========================================================================
+        Object.keys(divisions).forEach(divName => {
+            if (divisions[divName].bunks) {
+                divisions[divName].bunks.sort((a, b) => {
+                    const numA = parseInt(a.match(/\d+/)?.[0] || 0);
+                    const numB = parseInt(b.match(/\d+/)?.[0] || 0);
+                    return numA - numB || a.localeCompare(b);
+                });
+            }
+        });
 
         window.SchedulerCoreUtils._bunkMetaData = bunkMetaData;
         window.SchedulerCoreUtils._sportMetaData = config.sportMetaData || {};
@@ -620,6 +650,31 @@
         } else {
             // Even when not rainy day, expose disabled fields (from manual overrides)
             window.currentDisabledFields = disabledFields || [];
+        }
+
+        // ★★★ FIX: Filter Rainy Day Specials if Mode is OFF ★★★
+        // This ensures downstream logic (Smart Tiles & Solvers) never sees rainy-day-only specials
+        if (!isRainyDayModeActive()) {
+            if (masterSpecials) {
+                const originalCount = masterSpecials.length;
+                
+                // Keep only specials that are NOT exclusive to rainy days
+                // Checks both 'rainyDayOnly' (boolean) and 'rainyDayExclusive' (legacy boolean)
+                masterSpecials = masterSpecials.filter(s => !s.rainyDayOnly && !s.rainyDayExclusive);
+                
+                // Update config references so SmartLogicAdapter sees the filtered list
+                config.masterSpecials = masterSpecials;
+                
+                // Sync specialActivityNames
+                if (config.specialActivityNames) {
+                    const validNames = new Set(masterSpecials.map(s => s.name));
+                    config.specialActivityNames = config.specialActivityNames.filter(n => validNames.has(n));
+                }
+                
+                if (masterSpecials.length < originalCount) {
+                    console.log(`[RainyDay] Filtered out ${originalCount - masterSpecials.length} rainy-day-only specials (Mode OFF)`);
+                }
+            }
         }
 
         // =========================================================================
