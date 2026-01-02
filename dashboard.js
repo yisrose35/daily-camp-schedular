@@ -8,6 +8,7 @@
 // - Change password
 // - Display stats from cloud storage
 // - Logout
+// - RBAC Team Section Visibility
 // ============================================================================
 
 (function() {
@@ -50,6 +51,9 @@
     const statDivisions = document.getElementById('statDivisions');
     const statBunks = document.getElementById('statBunks');
     const statCampers = document.getElementById('statCampers');
+    
+    // RBAC elements
+    const teamAccessSection = document.getElementById('team-access-section');
 
     // ========================================
     // AUTH CHECK
@@ -83,6 +87,9 @@
             
             // Load dashboard data
             await loadDashboardData();
+            
+            // Check Access Control for Team Section
+            checkAccessControl();
             
         } catch (e) {
             console.error('Auth check failed:', e);
@@ -150,13 +157,81 @@
     }
 
     // ========================================
+    // CHECK ACCESS CONTROL (RBAC)
+    // ========================================
+
+    async function checkAccessControl() {
+        // If AccessControl is loaded and user is owner, show the section
+        // We wait a moment for AccessControl to initialize if needed
+        
+        const checkRole = async () => {
+            if (window.AccessControl) {
+                try {
+                    // Initialize if needed
+                    if (!window.AccessControl.isInitialized) {
+                        await window.AccessControl.initialize();
+                    }
+                    
+                    const role = window.AccessControl.getCurrentRole();
+                    console.log('Current user role:', role);
+                    
+                    if (role === 'owner') {
+                        if (teamAccessSection) {
+                            teamAccessSection.style.display = 'block';
+                            
+                            // Initialize Team UI if available
+                            if (window.TeamSubdivisionsUI) {
+                                // Remove placeholders
+                                document.getElementById('subdivisions-placeholder')?.remove();
+                                document.getElementById('team-placeholder')?.remove();
+                                
+                                await window.TeamSubdivisionsUI.initialize();
+                                window.TeamSubdivisionsUI.renderSubdivisionsCard(
+                                    document.getElementById('subdivisions-card')
+                                );
+                                window.TeamSubdivisionsUI.renderTeamCard(
+                                    document.getElementById('team-card')
+                                );
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.warn('Error checking access control:', err);
+                }
+            }
+        };
+
+        // Try immediately
+        await checkRole();
+        
+        // Also listen for event in case it loads late
+        document.addEventListener('campistry-access-loaded', async (e) => {
+            if (e.detail.role === 'owner') {
+                if (teamAccessSection) teamAccessSection.style.display = 'block';
+                 // Initialize Team UI if available
+                 if (window.TeamSubdivisionsUI) {
+                    document.getElementById('subdivisions-placeholder')?.remove();
+                    document.getElementById('team-placeholder')?.remove();
+                    
+                    await window.TeamSubdivisionsUI.initialize();
+                    window.TeamSubdivisionsUI.renderSubdivisionsCard(
+                        document.getElementById('subdivisions-card')
+                    );
+                    window.TeamSubdivisionsUI.renderTeamCard(
+                        document.getElementById('team-card')
+                    );
+                }
+            }
+        });
+    }
+
+    // ========================================
     // LOAD STATS
     // ========================================
     
     async function loadStats() {
         try {
             // Try to get from camp_state table (cloud storage)
-            // Fix #1: Changed owner_id to camp_id as requested
             const { data, error } = await window.supabase
                 .from('camp_state')
                 .select('state')
@@ -281,7 +356,7 @@
                     campData = data;
                 }
                 
-                // Fix #2: Added error handling for metadata update
+                // Update metadata
                 const { error: metaError } = await window.supabase.auth.updateUser({
                     data: { camp_name: newCampName }
                 });
