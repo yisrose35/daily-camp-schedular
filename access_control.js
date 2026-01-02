@@ -1,14 +1,15 @@
 // ============================================================================
-// access_control.js — Campistry Role-Based Access Control
+// access_control.js — Campistry Role-Based Access Control (Multi-Tenant)
 // ============================================================================
 // Provides permission checks throughout the app
 // Everyone sees everything, editing is restricted by role/subdivision
+// Properly handles team members connecting to the main camp
 // ============================================================================
 
 (function() {
     'use strict';
 
-    console.log("🔐 Access Control v1.1 loading...");
+    console.log("🔐 Access Control v1.2 (Multi-Tenant) loading...");
 
     // =========================================================================
     // STATE
@@ -21,6 +22,8 @@
     let _userSubdivisionIds = [];
     let _editableDivisions = [];
     let _initialized = false;
+    let _isTeamMember = false;
+    let _membership = null;
 
     const ROLES = {
         OWNER: 'owner',
@@ -74,15 +77,14 @@
         }
 
         _currentUser = user;
-        _campId = getCampId();
-
-        // Load user's role and permissions
-        await loadUserPermissions();
         
-        // Load subdivisions
+        // Determine camp ID and user role
+        await determineUserContext();
+        
+        // Load subdivisions for the camp
         await loadSubdivisions();
         
-        // Calculate editable divisions
+        // Calculate editable divisions based on role
         calculateEditableDivisions();
         
         _initialized = true;
@@ -92,98 +94,94 @@
             detail: {
                 role: _currentRole,
                 editableDivisions: _editableDivisions,
-                subdivisions: _subdivisions
+                subdivisions: _subdivisions,
+                isTeamMember: _isTeamMember
             }
         }));
         
         console.log("🔐 Access control initialized:", {
             role: _currentRole,
+            isTeamMember: _isTeamMember,
             editableDivisions: _editableDivisions.length,
             subdivisions: _subdivisions.length
         });
     }
 
+    // =========================================================================
+    // DETERMINE USER CONTEXT
+    // =========================================================================
+
+    async function determineUserContext() {
+        console.log("🔐 Determining user context...");
+        
+        // First, check if user owns any camps
+        try {
+            const { data: ownedCamp } = await window.supabase
+                .from('camps')
+                .select('owner')
+                .eq('owner', _currentUser.id)
+                .maybeSingle();
+            
+            if (ownedCamp) {
+                console.log("🔐 User is a camp owner");
+                _currentRole = ROLES.OWNER;
+                _isTeamMember = false;
+                _campId = _currentUser.id;
+                _userSubdivisionIds = []; // Empty = access to all
+                
+                // Store in localStorage
+                localStorage.setItem('campistry_user_id', _campId);
+                return;
+            }
+        } catch (e) {
+            console.warn("🔐 Error checking camp ownership:", e);
+        }
+        
+        // Not an owner - check if they're a team member
+        try {
+            const { data: memberData } = await window.supabase
+                .from('camp_users')
+                .select('*')
+                .eq('user_id', _currentUser.id)
+                .not('accepted_at', 'is', null)
+                .maybeSingle();
+            
+            if (memberData) {
+                console.log("🔐 User is a team member:", memberData.role);
+                _currentRole = memberData.role || ROLES.VIEWER;
+                _isTeamMember = true;
+                _campId = memberData.camp_id;
+                _userSubdivisionIds = memberData.subdivision_ids || [];
+                _membership = memberData;
+                
+                // Store camp ID for cloud storage to use
+                localStorage.setItem('campistry_user_id', _campId);
+                return;
+            }
+        } catch (e) {
+            console.warn("🔐 Error checking team membership:", e);
+        }
+        
+        // User is neither owner nor team member - default to their ID as new camp
+        console.log("🔐 User is a new camp owner (first time)");
+        _currentRole = ROLES.OWNER;
+        _isTeamMember = false;
+        _campId = _currentUser.id;
+        _userSubdivisionIds = [];
+        localStorage.setItem('campistry_user_id', _campId);
+    }
+
+    /**
+     * Get the camp ID (works for both owners and team members)
+     */
     function getCampId() {
-        // Check localStorage cache first
+        if (_campId) return _campId;
+        
+        // Fallback to localStorage
         const cached = localStorage.getItem('campistry_user_id');
         if (cached && cached !== 'demo_camp_001') return cached;
         
-        // Try to get from Supabase session
-        try {
-            for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i);
-                if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
-                    const stored = localStorage.getItem(key);
-                    if (stored) {
-                        const parsed = JSON.parse(stored);
-                        if (parsed?.user?.id) return parsed.user.id;
-                    }
-                }
-            }
-        } catch (e) {}
-        
         return _currentUser?.id || 'demo_camp_001';
-    }
-
-    // =========================================================================
-    // LOAD PERMISSIONS
-    // =========================================================================
-
-    async function loadUserPermissions() {
-        if (!_currentUser || !_campId) return;
-
-        // Check if user is the camp owner (their user ID = camp ID)
-        if (_currentUser.id === _campId) {
-            _currentRole = ROLES.OWNER;
-            _userSubdivisionIds = []; // Empty = access to all
-            console.log("🔐 User is camp owner");
-            return;
-        }
-
-        // Look up user in camp_users table
-        try {
-            const { data, error } = await window.supabase
-                .from('camp_users')
-                .select('role, subdivision_ids')
-                .eq('camp_id', _campId)
-                .eq('user_id', _currentUser.id)
-                .single();
-
-            if (error) {
-                // User not found in camp_users - might be owner or unauthorized
-                console.warn("🔐 User not found in camp_users, checking if owner");
-                
-                // Double-check ownership
-                const { data: campData } = await window.supabase
-                    .from('camps')
-                    .select('owner')
-                    .eq('owner', _currentUser.id)
-                    .single();
-                
-                if (campData) {
-                    _currentRole = ROLES.OWNER;
-                    _userSubdivisionIds = [];
-                } else {
-                    // Unauthorized - default to viewer with no edit access
-                    _currentRole = ROLES.VIEWER;
-                    _userSubdivisionIds = [];
-                }
-                return;
-            }
-
-            _currentRole = data.role || ROLES.VIEWER;
-            _userSubdivisionIds = data.subdivision_ids || [];
-            
-            console.log("🔐 Loaded user permissions:", {
-                role: _currentRole,
-                subdivisionIds: _userSubdivisionIds
-            });
-
-        } catch (e) {
-            console.error("🔐 Error loading permissions:", e);
-            _currentRole = ROLES.VIEWER;
-            _userSubdivisionIds = [];
-        }
     }
 
     // =========================================================================
@@ -191,13 +189,14 @@
     // =========================================================================
 
     async function loadSubdivisions() {
-        if (!_campId) return;
+        const campId = getCampId();
+        if (!campId) return;
 
         try {
             const { data, error } = await window.supabase
                 .from('subdivisions')
                 .select('*')
-                .eq('camp_id', _campId)
+                .eq('camp_id', campId)
                 .order('name');
 
             if (error) {
@@ -225,12 +224,14 @@
         // Owner and Admin can edit everything
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
             _editableDivisions = [...allDivisions];
+            console.log("🔐 Full edit access:", _editableDivisions.length, "divisions");
             return;
         }
         
         // Viewer can't edit anything
         if (_currentRole === ROLES.VIEWER) {
             _editableDivisions = [];
+            console.log("🔐 View-only access");
             return;
         }
         
@@ -239,6 +240,7 @@
             // If no subdivision restrictions, can edit all
             if (!_userSubdivisionIds || _userSubdivisionIds.length === 0) {
                 _editableDivisions = [...allDivisions];
+                console.log("🔐 Scheduler with full access");
                 return;
             }
             
@@ -252,6 +254,7 @@
             });
             
             _editableDivisions = [...editableDivs];
+            console.log("🔐 Scheduler restricted to:", _editableDivisions);
             return;
         }
         
@@ -272,6 +275,16 @@
             return true; // Default to allow during initialization
         }
         
+        // Owner and Admin can edit all
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
+            return true;
+        }
+        
+        // Viewer can't edit
+        if (_currentRole === ROLES.VIEWER) {
+            return false;
+        }
+        
         return _editableDivisions.includes(divisionName);
     }
 
@@ -279,7 +292,6 @@
      * Check if current user can generate schedule for a division
      */
     function canGenerateDivision(divisionName) {
-        // Same as edit permission
         return canEditDivision(divisionName);
     }
 
@@ -308,7 +320,16 @@
      * Check if current user has any edit permissions
      */
     function canEditAnything() {
-        return _currentRole !== ROLES.VIEWER && _editableDivisions.length > 0;
+        if (_currentRole === ROLES.VIEWER) return false;
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        return _editableDivisions.length > 0;
+    }
+    
+    /**
+     * Check if current user can save/modify data
+     */
+    function canSave() {
+        return _currentRole !== ROLES.VIEWER;
     }
 
     /**
@@ -330,6 +351,13 @@
      */
     function getCurrentRole() {
         return _currentRole;
+    }
+    
+    /**
+     * Check if user is a team member (vs owner)
+     */
+    function isTeamMember() {
+        return _isTeamMember;
     }
 
     /**
@@ -378,42 +406,34 @@
     // COLOR MANAGEMENT
     // =========================================================================
 
-    /**
-     * Get the next color in the palette (cycles through, avoids duplicates)
-     */
     function getNextSubdivisionColor() {
         const usedColors = _subdivisions.map(s => s.color);
-        // Find first unused color
         for (const color of SUBDIVISION_COLORS) {
             if (!usedColors.includes(color)) {
                 return color;
             }
         }
-        // If all used, cycle based on count
         return SUBDIVISION_COLORS[_subdivisions.length % SUBDIVISION_COLORS.length];
     }
 
     // =========================================================================
-    // SUBDIVISION MANAGEMENT
+    // SUBDIVISION MANAGEMENT (Owners/Admins only)
     // =========================================================================
 
-    /**
-     * Create a new subdivision
-     */
     async function createSubdivision(name, divisions = [], color = null) {
         if (!canManageSubdivisions()) {
             console.error("🔐 Not authorized to create subdivisions");
             return { error: "Not authorized" };
         }
 
-        // Use provided color or get next in palette
         const subdivisionColor = color || getNextSubdivisionColor();
+        const campId = getCampId();
 
         try {
             const { data, error } = await window.supabase
                 .from('subdivisions')
                 .insert([{
-                    camp_id: _campId,
+                    camp_id: campId,
                     name: name,
                     divisions: divisions,
                     color: subdivisionColor
@@ -423,7 +443,6 @@
 
             if (error) throw error;
 
-            // Refresh subdivisions
             await loadSubdivisions();
             calculateEditableDivisions();
 
@@ -435,9 +454,6 @@
         }
     }
 
-    /**
-     * Update a subdivision
-     */
     async function updateSubdivision(id, updates) {
         if (!canManageSubdivisions()) {
             return { error: "Not authorized" };
@@ -464,9 +480,6 @@
         }
     }
 
-    /**
-     * Delete a subdivision
-     */
     async function deleteSubdivision(id) {
         if (_currentRole !== ROLES.OWNER) {
             return { error: "Only owner can delete subdivisions" };
@@ -492,18 +505,17 @@
     }
 
     // =========================================================================
-    // TEAM MANAGEMENT
+    // TEAM MANAGEMENT (Owners only)
     // =========================================================================
 
-    /**
-     * Get all team members for the camp
-     */
     async function getTeamMembers() {
+        const campId = getCampId();
+        
         try {
             const { data, error } = await window.supabase
                 .from('camp_users')
                 .select('*')
-                .eq('camp_id', _campId)
+                .eq('camp_id', campId)
                 .order('role');
 
             if (error) throw error;
@@ -516,27 +528,23 @@
         }
     }
 
-    /**
-     * Invite a new team member
-     */
     async function inviteTeamMember(email, role, subdivisionIds = []) {
         if (!canInviteUsers()) {
             return { error: "Not authorized to invite users" };
         }
 
-        // Validate role
         if (!Object.values(ROLES).includes(role)) {
             return { error: "Invalid role" };
         }
 
-        // Generate invite token
         const inviteToken = crypto.randomUUID();
+        const campId = getCampId();
 
         try {
             const { data, error } = await window.supabase
                 .from('camp_users')
                 .insert([{
-                    camp_id: _campId,
+                    camp_id: campId,
                     email: email.toLowerCase().trim(),
                     role: role,
                     subdivision_ids: subdivisionIds,
@@ -548,8 +556,6 @@
 
             if (error) throw error;
 
-            // TODO: Send invite email via edge function
-            // For now, return the invite link
             const inviteUrl = `${window.location.origin}/invite.html?token=${inviteToken}`;
 
             return { 
@@ -564,9 +570,6 @@
         }
     }
 
-    /**
-     * Update a team member's role or subdivisions
-     */
     async function updateTeamMember(id, updates) {
         if (!canManageTeam()) {
             return { error: "Not authorized" };
@@ -590,9 +593,6 @@
         }
     }
 
-    /**
-     * Remove a team member
-     */
     async function removeTeamMember(id) {
         if (!canManageTeam()) {
             return { error: "Not authorized" };
@@ -614,16 +614,12 @@
         }
     }
 
-    /**
-     * Accept an invite (called when user clicks invite link and signs up/in)
-     */
     async function acceptInvite(inviteToken) {
         if (!_currentUser) {
             return { error: "Must be logged in to accept invite" };
         }
 
         try {
-            // Find the invite
             const { data: invite, error: findError } = await window.supabase
                 .from('camp_users')
                 .select('*')
@@ -634,18 +630,16 @@
                 return { error: "Invalid or expired invite" };
             }
 
-            // Check email matches
             if (invite.email.toLowerCase() !== _currentUser.email.toLowerCase()) {
                 return { error: "This invite was sent to a different email address" };
             }
 
-            // Accept the invite
             const { data, error } = await window.supabase
                 .from('camp_users')
                 .update({
                     user_id: _currentUser.id,
                     accepted_at: new Date().toISOString(),
-                    invite_token: null // Clear token after use
+                    invite_token: null
                 })
                 .eq('id', invite.id)
                 .select()
@@ -653,9 +647,14 @@
 
             if (error) throw error;
 
-            // Reload permissions
+            // Update local state
             _campId = invite.camp_id;
-            await loadUserPermissions();
+            _currentRole = invite.role;
+            _isTeamMember = true;
+            _userSubdivisionIds = invite.subdivision_ids || [];
+            
+            localStorage.setItem('campistry_user_id', _campId);
+            
             await loadSubdivisions();
             calculateEditableDivisions();
 
@@ -671,15 +670,14 @@
     // FIELD LOCKS PERSISTENCE
     // =========================================================================
 
-    /**
-     * Save field locks for a specific date
-     */
     async function saveFieldLocks(date, locks, generatedDivisions) {
+        const campId = getCampId();
+        
         try {
             const { data, error } = await window.supabase
                 .from('field_locks')
                 .upsert({
-                    camp_id: _campId,
+                    camp_id: campId,
                     schedule_date: date,
                     locks: locks,
                     generated_divisions: generatedDivisions,
@@ -701,21 +699,18 @@
         }
     }
 
-    /**
-     * Load field locks for a specific date
-     */
     async function loadFieldLocks(date) {
+        const campId = getCampId();
+        
         try {
             const { data, error } = await window.supabase
                 .from('field_locks')
                 .select('*')
-                .eq('camp_id', _campId)
+                .eq('camp_id', campId)
                 .eq('schedule_date', date)
-                .single();
+                .maybeSingle();
 
-            if (error && error.code !== 'PGRST116') { // PGRST116 = no rows
-                throw error;
-            }
+            if (error) throw error;
 
             return { 
                 data: data || null,
@@ -729,15 +724,14 @@
         }
     }
 
-    /**
-     * Clear field locks for a specific date
-     */
     async function clearFieldLocks(date) {
+        const campId = getCampId();
+        
         try {
             const { error } = await window.supabase
                 .from('field_locks')
                 .delete()
-                .eq('camp_id', _campId)
+                .eq('camp_id', campId)
                 .eq('schedule_date', date);
 
             if (error) throw error;
@@ -754,9 +748,6 @@
     // UI HELPERS
     // =========================================================================
 
-    /**
-     * Get role display name
-     */
     function getRoleDisplayName(role) {
         const names = {
             owner: 'Owner',
@@ -767,9 +758,6 @@
         return names[role] || role;
     }
 
-    /**
-     * Get role color for badges
-     */
     function getRoleColor(role) {
         const colors = {
             owner: '#7C3AED',
@@ -780,9 +768,6 @@
         return colors[role] || '#6B7280';
     }
 
-    /**
-     * Render access banner showing what user can edit
-     */
     function renderAccessBanner() {
         const existing = document.getElementById('access-control-banner');
         if (existing) existing.remove();
@@ -831,7 +816,6 @@
             `;
         }
         
-        // Insert at top of main content
         const container = document.getElementById('main-app-container') || document.body;
         const firstChild = container.firstChild;
         container.insertBefore(banner, firstChild);
@@ -864,15 +848,18 @@
         canManageSubdivisions,
         canManageTeam,
         canEditAnything,
+        canSave,
         
         // Getters
         getEditableDivisions,
         getGeneratableDivisions,
         getCurrentRole,
+        isTeamMember,
         getSubdivisions,
         getUserSubdivisions,
         getSubdivisionForDivision,
         isDivisionInUserSubdivisions,
+        getCampId,
         
         // Color management
         getNextSubdivisionColor,
@@ -915,12 +902,15 @@
                 _initialized = false;
                 _currentUser = null;
                 _currentRole = null;
+                _campId = null;
                 _subdivisions = [];
                 _editableDivisions = [];
+                _isTeamMember = false;
+                _membership = null;
             }
         });
     }
 
-    console.log("🔐 Access Control module loaded");
+    console.log("🔐 Access Control module loaded (Multi-Tenant)");
 
 })();
