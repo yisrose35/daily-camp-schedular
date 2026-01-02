@@ -367,9 +367,9 @@
         const SUPABASE_URL = 'https://bzqmhcumuarrbueqttfh.supabase.co';
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI';
         
-        // RENAMED to supabaseClient to prevent conflict with global 'supabase' object from CDN
         let supabaseClient;
         let inviteData = null;
+        let inviteToken = null; // Store the token globally
         let currentUser = null;
         
         // =====================================================================
@@ -379,16 +379,16 @@
         async function init() {
             console.log('🎟️ Invite page initializing...');
             
-            // Initialize Supabase - using 'supabaseClient' variable
+            // Initialize Supabase
             supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
             
             // Get invite token from URL
             const params = new URLSearchParams(window.location.search);
-            const token = params.get('token');
+            inviteToken = params.get('token');
             
-            console.log('🎟️ Token from URL:', token ? token.substring(0, 8) + '...' : 'NONE');
+            console.log('🎟️ Token from URL:', inviteToken ? inviteToken.substring(0, 8) + '...' : 'NONE');
             
-            if (!token) {
+            if (!inviteToken) {
                 showError('No invite token provided. Please check your invite link.');
                 return;
             }
@@ -402,29 +402,39 @@
             console.log('🎟️ Current user:', currentUser ? currentUser.email : 'Not logged in');
             
             // Load invite details
-            await loadInvite(token);
+            await loadInvite(inviteToken);
         }
         
         async function loadInvite(token) {
             try {
                 console.log('🎟️ Loading invite with token...');
                 
+                // Use maybeSingle() instead of single() to avoid error when no rows found
+                // This is more forgiving and helps diagnose RLS issues
                 const { data, error } = await supabaseClient
                     .from('camp_users')
                     .select('*')
                     .eq('invite_token', token)
-                    .single();
+                    .maybeSingle();
                 
                 console.log('🎟️ Query result:', { data, error });
                 
                 if (error) {
                     console.error('🎟️ Query error:', error);
-                    showError('This invite link is invalid or has expired. Error: ' + error.message);
+                    
+                    // Check if this is likely an RLS issue
+                    if (error.message.includes('coerce') || error.code === 'PGRST116') {
+                        showError('Unable to verify invite. This is likely a database permissions issue. Please ask the camp administrator to check Supabase RLS policies.');
+                    } else {
+                        showError('Error loading invite: ' + error.message);
+                    }
                     return;
                 }
                 
+                // If no data returned, it could be RLS blocking or invalid token
                 if (!data) {
-                    showError('This invite link is invalid or has expired.');
+                    console.warn('🎟️ No data returned - could be RLS issue or invalid token');
+                    showError('This invite link could not be verified. This may happen if:\n\n• The invite has already been accepted\n• The link has expired\n• Database permissions need to be configured\n\nPlease contact the camp administrator.');
                     return;
                 }
                 
@@ -437,7 +447,7 @@
                 
                 // If already accepted
                 if (data.accepted_at) {
-                    showError('This invite has already been accepted.');
+                    showError('This invite has already been accepted. If this is your invite, please sign in normally.');
                     return;
                 }
                 
@@ -642,6 +652,22 @@
         
         async function acceptInvite() {
             try {
+                // If we don't have inviteData (e.g., RLS blocked initial read), 
+                // we need to re-fetch now that user is authenticated
+                if (!inviteData && inviteToken) {
+                    console.log('🎟️ Re-fetching invite data now that user is authenticated...');
+                    const { data, error } = await supabaseClient
+                        .from('camp_users')
+                        .select('*')
+                        .eq('invite_token', inviteToken)
+                        .maybeSingle();
+                    
+                    if (error || !data) {
+                        throw new Error('Could not find invite. It may have expired or been used.');
+                    }
+                    inviteData = data;
+                }
+                
                 // Check email matches
                 if (currentUser.email.toLowerCase() !== inviteData.email.toLowerCase()) {
                     throw new Error('Email mismatch. Please sign in with ' + inviteData.email);
