@@ -436,6 +436,25 @@
             showInviteModal();
         });
 
+        // Bind copy link buttons
+        container.querySelectorAll('.member-copy-link-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const url = btn.dataset.url;
+                await copyToClipboard(url);
+                showToast('Invite link copied!');
+            });
+        });
+
+        // Bind send email buttons
+        container.querySelectorAll('.member-send-email-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const email = btn.dataset.email;
+                const url = btn.dataset.url;
+                const role = btn.dataset.role;
+                await sendInviteEmail(email, url, role);
+            });
+        });
+
         // Bind edit/remove buttons
         container.querySelectorAll('.member-edit-btn').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -457,6 +476,179 @@
         });
     }
 
+    // =========================================================================
+    // HELPER FUNCTIONS
+    // =========================================================================
+
+    /**
+     * Copy text to clipboard
+     */
+    async function copyToClipboard(text) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch (err) {
+            // Fallback for older browsers
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            return true;
+        }
+    }
+
+    /**
+     * Show a toast notification
+     */
+    function showToast(message, type = 'success') {
+        let toast = document.getElementById('team-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'team-toast';
+            toast.style.cssText = `
+                position: fixed;
+                bottom: 24px;
+                left: 50%;
+                transform: translateX(-50%) translateY(100px);
+                padding: 12px 24px;
+                border-radius: 10px;
+                color: white;
+                font-weight: 500;
+                font-size: 0.9rem;
+                z-index: 10001;
+                transition: all 0.3s ease;
+                box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+            `;
+            document.body.appendChild(toast);
+        }
+
+        toast.style.background = type === 'success' ? '#10B981' : type === 'error' ? '#EF4444' : '#6366F1';
+        toast.textContent = message;
+        
+        // Animate in
+        requestAnimationFrame(() => {
+            toast.style.transform = 'translateX(-50%) translateY(0)';
+        });
+
+        // Hide after delay
+        clearTimeout(toast._hideTimer);
+        toast._hideTimer = setTimeout(() => {
+            toast.style.transform = 'translateX(-50%) translateY(100px)';
+        }, 3000);
+    }
+
+    /**
+     * Open email client with pre-filled invite email (fallback)
+     */
+    function openInviteEmail(email, inviteUrl, role) {
+        // Get camp name if available
+        const campName = document.getElementById('campNameDisplay')?.textContent || 
+                        document.querySelector('.welcome-title span')?.textContent ||
+                        'our camp';
+
+        const subject = encodeURIComponent(`You're invited to join ${campName} on Campistry`);
+        
+        const body = encodeURIComponent(
+`Hi!
+
+You've been invited to join ${campName} on Campistry as a ${role}.
+
+Campistry is a camp management platform that helps us create and manage daily schedules, activities, and more.
+
+Click the link below to accept your invitation:
+${inviteUrl}
+
+If you don't have a Campistry account yet, you'll be able to create one when you click the link.
+
+Looking forward to working with you!
+
+---
+Sent via Campistry (campistry.org)`
+        );
+
+        window.open(`mailto:${email}?subject=${subject}&body=${body}`, '_blank');
+    }
+
+    /**
+     * Send invite email via Resend (Edge Function)
+     */
+    async function sendInviteEmailViaResend(email, inviteUrl, role) {
+        // Get camp name
+        const campName = document.getElementById('campNameDisplay')?.textContent || 
+                        document.querySelector('.welcome-title span')?.textContent ||
+                        'Your Camp';
+
+        try {
+            // Get the Supabase URL from the client
+            const supabaseUrl = window.supabase?.supabaseUrl || 
+                               'https://bzqmhcumuarrbueqttfh.supabase.co';
+            
+            const response = await fetch(`${supabaseUrl}/functions/v1/send-invite-email`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${(await window.supabase.auth.getSession()).data.session?.access_token}`,
+                },
+                body: JSON.stringify({
+                    to: email,
+                    inviteUrl: inviteUrl,
+                    role: role,
+                    campName: campName,
+                }),
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to send email');
+            }
+
+            return { success: true, data };
+        } catch (error) {
+            console.error('Error sending invite email:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Smart email sender - tries Resend first, falls back to mailto
+     */
+    async function sendInviteEmail(email, inviteUrl, role, showFeedback = true) {
+        if (showFeedback) {
+            showToast('Sending invite email...', 'info');
+        }
+
+        // Try Resend first
+        const result = await sendInviteEmailViaResend(email, inviteUrl, role);
+        
+        if (result.success) {
+            if (showFeedback) {
+                showToast(`✅ Invite sent to ${email}!`, 'success');
+            }
+            return { success: true, method: 'resend' };
+        }
+
+        // If Resend fails, offer mailto fallback
+        console.warn('Resend failed, offering mailto fallback:', result.error);
+        
+        if (showFeedback) {
+            const useFallback = confirm(
+                `Automatic email sending failed. Would you like to open your email client instead?\n\nError: ${result.error}`
+            );
+            
+            if (useFallback) {
+                openInviteEmail(email, inviteUrl, role);
+                return { success: true, method: 'mailto' };
+            }
+        }
+
+        return { success: false, error: result.error };
+    }
+
     function renderTeamMemberItem(member) {
         const roleClass = `role-${member.role}`;
         const roleName = window.AccessControl?.getRoleDisplayName(member.role) || member.role;
@@ -469,6 +661,11 @@
             return sub?.name;
         }).filter(Boolean).join(', ') || '';
 
+        // Generate invite URL for pending members
+        const inviteUrl = isPending && member.invite_token 
+            ? `${window.location.origin}/invite.html?token=${member.invite_token}`
+            : null;
+
         return `
             <div class="team-member-item ${isPending ? 'pending' : ''}">
                 <div class="member-info">
@@ -480,6 +677,20 @@
                 </div>
                 <div class="member-actions">
                     <span class="${roleClass}">${roleName}</span>
+                    ${isPending && inviteUrl ? `
+                        <button class="btn-icon member-copy-link-btn" data-url="${inviteUrl}" title="Copy Invite Link">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                        </button>
+                        <button class="btn-icon member-send-email-btn" data-email="${member.email}" data-url="${inviteUrl}" data-role="${roleName}" title="Send Invite Email">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                                <polyline points="22,6 12,13 2,6"></polyline>
+                            </svg>
+                        </button>
+                    ` : ''}
                     ${member.role !== 'owner' ? `
                         <button class="btn-icon member-edit-btn" data-id="${member.id}" title="Edit">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -619,27 +830,88 @@
                     return;
                 }
 
-                // Show success with invite link
+                // Show success with action buttons
                 successEl.innerHTML = `
-                    ✅ Invite created! Share this link:<br>
-                    <input 
-                        type="text" 
-                        value="${result.inviteUrl}" 
-                        readonly 
-                        style="width: 100%; margin-top: 8px; padding: 8px; font-size: 0.85rem;"
-                        onclick="this.select()"
-                    >
+                    <div style="margin-bottom: 12px;">✅ Invite created for <strong>${email}</strong></div>
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <button type="button" class="btn-action" id="copy-invite-link" style="
+                            display: inline-flex;
+                            align-items: center;
+                            gap: 6px;
+                            padding: 8px 16px;
+                            background: #6366F1;
+                            color: white;
+                            border: none;
+                            border-radius: 6px;
+                            font-size: 0.85rem;
+                            font-weight: 500;
+                            cursor: pointer;
+                        ">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                            Copy Link
+                        </button>
+                        <button type="button" class="btn-action" id="send-invite-email" style="
+                            display: inline-flex;
+                            align-items: center;
+                            gap: 6px;
+                            padding: 8px 16px;
+                            background: #10B981;
+                            color: white;
+                            border: none;
+                            border-radius: 6px;
+                            font-size: 0.85rem;
+                            font-weight: 500;
+                            cursor: pointer;
+                        ">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                                <polyline points="22,6 12,13 2,6"></polyline>
+                            </svg>
+                            Send Email
+                        </button>
+                    </div>
+                    <div style="margin-top: 10px; font-size: 0.8rem; color: var(--slate-500);">
+                        Or share this link directly: <br>
+                        <input 
+                            type="text" 
+                            value="${result.inviteUrl}" 
+                            readonly 
+                            style="width: 100%; margin-top: 4px; padding: 6px 8px; font-size: 0.8rem; border: 1px solid var(--slate-200); border-radius: 4px;"
+                            onclick="this.select()"
+                        >
+                    </div>
                 `;
+
+                // Bind the action buttons
+                document.getElementById('copy-invite-link')?.addEventListener('click', async () => {
+                    await copyToClipboard(result.inviteUrl);
+                    showToast('Invite link copied!');
+                });
+
+                document.getElementById('send-invite-email')?.addEventListener('click', async () => {
+                    const roleName = window.AccessControl?.getRoleDisplayName(role) || role;
+                    await sendInviteEmail(email, result.inviteUrl, roleName);
+                });
 
                 // Refresh data
                 await refreshData();
                 
-                // Close after delay
-                setTimeout(() => {
-                    closeModal();
-                    const container = document.getElementById('team-card');
-                    if (container) renderTeamCard(container);
-                }, 5000);
+                // Don't auto-close - let user copy/send first
+                // Add a done button
+                const formActions = modal.querySelector('.form-actions');
+                if (formActions) {
+                    formActions.innerHTML = `
+                        <button type="button" class="btn-primary" id="done-invite" style="width: 100%;">Done</button>
+                    `;
+                    document.getElementById('done-invite')?.addEventListener('click', () => {
+                        closeModal();
+                        const container = document.getElementById('team-card');
+                        if (container) renderTeamCard(container);
+                    });
+                }
 
             } catch (err) {
                 errorEl.textContent = err.message || 'An error occurred';
@@ -1110,6 +1382,11 @@
         showSubdivisionModal,
         showInviteModal,
         getNextColor,
+        copyToClipboard,
+        showToast,
+        openInviteEmail,
+        sendInviteEmailViaResend,
+        sendInviteEmail,
         SUBDIVISION_COLORS,
         injectStyles
     };
