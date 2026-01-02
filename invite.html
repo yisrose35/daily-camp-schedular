@@ -48,12 +48,6 @@
             text-align: center;
         }
         
-        .logo {
-            width: 60px;
-            height: 60px;
-            margin-bottom: 24px;
-        }
-        
         h1 {
             color: var(--slate-900);
             font-size: 1.5rem;
@@ -152,6 +146,7 @@
             border-radius: 8px;
             margin-bottom: 16px;
             font-size: 0.9rem;
+            text-align: left;
         }
         
         .success-message {
@@ -216,6 +211,11 @@
             border-color: var(--primary);
         }
         
+        .form-group input:disabled {
+            background: var(--slate-100);
+            color: var(--slate-600);
+        }
+        
         .auth-toggle {
             text-align: center;
             margin-top: 16px;
@@ -231,6 +231,17 @@
         
         .auth-toggle a:hover {
             text-decoration: underline;
+        }
+        
+        .email-notice {
+            background: #DBEAFE;
+            border: 1px solid #93C5FD;
+            color: #1E40AF;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            margin-bottom: 16px;
+            text-align: left;
         }
     </style>
 </head>
@@ -250,7 +261,7 @@
             <button class="btn-secondary" onclick="window.location.href='/'">Go to Homepage</button>
         </div>
         
-        <!-- Invite Details (need to log in) -->
+        <!-- Invite Details (need to create account or sign in) -->
         <div id="invite-state" class="hidden">
             <div style="font-size: 3rem; margin-bottom: 16px;">⛺</div>
             <h1>You're Invited!</h1>
@@ -262,54 +273,60 @@
                     <span class="invite-detail-value" id="invite-camp-name">Loading...</span>
                 </div>
                 <div class="invite-detail">
-                    <span class="invite-detail-label">Role</span>
+                    <span class="invite-detail-label">Your Role</span>
                     <span id="invite-role-badge" class="role-badge">Loading...</span>
                 </div>
                 <div class="invite-detail">
-                    <span class="invite-detail-label">Your Email</span>
+                    <span class="invite-detail-label">Invited Email</span>
                     <span class="invite-detail-value" id="invite-email">Loading...</span>
                 </div>
             </div>
             
             <div id="auth-error" class="error-message hidden"></div>
             
-            <!-- Sign In Form -->
-            <div id="signin-form" class="auth-form">
-                <div class="form-group">
-                    <label for="email">Email</label>
-                    <input type="email" id="email" placeholder="your@email.com" required>
+            <!-- Sign Up Form (DEFAULT for new invitees) -->
+            <div id="signup-form" class="auth-form">
+                <div class="email-notice">
+                    📧 Create your account using the email address this invite was sent to.
                 </div>
-                <div class="form-group">
-                    <label for="password">Password</label>
-                    <input type="password" id="password" placeholder="••••••••" required>
-                </div>
-                <button class="btn-primary" id="signin-btn" onclick="handleSignIn()">
-                    Sign In & Accept Invite
-                </button>
-                <p class="auth-toggle">
-                    Don't have an account? <a href="#" onclick="toggleAuthMode(event)">Sign Up</a>
-                </p>
-            </div>
-            
-            <!-- Sign Up Form -->
-            <div id="signup-form" class="auth-form hidden">
                 <div class="form-group">
                     <label for="signup-email">Email</label>
-                    <input type="email" id="signup-email" placeholder="your@email.com" required>
+                    <input type="email" id="signup-email" readonly disabled>
                 </div>
                 <div class="form-group">
-                    <label for="signup-password">Password</label>
-                    <input type="password" id="signup-password" placeholder="Create a password" required>
+                    <label for="signup-password">Create Password</label>
+                    <input type="password" id="signup-password" placeholder="At least 6 characters" required>
                 </div>
                 <div class="form-group">
                     <label for="signup-password-confirm">Confirm Password</label>
-                    <input type="password" id="signup-password-confirm" placeholder="Confirm password" required>
+                    <input type="password" id="signup-password-confirm" placeholder="Confirm your password" required>
                 </div>
                 <button class="btn-primary" id="signup-btn" onclick="handleSignUp()">
-                    Create Account & Accept
+                    Create Account & Join Camp
                 </button>
                 <p class="auth-toggle">
-                    Already have an account? <a href="#" onclick="toggleAuthMode(event)">Sign In</a>
+                    Already have a Campistry account? <a href="#" onclick="toggleAuthMode(event)">Sign In</a>
+                </p>
+            </div>
+            
+            <!-- Sign In Form (for existing users) -->
+            <div id="signin-form" class="auth-form hidden">
+                <div class="email-notice">
+                    🔑 Sign in with your existing Campistry account to join this camp.
+                </div>
+                <div class="form-group">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" readonly disabled>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" placeholder="Enter your password" required>
+                </div>
+                <button class="btn-primary" id="signin-btn" onclick="handleSignIn()">
+                    Sign In & Join Camp
+                </button>
+                <p class="auth-toggle">
+                    Don't have an account yet? <a href="#" onclick="toggleAuthMode(event)">Create Account</a>
                 </p>
             </div>
         </div>
@@ -326,7 +343,7 @@
                     <span class="invite-detail-value" id="accept-camp-name">Loading...</span>
                 </div>
                 <div class="invite-detail">
-                    <span class="invite-detail-label">Role</span>
+                    <span class="invite-detail-label">Your Role</span>
                     <span id="accept-role-badge" class="role-badge">Loading...</span>
                 </div>
                 <div class="invite-detail">
@@ -349,7 +366,7 @@
         <div id="success-state" class="hidden">
             <div style="font-size: 3rem; margin-bottom: 16px;">🎉</div>
             <h1>Welcome to the Team!</h1>
-            <p class="subtitle">You've successfully joined the camp.</p>
+            <p class="subtitle" id="success-camp-name">You've successfully joined the camp.</p>
             <div class="success-message">
                 Redirecting to your dashboard...
             </div>
@@ -361,7 +378,7 @@
     
     <script>
         // =====================================================================
-        // CONFIGURATION - MUST MATCH YOUR OTHER FILES
+        // CONFIGURATION
         // =====================================================================
         
         const SUPABASE_URL = 'https://bzqmhcumuarrbueqttfh.supabase.co';
@@ -369,8 +386,9 @@
         
         let supabaseClient;
         let inviteData = null;
-        let inviteToken = null; // Store the token globally
+        let inviteToken = null;
         let currentUser = null;
+        let campName = 'the camp'; // Will be fetched
         
         // =====================================================================
         // INITIALIZATION
@@ -393,11 +411,8 @@
                 return;
             }
             
-            // Check if user is logged in
+            // Check if user is already logged in
             const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
-            if (userError) {
-                console.log('🎟️ Auth check error (probably not logged in):', userError.message);
-            }
             currentUser = user;
             console.log('🎟️ Current user:', currentUser ? currentUser.email : 'Not logged in');
             
@@ -407,78 +422,75 @@
         
         async function loadInvite(token) {
             try {
-                console.log('🎟️ Loading invite with token...');
+                console.log('🎟️ Loading invite...');
                 
-                // Use maybeSingle() instead of single() to avoid error when no rows found
-                // This is more forgiving and helps diagnose RLS issues
+                // Fetch invite data
                 const { data, error } = await supabaseClient
                     .from('camp_users')
                     .select('*')
                     .eq('invite_token', token)
                     .maybeSingle();
                 
-                console.log('🎟️ Query result:', { data, error });
+                console.log('🎟️ Invite query result:', { data, error });
                 
                 if (error) {
                     console.error('🎟️ Query error:', error);
-                    
-                    // Check if this is likely an RLS issue
-                    if (error.message.includes('coerce') || error.code === 'PGRST116') {
-                        showError('Unable to verify invite. This is likely a database permissions issue. Please ask the camp administrator to check Supabase RLS policies.');
-                    } else {
-                        showError('Error loading invite: ' + error.message);
-                    }
+                    showError('Unable to load invite. Please try again or contact the camp administrator.');
                     return;
                 }
                 
-                // If no data returned, it could be RLS blocking or invalid token
                 if (!data) {
-                    console.warn('🎟️ No data returned - could be RLS issue or invalid token');
-                    showError('This invite link could not be verified. This may happen if:\n\n• The invite has already been accepted\n• The link has expired\n• Database permissions need to be configured\n\nPlease contact the camp administrator.');
+                    showError('This invite link is invalid or has already been used.');
+                    return;
+                }
+                
+                if (data.accepted_at) {
+                    showError('This invite has already been accepted. Please sign in normally to access the camp.');
                     return;
                 }
                 
                 inviteData = data;
-                console.log('🎟️ Invite data loaded:', { 
-                    email: inviteData.email, 
-                    role: inviteData.role,
-                    accepted: !!inviteData.accepted_at 
-                });
+                console.log('🎟️ Invite loaded:', { email: data.email, role: data.role, camp_id: data.camp_id });
                 
-                // If already accepted
-                if (data.accepted_at) {
-                    showError('This invite has already been accepted. If this is your invite, please sign in normally.');
-                    return;
-                }
-                
-                // Try to get camp name from camps table
-                let campName = 'Your Camp';
-                try {
-                    const { data: campData } = await supabaseClient
-                        .from('camps')
-                        .select('name')
-                        .eq('owner', data.camp_id)
-                        .single();
-                    
-                    if (campData?.name) {
-                        campName = campData.name;
-                    }
-                } catch (e) {
-                    console.log('🎟️ Could not fetch camp name:', e);
-                }
+                // Fetch camp name - the camp_id IS the owner's user ID
+                await fetchCampName(data.camp_id);
                 
                 // Show appropriate state
                 if (currentUser) {
-                    // User is logged in - show accept state
-                    showAcceptState(campName);
+                    showAcceptState();
                 } else {
-                    // Need to log in first
-                    showInviteState(campName);
+                    showInviteState();
                 }
                 
             } catch (e) {
-                console.error('🎟️ Error loading invite:', e);
-                showError('Failed to load invite details: ' + e.message);
+                console.error('🎟️ Error:', e);
+                showError('Failed to load invite: ' + e.message);
+            }
+        }
+        
+        async function fetchCampName(campOwnerId) {
+            try {
+                console.log('🎟️ Fetching camp name for owner:', campOwnerId);
+                
+                // Query the camps table where owner = campOwnerId
+                const { data, error } = await supabaseClient
+                    .from('camps')
+                    .select('name')
+                    .eq('owner', campOwnerId)
+                    .maybeSingle();
+                
+                console.log('🎟️ Camp query result:', { data, error });
+                
+                if (data && data.name) {
+                    campName = data.name;
+                    console.log('🎟️ Camp name found:', campName);
+                } else {
+                    console.warn('🎟️ Could not find camp name, using default');
+                    campName = 'Your Camp';
+                }
+            } catch (e) {
+                console.error('🎟️ Error fetching camp name:', e);
+                campName = 'Your Camp';
             }
         }
         
@@ -500,36 +512,47 @@
             document.getElementById('error-state').classList.remove('hidden');
         }
         
-        function showInviteState(campName) {
+        function showInviteState() {
             hideAll();
             
+            // Update invite details
             document.getElementById('invite-camp-name').textContent = campName;
             document.getElementById('invite-email').textContent = inviteData.email;
-            document.getElementById('invite-role-badge').textContent = getRoleDisplayName(inviteData.role);
-            document.getElementById('invite-role-badge').style.background = getRoleColor(inviteData.role) + '20';
-            document.getElementById('invite-role-badge').style.color = getRoleColor(inviteData.role);
             
-            // Pre-fill email
-            document.getElementById('email').value = inviteData.email;
+            const roleBadge = document.getElementById('invite-role-badge');
+            roleBadge.textContent = getRoleDisplayName(inviteData.role);
+            roleBadge.style.background = getRoleColor(inviteData.role) + '20';
+            roleBadge.style.color = getRoleColor(inviteData.role);
+            
+            // Pre-fill email (readonly - they must use the invited email)
             document.getElementById('signup-email').value = inviteData.email;
+            document.getElementById('email').value = inviteData.email;
             
             document.getElementById('invite-state').classList.remove('hidden');
         }
         
-        function showAcceptState(campName) {
+        function showAcceptState() {
             hideAll();
             
             document.getElementById('accept-camp-name').textContent = campName;
-            document.getElementById('accept-role-badge').textContent = getRoleDisplayName(inviteData.role);
-            document.getElementById('accept-role-badge').style.background = getRoleColor(inviteData.role) + '20';
-            document.getElementById('accept-role-badge').style.color = getRoleColor(inviteData.role);
+            
+            const roleBadge = document.getElementById('accept-role-badge');
+            roleBadge.textContent = getRoleDisplayName(inviteData.role);
+            roleBadge.style.background = getRoleColor(inviteData.role) + '20';
+            roleBadge.style.color = getRoleColor(inviteData.role);
+            
             document.getElementById('accept-email').textContent = currentUser.email;
             
             // Check email match
             if (currentUser.email.toLowerCase() !== inviteData.email.toLowerCase()) {
-                document.getElementById('accept-error').textContent = 
-                    `This invite was sent to ${inviteData.email}. You're logged in as ${currentUser.email}.`;
-                document.getElementById('accept-error').classList.remove('hidden');
+                const errorEl = document.getElementById('accept-error');
+                errorEl.innerHTML = `
+                    <strong>Email mismatch!</strong><br>
+                    This invite was sent to <strong>${inviteData.email}</strong><br>
+                    You're signed in as <strong>${currentUser.email}</strong><br><br>
+                    Please sign out and use the correct email, or ask for a new invite.
+                `;
+                errorEl.classList.remove('hidden');
                 document.getElementById('accept-btn').disabled = true;
             }
             
@@ -538,6 +561,7 @@
         
         function showSuccess() {
             hideAll();
+            document.getElementById('success-camp-name').textContent = `You've successfully joined ${campName}!`;
             document.getElementById('success-state').classList.remove('hidden');
             
             // Redirect after delay
@@ -554,18 +578,90 @@
             e.preventDefault();
             document.getElementById('signin-form').classList.toggle('hidden');
             document.getElementById('signup-form').classList.toggle('hidden');
+            
+            // Clear any errors
+            const errorEl = document.getElementById('auth-error');
+            errorEl.classList.add('hidden');
+            errorEl.textContent = '';
+        }
+        
+        function showAuthError(message) {
+            const errorEl = document.getElementById('auth-error');
+            errorEl.textContent = message;
+            errorEl.classList.remove('hidden');
+        }
+        
+        async function handleSignUp() {
+            const password = document.getElementById('signup-password').value;
+            const confirm = document.getElementById('signup-password-confirm').value;
+            const btn = document.getElementById('signup-btn');
+            
+            // Clear previous errors
             document.getElementById('auth-error').classList.add('hidden');
+            
+            // Validation
+            if (!password) {
+                showAuthError('Please enter a password.');
+                return;
+            }
+            
+            if (password.length < 6) {
+                showAuthError('Password must be at least 6 characters.');
+                return;
+            }
+            
+            if (password !== confirm) {
+                showAuthError('Passwords do not match.');
+                return;
+            }
+            
+            // Update button state
+            btn.disabled = true;
+            btn.textContent = 'Creating account...';
+            
+            try {
+                console.log('🎟️ Creating account for:', inviteData.email);
+                
+                const { data, error } = await supabaseClient.auth.signUp({
+                    email: inviteData.email,
+                    password: password
+                });
+                
+                console.log('🎟️ SignUp result:', { user: data?.user?.id, error });
+                
+                if (error) {
+                    throw error;
+                }
+                
+                if (!data.user) {
+                    throw new Error('Account creation failed. Please try again.');
+                }
+                
+                currentUser = data.user;
+                
+                // Update button
+                btn.textContent = 'Joining camp...';
+                
+                // Accept the invite
+                await acceptInvite();
+                
+            } catch (e) {
+                console.error('🎟️ SignUp error:', e);
+                showAuthError(e.message || 'Failed to create account.');
+                btn.disabled = false;
+                btn.textContent = 'Create Account & Join Camp';
+            }
         }
         
         async function handleSignIn() {
-            const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
-            const errorEl = document.getElementById('auth-error');
             const btn = document.getElementById('signin-btn');
             
-            if (!email || !password) {
-                errorEl.textContent = 'Please enter email and password';
-                errorEl.classList.remove('hidden');
+            // Clear previous errors
+            document.getElementById('auth-error').classList.add('hidden');
+            
+            if (!password) {
+                showAuthError('Please enter your password.');
                 return;
             }
             
@@ -573,142 +669,111 @@
             btn.textContent = 'Signing in...';
             
             try {
+                console.log('🎟️ Signing in:', inviteData.email);
+                
                 const { data, error } = await supabaseClient.auth.signInWithPassword({
-                    email,
-                    password
+                    email: inviteData.email,
+                    password: password
                 });
                 
-                if (error) throw error;
+                console.log('🎟️ SignIn result:', { user: data?.user?.id, error });
+                
+                if (error) {
+                    throw error;
+                }
+                
+                if (!data.user) {
+                    throw new Error('Sign in failed. Please try again.');
+                }
                 
                 currentUser = data.user;
                 
-                // Now accept the invite
-                await acceptInvite();
-                
-            } catch (e) {
-                errorEl.textContent = e.message;
-                errorEl.classList.remove('hidden');
-                btn.disabled = false;
-                btn.textContent = 'Sign In & Accept Invite';
-            }
-        }
-        
-        async function handleSignUp() {
-            const email = document.getElementById('signup-email').value;
-            const password = document.getElementById('signup-password').value;
-            const confirm = document.getElementById('signup-password-confirm').value;
-            const errorEl = document.getElementById('auth-error');
-            const btn = document.getElementById('signup-btn');
-            
-            if (!email || !password) {
-                errorEl.textContent = 'Please fill in all fields';
-                errorEl.classList.remove('hidden');
-                return;
-            }
-            
-            if (password !== confirm) {
-                errorEl.textContent = 'Passwords do not match';
-                errorEl.classList.remove('hidden');
-                return;
-            }
-            
-            if (password.length < 6) {
-                errorEl.textContent = 'Password must be at least 6 characters';
-                errorEl.classList.remove('hidden');
-                return;
-            }
-            
-            btn.disabled = true;
-            btn.textContent = 'Creating account...';
-            
-            try {
-                const { data, error } = await supabaseClient.auth.signUp({
-                    email,
-                    password
-                });
-                
-                if (error) throw error;
-                
-                currentUser = data.user;
+                // Update button
+                btn.textContent = 'Joining camp...';
                 
                 // Accept the invite
                 await acceptInvite();
                 
             } catch (e) {
-                errorEl.textContent = e.message;
-                errorEl.classList.remove('hidden');
+                console.error('🎟️ SignIn error:', e);
+                showAuthError(e.message || 'Failed to sign in. Check your password.');
                 btn.disabled = false;
-                btn.textContent = 'Create Account & Accept';
+                btn.textContent = 'Sign In & Join Camp';
             }
         }
         
         async function handleAccept() {
             const btn = document.getElementById('accept-btn');
             btn.disabled = true;
-            btn.textContent = 'Accepting...';
+            btn.textContent = 'Joining...';
             
             await acceptInvite();
         }
         
         async function acceptInvite() {
             try {
-                // If we don't have inviteData (e.g., RLS blocked initial read), 
-                // we need to re-fetch now that user is authenticated
-                if (!inviteData && inviteToken) {
-                    console.log('🎟️ Re-fetching invite data now that user is authenticated...');
-                    const { data, error } = await supabaseClient
-                        .from('camp_users')
-                        .select('*')
-                        .eq('invite_token', inviteToken)
-                        .maybeSingle();
-                    
-                    if (error || !data) {
-                        throw new Error('Could not find invite. It may have expired or been used.');
-                    }
-                    inviteData = data;
+                console.log('🎟️ Accepting invite...');
+                
+                // Verify we have current user
+                if (!currentUser) {
+                    throw new Error('Not signed in. Please refresh and try again.');
                 }
                 
-                // Check email matches
+                // Verify email matches
                 if (currentUser.email.toLowerCase() !== inviteData.email.toLowerCase()) {
-                    throw new Error('Email mismatch. Please sign in with ' + inviteData.email);
+                    throw new Error(`Email mismatch. Please sign in with ${inviteData.email}`);
                 }
                 
-                console.log('🎟️ Accepting invite:', inviteData.id);
+                console.log('🎟️ Updating invite record:', inviteData.id);
                 
                 // Update the invite record
-                const { error } = await supabaseClient
+                const { data, error } = await supabaseClient
                     .from('camp_users')
                     .update({
                         user_id: currentUser.id,
                         accepted_at: new Date().toISOString(),
-                        invite_token: null
+                        invite_token: null // Clear the token
                     })
-                    .eq('id', inviteData.id);
+                    .eq('id', inviteData.id)
+                    .select();
+                
+                console.log('🎟️ Update result:', { data, error });
                 
                 if (error) {
-                    console.error('🎟️ Accept error:', error);
-                    throw error;
+                    console.error('🎟️ Update error:', error);
+                    throw new Error('Failed to accept invite: ' + error.message);
                 }
                 
                 console.log('🎟️ Invite accepted successfully!');
                 
-                // Store camp ID for dashboard
+                // Store the camp ID for the app to use
                 localStorage.setItem('campistry_user_id', inviteData.camp_id);
+                localStorage.setItem('campistry_auth_user_id', currentUser.id);
                 
+                // Show success and redirect
                 showSuccess();
                 
             } catch (e) {
-                console.error('🎟️ Error accepting invite:', e);
+                console.error('🎟️ Accept error:', e);
+                
+                // Show error in appropriate place
                 const errorEl = document.getElementById('accept-error') || document.getElementById('auth-error');
-                errorEl.textContent = e.message;
-                errorEl.classList.remove('hidden');
+                if (errorEl) {
+                    errorEl.textContent = e.message;
+                    errorEl.classList.remove('hidden');
+                }
                 
                 // Re-enable buttons
-                const acceptBtn = document.getElementById('accept-btn');
-                if (acceptBtn) {
-                    acceptBtn.disabled = false;
-                    acceptBtn.textContent = 'Accept Invitation';
-                }
+                const btns = ['accept-btn', 'signup-btn', 'signin-btn'];
+                btns.forEach(id => {
+                    const btn = document.getElementById(id);
+                    if (btn) {
+                        btn.disabled = false;
+                    }
+                });
+                document.getElementById('signup-btn').textContent = 'Create Account & Join Camp';
+                document.getElementById('signin-btn').textContent = 'Sign In & Join Camp';
+                document.getElementById('accept-btn').textContent = 'Accept Invitation';
             }
         }
         
