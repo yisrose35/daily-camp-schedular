@@ -8,7 +8,7 @@
 (function() {
     'use strict';
 
-    console.log("🔐 Access Control v1.0 loading...");
+    console.log("🔐 Access Control v1.1 loading...");
 
     // =========================================================================
     // STATE
@@ -28,6 +28,22 @@
         SCHEDULER: 'scheduler',
         VIEWER: 'viewer'
     };
+
+    // Beautiful color palette for subdivisions
+    const SUBDIVISION_COLORS = [
+        '#6366F1', // Indigo
+        '#8B5CF6', // Violet  
+        '#EC4899', // Pink
+        '#F43F5E', // Rose
+        '#F97316', // Orange
+        '#EAB308', // Yellow
+        '#22C55E', // Green
+        '#14B8A6', // Teal
+        '#06B6D4', // Cyan
+        '#3B82F6', // Blue
+        '#A855F7', // Purple
+        '#10B981', // Emerald
+    ];
 
     // =========================================================================
     // INITIALIZATION
@@ -359,17 +375,39 @@
     }
 
     // =========================================================================
+    // COLOR MANAGEMENT
+    // =========================================================================
+
+    /**
+     * Get the next color in the palette (cycles through, avoids duplicates)
+     */
+    function getNextSubdivisionColor() {
+        const usedColors = _subdivisions.map(s => s.color);
+        // Find first unused color
+        for (const color of SUBDIVISION_COLORS) {
+            if (!usedColors.includes(color)) {
+                return color;
+            }
+        }
+        // If all used, cycle based on count
+        return SUBDIVISION_COLORS[_subdivisions.length % SUBDIVISION_COLORS.length];
+    }
+
+    // =========================================================================
     // SUBDIVISION MANAGEMENT
     // =========================================================================
 
     /**
      * Create a new subdivision
      */
-    async function createSubdivision(name, divisions = [], color = '#6B7280') {
+    async function createSubdivision(name, divisions = [], color = null) {
         if (!canManageSubdivisions()) {
             console.error("🔐 Not authorized to create subdivisions");
             return { error: "Not authorized" };
         }
+
+        // Use provided color or get next in palette
+        const subdivisionColor = color || getNextSubdivisionColor();
 
         try {
             const { data, error } = await window.supabase
@@ -378,7 +416,7 @@
                     camp_id: _campId,
                     name: name,
                     divisions: divisions,
-                    color: color
+                    color: subdivisionColor
                 }])
                 .select()
                 .single();
@@ -817,6 +855,7 @@
         // Initialization
         initialize,
         refresh,
+        get isInitialized() { return _initialized; },
         
         // Permission checks
         canEditDivision,
@@ -834,6 +873,10 @@
         getUserSubdivisions,
         getSubdivisionForDivision,
         isDivisionInUserSubdivisions,
+        
+        // Color management
+        getNextSubdivisionColor,
+        SUBDIVISION_COLORS,
         
         // Subdivision management
         createSubdivision,
