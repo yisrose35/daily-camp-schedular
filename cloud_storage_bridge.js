@@ -1,11 +1,11 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v3.7 (Visual Feedback + PATCH-First + Schedules)
+// FIXED VERSION: v3.8 (Multi-tenant Support for Invited Users)
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v3.7 (VISUAL FEEDBACK MODE)");
+  console.log("☁️ Campistry Cloud Bridge v3.8 (MULTI-TENANT MODE)");
 
   // DIRECT CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -54,17 +54,28 @@
   }
 
   // ============================================================================
-  // CAMP ID MANAGEMENT
+  // CAMP ID MANAGEMENT (MULTI-TENANT AWARE)
   // ============================================================================
   let _cachedCampId = null;
+  let _userRole = null;
+  let _isTeamMember = false;
 
+  /**
+   * Get the camp ID for the current user
+   * - For camp owners: returns their user ID
+   * - For invited team members: returns the camp they were invited to
+   */
   function getCampId() {
     if (_cachedCampId) return _cachedCampId;
+    
+    // Check localStorage cache first (set during invite acceptance or previous login)
     const cachedUserId = localStorage.getItem('campistry_user_id');
     if (cachedUserId && cachedUserId !== 'demo_camp_001') {
       _cachedCampId = cachedUserId;
       return _cachedCampId;
     }
+    
+    // Try to get from Supabase session (fallback for camp owners)
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
@@ -73,27 +84,120 @@
           if (storedSession) {
             const parsed = JSON.parse(storedSession);
             if (parsed?.user?.id) {
-              _cachedCampId = parsed.user.id;
-              localStorage.setItem('campistry_user_id', _cachedCampId);
-              return _cachedCampId;
+              // Don't cache yet - we need to verify if this user is a team member
+              return parsed.user.id;
             }
           }
         }
       }
     } catch (e) { console.warn("Error reading storage:", e); }
+    
     return "demo_camp_001";
   }
 
-  function updateCampIdCache(userId) {
-    if (userId) {
-      _cachedCampId = userId;
-      localStorage.setItem('campistry_user_id', userId);
+  /**
+   * Determine the correct camp ID for a user
+   * Called after authentication to check if user is a team member
+   */
+  async function determineUserCampId(userId) {
+    if (!userId) return null;
+    
+    console.log("☁️ Determining camp ID for user:", userId);
+    
+    // First, check if user owns any camps
+    try {
+      const { data: ownedCamp, error: ownedError } = await window.supabase
+        .from('camps')
+        .select('owner')
+        .eq('owner', userId)
+        .maybeSingle();
+      
+      if (ownedCamp && !ownedError) {
+        console.log("☁️ User is a camp owner");
+        _isTeamMember = false;
+        _userRole = 'owner';
+        return userId; // Camp owner - their ID is the camp ID
+      }
+    } catch (e) {
+      console.warn("☁️ Error checking camp ownership:", e);
+    }
+    
+    // Not a camp owner - check if they're an invited team member
+    try {
+      const { data: membership, error: memberError } = await window.supabase
+        .from('camp_users')
+        .select('camp_id, role, subdivision_ids, accepted_at')
+        .eq('user_id', userId)
+        .not('accepted_at', 'is', null) // Only accepted invites
+        .maybeSingle();
+      
+      if (membership && !memberError) {
+        console.log("☁️ User is a team member:", {
+          campId: membership.camp_id,
+          role: membership.role
+        });
+        _isTeamMember = true;
+        _userRole = membership.role;
+        
+        // Store user's membership info for access control
+        window._campistryMembership = membership;
+        
+        return membership.camp_id; // Return the camp they belong to
+      }
+    } catch (e) {
+      console.warn("☁️ Error checking team membership:", e);
+    }
+    
+    // User is neither owner nor team member
+    // This could be a new user who just signed up (not via invite)
+    console.log("☁️ User is a new camp owner (first time)");
+    _isTeamMember = false;
+    _userRole = 'owner';
+    return userId;
+  }
+
+  /**
+   * Update the camp ID cache
+   * Now properly handles team members vs owners
+   */
+  async function updateCampIdCache(userId) {
+    if (!userId) return;
+    
+    // Determine the correct camp ID
+    const campId = await determineUserCampId(userId);
+    
+    if (campId) {
+      _cachedCampId = campId;
+      localStorage.setItem('campistry_user_id', campId);
+      
+      // Also store user's own ID for reference
+      localStorage.setItem('campistry_auth_user_id', userId);
+      
+      console.log("☁️ Camp ID cached:", campId, _isTeamMember ? "(team member)" : "(owner)");
     }
   }
 
   function clearCampIdCache() {
     _cachedCampId = null;
+    _userRole = null;
+    _isTeamMember = false;
     localStorage.removeItem('campistry_user_id');
+    localStorage.removeItem('campistry_auth_user_id');
+    delete window._campistryMembership;
+  }
+
+  /**
+   * Get user's role in the current camp
+   */
+  function getUserRole() {
+    return _userRole;
+  }
+
+  /**
+   * Check if current user is a team member (not owner)
+   */
+  function isTeamMember() {
+    return _isTeamMember;
   }
 
   // ============================================================================
@@ -146,7 +250,6 @@
 
   async function getUser() {
     const { data } = await window.supabase.auth.getUser();
-    if (data?.user) updateCampIdCache(data.user.id);
     return data?.user;
   }
 
@@ -155,6 +258,8 @@
       const token = await getSessionToken();
       if (!token) return null;
       const campId = getCampId();
+
+      console.log("☁️ Loading from cloud for camp:", campId);
 
       const url = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}&select=state`;
       const response = await fetch(url, {
@@ -187,6 +292,13 @@
       
       if (campId === "demo_camp_001") return false;
 
+      // Check if user has permission to save (team members with viewer role cannot)
+      if (_userRole === 'viewer') {
+          showToast("❌ View-only access", "error");
+          console.warn("☁️ User has viewer role, cannot save");
+          return false;
+      }
+
       // Prepare Payload
       state.schema_version = SCHEMA_VERSION;
       state.updated_at = new Date().toISOString();
@@ -194,7 +306,6 @@
       delete stateToSave._importTimestamp;
 
       // 🟢 BUNDLE SCHEDULES
-      // This explicitly reads the generated schedule from storage and adds it to the save payload
       try {
         const schedulesRaw = localStorage.getItem(DAILY_DATA_KEY);
         if (schedulesRaw) {
@@ -202,6 +313,10 @@
             console.log("☁️ Generated schedules bundled into save.");
         }
       } catch(e) { console.warn("Bundle error:", e); }
+
+      // For team members, use the camp owner's ID as owner_id
+      // The camp_id IS the owner's user ID
+      const ownerId = campId;
 
       // 1. TRY PATCH FIRST
       const patchUrl = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}`;
@@ -215,7 +330,7 @@
         },
         body: JSON.stringify({ 
             state: stateToSave,
-            owner_id: user.id 
+            owner_id: ownerId 
         })
       });
 
@@ -228,31 +343,37 @@
           }
       }
 
-      // 2. IF PATCH FAILED -> POST
-      const postUrl = `${SUPABASE_URL}/rest/v1/${TABLE}`;
-      const postResponse = await fetch(postUrl, {
-        method: 'POST',
-        headers: {
-          'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'resolution=merge-duplicates'
-        },
-        body: JSON.stringify({
-          camp_id: campId,
-          owner_id: user.id,
-          state: stateToSave
-        })
-      });
+      // 2. IF PATCH FAILED -> POST (only for owners creating new camps)
+      if (!_isTeamMember) {
+          const postUrl = `${SUPABASE_URL}/rest/v1/${TABLE}`;
+          const postResponse = await fetch(postUrl, {
+            method: 'POST',
+            headers: {
+              'apikey': SUPABASE_KEY,
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'resolution=merge-duplicates'
+            },
+            body: JSON.stringify({
+              camp_id: campId,
+              owner_id: ownerId,
+              state: stateToSave
+            })
+          });
 
-      if (postResponse.ok) {
-        console.log("☁️ [REST] ✅ POST Success");
-        showToast("✅ Schedule Saved!", "success");
-        return true;
+          if (postResponse.ok) {
+            console.log("☁️ [REST] ✅ POST Success");
+            showToast("✅ Schedule Saved!", "success");
+            return true;
+          } else {
+            console.error("Save Failed:", postResponse.status);
+            showToast("❌ Save Failed (Check Console)", "error");
+            return false;
+          }
       } else {
-        console.error("Save Failed:", postResponse.status);
-        showToast("❌ Save Failed (Check Console)", "error");
-        return false;
+          console.error("Team member cannot create new camp state");
+          showToast("❌ Cannot save - camp data not found", "error");
+          return false;
       }
 
     } catch (e) {
@@ -266,6 +387,12 @@
   // RESET & IMPORT
   // ============================================================================
   window.resetCloudState = async function() {
+    // Only owners can reset
+    if (_isTeamMember) {
+        showToast("❌ Only camp owners can reset data", "error");
+        return false;
+    }
+    
     const emptyState = {
       divisions: {}, bunks: [], app1: { divisions: {}, bunks: [], fields: [], specialActivities: [] },
       updated_at: new Date().toISOString()
@@ -314,6 +441,13 @@
 
   async function initialize() {
     if (_initialized) return;
+    
+    // Get current user and determine their camp
+    const user = await getUser();
+    if (user) {
+        await updateCampIdCache(user.id);
+    }
+    
     const localData = getLocalCache();
     const hasLocalData = localData && (Object.keys(localData).length > 2);
 
@@ -345,13 +479,24 @@
     _initialized = true;
     window.__CAMPISTRY_CLOUD_READY__ = true;
     window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
-      detail: { hydrated: true, hasData }
+      detail: { 
+        hydrated: true, 
+        hasData,
+        isTeamMember: _isTeamMember,
+        userRole: _userRole
+      }
     }));
   }
 
   // PUBLIC API
   window.loadGlobalSettings = () => getLocalCache();
   window.saveGlobalSettings = (key, value) => {
+    // Check if user has write permission
+    if (_userRole === 'viewer') {
+        console.warn("☁️ Viewer cannot save settings");
+        return getLocalCache();
+    }
+    
     const state = getLocalCache();
     state[key] = value;
     state.updated_at = new Date().toISOString();
@@ -366,12 +511,19 @@
     _cloudSyncPending = true;
     scheduleCloudSync();
   };
+  
+  // Expose role info for other modules
+  window.getCampistryUserRole = getUserRole;
+  window.isCampistryTeamMember = isTeamMember;
+  window.getCampId = getCampId;
 
   setTimeout(() => {
     if(window.supabase) {
         window.supabase.auth.onAuthStateChange(async (event, session) => {
             if (event === 'SIGNED_IN' && session) {
-                updateCampIdCache(session.user.id);
+                // IMPORTANT: Don't immediately overwrite camp ID
+                // Let determineUserCampId figure out the correct one
+                await updateCampIdCache(session.user.id);
                 _initialized = false; 
                 await initialize();
             } else if (event === 'SIGNED_OUT') {
