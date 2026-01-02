@@ -252,7 +252,7 @@
         
         <!-- Invite Details (need to log in) -->
         <div id="invite-state" class="hidden">
-            <img src="assets/campistry-logo.svg" alt="Campistry" class="logo" onerror="this.style.display='none'">
+            <div style="font-size: 3rem; margin-bottom: 16px;">⛺</div>
             <h1>You're Invited!</h1>
             <p class="subtitle">You've been invited to join a camp on Campistry</p>
             
@@ -266,8 +266,8 @@
                     <span id="invite-role-badge" class="role-badge">Loading...</span>
                 </div>
                 <div class="invite-detail">
-                    <span class="invite-detail-label">Invited by</span>
-                    <span class="invite-detail-value" id="invite-by">Loading...</span>
+                    <span class="invite-detail-label">Your Email</span>
+                    <span class="invite-detail-value" id="invite-email">Loading...</span>
                 </div>
             </div>
             
@@ -316,7 +316,7 @@
         
         <!-- Already Logged In State -->
         <div id="accept-state" class="hidden">
-            <img src="assets/campistry-logo.svg" alt="Campistry" class="logo" onerror="this.style.display='none'">
+            <div style="font-size: 3rem; margin-bottom: 16px;">⛺</div>
             <h1>Accept Invitation</h1>
             <p class="subtitle">You're about to join:</p>
             
@@ -361,13 +361,14 @@
     
     <script>
         // =====================================================================
-        // CONFIGURATION
+        // CONFIGURATION - MUST MATCH YOUR OTHER FILES
         // =====================================================================
         
-        const SUPABASE_URL = 'https://pqgkwtdmxvdgkjzxcktk.supabase.co';
-        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxZ2t3dGRteHZkZ2tqenhja3RrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDkyMzU4MTYsImV4cCI6MjA2NDgxMTgxNn0.h_WZWOy8v94A5fTaB8DqMCn_WK9LCPcKoNhRb78aUZs';
+        const SUPABASE_URL = 'https://bzqmhcumuarrbueqttfh.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI';
         
-        let supabase;
+        // RENAMED to supabaseClient to prevent conflict with global 'supabase' object from CDN
+        let supabaseClient;
         let inviteData = null;
         let currentUser = null;
         
@@ -376,21 +377,29 @@
         // =====================================================================
         
         async function init() {
-            // Initialize Supabase
-            supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            console.log('🎟️ Invite page initializing...');
+            
+            // Initialize Supabase - using 'supabaseClient' variable
+            supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
             
             // Get invite token from URL
             const params = new URLSearchParams(window.location.search);
             const token = params.get('token');
             
+            console.log('🎟️ Token from URL:', token ? token.substring(0, 8) + '...' : 'NONE');
+            
             if (!token) {
-                showError('No invite token provided');
+                showError('No invite token provided. Please check your invite link.');
                 return;
             }
             
             // Check if user is logged in
-            const { data: { user } } = await supabase.auth.getUser();
+            const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
+            if (userError) {
+                console.log('🎟️ Auth check error (probably not logged in):', userError.message);
+            }
             currentUser = user;
+            console.log('🎟️ Current user:', currentUser ? currentUser.email : 'Not logged in');
             
             // Load invite details
             await loadInvite(token);
@@ -398,18 +407,33 @@
         
         async function loadInvite(token) {
             try {
-                const { data, error } = await supabase
+                console.log('🎟️ Loading invite with token...');
+                
+                const { data, error } = await supabaseClient
                     .from('camp_users')
                     .select('*')
                     .eq('invite_token', token)
                     .single();
                 
-                if (error || !data) {
+                console.log('🎟️ Query result:', { data, error });
+                
+                if (error) {
+                    console.error('🎟️ Query error:', error);
+                    showError('This invite link is invalid or has expired. Error: ' + error.message);
+                    return;
+                }
+                
+                if (!data) {
                     showError('This invite link is invalid or has expired.');
                     return;
                 }
                 
                 inviteData = data;
+                console.log('🎟️ Invite data loaded:', { 
+                    email: inviteData.email, 
+                    role: inviteData.role,
+                    accepted: !!inviteData.accepted_at 
+                });
                 
                 // If already accepted
                 if (data.accepted_at) {
@@ -417,8 +441,21 @@
                     return;
                 }
                 
-                // Get camp name (would need camps table or camp_state)
-                const campName = 'Camp'; // Placeholder - would fetch actual name
+                // Try to get camp name from camps table
+                let campName = 'Your Camp';
+                try {
+                    const { data: campData } = await supabaseClient
+                        .from('camps')
+                        .select('name')
+                        .eq('owner', data.camp_id)
+                        .single();
+                    
+                    if (campData?.name) {
+                        campName = campData.name;
+                    }
+                } catch (e) {
+                    console.log('🎟️ Could not fetch camp name:', e);
+                }
                 
                 // Show appropriate state
                 if (currentUser) {
@@ -430,8 +467,8 @@
                 }
                 
             } catch (e) {
-                console.error('Error loading invite:', e);
-                showError('Failed to load invite details.');
+                console.error('🎟️ Error loading invite:', e);
+                showError('Failed to load invite details: ' + e.message);
             }
         }
         
@@ -457,10 +494,10 @@
             hideAll();
             
             document.getElementById('invite-camp-name').textContent = campName;
+            document.getElementById('invite-email').textContent = inviteData.email;
             document.getElementById('invite-role-badge').textContent = getRoleDisplayName(inviteData.role);
             document.getElementById('invite-role-badge').style.background = getRoleColor(inviteData.role) + '20';
             document.getElementById('invite-role-badge').style.color = getRoleColor(inviteData.role);
-            document.getElementById('invite-by').textContent = 'Camp Owner';
             
             // Pre-fill email
             document.getElementById('email').value = inviteData.email;
@@ -526,7 +563,7 @@
             btn.textContent = 'Signing in...';
             
             try {
-                const { data, error } = await supabase.auth.signInWithPassword({
+                const { data, error } = await supabaseClient.auth.signInWithPassword({
                     email,
                     password
                 });
@@ -575,7 +612,7 @@
             btn.textContent = 'Creating account...';
             
             try {
-                const { data, error } = await supabase.auth.signUp({
+                const { data, error } = await supabaseClient.auth.signUp({
                     email,
                     password
                 });
@@ -610,8 +647,10 @@
                     throw new Error('Email mismatch. Please sign in with ' + inviteData.email);
                 }
                 
+                console.log('🎟️ Accepting invite:', inviteData.id);
+                
                 // Update the invite record
-                const { error } = await supabase
+                const { error } = await supabaseClient
                     .from('camp_users')
                     .update({
                         user_id: currentUser.id,
@@ -620,7 +659,12 @@
                     })
                     .eq('id', inviteData.id);
                 
-                if (error) throw error;
+                if (error) {
+                    console.error('🎟️ Accept error:', error);
+                    throw error;
+                }
+                
+                console.log('🎟️ Invite accepted successfully!');
                 
                 // Store camp ID for dashboard
                 localStorage.setItem('campistry_user_id', inviteData.camp_id);
@@ -628,10 +672,17 @@
                 showSuccess();
                 
             } catch (e) {
-                console.error('Error accepting invite:', e);
+                console.error('🎟️ Error accepting invite:', e);
                 const errorEl = document.getElementById('accept-error') || document.getElementById('auth-error');
                 errorEl.textContent = e.message;
                 errorEl.classList.remove('hidden');
+                
+                // Re-enable buttons
+                const acceptBtn = document.getElementById('accept-btn');
+                if (acceptBtn) {
+                    acceptBtn.disabled = false;
+                    acceptBtn.textContent = 'Accept Invitation';
+                }
             }
         }
         
