@@ -1,11 +1,12 @@
 // ============================================================================
-// dashboard.js — Campistry Dashboard Logic (Multi-Tenant) v2.0
+// dashboard.js — Campistry Dashboard Logic (Multi-Tenant) v2.1
 // 
 // Handles:
 // - Auth check (redirect to landing if not logged in)
 // - Load/display camp profile (for owners AND team members)
 // - Personalized welcome message with user name and camp name
-// - Show role and permissions for team members
+// - Show role badge for ALL users (owner, admin, scheduler, viewer)
+// - Show permissions for team members
 // - Edit camp name and address (owners only)
 // - Change password
 // - Display stats from cloud storage
@@ -88,7 +89,7 @@
             }
             
             currentUser = session.user;
-            console.log('User authenticated:', currentUser.email);
+            console.log('📊 User authenticated:', currentUser.email);
             
             // Determine user's role and camp membership
             await determineUserRole();
@@ -114,19 +115,24 @@
         
         // First check if user owns any camps
         try {
-            const { data: ownedCamp } = await window.supabase
+            const { data: ownedCamp, error: campError } = await window.supabase
                 .from('camps')
                 .select('*')
                 .eq('owner', currentUser.id)
                 .maybeSingle();
             
-            if (ownedCamp) {
-                console.log('📊 User is a camp owner');
+            console.log('📊 Camp query result:', { ownedCamp, campError });
+            
+            if (ownedCamp && !campError) {
+                console.log('📊 User is a camp owner, camp:', ownedCamp.name);
                 userRole = 'owner';
                 isTeamMember = false;
                 campData = ownedCamp;
-                campName = ownedCamp.name || 'Your Camp';
-                userName = ownedCamp.owner_name || currentUser.email.split('@')[0];
+                campName = ownedCamp.name || null;
+                userName = ownedCamp.owner_name || null;
+                
+                // Store camp ID
+                localStorage.setItem('campistry_user_id', currentUser.id);
                 return;
             }
         } catch (e) {
@@ -135,28 +141,34 @@
         
         // Not an owner - check if they're a team member
         try {
-            const { data: memberData } = await window.supabase
+            const { data: memberData, error: memberError } = await window.supabase
                 .from('camp_users')
-                .select('*, camps:camp_id(name, address, owner)')
+                .select('*')
                 .eq('user_id', currentUser.id)
                 .not('accepted_at', 'is', null)
                 .maybeSingle();
             
-            if (memberData) {
+            console.log('📊 Member query result:', { memberData, memberError });
+            
+            if (memberData && !memberError) {
                 console.log('📊 User is a team member:', memberData.role);
                 userRole = memberData.role;
                 isTeamMember = true;
                 membership = memberData;
-                userName = memberData.name || currentUser.email.split('@')[0];
+                userName = memberData.name || null;
                 
-                // Get camp data from the join
-                if (memberData.camps) {
-                    campData = {
-                        name: memberData.camps.name,
-                        address: memberData.camps.address,
-                        owner: memberData.camps.owner
-                    };
-                    campName = memberData.camps.name || 'Your Camp';
+                // Now fetch the camp details separately
+                const { data: campInfo, error: campInfoError } = await window.supabase
+                    .from('camps')
+                    .select('name, address')
+                    .eq('owner', memberData.camp_id)
+                    .maybeSingle();
+                
+                console.log('📊 Camp info for team member:', { campInfo, campInfoError });
+                
+                if (campInfo && !campInfoError) {
+                    campData = campInfo;
+                    campName = campInfo.name || null;
                 }
                 
                 // Store camp ID for cloud storage
@@ -167,12 +179,13 @@
             console.warn('Error checking team membership:', e);
         }
         
-        // User is neither - they're a new user (this shouldn't normally happen from dashboard)
-        console.log('📊 User has no camp association');
-        userRole = 'owner'; // Default to owner for new users
+        // User is neither - they're a new owner (first time)
+        console.log('📊 User has no camp association - treating as new owner');
+        userRole = 'owner';
         isTeamMember = false;
-        userName = currentUser.email.split('@')[0];
-        campName = 'Your Camp';
+        userName = null;
+        campName = null;
+        localStorage.setItem('campistry_user_id', currentUser.id);
     }
 
     // ========================================
@@ -180,14 +193,16 @@
     // ========================================
     
     function updateWelcomeMessage() {
-        // Find the welcome section - it might have different structures
         const welcomeSection = document.querySelector('.welcome-section');
         const welcomeTitle = document.querySelector('.welcome-section h1, .welcome-title, #welcomeTitle');
         const welcomeSubtitle = document.querySelector('.welcome-section p, .welcome-subtitle, #welcomeSubtitle');
         
         // Build the personalized welcome
-        const displayName = userName || 'there';
+        // Use stored name, or email prefix as fallback
+        const displayName = userName || currentUser.email.split('@')[0];
         const displayCamp = campName || 'Your Camp';
+        
+        console.log('📊 Updating welcome:', { displayName, displayCamp, userName, campName });
         
         // Update the title
         if (welcomeTitle) {
@@ -203,8 +218,6 @@
         if (campNameDisplay) {
             campNameDisplay.textContent = displayCamp;
         }
-        
-        console.log('📊 Welcome message updated:', `Welcome, ${displayName}!`, `Camp: ${displayCamp}`);
     }
 
     // ========================================
@@ -213,7 +226,9 @@
     
     function setupDashboardForRole() {
         const editProfileBtn = document.getElementById('editProfileBtn');
-        const profileCard = document.querySelector('.profile-card');
+        
+        // Add role badge for ALL users (including owners)
+        addRoleBadge();
         
         if (isTeamMember) {
             // Team members can't edit camp profile
@@ -221,10 +236,7 @@
                 editProfileBtn.style.display = 'none';
             }
             
-            // Add role badge to profile card
-            addRoleBadge();
-            
-            // Add "Your Permissions" section
+            // Add "Your Permissions" section for team members
             addPermissionsSection();
             
             // Hide team management section (only for owners)
@@ -248,12 +260,9 @@
         const roleBadge = document.createElement('div');
         roleBadge.className = 'role-badge-large';
         
-        // Get permissions text
-        const permissionsText = getPermissionsText();
-        
         roleBadge.innerHTML = `
             <span class="role-icon">${getRoleIcon(userRole)}</span>
-            <span class="role-text">${permissionsText}</span>
+            <span class="role-text">${getRoleDisplayName(userRole)}</span>
         `;
         roleBadge.style.cssText = `
             display: inline-flex;
@@ -266,41 +275,19 @@
             font-size: 0.9rem;
             margin-top: 12px;
             border: 1px solid ${getRoleColor(userRole)}30;
+            font-weight: 600;
         `;
         
         welcomeSection.appendChild(roleBadge);
+        
+        // For schedulers, update with subdivision names
+        if (userRole === 'scheduler' && membership?.subdivision_ids?.length > 0) {
+            updateRoleBadgeWithSubdivisions();
+        }
     }
     
     /**
-     * Get human-readable permissions text
-     * e.g., "Scheduler for Grades 1, 2, and 3"
-     */
-    function getPermissionsText() {
-        if (userRole === 'owner') {
-            return 'Owner — Full access to all features';
-        }
-        
-        if (userRole === 'admin') {
-            return 'Administrator — Full editing access';
-        }
-        
-        if (userRole === 'viewer') {
-            return 'Viewer — View-only access';
-        }
-        
-        if (userRole === 'scheduler') {
-            // We'll update this after loading subdivisions
-            if (membership?.subdivision_ids?.length > 0) {
-                return 'Scheduler — Loading divisions...';
-            }
-            return 'Scheduler — Full editing access';
-        }
-        
-        return userRole || 'Unknown';
-    }
-    
-    /**
-     * Update the role badge with actual subdivision names
+     * Update the role badge with actual subdivision names for schedulers
      */
     async function updateRoleBadgeWithSubdivisions() {
         if (userRole !== 'scheduler' || !membership?.subdivision_ids?.length) return;
@@ -355,6 +342,8 @@
             divisionsHtml = '<p style="color: var(--slate-600);"><strong>All divisions</strong> - Full access</p>';
         } else if (userRole === 'viewer') {
             divisionsHtml = '<p style="color: var(--slate-500);">View-only access to all divisions</p>';
+        } else if (userRole === 'scheduler') {
+            divisionsHtml = '<p style="color: var(--slate-600);"><strong>All divisions</strong> - No restrictions</p>';
         }
         
         permissionsCard.innerHTML = `
@@ -439,9 +428,6 @@
         
         // Load actual subdivision/division data
         loadAssignedDivisions();
-        
-        // Update the role badge with subdivision names
-        updateRoleBadgeWithSubdivisions();
     }
     
     async function loadAssignedDivisions() {
@@ -540,11 +526,7 @@
             profileEmail.textContent = currentUser.email;
         }
         
-        // Get camp name - either from owned camp or team membership
-        let displayCampName = campName || campData?.name || currentUser.user_metadata?.camp_name || 'Your Camp';
-        let campAddress = campData?.address || '';
-        
-        // If owner and no campData yet, try to fetch it
+        // If we're an owner and don't have camp data yet, try to fetch it again
         if (!campData && !isTeamMember) {
             try {
                 const { data: camps, error } = await window.supabase
@@ -553,13 +535,11 @@
                     .eq('owner', currentUser.id)
                     .maybeSingle();
                 
+                console.log('📊 Secondary camp fetch:', { camps, error });
+                
                 if (camps && !error) {
                     campData = camps;
-                    displayCampName = camps.name || displayCampName;
-                    campAddress = camps.address || '';
-                    campName = displayCampName;
-                    
-                    // Also get owner name if available
+                    campName = camps.name || null;
                     if (camps.owner_name) {
                         userName = camps.owner_name;
                     }
@@ -568,6 +548,12 @@
                 console.warn('Could not load camp data:', e);
             }
         }
+        
+        // Get display values
+        let displayCampName = campName || currentUser.user_metadata?.camp_name || 'Your Camp';
+        let campAddress = campData?.address || '';
+        
+        console.log('📊 Final display values:', { displayCampName, userName, campAddress });
         
         // Update the personalized welcome message
         updateWelcomeMessage();
@@ -582,7 +568,7 @@
         
         // Pre-fill edit form (only relevant for owners)
         if (editCampName) {
-            editCampName.value = displayCampName;
+            editCampName.value = displayCampName !== 'Your Camp' ? displayCampName : '';
         }
         if (editAddress) {
             editAddress.value = campAddress;
@@ -914,5 +900,5 @@
     checkAuth();
     setupAuthListener();
     
-    console.log('📊 Campistry Dashboard v2.0 loaded (multi-tenant)');
+    console.log('📊 Campistry Dashboard v2.1 loaded (multi-tenant)');
 })();
