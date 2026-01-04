@@ -332,6 +332,9 @@
 
         // Add Logic
         const addLeague = () => {
+            // ✅ RBAC Check
+            if (!window.AccessControl?.checkSetupAccess('add specialty leagues')) return;
+
             const name = addInput.value.trim();
             if (!name) return;
 
@@ -479,6 +482,7 @@
         delBtn.onmouseenter = () => { delBtn.style.background = '#FEE2E2'; };
         delBtn.onmouseleave = () => { delBtn.style.background = '#FFFFFF'; };
         delBtn.onclick = () => {
+            if (!window.AccessControl?.checkSetupAccess('delete specialty leagues')) return;
             if (confirm(`Delete "${league.name}"?`)) {
                 delete specialtyLeagues[league.id];
                 activeLeagueId = null;
