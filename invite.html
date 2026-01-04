@@ -22,11 +22,7 @@
             --primary-dark: #4F46E5;
         }
         
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
@@ -48,16 +44,8 @@
             text-align: center;
         }
         
-        h1 {
-            color: var(--slate-900);
-            font-size: 1.5rem;
-            margin-bottom: 8px;
-        }
-        
-        .subtitle {
-            color: var(--slate-500);
-            margin-bottom: 32px;
-        }
+        h1 { color: var(--slate-900); font-size: 1.5rem; margin-bottom: 8px; }
+        .subtitle { color: var(--slate-500); margin-bottom: 32px; }
         
         .invite-details {
             background: var(--slate-50);
@@ -70,23 +58,13 @@
         .invite-detail {
             display: flex;
             justify-content: space-between;
+            align-items: center;
             padding: 8px 0;
             border-bottom: 1px solid var(--slate-200);
         }
-        
-        .invite-detail:last-child {
-            border-bottom: none;
-        }
-        
-        .invite-detail-label {
-            color: var(--slate-500);
-            font-size: 0.9rem;
-        }
-        
-        .invite-detail-value {
-            color: var(--slate-800);
-            font-weight: 600;
-        }
+        .invite-detail:last-child { border-bottom: none; }
+        .invite-detail-label { color: var(--slate-500); font-size: 0.9rem; }
+        .invite-detail-value { color: var(--slate-800); font-weight: 600; }
         
         .role-badge {
             display: inline-block;
@@ -109,18 +87,8 @@
             transition: all 0.2s;
             margin-bottom: 12px;
         }
-        
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(99, 102, 241, 0.4);
-        }
-        
-        .btn-primary:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(99, 102, 241, 0.4); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
         
         .btn-secondary {
             width: 100%;
@@ -132,12 +100,8 @@
             font-size: 1rem;
             font-weight: 500;
             cursor: pointer;
-            transition: all 0.2s;
         }
-        
-        .btn-secondary:hover {
-            background: var(--slate-200);
-        }
+        .btn-secondary:hover { background: var(--slate-200); }
         
         .error-message {
             background: #FEE2E2;
@@ -158,45 +122,22 @@
             font-size: 0.9rem;
         }
         
-        .loading {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 16px;
-        }
+        .loading { display: flex; flex-direction: column; align-items: center; gap: 16px; }
         
         .spinner {
-            width: 40px;
-            height: 40px;
+            width: 40px; height: 40px;
             border: 3px solid var(--slate-200);
             border-top-color: var(--primary);
             border-radius: 50%;
             animation: spin 1s linear infinite;
         }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
+        @keyframes spin { to { transform: rotate(360deg); } }
         
         .hidden { display: none; }
         
-        /* Auth form styles */
-        .auth-form {
-            text-align: left;
-        }
-        
-        .form-group {
-            margin-bottom: 16px;
-        }
-        
-        .form-group label {
-            display: block;
-            color: var(--slate-700);
-            font-weight: 500;
-            margin-bottom: 6px;
-            font-size: 0.9rem;
-        }
-        
+        .auth-form { text-align: left; }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; color: var(--slate-700); font-weight: 500; margin-bottom: 6px; font-size: 0.9rem; }
         .form-group input {
             width: 100%;
             padding: 12px 16px;
@@ -205,33 +146,18 @@
             font-size: 1rem;
             transition: border-color 0.2s;
         }
+        .form-group input:focus { outline: none; border-color: var(--primary); }
+        .form-group input:disabled { background: var(--slate-100); color: var(--slate-600); }
         
-        .form-group input:focus {
-            outline: none;
-            border-color: var(--primary);
-        }
-        
-        .form-group input:disabled {
-            background: var(--slate-100);
-            color: var(--slate-600);
-        }
-        
-        .auth-toggle {
-            text-align: center;
-            margin-top: 16px;
+        .form-hint {
+            font-size: 0.8rem;
             color: var(--slate-500);
-            font-size: 0.9rem;
+            margin-top: 4px;
         }
         
-        .auth-toggle a {
-            color: var(--primary);
-            text-decoration: none;
-            font-weight: 600;
-        }
-        
-        .auth-toggle a:hover {
-            text-decoration: underline;
-        }
+        .auth-toggle { text-align: center; margin-top: 16px; color: var(--slate-500); font-size: 0.9rem; }
+        .auth-toggle a { color: var(--primary); text-decoration: none; font-weight: 600; }
+        .auth-toggle a:hover { text-decoration: underline; }
         
         .email-notice {
             background: #DBEAFE;
@@ -242,6 +168,33 @@
             font-size: 0.85rem;
             margin-bottom: 16px;
             text-align: left;
+        }
+        
+        .assigned-divisions {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px dashed var(--slate-300);
+        }
+        
+        .assigned-divisions-label {
+            font-size: 0.8rem;
+            color: var(--slate-500);
+            margin-bottom: 8px;
+        }
+        
+        .division-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        
+        .division-tag {
+            background: #6366f120;
+            color: #6366f1;
+            padding: 4px 12px;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 500;
         }
     </style>
 </head>
@@ -265,7 +218,7 @@
         <div id="invite-state" class="hidden">
             <div style="font-size: 3rem; margin-bottom: 16px;">⛺</div>
             <h1>You're Invited!</h1>
-            <p class="subtitle">You've been invited to join a camp on Campistry</p>
+            <p class="subtitle" id="invite-subtitle">You've been invited to join a camp on Campistry</p>
             
             <div class="invite-details">
                 <div class="invite-detail">
@@ -280,6 +233,10 @@
                     <span class="invite-detail-label">Invited Email</span>
                     <span class="invite-detail-value" id="invite-email">Loading...</span>
                 </div>
+                <div id="assigned-divisions-container" class="assigned-divisions hidden">
+                    <div class="assigned-divisions-label">Your assigned divisions:</div>
+                    <div id="division-tags" class="division-tags"></div>
+                </div>
             </div>
             
             <div id="auth-error" class="error-message hidden"></div>
@@ -287,19 +244,24 @@
             <!-- Sign Up Form (DEFAULT for new invitees) -->
             <div id="signup-form" class="auth-form">
                 <div class="email-notice">
-                    📧 Create your account using the email address this invite was sent to.
+                    📧 Create your Campistry account to join this camp.
                 </div>
                 <div class="form-group">
-                    <label for="signup-email">Email</label>
+                    <label for="signup-name">Your Name</label>
+                    <input type="text" id="signup-name" placeholder="How should we call you?">
+                    <div class="form-hint">This will be displayed to your team</div>
+                </div>
+                <div class="form-group">
+                    <label>Email (from invite)</label>
                     <input type="email" id="signup-email" readonly disabled>
                 </div>
                 <div class="form-group">
                     <label for="signup-password">Create Password</label>
-                    <input type="password" id="signup-password" placeholder="At least 6 characters" required>
+                    <input type="password" id="signup-password" placeholder="At least 6 characters">
                 </div>
                 <div class="form-group">
                     <label for="signup-password-confirm">Confirm Password</label>
-                    <input type="password" id="signup-password-confirm" placeholder="Confirm your password" required>
+                    <input type="password" id="signup-password-confirm" placeholder="Confirm your password">
                 </div>
                 <button class="btn-primary" id="signup-btn" onclick="handleSignUp()">
                     Create Account & Join Camp
@@ -315,18 +277,18 @@
                     🔑 Sign in with your existing Campistry account to join this camp.
                 </div>
                 <div class="form-group">
-                    <label for="email">Email</label>
+                    <label>Email (from invite)</label>
                     <input type="email" id="email" readonly disabled>
                 </div>
                 <div class="form-group">
                     <label for="password">Password</label>
-                    <input type="password" id="password" placeholder="Enter your password" required>
+                    <input type="password" id="password" placeholder="Enter your password">
                 </div>
                 <button class="btn-primary" id="signin-btn" onclick="handleSignIn()">
                     Sign In & Join Camp
                 </button>
                 <p class="auth-toggle">
-                    Don't have an account yet? <a href="#" onclick="toggleAuthMode(event)">Create Account</a>
+                    Need an account? <a href="#" onclick="toggleAuthMode(event)">Create Account</a>
                 </p>
             </div>
         </div>
@@ -388,7 +350,8 @@
         let inviteData = null;
         let inviteToken = null;
         let currentUser = null;
-        let campName = 'the camp'; // Will be fetched
+        let campName = 'Your Camp';
+        let subdivisionNames = [];
         
         // =====================================================================
         // INITIALIZATION
@@ -397,10 +360,8 @@
         async function init() {
             console.log('🎟️ Invite page initializing...');
             
-            // Initialize Supabase
             supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
             
-            // Get invite token from URL
             const params = new URLSearchParams(window.location.search);
             inviteToken = params.get('token');
             
@@ -412,7 +373,7 @@
             }
             
             // Check if user is already logged in
-            const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
+            const { data: { user } } = await supabaseClient.auth.getUser();
             currentUser = user;
             console.log('🎟️ Current user:', currentUser ? currentUser.email : 'Not logged in');
             
@@ -424,7 +385,6 @@
             try {
                 console.log('🎟️ Loading invite...');
                 
-                // Fetch invite data
                 const { data, error } = await supabaseClient
                     .from('camp_users')
                     .select('*')
@@ -452,8 +412,13 @@
                 inviteData = data;
                 console.log('🎟️ Invite loaded:', { email: data.email, role: data.role, camp_id: data.camp_id });
                 
-                // Fetch camp name - the camp_id IS the owner's user ID
+                // Fetch camp name
                 await fetchCampName(data.camp_id);
+                
+                // Fetch subdivision names if assigned
+                if (data.subdivisions && data.subdivisions.length > 0) {
+                    await fetchSubdivisionNames(data.subdivisions);
+                }
                 
                 // Show appropriate state
                 if (currentUser) {
@@ -472,25 +437,34 @@
             try {
                 console.log('🎟️ Fetching camp name for owner:', campOwnerId);
                 
-                // Query the camps table where owner = campOwnerId
                 const { data, error } = await supabaseClient
                     .from('camps')
                     .select('name')
                     .eq('owner', campOwnerId)
                     .maybeSingle();
                 
-                console.log('🎟️ Camp query result:', { data, error });
-                
                 if (data && data.name) {
                     campName = data.name;
                     console.log('🎟️ Camp name found:', campName);
-                } else {
-                    console.warn('🎟️ Could not find camp name, using default');
-                    campName = 'Your Camp';
                 }
             } catch (e) {
                 console.error('🎟️ Error fetching camp name:', e);
-                campName = 'Your Camp';
+            }
+        }
+        
+        async function fetchSubdivisionNames(subdivisionIds) {
+            try {
+                const { data, error } = await supabaseClient
+                    .from('subdivisions')
+                    .select('name')
+                    .in('id', subdivisionIds);
+                
+                if (data) {
+                    subdivisionNames = data.map(s => s.name);
+                    console.log('🎟️ Subdivision names:', subdivisionNames);
+                }
+            } catch (e) {
+                console.error('🎟️ Error fetching subdivision names:', e);
             }
         }
         
@@ -515,7 +489,8 @@
         function showInviteState() {
             hideAll();
             
-            // Update invite details
+            // Update subtitle with camp name
+            document.getElementById('invite-subtitle').textContent = `Join the team at ${campName}`;
             document.getElementById('invite-camp-name').textContent = campName;
             document.getElementById('invite-email').textContent = inviteData.email;
             
@@ -524,7 +499,17 @@
             roleBadge.style.background = getRoleColor(inviteData.role) + '20';
             roleBadge.style.color = getRoleColor(inviteData.role);
             
-            // Pre-fill email (readonly - they must use the invited email)
+            // Show assigned divisions if any
+            if (subdivisionNames.length > 0) {
+                const container = document.getElementById('assigned-divisions-container');
+                const tagsEl = document.getElementById('division-tags');
+                tagsEl.innerHTML = subdivisionNames.map(name => 
+                    `<span class="division-tag">${name}</span>`
+                ).join('');
+                container.classList.remove('hidden');
+            }
+            
+            // Pre-fill email (readonly)
             document.getElementById('signup-email').value = inviteData.email;
             document.getElementById('email').value = inviteData.email;
             
@@ -564,7 +549,6 @@
             document.getElementById('success-camp-name').textContent = `You've successfully joined ${campName}!`;
             document.getElementById('success-state').classList.remove('hidden');
             
-            // Redirect after delay
             setTimeout(() => {
                 window.location.href = '/dashboard.html';
             }, 2000);
@@ -579,7 +563,6 @@
             document.getElementById('signin-form').classList.toggle('hidden');
             document.getElementById('signup-form').classList.toggle('hidden');
             
-            // Clear any errors
             const errorEl = document.getElementById('auth-error');
             errorEl.classList.add('hidden');
             errorEl.textContent = '';
@@ -592,14 +575,19 @@
         }
         
         async function handleSignUp() {
+            const name = document.getElementById('signup-name').value.trim();
             const password = document.getElementById('signup-password').value;
             const confirm = document.getElementById('signup-password-confirm').value;
             const btn = document.getElementById('signup-btn');
             
-            // Clear previous errors
             document.getElementById('auth-error').classList.add('hidden');
             
             // Validation
+            if (!name) {
+                showAuthError('Please enter your name.');
+                return;
+            }
+            
             if (!password) {
                 showAuthError('Please enter a password.');
                 return;
@@ -615,7 +603,6 @@
                 return;
             }
             
-            // Update button state
             btn.disabled = true;
             btn.textContent = 'Creating account...';
             
@@ -627,7 +614,7 @@
                     password: password
                 });
                 
-                console.log('🎟️ SignUp result:', { user: data?.user?.id, error });
+                console.log('🎟️ SignUp result:', { user: data?.user?.id, session: !!data?.session, error });
                 
                 if (error) {
                     throw error;
@@ -637,13 +624,31 @@
                     throw new Error('Account creation failed. Please try again.');
                 }
                 
-                currentUser = data.user;
+                // If no session, try signing in (email confirmation might be disabled)
+                if (!data.session) {
+                    console.log('🎟️ No session, trying auto sign-in...');
+                    const signIn = await supabaseClient.auth.signInWithPassword({
+                        email: inviteData.email,
+                        password: password
+                    });
+                    
+                    if (signIn.error) {
+                        // Email confirmation might be required
+                        showAuthError('Account created! Please check your email to confirm, then return here.');
+                        btn.disabled = false;
+                        btn.textContent = 'Create Account & Join Camp';
+                        return;
+                    }
+                    
+                    currentUser = signIn.data.user;
+                } else {
+                    currentUser = data.user;
+                }
                 
-                // Update button
                 btn.textContent = 'Joining camp...';
                 
-                // Accept the invite
-                await acceptInvite();
+                // Accept the invite with the name
+                await acceptInvite(name);
                 
             } catch (e) {
                 console.error('🎟️ SignUp error:', e);
@@ -657,7 +662,6 @@
             const password = document.getElementById('password').value;
             const btn = document.getElementById('signin-btn');
             
-            // Clear previous errors
             document.getElementById('auth-error').classList.add('hidden');
             
             if (!password) {
@@ -687,12 +691,10 @@
                 }
                 
                 currentUser = data.user;
-                
-                // Update button
                 btn.textContent = 'Joining camp...';
                 
-                // Accept the invite
-                await acceptInvite();
+                // For existing users, use email as fallback name
+                await acceptInvite(currentUser.email.split('@')[0]);
                 
             } catch (e) {
                 console.error('🎟️ SignIn error:', e);
@@ -707,32 +709,31 @@
             btn.disabled = true;
             btn.textContent = 'Joining...';
             
-            await acceptInvite();
+            await acceptInvite(currentUser.email.split('@')[0]);
         }
         
-        async function acceptInvite() {
+        async function acceptInvite(userName) {
             try {
-                console.log('🎟️ Accepting invite...');
+                console.log('🎟️ Accepting invite with name:', userName);
                 
-                // Verify we have current user
                 if (!currentUser) {
                     throw new Error('Not signed in. Please refresh and try again.');
                 }
                 
-                // Verify email matches
                 if (currentUser.email.toLowerCase() !== inviteData.email.toLowerCase()) {
                     throw new Error(`Email mismatch. Please sign in with ${inviteData.email}`);
                 }
                 
                 console.log('🎟️ Updating invite record:', inviteData.id);
                 
-                // Update the invite record
+                // Update the invite record with user_id AND name
                 const { data, error } = await supabaseClient
                     .from('camp_users')
                     .update({
                         user_id: currentUser.id,
+                        name: userName,
                         accepted_at: new Date().toISOString(),
-                        invite_token: null // Clear the token
+                        invite_token: null
                     })
                     .eq('id', inviteData.id)
                     .select();
@@ -750,13 +751,11 @@
                 localStorage.setItem('campistry_user_id', inviteData.camp_id);
                 localStorage.setItem('campistry_auth_user_id', currentUser.id);
                 
-                // Show success and redirect
                 showSuccess();
                 
             } catch (e) {
                 console.error('🎟️ Accept error:', e);
                 
-                // Show error in appropriate place
                 const errorEl = document.getElementById('accept-error') || document.getElementById('auth-error');
                 if (errorEl) {
                     errorEl.textContent = e.message;
@@ -764,15 +763,11 @@
                 }
                 
                 // Re-enable buttons
-                const btns = ['accept-btn', 'signup-btn', 'signin-btn'];
-                btns.forEach(id => {
-                    const btn = document.getElementById(id);
-                    if (btn) {
-                        btn.disabled = false;
-                    }
-                });
+                document.getElementById('signup-btn').disabled = false;
                 document.getElementById('signup-btn').textContent = 'Create Account & Join Camp';
+                document.getElementById('signin-btn').disabled = false;
                 document.getElementById('signin-btn').textContent = 'Sign In & Join Camp';
+                document.getElementById('accept-btn').disabled = false;
                 document.getElementById('accept-btn').textContent = 'Accept Invitation';
             }
         }
