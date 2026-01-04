@@ -19,6 +19,10 @@
 
     // Persist Roster Updates (Teams)
     function saveRoster() {
+        if (!window.AccessControl?.canEdit?.()) {
+            console.warn('[CamperLocator] Save blocked - insufficient permissions');
+            return;
+        }
         const app1 = window.loadGlobalSettings?.().app1 || {};
         app1.camperRoster = camperRoster;
         window.saveGlobalSettings?.("app1", app1);
@@ -446,6 +450,11 @@
         listContainer.querySelectorAll(".team-selector").forEach(sel => {
             sel.onchange = (e) => {
                 const camperName = e.target.dataset.name;
+                if (!window.AccessControl?.canEdit?.()) {
+                    window.AccessControl?.showPermissionDenied?.('edit camper teams');
+                    e.target.value = camperRoster[camperName].team || ''; // revert
+                    return;
+                }
                 const newTeam = e.target.value;
                 camperRoster[camperName].team = newTeam;
                 saveRoster();
