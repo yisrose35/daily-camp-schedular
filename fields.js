@@ -8,6 +8,7 @@
 // 4. Feat: Sport Player Requirements section.
 // 5. NEW: Weather & Availability (Rainy Day Mode configuration).
 // 6. SYNC: Explicit Cloud Sync trigger added to saveData.
+// 7. SEC: Added RBAC checks for Add, Delete, and Save operations.
 // ============================================================================
 (function(){
 'use strict';
@@ -269,6 +270,12 @@ function loadData(){
 }
 
 function saveData(){
+    // ✅ RBAC Check
+    if (!window.AccessControl?.canEditSetup?.()) {
+        console.warn('[Fields] Save blocked - insufficient permissions');
+        return;
+    }
+
     try {
         const settings = window.loadGlobalSettings?.() || {};
         settings.app1 = settings.app1 || {};
@@ -568,6 +575,11 @@ function renderDetailPane(){
     delBtn.style.alignItems = "center";
 
     delBtn.onclick = ()=>{
+        // ✅ RBAC Check
+        if (!window.AccessControl?.canEraseData?.()) {
+            window.AccessControl?.showPermissionDenied?.('delete fields');
+            return;
+        }
         if(confirm(`Delete "${item.name}"?`)){
             fields = fields.filter(f => f !== item);
             saveData();
@@ -1327,6 +1339,9 @@ function makeEditable(el, save){
 }
 
 function addField(){
+    // ✅ RBAC Check
+    if (!window.AccessControl?.checkSetupAccess('add fields')) return;
+
     const n = addFieldInput.value.trim();
     if(!n) return;
 
