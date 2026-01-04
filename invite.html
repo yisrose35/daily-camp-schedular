@@ -415,9 +415,9 @@
                 // Fetch camp name
                 await fetchCampName(data.camp_id);
                 
-                // Fetch subdivision names if assigned
-                if (data.subdivisions && data.subdivisions.length > 0) {
-                    await fetchSubdivisionNames(data.subdivisions);
+                // Fetch subdivision names if assigned (column is subdivision_ids)
+                if (data.subdivision_ids && data.subdivision_ids.length > 0) {
+                    await fetchSubdivisionNames(data.subdivision_ids);
                 }
                 
                 // Show appropriate state
