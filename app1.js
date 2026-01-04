@@ -646,6 +646,8 @@
     }
     
     function deleteBunkFromDivision(divName, bunkName) {
+        if (!window.AccessControl?.checkSetupAccess('delete bunks')) return false;
+
         const div = state.divisions[divName];
         if (!div || !Array.isArray(div.bunks)) return false;
         
@@ -662,6 +664,8 @@
     }
     
     function addBunkToDivision(divName, bunkName) {
+        if (!window.AccessControl?.checkSetupAccess('add bunks')) return false;
+
         if (!divName || !bunkName) return false;
         
         const cleanDiv = String(divName).trim();
@@ -974,6 +978,8 @@
     // ==================== DIVISION OPERATIONS ====================
     
     function addDivision() {
+        if (!window.AccessControl?.checkSetupAccess('add divisions')) return;
+
         const input = document.getElementById("divisionInput");
         const name = (input?.value || "").trim();
         
@@ -1007,6 +1013,10 @@
     }
     
     function deleteDivision(divName) {
+        if (!window.AccessControl?.canEraseData?.()) {
+            window.AccessControl?.showPermissionDenied?.('delete divisions');
+            return;
+        }
         if (!confirm(`Delete division "${divName}"?`)) return;
         
         delete state.divisions[divName];
@@ -1027,6 +1037,8 @@
     }
     
     function renameDivision(oldName, newName) {
+        if (!window.AccessControl?.checkSetupAccess('rename divisions')) return false;
+
         const trimmed = newName.trim();
         
         if (!trimmed || trimmed === oldName) return false;
@@ -1541,6 +1553,10 @@
             eraseAllBtn.parentNode.replaceChild(newBtn, eraseAllBtn);
             
             newBtn.addEventListener("click", async () => {
+                if (!window.AccessControl?.canEraseData?.()) {
+                    window.AccessControl?.showPermissionDenied?.('erase all camp data');
+                    return;
+                }
                 if (confirm("⚠️ WARNING: This will delete ALL camp data, divisions, bunks, and schedules.\n\nThis action cannot be undone.\n\nAre you sure?")) {
                     const confirm2 = confirm("Are you absolutely sure? All data will be lost forever.");
                     if (confirm2) {
