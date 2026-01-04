@@ -1,5 +1,5 @@
 // =================================================================
-// daily_adjustments.js  (v3.7 - Updated: Custom Bunks, Green Toggles, Crash Fixes)
+// daily_adjustments.js  (v3.8 - Updated: RBAC Security)
 // - Grid/tiles EXACTLY match master_schedule_builder.js
 // - Professional Rainy Day Mode toggle with animations
 // - ★ NEW: Mid-day rainy mode (preserve morning schedule)
@@ -13,6 +13,7 @@
 // - Smart Tiles passed to Core Optimizer for capacity awareness
 // - Integration with getPinnedTileDefaultLocation for Pinned Events
 // - ★ UPDATED: Mobile Touch Support for Drag & Drop
+// - ★ SEC: Added RBAC checks for Editing & Optimizer
 // =================================================================
 (function() {
 'use strict';
@@ -377,6 +378,9 @@ function rerenderRainyDayUI() {
 }
 
 function activateFullDayRainyMode() {
+  // ✅ RBAC Check
+  if (!window.AccessControl?.checkEditAccess?.('activate rainy day mode')) return;
+
   const dailyData = window.loadCurrentDailyData?.() || {};
   const overrides = dailyData.overrides || {};
   const stats = getRainyDayStats();
@@ -1529,6 +1533,10 @@ function loadDailySkeleton() {
 }
 
 function saveDailySkeleton() {
+  if (!window.AccessControl?.canEdit?.()) {
+      console.warn('[DailyAdj] Save blocked - insufficient permissions');
+      return;
+  }
   window.saveCurrentDailyData?.("manualSkeleton", dailyOverrideSkeleton);
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
 }
@@ -1569,6 +1577,8 @@ function uid() {
 // RUN OPTIMIZER
 // =================================================================
 function runOptimizer() {
+  if (!window.AccessControl?.checkEditAccess?.('run optimizer')) return;
+
   if (!window.runSkeletonOptimizer) { alert("Error: 'runSkeletonOptimizer' not found."); return; }
   if (dailyOverrideSkeleton.length === 0) { alert("Skeleton is empty."); return; }
   saveDailySkeleton();
