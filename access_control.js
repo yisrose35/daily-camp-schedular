@@ -10,7 +10,7 @@
 (function() {
     'use strict';
 
-    console.log("🔐 Access Control v2.0 (Multi-Tenant) loading...");
+    console.log("🔐 Access Control v3.0 (Multi-Tenant) loading...");
 
     // =========================================================================
     // STATE
@@ -704,6 +704,156 @@
     }
 
     // =========================================================================
+    // V3.0 QUICK-CHECK HELPERS
+    // =========================================================================
+
+    /**
+     * Check if user can edit (scheduler or higher) - alias for canEditAnything
+     */
+    function canEdit() {
+        return canEditAnything();
+    }
+
+    /**
+     * Get current role - alias for getCurrentRole
+     */
+    function getRole() {
+        return _currentRole;
+    }
+
+    /**
+     * Check if user can edit camp setup (Owner/Admin only)
+     * Use for: adding/deleting divisions, fields, special activities, etc.
+     */
+    function canEditSetup() {
+        return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
+    }
+
+    /**
+     * Check if user can edit field configuration (Owner/Admin only)
+     */
+    function canEditFields() {
+        return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
+    }
+
+    /**
+     * Check if user can erase/delete data (Owner only)
+     * Use for: delete buttons, erase all, start new half, etc.
+     */
+    function canEraseData() {
+        return _currentRole === ROLES.OWNER;
+    }
+
+    /**
+     * Quick check with automatic error message for edit operations
+     * @param {string} action - Description of the action (for error message)
+     * @returns {boolean} - True if allowed, false if blocked (with toast shown)
+     */
+    function checkEditAccess(action) {
+        if (!canEdit()) {
+            showPermissionDenied(action || 'edit');
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Quick check with automatic error message for setup operations
+     * @param {string} action - Description of the action (for error message)
+     * @returns {boolean} - True if allowed, false if blocked (with toast shown)
+     */
+    function checkSetupAccess(action) {
+        if (!canEditSetup()) {
+            showPermissionDenied(action || 'modify setup');
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Check division-specific access with automatic error message
+     * @param {string} divisionName - Name of the division
+     * @param {string} action - Description of the action
+     * @returns {boolean}
+     */
+    function checkDivisionAccess(divisionName, action) {
+        if (!canEditDivision(divisionName)) {
+            showPermissionDenied(action || `edit ${divisionName}`);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Check bunk-specific access with automatic error message
+     * @param {string} bunkName - Name of the bunk
+     * @param {string} action - Description of the action
+     * @returns {boolean}
+     */
+    function checkBunkAccess(bunkName, action) {
+        if (!canEditBunk(bunkName)) {
+            showPermissionDenied(action || `edit ${bunkName}`);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Check if user can edit a specific bunk
+     */
+    function canEditBunk(bunkName) {
+        // Viewers can't edit anything
+        if (_currentRole === ROLES.VIEWER) return false;
+        
+        // Owners and admins can edit all bunks
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        
+        // Schedulers: check if bunk is in an editable division
+        if (_currentRole === ROLES.SCHEDULER) {
+            // If no restrictions, can edit all
+            if (_editableDivisions.length === 0 && _userSubdivisionIds.length === 0) {
+                return true;
+            }
+            
+            // Find which division this bunk belongs to
+            const divisions = window.divisions || window.getDivisions?.() || {};
+            for (const [divName, divData] of Object.entries(divisions)) {
+                if (divData.bunks && divData.bunks.includes(bunkName)) {
+                    return _editableDivisions.includes(divName);
+                }
+            }
+            
+            return false;
+        }
+        
+        return false;
+    }
+
+    /**
+     * Filter list of bunks to only those user can edit
+     * @param {Array} bunks - Array of bunk names
+     * @returns {Array} - Filtered array
+     */
+    function filterEditableBunks(bunks) {
+        if (!Array.isArray(bunks)) return [];
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return bunks;
+        if (!canEdit()) return [];
+        return bunks.filter(b => canEditBunk(b));
+    }
+
+    /**
+     * Filter list of divisions to only those user can edit
+     * @param {Array} divisionNames - Array of division names
+     * @returns {Array} - Filtered array
+     */
+    function filterEditableDivisions(divisionNames) {
+        if (!Array.isArray(divisionNames)) return [];
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return divisionNames;
+        if (!canEdit()) return [];
+        return divisionNames.filter(d => canEditDivision(d));
+    }
+
+    // =========================================================================
     // SUBDIVISION MANAGEMENT (Owners/Admins only)
     // =========================================================================
 
@@ -1063,11 +1213,12 @@
      * Show toast notification for permission denied
      */
     function showPermissionDenied(action = 'perform this action') {
-        if (typeof showToast === 'function') {
-            showToast(`You don't have permission to ${action}`, 'error');
+        if (typeof window.showToast === 'function') {
+            window.showToast(`You don't have permission to ${action}`, 'error');
         } else {
-            console.warn(`Permission denied: ${action}`);
+            alert(`You don't have permission to ${action}`);
         }
+        console.warn(`🔐 Permission denied: ${action}`);
     }
 
     function renderAccessBanner() {
@@ -1155,6 +1306,20 @@
         canRemoveFieldAvailability,
         hasRoleAtLeast,
         
+        // V3.0 Quick-check helpers
+        canEdit,
+        getRole,
+        canEditSetup,
+        canEditFields,
+        canEraseData,
+        checkEditAccess,
+        checkSetupAccess,
+        checkDivisionAccess,
+        checkBunkAccess,
+        canEditBunk,
+        filterEditableBunks,
+        filterEditableDivisions,
+        
         // Role checks
         isOwner,
         isAdmin,
@@ -1236,6 +1401,6 @@
         });
     }
 
-    console.log("🔐 Access Control v2.0 module loaded (Multi-Tenant)");
+    console.log("🔐 Access Control v3.0 module loaded (Multi-Tenant)");
 
 })();
