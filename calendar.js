@@ -162,6 +162,10 @@
     // RESET ALL ACTIVITY / SPECIAL ROTATION
     // ==========================================================
     window.eraseRotationHistory = async function() {
+        if (!window.AccessControl?.canEraseData?.()) {
+            window.AccessControl?.showPermissionDenied?.('erase rotation history');
+            return;
+        }
         try {
             console.log("🔄 Erasing rotation history...");
             
@@ -199,6 +203,10 @@
     // START NEW HALF
     // ==========================================================
     window.startNewHalf = async function() {
+        if (!window.AccessControl?.canEraseData?.()) {
+            window.AccessControl?.showPermissionDenied?.('start new half');
+            return;
+        }
         const confirmed = confirm(
             "🏕️ START NEW HALF\n\n" +
             "This will reset:\n" +
@@ -271,6 +279,10 @@
         if (!btn) return;
         
         btn.onclick = async function() {
+            if (!window.AccessControl?.canEraseData?.()) {
+                window.AccessControl?.showPermissionDenied?.('erase all data');
+                return;
+            }
             if (!confirm("Erase ALL settings, schedules, and rotation histories?\nThis cannot be undone.")) return;
             
             btn.disabled = true;
@@ -374,6 +386,10 @@
     // 7. ERASE ALL SCHEDULE DAYS
     // ==========================================================
     window.eraseAllDailyData = function() {
+        if (!window.AccessControl?.canEraseData?.()) {
+            window.AccessControl?.showPermissionDenied?.('erase all daily data');
+            return;
+        }
         localStorage.removeItem(DAILY_DATA_KEY);
         // 🟢 Trigger Sync
         if (typeof window.scheduleCloudSync === 'function') window.scheduleCloudSync();
