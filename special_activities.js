@@ -1,4 +1,3 @@
-
 // ============================================================================
 // special_activities.js — MERGED: FIELDS.JS UX STYLE
 // ============================================================================
@@ -6,6 +5,7 @@
 // 2. Logic: Retains all Transition, Sharing, Frequency, and Time Rules.
 // 3. Style: Matches fields.js for consistent UI/UX across the app.
 // 4. Update: Added Location Dropdown for Special Activities.
+// 5. Update: Added RBAC Checks for Add/Delete operations.
 // ============================================================================
 (function() {
 'use strict';
@@ -434,6 +434,9 @@ function renderDetailPane() {
     delBtn.style.gap = "6px";
     delBtn.style.alignItems = "center";
     delBtn.onclick = () => {
+        // ✅ RBAC Check
+        if (!window.AccessControl?.checkSetupAccess('delete special activities')) return;
+
         if (confirm(`Delete "${item.name}"?`)) {
             if (isRainyDayItem) {
                 rainyDayActivities = rainyDayActivities.filter(s => s.name !== item.name);
@@ -1268,6 +1271,9 @@ function renderTimeRules(item) {
 // ADD SPECIAL
 //------------------------------------------------------------------
 function addSpecial() {
+    // ✅ RBAC Check
+    if (!window.AccessControl?.checkSetupAccess('add special activities')) return;
+    
     const n = addSpecialInput.value.trim();
     if (!n) return;
     
@@ -1312,6 +1318,9 @@ function addSpecial() {
 // ADD RAINY DAY ACTIVITY
 //------------------------------------------------------------------
 function addRainyDayActivity() {
+    // ✅ RBAC Check
+    if (!window.AccessControl?.checkSetupAccess('add rainy day activities')) return;
+    
     const n = addRainyDayInput.value.trim();
     if (!n) return;
     
