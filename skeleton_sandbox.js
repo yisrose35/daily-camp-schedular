@@ -44,6 +44,10 @@
   }
 
   function saveRules() {
+    if (!window.AccessControl?.canEditSetup?.()) {
+        console.warn("🔐 Not authorized to save conflict rules");
+        return;
+    }
     window.saveGlobalSettings?.("conflictRules", tileRules);
     window.saveGlobalSettings?.("customConflictTiles", customTiles);
     window.forceSyncToCloud?.();
