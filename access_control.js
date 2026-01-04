@@ -177,7 +177,7 @@
                 _isTeamMember = true;
                 _campId = memberData.camp_id;
                 _userName = memberData.name || _currentUser.email.split('@')[0];
-                _userSubdivisionIds = memberData.subdivisions || [];
+                _userSubdivisionIds = memberData.subdivision_ids || [];
                 _membership = memberData;
                 
                 // Fetch camp name
@@ -835,7 +835,7 @@
                     email: email.toLowerCase().trim(),
                     name: name || null,
                     role: role,
-                    subdivisions: subdivisionIds,
+                    subdivision_ids: subdivisionIds,
                     invited_by: _currentUser.id,
                     invite_token: inviteToken
                 }])
@@ -939,7 +939,7 @@
             _campId = invite.camp_id;
             _currentRole = invite.role;
             _isTeamMember = true;
-            _userSubdivisionIds = invite.subdivisions || [];
+            _userSubdivisionIds = invite.subdivision_ids || [];
             _userName = invite.name || _currentUser.email.split('@')[0];
             
             localStorage.setItem('campistry_user_id', _campId);
