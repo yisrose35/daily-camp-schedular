@@ -1,6 +1,6 @@
 // =================================================================
 // master_schedule_builder.js (UPDATED - ADVANCED GRID INTERACTION + MOBILE)
-// Beta v2.1
+// Beta v2.2
 // Updates:
 // 1. Added Elective tile type for reserving multiple activities
 // 2. Added "Update [Template Name]" button to save changes to current file.
@@ -12,6 +12,7 @@
 // 8. ADDED: Live drop previews and resize tooltips.
 // 9. CHANGED: Deletion now requires DOUBLE-CLICK to prevent accidental clicks.
 // 10. ADDED: Mobile Touch Support (Drag from palette to grid).
+// 11. ADDED: RBAC Checks for Update, Save, and Delete operations.
 // =================================================================
 
 (function(){
@@ -363,6 +364,9 @@ function renderTemplateUI(){
   const updateBtn = document.getElementById("template-update-btn");
   if(updateBtn) {
       updateBtn.onclick = () => {
+          // ✅ RBAC Check
+          if (!window.AccessControl?.checkSetupAccess('update schedule templates')) return;
+          
           if(currentLoadedTemplate && confirm(`Overwrite existing template "${currentLoadedTemplate}" with current grid?`)){
               window.saveSkeleton?.(currentLoadedTemplate, dailySkeleton);
               // Fix #2: Explicit sync
@@ -377,6 +381,9 @@ function renderTemplateUI(){
 
   // 2. SAVE AS NEW
   document.getElementById("template-save-btn").onclick=()=>{
+    // ✅ RBAC Check
+    if (!window.AccessControl?.checkSetupAccess('save schedule templates')) return;
+    
     const name=saveName.value.trim();
     if(!name) { alert("Please enter a name."); return; }
     
@@ -424,6 +431,9 @@ function renderTemplateUI(){
 
   // 5. DELETE
   document.getElementById("template-delete-btn").onclick=()=>{
+      // ✅ RBAC Check
+      if (!window.AccessControl?.checkSetupAccess('delete schedule templates')) return;
+      
       const delSel = document.getElementById("template-delete-select");
       const nameToDelete = delSel.value;
         
