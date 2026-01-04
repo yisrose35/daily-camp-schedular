@@ -446,6 +446,7 @@ function renderDetailPane(){
         delBtn.innerHTML = `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg> Delete`;
         delBtn.style.cssText = "color:#dc2626; background:#fef2f2; border:1px solid #fecaca; padding:6px 12px; border-radius:999px; cursor:pointer; display:flex; gap:6px; align-items:center; font-size:0.85rem;";
         delBtn.onclick = () => {
+            if (!window.AccessControl?.checkSetupAccess('delete zones')) return;
             if(confirm(`Delete zone "${zone.name}"? Fields will be unassigned.`)){
                 delete locationZones[zone.name];
                 saveData();
@@ -894,6 +895,9 @@ function renderLocationsSection(zone){
 // ADD ZONE
 //------------------------------------------------------------------
 function addZone(){
+    // ✅ RBAC Check
+    if (!window.AccessControl?.checkSetupAccess('add zones')) return;
+
     const name = addZoneInput.value.trim();
     if(!name){
         alert("Please enter a zone name.");
