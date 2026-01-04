@@ -1,9 +1,10 @@
 // ============================================================================
-// dashboard.js — Campistry Dashboard Logic (Multi-Tenant)
+// dashboard.js — Campistry Dashboard Logic (Multi-Tenant) v2.0
 // 
 // Handles:
 // - Auth check (redirect to landing if not logged in)
 // - Load/display camp profile (for owners AND team members)
+// - Personalized welcome message with user name and camp name
 // - Show role and permissions for team members
 // - Edit camp name and address (owners only)
 // - Change password
@@ -11,10 +12,8 @@
 // - Logout
 // - RBAC Team Section Visibility (owners only)
 // ============================================================================
-
 (function() {
     'use strict';
-
     // ========================================
     // STATE
     // ========================================
@@ -25,6 +24,8 @@
     let userRole = null;
     let isTeamMember = false;
     let membership = null;
+    let userName = null;
+    let campName = null;
 
     // ========================================
     // DOM ELEMENTS
@@ -124,6 +125,8 @@
                 userRole = 'owner';
                 isTeamMember = false;
                 campData = ownedCamp;
+                campName = ownedCamp.name || 'Your Camp';
+                userName = ownedCamp.owner_name || currentUser.email.split('@')[0];
                 return;
             }
         } catch (e) {
@@ -144,6 +147,7 @@
                 userRole = memberData.role;
                 isTeamMember = true;
                 membership = memberData;
+                userName = memberData.name || currentUser.email.split('@')[0];
                 
                 // Get camp data from the join
                 if (memberData.camps) {
@@ -152,6 +156,7 @@
                         address: memberData.camps.address,
                         owner: memberData.camps.owner
                     };
+                    campName = memberData.camps.name || 'Your Camp';
                 }
                 
                 // Store camp ID for cloud storage
@@ -164,8 +169,42 @@
         
         // User is neither - they're a new user (this shouldn't normally happen from dashboard)
         console.log('📊 User has no camp association');
-        userRole = null;
+        userRole = 'owner'; // Default to owner for new users
         isTeamMember = false;
+        userName = currentUser.email.split('@')[0];
+        campName = 'Your Camp';
+    }
+
+    // ========================================
+    // UPDATE WELCOME MESSAGE
+    // ========================================
+    
+    function updateWelcomeMessage() {
+        // Find the welcome section - it might have different structures
+        const welcomeSection = document.querySelector('.welcome-section');
+        const welcomeTitle = document.querySelector('.welcome-section h1, .welcome-title, #welcomeTitle');
+        const welcomeSubtitle = document.querySelector('.welcome-section p, .welcome-subtitle, #welcomeSubtitle');
+        
+        // Build the personalized welcome
+        const displayName = userName || 'there';
+        const displayCamp = campName || 'Your Camp';
+        
+        // Update the title
+        if (welcomeTitle) {
+            welcomeTitle.textContent = `Welcome, ${displayName}!`;
+        }
+        
+        // Update the subtitle to show camp name
+        if (welcomeSubtitle) {
+            welcomeSubtitle.innerHTML = `<span style="color: var(--primary, #6366F1); font-weight: 600;">${displayCamp}</span> — Manage your camp and access all Campistry products.`;
+        }
+        
+        // Also update the campNameDisplay if it exists (legacy support)
+        if (campNameDisplay) {
+            campNameDisplay.textContent = displayCamp;
+        }
+        
+        console.log('📊 Welcome message updated:', `Welcome, ${displayName}!`, `Camp: ${displayCamp}`);
     }
 
     // ========================================
@@ -203,11 +242,18 @@
         const welcomeSection = document.querySelector('.welcome-section');
         if (!welcomeSection) return;
         
+        // Check if badge already exists
+        if (document.querySelector('.role-badge-large')) return;
+        
         const roleBadge = document.createElement('div');
         roleBadge.className = 'role-badge-large';
+        
+        // Get permissions text
+        const permissionsText = getPermissionsText();
+        
         roleBadge.innerHTML = `
             <span class="role-icon">${getRoleIcon(userRole)}</span>
-            <span class="role-text">You are a <strong>${getRoleDisplayName(userRole)}</strong></span>
+            <span class="role-text">${permissionsText}</span>
         `;
         roleBadge.style.cssText = `
             display: inline-flex;
@@ -225,9 +271,76 @@
         welcomeSection.appendChild(roleBadge);
     }
     
+    /**
+     * Get human-readable permissions text
+     * e.g., "Scheduler for Grades 1, 2, and 3"
+     */
+    function getPermissionsText() {
+        if (userRole === 'owner') {
+            return 'Owner — Full access to all features';
+        }
+        
+        if (userRole === 'admin') {
+            return 'Administrator — Full editing access';
+        }
+        
+        if (userRole === 'viewer') {
+            return 'Viewer — View-only access';
+        }
+        
+        if (userRole === 'scheduler') {
+            // We'll update this after loading subdivisions
+            if (membership?.subdivision_ids?.length > 0) {
+                return 'Scheduler — Loading divisions...';
+            }
+            return 'Scheduler — Full editing access';
+        }
+        
+        return userRole || 'Unknown';
+    }
+    
+    /**
+     * Update the role badge with actual subdivision names
+     */
+    async function updateRoleBadgeWithSubdivisions() {
+        if (userRole !== 'scheduler' || !membership?.subdivision_ids?.length) return;
+        
+        try {
+            const { data: subdivisions } = await window.supabase
+                .from('subdivisions')
+                .select('name')
+                .in('id', membership.subdivision_ids);
+            
+            if (subdivisions && subdivisions.length > 0) {
+                const names = subdivisions.map(s => s.name);
+                let text = '';
+                
+                if (names.length === 1) {
+                    text = `Scheduler for ${names[0]}`;
+                } else if (names.length === 2) {
+                    text = `Scheduler for ${names[0]} and ${names[1]}`;
+                } else {
+                    const last = names.pop();
+                    text = `Scheduler for ${names.join(', ')}, and ${last}`;
+                }
+                
+                // Update the badge
+                const badge = document.querySelector('.role-badge-large .role-text');
+                if (badge) {
+                    badge.textContent = text;
+                }
+            }
+        } catch (e) {
+            console.warn('Could not load subdivision names for badge:', e);
+        }
+    }
+    
     function addPermissionsSection() {
         const dashboardGrid = document.querySelector('.dashboard-grid');
         if (!dashboardGrid) return;
+        
+        // Check if already exists
+        if (document.querySelector('.permissions-card')) return;
         
         // Create permissions card
         const permissionsCard = document.createElement('section');
@@ -237,7 +350,6 @@
         let divisionsHtml = '<p style="color: var(--slate-500);">Loading...</p>';
         
         if (membership && membership.subdivision_ids && membership.subdivision_ids.length > 0) {
-            // Will be populated after subdivisions load
             divisionsHtml = '<p style="color: var(--slate-500);">Loading assigned divisions...</p>';
         } else if (userRole === 'admin') {
             divisionsHtml = '<p style="color: var(--slate-600);"><strong>All divisions</strong> - Full access</p>';
@@ -253,16 +365,22 @@
                 <div class="permission-row">
                     <span class="permission-label">Role</span>
                     <span class="permission-value">
-                        <span class="role-${userRole}">${getRoleDisplayName(userRole)}</span>
+                        <span class="role-badge-small" style="background: ${getRoleColor(userRole)}15; color: ${getRoleColor(userRole)}; padding: 4px 12px; border-radius: 999px; font-weight: 600;">
+                            ${getRoleIcon(userRole)} ${getRoleDisplayName(userRole)}
+                        </span>
                     </span>
                 </div>
                 <div class="permission-row">
-                    <span class="permission-label">Can Edit</span>
+                    <span class="permission-label">Can Edit Schedules</span>
                     <span class="permission-value">${userRole === 'viewer' ? '❌ No' : '✅ Yes'}</span>
                 </div>
                 <div class="permission-row">
-                    <span class="permission-label">Can Generate Schedules</span>
+                    <span class="permission-label">Can Print</span>
                     <span class="permission-value">${userRole === 'viewer' ? '❌ No' : '✅ Yes'}</span>
+                </div>
+                <div class="permission-row">
+                    <span class="permission-label">Can View All</span>
+                    <span class="permission-value">✅ Yes</span>
                 </div>
                 <div class="permission-divider"></div>
                 <div class="permission-section">
@@ -273,36 +391,43 @@
         `;
         
         // Add custom styles
-        const style = document.createElement('style');
-        style.textContent = `
-            .permission-row {
-                display: flex;
-                justify-content: space-between;
-                padding: 10px 0;
-                border-bottom: 1px solid var(--slate-100);
-            }
-            .permission-label {
-                color: var(--slate-600);
-                font-weight: 500;
-            }
-            .permission-value {
-                font-weight: 600;
-            }
-            .permission-divider {
-                height: 1px;
-                background: var(--slate-200);
-                margin: 16px 0;
-            }
-            .division-tag {
-                display: inline-block;
-                padding: 4px 12px;
-                background: var(--slate-100);
-                border-radius: 999px;
-                font-size: 0.85rem;
-                margin: 4px 4px 4px 0;
-            }
-        `;
-        document.head.appendChild(style);
+        if (!document.getElementById('permissions-styles')) {
+            const style = document.createElement('style');
+            style.id = 'permissions-styles';
+            style.textContent = `
+                .permission-row {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 10px 0;
+                    border-bottom: 1px solid var(--slate-100);
+                }
+                .permission-label {
+                    color: var(--slate-600);
+                    font-weight: 500;
+                }
+                .permission-value {
+                    font-weight: 600;
+                }
+                .permission-divider {
+                    height: 1px;
+                    background: var(--slate-200);
+                    margin: 16px 0;
+                }
+                .division-tag {
+                    display: inline-block;
+                    padding: 4px 12px;
+                    background: var(--slate-100);
+                    border-radius: 999px;
+                    font-size: 0.85rem;
+                    margin: 4px 4px 4px 0;
+                }
+                .permissions-card {
+                    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+                }
+            `;
+            document.head.appendChild(style);
+        }
         
         // Insert after first card
         const firstCard = dashboardGrid.firstElementChild;
@@ -314,6 +439,9 @@
         
         // Load actual subdivision/division data
         loadAssignedDivisions();
+        
+        // Update the role badge with subdivision names
+        updateRoleBadgeWithSubdivisions();
     }
     
     async function loadAssignedDivisions() {
@@ -346,7 +474,7 @@
                 let html = '';
                 subdivisions.forEach(sub => {
                     html += `
-                        <div style="margin-bottom: 12px; padding: 12px; background: var(--slate-50); border-radius: 8px; border-left: 4px solid ${sub.color || '#6B7280'};">
+                        <div style="margin-bottom: 12px; padding: 12px; background: white; border-radius: 8px; border-left: 4px solid ${sub.color || '#6B7280'}; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                             <div style="font-weight: 600; color: var(--slate-800);">${sub.name}</div>
                             <div style="font-size: 0.85rem; color: var(--slate-500); margin-top: 4px;">
                                 ${sub.divisions && sub.divisions.length > 0 
@@ -413,7 +541,7 @@
         }
         
         // Get camp name - either from owned camp or team membership
-        let campName = campData?.name || currentUser.user_metadata?.camp_name || '';
+        let displayCampName = campName || campData?.name || currentUser.user_metadata?.camp_name || 'Your Camp';
         let campAddress = campData?.address || '';
         
         // If owner and no campData yet, try to fetch it
@@ -427,24 +555,26 @@
                 
                 if (camps && !error) {
                     campData = camps;
-                    campName = camps.name || campName;
+                    displayCampName = camps.name || displayCampName;
                     campAddress = camps.address || '';
+                    campName = displayCampName;
+                    
+                    // Also get owner name if available
+                    if (camps.owner_name) {
+                        userName = camps.owner_name;
+                    }
                 }
             } catch (e) {
                 console.warn('Could not load camp data:', e);
             }
         }
         
-        // Update displays
-        if (campNameDisplay) {
-            if (isTeamMember) {
-                campNameDisplay.textContent = campName || 'Your Camp';
-            } else {
-                campNameDisplay.textContent = campName || 'Your Camp';
-            }
-        }
+        // Update the personalized welcome message
+        updateWelcomeMessage();
+        
+        // Update profile card displays
         if (profileCampName) {
-            profileCampName.textContent = campName || '—';
+            profileCampName.textContent = displayCampName || '—';
         }
         if (profileAddress) {
             profileAddress.textContent = campAddress || 'Not set';
@@ -452,7 +582,7 @@
         
         // Pre-fill edit form (only relevant for owners)
         if (editCampName) {
-            editCampName.value = campName;
+            editCampName.value = displayCampName;
         }
         if (editAddress) {
             editAddress.value = campAddress;
@@ -465,7 +595,6 @@
     // ========================================
     // CHECK ACCESS CONTROL (RBAC)
     // ========================================
-
     async function checkAccessControl() {
         // Only show team section for owners
         if (userRole !== 'owner') {
@@ -506,7 +635,6 @@
                 }
             }
         };
-
         await checkRole();
         
         document.addEventListener('campistry-access-loaded', async (e) => {
@@ -667,14 +795,20 @@
                 const { error: metaError } = await window.supabase.auth.updateUser({
                     data: { camp_name: newCampName }
                 });
-
                 if (metaError) {
                     console.error('Failed to update camp name metadata:', metaError);
                 }
                 
+                // Update local state
+                campName = newCampName;
+                
+                // Update displays
                 if (campNameDisplay) campNameDisplay.textContent = newCampName;
                 if (profileCampName) profileCampName.textContent = newCampName;
                 if (profileAddress) profileAddress.textContent = newAddress || 'Not set';
+                
+                // Update welcome message
+                updateWelcomeMessage();
                 
                 if (profileSuccess) profileSuccess.textContent = 'Profile updated successfully!';
                 
@@ -741,6 +875,7 @@
             // Clear camp ID cache
             localStorage.removeItem('campistry_user_id');
             localStorage.removeItem('campistry_auth_user_id');
+            localStorage.removeItem('campistry_user_context');
             
             await window.supabase.auth.signOut();
             window.location.href = 'landing.html';
@@ -766,6 +901,7 @@
             if (event === 'SIGNED_OUT') {
                 localStorage.removeItem('campistry_user_id');
                 localStorage.removeItem('campistry_auth_user_id');
+                localStorage.removeItem('campistry_user_context');
                 window.location.href = 'landing.html';
             }
         });
@@ -778,6 +914,5 @@
     checkAuth();
     setupAuthListener();
     
-    console.log('📊 Campistry Dashboard loaded (multi-tenant)');
-
+    console.log('📊 Campistry Dashboard v2.0 loaded (multi-tenant)');
 })();
