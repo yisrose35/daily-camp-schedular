@@ -1,15 +1,16 @@
 // ============================================================================
-// access_control.js — Campistry Role-Based Access Control (Multi-Tenant)
+// access_control.js — Campistry Role-Based Access Control (Multi-Tenant) v2.0
 // ============================================================================
 // Provides permission checks throughout the app
 // Everyone sees everything, editing is restricted by role/subdivision
 // Properly handles team members connecting to the main camp
+// Includes personalized welcome messages and permissions display
 // ============================================================================
 
 (function() {
     'use strict';
 
-    console.log("🔐 Access Control v1.2 (Multi-Tenant) loading...");
+    console.log("🔐 Access Control v2.0 (Multi-Tenant) loading...");
 
     // =========================================================================
     // STATE
@@ -18,8 +19,11 @@
     let _currentUser = null;
     let _currentRole = null;
     let _campId = null;
+    let _campName = null;
+    let _userName = null;
     let _subdivisions = [];
     let _userSubdivisionIds = [];
+    let _userSubdivisionDetails = []; // Full details of assigned subdivisions
     let _editableDivisions = [];
     let _initialized = false;
     let _isTeamMember = false;
@@ -30,6 +34,14 @@
         ADMIN: 'admin',
         SCHEDULER: 'scheduler',
         VIEWER: 'viewer'
+    };
+
+    // Role hierarchy for permission checks
+    const ROLE_HIERARCHY = {
+        owner: 4,
+        admin: 3,
+        scheduler: 2,
+        viewer: 1
     };
 
     // Beautiful color palette for subdivisions
@@ -84,6 +96,11 @@
         // Load subdivisions for the camp
         await loadSubdivisions();
         
+        // Load user's subdivision details if they're a scheduler
+        if (_currentRole === ROLES.SCHEDULER && _userSubdivisionIds.length > 0) {
+            await loadUserSubdivisionDetails();
+        }
+        
         // Calculate editable divisions based on role
         calculateEditableDivisions();
         
@@ -95,13 +112,18 @@
                 role: _currentRole,
                 editableDivisions: _editableDivisions,
                 subdivisions: _subdivisions,
-                isTeamMember: _isTeamMember
+                isTeamMember: _isTeamMember,
+                userName: _userName,
+                campName: _campName,
+                userSubdivisionDetails: _userSubdivisionDetails
             }
         }));
         
         console.log("🔐 Access control initialized:", {
             role: _currentRole,
             isTeamMember: _isTeamMember,
+            userName: _userName,
+            campName: _campName,
             editableDivisions: _editableDivisions.length,
             subdivisions: _subdivisions.length
         });
@@ -118,7 +140,7 @@
         try {
             const { data: ownedCamp } = await window.supabase
                 .from('camps')
-                .select('owner')
+                .select('*')
                 .eq('owner', _currentUser.id)
                 .maybeSingle();
             
@@ -127,10 +149,13 @@
                 _currentRole = ROLES.OWNER;
                 _isTeamMember = false;
                 _campId = _currentUser.id;
+                _campName = ownedCamp.name || 'Your Camp';
+                _userName = ownedCamp.owner_name || _currentUser.email.split('@')[0];
                 _userSubdivisionIds = []; // Empty = access to all
                 
                 // Store in localStorage
                 localStorage.setItem('campistry_user_id', _campId);
+                localStorage.setItem('campistry_auth_user_id', _currentUser.id);
                 return;
             }
         } catch (e) {
@@ -151,11 +176,22 @@
                 _currentRole = memberData.role || ROLES.VIEWER;
                 _isTeamMember = true;
                 _campId = memberData.camp_id;
-                _userSubdivisionIds = memberData.subdivision_ids || [];
+                _userName = memberData.name || _currentUser.email.split('@')[0];
+                _userSubdivisionIds = memberData.subdivisions || [];
                 _membership = memberData;
+                
+                // Fetch camp name
+                const { data: campData } = await window.supabase
+                    .from('camps')
+                    .select('name')
+                    .eq('owner', memberData.camp_id)
+                    .maybeSingle();
+                
+                _campName = campData?.name || 'Your Camp';
                 
                 // Store camp ID for cloud storage to use
                 localStorage.setItem('campistry_user_id', _campId);
+                localStorage.setItem('campistry_auth_user_id', _currentUser.id);
                 return;
             }
         } catch (e) {
@@ -167,8 +203,11 @@
         _currentRole = ROLES.OWNER;
         _isTeamMember = false;
         _campId = _currentUser.id;
+        _campName = 'Your Camp';
+        _userName = _currentUser.email.split('@')[0];
         _userSubdivisionIds = [];
         localStorage.setItem('campistry_user_id', _campId);
+        localStorage.setItem('campistry_auth_user_id', _currentUser.id);
     }
 
     /**
@@ -214,6 +253,36 @@
         }
     }
 
+    /**
+     * Load detailed info about user's assigned subdivisions
+     */
+    async function loadUserSubdivisionDetails() {
+        if (!_userSubdivisionIds || _userSubdivisionIds.length === 0) {
+            _userSubdivisionDetails = [];
+            return;
+        }
+
+        try {
+            const { data, error } = await window.supabase
+                .from('subdivisions')
+                .select('id, name, divisions, color')
+                .in('id', _userSubdivisionIds);
+
+            if (error) {
+                console.warn("🔐 Error loading user subdivision details:", error);
+                _userSubdivisionDetails = [];
+                return;
+            }
+
+            _userSubdivisionDetails = data || [];
+            console.log("🔐 Loaded user subdivision details:", _userSubdivisionDetails.length);
+
+        } catch (e) {
+            console.error("🔐 Error loading user subdivision details:", e);
+            _userSubdivisionDetails = [];
+        }
+    }
+
     // =========================================================================
     // CALCULATE EDITABLE DIVISIONS
     // =========================================================================
@@ -246,12 +315,23 @@
             
             // Get divisions from assigned subdivisions
             const editableDivs = new Set();
-            _userSubdivisionIds.forEach(subId => {
-                const sub = _subdivisions.find(s => s.id === subId);
-                if (sub && sub.divisions) {
-                    sub.divisions.forEach(d => editableDivs.add(d));
-                }
-            });
+            
+            // Use the detailed subdivision info if available
+            if (_userSubdivisionDetails && _userSubdivisionDetails.length > 0) {
+                _userSubdivisionDetails.forEach(sub => {
+                    if (sub.divisions) {
+                        sub.divisions.forEach(d => editableDivs.add(d));
+                    }
+                });
+            } else {
+                // Fallback to looking up in all subdivisions
+                _userSubdivisionIds.forEach(subId => {
+                    const sub = _subdivisions.find(s => s.id === subId);
+                    if (sub && sub.divisions) {
+                        sub.divisions.forEach(d => editableDivs.add(d));
+                    }
+                });
+            }
             
             _editableDivisions = [...editableDivs];
             console.log("🔐 Scheduler restricted to:", _editableDivisions);
@@ -333,6 +413,42 @@
     }
 
     /**
+     * Check if user can print schedules
+     */
+    function canPrint() {
+        return _currentRole !== ROLES.VIEWER;
+    }
+
+    /**
+     * Check if user can add a division's availability to a field
+     * Schedulers can only add their own divisions
+     */
+    function canAddFieldAvailability(divisionName) {
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        if (_currentRole === ROLES.SCHEDULER) return canEditDivision(divisionName);
+        return false;
+    }
+
+    /**
+     * Check if user can remove a division's availability from a field
+     * Schedulers can ONLY remove their own divisions, NOT others
+     */
+    function canRemoveFieldAvailability(divisionName) {
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        if (_currentRole === ROLES.SCHEDULER) return canEditDivision(divisionName);
+        return false;
+    }
+
+    /**
+     * Check if user has at least a certain role level
+     */
+    function hasRoleAtLeast(requiredRole) {
+        const currentLevel = ROLE_HIERARCHY[_currentRole] || 0;
+        const requiredLevel = ROLE_HIERARCHY[requiredRole] || 0;
+        return currentLevel >= requiredLevel;
+    }
+
+    /**
      * Get list of divisions user can edit
      */
     function getEditableDivisions() {
@@ -358,6 +474,27 @@
      */
     function isTeamMember() {
         return _isTeamMember;
+    }
+
+    /**
+     * Check if user is owner
+     */
+    function isOwner() {
+        return _currentRole === ROLES.OWNER;
+    }
+
+    /**
+     * Check if user is admin or owner
+     */
+    function isAdmin() {
+        return _currentRole === ROLES.ADMIN || _currentRole === ROLES.OWNER;
+    }
+
+    /**
+     * Check if user is viewer only
+     */
+    function isViewer() {
+        return _currentRole === ROLES.VIEWER;
     }
 
     /**
@@ -400,6 +537,156 @@
         
         const userSubs = getUserSubdivisions();
         return userSubs.some(sub => sub.divisions && sub.divisions.includes(divisionName));
+    }
+
+    // =========================================================================
+    // WELCOME MESSAGE & PERMISSIONS DISPLAY
+    // =========================================================================
+
+    /**
+     * Get personalized welcome message
+     * Returns: { title: "Welcome, John!", subtitle: "Camp Awesome" }
+     */
+    function getWelcomeMessage() {
+        const name = _userName || 'there';
+        const camp = _campName || 'Your Camp';
+        
+        return {
+            title: `Welcome, ${name}!`,
+            subtitle: camp,
+            role: _currentRole,
+            isOwner: !_isTeamMember
+        };
+    }
+
+    /**
+     * Get human-readable permissions text
+     * e.g., "Scheduler for Grades 1, 2, and 3"
+     */
+    function getPermissionsText() {
+        if (_currentRole === ROLES.OWNER) {
+            return 'Full access to all features';
+        }
+        
+        if (_currentRole === ROLES.ADMIN) {
+            return 'Full editing access to all divisions';
+        }
+        
+        if (_currentRole === ROLES.VIEWER) {
+            return 'View-only access';
+        }
+        
+        if (_currentRole === ROLES.SCHEDULER) {
+            // Get subdivision names
+            let names = [];
+            
+            if (_userSubdivisionDetails && _userSubdivisionDetails.length > 0) {
+                names = _userSubdivisionDetails.map(s => s.name);
+            } else if (_userSubdivisionIds && _userSubdivisionIds.length > 0) {
+                const subs = _subdivisions.filter(s => _userSubdivisionIds.includes(s.id));
+                names = subs.map(s => s.name);
+            }
+            
+            if (names.length === 0) {
+                return 'Scheduler (no divisions assigned)';
+            } else if (names.length === 1) {
+                return `Scheduler for ${names[0]}`;
+            } else if (names.length === 2) {
+                return `Scheduler for ${names[0]} and ${names[1]}`;
+            } else {
+                const last = names.pop();
+                return `Scheduler for ${names.join(', ')}, and ${last}`;
+            }
+        }
+        
+        return '';
+    }
+
+    /**
+     * Get role display info for UI
+     */
+    function getRoleDisplay() {
+        const roleNames = {
+            owner: 'Owner',
+            admin: 'Administrator',
+            scheduler: 'Scheduler',
+            viewer: 'Viewer'
+        };
+        
+        const roleColors = {
+            owner: '#7C3AED',
+            admin: '#2563EB',
+            scheduler: '#059669',
+            viewer: '#6B7280'
+        };
+        
+        const roleDescriptions = {
+            owner: 'Full access to all features and team management',
+            admin: 'Full editing access to all divisions',
+            scheduler: 'Edit access to assigned divisions only',
+            viewer: 'View-only access to schedules'
+        };
+        
+        return {
+            role: _currentRole,
+            name: roleNames[_currentRole] || _currentRole,
+            color: roleColors[_currentRole] || '#6B7280',
+            description: roleDescriptions[_currentRole] || '',
+            subdivisionDetails: _userSubdivisionDetails || []
+        };
+    }
+
+    /**
+     * Get permissions summary for display
+     */
+    function getPermissionsSummary() {
+        const permissions = [];
+        
+        if (_currentRole === ROLES.OWNER) {
+            permissions.push({ icon: '👑', text: 'Full access to all features' });
+            permissions.push({ icon: '👥', text: 'Manage team members' });
+            permissions.push({ icon: '⚙️', text: 'Camp settings' });
+        } else if (_currentRole === ROLES.ADMIN) {
+            permissions.push({ icon: '✏️', text: 'Edit all divisions and schedules' });
+            permissions.push({ icon: '🖨️', text: 'Print any schedule' });
+            permissions.push({ icon: '📊', text: 'Full reporting access' });
+        } else if (_currentRole === ROLES.SCHEDULER) {
+            if (_userSubdivisionDetails && _userSubdivisionDetails.length > 0) {
+                const names = _userSubdivisionDetails.map(s => s.name).join(', ');
+                permissions.push({ icon: '✏️', text: `Edit: ${names}` });
+            } else {
+                permissions.push({ icon: '✏️', text: 'Edit assigned divisions' });
+            }
+            permissions.push({ icon: '🖨️', text: 'Print any schedule' });
+            permissions.push({ icon: '👁️', text: 'View all schedules' });
+        } else {
+            permissions.push({ icon: '👁️', text: 'View all schedules' });
+            permissions.push({ icon: '🔍', text: 'Camper lookup' });
+            permissions.push({ icon: '❓', text: 'Help & documentation' });
+        }
+        
+        return permissions;
+    }
+
+    /**
+     * Get the user's name
+     */
+    function getUserName() {
+        return _userName;
+    }
+
+    /**
+     * Get the camp name
+     */
+    function getCampName() {
+        return _campName;
+    }
+
+    /**
+     * Get user's assigned subdivision details
+     */
+    function getUserSubdivisionDetails() {
+        return [..._userSubdivisionDetails];
     }
 
     // =========================================================================
@@ -528,7 +815,7 @@
         }
     }
 
-    async function inviteTeamMember(email, role, subdivisionIds = []) {
+    async function inviteTeamMember(email, role, subdivisionIds = [], name = '') {
         if (!canInviteUsers()) {
             return { error: "Not authorized to invite users" };
         }
@@ -546,8 +833,9 @@
                 .insert([{
                     camp_id: campId,
                     email: email.toLowerCase().trim(),
+                    name: name || null,
                     role: role,
-                    subdivision_ids: subdivisionIds,
+                    subdivisions: subdivisionIds,
                     invited_by: _currentUser.id,
                     invite_token: inviteToken
                 }])
@@ -651,11 +939,14 @@
             _campId = invite.camp_id;
             _currentRole = invite.role;
             _isTeamMember = true;
-            _userSubdivisionIds = invite.subdivision_ids || [];
+            _userSubdivisionIds = invite.subdivisions || [];
+            _userName = invite.name || _currentUser.email.split('@')[0];
             
             localStorage.setItem('campistry_user_id', _campId);
+            localStorage.setItem('campistry_auth_user_id', _currentUser.id);
             
             await loadSubdivisions();
+            await loadUserSubdivisionDetails();
             calculateEditableDivisions();
 
             return { data, campId: invite.camp_id };
@@ -768,6 +1059,17 @@
         return colors[role] || '#6B7280';
     }
 
+    /**
+     * Show toast notification for permission denied
+     */
+    function showPermissionDenied(action = 'perform this action') {
+        if (typeof showToast === 'function') {
+            showToast(`You don't have permission to ${action}`, 'error');
+        } else {
+            console.warn(`Permission denied: ${action}`);
+        }
+    }
+
     function renderAccessBanner() {
         const existing = document.getElementById('access-control-banner');
         if (existing) existing.remove();
@@ -802,15 +1104,14 @@
                 </div>
             `;
         } else if (_currentRole === ROLES.SCHEDULER) {
-            const userSubs = getUserSubdivisions();
-            const subNames = userSubs.map(s => s.name).join(', ') || 'All';
+            const permText = getPermissionsText();
             
             banner.innerHTML = `
                 <span style="font-size: 1.2rem;">🔓</span>
                 <div>
-                    <strong>You can edit: ${subNames}</strong>
+                    <strong>${permText}</strong>
                     <div style="font-size: 0.85rem; color: #92400E;">
-                        ${_editableDivisions.join(', ') || 'No divisions assigned'}
+                        You can view all schedules but only edit your assigned divisions.
                     </div>
                 </div>
             `;
@@ -849,17 +1150,35 @@
         canManageTeam,
         canEditAnything,
         canSave,
+        canPrint,
+        canAddFieldAvailability,
+        canRemoveFieldAvailability,
+        hasRoleAtLeast,
+        
+        // Role checks
+        isOwner,
+        isAdmin,
+        isViewer,
+        isTeamMember,
         
         // Getters
         getEditableDivisions,
         getGeneratableDivisions,
         getCurrentRole,
-        isTeamMember,
         getSubdivisions,
         getUserSubdivisions,
+        getUserSubdivisionDetails,
         getSubdivisionForDivision,
         isDivisionInUserSubdivisions,
         getCampId,
+        getUserName,
+        getCampName,
+        
+        // Welcome & Permissions display
+        getWelcomeMessage,
+        getPermissionsText,
+        getRoleDisplay,
+        getPermissionsSummary,
         
         // Color management
         getNextSubdivisionColor,
@@ -886,9 +1205,11 @@
         getRoleDisplayName,
         getRoleColor,
         renderAccessBanner,
+        showPermissionDenied,
         
         // Constants
-        ROLES
+        ROLES,
+        ROLE_HIERARCHY
     };
 
     window.AccessControl = AccessControl;
@@ -903,7 +1224,11 @@
                 _currentUser = null;
                 _currentRole = null;
                 _campId = null;
+                _campName = null;
+                _userName = null;
                 _subdivisions = [];
+                _userSubdivisionIds = [];
+                _userSubdivisionDetails = [];
                 _editableDivisions = [];
                 _isTeamMember = false;
                 _membership = null;
@@ -911,6 +1236,6 @@
         });
     }
 
-    console.log("🔐 Access Control module loaded (Multi-Tenant)");
+    console.log("🔐 Access Control v2.0 module loaded (Multi-Tenant)");
 
 })();
