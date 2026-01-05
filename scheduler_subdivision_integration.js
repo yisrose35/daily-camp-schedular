@@ -1,15 +1,11 @@
 // ============================================================================
-// scheduler_subdivision_integration.js (v1.0)
+// scheduler_subdivision_integration.js (v1.1 - FIXED)
 // ============================================================================
 // INTEGRATION LAYER: Connects SubdivisionScheduleManager with the scheduler
 //
-// This module:
-// 1. Hooks into scheduler lifecycle
-// 2. Filters divisions/bunks based on user access
-// 3. Restores locked schedules before generation
-// 4. Registers locked claims in GlobalFieldLocks
-// 5. Marks schedules as draft after generation
-// 6. Provides smart resource allocation recommendations
+// FIXES in v1.1:
+// - Fixed isInitialized getter being called as function
+// - Added proper permission checks for scheduler role
 // ============================================================================
 
 (function() {
@@ -42,7 +38,8 @@
             console.log('='.repeat(70));
 
             // Initialize subdivision manager if needed
-            if (!window.SubdivisionScheduleManager?.isInitialized?.()) {
+            // FIXED: isInitialized is a getter property, not a function
+            if (!window.SubdivisionScheduleManager?.isInitialized) {
                 console.log('[Integration] Initializing SubdivisionScheduleManager...');
                 await window.SubdivisionScheduleManager?.initialize?.();
             }
@@ -178,7 +175,8 @@
      */
     function getAdjustedFieldCapacity(fieldName, slots) {
         const manager = window.SubdivisionScheduleManager;
-        if (!manager?.isInitialized?.()) {
+        // FIXED: isInitialized is a getter property
+        if (!manager?.isInitialized) {
             return null; // No adjustment
         }
 
@@ -190,7 +188,8 @@
      */
     function isFieldBlockedByLockedSubdivision(fieldName, slots, divisionContext) {
         const manager = window.SubdivisionScheduleManager;
-        if (!manager?.isInitialized?.()) {
+        // FIXED: isInitialized is a getter property
+        if (!manager?.isInitialized) {
             return false;
         }
 
@@ -221,7 +220,7 @@
         
         if (isLocked) {
             btn.innerHTML = '🔒 Locked';
-            btn.disabled = !canEdit; // Only allow unlock if can edit
+            btn.disabled = !canEdit;
             btn.title = `Locked by ${schedule.lockedBy?.name || schedule.lockedBy?.email}`;
             
             btn.onclick = () => {
@@ -265,6 +264,16 @@
         const manager = window.SubdivisionScheduleManager;
         if (!manager) {
             container.innerHTML = '<p>Subdivision manager not loaded</p>';
+            return;
+        }
+
+        // FIXED: isInitialized is a getter property
+        if (!manager.isInitialized) {
+            container.innerHTML = '<p>Loading subdivision status...</p>';
+            // Try to initialize
+            manager.initialize?.().then(() => {
+                createSubdivisionStatusPanel(container);
+            });
             return;
         }
 
@@ -402,6 +411,11 @@
         container.innerHTML = html;
         const listEl = container.querySelector('#subdivision-status-list');
 
+        if (!summary || summary.length === 0) {
+            listEl.innerHTML = '<p style="color:#64748b;padding:8px;">No subdivisions configured yet.</p>';
+            return;
+        }
+
         summary.forEach(sub => {
             const item = document.createElement('div');
             item.className = `subdivision-status-item ${sub.isMySubdivision ? 'is-mine' : ''} ${sub.status === 'locked' ? 'is-locked' : ''}`;
@@ -443,7 +457,8 @@
      */
     function canEditBunk(bunkName) {
         const manager = window.SubdivisionScheduleManager;
-        if (!manager?.isInitialized?.()) {
+        // FIXED: isInitialized is a getter property
+        if (!manager?.isInitialized) {
             return true; // Allow if manager not ready
         }
 
@@ -469,7 +484,8 @@
     function getBunkEditStatus(bunkName) {
         const manager = window.SubdivisionScheduleManager;
         
-        if (!manager?.isInitialized?.()) {
+        // FIXED: isInitialized is a getter property
+        if (!manager?.isInitialized) {
             return { canEdit: true, reason: null };
         }
 
@@ -521,13 +537,14 @@
         // Install scheduler hooks
         installSchedulerHooks();
 
-        // Initialize manager when AccessControl is ready
-        if (window.AccessControl?.isInitialized?.()) {
+        // FIXED: isInitialized is a getter property, not a function
+        if (window.AccessControl?.isInitialized) {
             window.SubdivisionScheduleManager?.initialize?.();
         } else {
             // Wait for AccessControl
             const checkInterval = setInterval(() => {
-                if (window.AccessControl?.isInitialized?.()) {
+                // FIXED: isInitialized is a getter property
+                if (window.AccessControl?.isInitialized) {
                     clearInterval(checkInterval);
                     window.SubdivisionScheduleManager?.initialize?.();
                 }
@@ -570,6 +587,6 @@
         filterSkeletonByDivisions
     };
 
-    console.log('[SchedulerSubdivisionIntegration] Module loaded');
+    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.1');
 
 })();
