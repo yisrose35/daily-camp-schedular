@@ -1,16 +1,17 @@
 // ============================================================================
-// access_control.js — Campistry Role-Based Access Control (Multi-Tenant) v2.0
+// access_control.js — Campistry Role-Based Access Control (Multi-Tenant) v3.1
 // ============================================================================
-// Provides permission checks throughout the app
-// Everyone sees everything, editing is restricted by role/subdivision
-// Properly handles team members connecting to the main camp
-// Includes personalized welcome messages and permissions display
+// FIXED VERSION - Addresses:
+// 1. Returns FALSE (not true) when not initialized
+// 2. Recalculates editable divisions when window.divisions changes
+// 3. Better debugging output
+// 4. Stricter enforcement at action level
 // ============================================================================
 
 (function() {
     'use strict';
 
-    console.log("🔐 Access Control v3.0 (Multi-Tenant) loading...");
+    console.log("🔐 Access Control v3.1 (FIXED) loading...");
 
     // =========================================================================
     // STATE
@@ -28,6 +29,7 @@
     let _initialized = false;
     let _isTeamMember = false;
     let _membership = null;
+    let _lastDivisionsHash = null; // Track if window.divisions changed
 
     const ROLES = {
         OWNER: 'owner',
@@ -61,11 +63,26 @@
     ];
 
     // =========================================================================
+    // DEBUG MODE
+    // =========================================================================
+    
+    const DEBUG = true; // Set to false in production
+    
+    function debugLog(...args) {
+        if (DEBUG) {
+            console.log("🔐 [RBAC DEBUG]", ...args);
+        }
+    }
+
+    // =========================================================================
     // INITIALIZATION
     // =========================================================================
 
     async function initialize() {
-        if (_initialized) return;
+        if (_initialized) {
+            debugLog("Already initialized, skipping");
+            return;
+        }
         
         console.log("🔐 Initializing access control...");
         
@@ -106,6 +123,9 @@
         
         _initialized = true;
         
+        // Set up observer to recalculate when divisions change
+        setupDivisionChangeObserver();
+        
         // Dispatch event so UI can update
         window.dispatchEvent(new CustomEvent('campistry-access-loaded', {
             detail: {
@@ -115,7 +135,8 @@
                 isTeamMember: _isTeamMember,
                 userName: _userName,
                 campName: _campName,
-                userSubdivisionDetails: _userSubdivisionDetails
+                userSubdivisionDetails: _userSubdivisionDetails,
+                userSubdivisionIds: _userSubdivisionIds
             }
         }));
         
@@ -124,9 +145,38 @@
             isTeamMember: _isTeamMember,
             userName: _userName,
             campName: _campName,
-            editableDivisions: _editableDivisions.length,
-            subdivisions: _subdivisions.length
+            userSubdivisionIds: _userSubdivisionIds,
+            editableDivisions: _editableDivisions,
+            allSubdivisions: _subdivisions.length
         });
+        
+        // Detailed debug output
+        debugLog("=== RBAC STATE ===");
+        debugLog("User:", _currentUser?.email);
+        debugLog("Role:", _currentRole);
+        debugLog("Is Team Member:", _isTeamMember);
+        debugLog("User Subdivision IDs:", _userSubdivisionIds);
+        debugLog("User Subdivision Details:", _userSubdivisionDetails);
+        debugLog("All Subdivisions:", _subdivisions);
+        debugLog("Editable Divisions:", _editableDivisions);
+        debugLog("window.divisions:", Object.keys(window.divisions || {}));
+        debugLog("==================");
+    }
+
+    // =========================================================================
+    // DIVISION CHANGE OBSERVER
+    // =========================================================================
+    
+    function setupDivisionChangeObserver() {
+        // Check periodically if window.divisions has changed
+        setInterval(() => {
+            const currentHash = JSON.stringify(Object.keys(window.divisions || {}).sort());
+            if (currentHash !== _lastDivisionsHash && _lastDivisionsHash !== null) {
+                debugLog("window.divisions changed, recalculating editable divisions");
+                calculateEditableDivisions();
+            }
+            _lastDivisionsHash = currentHash;
+        }, 1000);
     }
 
     // =========================================================================
@@ -164,21 +214,36 @@
         
         // Not an owner - check if they're a team member
         try {
-            const { data: memberData } = await window.supabase
+            const { data: memberData, error } = await window.supabase
                 .from('camp_users')
                 .select('*')
                 .eq('user_id', _currentUser.id)
                 .not('accepted_at', 'is', null)
                 .maybeSingle();
             
+            debugLog("Team member query result:", { memberData, error });
+            
             if (memberData) {
                 console.log("🔐 User is a team member:", memberData.role);
+                debugLog("Member data subdivision_ids:", memberData.subdivision_ids);
+                
                 _currentRole = memberData.role || ROLES.VIEWER;
                 _isTeamMember = true;
                 _campId = memberData.camp_id;
                 _userName = memberData.name || _currentUser.email.split('@')[0];
+                
+                // CRITICAL: Properly load subdivision_ids
                 _userSubdivisionIds = memberData.subdivision_ids || [];
+                
+                // Validate that subdivision_ids is actually an array
+                if (!Array.isArray(_userSubdivisionIds)) {
+                    console.warn("🔐 subdivision_ids is not an array:", _userSubdivisionIds);
+                    _userSubdivisionIds = [];
+                }
+                
                 _membership = memberData;
+                
+                debugLog("Loaded subdivision IDs:", _userSubdivisionIds);
                 
                 // Fetch camp name
                 const { data: campData } = await window.supabase
@@ -246,6 +311,7 @@
 
             _subdivisions = data || [];
             console.log("🔐 Loaded subdivisions:", _subdivisions.length);
+            debugLog("Subdivisions:", _subdivisions);
 
         } catch (e) {
             console.error("🔐 Error loading subdivisions:", e);
@@ -258,9 +324,12 @@
      */
     async function loadUserSubdivisionDetails() {
         if (!_userSubdivisionIds || _userSubdivisionIds.length === 0) {
+            debugLog("No user subdivision IDs to load details for");
             _userSubdivisionDetails = [];
             return;
         }
+
+        debugLog("Loading details for subdivision IDs:", _userSubdivisionIds);
 
         try {
             const { data, error } = await window.supabase
@@ -276,6 +345,7 @@
 
             _userSubdivisionDetails = data || [];
             console.log("🔐 Loaded user subdivision details:", _userSubdivisionDetails.length);
+            debugLog("User subdivision details:", _userSubdivisionDetails);
 
         } catch (e) {
             console.error("🔐 Error loading user subdivision details:", e);
@@ -289,6 +359,11 @@
 
     function calculateEditableDivisions() {
         const allDivisions = Object.keys(window.divisions || {});
+        
+        debugLog("Calculating editable divisions...");
+        debugLog("All divisions in window.divisions:", allDivisions);
+        debugLog("Current role:", _currentRole);
+        debugLog("User subdivision IDs:", _userSubdivisionIds);
         
         // Owner and Admin can edit everything
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
@@ -306,10 +381,24 @@
         
         // Scheduler: check subdivision assignments
         if (_currentRole === ROLES.SCHEDULER) {
-            // If no subdivision restrictions, can edit all
+            // CHANGED: If no subdivision restrictions, scheduler still needs assignments
+            // Empty subdivision_ids now means NO ACCESS, not full access
+            // This is a policy change - uncomment the old behavior if you want empty = full access
+            
+            /*
+            // OLD BEHAVIOR (empty = full access):
             if (!_userSubdivisionIds || _userSubdivisionIds.length === 0) {
                 _editableDivisions = [...allDivisions];
-                console.log("🔐 Scheduler with full access");
+                console.log("🔐 Scheduler with full access (no subdivision restrictions)");
+                return;
+            }
+            */
+            
+            // NEW BEHAVIOR (empty = no access):
+            if (!_userSubdivisionIds || _userSubdivisionIds.length === 0) {
+                _editableDivisions = [];
+                console.warn("🔐 Scheduler has NO subdivision assignments - no edit access!");
+                console.warn("🔐 Assign this scheduler to subdivisions to grant edit access");
                 return;
             }
             
@@ -318,23 +407,34 @@
             
             // Use the detailed subdivision info if available
             if (_userSubdivisionDetails && _userSubdivisionDetails.length > 0) {
+                debugLog("Using user subdivision details to determine editable divisions");
                 _userSubdivisionDetails.forEach(sub => {
-                    if (sub.divisions) {
-                        sub.divisions.forEach(d => editableDivs.add(d));
+                    debugLog(`  Subdivision "${sub.name}" has divisions:`, sub.divisions);
+                    if (sub.divisions && Array.isArray(sub.divisions)) {
+                        sub.divisions.forEach(d => {
+                            debugLog(`    Adding "${d}" to editable divisions`);
+                            editableDivs.add(d);
+                        });
                     }
                 });
             } else {
+                debugLog("Falling back to looking up subdivisions by ID");
                 // Fallback to looking up in all subdivisions
                 _userSubdivisionIds.forEach(subId => {
                     const sub = _subdivisions.find(s => s.id === subId);
-                    if (sub && sub.divisions) {
-                        sub.divisions.forEach(d => editableDivs.add(d));
+                    debugLog(`  Looking up subdivision ID ${subId}:`, sub);
+                    if (sub && sub.divisions && Array.isArray(sub.divisions)) {
+                        sub.divisions.forEach(d => {
+                            debugLog(`    Adding "${d}" to editable divisions`);
+                            editableDivs.add(d);
+                        });
                     }
                 });
             }
             
             _editableDivisions = [...editableDivs];
             console.log("🔐 Scheduler restricted to:", _editableDivisions);
+            debugLog("Final editable divisions:", _editableDivisions);
             return;
         }
         
@@ -348,11 +448,13 @@
 
     /**
      * Check if current user can edit a specific division
+     * FIXED: Returns FALSE when not initialized (was returning true)
      */
     function canEditDivision(divisionName) {
+        // FIXED: Default to DENY when not initialized
         if (!_initialized) {
-            console.warn("🔐 Access control not initialized yet");
-            return true; // Default to allow during initialization
+            console.warn("🔐 Access control not initialized - DENYING access to", divisionName);
+            return false; // CHANGED from true to false
         }
         
         // Owner and Admin can edit all
@@ -365,7 +467,66 @@
             return false;
         }
         
-        return _editableDivisions.includes(divisionName);
+        // Scheduler - check editable divisions
+        const canEdit = _editableDivisions.includes(divisionName);
+        
+        debugLog(`canEditDivision("${divisionName}"): ${canEdit}`, 
+            `(editable: [${_editableDivisions.join(', ')}])`);
+        
+        return canEdit;
+    }
+
+    /**
+     * Check if current user can edit a specific bunk
+     */
+    function canEditBunk(bunkName) {
+        // FIXED: Default to DENY when not initialized
+        if (!_initialized) {
+            console.warn("🔐 Access control not initialized - DENYING access to bunk", bunkName);
+            return false;
+        }
+        
+        // Viewers can't edit anything
+        if (_currentRole === ROLES.VIEWER) return false;
+        
+        // Owners and admins can edit all bunks
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        
+        // Schedulers: check if bunk is in an editable division
+        if (_currentRole === ROLES.SCHEDULER) {
+            // If no editable divisions, can't edit any bunks
+            if (_editableDivisions.length === 0) {
+                return false;
+            }
+            
+            // Find which division this bunk belongs to
+            const divisions = window.divisions || window.getDivisions?.() || {};
+            for (const [divName, divData] of Object.entries(divisions)) {
+                if (divData.bunks && divData.bunks.includes(bunkName)) {
+                    const canEdit = _editableDivisions.includes(divName);
+                    debugLog(`canEditBunk("${bunkName}"): ${canEdit} (belongs to "${divName}")`);
+                    return canEdit;
+                }
+            }
+            
+            debugLog(`canEditBunk("${bunkName}"): false (bunk not found in any division)`);
+            return false;
+        }
+        
+        return false;
+    }
+
+    /**
+     * Get the division a bunk belongs to
+     */
+    function getDivisionForBunk(bunkName) {
+        const divisions = window.divisions || window.getDivisions?.() || {};
+        for (const [divName, divData] of Object.entries(divisions)) {
+            if (divData.bunks && divData.bunks.includes(bunkName)) {
+                return divName;
+            }
+        }
+        return null;
     }
 
     /**
@@ -400,6 +561,7 @@
      * Check if current user has any edit permissions
      */
     function canEditAnything() {
+        if (!_initialized) return false; // FIXED
         if (_currentRole === ROLES.VIEWER) return false;
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         return _editableDivisions.length > 0;
@@ -409,6 +571,7 @@
      * Check if current user can save/modify data
      */
     function canSave() {
+        if (!_initialized) return false; // FIXED
         return _currentRole !== ROLES.VIEWER;
     }
 
@@ -424,6 +587,7 @@
      * Schedulers can only add their own divisions
      */
     function canAddFieldAvailability(divisionName) {
+        if (!_initialized) return false;
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (_currentRole === ROLES.SCHEDULER) return canEditDivision(divisionName);
         return false;
@@ -434,6 +598,7 @@
      * Schedulers can ONLY remove their own divisions, NOT others
      */
     function canRemoveFieldAvailability(divisionName) {
+        if (!_initialized) return false;
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (_currentRole === ROLES.SCHEDULER) return canEditDivision(divisionName);
         return false;
@@ -505,6 +670,25 @@
     }
 
     /**
+     * Alias for getSubdivisions - used by SubdivisionScheduleManager
+     */
+    function getAllSubdivisions() {
+        return [..._subdivisions];
+    }
+
+    /**
+     * Get current user info object
+     */
+    function getCurrentUserInfo() {
+        if (!_currentUser) return null;
+        return {
+            userId: _currentUser.id,
+            email: _currentUser.email,
+            name: _userName || _currentUser.email?.split('@')[0] || 'Unknown'
+        };
+    }
+
+    /**
      * Get user's assigned subdivisions
      */
     function getUserSubdivisions() {
@@ -545,7 +729,6 @@
 
     /**
      * Get personalized welcome message
-     * Returns: { title: "Welcome, John!", subtitle: "Camp Awesome" }
      */
     function getWelcomeMessage() {
         const name = _userName || 'there';
@@ -561,7 +744,6 @@
 
     /**
      * Get human-readable permissions text
-     * e.g., "Scheduler for Grades 1, 2, and 3"
      */
     function getPermissionsText() {
         if (_currentRole === ROLES.OWNER) {
@@ -654,8 +836,10 @@
             if (_userSubdivisionDetails && _userSubdivisionDetails.length > 0) {
                 const names = _userSubdivisionDetails.map(s => s.name).join(', ');
                 permissions.push({ icon: '✏️', text: `Edit: ${names}` });
+            } else if (_editableDivisions.length > 0) {
+                permissions.push({ icon: '✏️', text: `Edit: ${_editableDivisions.join(', ')}` });
             } else {
-                permissions.push({ icon: '✏️', text: 'Edit assigned divisions' });
+                permissions.push({ icon: '⚠️', text: 'No divisions assigned - contact owner' });
             }
             permissions.push({ icon: '🖨️', text: 'Print any schedule' });
             permissions.push({ icon: '👁️', text: 'View all schedules' });
@@ -687,6 +871,13 @@
      */
     function getUserSubdivisionDetails() {
         return [..._userSubdivisionDetails];
+    }
+    
+    /**
+     * Get user's assigned subdivision IDs
+     */
+    function getUserSubdivisionIds() {
+        return [..._userSubdivisionIds];
     }
 
     // =========================================================================
@@ -723,9 +914,9 @@
 
     /**
      * Check if user can edit camp setup (Owner/Admin only)
-     * Use for: adding/deleting divisions, fields, special activities, etc.
      */
     function canEditSetup() {
+        if (!_initialized) return false;
         return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
     }
 
@@ -733,21 +924,20 @@
      * Check if user can edit field configuration (Owner/Admin only)
      */
     function canEditFields() {
+        if (!_initialized) return false;
         return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
     }
 
     /**
      * Check if user can erase/delete data (Owner only)
-     * Use for: delete buttons, erase all, start new half, etc.
      */
     function canEraseData() {
+        if (!_initialized) return false;
         return _currentRole === ROLES.OWNER;
     }
 
     /**
      * Quick check with automatic error message for edit operations
-     * @param {string} action - Description of the action (for error message)
-     * @returns {boolean} - True if allowed, false if blocked (with toast shown)
      */
     function checkEditAccess(action) {
         if (!canEdit()) {
@@ -759,8 +949,6 @@
 
     /**
      * Quick check with automatic error message for setup operations
-     * @param {string} action - Description of the action (for error message)
-     * @returns {boolean} - True if allowed, false if blocked (with toast shown)
      */
     function checkSetupAccess(action) {
         if (!canEditSetup()) {
@@ -772,9 +960,6 @@
 
     /**
      * Check division-specific access with automatic error message
-     * @param {string} divisionName - Name of the division
-     * @param {string} action - Description of the action
-     * @returns {boolean}
      */
     function checkDivisionAccess(divisionName, action) {
         if (!canEditDivision(divisionName)) {
@@ -786,9 +971,6 @@
 
     /**
      * Check bunk-specific access with automatic error message
-     * @param {string} bunkName - Name of the bunk
-     * @param {string} action - Description of the action
-     * @returns {boolean}
      */
     function checkBunkAccess(bunkName, action) {
         if (!canEditBunk(bunkName)) {
@@ -799,43 +981,11 @@
     }
 
     /**
-     * Check if user can edit a specific bunk
-     */
-    function canEditBunk(bunkName) {
-        // Viewers can't edit anything
-        if (_currentRole === ROLES.VIEWER) return false;
-        
-        // Owners and admins can edit all bunks
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
-        
-        // Schedulers: check if bunk is in an editable division
-        if (_currentRole === ROLES.SCHEDULER) {
-            // If no restrictions, can edit all
-            if (_editableDivisions.length === 0 && _userSubdivisionIds.length === 0) {
-                return true;
-            }
-            
-            // Find which division this bunk belongs to
-            const divisions = window.divisions || window.getDivisions?.() || {};
-            for (const [divName, divData] of Object.entries(divisions)) {
-                if (divData.bunks && divData.bunks.includes(bunkName)) {
-                    return _editableDivisions.includes(divName);
-                }
-            }
-            
-            return false;
-        }
-        
-        return false;
-    }
-
-    /**
      * Filter list of bunks to only those user can edit
-     * @param {Array} bunks - Array of bunk names
-     * @returns {Array} - Filtered array
      */
     function filterEditableBunks(bunks) {
         if (!Array.isArray(bunks)) return [];
+        if (!_initialized) return []; // FIXED
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return bunks;
         if (!canEdit()) return [];
         return bunks.filter(b => canEditBunk(b));
@@ -843,11 +993,10 @@
 
     /**
      * Filter list of divisions to only those user can edit
-     * @param {Array} divisionNames - Array of division names
-     * @returns {Array} - Filtered array
      */
     function filterEditableDivisions(divisionNames) {
         if (!Array.isArray(divisionNames)) return [];
+        if (!_initialized) return []; // FIXED
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return divisionNames;
         if (!canEdit()) return [];
         return divisionNames.filter(d => canEditDivision(d));
@@ -977,6 +1126,8 @@
         const inviteToken = crypto.randomUUID();
         const campId = getCampId();
 
+        debugLog("Creating invite with subdivision_ids:", subdivisionIds);
+
         try {
             const { data, error } = await window.supabase
                 .from('camp_users')
@@ -985,7 +1136,7 @@
                     email: email.toLowerCase().trim(),
                     name: name || null,
                     role: role,
-                    subdivision_ids: subdivisionIds,
+                    subdivision_ids: subdivisionIds, // CRITICAL: Make sure this is saved
                     invited_by: _currentUser.id,
                     invite_token: inviteToken
                 }])
@@ -993,6 +1144,8 @@
                 .single();
 
             if (error) throw error;
+            
+            debugLog("Invite created with data:", data);
 
             const inviteUrl = `${window.location.origin}/invite.html?token=${inviteToken}`;
 
@@ -1013,6 +1166,8 @@
             return { error: "Not authorized" };
         }
 
+        debugLog("Updating team member", id, "with:", updates);
+
         try {
             const { data, error } = await window.supabase
                 .from('camp_users')
@@ -1022,6 +1177,8 @@
                 .single();
 
             if (error) throw error;
+            
+            debugLog("Team member updated:", data);
 
             return { data };
 
@@ -1216,7 +1373,36 @@
         if (typeof window.showToast === 'function') {
             window.showToast(`You don't have permission to ${action}`, 'error');
         } else {
-            alert(`You don't have permission to ${action}`);
+            // Create inline toast
+            let toast = document.getElementById('rbac-toast');
+            if (!toast) {
+                toast = document.createElement('div');
+                toast.id = 'rbac-toast';
+                toast.style.cssText = `
+                    position: fixed;
+                    bottom: 24px;
+                    left: 50%;
+                    transform: translateX(-50%) translateY(100px);
+                    padding: 12px 24px;
+                    background: #EF4444;
+                    color: white;
+                    border-radius: 10px;
+                    font-weight: 500;
+                    font-size: 0.9rem;
+                    z-index: 10001;
+                    transition: all 0.3s ease;
+                    box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+                `;
+                document.body.appendChild(toast);
+            }
+            
+            toast.textContent = `🔒 You don't have permission to ${action}`;
+            toast.style.transform = 'translateX(-50%) translateY(0)';
+            
+            clearTimeout(toast._timer);
+            toast._timer = setTimeout(() => {
+                toast.style.transform = 'translateX(-50%) translateY(100px)';
+            }, 3000);
         }
         console.warn(`🔐 Permission denied: ${action}`);
     }
@@ -1256,13 +1442,16 @@
             `;
         } else if (_currentRole === ROLES.SCHEDULER) {
             const permText = getPermissionsText();
+            const editableDivsList = _editableDivisions.length > 0 
+                ? _editableDivisions.join(', ')
+                : 'None (contact owner to assign subdivisions)';
             
             banner.innerHTML = `
                 <span style="font-size: 1.2rem;">🔓</span>
                 <div>
                     <strong>${permText}</strong>
                     <div style="font-size: 0.85rem; color: #92400E;">
-                        You can view all schedules but only edit your assigned divisions.
+                        You can edit: ${editableDivsList}
                     </div>
                 </div>
             `;
@@ -1281,6 +1470,30 @@
         _initialized = false;
         await initialize();
         renderAccessBanner();
+    }
+    
+    // =========================================================================
+    // DEBUG FUNCTIONS
+    // =========================================================================
+    
+    /**
+     * Print current RBAC state to console (for debugging)
+     */
+    function debugPrintState() {
+        console.log("🔐 ========== RBAC STATE ==========");
+        console.log("Initialized:", _initialized);
+        console.log("Current User:", _currentUser?.email);
+        console.log("Current Role:", _currentRole);
+        console.log("Is Team Member:", _isTeamMember);
+        console.log("Camp ID:", _campId);
+        console.log("Camp Name:", _campName);
+        console.log("User Name:", _userName);
+        console.log("User Subdivision IDs:", _userSubdivisionIds);
+        console.log("User Subdivision Details:", _userSubdivisionDetails);
+        console.log("All Subdivisions:", _subdivisions);
+        console.log("Editable Divisions:", _editableDivisions);
+        console.log("window.divisions keys:", Object.keys(window.divisions || {}));
+        console.log("🔐 ==================================");
     }
 
     // =========================================================================
@@ -1319,6 +1532,7 @@
         canEditBunk,
         filterEditableBunks,
         filterEditableDivisions,
+        getDivisionForBunk,
         
         // Role checks
         isOwner,
@@ -1330,9 +1544,12 @@
         getEditableDivisions,
         getGeneratableDivisions,
         getCurrentRole,
+        getCurrentUserInfo,
         getSubdivisions,
+        getAllSubdivisions,
         getUserSubdivisions,
         getUserSubdivisionDetails,
+        getUserSubdivisionIds,
         getSubdivisionForDivision,
         isDivisionInUserSubdivisions,
         getCampId,
@@ -1372,6 +1589,9 @@
         renderAccessBanner,
         showPermissionDenied,
         
+        // Debug
+        debugPrintState,
+        
         // Constants
         ROLES,
         ROLE_HIERARCHY
@@ -1401,6 +1621,6 @@
         });
     }
 
-    console.log("🔐 Access Control v3.0 module loaded (Multi-Tenant)");
+    console.log("🔐 Access Control v3.1 (FIXED) loaded");
 
 })();
