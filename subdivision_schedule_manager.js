@@ -1,13 +1,14 @@
 // ============================================================================
-// subdivision_schedule_manager.js (v1.6 - SELF-ACCESS GUARANTEED)
+// subdivision_schedule_manager.js (v1.7 - STRICT ASSIGNMENT ENFORCEMENT)
 // ============================================================================
 // MULTI-SCHEDULER SYSTEM: Allows multiple schedulers to create schedules for
 // their assigned subdivisions while respecting each other's locked schedules.
 //
-// GUARANTEE in v1.6:
-// - "Self-Access": A scheduler is NEVER locked out of their own assigned 
-//   subdivisions, regardless of Draft/Locked status.
-// - "Auto-Locking": Schedulers strictly respect schedules from *other* //   subdivisions as constraints.
+// UPDATE v1.7:
+// - Strict Assignment: Users (including Owners) can ONLY schedule subdivisions
+//   they are explicitly assigned to.
+// - Auto-Locking: Users respect ALL other schedules (Draft/Locked) as constraints.
+// - Orphans: Owners still automatically pick up orphaned divisions.
 // ============================================================================
 
 (function() {
@@ -350,8 +351,10 @@
     function getLockedFieldUsageClaims() {
         const claims = {};
         const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
-        const role = window.AccessControl?.getCurrentRole?.();
-        const isOwner = role === 'owner' || role === 'admin';
+        
+        // Removed explicit role check to enforce strict behavior
+        // const role = window.AccessControl?.getCurrentRole?.();
+        // const isOwner = role === 'owner' || role === 'admin';
 
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
             // 1. Skip Empty Schedules
@@ -360,23 +363,13 @@
             // 2. Determine if we should treat this as a LOCK
             let treatAsLock = false;
 
-            if (isOwner) {
-                // Owner / Admin Logic:
-                // Owners respect explicit LOCKS only (they can edit drafts).
-                if (schedule.status === SCHEDULE_STATUS.LOCKED) {
-                    treatAsLock = true;
-                }
+            // STRICT MODE (v1.7): logic is uniform for everyone.
+            // If I am assigned to this subdivision, I am editing it, so I don't treat it as a lock.
+            // If I am NOT assigned, I treat it as a lock (Draft or Locked), so I schedule AROUND it.
+            if (mySubIds.has(subId)) {
+                treatAsLock = false;
             } else {
-                // Standard User Logic:
-                if (mySubIds.has(subId)) {
-                    // This is MY subdivision.
-                    // GUARANTEE: I never lock myself out. I can edit/overwrite my own work.
-                    treatAsLock = false;
-                } else {
-                    // This is SOMEONE ELSE'S subdivision.
-                    // GUARANTEE: I respect it automatically (Auto-Lock), whether Draft or Locked.
-                    treatAsLock = true;
-                }
+                treatAsLock = true;
             }
 
             if (!treatAsLock) continue;
@@ -459,14 +452,13 @@
 
     function restoreLockedSchedules() {
         const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
-        const role = window.AccessControl?.getCurrentRole?.();
-        const isOwner = role === 'owner' || role === 'admin';
+        // role check removed for strict mode
 
         let restoredCount = 0;
 
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
             // Don't restore "My" schedules as background layers; they are the active layer.
-            if (!isOwner && mySubIds.has(subId)) continue;
+            if (mySubIds.has(subId)) continue;
             
             // For others, restore if not empty (visualizing the constraints)
             if (schedule.status === SCHEDULE_STATUS.EMPTY) continue;
@@ -533,8 +525,13 @@
 
         // 1. Collect from assigned subdivisions
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            if (!isOwner && !mySubIds.has(subId)) continue;
+            // STRICT MODE (v1.7): Even Owners must be assigned to a subdivision to schedule it.
+            // This prevents "Accidental Full Regenerations" by owners.
+            if (!mySubIds.has(subId)) continue;
+            
+            // Never schedule locked subdivisions
             if (schedule.status === SCHEDULE_STATUS.LOCKED) continue;
+            
             (schedule.divisions || []).forEach(d => divisionsToSchedule.add(d));
         }
 
@@ -647,6 +644,36 @@
     }
 
     // =========================================================================
+    // UPDATE SCHEDULE STATUS
+    // =========================================================================
+
+    function markSubdivisionAsDraft(subdivisionId) {
+        const schedule = _subdivisionSchedules[subdivisionId];
+        if (!schedule) return;
+
+        if (schedule.status === SCHEDULE_STATUS.LOCKED) {
+            console.warn('[SubdivisionScheduler] Cannot modify locked schedule');
+            return;
+        }
+
+        schedule.status = SCHEDULE_STATUS.DRAFT;
+        schedule.lastModifiedAt = Date.now();
+        schedule.lastModifiedBy = window.AccessControl?.getCurrentUserInfo?.()?.email || 'unknown';
+
+        schedule.scheduleData = extractScheduleDataForSubdivision(subdivisionId);
+        schedule.fieldUsageClaims = extractFieldUsageClaimsForSubdivision(subdivisionId);
+
+        saveSubdivisionSchedules();
+    }
+
+    function markCurrentUserSubdivisionsAsDraft() {
+        // STRICT MODE (v1.7): Only mark assigned subdivisions.
+        _currentUserSubdivisions.forEach(sub => {
+            markSubdivisionAsDraft(sub.id);
+        });
+    }
+
+    // =========================================================================
     // DEBUG
     // =========================================================================
 
@@ -742,6 +769,6 @@
         debugPrintStatus
     };
 
-    console.log('[SubdivisionScheduler] Module loaded v1.6 (Self-Access Guaranteed)');
+    console.log('[SubdivisionScheduler] Module loaded v1.7 (Strict Assignment Enforcement)');
 
 })();
