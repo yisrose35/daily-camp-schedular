@@ -1,13 +1,13 @@
 // ============================================================================
-// subdivision_schedule_manager.js (v1.3 - ORPHAN FIX & STRICT ISOLATION)
+// subdivision_schedule_manager.js (v1.5 - AUTO-LOCKING FOR OTHERS)
 // ============================================================================
 // MULTI-SCHEDULER SYSTEM: Allows multiple schedulers to create schedules for
 // their assigned subdivisions while respecting each other's locked schedules.
 //
-// FIX in v1.3:
-// - Schedulers are STRICTLY restricted to their assigned subdivisions.
-// - Owners automatically schedule ALL unlocked subdivisions PLUS "Orphaned" 
-//   divisions (divisions not assigned to any subdivision).
+// FIX in v1.5:
+// - "Implicit Locking": Schedulers AUTOMATICALLY respect any non-empty schedule
+//   from other subdivisions (even Drafts) as constraints.
+// - Owners/Editors continue to see their accessible schedules as editable.
 // ============================================================================
 
 (function() {
@@ -344,17 +344,48 @@
     }
 
     // =========================================================================
-    // CROSS-SUBDIVISION FIELD CLAIMS
+    // CROSS-SUBDIVISION FIELD CLAIMS (THE CORE FIX)
     // =========================================================================
 
     function getLockedFieldUsageClaims() {
         const claims = {};
         const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
+        const role = window.AccessControl?.getCurrentRole?.();
+        const isOwner = role === 'owner' || role === 'admin';
 
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            if (schedule.status !== SCHEDULE_STATUS.LOCKED) continue;
-            if (mySubIds.has(subId)) continue;
+            // 1. Skip Empty Schedules
+            if (schedule.status === SCHEDULE_STATUS.EMPTY) continue;
 
+            // 2. Determine if we should treat this as a LOCK
+            let treatAsLock = false;
+
+            if (isOwner) {
+                // Owner / Admin Logic:
+                // Owners can edit ANY subdivision, so "Drafts" are not locks for them 
+                // (they are editable/regeneratable).
+                // Owners only respect explicit LOCKS as hard constraints.
+                if (schedule.status === SCHEDULE_STATUS.LOCKED) {
+                    treatAsLock = true;
+                }
+            } else {
+                // Standard User Logic:
+                if (mySubIds.has(subId)) {
+                    // This is MY subdivision.
+                    // I ignore my own Drafts (I am working on them).
+                    // I ignore my own Locks (I can unlock/overwrite them).
+                    treatAsLock = false;
+                } else {
+                    // This is SOMEONE ELSE'S subdivision.
+                    // I MUST respect it if it exists (Draft OR Locked).
+                    // This creates the "Automatic Locking" effect for others.
+                    treatAsLock = true;
+                }
+            }
+
+            if (!treatAsLock) continue;
+
+            // 3. Extract claims from the locked/blocking schedule
             const subClaims = schedule.fieldUsageClaims || {};
 
             for (const [slotIdx, slotClaims] of Object.entries(subClaims)) {
@@ -372,7 +403,9 @@
 
                     claims[slotIdx][fieldName].count += (usage.count || 0);
                     claims[slotIdx][fieldName].divisions.push(...(usage.divisions || []));
-                    claims[slotIdx][fieldName]._lockedSubdivisions.push(subId);
+                    // Add lock reason
+                    const statusText = schedule.status === SCHEDULE_STATUS.DRAFT ? '(Draft)' : '(Locked)';
+                    claims[slotIdx][fieldName]._lockedSubdivisions.push(`${schedule.subdivisionName} ${statusText}`);
 
                     if (usage.bunks) {
                         Object.assign(claims[slotIdx][fieldName].bunks, usage.bunks);
@@ -383,6 +416,126 @@
 
         return claims;
     }
+
+    function registerLockedClaimsInGlobalLocks() {
+        if (!window.GlobalFieldLocks) {
+            console.warn('[SubdivisionScheduler] GlobalFieldLocks not available');
+            return;
+        }
+
+        const claims = getLockedFieldUsageClaims();
+        let registeredCount = 0;
+        
+        console.log('[SubdivisionScheduler] 🔒 Applying external locks/constraints...');
+
+        for (const [slotIdx, slotClaims] of Object.entries(claims)) {
+            for (const [fieldName, usage] of Object.entries(slotClaims)) {
+                const props = window.activityProperties?.[fieldName] || {};
+                let maxCapacity = 1;
+                if (props.sharableWith?.capacity) {
+                    maxCapacity = parseInt(props.sharableWith.capacity) || 1;
+                } else if (props.sharable) {
+                    maxCapacity = 2;
+                }
+
+                if (usage.count >= maxCapacity) {
+                    const lockMsg = `Constraint: ${(usage._lockedSubdivisions || []).join(', ')}`;
+
+                    window.GlobalFieldLocks.lockField(fieldName, [parseInt(slotIdx)], {
+                        lockedBy: 'locked_subdivision',
+                        leagueName: null,
+                        division: (usage.divisions || []).join(', '),
+                        activity: lockMsg
+                    });
+                    
+                    console.log(`   ⛔ Blocked "${fieldName}" at Slot ${slotIdx} (${lockMsg})`);
+                    registeredCount++;
+                }
+            }
+        }
+
+        console.log(`[SubdivisionScheduler] Registered ${registeredCount} locked field claims in GlobalFieldLocks`);
+    }
+
+    // =========================================================================
+    // RESTORE LOCKED SCHEDULES
+    // =========================================================================
+
+    function restoreLockedSchedules() {
+        // This function ensures that the data for *my* scheduled blocks isn't lost
+        // but we only really need to restore things that are LOCKED (persisted).
+        // Drafts are handled by the main schedule loader usually.
+        
+        const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
+        const role = window.AccessControl?.getCurrentRole?.();
+        const isOwner = role === 'owner' || role === 'admin';
+
+        let restoredCount = 0;
+
+        for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
+            // Restore anything that has data, really. 
+            // But usually we only want to 'restore' (overlay) things we aren't editing.
+            
+            // If I am editing it (it's in my list), I don't "restore" it as a background layer;
+            // it should be in the main scheduleAssignments.
+            if (mySubIds.has(subId)) continue; 
+            
+            // If it's empty, nothing to restore.
+            if (schedule.status === SCHEDULE_STATUS.EMPTY) continue;
+
+            const scheduleData = schedule.scheduleData || {};
+
+            for (const [bunk, slots] of Object.entries(scheduleData)) {
+                if (!window.scheduleAssignments[bunk]) {
+                    window.scheduleAssignments[bunk] = [];
+                }
+
+                for (let i = 0; i < slots.length; i++) {
+                    if (slots[i]) {
+                        window.scheduleAssignments[bunk][i] = JSON.parse(JSON.stringify(slots[i]));
+                        window.scheduleAssignments[bunk][i]._locked = true;
+                        window.scheduleAssignments[bunk][i]._lockedSubdivision = subId;
+                    }
+                }
+            }
+
+            // Also restore usage counts so the solver knows fields are busy
+            const claims = schedule.fieldUsageClaims || {};
+            for (const [slotIdx, slotClaims] of Object.entries(claims)) {
+                if (!window.fieldUsageBySlot[slotIdx]) {
+                    window.fieldUsageBySlot[slotIdx] = {};
+                }
+
+                for (const [fieldName, usage] of Object.entries(slotClaims)) {
+                    if (!window.fieldUsageBySlot[slotIdx][fieldName]) {
+                        window.fieldUsageBySlot[slotIdx][fieldName] = {
+                            count: 0,
+                            divisions: [],
+                            bunks: {}
+                        };
+                    }
+
+                    const existing = window.fieldUsageBySlot[slotIdx][fieldName];
+                    existing.count += usage.count;
+                    existing.divisions.push(...(usage.divisions || []));
+                    existing._hasLockedClaim = true;
+
+                    if (usage.bunks) {
+                        Object.assign(existing.bunks, usage.bunks);
+                    }
+                }
+            }
+
+            restoredCount++;
+        }
+
+        console.log(`[SubdivisionScheduler] Restored ${restoredCount} background subdivision schedules`);
+        return restoredCount;
+    }
+
+    // =========================================================================
+    // CROSS-SUBDIVISION FIELD CLAIMS - HELPERS
+    // =========================================================================
 
     function isFieldClaimedByOthers(fieldName, slots, divisionContext) {
         const claims = getLockedFieldUsageClaims();
@@ -525,16 +678,13 @@
         const isOwner = role === 'owner' || role === 'admin';
 
         if (isOwner) {
-            // FIX: Owners mark all UNLOCKED subdivisions as draft
             _allSubdivisions.forEach(sub => {
                 const schedule = _subdivisionSchedules[sub.id];
-                // Do not touch locked schedules
                 if (schedule && schedule.status !== SCHEDULE_STATUS.LOCKED) {
                     markSubdivisionAsDraft(sub.id);
                 }
             });
         } else {
-            // Standard users only mark their assigned subdivisions
             _currentUserSubdivisions.forEach(sub => {
                 markSubdivisionAsDraft(sub.id);
             });
@@ -542,103 +692,7 @@
     }
 
     // =========================================================================
-    // RESTORE LOCKED SCHEDULES
-    // =========================================================================
-
-    function restoreLockedSchedules() {
-        const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
-
-        let restoredCount = 0;
-
-        for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            if (mySubIds.has(subId)) continue;
-            if (schedule.status !== SCHEDULE_STATUS.LOCKED) continue;
-
-            const scheduleData = schedule.scheduleData || {};
-
-            for (const [bunk, slots] of Object.entries(scheduleData)) {
-                if (!window.scheduleAssignments[bunk]) {
-                    window.scheduleAssignments[bunk] = [];
-                }
-
-                for (let i = 0; i < slots.length; i++) {
-                    if (slots[i]) {
-                        window.scheduleAssignments[bunk][i] = JSON.parse(JSON.stringify(slots[i]));
-                        window.scheduleAssignments[bunk][i]._locked = true;
-                        window.scheduleAssignments[bunk][i]._lockedSubdivision = subId;
-                    }
-                }
-            }
-
-            const claims = schedule.fieldUsageClaims || {};
-            for (const [slotIdx, slotClaims] of Object.entries(claims)) {
-                if (!window.fieldUsageBySlot[slotIdx]) {
-                    window.fieldUsageBySlot[slotIdx] = {};
-                }
-
-                for (const [fieldName, usage] of Object.entries(slotClaims)) {
-                    if (!window.fieldUsageBySlot[slotIdx][fieldName]) {
-                        window.fieldUsageBySlot[slotIdx][fieldName] = {
-                            count: 0,
-                            divisions: [],
-                            bunks: {}
-                        };
-                    }
-
-                    const existing = window.fieldUsageBySlot[slotIdx][fieldName];
-                    existing.count += usage.count;
-                    existing.divisions.push(...(usage.divisions || []));
-                    existing._hasLockedClaim = true;
-
-                    if (usage.bunks) {
-                        Object.assign(existing.bunks, usage.bunks);
-                    }
-                }
-            }
-
-            restoredCount++;
-        }
-
-        console.log(`[SubdivisionScheduler] Restored ${restoredCount} locked subdivision schedules`);
-        return restoredCount;
-    }
-
-    function registerLockedClaimsInGlobalLocks() {
-        if (!window.GlobalFieldLocks) {
-            console.warn('[SubdivisionScheduler] GlobalFieldLocks not available');
-            return;
-        }
-
-        const claims = getLockedFieldUsageClaims();
-        let registeredCount = 0;
-
-        for (const [slotIdx, slotClaims] of Object.entries(claims)) {
-            for (const [fieldName, usage] of Object.entries(slotClaims)) {
-                const props = window.activityProperties?.[fieldName] || {};
-                let maxCapacity = 1;
-                if (props.sharableWith?.capacity) {
-                    maxCapacity = parseInt(props.sharableWith.capacity) || 1;
-                } else if (props.sharable) {
-                    maxCapacity = 2;
-                }
-
-                if (usage.count >= maxCapacity) {
-                    window.GlobalFieldLocks.lockField(fieldName, [parseInt(slotIdx)], {
-                        lockedBy: 'locked_subdivision',
-                        leagueName: null,
-                        division: (usage.divisions || []).join(', '),
-                        activity: `Locked by ${(usage._lockedSubdivisions || []).length} subdivision(s)`
-                    });
-                    registeredCount++;
-                }
-            }
-        }
-
-        console.log(`[SubdivisionScheduler] Registered ${registeredCount} locked field claims in GlobalFieldLocks`);
-    }
-
-    // =========================================================================
-    // DIVISION FILTERING
+    // DIVISION FILTERING (KEPT FROM V1.3)
     // =========================================================================
 
     function getDivisionsToSchedule() {
@@ -648,7 +702,6 @@
         const role = window.AccessControl?.getCurrentRole?.();
         const isOwner = role === 'owner' || role === 'admin';
 
-        // 1. Collect divisions from accessible subdivisions
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
             // For owners, we check everything. For users, only assigned.
             if (!isOwner && !mySubIds.has(subId)) continue;
@@ -659,25 +712,20 @@
             (schedule.divisions || []).forEach(d => divisionsToSchedule.add(d));
         }
 
-        // 2. Handle ORPHANED divisions (Owner only)
-        // If a division is not in ANY subdivision, the Owner should still schedule it.
         if (isOwner) {
             const allDivisions = Object.keys(window.divisions || {});
             const assignedDivisions = new Set();
             
-            // Collect all assigned divisions across ALL schedules (locked or unlocked)
             Object.values(_subdivisionSchedules).forEach(sch => {
                 (sch.divisions || []).forEach(d => assignedDivisions.add(d));
             });
 
-            // Add orphans
             allDivisions.forEach(div => {
                 if (!assignedDivisions.has(div)) {
                     divisionsToSchedule.add(div);
                 }
             });
             
-            // Logging for debug
             const orphans = allDivisions.filter(d => !assignedDivisions.has(d));
             if (orphans.length > 0) {
                  console.log(`[SubdivisionScheduler] Including ${orphans.length} orphaned divisions for Owner: ${orphans.join(', ')}`);
@@ -818,7 +866,6 @@
     window.SubdivisionScheduleManager = {
         // Initialization
         initialize,
-        // FIXED: isInitialized as getter property
         get isInitialized() { return _initialized; },
 
         // Constants
@@ -869,6 +916,6 @@
         debugPrintStatus
     };
 
-    console.log('[SubdivisionScheduler] Module loaded v1.3');
+    console.log('[SubdivisionScheduler] Module loaded v1.5 (Auto-Locking)');
 
 })();
