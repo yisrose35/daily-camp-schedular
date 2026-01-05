@@ -1,13 +1,13 @@
 // ============================================================================
-// subdivision_schedule_manager.js (v1.5 - AUTO-LOCKING FOR OTHERS)
+// subdivision_schedule_manager.js (v1.6 - SELF-ACCESS GUARANTEED)
 // ============================================================================
 // MULTI-SCHEDULER SYSTEM: Allows multiple schedulers to create schedules for
 // their assigned subdivisions while respecting each other's locked schedules.
 //
-// FIX in v1.5:
-// - "Implicit Locking": Schedulers AUTOMATICALLY respect any non-empty schedule
-//   from other subdivisions (even Drafts) as constraints.
-// - Owners/Editors continue to see their accessible schedules as editable.
+// GUARANTEE in v1.6:
+// - "Self-Access": A scheduler is NEVER locked out of their own assigned 
+//   subdivisions, regardless of Draft/Locked status.
+// - "Auto-Locking": Schedulers strictly respect schedules from *other* //   subdivisions as constraints.
 // ============================================================================
 
 (function() {
@@ -362,9 +362,7 @@
 
             if (isOwner) {
                 // Owner / Admin Logic:
-                // Owners can edit ANY subdivision, so "Drafts" are not locks for them 
-                // (they are editable/regeneratable).
-                // Owners only respect explicit LOCKS as hard constraints.
+                // Owners respect explicit LOCKS only (they can edit drafts).
                 if (schedule.status === SCHEDULE_STATUS.LOCKED) {
                     treatAsLock = true;
                 }
@@ -372,13 +370,11 @@
                 // Standard User Logic:
                 if (mySubIds.has(subId)) {
                     // This is MY subdivision.
-                    // I ignore my own Drafts (I am working on them).
-                    // I ignore my own Locks (I can unlock/overwrite them).
+                    // GUARANTEE: I never lock myself out. I can edit/overwrite my own work.
                     treatAsLock = false;
                 } else {
                     // This is SOMEONE ELSE'S subdivision.
-                    // I MUST respect it if it exists (Draft OR Locked).
-                    // This creates the "Automatic Locking" effect for others.
+                    // GUARANTEE: I respect it automatically (Auto-Lock), whether Draft or Locked.
                     treatAsLock = true;
                 }
             }
@@ -403,7 +399,7 @@
 
                     claims[slotIdx][fieldName].count += (usage.count || 0);
                     claims[slotIdx][fieldName].divisions.push(...(usage.divisions || []));
-                    // Add lock reason
+                    
                     const statusText = schedule.status === SCHEDULE_STATUS.DRAFT ? '(Draft)' : '(Locked)';
                     claims[slotIdx][fieldName]._lockedSubdivisions.push(`${schedule.subdivisionName} ${statusText}`);
 
@@ -462,10 +458,6 @@
     // =========================================================================
 
     function restoreLockedSchedules() {
-        // This function ensures that the data for *my* scheduled blocks isn't lost
-        // but we only really need to restore things that are LOCKED (persisted).
-        // Drafts are handled by the main schedule loader usually.
-        
         const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
         const role = window.AccessControl?.getCurrentRole?.();
         const isOwner = role === 'owner' || role === 'admin';
@@ -473,14 +465,10 @@
         let restoredCount = 0;
 
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            // Restore anything that has data, really. 
-            // But usually we only want to 'restore' (overlay) things we aren't editing.
+            // Don't restore "My" schedules as background layers; they are the active layer.
+            if (!isOwner && mySubIds.has(subId)) continue;
             
-            // If I am editing it (it's in my list), I don't "restore" it as a background layer;
-            // it should be in the main scheduleAssignments.
-            if (mySubIds.has(subId)) continue; 
-            
-            // If it's empty, nothing to restore.
+            // For others, restore if not empty (visualizing the constraints)
             if (schedule.status === SCHEDULE_STATUS.EMPTY) continue;
 
             const scheduleData = schedule.scheduleData || {};
@@ -499,7 +487,6 @@
                 }
             }
 
-            // Also restore usage counts so the solver knows fields are busy
             const claims = schedule.fieldUsageClaims || {};
             for (const [slotIdx, slotClaims] of Object.entries(claims)) {
                 if (!window.fieldUsageBySlot[slotIdx]) {
@@ -534,165 +521,7 @@
     }
 
     // =========================================================================
-    // CROSS-SUBDIVISION FIELD CLAIMS - HELPERS
-    // =========================================================================
-
-    function isFieldClaimedByOthers(fieldName, slots, divisionContext) {
-        const claims = getLockedFieldUsageClaims();
-        
-        for (const slotIdx of slots) {
-            const slotClaims = claims[slotIdx];
-            if (!slotClaims) continue;
-
-            const fieldClaim = slotClaims[fieldName];
-            if (!fieldClaim) continue;
-
-            const props = window.activityProperties?.[fieldName] || {};
-            let maxCapacity = 1;
-            if (props.sharableWith?.capacity) {
-                maxCapacity = parseInt(props.sharableWith.capacity) || 1;
-            } else if (props.sharable) {
-                maxCapacity = 2;
-            }
-
-            if (fieldClaim.count >= maxCapacity) {
-                return {
-                    claimed: true,
-                    claimedBy: fieldClaim._lockedSubdivisions,
-                    currentCount: fieldClaim.count,
-                    maxCapacity
-                };
-            }
-        }
-
-        return { claimed: false };
-    }
-
-    function getRemainingFieldCapacity(fieldName, slots) {
-        const claims = getLockedFieldUsageClaims();
-        const props = window.activityProperties?.[fieldName] || {};
-        
-        let maxCapacity = 1;
-        if (props.sharableWith?.capacity) {
-            maxCapacity = parseInt(props.sharableWith.capacity) || 1;
-        } else if (props.sharable) {
-            maxCapacity = 2;
-        }
-
-        let maxClaimed = 0;
-
-        for (const slotIdx of slots) {
-            const slotClaims = claims[slotIdx];
-            if (!slotClaims) continue;
-
-            const fieldClaim = slotClaims[fieldName];
-            if (fieldClaim) {
-                maxClaimed = Math.max(maxClaimed, fieldClaim.count || 0);
-            }
-        }
-
-        return Math.max(0, maxCapacity - maxClaimed);
-    }
-
-    // =========================================================================
-    // SMART RESOURCE SHARING
-    // =========================================================================
-
-    function getUnscheduledSubdivisionCount(slots) {
-        let count = 0;
-
-        for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            if (schedule.status === SCHEDULE_STATUS.EMPTY) {
-                count++;
-            }
-        }
-
-        return count;
-    }
-
-    function calculateFairResourceShare(fieldName, slots, totalDivisionsNeedingResource) {
-        const props = window.activityProperties?.[fieldName] || {};
-        
-        let maxCapacity = 1;
-        if (props.sharableWith?.capacity) {
-            maxCapacity = parseInt(props.sharableWith.capacity) || 1;
-        } else if (props.sharable) {
-            maxCapacity = 2;
-        }
-
-        if (totalDivisionsNeedingResource <= 1) {
-            return maxCapacity;
-        }
-
-        const fairShare = Math.max(1, Math.floor(maxCapacity / totalDivisionsNeedingResource));
-        return fairShare;
-    }
-
-    function getSmartResourceAllocation(slots) {
-        const allocation = {};
-        const unscheduledCount = getUnscheduledSubdivisionCount(slots);
-        const allFields = window.loadGlobalSettings?.()?.app1?.fields || [];
-        const allSpecials = window.loadGlobalSettings?.()?.app1?.specialActivities || [];
-
-        [...allFields, ...allSpecials].forEach(resource => {
-            const name = resource.name;
-            const remaining = getRemainingFieldCapacity(name, slots);
-            const totalNeedingResource = unscheduledCount + 1;
-            const fairShare = calculateFairResourceShare(name, slots, totalNeedingResource);
-
-            allocation[name] = {
-                remaining,
-                fairShare: Math.min(fairShare, remaining),
-                othersWaiting: unscheduledCount
-            };
-        });
-
-        return allocation;
-    }
-
-    // =========================================================================
-    // UPDATE SCHEDULE STATUS
-    // =========================================================================
-
-    function markSubdivisionAsDraft(subdivisionId) {
-        const schedule = _subdivisionSchedules[subdivisionId];
-        if (!schedule) return;
-
-        if (schedule.status === SCHEDULE_STATUS.LOCKED) {
-            console.warn('[SubdivisionScheduler] Cannot modify locked schedule');
-            return;
-        }
-
-        schedule.status = SCHEDULE_STATUS.DRAFT;
-        schedule.lastModifiedAt = Date.now();
-        schedule.lastModifiedBy = window.AccessControl?.getCurrentUserInfo?.()?.email || 'unknown';
-
-        schedule.scheduleData = extractScheduleDataForSubdivision(subdivisionId);
-        schedule.fieldUsageClaims = extractFieldUsageClaimsForSubdivision(subdivisionId);
-
-        saveSubdivisionSchedules();
-    }
-
-    function markCurrentUserSubdivisionsAsDraft() {
-        const role = window.AccessControl?.getCurrentRole?.();
-        const isOwner = role === 'owner' || role === 'admin';
-
-        if (isOwner) {
-            _allSubdivisions.forEach(sub => {
-                const schedule = _subdivisionSchedules[sub.id];
-                if (schedule && schedule.status !== SCHEDULE_STATUS.LOCKED) {
-                    markSubdivisionAsDraft(sub.id);
-                }
-            });
-        } else {
-            _currentUserSubdivisions.forEach(sub => {
-                markSubdivisionAsDraft(sub.id);
-            });
-        }
-    }
-
-    // =========================================================================
-    // DIVISION FILTERING (KEPT FROM V1.3)
+    // DIVISION FILTERING (STANDARD & OWNER LOGIC)
     // =========================================================================
 
     function getDivisionsToSchedule() {
@@ -702,20 +531,17 @@
         const role = window.AccessControl?.getCurrentRole?.();
         const isOwner = role === 'owner' || role === 'admin';
 
+        // 1. Collect from assigned subdivisions
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            // For owners, we check everything. For users, only assigned.
             if (!isOwner && !mySubIds.has(subId)) continue;
-            
-            // Never schedule locked subdivisions
             if (schedule.status === SCHEDULE_STATUS.LOCKED) continue;
-            
             (schedule.divisions || []).forEach(d => divisionsToSchedule.add(d));
         }
 
+        // 2. Owner collects Orphans
         if (isOwner) {
             const allDivisions = Object.keys(window.divisions || {});
             const assignedDivisions = new Set();
-            
             Object.values(_subdivisionSchedules).forEach(sch => {
                 (sch.divisions || []).forEach(d => assignedDivisions.add(d));
             });
@@ -891,7 +717,7 @@
 
         // Cross-subdivision awareness
         getLockedFieldUsageClaims,
-        isFieldClaimedByOthers,
+        // isFieldClaimedByOthers,
         getRemainingFieldCapacity,
 
         // Smart resource sharing
@@ -916,6 +742,6 @@
         debugPrintStatus
     };
 
-    console.log('[SubdivisionScheduler] Module loaded v1.5 (Auto-Locking)');
+    console.log('[SubdivisionScheduler] Module loaded v1.6 (Self-Access Guaranteed)');
 
 })();
