@@ -1,12 +1,12 @@
 // ============================================================================
-// subdivision_schedule_manager.js (v1.2 - OWNER FIX)
+// subdivision_schedule_manager.js (v1.3 - ORPHAN FIX)
 // ============================================================================
 // MULTI-SCHEDULER SYSTEM: Allows multiple schedulers to create schedules for
 // their assigned subdivisions while respecting each other's locked schedules.
 //
-// FIX in v1.2: 
-// - Owners/Admins now implicitly schedule ALL unlocked subdivisions
-// - Owners/Admins mark ALL unlocked subdivisions as draft after running
+// FIX in v1.3:
+// - Owners now schedule ALL unlocked subdivisions PLUS any "Orphaned" divisions
+//   (divisions not assigned to any subdivision).
 // ============================================================================
 
 (function() {
@@ -39,7 +39,6 @@
         console.log('[SubdivisionScheduler] Initializing...');
 
         // Wait for AccessControl to be ready
-        // FIXED: isInitialized is a getter property
         if (!window.AccessControl?.isInitialized) {
             console.log('[SubdivisionScheduler] Waiting for AccessControl...');
             await new Promise(resolve => {
@@ -533,6 +532,9 @@
                     markSubdivisionAsDraft(sub.id);
                 }
             });
+            // Note: Orphaned divisions are not "marked as draft" because they don't have
+            // a subdivision container. Their data resides in the global assignment state
+            // and is saved via the standard daily data bridge.
         } else {
             // Standard users only mark their assigned subdivisions
             _currentUserSubdivisions.forEach(sub => {
@@ -643,23 +645,48 @@
 
     function getDivisionsToSchedule() {
         const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
-        const divisionsToSchedule = [];
+        const divisionsToSchedule = new Set();
 
-        // FIX: Owners implicitly schedule ALL unlocked subdivisions
         const role = window.AccessControl?.getCurrentRole?.();
         const isOwner = role === 'owner' || role === 'admin';
 
+        // 1. Collect divisions from accessible subdivisions
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            // For owners, we include everything. For users, only assigned.
+            // For owners, we check everything. For users, only assigned.
             if (!isOwner && !mySubIds.has(subId)) continue;
             
             // Never schedule locked subdivisions
             if (schedule.status === SCHEDULE_STATUS.LOCKED) continue;
             
-            divisionsToSchedule.push(...(schedule.divisions || []));
+            (schedule.divisions || []).forEach(d => divisionsToSchedule.add(d));
         }
 
-        return [...new Set(divisionsToSchedule)];
+        // 2. Handle ORPHANED divisions (Owner only)
+        // If a division is not in ANY subdivision, the Owner should still schedule it.
+        if (isOwner) {
+            const allDivisions = Object.keys(window.divisions || {});
+            const assignedDivisions = new Set();
+            
+            // Collect all assigned divisions across ALL schedules (locked or unlocked)
+            Object.values(_subdivisionSchedules).forEach(sch => {
+                (sch.divisions || []).forEach(d => assignedDivisions.add(d));
+            });
+
+            // Add orphans
+            allDivisions.forEach(div => {
+                if (!assignedDivisions.has(div)) {
+                    divisionsToSchedule.add(div);
+                }
+            });
+            
+            // Logging for debug
+            const orphans = allDivisions.filter(d => !assignedDivisions.has(d));
+            if (orphans.length > 0) {
+                 console.log(`[SubdivisionScheduler] Including ${orphans.length} orphaned divisions for Owner: ${orphans.join(', ')}`);
+            }
+        }
+
+        return [...divisionsToSchedule];
     }
 
     function getBunksToSchedule() {
@@ -844,6 +871,6 @@
         debugPrintStatus
     };
 
-    console.log('[SubdivisionScheduler] Module loaded v1.2');
+    console.log('[SubdivisionScheduler] Module loaded v1.3');
 
 })();
