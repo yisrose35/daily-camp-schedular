@@ -64,7 +64,7 @@
         
         // 3. Ensure defaults
         Object.keys(leaguesByName).forEach(function(leagueName) {
-            const l = leaguesByName[leagueName];
+            var l = leaguesByName[leagueName];
             
             // FIX: Add name property
             if (!l.name) l.name = leagueName;
@@ -75,6 +75,8 @@
             l.enabled = l.enabled !== false;
             l.standings = l.standings || {};
             l.games = l.games || [];
+            // Scheduling priority: 'sport_variety' (default) or 'matchup_variety'
+            l.schedulingPriority = l.schedulingPriority || 'sport_variety';
             (l.teams || []).forEach(function(team) {
                 l.standings[team] = l.standings[team] || { w: 0, l: 0, t: 0 };
             });
@@ -223,6 +225,11 @@
                 '.match-row { transition: background 0.15s ease, transform 0.12s ease; }' +
                 '.match-row:hover { background: #F3F4F6 !important; transform: translateX(2px); }' +
                 '.muted { color: #6B7280; font-size: 0.86rem; }' +
+                '.priority-toggle { display: flex; gap: 0; border-radius: 8px; overflow: hidden; border: 1px solid #D1D5DB; }' +
+                '.priority-toggle-btn { padding: 8px 12px; font-size: 0.8rem; border: none; background: #F9FAFB; color: #6B7280; cursor: pointer; transition: all 0.15s ease; flex: 1; text-align: center; }' +
+                '.priority-toggle-btn:first-child { border-right: 1px solid #D1D5DB; }' +
+                '.priority-toggle-btn.active { background: #00C896; color: white; font-weight: 600; }' +
+                '.priority-toggle-btn:hover:not(.active) { background: #F3F4F6; }' +
             '</style>';
         
         listEl = document.getElementById('league-master-list');
@@ -244,7 +251,8 @@
                 divisions: [],
                 standings: {},
                 games: [],
-                enabled: true
+                enabled: true,
+                schedulingPriority: 'sport_variety'
             };
             saveLeaguesData();
             addInput.value = '';
@@ -426,6 +434,60 @@
     // =================================================================
     function renderConfigSections(league, container) {
         container.innerHTML = '';
+        
+        // CARD 0: SCHEDULING PRIORITY
+        var priorityCard = document.createElement('div');
+        priorityCard.className = 'league-section-card';
+        priorityCard.innerHTML = 
+            '<div class="league-section-header">' +
+                '<span class="league-section-title">Scheduling Priority</span>' +
+                '<span>How to schedule games</span>' +
+            '</div>';
+        
+        var priorityDesc = document.createElement('p');
+        priorityDesc.style.fontSize = '0.8rem';
+        priorityDesc.style.color = '#6B7280';
+        priorityDesc.style.margin = '0 0 10px 0';
+        priorityDesc.textContent = 'Choose what the scheduler prioritizes when assigning games:';
+        priorityCard.appendChild(priorityDesc);
+        
+        var priorityToggle = document.createElement('div');
+        priorityToggle.className = 'priority-toggle';
+        
+        var sportBtn = document.createElement('button');
+        sportBtn.className = 'priority-toggle-btn' + (league.schedulingPriority === 'sport_variety' ? ' active' : '');
+        sportBtn.innerHTML = '<strong>Sport Variety</strong><br><span style="font-size:0.7rem; opacity:0.85;">Play all sports before repeating</span>';
+        sportBtn.onclick = function() {
+            league.schedulingPriority = 'sport_variety';
+            saveLeaguesData();
+            renderConfigSections(league, container);
+        };
+        
+        var matchupBtn = document.createElement('button');
+        matchupBtn.className = 'priority-toggle-btn' + (league.schedulingPriority === 'matchup_variety' ? ' active' : '');
+        matchupBtn.innerHTML = '<strong>Matchup Variety</strong><br><span style="font-size:0.7rem; opacity:0.85;">Play all teams before repeating</span>';
+        matchupBtn.onclick = function() {
+            league.schedulingPriority = 'matchup_variety';
+            saveLeaguesData();
+            renderConfigSections(league, container);
+        };
+        
+        priorityToggle.append(sportBtn, matchupBtn);
+        priorityCard.appendChild(priorityToggle);
+        
+        var priorityNote = document.createElement('p');
+        priorityNote.style.fontSize = '0.75rem';
+        priorityNote.style.color = '#9CA3AF';
+        priorityNote.style.margin = '8px 0 0 0';
+        priorityNote.style.fontStyle = 'italic';
+        if (league.schedulingPriority === 'sport_variety') {
+            priorityNote.textContent = 'Teams will rotate through all available sports. Team matchups may repeat if needed to ensure sport variety.';
+        } else {
+            priorityNote.textContent = 'Teams will play all opponents before rematches. Sports may repeat if needed to ensure matchup variety.';
+        }
+        priorityCard.appendChild(priorityNote);
+        
+        container.appendChild(priorityCard);
         
         // CARD 1: DIVISIONS
         var divCard = document.createElement('div');
