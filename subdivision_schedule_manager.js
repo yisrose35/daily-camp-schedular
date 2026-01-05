@@ -1,10 +1,12 @@
 // ============================================================================
-// subdivision_schedule_manager.js (v1.1 - FIXED)
+// subdivision_schedule_manager.js (v1.2 - OWNER FIX)
 // ============================================================================
 // MULTI-SCHEDULER SYSTEM: Allows multiple schedulers to create schedules for
 // their assigned subdivisions while respecting each other's locked schedules.
 //
-// FIX in v1.1: isInitialized is now a getter property (not a function)
+// FIX in v1.2: 
+// - Owners/Admins now implicitly schedule ALL unlocked subdivisions
+// - Owners/Admins mark ALL unlocked subdivisions as draft after running
 // ============================================================================
 
 (function() {
@@ -519,9 +521,24 @@
     }
 
     function markCurrentUserSubdivisionsAsDraft() {
-        _currentUserSubdivisions.forEach(sub => {
-            markSubdivisionAsDraft(sub.id);
-        });
+        const role = window.AccessControl?.getCurrentRole?.();
+        const isOwner = role === 'owner' || role === 'admin';
+
+        if (isOwner) {
+            // FIX: Owners mark all UNLOCKED subdivisions as draft
+            _allSubdivisions.forEach(sub => {
+                const schedule = _subdivisionSchedules[sub.id];
+                // Do not touch locked schedules
+                if (schedule && schedule.status !== SCHEDULE_STATUS.LOCKED) {
+                    markSubdivisionAsDraft(sub.id);
+                }
+            });
+        } else {
+            // Standard users only mark their assigned subdivisions
+            _currentUserSubdivisions.forEach(sub => {
+                markSubdivisionAsDraft(sub.id);
+            });
+        }
     }
 
     // =========================================================================
@@ -628,9 +645,17 @@
         const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
         const divisionsToSchedule = [];
 
+        // FIX: Owners implicitly schedule ALL unlocked subdivisions
+        const role = window.AccessControl?.getCurrentRole?.();
+        const isOwner = role === 'owner' || role === 'admin';
+
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            if (!mySubIds.has(subId)) continue;
+            // For owners, we include everything. For users, only assigned.
+            if (!isOwner && !mySubIds.has(subId)) continue;
+            
+            // Never schedule locked subdivisions
             if (schedule.status === SCHEDULE_STATUS.LOCKED) continue;
+            
             divisionsToSchedule.push(...(schedule.divisions || []));
         }
 
@@ -819,6 +844,6 @@
         debugPrintStatus
     };
 
-    console.log('[SubdivisionScheduler] Module loaded v1.1');
+    console.log('[SubdivisionScheduler] Module loaded v1.2');
 
 })();
