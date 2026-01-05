@@ -1,8 +1,11 @@
 // ============================================================================
-// scheduler_core_leagues.js (FIXED v5 - PROPER DAY-AWARE COUNTER)
+// scheduler_core_leagues.js (FIXED v6 - SCHEDULING PRIORITY SUPPORT)
 //
 // CRITICAL UPDATE:
-// - Now uses GlobalFieldLocks to check/lock fields
+// - Now supports two scheduling priorities per league:
+//   - 'sport_variety' (default): Prioritize playing all sports before repeating
+//   - 'matchup_variety': Prioritize playing all opponents before rematching
+// - Uses GlobalFieldLocks to check/lock fields
 // - Regular leagues process AFTER specialty leagues
 // - Any field locked by specialty leagues is unavailable
 // - Regular leagues lock their fields to prevent double-booking
@@ -36,6 +39,7 @@
             // Ensure new fields exist for backward compatibility
             if (!history.lastScheduledDay) history.lastScheduledDay = {};
             if (!history.dayStartRound) history.dayStartRound = {};
+            if (!history.matchupHistory) history.matchupHistory = {};
             
             return history;
         } catch (e) {
@@ -67,6 +71,25 @@
         const key = `${leagueName}|${team}`;
         if (!history.teamSports[key]) history.teamSports[key] = [];
         history.teamSports[key].push(sport);
+    }
+
+    // =========================================================================
+    // MATCHUP HISTORY TRACKING (for matchup_variety mode)
+    // =========================================================================
+
+    function getMatchupKey(team1, team2) {
+        // Normalize matchup key so A vs B === B vs A
+        return [team1, team2].sort().join('|');
+    }
+
+    function getMatchupCount(leagueName, team1, team2, history) {
+        const matchupKey = `${leagueName}:${getMatchupKey(team1, team2)}`;
+        return history.matchupHistory[matchupKey] || 0;
+    }
+
+    function recordMatchup(leagueName, team1, team2, history) {
+        const matchupKey = `${leagueName}:${getMatchupKey(team1, team2)}`;
+        history.matchupHistory[matchupKey] = (history.matchupHistory[matchupKey] || 0) + 1;
     }
 
     // =========================================================================
@@ -151,10 +174,10 @@
     }
 
     // =========================================================================
-    // SMART ASSIGNMENT ALGORITHM
+    // SMART ASSIGNMENT ALGORITHM - SPORT VARIETY MODE (Default)
     // =========================================================================
 
-    function assignMatchupsToFieldsAndSports(matchups, availablePool, leagueName, history, slots) {
+    function assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots) {
         const assignments = [];
         const usedFields = new Set();
         const usedSportsThisSlot = {};
@@ -167,6 +190,7 @@
             return Math.max(0, 100 - sportCount * 20);
         }
 
+        // Sort matchups so teams with less sport variety get processed first
         const matchupsWithPriority = matchups.map(([t1, t2]) => {
             const h1 = getTeamSportHistory(leagueName, t1, history);
             const h2 = getTeamSportHistory(leagueName, t2, history);
@@ -186,10 +210,12 @@
 
                 let score = 0;
 
+                // Heavy weight on sport need (main priority in this mode)
                 const need1 = getTeamSportNeed(t1, option.sport);
                 const need2 = getTeamSportNeed(t2, option.sport);
                 score += need1 + need2;
 
+                // Prefer sports not yet used this slot
                 const sportUsageThisSlot = usedSportsThisSlot[option.sport] || 0;
                 if (sportUsageThisSlot === 0) {
                     score += 500;
@@ -217,13 +243,99 @@
                 usedFields.add(bestOption.field);
                 usedSportsThisSlot[bestOption.sport] = (usedSportsThisSlot[bestOption.sport] || 0) + 1;
 
-                console.log(`   ✅ ${t1} vs ${t2} → ${bestOption.sport} @ ${bestOption.field}`);
+                console.log(`   ✅ [SportVariety] ${t1} vs ${t2} → ${bestOption.sport} @ ${bestOption.field}`);
             } else {
                 console.log(`   ❌ No field available for ${t1} vs ${t2}`);
             }
         }
 
         return assignments;
+    }
+
+    // =========================================================================
+    // SMART ASSIGNMENT ALGORITHM - MATCHUP VARIETY MODE
+    // =========================================================================
+
+    function assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots) {
+        const assignments = [];
+        const usedFields = new Set();
+
+        // Sort matchups by how many times they've played (least played first)
+        const matchupsWithPriority = matchups.map(([t1, t2]) => {
+            const matchupCount = getMatchupCount(leagueName, t1, t2, history);
+            return { t1, t2, matchupCount };
+        });
+
+        // Process matchups with fewest prior meetings first
+        matchupsWithPriority.sort((a, b) => a.matchupCount - b.matchupCount);
+
+        console.log(`   📊 [MatchupVariety] Matchup priorities:`);
+        matchupsWithPriority.forEach(m => {
+            console.log(`      • ${m.t1} vs ${m.t2}: ${m.matchupCount} prior games`);
+        });
+
+        for (const { t1, t2 } of matchupsWithPriority) {
+            let bestOption = null;
+            let bestScore = -Infinity;
+
+            for (const option of availablePool) {
+                if (usedFields.has(option.field)) continue;
+
+                let score = 0;
+
+                // In matchup variety mode, sport variety is secondary
+                // Just add a small preference for sports not played as much
+                const h1 = getTeamSportHistory(leagueName, t1, history);
+                const h2 = getTeamSportHistory(leagueName, t2, history);
+                const sportCount1 = h1.filter(s => s === option.sport).length;
+                const sportCount2 = h2.filter(s => s === option.sport).length;
+                
+                // Small bonus for less-played sports (not the main factor)
+                score += Math.max(0, 50 - (sportCount1 + sportCount2) * 5);
+
+                // Random factor for variety
+                score += Math.random() * 20;
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestOption = option;
+                }
+            }
+
+            if (bestOption) {
+                assignments.push({
+                    team1: t1,
+                    team2: t2,
+                    matchup: `${t1} vs ${t2}`,
+                    field: bestOption.field,
+                    sport: bestOption.sport
+                });
+
+                usedFields.add(bestOption.field);
+
+                console.log(`   ✅ [MatchupVariety] ${t1} vs ${t2} → ${bestOption.sport} @ ${bestOption.field}`);
+            } else {
+                console.log(`   ❌ No field available for ${t1} vs ${t2}`);
+            }
+        }
+
+        return assignments;
+    }
+
+    // =========================================================================
+    // UNIFIED ASSIGNMENT FUNCTION (Delegates based on priority mode)
+    // =========================================================================
+
+    function assignMatchupsToFieldsAndSports(matchups, availablePool, leagueName, history, slots, schedulingPriority) {
+        const mode = schedulingPriority || 'sport_variety';
+        
+        console.log(`   🎯 Scheduling Priority: ${mode === 'sport_variety' ? 'Sport Variety' : 'Matchup Variety'}`);
+
+        if (mode === 'matchup_variety') {
+            return assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots);
+        } else {
+            return assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots);
+        }
     }
 
     // =========================================================================
@@ -340,6 +452,7 @@
                 console.log(`   Teams: [${(league.teams || []).join(", ")}]`);
                 console.log(`   Sports: [${(league.sports || []).join(", ")}]`);
                 console.log(`   Active Divisions: [${leagueDivisions.join(", ")}]`);
+                console.log(`   Scheduling Priority: ${league.schedulingPriority || 'sport_variety'}`);
 
                 const leagueTeams = league.teams || [];
                 if (leagueTeams.length < 2) {
@@ -381,12 +494,14 @@
                     continue;
                 }
 
+                // ★★★ PASS SCHEDULING PRIORITY TO ASSIGNMENT FUNCTION ★★★
                 const assignments = assignMatchupsToFieldsAndSports(
                     matchups,
                     availablePool,
                     league.name,
                     history,
-                    slots
+                    slots,
+                    league.schedulingPriority || 'sport_variety'
                 );
 
                 if (assignments.length === 0) {
@@ -425,6 +540,9 @@
                     console.log(`      ✅ ${a.team1} vs ${a.team2} → ${a.sport} @ ${a.field}`);
                     recordTeamSport(league.name, a.team1, a.sport, history);
                     recordTeamSport(league.name, a.team2, a.sport, history);
+                    
+                    // Record matchup for matchup_variety tracking
+                    recordMatchup(league.name, a.team1, a.team2, history);
                 });
 
                 leagueDivisions.forEach(divName => {
@@ -520,6 +638,21 @@
         return teamStats;
     };
 
+    window.viewMatchupHistory = function(leagueName) {
+        const history = loadLeagueHistory();
+        console.log(`\n=== Matchup History for League: ${leagueName} ===`);
+
+        const matchupStats = {};
+        Object.keys(history.matchupHistory).forEach(key => {
+            if (!key.startsWith(leagueName + ':')) return;
+            const matchupPart = key.substring(leagueName.length + 1);
+            matchupStats[matchupPart] = history.matchupHistory[key];
+        });
+
+        console.table(matchupStats);
+        return matchupStats;
+    };
+
     window.SchedulerCoreLeagues = Leagues;
-    console.log('[RegularLeagues] Module loaded with Global Lock integration + Day-Aware Counter v5');
+    console.log('[RegularLeagues] Module loaded with Scheduling Priority Support v6');
 })();
