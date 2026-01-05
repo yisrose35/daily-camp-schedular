@@ -1,12 +1,13 @@
 // ============================================================================
-// subdivision_schedule_manager.js (v1.3 - ORPHAN FIX)
+// subdivision_schedule_manager.js (v1.3 - ORPHAN FIX & STRICT ISOLATION)
 // ============================================================================
 // MULTI-SCHEDULER SYSTEM: Allows multiple schedulers to create schedules for
 // their assigned subdivisions while respecting each other's locked schedules.
 //
 // FIX in v1.3:
-// - Owners now schedule ALL unlocked subdivisions PLUS any "Orphaned" divisions
-//   (divisions not assigned to any subdivision).
+// - Schedulers are STRICTLY restricted to their assigned subdivisions.
+// - Owners automatically schedule ALL unlocked subdivisions PLUS "Orphaned" 
+//   divisions (divisions not assigned to any subdivision).
 // ============================================================================
 
 (function() {
@@ -532,9 +533,6 @@
                     markSubdivisionAsDraft(sub.id);
                 }
             });
-            // Note: Orphaned divisions are not "marked as draft" because they don't have
-            // a subdivision container. Their data resides in the global assignment state
-            // and is saved via the standard daily data bridge.
         } else {
             // Standard users only mark their assigned subdivisions
             _currentUserSubdivisions.forEach(sub => {
