@@ -1,24 +1,10 @@
 // ============================================================================
-// subdivision_schedule_manager.js (v1.0)
+// subdivision_schedule_manager.js (v1.1 - FIXED)
 // ============================================================================
 // MULTI-SCHEDULER SYSTEM: Allows multiple schedulers to create schedules for
 // their assigned subdivisions while respecting each other's locked schedules.
 //
-// KEY FEATURES:
-// 1. Schedule Ownership - Each subdivision owns its schedule
-// 2. Schedule Locking - Once locked, others can see but not edit
-// 3. Cross-Subdivision Awareness - Respects locked field usage
-// 4. Smart Resource Sharing - First scheduler leaves room for others
-// 5. Field Usage Claims - Locked schedules claim field slots
-//
-// DATA STRUCTURE (stored in daily data):
-// subdivisionSchedules: {
-//   "subdivision_uuid": {
-//     subdivisionId, subdivisionName, divisions[], status,
-//     lockedBy: { userId, email, name },
-//     lockedAt, lastModifiedAt, scheduleData, fieldUsageClaims
-//   }
-// }
+// FIX in v1.1: isInitialized is now a getter property (not a function)
 // ============================================================================
 
 (function() {
@@ -29,9 +15,9 @@
     // =========================================================================
 
     const SCHEDULE_STATUS = {
-        EMPTY: 'empty',       // No schedule generated yet
-        DRAFT: 'draft',       // Schedule exists but not locked
-        LOCKED: 'locked'      // Schedule is finalized and immutable
+        EMPTY: 'empty',
+        DRAFT: 'draft',
+        LOCKED: 'locked'
     };
 
     // =========================================================================
@@ -39,32 +25,28 @@
     // =========================================================================
 
     let _initialized = false;
-    let _currentUserSubdivisions = [];  // Subdivisions this user can edit
-    let _allSubdivisions = [];          // All subdivisions in camp
-    let _subdivisionSchedules = {};     // All subdivision schedules for today
+    let _currentUserSubdivisions = [];
+    let _allSubdivisions = [];
+    let _subdivisionSchedules = {};
 
     // =========================================================================
     // INITIALIZATION
     // =========================================================================
 
-    /**
-     * Initialize the subdivision schedule manager
-     * Must be called after AccessControl is initialized
-     */
     async function initialize() {
         console.log('[SubdivisionScheduler] Initializing...');
 
         // Wait for AccessControl to be ready
-        if (!window.AccessControl?.isInitialized?.()) {
+        // FIXED: isInitialized is a getter property
+        if (!window.AccessControl?.isInitialized) {
             console.log('[SubdivisionScheduler] Waiting for AccessControl...');
             await new Promise(resolve => {
                 const check = setInterval(() => {
-                    if (window.AccessControl?.isInitialized?.()) {
+                    if (window.AccessControl?.isInitialized) {
                         clearInterval(check);
                         resolve();
                     }
                 }, 100);
-                // Timeout after 10 seconds
                 setTimeout(() => {
                     clearInterval(check);
                     resolve();
@@ -72,11 +54,9 @@
             });
         }
 
-        // Load current user's subdivision access
         _currentUserSubdivisions = window.AccessControl?.getUserSubdivisions?.() || [];
         _allSubdivisions = window.AccessControl?.getAllSubdivisions?.() || [];
 
-        // Load today's subdivision schedules
         await loadSubdivisionSchedules();
 
         _initialized = true;
@@ -84,31 +64,19 @@
         console.log(`  Current user has access to ${_currentUserSubdivisions.length} subdivisions`);
         console.log(`  Camp has ${_allSubdivisions.length} total subdivisions`);
 
-        // Emit initialization event
         window.dispatchEvent(new CustomEvent('subdivisionSchedulerReady'));
 
         return true;
-    }
-
-    /**
-     * Check if manager is initialized
-     */
-    function isInitialized() {
-        return _initialized;
     }
 
     // =========================================================================
     // DATA LOADING/SAVING
     // =========================================================================
 
-    /**
-     * Load subdivision schedules for today
-     */
     async function loadSubdivisionSchedules() {
         const dailyData = window.loadCurrentDailyData?.() || {};
         _subdivisionSchedules = dailyData.subdivisionSchedules || {};
 
-        // Ensure all subdivisions have entries
         _allSubdivisions.forEach(sub => {
             if (!_subdivisionSchedules[sub.id]) {
                 _subdivisionSchedules[sub.id] = {
@@ -129,17 +97,11 @@
         console.log('[SubdivisionScheduler] Loaded schedules:', Object.keys(_subdivisionSchedules).length);
     }
 
-    /**
-     * Save subdivision schedules
-     */
     function saveSubdivisionSchedules() {
         window.saveCurrentDailyData?.('subdivisionSchedules', _subdivisionSchedules);
         scheduleCloudSync();
     }
 
-    /**
-     * Schedule cloud sync
-     */
     let _syncTimeout = null;
     function scheduleCloudSync() {
         clearTimeout(_syncTimeout);
@@ -155,37 +117,22 @@
     // SUBDIVISION ACCESS HELPERS
     // =========================================================================
 
-    /**
-     * Get subdivisions the current user can edit
-     */
     function getEditableSubdivisions() {
         return _currentUserSubdivisions;
     }
 
-    /**
-     * Get all subdivisions in the camp
-     */
     function getAllSubdivisions() {
         return _allSubdivisions;
     }
 
-    /**
-     * Check if current user can edit a specific subdivision
-     */
     function canEditSubdivision(subdivisionId) {
-        // Owner/Admin can edit all
         const role = window.AccessControl?.getCurrentRole?.();
         if (role === 'owner' || role === 'admin') {
             return true;
         }
-
-        // Check if subdivision is in user's list
         return _currentUserSubdivisions.some(sub => sub.id === subdivisionId);
     }
 
-    /**
-     * Get the subdivision for a division name
-     */
     function getSubdivisionForDivision(divisionName) {
         for (const sub of _allSubdivisions) {
             if (sub.divisions?.includes(divisionName)) {
@@ -195,9 +142,6 @@
         return null;
     }
 
-    /**
-     * Check if current user can edit a division
-     */
     function canEditDivision(divisionName) {
         const sub = getSubdivisionForDivision(divisionName);
         if (!sub) return false;
@@ -208,41 +152,25 @@
     // SCHEDULE STATUS MANAGEMENT
     // =========================================================================
 
-    /**
-     * Get the schedule for a subdivision
-     */
     function getSubdivisionSchedule(subdivisionId) {
         return _subdivisionSchedules[subdivisionId] || null;
     }
 
-    /**
-     * Get all subdivision schedules
-     */
     function getAllSubdivisionSchedules() {
         return { ..._subdivisionSchedules };
     }
 
-    /**
-     * Check if a subdivision's schedule is locked
-     */
     function isSubdivisionLocked(subdivisionId) {
         const schedule = _subdivisionSchedules[subdivisionId];
         return schedule?.status === SCHEDULE_STATUS.LOCKED;
     }
 
-    /**
-     * Check if a division's schedule is locked
-     */
     function isDivisionLocked(divisionName) {
         const sub = getSubdivisionForDivision(divisionName);
         if (!sub) return false;
         return isSubdivisionLocked(sub.id);
     }
 
-    /**
-     * Get locked subdivisions that the current user should respect
-     * (i.e., not their own)
-     */
     function getOtherLockedSubdivisions() {
         const locked = [];
         const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
@@ -260,11 +188,6 @@
     // SCHEDULE LOCKING
     // =========================================================================
 
-    /**
-     * Lock a subdivision's schedule
-     * @param {string} subdivisionId - The subdivision to lock
-     * @returns {object} - Result with success status
-     */
     function lockSubdivisionSchedule(subdivisionId) {
         if (!canEditSubdivision(subdivisionId)) {
             return { success: false, error: 'Not authorized to lock this subdivision' };
@@ -283,18 +206,15 @@
             return { success: false, error: 'Cannot lock an empty schedule. Generate a schedule first.' };
         }
 
-        // Get current user info
         const userInfo = window.AccessControl?.getCurrentUserInfo?.() || {
             userId: 'unknown',
             email: 'unknown',
             name: 'Unknown User'
         };
 
-        // Extract schedule data for this subdivision's divisions
         const scheduleData = extractScheduleDataForSubdivision(subdivisionId);
         const fieldUsageClaims = extractFieldUsageClaimsForSubdivision(subdivisionId);
 
-        // Update schedule status
         schedule.status = SCHEDULE_STATUS.LOCKED;
         schedule.lockedBy = userInfo;
         schedule.lockedAt = Date.now();
@@ -304,11 +224,7 @@
         saveSubdivisionSchedules();
 
         console.log(`[SubdivisionScheduler] 🔒 LOCKED: ${schedule.subdivisionName}`);
-        console.log(`  By: ${userInfo.email}`);
-        console.log(`  Divisions: ${schedule.divisions.join(', ')}`);
-        console.log(`  Field claims: ${Object.keys(fieldUsageClaims).length} slots`);
 
-        // Emit lock event
         window.dispatchEvent(new CustomEvent('subdivisionScheduleLocked', {
             detail: { subdivisionId, schedule }
         }));
@@ -316,10 +232,6 @@
         return { success: true, schedule };
     }
 
-    /**
-     * Unlock a subdivision's schedule
-     * Only the owner/admin or the person who locked it can unlock
-     */
     function unlockSubdivisionSchedule(subdivisionId) {
         const schedule = _subdivisionSchedules[subdivisionId];
         if (!schedule) {
@@ -330,7 +242,6 @@
             return { success: false, error: 'Schedule is not locked' };
         }
 
-        // Check authorization
         const role = window.AccessControl?.getCurrentRole?.();
         const currentEmail = window.AccessControl?.getCurrentUserInfo?.()?.email;
         const lockedByEmail = schedule.lockedBy?.email;
@@ -345,17 +256,14 @@
             return { success: false, error: 'Not authorized to unlock. Only the person who locked or an admin can unlock.' };
         }
 
-        // Unlock the schedule
         schedule.status = SCHEDULE_STATUS.DRAFT;
         schedule.lockedBy = null;
         schedule.lockedAt = null;
-        // Keep the schedule data - just unlocked for editing
 
         saveSubdivisionSchedules();
 
         console.log(`[SubdivisionScheduler] 🔓 UNLOCKED: ${schedule.subdivisionName}`);
 
-        // Emit unlock event
         window.dispatchEvent(new CustomEvent('subdivisionScheduleUnlocked', {
             detail: { subdivisionId, schedule }
         }));
@@ -367,9 +275,6 @@
     // SCHEDULE DATA EXTRACTION
     // =========================================================================
 
-    /**
-     * Extract schedule assignments for a subdivision's divisions
-     */
     function extractScheduleDataForSubdivision(subdivisionId) {
         const schedule = _subdivisionSchedules[subdivisionId];
         if (!schedule) return {};
@@ -380,7 +285,6 @@
 
         const data = {};
 
-        // Get all bunks in this subdivision's divisions
         divisions.forEach(divName => {
             const bunks = allDivisions[divName]?.bunks || [];
             bunks.forEach(bunk => {
@@ -393,10 +297,6 @@
         return data;
     }
 
-    /**
-     * Extract field usage claims for a subdivision
-     * These are the slots where this subdivision is using fields
-     */
     function extractFieldUsageClaimsForSubdivision(subdivisionId) {
         const schedule = _subdivisionSchedules[subdivisionId];
         if (!schedule) return {};
@@ -407,10 +307,8 @@
 
         const claims = {};
 
-        // Go through all field usage and extract claims for this subdivision
         for (const [slotIdx, slotUsage] of Object.entries(fieldUsageBySlot)) {
             for (const [fieldName, usage] of Object.entries(slotUsage || {})) {
-                // Check if any of the divisions match
                 const matchingDivisions = (usage.divisions || []).filter(d => divisionsSet.has(d));
                 
                 if (matchingDivisions.length > 0) {
@@ -423,7 +321,6 @@
                         _lockedBy: subdivisionId
                     };
 
-                    // Copy only bunks that belong to this subdivision
                     if (usage.bunks) {
                         const allDivisions = window.divisions || {};
                         const subBunks = new Set();
@@ -448,22 +345,16 @@
     // CROSS-SUBDIVISION FIELD CLAIMS
     // =========================================================================
 
-    /**
-     * Get all field usage claims from OTHER locked subdivisions
-     * This is what the current scheduler must respect
-     */
     function getLockedFieldUsageClaims() {
         const claims = {};
         const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
 
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            // Skip if not locked or if it's our own subdivision
             if (schedule.status !== SCHEDULE_STATUS.LOCKED) continue;
             if (mySubIds.has(subId)) continue;
 
             const subClaims = schedule.fieldUsageClaims || {};
 
-            // Merge claims
             for (const [slotIdx, slotClaims] of Object.entries(subClaims)) {
                 if (!claims[slotIdx]) claims[slotIdx] = {};
 
@@ -477,12 +368,10 @@
                         };
                     }
 
-                    // Accumulate claims
                     claims[slotIdx][fieldName].count += (usage.count || 0);
                     claims[slotIdx][fieldName].divisions.push(...(usage.divisions || []));
                     claims[slotIdx][fieldName]._lockedSubdivisions.push(subId);
 
-                    // Merge bunks
                     if (usage.bunks) {
                         Object.assign(claims[slotIdx][fieldName].bunks, usage.bunks);
                     }
@@ -493,9 +382,6 @@
         return claims;
     }
 
-    /**
-     * Check if a field is claimed by a locked subdivision at specific slots
-     */
     function isFieldClaimedByOthers(fieldName, slots, divisionContext) {
         const claims = getLockedFieldUsageClaims();
         
@@ -506,8 +392,6 @@
             const fieldClaim = slotClaims[fieldName];
             if (!fieldClaim) continue;
 
-            // Field is claimed by a locked subdivision
-            // Check capacity
             const props = window.activityProperties?.[fieldName] || {};
             let maxCapacity = 1;
             if (props.sharableWith?.capacity) {
@@ -529,9 +413,6 @@
         return { claimed: false };
     }
 
-    /**
-     * Get remaining capacity for a field considering locked claims
-     */
     function getRemainingFieldCapacity(fieldName, slots) {
         const claims = getLockedFieldUsageClaims();
         const props = window.activityProperties?.[fieldName] || {};
@@ -562,10 +443,6 @@
     // SMART RESOURCE SHARING
     // =========================================================================
 
-    /**
-     * Calculate how many other subdivisions still need to schedule
-     * for a given time block
-     */
     function getUnscheduledSubdivisionCount(slots) {
         let count = 0;
 
@@ -578,10 +455,6 @@
         return count;
     }
 
-    /**
-     * Calculate fair share of a resource for the current subdivision
-     * This helps the first scheduler not be greedy
-     */
     function calculateFairResourceShare(fieldName, slots, totalDivisionsNeedingResource) {
         const props = window.activityProperties?.[fieldName] || {};
         
@@ -592,32 +465,24 @@
             maxCapacity = 2;
         }
 
-        // If no other subdivisions need this, we can use full capacity
         if (totalDivisionsNeedingResource <= 1) {
             return maxCapacity;
         }
 
-        // Otherwise, be fair - leave room for others
-        // But always allow at least 1
         const fairShare = Math.max(1, Math.floor(maxCapacity / totalDivisionsNeedingResource));
         return fairShare;
     }
 
-    /**
-     * Get smart resource allocation info
-     * Returns recommendations for how much of each resource to use
-     */
     function getSmartResourceAllocation(slots) {
         const allocation = {};
         const unscheduledCount = getUnscheduledSubdivisionCount(slots);
         const allFields = window.loadGlobalSettings?.()?.app1?.fields || [];
         const allSpecials = window.loadGlobalSettings?.()?.app1?.specialActivities || [];
 
-        // Calculate fair share for each resource
         [...allFields, ...allSpecials].forEach(resource => {
             const name = resource.name;
             const remaining = getRemainingFieldCapacity(name, slots);
-            const totalNeedingResource = unscheduledCount + 1; // +1 for current
+            const totalNeedingResource = unscheduledCount + 1;
             const fairShare = calculateFairResourceShare(name, slots, totalNeedingResource);
 
             allocation[name] = {
@@ -631,13 +496,9 @@
     }
 
     // =========================================================================
-    // UPDATE SCHEDULE STATUS AFTER GENERATION
+    // UPDATE SCHEDULE STATUS
     // =========================================================================
 
-    /**
-     * Mark a subdivision as having a draft schedule
-     * Called after schedule generation
-     */
     function markSubdivisionAsDraft(subdivisionId) {
         const schedule = _subdivisionSchedules[subdivisionId];
         if (!schedule) return;
@@ -651,16 +512,12 @@
         schedule.lastModifiedAt = Date.now();
         schedule.lastModifiedBy = window.AccessControl?.getCurrentUserInfo?.()?.email || 'unknown';
 
-        // Update schedule data
         schedule.scheduleData = extractScheduleDataForSubdivision(subdivisionId);
         schedule.fieldUsageClaims = extractFieldUsageClaimsForSubdivision(subdivisionId);
 
         saveSubdivisionSchedules();
     }
 
-    /**
-     * Mark all of current user's subdivisions as draft
-     */
     function markCurrentUserSubdivisionsAsDraft() {
         _currentUserSubdivisions.forEach(sub => {
             markSubdivisionAsDraft(sub.id);
@@ -668,32 +525,25 @@
     }
 
     // =========================================================================
-    // RESTORE LOCKED SCHEDULE
+    // RESTORE LOCKED SCHEDULES
     // =========================================================================
 
-    /**
-     * Restore a locked subdivision's schedule to the current schedule
-     * Used when regenerating to preserve locked schedules
-     */
     function restoreLockedSchedules() {
         const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
 
         let restoredCount = 0;
 
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            // Only restore OTHER subdivisions' locked schedules
             if (mySubIds.has(subId)) continue;
             if (schedule.status !== SCHEDULE_STATUS.LOCKED) continue;
 
             const scheduleData = schedule.scheduleData || {};
 
-            // Restore each bunk's schedule
             for (const [bunk, slots] of Object.entries(scheduleData)) {
                 if (!window.scheduleAssignments[bunk]) {
                     window.scheduleAssignments[bunk] = [];
                 }
 
-                // Overwrite with locked data
                 for (let i = 0; i < slots.length; i++) {
                     if (slots[i]) {
                         window.scheduleAssignments[bunk][i] = JSON.parse(JSON.stringify(slots[i]));
@@ -703,7 +553,6 @@
                 }
             }
 
-            // Restore field usage claims
             const claims = schedule.fieldUsageClaims || {};
             for (const [slotIdx, slotClaims] of Object.entries(claims)) {
                 if (!window.fieldUsageBySlot[slotIdx]) {
@@ -737,14 +586,6 @@
         return restoredCount;
     }
 
-    // =========================================================================
-    // INTEGRATION WITH GLOBAL FIELD LOCKS
-    // =========================================================================
-
-    /**
-     * Register locked subdivision claims in GlobalFieldLocks
-     * Called at start of schedule generation
-     */
     function registerLockedClaimsInGlobalLocks() {
         if (!window.GlobalFieldLocks) {
             console.warn('[SubdivisionScheduler] GlobalFieldLocks not available');
@@ -764,7 +605,6 @@
                     maxCapacity = 2;
                 }
 
-                // If field is at capacity, lock it globally
                 if (usage.count >= maxCapacity) {
                     window.GlobalFieldLocks.lockField(fieldName, [parseInt(slotIdx)], {
                         lockedBy: 'locked_subdivision',
@@ -781,34 +621,22 @@
     }
 
     // =========================================================================
-    // DIVISION FILTERING FOR SCHEDULE GENERATION
+    // DIVISION FILTERING
     // =========================================================================
 
-    /**
-     * Get divisions that the current user should generate schedules for
-     * Excludes divisions from locked subdivisions
-     */
     function getDivisionsToSchedule() {
         const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
         const divisionsToSchedule = [];
 
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            // Only include our own subdivisions
             if (!mySubIds.has(subId)) continue;
-
-            // Skip if locked (shouldn't happen but safety check)
             if (schedule.status === SCHEDULE_STATUS.LOCKED) continue;
-
-            // Add divisions from this subdivision
             divisionsToSchedule.push(...(schedule.divisions || []));
         }
 
         return [...new Set(divisionsToSchedule)];
     }
 
-    /**
-     * Get bunks that the current user should generate schedules for
-     */
     function getBunksToSchedule() {
         const divisionsToSchedule = getDivisionsToSchedule();
         const allDivisions = window.divisions || {};
@@ -822,13 +650,9 @@
         return bunks;
     }
 
-    /**
-     * Check if a bunk belongs to a locked subdivision
-     */
     function isBunkLocked(bunkName) {
         const allDivisions = window.divisions || {};
         
-        // Find which division this bunk belongs to
         for (const [divName, divInfo] of Object.entries(allDivisions)) {
             if (divInfo.bunks?.includes(bunkName)) {
                 return isDivisionLocked(divName);
@@ -842,9 +666,6 @@
     // UI HELPERS
     // =========================================================================
 
-    /**
-     * Get status summary for all subdivisions
-     */
     function getSubdivisionStatusSummary() {
         const summary = [];
 
@@ -866,9 +687,6 @@
         return summary;
     }
 
-    /**
-     * Get lock status display info for a division
-     */
     function getDivisionLockStatus(divisionName) {
         const sub = getSubdivisionForDivision(divisionName);
         if (!sub) {
@@ -905,12 +723,9 @@
     }
 
     // =========================================================================
-    // DEBUG UTILITIES
+    // DEBUG
     // =========================================================================
 
-    /**
-     * Debug: Print full status
-     */
     function debugPrintStatus() {
         console.log('\n' + '='.repeat(70));
         console.log('SUBDIVISION SCHEDULE MANAGER STATUS');
@@ -943,15 +758,6 @@
             console.log(`     Field Claims: ${claimCount} slots`);
         }
 
-        console.log('\nLocked Claims from Others:');
-        const claims = getLockedFieldUsageClaims();
-        const claimSlots = Object.keys(claims);
-        console.log(`  ${claimSlots.length} slots with claims`);
-        
-        claimSlots.slice(0, 5).forEach(slotIdx => {
-            console.log(`  Slot ${slotIdx}: ${Object.keys(claims[slotIdx]).join(', ')}`);
-        });
-
         console.log('\n' + '='.repeat(70));
     }
 
@@ -962,7 +768,8 @@
     window.SubdivisionScheduleManager = {
         // Initialization
         initialize,
-        isInitialized,
+        // FIXED: isInitialized as getter property
+        get isInitialized() { return _initialized; },
 
         // Constants
         SCHEDULE_STATUS,
@@ -1012,6 +819,6 @@
         debugPrintStatus
     };
 
-    console.log('[SubdivisionScheduler] Module loaded');
+    console.log('[SubdivisionScheduler] Module loaded v1.1');
 
 })();
