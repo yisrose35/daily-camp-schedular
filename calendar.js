@@ -1,9 +1,9 @@
 // =================================================================
-// calendar.js (FIXED v2.6 - Unified Bridge Saving)
+// calendar.js (FIXED v2.7 - League History Cloud Reset)
 // =================================================================
 (function() {
     'use strict';
-    console.log("🗓️ calendar.js v2.6 (UNIFIED BRIDGE SAVING) loaded");
+    console.log("🗓️ calendar.js v2.7 (LEAGUE HISTORY CLOUD RESET) loaded");
     
     // ==========================================================
     // 1. STORAGE KEYS - UNIFIED
@@ -229,6 +229,7 @@
             console.log("⭐ STARTING NEW HALF - Resetting Counters ⭐");
             console.log("=".repeat(50));
             
+            // Clear localStorage
             localStorage.removeItem(ROTATION_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
@@ -236,17 +237,25 @@
             localStorage.removeItem(SPECIALTY_LEAGUE_HISTORY_KEY);
             localStorage.removeItem(DAILY_DATA_KEY);
             
+            // ★★★ CRITICAL: Clear ALL cloud keys including new league history keys ★★★
             if (typeof window.clearCloudKeys === 'function') {
                 console.log("☁️ Clearing cloud keys for new half...");
                 await window.clearCloudKeys([
                     'leagueRoundState',
+                    'leagueHistory',              // ★ NEW: Regular league history (gamesPerDate)
+                    'specialtyLeagueHistory',     // ★ NEW: Specialty league history
+                    'daily_schedules',            // ★ NEW: Clear saved schedules from cloud
                     'manualUsageOffsets', 
                     'historicalCounts',
                     'smartTileHistory'
                 ]);
                 console.log("☁️ Cloud keys cleared");
             } else {
+                // Fallback: Set empty objects
                 window.saveGlobalSettings?.('leagueRoundState', {});
+                window.saveGlobalSettings?.('leagueHistory', {});              // ★ NEW
+                window.saveGlobalSettings?.('specialtyLeagueHistory', {});     // ★ NEW
+                window.saveGlobalSettings?.('daily_schedules', {});            // ★ NEW
                 window.saveGlobalSettings?.('manualUsageOffsets', undefined);
                 window.saveGlobalSettings?.('historicalCounts', {});
                 window.saveGlobalSettings?.('smartTileHistory', {});
@@ -336,6 +345,8 @@
                         pinnedTileDefaults: {},
                         leaguesByName: {},
                         leagueRoundState: {},
+                        leagueHistory: {},              // ★ NEW
+                        specialtyLeagueHistory: {},     // ★ NEW
                         updated_at: new Date().toISOString()
                     };
                     
@@ -792,7 +803,7 @@
         setupEraseAll();
         startAutoSaveTimer();
         
-        console.log("🗓️ Calendar initialized (FIXED v2.6)");
+        console.log("🗓️ Calendar initialized (FIXED v2.7)");
     }
     
     window.initCalendar = initCalendar;
