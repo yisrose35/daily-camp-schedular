@@ -1,10 +1,12 @@
 // ============================================================================
-// scheduler_core_specialty_leagues.js (FIXED v2 - GLOBAL LOCK INTEGRATION)
+// scheduler_core_specialty_leagues.js (FIXED v3 - CHRONOLOGICAL DATE ORDERING)
 //
 // DEDICATED SCHEDULER CORE FOR SPECIALTY LEAGUES
 //
 // CRITICAL UPDATE:
-// - Now uses GlobalFieldLocks to LOCK fields before assignment
+// - Now uses CHRONOLOGICAL date ordering (not creation order)
+// - Persists history to cloud via saveGlobalSettings
+// - Uses GlobalFieldLocks to LOCK fields before assignment
 // - Checks for existing locks before using a field
 // - Fields locked by specialty leagues are COMPLETELY unavailable to all others
 // ============================================================================
@@ -20,40 +22,112 @@
     const SPECIALTY_HISTORY_KEY = "campSpecialtyLeagueHistory_v1";
 
     // =========================================================================
-    // LOAD/SAVE HISTORY
+    // LOAD/SAVE HISTORY (NOW CLOUD-SYNCED)
     // =========================================================================
 
     function loadSpecialtyHistory() {
         try {
+            // ★ First try to load from cloud-synced global settings
+            const global = window.loadGlobalSettings?.() || {};
+            if (global.specialtyLeagueHistory && Object.keys(global.specialtyLeagueHistory).length > 0) {
+                const history = global.specialtyLeagueHistory;
+                // Ensure all fields exist
+                history.teamFieldRotation = history.teamFieldRotation || {};
+                history.lastSlotOrder = history.lastSlotOrder || {};
+                history.conferenceRounds = history.conferenceRounds || {};
+                history.matchupHistory = history.matchupHistory || {};
+                history.gamesPerDate = history.gamesPerDate || {};  // ★ NEW
+                console.log("[SpecialtyLeagues] ✅ Loaded history from cloud");
+                return history;
+            }
+            
+            // Fallback to localStorage
             const raw = localStorage.getItem(SPECIALTY_HISTORY_KEY);
             if (!raw) return {
                 teamFieldRotation: {},
                 lastSlotOrder: {},
-                roundCounters: {},
                 conferenceRounds: {},
                 matchupHistory: {},
-                lastScheduledDate: {}
+                gamesPerDate: {}  // ★ NEW: { leagueId: { "2025-01-01": 2, "2025-01-02": 3 } }
             };
-            return JSON.parse(raw);
+            
+            const history = JSON.parse(raw);
+            // Ensure new fields exist
+            history.teamFieldRotation = history.teamFieldRotation || {};
+            history.lastSlotOrder = history.lastSlotOrder || {};
+            history.conferenceRounds = history.conferenceRounds || {};
+            history.matchupHistory = history.matchupHistory || {};
+            history.gamesPerDate = history.gamesPerDate || {};
+            
+            // Migrate old format if needed
+            if (history.roundCounters && !history.gamesPerDate) {
+                console.log("[SpecialtyLeagues] Migrating old history format...");
+                history.gamesPerDate = {};
+            }
+            
+            return history;
         } catch (e) {
             console.error("[SpecialtyLeagues] Failed to load history:", e);
             return {
                 teamFieldRotation: {},
                 lastSlotOrder: {},
-                roundCounters: {},
                 conferenceRounds: {},
                 matchupHistory: {},
-                lastScheduledDate: {}
+                gamesPerDate: {}
             };
         }
     }
 
     function saveSpecialtyHistory(history) {
         try {
+            // Save to localStorage as backup
             localStorage.setItem(SPECIALTY_HISTORY_KEY, JSON.stringify(history));
+            
+            // ★ CRITICAL: Also save to cloud via global settings
+            if (typeof window.saveGlobalSettings === 'function') {
+                window.saveGlobalSettings('specialtyLeagueHistory', history);
+                console.log("[SpecialtyLeagues] ✅ History saved to cloud");
+            }
         } catch (e) {
             console.error("[SpecialtyLeagues] Failed to save history:", e);
         }
+    }
+
+    // =========================================================================
+    // ★ NEW: CHRONOLOGICAL GAME NUMBERING
+    // =========================================================================
+
+    /**
+     * Calculate the starting game number for a given date based on
+     * all games that occurred on EARLIER dates (chronologically)
+     */
+    function calculateStartingGameNumber(leagueId, currentDate, history) {
+        if (!history.gamesPerDate) history.gamesPerDate = {};
+        if (!history.gamesPerDate[leagueId]) history.gamesPerDate[leagueId] = {};
+        
+        const gamesMap = history.gamesPerDate[leagueId];
+        
+        // Sum games from all dates BEFORE currentDate (chronologically)
+        let total = 0;
+        for (const date of Object.keys(gamesMap)) {
+            if (date < currentDate) {
+                total += gamesMap[date];
+            }
+        }
+        
+        console.log(`[SpecialtyLeagues] Starting game# for league ${leagueId} on ${currentDate}: ${total + 1} (${total} games on earlier dates)`);
+        return total;
+    }
+
+    /**
+     * Record how many games occurred on a given date for a league
+     */
+    function recordGamesOnDate(leagueId, currentDate, numGames, history) {
+        if (!history.gamesPerDate) history.gamesPerDate = {};
+        if (!history.gamesPerDate[leagueId]) history.gamesPerDate[leagueId] = {};
+        
+        history.gamesPerDate[leagueId][currentDate] = numGames;
+        console.log(`[SpecialtyLeagues] Recorded ${numGames} game(s) for league ${leagueId} on ${currentDate}`);
     }
 
     // =========================================================================
@@ -155,10 +229,10 @@
     }
 
     // =========================================================================
-    // GET TODAY'S MATCHUPS FOR A LEAGUE
+    // GET TODAY'S MATCHUPS FOR A LEAGUE (Using chronological game number)
     // =========================================================================
 
-    function getLeagueMatchupsForToday(league, history) {
+    function getLeagueMatchupsForToday(league, history, gameNumber) {
         const {
             id,
             teams,
@@ -178,8 +252,8 @@
                 const confTeams = conferences[confName] || [];
                 const roundRobin = generateRoundRobin(confTeams);
 
-                const confKey = `${id}|${confName}`;
-                const currentRound = (history.conferenceRounds[confKey] || 0) % Math.max(1, roundRobin.length);
+                // Use gameNumber - 1 as the round index
+                const currentRound = (gameNumber - 1) % Math.max(1, roundRobin.length);
 
                 if (roundRobin[currentRound]) {
                     matchups.push(...roundRobin[currentRound].map(m => ({
@@ -194,8 +268,7 @@
                 const conf1Teams = conferences[conferenceNames[0]] || [];
                 const conf2Teams = conferences[conferenceNames[1]] || [];
 
-                const interKey = `${id}|inter`;
-                const interRound = (history.conferenceRounds[interKey] || 0) % Math.max(1, Math.max(conf1Teams.length, conf2Teams.length));
+                const interRound = (gameNumber - 1) % Math.max(1, Math.max(conf1Teams.length, conf2Teams.length));
 
                 conf1Teams.forEach((team1, idx) => {
                     const team2Idx = (idx + interRound) % conf2Teams.length;
@@ -215,7 +288,7 @@
             }
         } else {
             const roundRobin = generateRoundRobin(teams);
-            const currentRound = (history.roundCounters[id] || 0) % Math.max(1, roundRobin.length);
+            const currentRound = (gameNumber - 1) % Math.max(1, roundRobin.length);
 
             if (roundRobin[currentRound]) {
                 matchups = roundRobin[currentRound].map(m => ({
@@ -341,57 +414,27 @@
     // UPDATE HISTORY AFTER SCHEDULING
     // =========================================================================
 
-    function updateHistoryAfterScheduling(league, assignments, history) {
-        const {
-            id,
-            conferences
-        } = league;
-        const currentDate = window.currentScheduleDate || new Date().toISOString().slice(0, 10);
+    function updateHistoryAfterScheduling(league, assignments, history, currentDate) {
+        const { id } = league;
 
-        if (!history.lastScheduledDate) history.lastScheduledDate = {};
-        const isNewDay = history.lastScheduledDate[id] !== currentDate;
+        // Always update field rotation and slot order
+        assignments.forEach(game => {
+            const keyA = `${id}|${game.teamA}`;
+            const keyB = `${id}|${game.teamB}`;
 
-        if (isNewDay) {
-            assignments.forEach(game => {
-                const keyA = `${id}|${game.teamA}`;
-                const keyB = `${id}|${game.teamB}`;
+            if (!history.teamFieldRotation[keyA]) history.teamFieldRotation[keyA] = [];
+            if (!history.teamFieldRotation[keyB]) history.teamFieldRotation[keyB] = [];
+            history.teamFieldRotation[keyA].push(game.field);
+            history.teamFieldRotation[keyB].push(game.field);
 
-                if (!history.teamFieldRotation[keyA]) history.teamFieldRotation[keyA] = [];
-                if (!history.teamFieldRotation[keyB]) history.teamFieldRotation[keyB] = [];
-                history.teamFieldRotation[keyA].push(game.field);
-                history.teamFieldRotation[keyB].push(game.field);
+            history.lastSlotOrder[keyA] = game.slotOrder;
+            history.lastSlotOrder[keyB] = game.slotOrder;
 
-                history.lastSlotOrder[keyA] = game.slotOrder;
-                history.lastSlotOrder[keyB] = game.slotOrder;
-
-                const matchupKey = [game.teamA, game.teamB].sort().join('|');
-                const fullKey = `${id}|${matchupKey}`;
-                if (!history.matchupHistory[fullKey]) history.matchupHistory[fullKey] = [];
-                history.matchupHistory[fullKey].push(currentDate);
-            });
-
-            const conferenceNames = Object.keys(conferences || {}).filter(c => (conferences[c]?.length || 0) > 0);
-
-            if (conferenceNames.length > 0) {
-                conferenceNames.forEach(conf => {
-                    const confKey = `${id}|${conf}`;
-                    history.conferenceRounds[confKey] = (history.conferenceRounds[confKey] || 0) + 1;
-                });
-
-                if (league.allowInterConference) {
-                    const interKey = `${id}|inter`;
-                    history.conferenceRounds[interKey] = (history.conferenceRounds[interKey] || 0) + 1;
-                }
-            } else {
-                history.roundCounters[id] = (history.roundCounters[id] || 0) + 1;
-            }
-
-            history.lastScheduledDate[id] = currentDate;
-
-            console.log(`[SpecialtyLeagues] New day (${currentDate}) - incremented round counter`);
-        } else {
-            console.log(`[SpecialtyLeagues] Same day (${currentDate}) - round counter unchanged`);
-        }
+            const matchupKey = [game.teamA, game.teamB].sort().join('|');
+            const fullKey = `${id}|${matchupKey}`;
+            if (!history.matchupHistory[fullKey]) history.matchupHistory[fullKey] = [];
+            history.matchupHistory[fullKey].push(currentDate);
+        });
     }
 
     // =========================================================================
@@ -420,6 +463,13 @@
         }
 
         const history = loadSpecialtyHistory();
+        
+        // ★★★ GET CURRENT DAY IDENTIFIER ★★★
+        const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        console.log(`[SpecialtyLeagues] Current day: "${currentDate}"`);
+
+        // ★★★ TRACK GAMES PER LEAGUE FOR THIS DAY ★★★
+        const leagueGameCounters = {};
 
         const specialtyBlocks = schedulableSlotBlocks.filter(b =>
             b.type === 'specialty_league' ||
@@ -473,15 +523,24 @@
             });
             const uniqueSlots = [...new Set(allSlots)].sort((a, b) => a - b);
 
-            // Get today's matchups
-            const matchups = getLeagueMatchupsForToday(league, history);
+            // ★★★ CHRONOLOGICAL GAME NUMBERING ★★★
+            if (leagueGameCounters[league.id] === undefined) {
+                leagueGameCounters[league.id] = 0;
+            }
+            
+            const baseGameNumber = calculateStartingGameNumber(league.id, currentDate, history);
+            const todayGameIndex = leagueGameCounters[league.id];
+            const gameNumber = baseGameNumber + todayGameIndex + 1;
+
+            // Get today's matchups using the game number
+            const matchups = getLeagueMatchupsForToday(league, history, gameNumber);
 
             if (matchups.length === 0) {
                 console.log(`[SpecialtyLeagues] No matchups generated`);
                 continue;
             }
 
-            console.log(`[SpecialtyLeagues] Generated ${matchups.length} matchups`);
+            console.log(`[SpecialtyLeagues] Game #${gameNumber} - Generated ${matchups.length} matchups`);
             matchups.forEach(m => console.log(`   • ${m.teamA} vs ${m.teamB} (${m.conference || 'No Conference'})`));
 
             // ★★★ ASSIGN MATCHUPS - RESPECTING GLOBAL LOCKS ★★★
@@ -491,6 +550,9 @@
                 console.log(`[SpecialtyLeagues] ❌ No assignments made`);
                 continue;
             }
+
+            // ★★★ INCREMENT TODAY'S GAME COUNTER ★★★
+            leagueGameCounters[league.id]++;
 
             // ★★★ CRITICAL: LOCK ALL USED FIELDS GLOBALLY ★★★
             const usedFields = [...new Set(assignments.map(a => a.field))];
@@ -520,7 +582,7 @@
                 });
             });
 
-            console.log(`\n[SpecialtyLeagues] Final Assignments:`);
+            console.log(`\n[SpecialtyLeagues] Final Assignments for Game #${gameNumber}:`);
             assignments.forEach(a => {
                 console.log(`   ✅ ${a.teamA} vs ${a.teamB} @ ${a.field} (Slot ${a.slotOrder})`);
             });
@@ -530,8 +592,7 @@
                 `${a.teamA} vs ${a.teamB} — ${a.field}`
             );
 
-            const roundNum = (history.roundCounters[league.id] || 0) + 1;
-            const gameLabel = `${league.name} Game ${roundNum}`;
+            const gameLabel = `${league.name} Game ${gameNumber}`;
 
             // Fill all blocks
             blocks.forEach(block => {
@@ -552,7 +613,7 @@
                 block.processed = true;
             });
 
-            updateHistoryAfterScheduling(league, assignments, history);
+            updateHistoryAfterScheduling(league, assignments, history, currentDate);
 
             // Store in leagueAssignments for UI
             if (!window.leagueAssignments) window.leagueAssignments = {};
@@ -573,6 +634,13 @@
                         conference: a.conference || null
                     }))
                 };
+            }
+        }
+
+        // ★★★ SAVE GAMES PER DATE FOR EACH LEAGUE ★★★
+        for (const [leagueId, count] of Object.entries(leagueGameCounters)) {
+            if (count > 0) {
+                recordGamesOnDate(leagueId, currentDate, count, history);
             }
         }
 
@@ -599,7 +667,10 @@
         if (!league) return null;
 
         const history = loadSpecialtyHistory();
-        const matchups = getLeagueMatchupsForToday(league, history);
+        const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const gameNumber = calculateStartingGameNumber(leagueId, currentDate, history) + 1;
+        
+        const matchups = getLeagueMatchupsForToday(league, history, gameNumber);
         const assignments = assignMatchupsToFieldsAndSlots(matchups, league, history, []);
 
         return {
@@ -607,6 +678,7 @@
             sport: league.sport,
             fields: league.fields,
             gamesPerField: league.gamesPerFieldSlot || 3,
+            gameNumber: gameNumber,
             assignments: assignments
         };
     };
@@ -614,6 +686,10 @@
     SpecialtyLeagues.resetHistory = function() {
         if (confirm("Reset ALL specialty league history? This will start fresh.")) {
             localStorage.removeItem(SPECIALTY_HISTORY_KEY);
+            // Also clear from cloud
+            if (typeof window.saveGlobalSettings === 'function') {
+                window.saveGlobalSettings('specialtyLeagueHistory', {});
+            }
             console.log("[SpecialtyLeagues] History reset.");
             alert("Specialty League history has been reset.");
         }
@@ -662,6 +738,30 @@
         return stats;
     };
 
+    SpecialtyLeagues.viewLeagueSchedule = function(leagueId) {
+        const history = loadSpecialtyHistory();
+        console.log(`\n=== Games Per Date for Specialty League: ${leagueId} ===`);
+
+        if (!history.gamesPerDate || !history.gamesPerDate[leagueId]) {
+            console.log("No games recorded for this league.");
+            return {};
+        }
+
+        const dates = Object.keys(history.gamesPerDate[leagueId]).sort();
+        let cumulative = 0;
+        
+        console.log("Date\t\tGames\tCumulative");
+        console.log("-".repeat(40));
+        
+        dates.forEach(date => {
+            const count = history.gamesPerDate[leagueId][date];
+            cumulative += count;
+            console.log(`${date}\t${count}\t${cumulative}`);
+        });
+        
+        return history.gamesPerDate[leagueId];
+    };
+
     // =========================================================================
     // EXPOSE GLOBALLY
     // =========================================================================
@@ -672,5 +772,5 @@
         window.SchedulerCoreLeagues.processSpecialtyLeagues = SpecialtyLeagues.processSpecialtyLeagues;
     }
 
-    console.log('[SpecialtyLeagues] Module loaded with Global Lock integration');
+    console.log('[SpecialtyLeagues] Module loaded with Chronological Date Ordering + Cloud Persistence v3');
 })();
