@@ -127,15 +127,26 @@
      */
     function updateFutureSchedules(currentDate, history) {
         console.log(`[RegularLeagues] 🔄 Checking for future schedules to update...`);
+        console.log(`[RegularLeagues] Current history.gamesPerDate:`, JSON.stringify(history.gamesPerDate, null, 2));
         
         // Get all unique league names from history
         const leagueNames = Object.keys(history.gamesPerDate || {});
-        if (leagueNames.length === 0) return;
+        if (leagueNames.length === 0) {
+            console.log(`[RegularLeagues] No league history found, skipping update.`);
+            return;
+        }
         
         // Load all daily data
         const allDailyData = window.loadAllDailyData?.() || {};
+        
+        // Filter to only valid date keys (YYYY-MM-DD format) that are after currentDate
         const futureDates = Object.keys(allDailyData)
-            .filter(date => date > currentDate)
+            .filter(date => {
+                // Must be a valid date format
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+                // Must be after current date
+                return date > currentDate;
+            })
             .sort();
         
         if (futureDates.length === 0) {
@@ -157,31 +168,71 @@
             
             // For each league, recalculate the correct game number for this date
             for (const leagueName of leagueNames) {
-                const correctStartingNumber = calculateStartingGameNumber(leagueName, futureDate, history);
+                // ★★★ CRITICAL: Count games from all dates BEFORE this future date ★★★
+                const gamesPerDateMap = history.gamesPerDate[leagueName] || {};
+                let gamesBeforeThisDate = 0;
                 
-                // Check leagueAssignments for this league
-                for (const divName of Object.keys(leagueAssignments)) {
-                    for (const slotIdx of Object.keys(leagueAssignments[divName])) {
-                        const leagueData = leagueAssignments[divName][slotIdx];
-                        if (leagueData && leagueData.leagueName === leagueName) {
-                            // Extract current game number from label
-                            const currentLabel = leagueData.gameLabel || '';
-                            const match = currentLabel.match(/Game\s+(\d+)/i);
-                            if (match) {
-                                const currentNum = parseInt(match[1], 10);
-                                const correctNum = correctStartingNumber + 1;
+                for (const histDate of Object.keys(gamesPerDateMap)) {
+                    if (histDate < futureDate) {
+                        gamesBeforeThisDate += gamesPerDateMap[histDate];
+                    }
+                }
+                
+                console.log(`[RegularLeagues] ${leagueName} on ${futureDate}: ${gamesBeforeThisDate} games before this date`);
+                
+                // Find all league entries for this date and update them
+                // Track slots we've already processed to avoid double-counting
+                const processedSlots = new Set();
+                let gameIndexWithinDay = 0;
+                
+                // Get all division names and sort slots numerically
+                const divNames = Object.keys(leagueAssignments).sort();
+                
+                for (const divName of divNames) {
+                    const divData = leagueAssignments[divName] || {};
+                    const slotKeys = Object.keys(divData)
+                        .filter(k => !isNaN(parseInt(k)))
+                        .sort((a, b) => parseInt(a) - parseInt(b));
+                    
+                    for (const slotIdx of slotKeys) {
+                        const leagueData = divData[slotIdx];
+                        if (!leagueData) continue;
+                        if (leagueData.leagueName !== leagueName) continue;
+                        
+                        // Only process each slot once (same game appears in multiple divisions)
+                        const slotKey = `${slotIdx}`;
+                        if (processedSlots.has(slotKey)) continue;
+                        processedSlots.add(slotKey);
+                        
+                        const currentLabel = leagueData.gameLabel || '';
+                        const match = currentLabel.match(/Game\s+(\d+)/i);
+                        
+                        if (match) {
+                            const currentNum = parseInt(match[1], 10);
+                            const correctNum = gamesBeforeThisDate + gameIndexWithinDay + 1;
+                            
+                            console.log(`[RegularLeagues] Slot ${slotIdx}: Current Game ${currentNum}, Should be Game ${correctNum}`);
+                            
+                            if (currentNum !== correctNum) {
+                                console.log(`[RegularLeagues] 📝 Updating ${leagueName} on ${futureDate} slot ${slotIdx}: Game ${currentNum} → Game ${correctNum}`);
                                 
-                                if (currentNum !== correctNum) {
-                                    console.log(`[RegularLeagues] 📝 Updating ${leagueName} on ${futureDate}: Game ${currentNum} → Game ${correctNum}`);
-                                    leagueData.gameLabel = currentLabel.replace(/Game\s+\d+/i, `Game ${correctNum}`);
-                                    dayUpdated = true;
+                                // Update in ALL divisions that have this slot
+                                for (const d of divNames) {
+                                    if (leagueAssignments[d]?.[slotIdx]?.leagueName === leagueName) {
+                                        leagueAssignments[d][slotIdx].gameLabel = `Game ${correctNum}`;
+                                    }
                                 }
+                                dayUpdated = true;
                             }
+                            
+                            gameIndexWithinDay++;
                         }
                     }
                 }
                 
-                // Also update scheduleAssignments
+                // Also update scheduleAssignments entries
+                const processedBunkSlots = new Set();
+                
                 for (const bunk of Object.keys(assignments)) {
                     const bunkSchedule = assignments[bunk];
                     if (!Array.isArray(bunkSchedule)) continue;
@@ -192,28 +243,53 @@
                         
                         // Check if this is a league entry for our league
                         const activityName = entry._activity || entry.field || '';
-                        if (activityName.includes(leagueName) || activityName.includes('League:')) {
-                            const gameLabel = entry._gameLabel || entry.sport || '';
-                            const match = gameLabel.match(/Game\s+(\d+)/i);
-                            if (match) {
-                                const currentNum = parseInt(match[1], 10);
-                                const correctNum = calculateStartingGameNumber(leagueName, futureDate, history) + 1;
-                                
-                                if (currentNum !== correctNum) {
-                                    entry._gameLabel = `Game ${correctNum}`;
-                                    entry.sport = `Game ${correctNum}`;
-                                    
-                                    // Update matchup strings if present
-                                    if (entry._allMatchups && Array.isArray(entry._allMatchups)) {
-                                        entry._allMatchups = entry._allMatchups.map(m => 
-                                            m.replace(/Game\s+\d+/gi, `Game ${correctNum}`)
-                                        );
+                        const entryLeagueName = entry._leagueName || '';
+                        
+                        const isThisLeague = activityName.includes(`League: ${leagueName}`) || 
+                                            entryLeagueName === leagueName ||
+                                            (entry._h2h && activityName.includes(leagueName));
+                        
+                        if (!isThisLeague) continue;
+                        
+                        // Avoid double-processing same slot
+                        const slotKey = `${i}`;
+                        if (processedBunkSlots.has(slotKey)) continue;
+                        processedBunkSlots.add(slotKey);
+                        
+                        const gameLabel = entry._gameLabel || entry.sport || '';
+                        const match = gameLabel.match(/Game\s+(\d+)/i);
+                        
+                        if (match) {
+                            const currentNum = parseInt(match[1], 10);
+                            // Recalculate based on slot position within day
+                            // Find which game index this slot corresponds to
+                            const slotGameIndex = Array.from(processedSlots).indexOf(`${i}`);
+                            const correctNum = gamesBeforeThisDate + (slotGameIndex >= 0 ? slotGameIndex : 0) + 1;
+                            
+                            if (currentNum !== correctNum) {
+                                // Update ALL bunks at this slot
+                                for (const b of Object.keys(assignments)) {
+                                    const bSchedule = assignments[b];
+                                    if (Array.isArray(bSchedule) && bSchedule[i]) {
+                                        const e = bSchedule[i];
+                                        if (e._gameLabel) e._gameLabel = `Game ${correctNum}`;
+                                        if (e.sport && e.sport.includes('Game')) e.sport = `Game ${correctNum}`;
+                                        
+                                        // Update matchup strings if present
+                                        if (e._allMatchups && Array.isArray(e._allMatchups)) {
+                                            e._allMatchups = e._allMatchups.map(m => 
+                                                m.replace(/Game\s+\d+/gi, `Game ${correctNum}`)
+                                            );
+                                        }
                                     }
-                                    dayUpdated = true;
                                 }
+                                dayUpdated = true;
                             }
                         }
                     }
+                    
+                    // Only iterate bunks once to find slots, then break
+                    break;
                 }
             }
             
