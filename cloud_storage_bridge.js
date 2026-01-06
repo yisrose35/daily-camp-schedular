@@ -205,8 +205,9 @@
   // ============================================================================
   let _memoryCache = null;
   let _cloudSyncPending = false;
-  let _syncInProgress = false; // Moved up for visibility
-  let _syncTimeout = null;     // Moved up for visibility
+  let _syncInProgress = false;
+  let _syncTimeout = null;
+  let _dailyDataDirty = false; // ★★★ NEW TRACKER FOR DAILY DATA DIRTY STATE ★★★
   let _initialized = false;
   const SCHEMA_VERSION = 2;
 
@@ -220,12 +221,10 @@
   }
    
   function setLocalCache(state) {
-    // PROTECT LOCAL WORK: If we have pending syncs, assume local is newer/authoritative
-    // for the daily schedules, unless we are just starting up.
-    const isLocalDirty = _cloudSyncPending || _syncInProgress;
-
+    // PROTECT LOCAL WORK: Only block overwrite if daily data specifically is dirty
+    // The previous check was too broad (_cloudSyncPending included settings changes)
     if (state.daily_schedules) {
-        if (!isLocalDirty) {
+        if (!_dailyDataDirty) {
             console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
             try {
                 const currentRaw = localStorage.getItem(DAILY_DATA_KEY);
@@ -363,6 +362,7 @@
           if (patchedData && patchedData.length > 0) {
               console.log("☁️ [REST] ✅ PATCH Success");
               showToast("✅ Schedule Saved!", "success");
+              _dailyDataDirty = false; // ★★★ CLEAR DIRTY FLAG ON SUCCESS ★★★
               return true;
           }
       }
@@ -388,6 +388,7 @@
           if (postResponse.ok) {
             console.log("☁️ [REST] ✅ POST Success");
             showToast("✅ Schedule Saved!", "success");
+            _dailyDataDirty = false; // ★★★ CLEAR DIRTY FLAG ON SUCCESS ★★★
             return true;
           } else {
             console.error("Save Failed:", postResponse.status);
@@ -479,6 +480,7 @@
             if (cloudState) {
                 const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
                 const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
+                // Always sync on load if cloud is newer, regardless of minor local setting changes
                 if (cloudTime > localTime) {
                     setLocalCache({ ...localData, ...cloudState });
                     showToast("☁️ Data updated from Cloud", "info");
@@ -545,8 +547,10 @@
         const data = window.loadCurrentDailyData();
         data[key] = value;
         localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(data));
+        
         // Trigger the cloud sync to bundle this data
         _cloudSyncPending = true;
+        _dailyDataDirty = true; // ★★★ MARK DAILY DATA AS DIRTY ★★★
         scheduleCloudSync();
     } catch(e) { console.error("Daily Save Error:", e); }
   };
