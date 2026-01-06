@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_leagues.js (FIXED v6 - SCHEDULING PRIORITY SUPPORT)
+// scheduler_core_leagues.js (FIXED v7 - CHRONOLOGICAL DATE ORDERING)
 //
 // CRITICAL UPDATE:
 // - Now supports two scheduling priorities per league:
@@ -9,8 +9,8 @@
 // - Regular leagues process AFTER specialty leagues
 // - Any field locked by specialty leagues is unavailable
 // - Regular leagues lock their fields to prevent double-booking
-// - Game counter: resets on same-day regenerate, increments per slot,
-//   continues across days
+// - Game counter: Uses CHRONOLOGICAL date ordering (not creation order)
+// - Persists to cloud via saveGlobalSettings
 // ============================================================================
 
 (function () {
@@ -19,27 +19,44 @@
     const Leagues = {};
 
     // =========================================================================
-    // PERSISTENT HISTORY
+    // PERSISTENT HISTORY (NOW CLOUD-SYNCED)
     // =========================================================================
 
     const LEAGUE_HISTORY_KEY = "campLeagueHistory_v2";
 
     function loadLeagueHistory() {
         try {
+            // ★ First try to load from cloud-synced global settings
+            const global = window.loadGlobalSettings?.() || {};
+            if (global.leagueHistory && Object.keys(global.leagueHistory).length > 0) {
+                const history = global.leagueHistory;
+                // Ensure all fields exist
+                history.teamSports = history.teamSports || {};
+                history.matchupHistory = history.matchupHistory || {};
+                history.gamesPerDate = history.gamesPerDate || {};  // ★ NEW: tracks games per date per league
+                console.log("[RegularLeagues] ✅ Loaded history from cloud");
+                return history;
+            }
+            
+            // Fallback to localStorage
             const raw = localStorage.getItem(LEAGUE_HISTORY_KEY);
             if (!raw) return {
                 teamSports: {},
                 matchupHistory: {},
-                roundCounters: {},
-                lastScheduledDay: {},
-                dayStartRound: {}  // ★ Tracks counter at start of each day
+                gamesPerDate: {}  // ★ NEW: { leagueName: { "2025-01-01": 2, "2025-01-02": 3 } }
             };
 
             const history = JSON.parse(raw);
-            // Ensure new fields exist for backward compatibility
-            if (!history.lastScheduledDay) history.lastScheduledDay = {};
-            if (!history.dayStartRound) history.dayStartRound = {};
-            if (!history.matchupHistory) history.matchupHistory = {};
+            // Migrate old format to new
+            history.teamSports = history.teamSports || {};
+            history.matchupHistory = history.matchupHistory || {};
+            history.gamesPerDate = history.gamesPerDate || {};
+            
+            // Migrate from old roundCounters/dayStartRound if present
+            if (history.roundCounters && !history.gamesPerDate) {
+                console.log("[RegularLeagues] Migrating old history format...");
+                history.gamesPerDate = {};
+            }
             
             return history;
         } catch (e) {
@@ -47,19 +64,61 @@
             return {
                 teamSports: {},
                 matchupHistory: {},
-                roundCounters: {},
-                lastScheduledDay: {},
-                dayStartRound: {}
+                gamesPerDate: {}
             };
         }
     }
 
     function saveLeagueHistory(history) {
         try {
+            // Save to localStorage as backup
             localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(history));
+            
+            // ★ CRITICAL: Also save to cloud via global settings
+            if (typeof window.saveGlobalSettings === 'function') {
+                window.saveGlobalSettings('leagueHistory', history);
+                console.log("[RegularLeagues] ✅ History saved to cloud");
+            }
         } catch (e) {
             console.error("Failed to save league history:", e);
         }
+    }
+
+    // =========================================================================
+    // ★ NEW: CHRONOLOGICAL GAME NUMBERING
+    // =========================================================================
+
+    /**
+     * Calculate the starting game number for a given date based on
+     * all games that occurred on EARLIER dates (chronologically)
+     */
+    function calculateStartingGameNumber(leagueName, currentDate, history) {
+        if (!history.gamesPerDate) history.gamesPerDate = {};
+        if (!history.gamesPerDate[leagueName]) history.gamesPerDate[leagueName] = {};
+        
+        const gamesMap = history.gamesPerDate[leagueName];
+        
+        // Sum games from all dates BEFORE currentDate (chronologically)
+        let total = 0;
+        for (const date of Object.keys(gamesMap)) {
+            if (date < currentDate) {
+                total += gamesMap[date];
+            }
+        }
+        
+        console.log(`[RegularLeagues] Starting game# for "${leagueName}" on ${currentDate}: ${total + 1} (${total} games on earlier dates)`);
+        return total;
+    }
+
+    /**
+     * Record how many games occurred on a given date for a league
+     */
+    function recordGamesOnDate(leagueName, currentDate, numGames, history) {
+        if (!history.gamesPerDate) history.gamesPerDate = {};
+        if (!history.gamesPerDate[leagueName]) history.gamesPerDate[leagueName] = {};
+        
+        history.gamesPerDate[leagueName][currentDate] = numGames;
+        console.log(`[RegularLeagues] Recorded ${numGames} game(s) for "${leagueName}" on ${currentDate}`);
     }
 
     function getTeamSportHistory(leagueName, team, history) {
@@ -369,34 +428,8 @@
         const dayId = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         console.log(`[RegularLeagues] Current day: "${dayId}"`);
 
-        // ★★★ PRE-PROCESS: Reset counters for same-day regeneration ★★★
-        // This happens ONCE at the start, before any time slots are processed
-        for (const league of Object.values(masterLeagues)) {
-            if (!league.enabled) continue;
-
-            const leagueName = league.name;
-            if (!history.dayStartRound[leagueName]) {
-                history.dayStartRound[leagueName] = {};
-            }
-
-            const lastDay = history.lastScheduledDay[leagueName];
-            const isNewDay = (lastDay !== dayId);
-
-            if (isNewDay) {
-                // ★ NEW DAY: Record current counter as this day's starting point
-                const currentCounter = history.roundCounters[leagueName] || 0;
-                history.dayStartRound[leagueName][dayId] = currentCounter;
-                history.lastScheduledDay[leagueName] = dayId;
-                console.log(`[RegularLeagues] 🆕 New day for "${leagueName}" - starting at Game ${currentCounter + 1}`);
-            } else {
-                // ★ SAME DAY REGENERATE: Reset counter to day's starting point
-                const dayStart = history.dayStartRound[leagueName][dayId];
-                if (dayStart !== undefined) {
-                    console.log(`[RegularLeagues] 🔄 Same-day regenerate for "${leagueName}" - resetting to Game ${dayStart + 1}`);
-                    history.roundCounters[leagueName] = dayStart;
-                }
-            }
-        }
+        // ★★★ TRACK GAMES PER LEAGUE FOR THIS DAY ★★★
+        const leagueGameCounters = {};  // Tracks how many games each league has scheduled TODAY
 
         // Group blocks by time
         const blocksByTime = {};
@@ -460,15 +493,23 @@
                     continue;
                 }
 
-                // ★★★ GET CURRENT ROUND COUNTER FOR THIS SLOT ★★★
-                const roundCounter = history.roundCounters[league.name] || 0;
+                // ★★★ CHRONOLOGICAL GAME NUMBERING ★★★
+                // Initialize counter for this league if not done
+                if (leagueGameCounters[league.name] === undefined) {
+                    leagueGameCounters[league.name] = 0;
+                }
+                
+                // Get the starting game number based on chronological date order
+                const baseGameNumber = calculateStartingGameNumber(league.name, dayId, history);
+                const todayGameIndex = leagueGameCounters[league.name];
+                const gameNumber = baseGameNumber + todayGameIndex + 1;
+                
+                // Get matchups using round robin
                 const fullSchedule = generateRoundRobinSchedule(leagueTeams);
-                const roundIndex = roundCounter % fullSchedule.length;
+                const roundIndex = (gameNumber - 1) % fullSchedule.length;
                 const matchups = fullSchedule[roundIndex] || [];
 
-                const gameNumber = roundCounter + 1;
-
-                console.log(`   Game #${gameNumber} (Round Index: ${roundIndex})`);
+                console.log(`   Game #${gameNumber} (Round Index: ${roundIndex}, Today's Game: ${todayGameIndex + 1})`);
                 console.log(`   Matchups: ${matchups.length}`);
                 matchups.forEach(([t1, t2]) => console.log(`      • ${t1} vs ${t2}`));
 
@@ -508,6 +549,9 @@
                     console.log(`   ❌ No assignments possible`);
                     continue;
                 }
+
+                // ★★★ INCREMENT TODAY'S GAME COUNTER ★★★
+                leagueGameCounters[league.name]++;
 
                 // ★★★ CRITICAL: LOCK ALL USED FIELDS GLOBALLY ★★★
                 const usedFields = [...new Set(assignments.map(a => a.field))];
@@ -567,12 +611,17 @@
                     });
                 });
 
-                // ★★★ INCREMENT COUNTER AFTER THIS SLOT ★★★
-                history.roundCounters[league.name] = roundCounter + 1;
-                console.log(`   📈 Counter for "${league.name}" now at ${roundCounter + 1}`);
+                console.log(`   📈 Game #${gameNumber} complete for "${league.name}"`);
 
                 if (!window.leagueRoundState) window.leagueRoundState = {};
                 window.leagueRoundState[league.name] = { currentRound: gameNumber };
+            }
+        }
+
+        // ★★★ SAVE GAMES PER DATE FOR EACH LEAGUE ★★★
+        for (const [leagueName, count] of Object.entries(leagueGameCounters)) {
+            if (count > 0) {
+                recordGamesOnDate(leagueName, dayId, count, history);
             }
         }
 
@@ -615,6 +664,10 @@
     window.resetLeagueHistory = function() {
         if (confirm("Reset ALL league history? This will start fresh.")) {
             localStorage.removeItem(LEAGUE_HISTORY_KEY);
+            // Also clear from cloud
+            if (typeof window.saveGlobalSettings === 'function') {
+                window.saveGlobalSettings('leagueHistory', {});
+            }
             console.log("League history reset.");
         }
     };
@@ -653,6 +706,30 @@
         return matchupStats;
     };
 
+    window.viewLeagueSchedule = function(leagueName) {
+        const history = loadLeagueHistory();
+        console.log(`\n=== Games Per Date for League: ${leagueName} ===`);
+
+        if (!history.gamesPerDate || !history.gamesPerDate[leagueName]) {
+            console.log("No games recorded for this league.");
+            return {};
+        }
+
+        const dates = Object.keys(history.gamesPerDate[leagueName]).sort();
+        let cumulative = 0;
+        
+        console.log("Date\t\tGames\tCumulative");
+        console.log("-".repeat(40));
+        
+        dates.forEach(date => {
+            const count = history.gamesPerDate[leagueName][date];
+            cumulative += count;
+            console.log(`${date}\t${count}\t${cumulative}`);
+        });
+        
+        return history.gamesPerDate[leagueName];
+    };
+
     window.SchedulerCoreLeagues = Leagues;
-    console.log('[RegularLeagues] Module loaded with Scheduling Priority Support v6');
+    console.log('[RegularLeagues] Module loaded with Chronological Date Ordering + Cloud Persistence v7');
 })();
