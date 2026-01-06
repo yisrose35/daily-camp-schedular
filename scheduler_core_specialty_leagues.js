@@ -130,6 +130,136 @@
         console.log(`[SpecialtyLeagues] Recorded ${numGames} game(s) for league ${leagueId} on ${currentDate}`);
     }
 
+    /**
+     * ★ CRITICAL: Update game numbers in all schedules that come AFTER the current date
+     * This ensures chronological consistency when schedules are created out of order
+     */
+    function updateFutureSchedules(currentDate, history) {
+        console.log(`[SpecialtyLeagues] 🔄 Checking for future schedules to update...`);
+        
+        // Get all unique league IDs from history
+        const leagueIds = Object.keys(history.gamesPerDate || {});
+        if (leagueIds.length === 0) return;
+        
+        // Load specialty league config to get names
+        const specialtyLeaguesConfig = loadSpecialtyLeagues();
+        
+        // Load all daily data
+        const allDailyData = window.loadAllDailyData?.() || {};
+        const futureDates = Object.keys(allDailyData)
+            .filter(date => date > currentDate)
+            .sort();
+        
+        if (futureDates.length === 0) {
+            console.log(`[SpecialtyLeagues] No future schedules to update.`);
+            return;
+        }
+        
+        console.log(`[SpecialtyLeagues] Found ${futureDates.length} future date(s) to check: ${futureDates.join(', ')}`);
+        
+        let updatedAny = false;
+        
+        for (const futureDate of futureDates) {
+            const dayData = allDailyData[futureDate];
+            if (!dayData) continue;
+            
+            const assignments = dayData.scheduleAssignments || {};
+            const leagueAssignments = dayData.leagueAssignments || {};
+            let dayUpdated = false;
+            
+            // For each league, recalculate the correct game number for this date
+            for (const leagueId of leagueIds) {
+                const league = specialtyLeaguesConfig[leagueId];
+                const leagueName = league?.name || leagueId;
+                const correctStartingNumber = calculateStartingGameNumber(leagueId, futureDate, history);
+                
+                // Check leagueAssignments for this league
+                for (const divName of Object.keys(leagueAssignments)) {
+                    for (const slotIdx of Object.keys(leagueAssignments[divName])) {
+                        const leagueData = leagueAssignments[divName][slotIdx];
+                        if (leagueData && leagueData.isSpecialtyLeague && 
+                            (leagueData.leagueName === leagueName || leagueData.leagueName === leagueId)) {
+                            // Extract current game number from label
+                            const currentLabel = leagueData.gameLabel || '';
+                            const match = currentLabel.match(/Game\s+(\d+)/i);
+                            if (match) {
+                                const currentNum = parseInt(match[1], 10);
+                                const correctNum = correctStartingNumber + 1;
+                                
+                                if (currentNum !== correctNum) {
+                                    console.log(`[SpecialtyLeagues] 📝 Updating ${leagueName} on ${futureDate}: Game ${currentNum} → Game ${correctNum}`);
+                                    leagueData.gameLabel = currentLabel.replace(/Game\s+\d+/i, `Game ${correctNum}`);
+                                    dayUpdated = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Also update scheduleAssignments
+                for (const bunk of Object.keys(assignments)) {
+                    const bunkSchedule = assignments[bunk];
+                    if (!Array.isArray(bunkSchedule)) continue;
+                    
+                    for (let i = 0; i < bunkSchedule.length; i++) {
+                        const entry = bunkSchedule[i];
+                        if (!entry || !entry._isSpecialtyLeague) continue;
+                        
+                        // Check if this is a specialty league entry for our league
+                        const entryLeagueName = entry._leagueName || '';
+                        if (entryLeagueName === leagueName || entryLeagueName === leagueId) {
+                            const gameLabel = entry._gameLabel || '';
+                            const match = gameLabel.match(/Game\s+(\d+)/i);
+                            if (match) {
+                                const currentNum = parseInt(match[1], 10);
+                                const correctNum = correctStartingNumber + 1;
+                                
+                                if (currentNum !== correctNum) {
+                                    const newLabel = `${leagueName} Game ${correctNum}`;
+                                    entry._gameLabel = newLabel;
+                                    entry.field = newLabel;
+                                    entry._activity = newLabel;
+                                    
+                                    // Update matchup strings if present
+                                    if (entry._allMatchups && Array.isArray(entry._allMatchups)) {
+                                        entry._allMatchups = entry._allMatchups.map(m => 
+                                            m.replace(/Game\s+\d+/gi, `Game ${correctNum}`)
+                                        );
+                                    }
+                                    dayUpdated = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (dayUpdated) {
+                allDailyData[futureDate].scheduleAssignments = assignments;
+                allDailyData[futureDate].leagueAssignments = leagueAssignments;
+                updatedAny = true;
+                console.log(`[SpecialtyLeagues] ✅ Updated schedule for ${futureDate}`);
+            }
+        }
+        
+        // Save all updated daily data
+        if (updatedAny) {
+            try {
+                const DAILY_DATA_KEY = "campDailyData_v1";
+                localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allDailyData));
+                
+                // Also sync to cloud
+                if (typeof window.saveGlobalSettings === 'function') {
+                    window.saveGlobalSettings('daily_schedules', allDailyData);
+                }
+                
+                console.log(`[SpecialtyLeagues] ✅ Saved updated future schedules to storage`);
+            } catch (e) {
+                console.error("[SpecialtyLeagues] Failed to save updated future schedules:", e);
+            }
+        }
+    }
+
     // =========================================================================
     // HELPER: Load specialty leagues from global settings
     // =========================================================================
@@ -645,6 +775,9 @@
         }
 
         saveSpecialtyHistory(history);
+
+        // ★★★ UPDATE FUTURE SCHEDULES TO MAINTAIN CHRONOLOGICAL ORDER ★★★
+        updateFutureSchedules(currentDate, history);
 
         console.log("\n" + "=".repeat(60));
         console.log("★★★ SPECIALTY LEAGUE SCHEDULER COMPLETE ★★★");
