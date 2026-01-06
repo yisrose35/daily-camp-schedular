@@ -1,11 +1,11 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v3.8 (Multi-tenant Support for Invited Users)
+// FIXED VERSION: v3.9 (Added Daily Data Sync Handlers)
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v3.8 (MULTI-TENANT MODE)");
+  console.log("☁️ Campistry Cloud Bridge v3.9 (MULTI-TENANT MODE)");
 
   // DIRECT CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -505,6 +505,30 @@
     scheduleCloudSync();
     return state;
   };
+
+  // ★★★ NEW: DAILY DATA HANDLERS (Fixes Schedule Saving) ★★★
+  window.loadCurrentDailyData = function() {
+    try {
+        const raw = localStorage.getItem(DAILY_DATA_KEY);
+        return raw ? JSON.parse(raw) : {};
+    } catch(e) { return {}; }
+  };
+
+  window.saveCurrentDailyData = function(key, value) {
+    if (_userRole === 'viewer') {
+        console.warn("Viewers cannot save daily data");
+        return;
+    }
+    try {
+        const data = window.loadCurrentDailyData();
+        data[key] = value;
+        localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(data));
+        // Trigger the cloud sync to bundle this data
+        _cloudSyncPending = true;
+        scheduleCloudSync();
+    } catch(e) { console.error("Daily Save Error:", e); }
+  };
+
   window.syncNow = syncNow;
   window.forceSyncToCloud = syncNow;
   window.scheduleCloudSync = () => {
