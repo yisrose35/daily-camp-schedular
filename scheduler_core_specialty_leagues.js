@@ -136,10 +136,14 @@
      */
     function updateFutureSchedules(currentDate, history) {
         console.log(`[SpecialtyLeagues] 🔄 Checking for future schedules to update...`);
+        console.log(`[SpecialtyLeagues] Current history.gamesPerDate:`, JSON.stringify(history.gamesPerDate, null, 2));
         
         // Get all unique league IDs from history
         const leagueIds = Object.keys(history.gamesPerDate || {});
-        if (leagueIds.length === 0) return;
+        if (leagueIds.length === 0) {
+            console.log(`[SpecialtyLeagues] No league history found, skipping update.`);
+            return;
+        }
         
         // Load specialty league config to get names
         const specialtyLeaguesConfig = loadSpecialtyLeagues();
@@ -147,7 +151,10 @@
         // Load all daily data
         const allDailyData = window.loadAllDailyData?.() || {};
         const futureDates = Object.keys(allDailyData)
-            .filter(date => date > currentDate)
+            .filter(date => {
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+                return date > currentDate;
+            })
             .sort();
         
         if (futureDates.length === 0) {
@@ -171,32 +178,72 @@
             for (const leagueId of leagueIds) {
                 const league = specialtyLeaguesConfig[leagueId];
                 const leagueName = league?.name || leagueId;
-                const correctStartingNumber = calculateStartingGameNumber(leagueId, futureDate, history);
+                
+                // ★★★ CRITICAL: Count games from all dates BEFORE this future date ★★★
+                const gamesPerDateMap = history.gamesPerDate[leagueId] || {};
+                let gamesBeforeThisDate = 0;
+                
+                for (const histDate of Object.keys(gamesPerDateMap)) {
+                    if (histDate < futureDate) {
+                        gamesBeforeThisDate += gamesPerDateMap[histDate];
+                    }
+                }
+                
+                console.log(`[SpecialtyLeagues] ${leagueName} on ${futureDate}: ${gamesBeforeThisDate} games before this date`);
+                
+                // Track slots we've already processed
+                const processedSlots = new Set();
+                let gameIndexWithinDay = 0;
                 
                 // Check leagueAssignments for this league
-                for (const divName of Object.keys(leagueAssignments)) {
-                    for (const slotIdx of Object.keys(leagueAssignments[divName])) {
-                        const leagueData = leagueAssignments[divName][slotIdx];
-                        if (leagueData && leagueData.isSpecialtyLeague && 
-                            (leagueData.leagueName === leagueName || leagueData.leagueName === leagueId)) {
-                            // Extract current game number from label
-                            const currentLabel = leagueData.gameLabel || '';
-                            const match = currentLabel.match(/Game\s+(\d+)/i);
-                            if (match) {
-                                const currentNum = parseInt(match[1], 10);
-                                const correctNum = correctStartingNumber + 1;
+                const divNames = Object.keys(leagueAssignments).sort();
+                
+                for (const divName of divNames) {
+                    const divData = leagueAssignments[divName] || {};
+                    const slotKeys = Object.keys(divData)
+                        .filter(k => !isNaN(parseInt(k)))
+                        .sort((a, b) => parseInt(a) - parseInt(b));
+                    
+                    for (const slotIdx of slotKeys) {
+                        const leagueData = divData[slotIdx];
+                        if (!leagueData || !leagueData.isSpecialtyLeague) continue;
+                        if (leagueData.leagueName !== leagueName && leagueData.leagueName !== leagueId) continue;
+                        
+                        const slotKey = `${slotIdx}`;
+                        if (processedSlots.has(slotKey)) continue;
+                        processedSlots.add(slotKey);
+                        
+                        const currentLabel = leagueData.gameLabel || '';
+                        const match = currentLabel.match(/Game\s+(\d+)/i);
+                        
+                        if (match) {
+                            const currentNum = parseInt(match[1], 10);
+                            const correctNum = gamesBeforeThisDate + gameIndexWithinDay + 1;
+                            
+                            console.log(`[SpecialtyLeagues] Slot ${slotIdx}: Current Game ${currentNum}, Should be Game ${correctNum}`);
+                            
+                            if (currentNum !== correctNum) {
+                                console.log(`[SpecialtyLeagues] 📝 Updating ${leagueName} on ${futureDate}: Game ${currentNum} → Game ${correctNum}`);
                                 
-                                if (currentNum !== correctNum) {
-                                    console.log(`[SpecialtyLeagues] 📝 Updating ${leagueName} on ${futureDate}: Game ${currentNum} → Game ${correctNum}`);
-                                    leagueData.gameLabel = currentLabel.replace(/Game\s+\d+/i, `Game ${correctNum}`);
-                                    dayUpdated = true;
+                                // Update in ALL divisions that have this slot
+                                for (const d of divNames) {
+                                    if (leagueAssignments[d]?.[slotIdx]?.isSpecialtyLeague &&
+                                        (leagueAssignments[d][slotIdx].leagueName === leagueName || 
+                                         leagueAssignments[d][slotIdx].leagueName === leagueId)) {
+                                        leagueAssignments[d][slotIdx].gameLabel = `Game ${correctNum}`;
+                                    }
                                 }
+                                dayUpdated = true;
                             }
+                            
+                            gameIndexWithinDay++;
                         }
                     }
                 }
                 
                 // Also update scheduleAssignments
+                const processedBunkSlots = new Set();
+                
                 for (const bunk of Object.keys(assignments)) {
                     const bunkSchedule = assignments[bunk];
                     if (!Array.isArray(bunkSchedule)) continue;
@@ -205,32 +252,44 @@
                         const entry = bunkSchedule[i];
                         if (!entry || !entry._isSpecialtyLeague) continue;
                         
-                        // Check if this is a specialty league entry for our league
                         const entryLeagueName = entry._leagueName || '';
-                        if (entryLeagueName === leagueName || entryLeagueName === leagueId) {
-                            const gameLabel = entry._gameLabel || '';
-                            const match = gameLabel.match(/Game\s+(\d+)/i);
-                            if (match) {
-                                const currentNum = parseInt(match[1], 10);
-                                const correctNum = correctStartingNumber + 1;
+                        if (entryLeagueName !== leagueName && entryLeagueName !== leagueId) continue;
+                        
+                        const slotKey = `${i}`;
+                        if (processedBunkSlots.has(slotKey)) continue;
+                        processedBunkSlots.add(slotKey);
+                        
+                        const gameLabel = entry._gameLabel || '';
+                        const match = gameLabel.match(/Game\s+(\d+)/i);
+                        
+                        if (match) {
+                            const currentNum = parseInt(match[1], 10);
+                            const slotGameIndex = Array.from(processedSlots).indexOf(`${i}`);
+                            const correctNum = gamesBeforeThisDate + (slotGameIndex >= 0 ? slotGameIndex : 0) + 1;
+                            
+                            if (currentNum !== correctNum) {
+                                const newLabel = `${leagueName} Game ${correctNum}`;
                                 
-                                if (currentNum !== correctNum) {
-                                    const newLabel = `${leagueName} Game ${correctNum}`;
-                                    entry._gameLabel = newLabel;
-                                    entry.field = newLabel;
-                                    entry._activity = newLabel;
-                                    
-                                    // Update matchup strings if present
-                                    if (entry._allMatchups && Array.isArray(entry._allMatchups)) {
-                                        entry._allMatchups = entry._allMatchups.map(m => 
-                                            m.replace(/Game\s+\d+/gi, `Game ${correctNum}`)
-                                        );
+                                // Update ALL bunks at this slot
+                                for (const b of Object.keys(assignments)) {
+                                    const bSchedule = assignments[b];
+                                    if (Array.isArray(bSchedule) && bSchedule[i] && bSchedule[i]._isSpecialtyLeague) {
+                                        bSchedule[i]._gameLabel = newLabel;
+                                        bSchedule[i].field = newLabel;
+                                        bSchedule[i]._activity = newLabel;
+                                        
+                                        if (bSchedule[i]._allMatchups && Array.isArray(bSchedule[i]._allMatchups)) {
+                                            bSchedule[i]._allMatchups = bSchedule[i]._allMatchups.map(m => 
+                                                m.replace(/Game\s+\d+/gi, `Game ${correctNum}`)
+                                            );
+                                        }
                                     }
-                                    dayUpdated = true;
                                 }
+                                dayUpdated = true;
                             }
                         }
                     }
+                    break;
                 }
             }
             
