@@ -205,6 +205,8 @@
   // ============================================================================
   let _memoryCache = null;
   let _cloudSyncPending = false;
+  let _syncInProgress = false; // Moved up for visibility
+  let _syncTimeout = null;     // Moved up for visibility
   let _initialized = false;
   const SCHEMA_VERSION = 2;
 
@@ -218,17 +220,33 @@
   }
    
   function setLocalCache(state) {
+    // PROTECT LOCAL WORK: If we have pending syncs, assume local is newer/authoritative
+    // for the daily schedules, unless we are just starting up.
+    const isLocalDirty = _cloudSyncPending || _syncInProgress;
+
     if (state.daily_schedules) {
-        console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
-        try {
-            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(state.daily_schedules));
-            
-            // 🔥 NOTIFY UI TO RELOAD 🔥
-            window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
-            if (window.initScheduleSystem) window.initScheduleSystem();
-            if (window.updateTable) window.updateTable();
-            
-        } catch(e) { console.error("Failed to save extracted schedules", e); }
+        if (!isLocalDirty) {
+            console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
+            try {
+                const currentRaw = localStorage.getItem(DAILY_DATA_KEY);
+                const newRaw = JSON.stringify(state.daily_schedules);
+                
+                // Only write and notify if actually different
+                if (currentRaw !== newRaw) {
+                    localStorage.setItem(DAILY_DATA_KEY, newRaw);
+                    
+                    // 🔥 CRITICAL: Notify UI to reload immediately on other devices
+                    setTimeout(() => {
+                        console.log("🔥 Dispatching UI refresh for new schedule data...");
+                        window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
+                        if (window.initScheduleSystem) window.initScheduleSystem();
+                        if (window.updateTable) window.updateTable();
+                    }, 50);
+                }
+            } catch(e) { console.error("Failed to save extracted schedules", e); }
+        } else {
+            console.log("☁️ [SYNC] Skipping daily schedule overwrite - Local changes pending upload.");
+        }
         delete state.daily_schedules; 
     }
 
@@ -420,8 +438,6 @@
   // ============================================================================
   // SYNC LOGIC & INIT
   // ============================================================================
-  let _syncTimeout = null;
-  let _syncInProgress = false;
    
   function scheduleCloudSync() {
     if (_syncTimeout) clearTimeout(_syncTimeout);
