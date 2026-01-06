@@ -1,14 +1,13 @@
 // ============================================================================
-// subdivision_schedule_manager.js (v1.10 - OWNER SUPERUSER ACCESS)
+// subdivision_schedule_manager.js (v1.11 - STRICT FILTERING FIX)
 // ============================================================================
 // MULTI-SCHEDULER SYSTEM: Allows multiple schedulers to create schedules for
 // their assigned subdivisions while respecting each other's locked schedules.
 //
-// UPDATE v1.10:
-// - Owner Superuser: Owners/Admins ignore ALL locks. They can schedule freely,
-//   effectively overwriting or ignoring constraints from other subdivisions.
-// - Standard Schedulers: Still strictly bound to their assigned divisions and
-//   must respect all other schedules as constraints.
+// UPDATE v1.11:
+// - Strict Filtering: Standard schedulers are forcefully restricted to ONLY
+//   the divisions within their assigned subdivisions.
+// - Owner Superuser: Owners retain full access to everything.
 // ============================================================================
 
 (function() {
@@ -362,7 +361,7 @@
             let treatAsLock = false;
 
             if (isOwner) {
-                // Owner / Admin Logic (v1.10 FIX):
+                // Owner / Admin Logic:
                 // Owners are NEVER locked out. They can overwrite/change anything.
                 // treatAsLock remains false.
                 treatAsLock = false; 
@@ -371,6 +370,7 @@
                 if (mySubIds.has(subId)) {
                     // This is MY subdivision (assigned to me).
                     // I ignore my own Drafts (I am working on them).
+                    // I ignore my own Locks (I can unlock/overwrite them).
                     treatAsLock = false;
                 } else {
                     // This is SOMEONE ELSE'S subdivision (not assigned to me).
@@ -548,7 +548,8 @@
 
         // 1. Collect from assigned subdivisions
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            // For owners, we check everything. For users, only assigned.
+            // STRICT FILTERING FOR STANDARD USERS
+            // If I am NOT an owner, I MUST be assigned to this subdivision to schedule it.
             if (!isOwner && !mySubIds.has(subId)) continue;
             
             // Standard users never schedule locked subdivisions (they are read-only)
@@ -809,6 +810,6 @@
         debugPrintStatus
     };
 
-    console.log('[SubdivisionScheduler] Module loaded v1.10 (Owner Superuser Access)');
+    console.log('[SubdivisionScheduler] Module loaded v1.11 (Strict Filtering Fix)');
 
 })();
