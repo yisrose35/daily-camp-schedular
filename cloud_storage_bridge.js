@@ -222,6 +222,12 @@
         console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
         try {
             localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(state.daily_schedules));
+            
+            // 🔥 NOTIFY UI TO RELOAD 🔥
+            window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
+            if (window.initScheduleSystem) window.initScheduleSystem();
+            if (window.updateTable) window.updateTable();
+            
         } catch(e) { console.error("Failed to save extracted schedules", e); }
         delete state.daily_schedules; 
     }
