@@ -1,3 +1,10 @@
+/**
+ * scheduler_core_main.js
+ * * Main entry point for the Camp Scheduler Generator.
+ * Handles the orchestration of division scheduling, resource locking,
+ * and selective generation based on user permissions.
+ */
+
 // ============================================================================
 // scheduler_core_main.js (FIXED v11 - STRICT AVAILABILITY + BUNK SORTING + RAINY DAY CHECKS)
 // ============================================================================
@@ -102,7 +109,7 @@
                 // (Multiple bunks doing "Lunch" at Lunchroom is OK)
                 // (One bunk doing "Skits" while another does "Lunch" is NOT OK)
                 if (slotUsage.activity.toLowerCase() !== activityName.toLowerCase()) {
-                    console.log(`[LOCATION_CONFLICT] ${activityName} blocked at ${locationName} - ${slotUsage.activity} already scheduled`);
+                    // console.log(`[LOCATION_CONFLICT] ${activityName} blocked at ${locationName} - ${slotUsage.activity} already scheduled`);
                     return false;
                 }
             }
@@ -132,7 +139,7 @@
                     division: divisionName,
                     timestamp: Date.now()
                 };
-                console.log(`[LOCATION] Registered ${activityName} at ${locationName} for slot ${slotIdx}`);
+                // console.log(`[LOCATION] Registered ${activityName} at ${locationName} for slot ${slotIdx}`);
             }
         }
     }
@@ -358,7 +365,7 @@
     // SMART TILES PROCESSOR
     // ============================================================================
 
-    function processSmartTiles(manualSkeleton, externalOverrides, config) {
+    function processSmartTiles(manualSkeleton, externalOverrides, config, allowedDivisions = null) {
         const Utils = window.SchedulerCoreUtils;
         const {
             divisions,
@@ -393,9 +400,14 @@
             masterSpecials
         ) || [];
 
-        console.log(`[SmartTile] Processing ${smartJobs.length} smart tile jobs`);
+        // ★★★ FILTER JOBS BY ALLOWED DIVISIONS ★★★
+        const filteredJobs = allowedDivisions 
+            ? smartJobs.filter(job => allowedDivisions.includes(job.division))
+            : smartJobs;
 
-        smartJobs.forEach((job, jobIdx) => {
+        console.log(`[SmartTile] Processing ${filteredJobs.length} smart tile jobs (filtered from ${smartJobs.length})`);
+
+        filteredJobs.forEach((job, jobIdx) => {
             console.log(`\n[SmartTile] Job ${jobIdx + 1}: ${job.division}`);
 
             const divName = job.division;
@@ -521,9 +533,18 @@
     // ★★★ MAIN ENTRY POINT ★★★
     // =========================================================================
 
-    window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides) {
+    /**
+     * @param {Array} manualSkeleton - The base schedule structure
+     * @param {Object} externalOverrides - Manual overrides
+     * @param {Array<string>|null} allowedDivisions - [OPTIONAL] If provided, only generates for these divisions.
+     * @param {Object|null} existingScheduleSnapshot - [OPTIONAL] Snapshot of existing assignments to preserve for locked divisions.
+     */
+    window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null) {
         console.log("\n" + "=".repeat(70));
         console.log("★★★ OPTIMIZER STARTED (v11 - STRICT AVAILABILITY + BUNK SORTING) ★★★");
+        if (allowedDivisions) {
+            console.log(`★★★ PARTIAL GENERATION MODE: ${allowedDivisions.join(', ')} ★★★`);
+        }
         console.log("=".repeat(70));
 
         // ★★★ RESET disabled fields & Location Usage at start of each run ★★★
@@ -727,6 +748,63 @@
         });
 
         // =========================================================================
+        // ★★★ STEP 1.5: RESTORE EXISTING SCHEDULE FOR LOCKED DIVISIONS ★★★
+        // =========================================================================
+        if (allowedDivisions && existingScheduleSnapshot) {
+            console.log("\n[STEP 1.5] Restoring locked divisions from snapshot...");
+            let restoredCount = 0;
+            
+            Object.keys(existingScheduleSnapshot).forEach(bunkName => {
+                 // Find division for this bunk
+                 const divName = Object.keys(divisions).find(d => divisions[d].bunks?.includes(bunkName));
+                 
+                 // If division not found, or IS allowed (meaning we regenerate it), skip restore
+                 if (!divName || allowedDivisions.includes(divName)) return;
+                 
+                 // Restore this bunk's schedule
+                 const sourceSchedule = existingScheduleSnapshot[bunkName];
+                 if (sourceSchedule && Array.isArray(sourceSchedule)) {
+                     // Deep copy assignments to current state
+                     window.scheduleAssignments[bunkName] = sourceSchedule.map(s => s ? {...s} : null);
+                     
+                     // Re-register resource usage
+                     sourceSchedule.forEach((slotData, slotIdx) => {
+                         if (!slotData) return;
+                         
+                         // 1. Register Field Usage (Capacity Counting)
+                         // If it's a real activity/field
+                         if (slotData.field && slotData.field !== TRANSITION_TYPE) {
+                             const activityName = slotData._activity || slotData.field;
+                             
+                             // Determine if we need to register
+                             // (Logic borrowed from registerSingleSlotUsage checks)
+                             registerSingleSlotUsage(
+                                 slotIdx,
+                                 slotData.field, // Field Name
+                                 divName,
+                                 bunkName,
+                                 activityName,
+                                 fieldUsageBySlot,
+                                 activityProperties
+                             );
+                             
+                             // 2. Register Location Usage
+                             const locName = getLocationForActivity(activityName) || (activityProperties[slotData.field]?.location);
+                             if (locName) {
+                                 registerActivityAtLocation(activityName, locName, [slotIdx], divName);
+                             }
+                             
+                             // 3. Optional: Explicit Global Lock to prevent sharing (if strictly required)
+                             // Since we registered slot usage above, standard capacity checks should handle it.
+                         }
+                     });
+                     restoredCount++;
+                 }
+            });
+            console.log(`[RESTORE] Preserved schedules for ${restoredCount} bunks in non-target divisions.`);
+        }
+
+        // =========================================================================
         // STEP 2: Process Bunk Overrides (Pinned specific bunks)
         // - Personal Trips: Treated as pinned (no field usage)
         // - Sports: Register field usage for capacity tracking
@@ -749,6 +827,12 @@
             if (!divName || slots.length === 0) {
                 console.warn(`[BunkOverride] Skipping ${bunk} - no division found or no slots`);
                 return;
+            }
+
+            // ★★★ PARTIAL GEN CHECK ★★★
+            if (allowedDivisions && !allowedDivisions.includes(divName)) {
+                // Skip processing override for locked division (it's already restored in step 1.5)
+                return; 
             }
 
             console.log(`[BunkOverride] ${bunk}: ${activityName} (${overrideType}) @ ${override.startTime}-${override.endTime}`);
@@ -923,6 +1007,12 @@
 
         electiveTiles.forEach(elective => {
             const electiveDivision = elective.division;
+            
+            // ★★★ PARTIAL GEN CHECK ★★★
+            // Even if we aren't generating for this division, we need to respect its elective locks.
+            // If it's a locked division, its activities are already in 'existingScheduleSnapshot' and locked there.
+            // However, GlobalFieldLocks logic here ensures cross-division exclusion.
+            
             const activities = elective.electiveActivities || [];
             const startMin = Utils.parseTimeToMinutes(elective.startTime);
             const endMin = Utils.parseTimeToMinutes(elective.endTime);
@@ -989,6 +1079,12 @@
             const divName = item.division;
             const bunkList = divisions[divName]?.bunks || [];
             if (bunkList.length === 0) return;
+
+            // ★★★ PARTIAL GEN CHECK ★★★
+            // If we are in partial generation mode, SKIP items for locked divisions.
+            if (allowedDivisions && !allowedDivisions.includes(divName)) {
+                return;
+            }
 
             const sMin = Utils.parseTimeToMinutes(item.startTime);
             const eMin = Utils.parseTimeToMinutes(item.endTime);
@@ -1248,7 +1344,7 @@
             specialActivityNames,
             yesterdayHistory,
             fieldUsageBySlot
-        });
+        }, allowedDivisions); // Pass allowedDivisions for filtering
 
         schedulableSlotBlocks.push(...smartTileBlocks);
         console.log(`[SmartTile] Added ${smartTileBlocks.length} blocks to scheduler`);
