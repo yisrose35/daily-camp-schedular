@@ -1,11 +1,11 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v3.9.1 (Added Smart Merge for Multi-Tenant Safety)
+// FIXED VERSION: v3.9.2 (Fixed Auth Detection for Smart Merge)
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v3.9.1 (MULTI-TENANT SAFE)");
+  console.log("☁️ Campistry Cloud Bridge v3.9.2 (MULTI-TENANT SAFE)");
 
   // DIRECT CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -22,7 +22,7 @@
   };
 
   // ============================================================================
-  // UI FEEDBACK (TOAST NOTIFICATIONS)
+  // UI FEEDBACK
   // ============================================================================
   function showToast(message, type = 'info') {
       let toast = document.getElementById('cloud-toast');
@@ -38,15 +38,13 @@
           document.body.appendChild(toast);
       }
       
-      // Colors
-      if (type === 'success') toast.style.backgroundColor = '#10B981'; // Green
-      else if (type === 'error') toast.style.backgroundColor = '#EF4444'; // Red
-      else toast.style.backgroundColor = '#3B82F6'; // Blue
+      if (type === 'success') toast.style.backgroundColor = '#10B981';
+      else if (type === 'error') toast.style.backgroundColor = '#EF4444';
+      else toast.style.backgroundColor = '#3B82F6';
 
       toast.textContent = message;
       toast.style.opacity = '1';
       
-      // Auto-hide after 3s
       if (window._toastTimer) clearTimeout(window._toastTimer);
       window._toastTimer = setTimeout(() => {
           toast.style.opacity = '0';
@@ -54,7 +52,7 @@
   }
 
   // ============================================================================
-  // CAMP ID MANAGEMENT (MULTI-TENANT AWARE)
+  // CAMP ID MANAGEMENT
   // ============================================================================
   let _cachedCampId = null;
   let _userRole = null;
@@ -294,8 +292,6 @@
             let finalSchedules = localSchedules;
 
             // ★★★ SMART MERGE FOR MULTI-TENANT ★★★
-            // If we are a team member (not owner), we must fetch the latest state 
-            // and merge to avoid overwriting divisions we don't own/see.
             if (_isTeamMember && _userRole !== 'owner') {
                 console.log("☁️ [MERGE] Multi-tenant detected. Fetching latest cloud state to merge...");
                 try {
@@ -305,10 +301,25 @@
                     
                     // 2. Identify divisions I am allowed to edit
                     let myDivisions = [];
+                    
+                    // Primary: AccessControl
                     if (window.AccessControl && window.AccessControl.getUserDivisions) {
-                         myDivisions = window.AccessControl.getUserDivisions();
-                    } else if (window._campistryMembership && window._campistryMembership.subdivision_ids) {
-                         // Fallback logic could go here, but AccessControl is preferred
+                         const acDivs = window.AccessControl.getUserDivisions();
+                         if (acDivs && acDivs.length > 0) myDivisions = acDivs;
+                    } 
+                    
+                    // Fallback 1: Scheduler Manager (most reliable during active scheduling)
+                    if (myDivisions.length === 0 && window.SubdivisionScheduleManager && window.SubdivisionScheduleManager.getDivisionsToSchedule) {
+                         const schedDivs = window.SubdivisionScheduleManager.getDivisionsToSchedule();
+                         if (schedDivs && schedDivs.length > 0) {
+                             console.log("☁️ [MERGE] Retrieved divisions from SubdivisionManager fallback.");
+                             myDivisions = schedDivs;
+                         }
+                    }
+
+                    // Fallback 2: Direct Membership Object
+                    if (myDivisions.length === 0 && window._campistryMembership && window._campistryMembership.assigned_divisions) {
+                        myDivisions = window._campistryMembership.assigned_divisions;
                     }
 
                     if (myDivisions && myDivisions.length > 0) {
@@ -318,19 +329,14 @@
                          finalSchedules = { ...cloudSchedules };
 
                          // 4. Overlay Local State (My Work)
-                         // Only overwrite the keys for divisions I own. 
-                         // Preserve everything else from the cloud.
                          myDivisions.forEach(divId => {
-                             // Even if local is undefined for this div (e.g. cleared), 
-                             // we take the local state if we own it.
-                             // But usually we just want to update what we have.
                              if (localSchedules[divId] !== undefined) {
                                  finalSchedules[divId] = localSchedules[divId];
                              }
                          });
                          console.log("☁️ [MERGE] Merge complete. Saving combined state.");
                     } else {
-                        console.warn("☁️ [MERGE] No authorized divisions found. Defaulting to full overwrite.");
+                        console.warn("☁️ [MERGE] No authorized divisions found after all checks. Defaulting to full overwrite.");
                     }
                 } catch (mergeErr) {
                     console.error("☁️ [MERGE] Failed. Aborting save to protect data.", mergeErr);
