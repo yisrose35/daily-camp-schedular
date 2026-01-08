@@ -1,11 +1,11 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v3.9.3 (Cache Busting & Strict Merge)
+// FIXED VERSION: v3.9.4 (Fixes 400 Error & Cache Headers)
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v3.9.3 (MULTI-TENANT SAFE + NO CACHE)");
+  console.log("☁️ Campistry Cloud Bridge v3.9.4 (MULTI-TENANT SAFE)");
 
   // DIRECT CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -242,21 +242,30 @@
 
       console.log("☁️ Loading from cloud for camp:", campId);
 
-      // ★★★ CACHE BUSTING ADDED (_t) ★★★
-      const url = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}&select=state&_t=${Date.now()}`;
+      // ★★★ FIX: REMOVED _t PARAMETER (CAUSED 400 BAD REQUEST) ★★★
+      const url = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}&select=state`;
+      
       const response = await fetch(url, {
         method: 'GET',
         headers: {
           'apikey': SUPABASE_KEY,
           'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache', // Use header for cache busting instead
+          'Pragma': 'no-cache'
         }
       });
 
-      if (!response.ok) return null;
+      if (!response.ok) {
+          console.error("☁️ Load failed:", response.status, response.statusText);
+          return null;
+      }
       const data = await response.json();
       return (data && data.length > 0) ? data[0].state : null;
-    } catch (e) { return null; }
+    } catch (e) { 
+        console.error("☁️ Load exception:", e);
+        return null; 
+    }
   }
 
   async function saveToCloud(state) {
@@ -296,60 +305,52 @@
             if (_isTeamMember && _userRole !== 'owner') {
                 console.log("☁️ [MERGE] Multi-tenant detected. Fetching latest cloud state to merge...");
                 try {
-                    // 1. Fetch latest "truth" from cloud (CACHE BUSTED)
+                    // 1. Fetch latest "truth" from cloud
                     const currentCloudState = await loadFromCloud();
                     
-                    // SAFETY: If cloud state is null but we expect it to exist, proceed with caution.
-                    // However, we default to {} if missing.
-                    const cloudSchedules = currentCloudState?.daily_schedules || {};
-                    
-                    // 2. Identify divisions I am allowed to edit
-                    let myDivisions = [];
-                    
-                    // Primary: AccessControl
-                    if (window.AccessControl && window.AccessControl.getUserDivisions) {
-                         const acDivs = window.AccessControl.getUserDivisions();
-                         if (acDivs && acDivs.length > 0) myDivisions = acDivs;
-                    } 
-                    
-                    // Fallback 1: Scheduler Manager (most reliable during active scheduling)
-                    if (myDivisions.length === 0 && window.SubdivisionScheduleManager && window.SubdivisionScheduleManager.getDivisionsToSchedule) {
-                         const schedDivs = window.SubdivisionScheduleManager.getDivisionsToSchedule();
-                         if (schedDivs && schedDivs.length > 0) {
-                             console.log("☁️ [MERGE] Retrieved divisions from SubdivisionManager fallback.");
-                             myDivisions = schedDivs;
-                         }
-                    }
+                    if (currentCloudState) {
+                        const cloudSchedules = currentCloudState.daily_schedules || {};
+                        
+                        // 2. Identify divisions I am allowed to edit
+                        let myDivisions = [];
+                        
+                        // Primary: AccessControl
+                        if (window.AccessControl && window.AccessControl.getUserDivisions) {
+                             const acDivs = window.AccessControl.getUserDivisions();
+                             if (acDivs && acDivs.length > 0) myDivisions = acDivs;
+                        } 
+                        
+                        // Fallback 1: Scheduler Manager
+                        if (myDivisions.length === 0 && window.SubdivisionScheduleManager && window.SubdivisionScheduleManager.getDivisionsToSchedule) {
+                             const schedDivs = window.SubdivisionScheduleManager.getDivisionsToSchedule();
+                             if (schedDivs && schedDivs.length > 0) myDivisions = schedDivs;
+                        }
 
-                    // Fallback 2: Direct Membership Object
-                    if (myDivisions.length === 0 && window._campistryMembership && window._campistryMembership.assigned_divisions) {
-                        myDivisions = window._campistryMembership.assigned_divisions;
-                    }
+                        // Fallback 2: Direct Membership Object
+                        if (myDivisions.length === 0 && window._campistryMembership && window._campistryMembership.assigned_divisions) {
+                            myDivisions = window._campistryMembership.assigned_divisions;
+                        }
 
-                    if (myDivisions && myDivisions.length > 0) {
-                         console.log(`☁️ [MERGE] Authorized divisions: [${myDivisions.join(', ')}]`);
-                         
-                         // 3. Start with Cloud State (Background Truth)
-                         finalSchedules = { ...cloudSchedules };
+                        if (myDivisions && myDivisions.length > 0) {
+                             console.log(`☁️ [MERGE] Authorized divisions: [${myDivisions.join(', ')}]`);
+                             
+                             // 3. Start with Cloud State (Background Truth)
+                             finalSchedules = { ...cloudSchedules };
 
-                         // 4. Overlay Local State (My Work)
-                         // CRITICAL: Ensure we don't accidentally wipe data if local is empty/undefined for a key.
-                         // But if local has NEW data, we want it.
-                         // Pessimistic Approach: Only overwrite keys that are in myDivisions AND exist in localSchedules
-                         myDivisions.forEach(divId => {
-                             // Use loose equality for key matching (string vs number)
-                             // localSchedules might use "1", myDivisions might use 1
-                             if (localSchedules[divId] !== undefined) {
-                                 finalSchedules[divId] = localSchedules[divId];
-                             }
-                         });
-                         
-                         const cloudKeys = Object.keys(cloudSchedules);
-                         const finalKeys = Object.keys(finalSchedules);
-                         console.log(`☁️ [MERGE] Cloud had ${cloudKeys.length} divs. Merged result has ${finalKeys.length} divs.`);
-                         
+                             // 4. Overlay Local State (My Work)
+                             myDivisions.forEach(divId => {
+                                 // Only apply my local data if I actually have data for this division
+                                 if (localSchedules[divId] !== undefined) {
+                                     finalSchedules[divId] = localSchedules[divId];
+                                 }
+                             });
+                             
+                             console.log(`☁️ [MERGE] Success. Combined ${Object.keys(cloudSchedules).length} cloud divs with local changes.`);
+                        } else {
+                            console.warn("☁️ [MERGE] No authorized divisions found. Merging failed.");
+                        }
                     } else {
-                        console.warn("☁️ [MERGE] No authorized divisions found after all checks. Defaulting to full overwrite.");
+                        console.warn("☁️ [MERGE] Cloud state fetch returned null. Defaulting to local state.");
                     }
                 } catch (mergeErr) {
                     console.error("☁️ [MERGE] Failed. Aborting save to protect data.", mergeErr);
