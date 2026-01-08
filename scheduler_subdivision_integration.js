@@ -1,11 +1,11 @@
 // ============================================================================
-// scheduler_subdivision_integration.js (v1.1 - FIXED)
+// scheduler_subdivision_integration.js (v1.3 - MERGED SNAPSHOT & UI)
 // ============================================================================
 // INTEGRATION LAYER: Connects SubdivisionScheduleManager with the scheduler
 //
-// FIXES in v1.1:
-// - Fixed isInitialized getter being called as function
-// - Added proper permission checks for scheduler role
+// UPDATE v1.3:
+// - Merged v1.2 Snapshot logic with v1.1 UI and Helper functions
+// - Robust initialization waiting
 // ============================================================================
 
 (function() {
@@ -34,47 +34,83 @@
         // Replace with wrapped version
         window.runSkeletonOptimizer = async function(manualSkeleton, externalOverrides) {
             console.log('\n' + '='.repeat(70));
-            console.log('★★★ MULTI-SCHEDULER MODE ACTIVE ★★★');
+            console.log('★★★ MULTI-SCHEDULER MODE INITIALIZING ★★★');
             console.log('='.repeat(70));
 
-            // Initialize subdivision manager if needed
-            // FIXED: isInitialized is a getter property, not a function
-            if (!window.SubdivisionScheduleManager?.isInitialized) {
-                console.log('[Integration] Initializing SubdivisionScheduleManager...');
-                await window.SubdivisionScheduleManager?.initialize?.();
+            // 1. ROBUST INITIALIZATION CHECK
+            let retries = 0;
+            while (!window.SubdivisionScheduleManager && retries < 20) {
+                console.log(`[Integration] Waiting for SubdivisionScheduleManager (Attempt ${retries+1}/20)...`);
+                await new Promise(r => setTimeout(r, 100));
+                retries++;
             }
 
             const manager = window.SubdivisionScheduleManager;
+            // FIXED: isInitialized is a getter, check existence first
             if (!manager) {
-                console.warn('[Integration] SubdivisionScheduleManager not available, running without subdivision awareness');
+                console.warn('[Integration] SubdivisionScheduleManager not available, running standard mode.');
                 return _originalRunSkeletonOptimizer(manualSkeleton, externalOverrides);
             }
 
+            // Ensure initialized
+            if (manager.ensureInitialized) {
+                await manager.ensureInitialized();
+            } else if (!manager.isInitialized && manager.initialize) {
+                await manager.initialize();
+            }
+
+            // 2. PREPARE MULTI-TENANT DATA
+            
             // Get current user's divisions
             const divisionsToSchedule = manager.getDivisionsToSchedule();
-            console.log(`[Integration] Divisions to schedule: ${divisionsToSchedule.join(', ') || 'none'}`);
+            console.log(`[Integration] 🎯 Active Divisions: ${divisionsToSchedule.join(', ') || 'NONE'}`);
 
-            // Get locked subdivisions
+            // Get locked subdivisions info
             const lockedSubs = manager.getOtherLockedSubdivisions();
-            console.log(`[Integration] ${lockedSubs.length} other subdivision(s) have locked schedules`);
+            console.log(`[Integration] 🔒 ${lockedSubs.length} background subdivision(s) detected.`);
 
-            // Log what's locked
-            lockedSubs.forEach(sub => {
-                console.log(`  🔒 ${sub.subdivisionName}: ${sub.divisions.join(', ')}`);
-            });
+            // ★★★ CRITICAL: Get Snapshot of existing schedules for background divisions
+            let scheduleSnapshot = null;
+            if (manager.getLockedScheduleSnapshot) {
+                scheduleSnapshot = manager.getLockedScheduleSnapshot();
+                const snapshotCount = Object.keys(scheduleSnapshot).length;
+                console.log(`[Integration] 📸 Captured snapshot of ${snapshotCount} locked bunks.`);
+            } else {
+                console.warn('[Integration] getLockedScheduleSnapshot not found on manager (old version?)');
+            }
 
-            // Filter skeleton to only include user's divisions
+            // Register global field locks (Capacity constraints)
+            if (manager.registerLockedClaimsInGlobalLocks) {
+                manager.registerLockedClaimsInGlobalLocks();
+            } else {
+                // Fallback to legacy restore if new method missing
+                manager.restoreLockedSchedules();
+            }
+
+            // 3. PRE-GENERATION EXTRAS (Smart Allocation)
+            applySmartResourceAllocation(manager, divisionsToSchedule);
+
+            // 4. FILTER SKELETON
             const filteredSkeleton = filterSkeletonByDivisions(manualSkeleton, divisionsToSchedule);
-            console.log(`[Integration] Filtered skeleton: ${filteredSkeleton.length} blocks (from ${manualSkeleton.length})`);
+            console.log(`[Integration] 🧹 Filtered skeleton from ${manualSkeleton.length} to ${filteredSkeleton.length} items.`);
 
-            // Pre-generation setup
-            preGenerationSetup(manager, divisionsToSchedule);
+            // 5. EXECUTE CORE SCHEDULER
+            // Pass extra args: allowedDivisions, scheduleSnapshot
+            const result = _originalRunSkeletonOptimizer(
+                filteredSkeleton, 
+                externalOverrides, 
+                divisionsToSchedule, 
+                scheduleSnapshot
+            );
 
-            // Run the original optimizer with filtered skeleton
-            const result = _originalRunSkeletonOptimizer(filteredSkeleton, externalOverrides);
+            // 6. POST-GENERATION CLEANUP
+            manager.markCurrentUserSubdivisionsAsDraft();
+            
+            // Clear temporary state
+            delete window._currentSchedulingDivisions;
+            delete window._smartResourceAllocation;
 
-            // Post-generation cleanup
-            postGenerationCleanup(manager);
+            console.log('[Integration] ✅ Schedule generation complete.');
 
             return result;
         };
@@ -104,43 +140,6 @@
     }
 
     /**
-     * Pre-generation setup
-     */
-    function preGenerationSetup(manager, divisionsToSchedule) {
-        console.log('\n[Integration] Pre-generation setup...');
-
-        // 1. Restore locked schedules to window.scheduleAssignments
-        console.log('[Integration] Restoring locked schedules...');
-        manager.restoreLockedSchedules();
-
-        // 2. Register locked claims in GlobalFieldLocks
-        console.log('[Integration] Registering locked claims in GlobalFieldLocks...');
-        manager.registerLockedClaimsInGlobalLocks();
-
-        // 3. Apply smart resource allocation recommendations
-        console.log('[Integration] Calculating smart resource allocation...');
-        applySmartResourceAllocation(manager, divisionsToSchedule);
-
-        // 4. Store which divisions we're scheduling for validation
-        window._currentSchedulingDivisions = new Set(divisionsToSchedule);
-    }
-
-    /**
-     * Post-generation cleanup
-     */
-    function postGenerationCleanup(manager) {
-        console.log('\n[Integration] Post-generation cleanup...');
-
-        // 1. Mark current user's subdivisions as draft
-        manager.markCurrentUserSubdivisionsAsDraft();
-
-        // 2. Clear temporary state
-        delete window._currentSchedulingDivisions;
-
-        console.log('[Integration] Schedule generation complete');
-    }
-
-    /**
      * Apply smart resource allocation
      * Adjusts solver behavior to leave room for other schedulers
      */
@@ -148,6 +147,8 @@
         // Get all slots (assume first and last from unified times)
         const slots = window.unifiedTimes?.map((_, i) => i) || [];
         if (slots.length === 0) return;
+
+        if (!manager.getSmartResourceAllocation) return;
 
         const allocation = manager.getSmartResourceAllocation(slots);
         
@@ -175,12 +176,14 @@
      */
     function getAdjustedFieldCapacity(fieldName, slots) {
         const manager = window.SubdivisionScheduleManager;
-        // FIXED: isInitialized is a getter property
         if (!manager?.isInitialized) {
             return null; // No adjustment
         }
 
-        return manager.getRemainingFieldCapacity(fieldName, slots);
+        if (manager.getRemainingFieldCapacity) {
+            return manager.getRemainingFieldCapacity(fieldName, slots);
+        }
+        return null;
     }
 
     /**
@@ -188,13 +191,15 @@
      */
     function isFieldBlockedByLockedSubdivision(fieldName, slots, divisionContext) {
         const manager = window.SubdivisionScheduleManager;
-        // FIXED: isInitialized is a getter property
         if (!manager?.isInitialized) {
             return false;
         }
 
-        const claimInfo = manager.isFieldClaimedByOthers(fieldName, slots, divisionContext);
-        return claimInfo.claimed;
+        if (manager.isFieldClaimedByOthers) {
+            const claimInfo = manager.isFieldClaimedByOthers(fieldName, slots, divisionContext);
+            return claimInfo.claimed;
+        }
+        return false;
     }
 
     // =========================================================================
@@ -267,7 +272,6 @@
             return;
         }
 
-        // FIXED: isInitialized is a getter property
         if (!manager.isInitialized) {
             container.innerHTML = '<p>Loading subdivision status...</p>';
             // Try to initialize
@@ -279,6 +283,7 @@
 
         const summary = manager.getSubdivisionStatusSummary();
 
+        // Restore beautiful CSS from v1.1
         const html = `
             <style>
                 .subdivision-status-panel {
@@ -457,7 +462,6 @@
      */
     function canEditBunk(bunkName) {
         const manager = window.SubdivisionScheduleManager;
-        // FIXED: isInitialized is a getter property
         if (!manager?.isInitialized) {
             return true; // Allow if manager not ready
         }
@@ -484,7 +488,6 @@
     function getBunkEditStatus(bunkName) {
         const manager = window.SubdivisionScheduleManager;
         
-        // FIXED: isInitialized is a getter property
         if (!manager?.isInitialized) {
             return { canEdit: true, reason: null };
         }
@@ -543,7 +546,6 @@
         } else {
             // Wait for AccessControl
             const checkInterval = setInterval(() => {
-                // FIXED: isInitialized is a getter property
                 if (window.AccessControl?.isInitialized) {
                     clearInterval(checkInterval);
                     window.SubdivisionScheduleManager?.initialize?.();
@@ -587,6 +589,6 @@
         filterSkeletonByDivisions
     };
 
-    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.1');
+    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.3 (Merged Fix)');
 
 })();
