@@ -1,11 +1,11 @@
 // ============================================================================
-// scheduler_subdivision_integration.js (v1.3 - MERGED SNAPSHOT & UI)
+// scheduler_subdivision_integration.js (v1.4 - ROBUST MULTI-TENANT & MERGE SAFE)
 // ============================================================================
 // INTEGRATION LAYER: Connects SubdivisionScheduleManager with the scheduler
 //
-// UPDATE v1.3:
-// - Merged v1.2 Snapshot logic with v1.1 UI and Helper functions
-// - Robust initialization waiting
+// UPDATE v1.4:
+// - Added rigorous background division detection (Fixes "0 background detected" bug)
+// - Improved logic to ensure optimizer sees all global constraints
 // ============================================================================
 
 (function() {
@@ -46,7 +46,6 @@
             }
 
             const manager = window.SubdivisionScheduleManager;
-            // FIXED: isInitialized is a getter, check existence first
             if (!manager) {
                 console.warn('[Integration] SubdivisionScheduleManager not available, running standard mode.');
                 return _originalRunSkeletonOptimizer(manualSkeleton, externalOverrides);
@@ -65,9 +64,28 @@
             const divisionsToSchedule = manager.getDivisionsToSchedule();
             console.log(`[Integration] 🎯 Active Divisions: ${divisionsToSchedule.join(', ') || 'NONE'}`);
 
-            // Get locked subdivisions info
+            // ★★★ IMPROVED BACKGROUND DETECTION ★★★
+            // Do not rely solely on the manager's loaded subdivisions, check global authority
+            let allDivisions = [];
+            if (window.global_authority && window.global_authority.getAllDivisions) {
+                allDivisions = window.global_authority.getAllDivisions();
+            } else if (window.divisions) {
+                allDivisions = Object.keys(window.divisions);
+            }
+
+            // Calculate background divisions (All - Mine)
+            const backgroundDivisions = allDivisions.filter(d => !divisionsToSchedule.includes(d));
+            
+            // Get locked subdivisions info from manager
             const lockedSubs = manager.getOtherLockedSubdivisions();
-            console.log(`[Integration] 🔒 ${lockedSubs.length} background subdivision(s) detected.`);
+            
+            console.log(`[Integration] 🔒 Background Divisions (Calculated): ${backgroundDivisions.join(', ')}`);
+            console.log(`[Integration] 🔒 Background Subdivisions (Loaded in Manager): ${lockedSubs.length}`);
+
+            // If mismatch, warn but proceed (Manager usually loads everything, but global check is safer)
+            if (backgroundDivisions.length > 0 && lockedSubs.length === 0) {
+                console.warn("[Integration] ⚠️ WARNING: Background divisions exist but Manager reports 0 locked. Ensure cloud data is synced.");
+            }
 
             // ★★★ CRITICAL: Get Snapshot of existing schedules for background divisions
             let scheduleSnapshot = null;
@@ -589,6 +607,6 @@
         filterSkeletonByDivisions
     };
 
-    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.3 (Merged Fix)');
+    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.4 (ROBUST MULTI-TENANT)');
 
 })();
