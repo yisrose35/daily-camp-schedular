@@ -1,16 +1,16 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v3.9 (Added Daily Data Sync Handlers)
+// FIXED VERSION: v3.9.1 (Added Smart Merge for Multi-Tenant Safety)
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v3.9 (MULTI-TENANT MODE)");
+  console.log("☁️ Campistry Cloud Bridge v3.9.1 (MULTI-TENANT SAFE)");
 
   // DIRECT CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
   const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI";
-   
+    
   const TABLE = "camp_state";
   const UNIFIED_CACHE_KEY = "CAMPISTRY_UNIFIED_STATE";
   const DAILY_DATA_KEY = "campDailyData_v1"; 
@@ -60,22 +60,15 @@
   let _userRole = null;
   let _isTeamMember = false;
 
-  /**
-   * Get the camp ID for the current user
-   * - For camp owners: returns their user ID
-   * - For invited team members: returns the camp they were invited to
-   */
   function getCampId() {
     if (_cachedCampId) return _cachedCampId;
     
-    // Check localStorage cache first (set during invite acceptance or previous login)
     const cachedUserId = localStorage.getItem('campistry_user_id');
     if (cachedUserId && cachedUserId !== 'demo_camp_001') {
       _cachedCampId = cachedUserId;
       return _cachedCampId;
     }
     
-    // Try to get from Supabase session (fallback for camp owners)
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
@@ -84,7 +77,6 @@
           if (storedSession) {
             const parsed = JSON.parse(storedSession);
             if (parsed?.user?.id) {
-              // Don't cache yet - we need to verify if this user is a team member
               return parsed.user.id;
             }
           }
@@ -95,16 +87,11 @@
     return "demo_camp_001";
   }
 
-  /**
-   * Determine the correct camp ID for a user
-   * Called after authentication to check if user is a team member
-   */
   async function determineUserCampId(userId) {
     if (!userId) return null;
     
     console.log("☁️ Determining camp ID for user:", userId);
     
-    // First, check if user owns any camps
     try {
       const { data: ownedCamp, error: ownedError } = await window.supabase
         .from('camps')
@@ -116,19 +103,18 @@
         console.log("☁️ User is a camp owner");
         _isTeamMember = false;
         _userRole = 'owner';
-        return userId; // Camp owner - their ID is the camp ID
+        return userId; 
       }
     } catch (e) {
       console.warn("☁️ Error checking camp ownership:", e);
     }
     
-    // Not a camp owner - check if they're an invited team member
     try {
       const { data: membership, error: memberError } = await window.supabase
         .from('camp_users')
         .select('camp_id, role, subdivision_ids, accepted_at')
         .eq('user_id', userId)
-        .not('accepted_at', 'is', null) // Only accepted invites
+        .not('accepted_at', 'is', null)
         .maybeSingle();
       
       if (membership && !memberError) {
@@ -138,41 +124,26 @@
         });
         _isTeamMember = true;
         _userRole = membership.role;
-        
-        // Store user's membership info for access control
         window._campistryMembership = membership;
-        
-        return membership.camp_id; // Return the camp they belong to
+        return membership.camp_id;
       }
     } catch (e) {
       console.warn("☁️ Error checking team membership:", e);
     }
     
-    // User is neither owner nor team member
-    // This could be a new user who just signed up (not via invite)
     console.log("☁️ User is a new camp owner (first time)");
     _isTeamMember = false;
     _userRole = 'owner';
     return userId;
   }
 
-  /**
-   * Update the camp ID cache
-   * Now properly handles team members vs owners
-   */
   async function updateCampIdCache(userId) {
     if (!userId) return;
-    
-    // Determine the correct camp ID
     const campId = await determineUserCampId(userId);
-    
     if (campId) {
       _cachedCampId = campId;
       localStorage.setItem('campistry_user_id', campId);
-      
-      // Also store user's own ID for reference
       localStorage.setItem('campistry_auth_user_id', userId);
-      
       console.log("☁️ Camp ID cached:", campId, _isTeamMember ? "(team member)" : "(owner)");
     }
   }
@@ -186,16 +157,10 @@
     delete window._campistryMembership;
   }
 
-  /**
-   * Get user's role in the current camp
-   */
   function getUserRole() {
     return _userRole;
   }
 
-  /**
-   * Check if current user is a team member (not owner)
-   */
   function isTeamMember() {
     return _isTeamMember;
   }
@@ -207,7 +172,7 @@
   let _cloudSyncPending = false;
   let _syncInProgress = false;
   let _syncTimeout = null;
-  let _dailyDataDirty = false; // ★★★ NEW TRACKER FOR DAILY DATA DIRTY STATE ★★★
+  let _dailyDataDirty = false;
   let _initialized = false;
   const SCHEMA_VERSION = 2;
 
@@ -219,10 +184,8 @@
     } catch (e) { _memoryCache = {}; }
     return _memoryCache;
   }
-   
+    
   function setLocalCache(state) {
-    // PROTECT LOCAL WORK: Only block overwrite if daily data specifically is dirty
-    // The previous check was too broad (_cloudSyncPending included settings changes)
     if (state.daily_schedules) {
         if (!_dailyDataDirty) {
             console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
@@ -230,11 +193,8 @@
                 const currentRaw = localStorage.getItem(DAILY_DATA_KEY);
                 const newRaw = JSON.stringify(state.daily_schedules);
                 
-                // Only write and notify if actually different
                 if (currentRaw !== newRaw) {
                     localStorage.setItem(DAILY_DATA_KEY, newRaw);
-                    
-                    // 🔥 CRITICAL: Notify UI to reload immediately on other devices
                     setTimeout(() => {
                         console.log("🔥 Dispatching UI refresh for new schedule data...");
                         window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
@@ -315,10 +275,8 @@
       
       if (campId === "demo_camp_001") return false;
 
-      // Check if user has permission to save (team members with viewer role cannot)
       if (_userRole === 'viewer') {
           showToast("❌ View-only access", "error");
-          console.warn("☁️ User has viewer role, cannot save");
           return false;
       }
 
@@ -328,17 +286,64 @@
       const stateToSave = { ...state };
       delete stateToSave._importTimestamp;
 
-      // 🟢 BUNDLE SCHEDULES
+      // 🟢 BUNDLE SCHEDULES WITH SMART MERGE
       try {
         const schedulesRaw = localStorage.getItem(DAILY_DATA_KEY);
         if (schedulesRaw) {
-            stateToSave.daily_schedules = JSON.parse(schedulesRaw);
+            let localSchedules = JSON.parse(schedulesRaw);
+            let finalSchedules = localSchedules;
+
+            // ★★★ SMART MERGE FOR MULTI-TENANT ★★★
+            // If we are a team member (not owner), we must fetch the latest state 
+            // and merge to avoid overwriting divisions we don't own/see.
+            if (_isTeamMember && _userRole !== 'owner') {
+                console.log("☁️ [MERGE] Multi-tenant detected. Fetching latest cloud state to merge...");
+                try {
+                    // 1. Fetch latest "truth" from cloud
+                    const currentCloudState = await loadFromCloud();
+                    const cloudSchedules = currentCloudState?.daily_schedules || {};
+                    
+                    // 2. Identify divisions I am allowed to edit
+                    let myDivisions = [];
+                    if (window.AccessControl && window.AccessControl.getUserDivisions) {
+                         myDivisions = window.AccessControl.getUserDivisions();
+                    } else if (window._campistryMembership && window._campistryMembership.subdivision_ids) {
+                         // Fallback logic could go here, but AccessControl is preferred
+                    }
+
+                    if (myDivisions && myDivisions.length > 0) {
+                         console.log(`☁️ [MERGE] Authorized divisions: [${myDivisions.join(', ')}]`);
+                         
+                         // 3. Start with Cloud State (Background Truth)
+                         finalSchedules = { ...cloudSchedules };
+
+                         // 4. Overlay Local State (My Work)
+                         // Only overwrite the keys for divisions I own. 
+                         // Preserve everything else from the cloud.
+                         myDivisions.forEach(divId => {
+                             // Even if local is undefined for this div (e.g. cleared), 
+                             // we take the local state if we own it.
+                             // But usually we just want to update what we have.
+                             if (localSchedules[divId] !== undefined) {
+                                 finalSchedules[divId] = localSchedules[divId];
+                             }
+                         });
+                         console.log("☁️ [MERGE] Merge complete. Saving combined state.");
+                    } else {
+                        console.warn("☁️ [MERGE] No authorized divisions found. Defaulting to full overwrite.");
+                    }
+                } catch (mergeErr) {
+                    console.error("☁️ [MERGE] Failed. Aborting save to protect data.", mergeErr);
+                    showToast("❌ Sync Error - Save Aborted", "error");
+                    return false;
+                }
+            }
+
+            stateToSave.daily_schedules = finalSchedules;
             console.log("☁️ Generated schedules bundled into save.");
         }
       } catch(e) { console.warn("Bundle error:", e); }
 
-      // For team members, use the camp owner's ID as owner_id
-      // The camp_id IS the owner's user ID
       const ownerId = campId;
 
       // 1. TRY PATCH FIRST
@@ -362,12 +367,12 @@
           if (patchedData && patchedData.length > 0) {
               console.log("☁️ [REST] ✅ PATCH Success");
               showToast("✅ Schedule Saved!", "success");
-              _dailyDataDirty = false; // ★★★ CLEAR DIRTY FLAG ON SUCCESS ★★★
+              _dailyDataDirty = false; 
               return true;
           }
       }
 
-      // 2. IF PATCH FAILED -> POST (only for owners creating new camps)
+      // 2. IF PATCH FAILED -> POST (only for owners)
       if (!_isTeamMember) {
           const postUrl = `${SUPABASE_URL}/rest/v1/${TABLE}`;
           const postResponse = await fetch(postUrl, {
@@ -388,7 +393,7 @@
           if (postResponse.ok) {
             console.log("☁️ [REST] ✅ POST Success");
             showToast("✅ Schedule Saved!", "success");
-            _dailyDataDirty = false; // ★★★ CLEAR DIRTY FLAG ON SUCCESS ★★★
+            _dailyDataDirty = false;
             return true;
           } else {
             console.error("Save Failed:", postResponse.status);
@@ -407,12 +412,11 @@
       return false;
     }
   }
-   
+    
   // ============================================================================
   // RESET & IMPORT
   // ============================================================================
   window.resetCloudState = async function() {
-    // Only owners can reset
     if (_isTeamMember) {
         showToast("❌ Only camp owners can reset data", "error");
         return false;
@@ -439,7 +443,7 @@
   // ============================================================================
   // SYNC LOGIC & INIT
   // ============================================================================
-   
+    
   function scheduleCloudSync() {
     if (_syncTimeout) clearTimeout(_syncTimeout);
     _syncTimeout = setTimeout(async () => {
@@ -452,7 +456,7 @@
       _syncInProgress = false;
     }, 2000);
   }
-   
+    
   async function syncNow() {
     if (_syncTimeout) clearTimeout(_syncTimeout);
     _cloudSyncPending = false;
@@ -465,7 +469,6 @@
   async function initialize() {
     if (_initialized) return;
     
-    // Get current user and determine their camp
     const user = await getUser();
     if (user) {
         await updateCampIdCache(user.id);
@@ -480,7 +483,6 @@
             if (cloudState) {
                 const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
                 const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
-                // Always sync on load if cloud is newer, regardless of minor local setting changes
                 if (cloudTime > localTime) {
                     setLocalCache({ ...localData, ...cloudState });
                     showToast("☁️ Data updated from Cloud", "info");
@@ -515,7 +517,6 @@
   // PUBLIC API
   window.loadGlobalSettings = () => getLocalCache();
   window.saveGlobalSettings = (key, value) => {
-    // Check if user has write permission
     if (_userRole === 'viewer') {
         console.warn("☁️ Viewer cannot save settings");
         return getLocalCache();
@@ -530,7 +531,6 @@
     return state;
   };
 
-  // ★★★ NEW: DAILY DATA HANDLERS (Fixes Schedule Saving) ★★★
   window.loadCurrentDailyData = function() {
     try {
         const raw = localStorage.getItem(DAILY_DATA_KEY);
@@ -548,9 +548,8 @@
         data[key] = value;
         localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(data));
         
-        // Trigger the cloud sync to bundle this data
         _cloudSyncPending = true;
-        _dailyDataDirty = true; // ★★★ MARK DAILY DATA AS DIRTY ★★★
+        _dailyDataDirty = true; 
         scheduleCloudSync();
     } catch(e) { console.error("Daily Save Error:", e); }
   };
@@ -561,8 +560,7 @@
     _cloudSyncPending = true;
     scheduleCloudSync();
   };
-  
-  // Expose role info for other modules
+   
   window.getCampistryUserRole = getUserRole;
   window.isCampistryTeamMember = isTeamMember;
   window.getCampId = getCampId;
@@ -571,8 +569,6 @@
     if(window.supabase) {
         window.supabase.auth.onAuthStateChange(async (event, session) => {
             if (event === 'SIGNED_IN' && session) {
-                // IMPORTANT: Don't immediately overwrite camp ID
-                // Let determineUserCampId figure out the correct one
                 await updateCampIdCache(session.user.id);
                 _initialized = false; 
                 await initialize();
