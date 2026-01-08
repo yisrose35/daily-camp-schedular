@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v12 - MULTI-TENANT SNAPSHOT SUPPORT)
+// scheduler_core_main.js (FIXED v13 - MERGED SCHEDULE GENERATION)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
@@ -532,7 +532,7 @@
      */
     window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v12 - PARTIAL GENERATION SUPPORT) ★★★");
+        console.log("★★★ OPTIMIZER STARTED (v13 - MULTI-TENANT MERGE SUPPORT) ★★★");
         if (allowedDivisions) {
             console.log(`★★★ PARTIAL MODE ACTIVE: Generating for [${allowedDivisions.join(', ')}] only ★★★`);
         }
