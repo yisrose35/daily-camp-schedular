@@ -1,18 +1,16 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v11 - STRICT AVAILABILITY + BUNK SORTING + RAINY DAY CHECKS)
+// scheduler_core_main.js (FIXED v12 - MULTI-TENANT SNAPSHOT SUPPORT)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
-// 2. Load Data & Apply Daily Overrides (Strict Availability)
-// 3. Process Bunk Overrides (pinned specific bunks)
+// 2. Load Data & Apply Daily Overrides
+// 3. Process Bunk Overrides
 // 4. Process Elective Tiles
 // 5. Process Skeleton Blocks
 // 6. ★ SPECIALTY LEAGUES FIRST ★
 // 7. ★ REGULAR LEAGUES SECOND ★
 // 8. Process Smart Tiles
 // 9. Run Total Solver
-//
-// This ensures NO field double-booking across divisions!
 // ============================================================================
 
 (function() {
@@ -534,9 +532,9 @@
      */
     window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v11 - STRICT AVAILABILITY + BUNK SORTING) ★★★");
+        console.log("★★★ OPTIMIZER STARTED (v12 - PARTIAL GENERATION SUPPORT) ★★★");
         if (allowedDivisions) {
-            console.log(`★★★ PARTIAL GENERATION MODE: ${allowedDivisions.join(', ')} ★★★`);
+            console.log(`★★★ PARTIAL MODE ACTIVE: Generating for [${allowedDivisions.join(', ')}] only ★★★`);
         }
         console.log("=".repeat(70));
 
@@ -743,58 +741,61 @@
         // =========================================================================
         // ★★★ STEP 1.5: RESTORE EXISTING SCHEDULE FOR LOCKED DIVISIONS ★★★
         // =========================================================================
+        // This is the key fix for the "Multi-Scheduler" requirement.
         if (allowedDivisions && existingScheduleSnapshot) {
-            console.log("\n[STEP 1.5] Restoring locked divisions from snapshot...");
+            console.log(`\n[STEP 1.5] Restoring background schedules from snapshot...`);
             let restoredCount = 0;
             
             Object.keys(existingScheduleSnapshot).forEach(bunkName => {
-                 // Find division for this bunk
+                 // 1. Find division for this bunk
                  const divName = Object.keys(divisions).find(d => divisions[d].bunks?.includes(bunkName));
                  
-                 // If division not found, or IS allowed (meaning we regenerate it), skip restore
-                 if (!divName || allowedDivisions.includes(divName)) return;
+                 // 2. Safety Check: If this division IS allowed to be scheduled, we should NOT restore it from snapshot.
+                 // We want to regenerate it.
+                 if (divName && allowedDivisions.includes(divName)) {
+                     // console.log(`   Skipping restore for ${bunkName} (Target Division: ${divName})`);
+                     return; 
+                 }
                  
-                 // Restore this bunk's schedule
+                 // 3. Restore this bunk's schedule
                  const sourceSchedule = existingScheduleSnapshot[bunkName];
                  if (sourceSchedule && Array.isArray(sourceSchedule)) {
-                     // Deep copy assignments to current state
-                     window.scheduleAssignments[bunkName] = sourceSchedule.map(s => s ? {...s} : null);
+                     // Ensure the target array exists
+                     if (!window.scheduleAssignments[bunkName]) {
+                         window.scheduleAssignments[bunkName] = new Array(window.unifiedTimes.length);
+                     }
+
+                     // Deep copy assignments
+                     window.scheduleAssignments[bunkName] = sourceSchedule.map(s => s ? {...s, _locked: true} : null);
                      
-                     // Re-register resource usage
+                     // 4. Re-register resource usage (Crucial for blocking fields)
                      sourceSchedule.forEach((slotData, slotIdx) => {
                          if (!slotData) return;
                          
-                         // 1. Register Field Usage (Capacity Counting)
-                         // If it's a real activity/field
+                         // Register Field Usage
                          if (slotData.field && slotData.field !== TRANSITION_TYPE) {
                              const activityName = slotData._activity || slotData.field;
-                             
-                             // Determine if we need to register
-                             // (Logic borrowed from registerSingleSlotUsage checks)
-                             registerSingleSlotUsage(
+                             window.registerSingleSlotUsage(
                                  slotIdx,
-                                 slotData.field, // Field Name
-                                 divName,
+                                 slotData.field, 
+                                 divName || 'Unknown',
                                  bunkName,
                                  activityName,
                                  fieldUsageBySlot,
                                  activityProperties
                              );
                              
-                             // 2. Register Location Usage
+                             // Register Location Usage
                              const locName = getLocationForActivity(activityName) || (activityProperties[slotData.field]?.location);
                              if (locName) {
-                                 registerActivityAtLocation(activityName, locName, [slotIdx], divName);
+                                 registerActivityAtLocation(activityName, locName, [slotIdx], divName || 'Unknown');
                              }
-                             
-                             // 3. Optional: Explicit Global Lock to prevent sharing (if strictly required)
-                             // Since we registered slot usage above, standard capacity checks should handle it.
                          }
                      });
                      restoredCount++;
                  }
             });
-            console.log(`[RESTORE] Preserved schedules for ${restoredCount} bunks in non-target divisions.`);
+            console.log(`[RESTORE] Successfully locked down ${restoredCount} bunks from other divisions.`);
         }
 
         // =========================================================================
