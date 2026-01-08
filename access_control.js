@@ -245,9 +245,9 @@
                     _directDivisionAssignments.length === 0) {
                     console.warn("🔐 ⚠️ SCHEDULER HAS NO SUBDIVISION OR DIVISION ASSIGNMENTS!");
                     console.warn("🔐 The camp owner needs to:");
-                    console.warn("🔐   1. Create subdivisions in Dashboard → Team & Access");
-                    console.warn("🔐   2. Assign this scheduler to subdivisions");
-                    console.warn("🔐   OR add 'assigned_divisions' directly to this user's camp_users record");
+                    console.warn("🔐    1. Create subdivisions in Dashboard → Team & Access");
+                    console.warn("🔐    2. Assign this scheduler to subdivisions");
+                    console.warn("🔐    OR add 'assigned_divisions' directly to this user's camp_users record");
                 }
                 
                 return;
@@ -633,8 +633,20 @@
         return currentLevel >= requiredLevel;
     }
 
+    // =========================================================================
+    // GETTERS & HELPERS
+    // =========================================================================
+
     function getEditableDivisions() {
         return [..._editableDivisions];
+    }
+
+    // NEW: For Scheduler UI
+    function getUserManagedDivisions() {
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
+            return null; // Implies ALL
+        }
+        return getEditableDivisions();
     }
 
     function getGeneratableDivisions() {
@@ -1489,6 +1501,7 @@
         isTeamMember,
         
         getEditableDivisions,
+        getUserManagedDivisions, // Added export
         getGeneratableDivisions,
         getCurrentRole,
         getCurrentUserInfo,
