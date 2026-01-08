@@ -19,13 +19,13 @@
     // =========================================================================
     // Structure: { slotIndex: { fieldName: lockInfo } }
     // lockInfo: { 
-    //   lockedBy: 'specialty_league' | 'regular_league' | 'pinned' | 'elective',
-    //   lockType: 'global' | 'division',  // NEW for electives
-    //   allowedDivision: string | null,   // NEW for electives
-    //   leagueName: string,
-    //   division: string,
-    //   activity: string,
-    //   timestamp: number
+    //    lockedBy: 'specialty_league' | 'regular_league' | 'pinned' | 'elective',
+    //    lockType: 'global' | 'division',  // NEW for electives
+    //    allowedDivision: string | null,   // NEW for electives
+    //    leagueName: string,
+    //    division: string,
+    //    activity: string,
+    //    timestamp: number
     // }
     // =========================================================================
     
@@ -71,7 +71,7 @@
             // Check if already locked
             if (this._locks[slotIdx][normalizedField]) {
                 const existing = this._locks[slotIdx][normalizedField];
-                console.warn(`[GLOBAL_LOCKS] ⚠️ CONFLICT: "${fieldName}" at slot ${slotIdx} already locked by ${existing.lockedBy} (${existing.leagueName || existing.activity || existing.reason})`);
+                // console.warn(`[GLOBAL_LOCKS] ⚠️ CONFLICT: "${fieldName}" at slot ${slotIdx} already locked by ${existing.lockedBy} (${existing.leagueName || existing.activity || existing.reason})`);
                 return false;
             }
             
@@ -83,7 +83,7 @@
                 timestamp: Date.now()
             };
             
-            console.log(`[GLOBAL_LOCKS] 🔒 LOCKED: "${fieldName}" at slot ${slotIdx} by ${lockInfo.lockedBy} (${lockInfo.leagueName || lockInfo.activity})`);
+            // console.log(`[GLOBAL_LOCKS] 🔒 LOCKED: "${fieldName}" at slot ${slotIdx} by ${lockInfo.lockedBy} (${lockInfo.leagueName || lockInfo.activity})`);
         }
         
         return true;
@@ -115,11 +115,11 @@
             if (this._locks[slotIdx][normalizedField]) {
                 const existing = this._locks[slotIdx][normalizedField];
                 if (existing.lockType === 'global') {
-                    console.warn(`[GLOBAL_LOCKS] ⚠️ Cannot add division lock for "${fieldName}" at slot ${slotIdx} - already GLOBALLY locked by ${existing.lockedBy}`);
+                    // console.warn(`[GLOBAL_LOCKS] ⚠️ Cannot add division lock for "${fieldName}" at slot ${slotIdx} - already GLOBALLY locked by ${existing.lockedBy}`);
                     return false;
                 }
                 // If it's another division lock, warn but allow override
-                console.warn(`[GLOBAL_LOCKS] ⚠️ Overwriting division lock for "${fieldName}" at slot ${slotIdx}`);
+                // console.warn(`[GLOBAL_LOCKS] ⚠️ Overwriting division lock for "${fieldName}" at slot ${slotIdx}`);
             }
             
             // Apply division-specific lock
@@ -132,7 +132,7 @@
                 timestamp: Date.now()
             };
             
-            console.log(`[GLOBAL_LOCKS] 🎯 DIVISION LOCK: "${fieldName}" at slot ${slotIdx} - reserved for ${allowedDivision}`);
+            // console.log(`[GLOBAL_LOCKS] 🎯 DIVISION LOCK: "${fieldName}" at slot ${slotIdx} - reserved for ${allowedDivision}`);
         }
         
         return true;
@@ -146,7 +146,7 @@
      * @param {string} fieldName - The field to check
      * @param {number[]} slots - Array of slot indices to check
      * @param {string} [divisionContext] - Optional: the division asking. For division locks,
-     *                                     if this matches allowedDivision, field is NOT locked.
+     * if this matches allowedDivision, field is NOT locked.
      * @returns {object|null} - Lock info if locked, null if available
      */
     GlobalFieldLocks.isFieldLocked = function(fieldName, slots, divisionContext) {
