@@ -1,10 +1,10 @@
 // ============================================================================
-// scheduler_subdivision_integration.js (v1.6 - SAFE SNAPSHOT MERGE)
+// scheduler_subdivision_integration.js (v1.7 - ROBUST DATA LOOKUP)
 // ============================================================================
 // INTEGRATION LAYER: Connects SubdivisionScheduleManager with the scheduler
 //
-// UPDATE v1.6:
-// - Added safety checks for manual data injection
+// UPDATE v1.7:
+// - Fixed manual data lookup when window.current_date_str is missing
 // ============================================================================
 
 (function() {
@@ -94,17 +94,30 @@
                 
                 try {
                     let dailyData = null;
-                    // Try to get data from current session or storage
+                    
+                    // 1. Try Memory (most reliable if app is running)
                     if (window.camp_schedules && window.currentDayIndex !== undefined) {
                         const dateKey = Object.keys(window.camp_schedules)[window.currentDayIndex];
                         if (dateKey) dailyData = window.camp_schedules[dateKey];
                     }
                     
+                    // 2. Try LocalStorage (using current_date_str)
                     if (!dailyData && window.loadCurrentDailyData) {
                         const allDaily = window.loadCurrentDailyData();
-                        // Assuming current context:
+                        
                         if (window.current_date_str && allDaily[window.current_date_str]) {
                             dailyData = allDaily[window.current_date_str];
+                        } 
+                        // 3. Fallback: Take the most recent entry from local storage if standard lookups failed
+                        else {
+                            const keys = Object.keys(allDaily).sort();
+                            if (keys.length > 0) {
+                                // Assume we are editing the latest or specific date (fallback)
+                                // Better than nothing for a safety net
+                                const latestKey = keys[keys.length - 1]; 
+                                console.log(`[Integration] ⚠️ Guessing date context: ${latestKey}`);
+                                dailyData = allDaily[latestKey];
+                            }
                         }
                     }
 
@@ -642,6 +655,6 @@
         filterSkeletonByDivisions
     };
 
-    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.6 (SAFE SNAPSHOT MERGE)');
+    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.7 (ROBUST DATA LOOKUP)');
 
 })();
