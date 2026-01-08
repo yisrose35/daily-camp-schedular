@@ -1,12 +1,5 @@
 // ============================================================================
 // scheduler_ui.js (COMBINED: CAMPISTRY + ELECTIVE DISPLAY + LEAGUE SOURCE OF TRUTH)
-//
-// FIXES:
-// ✓ Waits for Campistry cloud system to be ready
-// ✓ Connects UI directly to 'window.leagueAssignments' (The League Engine Output).
-// ✓ Elective tiles now display like leagues (combined cells showing activities)
-// ✓ No longer relies on "scanning bunks" for league data.
-// ✓ Guarantees the UI shows exactly what the League Generator created.
 // ============================================================================
 
 // Wait for Campistry cloud system
@@ -121,6 +114,12 @@
 
     function editCell(bunk, startMin, endMin, current) {
         if (!bunk) return;
+        
+        // CHECK PERMISSIONS FOR EDITING THIS BUNK
+        if (window.AccessControl && !window.AccessControl.canEditBunk(bunk)) {
+            alert("You do not have permission to edit this schedule.");
+            return;
+        }
 
         // 1. Get user input
         const newName = prompt(`Edit activity for ${bunk}\n${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}\n(Enter CLEAR or FREE to empty)`, current);
@@ -276,7 +275,15 @@
     function renderStaggeredView(container) {
         container.innerHTML = "";
         const divisions = window.divisions || {};
-        const availableDivisions = window.availableDivisions || [];
+        
+        // Use user-managed divisions if available, otherwise show all available
+        let divisionsToShow = window.availableDivisions || [];
+        if (window.AccessControl) {
+             const userDivs = window.AccessControl.getUserManagedDivisions();
+             // If user manages specific divisions, we might want to prioritize/highlight them
+             // but typically viewing all is allowed. The edit restriction is handled in editCell.
+        }
+
         const daily = window.loadCurrentDailyData?.() || {};
         const manualSkeleton = daily.manualSkeleton || [];
 
@@ -289,7 +296,7 @@
         wrapper.className = "schedule-view-wrapper";
         container.appendChild(wrapper);
 
-        availableDivisions.forEach((div) => {
+        divisionsToShow.forEach((div) => {
             const bunks = (divisions[div]?.bunks || []).slice().sort((a, b) =>
                 String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
             );
@@ -499,6 +506,58 @@
 
     function initScheduleSystem() {
         reconcileOrRenderSaved();
+        
+        // HOOK UP GENERATOR BUTTON
+        const genBtn = document.getElementById("btn-generate-schedule");
+        if (genBtn) {
+            genBtn.onclick = async () => {
+                if (window.AccessControl && !window.AccessControl.canRunGenerator()) {
+                    alert("You do not have permission to run the generator.");
+                    return;
+                }
+                
+                genBtn.disabled = true;
+                genBtn.textContent = "Generating...";
+                
+                try {
+                    // 1. Get permissions
+                    const allowedDivisions = window.AccessControl 
+                        ? window.AccessControl.getUserManagedDivisions() 
+                        : null;
+                        
+                    // 2. Capture snapshot for locking
+                    let snapshot = null;
+                    if (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0) {
+                        snapshot = JSON.parse(JSON.stringify(window.scheduleAssignments));
+                    }
+                    
+                    // 3. Get inputs
+                    const daily = window.loadCurrentDailyData?.() || {};
+                    const manualSkeleton = daily.manualSkeleton || [];
+                    const externalOverrides = []; // Simplified for now
+                    
+                    // 4. Run!
+                    if (window.runSkeletonOptimizer) {
+                        await window.runSkeletonOptimizer(
+                            manualSkeleton, 
+                            externalOverrides, 
+                            allowedDivisions, 
+                            snapshot
+                        );
+                        alert("Schedule Generated Successfully!");
+                    } else {
+                        alert("Error: Scheduler Core not loaded.");
+                    }
+                } catch (e) {
+                    console.error(e);
+                    alert("An error occurred during generation.");
+                } finally {
+                    genBtn.disabled = false;
+                    genBtn.textContent = "Generate Schedule";
+                    updateTable();
+                }
+            };
+        }
     }
 
     window.updateTable = updateTable;
