@@ -1,11 +1,11 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v3.9.2 (Fixed Auth Detection for Smart Merge)
+// FIXED VERSION: v3.9.3 (Cache Busting & Strict Merge)
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v3.9.2 (MULTI-TENANT SAFE)");
+  console.log("☁️ Campistry Cloud Bridge v3.9.3 (MULTI-TENANT SAFE + NO CACHE)");
 
   // DIRECT CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -242,7 +242,8 @@
 
       console.log("☁️ Loading from cloud for camp:", campId);
 
-      const url = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}&select=state`;
+      // ★★★ CACHE BUSTING ADDED (_t) ★★★
+      const url = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}&select=state&_t=${Date.now()}`;
       const response = await fetch(url, {
         method: 'GET',
         headers: {
@@ -295,8 +296,11 @@
             if (_isTeamMember && _userRole !== 'owner') {
                 console.log("☁️ [MERGE] Multi-tenant detected. Fetching latest cloud state to merge...");
                 try {
-                    // 1. Fetch latest "truth" from cloud
+                    // 1. Fetch latest "truth" from cloud (CACHE BUSTED)
                     const currentCloudState = await loadFromCloud();
+                    
+                    // SAFETY: If cloud state is null but we expect it to exist, proceed with caution.
+                    // However, we default to {} if missing.
                     const cloudSchedules = currentCloudState?.daily_schedules || {};
                     
                     // 2. Identify divisions I am allowed to edit
@@ -329,12 +333,21 @@
                          finalSchedules = { ...cloudSchedules };
 
                          // 4. Overlay Local State (My Work)
+                         // CRITICAL: Ensure we don't accidentally wipe data if local is empty/undefined for a key.
+                         // But if local has NEW data, we want it.
+                         // Pessimistic Approach: Only overwrite keys that are in myDivisions AND exist in localSchedules
                          myDivisions.forEach(divId => {
+                             // Use loose equality for key matching (string vs number)
+                             // localSchedules might use "1", myDivisions might use 1
                              if (localSchedules[divId] !== undefined) {
                                  finalSchedules[divId] = localSchedules[divId];
                              }
                          });
-                         console.log("☁️ [MERGE] Merge complete. Saving combined state.");
+                         
+                         const cloudKeys = Object.keys(cloudSchedules);
+                         const finalKeys = Object.keys(finalSchedules);
+                         console.log(`☁️ [MERGE] Cloud had ${cloudKeys.length} divs. Merged result has ${finalKeys.length} divs.`);
+                         
                     } else {
                         console.warn("☁️ [MERGE] No authorized divisions found after all checks. Defaulting to full overwrite.");
                     }
