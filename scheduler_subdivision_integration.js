@@ -1,11 +1,10 @@
 // ============================================================================
-// scheduler_subdivision_integration.js (v1.5 - MANUAL DATA INJECTION)
+// scheduler_subdivision_integration.js (v1.6 - SAFE SNAPSHOT MERGE)
 // ============================================================================
 // INTEGRATION LAYER: Connects SubdivisionScheduleManager with the scheduler
 //
-// UPDATE v1.5:
-// - Manually loads background division data if Manager misses it (Fixes double-booking)
-// - Ensures snapshot contains data for ALL background divisions
+// UPDATE v1.6:
+// - Added safety checks for manual data injection
 // ============================================================================
 
 (function() {
@@ -103,9 +102,6 @@
                     
                     if (!dailyData && window.loadCurrentDailyData) {
                         const allDaily = window.loadCurrentDailyData();
-                        // Assume first key if simple structure, or try to find today
-                        // Ideally we need the date string. If 'manualSkeleton' is passed, 
-                        // the optimizer usually knows the date context.
                         // Assuming current context:
                         if (window.current_date_str && allDaily[window.current_date_str]) {
                             dailyData = allDaily[window.current_date_str];
@@ -114,11 +110,11 @@
 
                     if (dailyData) {
                         backgroundDivisions.forEach(divId => {
+                            // Check if dailyData[divId] exists and is array (standard format)
                             if (dailyData[divId] && Array.isArray(dailyData[divId])) {
                                 console.log(`[Integration] 💉 Injecting ${dailyData[divId].length} blocks for Division ${divId}`);
-                                // Flatten structure: snapshot[bunkName] = [slot1_act, slot2_act...]
                                 dailyData[divId].forEach(block => {
-                                    if (block.bunk_id && block.period && block.activity) {
+                                    if (block && block.bunk_id && block.period && block.activity) {
                                         if (!scheduleSnapshot[block.bunk_id]) scheduleSnapshot[block.bunk_id] = {};
                                         scheduleSnapshot[block.bunk_id][block.period] = block.activity;
                                     }
@@ -126,6 +122,8 @@
                             }
                         });
                         console.log(`[Integration] 📸 Manual Snapshot Size: ${Object.keys(scheduleSnapshot).length} bunks`);
+                    } else {
+                        console.log("[Integration] No daily data found to inject.");
                     }
                 } catch (e) {
                     console.error("[Integration] Failed to manually inject background data:", e);
@@ -142,15 +140,6 @@
                 manager.restoreLockedSchedules();
             }
             
-            // ★★★ FORCE LOCK IN GLOBAL FIELD LOCKS IF EMPTY ★★★
-            // If manager failed to register locks but we have data, do it manually
-            if (window.GlobalFieldLocks && window.GlobalFieldLocks.reset && Object.keys(scheduleSnapshot).length > 0) {
-                // Note: We can't easily check if GlobalFieldLocks is empty without internal access,
-                // but we can trust the manager usually. If paranoid, we could iterate scheduleSnapshot
-                // and call GlobalFieldLocks.addLock() manually here.
-                // For now, let's assume registerLockedClaimsInGlobalLocks works IF the snapshot has data.
-            }
-
             // 3. PRE-GENERATION EXTRAS (Smart Allocation)
             applySmartResourceAllocation(manager, divisionsToSchedule);
 
@@ -653,6 +642,6 @@
         filterSkeletonByDivisions
     };
 
-    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.5 (MANUAL DATA INJECTION)');
+    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.6 (SAFE SNAPSHOT MERGE)');
 
 })();
