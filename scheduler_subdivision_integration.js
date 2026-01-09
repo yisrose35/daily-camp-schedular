@@ -1,12 +1,11 @@
 // ============================================================================
-// scheduler_subdivision_integration.js (v1.3 - PROTECTED LOCAL STORAGE)
+// scheduler_subdivision_integration.js (v1.4 - CORRECT STORAGE LOCATION)
 // ============================================================================
 // Integrates multi-scheduler functionality with the core schedule generator.
 // 
-// KEY FIX in v1.3:
-// - Calls protectLocalData() before generation
-// - Calls unprotectLocalData() only after cloud sync completes
-// - This prevents the race condition where cloud refresh overwrites local data
+// KEY FIX in v1.4:
+// - Saves scheduleAssignments INSIDE the date key, not at root level
+// - Structure: campDailyData_v1[dateKey].scheduleAssignments
 // ============================================================================
 
 (function() {
@@ -51,7 +50,7 @@
     }
 
     // =========================================================================
-    // SAVE SCHEDULE TO LOCALSTORAGE
+    // ★★★ CRITICAL FIX: SAVE TO CORRECT LOCATION ★★★
     // =========================================================================
 
     function saveScheduleToLocalStorage() {
@@ -65,28 +64,40 @@
         console.log(`[Integration] 💾 Saving scheduleAssignments for ${dateKey}...`);
         
         try {
+            // Load existing daily data
             let dailyData = {};
             try {
                 const raw = localStorage.getItem(DAILY_DATA_KEY);
                 if (raw) dailyData = JSON.parse(raw);
             } catch (e) { /* ignore */ }
             
+            // ★★★ CRITICAL: Initialize the DATE KEY object, not root ★★★
             if (!dailyData[dateKey]) {
                 dailyData[dateKey] = {};
             }
             
-            // Deep copy scheduleAssignments
+            // ★★★ CRITICAL: Save INSIDE the date key ★★★
             dailyData[dateKey].scheduleAssignments = JSON.parse(JSON.stringify(window.scheduleAssignments));
             
-            // Also save skeleton if available
+            // Also save skeleton inside the date key
             if (window.skeleton && window.skeleton.length > 0) {
                 dailyData[dateKey].skeleton = JSON.parse(JSON.stringify(window.skeleton));
             }
             
+            // Save to localStorage
             localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(dailyData));
             
             const bunkCount = Object.keys(window.scheduleAssignments).length;
-            console.log(`[Integration] 💾 Saved ${bunkCount} bunks to localStorage`);
+            console.log(`[Integration] 💾 Saved ${bunkCount} bunks to localStorage[${dateKey}].scheduleAssignments`);
+            
+            // Verify the save
+            const verifyRaw = localStorage.getItem(DAILY_DATA_KEY);
+            const verifyData = JSON.parse(verifyRaw);
+            if (verifyData[dateKey]?.scheduleAssignments) {
+                console.log(`[Integration] ✅ Verified: ${Object.keys(verifyData[dateKey].scheduleAssignments).length} bunks saved correctly`);
+            } else {
+                console.error('[Integration] ❌ Verification failed - data not found at correct path!');
+            }
             
         } catch (e) {
             console.error('[Integration] Error saving to localStorage:', e);
@@ -104,7 +115,7 @@
 
             const SSM = window.SubdivisionScheduleManager;
             
-            // ★★★ PROTECT LOCAL DATA BEFORE STARTING ★★★
+            // Protect local data before starting
             if (typeof window.protectLocalData === 'function') {
                 window.protectLocalData();
             }
@@ -172,16 +183,13 @@
                 // Post-generation cleanup
                 console.log('\n[Integration] Post-generation cleanup...');
                 
-                // ★★★ SAVE TO LOCALSTORAGE IMMEDIATELY ★★★
+                // ★★★ SAVE TO CORRECT LOCATION ★★★
                 saveScheduleToLocalStorage();
                 
-                // Mark subdivisions as draft (which will trigger cloud sync)
+                // Mark subdivisions as draft
                 SSM.markCurrentUserSubdivisionsAsDraft();
                 
                 console.log('[Integration] Schedule generation complete');
-                
-                // ★★★ DON'T UNPROTECT HERE - let cloud sync do it ★★★
-                // The cloud_storage_bridge will unprotect after sync completes
 
             } else {
                 // Standard mode
@@ -191,7 +199,7 @@
                 // Save to localStorage
                 saveScheduleToLocalStorage();
                 
-                // Unprotect in standard mode (no subdivision system to handle it)
+                // Unprotect in standard mode
                 if (typeof window.unprotectLocalData === 'function') {
                     setTimeout(() => {
                         window.unprotectLocalData();
@@ -213,6 +221,8 @@
             if (!raw) return;
             
             const dailyData = JSON.parse(raw);
+            
+            // ★★★ Load from INSIDE the date key ★★★
             const dateData = dailyData[dateKey];
             
             if (dateData?.scheduleAssignments) {
@@ -227,6 +237,11 @@
                 }
                 
                 console.log(`[Integration] Loaded existing schedule: ${Object.keys(dateData.scheduleAssignments).length} bunks`);
+            }
+            
+            // Also load skeleton if available
+            if (dateData?.skeleton) {
+                window.skeleton = dateData.skeleton;
             }
         } catch (e) {
             console.warn('[Integration] Error loading existing schedule:', e);
@@ -297,15 +312,13 @@
         }
     });
 
-    // ★★★ UPDATED: Only reload if NOT protected ★★★
     window.addEventListener('campistry-daily-data-updated', function() {
-        // This event shouldn't trigger during protected state
-        // But just in case, check if we need to reload
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         try {
             const raw = localStorage.getItem(DAILY_DATA_KEY);
             if (raw) {
                 const dailyData = JSON.parse(raw);
+                // ★★★ Load from INSIDE the date key ★★★
                 const dateData = dailyData[dateKey];
                 if (dateData?.scheduleAssignments) {
                     window.scheduleAssignments = dateData.scheduleAssignments;
@@ -329,16 +342,31 @@
         saveScheduleToLocalStorage,
         
         debugState: function() {
+            const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
             console.log('\n=== Scheduler Integration State ===');
             console.log('Hooked:', _isHooked);
-            console.log('Current Date:', window.currentScheduleDate);
-            console.log('scheduleAssignments bunks:', Object.keys(window.scheduleAssignments || {}).length);
+            console.log('Current Date:', dateKey);
+            console.log('window.scheduleAssignments bunks:', Object.keys(window.scheduleAssignments || {}).length);
+            
+            // Check localStorage structure
+            try {
+                const raw = localStorage.getItem(DAILY_DATA_KEY);
+                if (raw) {
+                    const data = JSON.parse(raw);
+                    console.log('localStorage root keys:', Object.keys(data));
+                    if (data[dateKey]) {
+                        console.log(`localStorage[${dateKey}] keys:`, Object.keys(data[dateKey]));
+                        if (data[dateKey].scheduleAssignments) {
+                            console.log(`localStorage[${dateKey}].scheduleAssignments:`, Object.keys(data[dateKey].scheduleAssignments).length, 'bunks');
+                        }
+                    }
+                }
+            } catch(e) {}
             
             const SSM = window.SubdivisionScheduleManager;
             if (SSM?.isInitialized) {
                 console.log('SubdivisionScheduleManager: initialized');
                 console.log('Divisions to schedule:', SSM.getDivisionsToSchedule());
-                console.log('Other locked:', SSM.getOtherLockedSubdivisions().map(s => s.subdivisionName));
             }
         }
     };
@@ -351,6 +379,6 @@
 
     setTimeout(installHooks, 100);
 
-    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.3 (with localStorage protection)');
+    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.4 (CORRECT STORAGE LOCATION)');
 
 })();
