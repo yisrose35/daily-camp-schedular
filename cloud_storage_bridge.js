@@ -1,17 +1,18 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v4.1 (Multi-Scheduler Merge Support - Bug Fixes)
+// FIXED VERSION: v4.2 (Multi-Scheduler Merge + Proper Local Storage)
 // =================================================================
-// KEY FIXES in v4.1:
+// KEY FIXES in v4.2:
 // 1. Fixed "Cannot assign to read only property" error in merge
 // 2. Properly deep-clones data before merging
 // 3. Skips non-date keys in daily data iteration
+// 4. ★★★ CRITICAL: Properly unbundles scheduleAssignments to localStorage
 // =================================================================
 
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v4.1 (MULTI-SCHEDULER MERGE MODE - FIXED)");
+  console.log("☁️ Campistry Cloud Bridge v4.2 (MULTI-SCHEDULER MERGE + LOCAL STORAGE FIX)");
 
   // DIRECT CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -247,29 +248,65 @@
     } catch (e) { _memoryCache = {}; }
     return _memoryCache;
   }
-   
+  
+  // ============================================================================
+  // ★★★ CRITICAL FIX: PROPERLY UNBUNDLE DAILY SCHEDULES ★★★
+  // ============================================================================
   function setLocalCache(state) {
     if (state.daily_schedules) {
-        if (!_dailyDataDirty) {
-            console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
+        console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
+        try {
+            // ★★★ KEY FIX: Always write to localStorage, regardless of _dailyDataDirty
+            // The dirty flag should only prevent OVERWRITING during active editing,
+            // not during initial load from cloud
+            const newDailyData = state.daily_schedules;
+            
+            // Get existing local data
+            let existingData = {};
             try {
-                const currentRaw = localStorage.getItem(DAILY_DATA_KEY);
-                const newRaw = JSON.stringify(state.daily_schedules);
-                
-                if (currentRaw !== newRaw) {
-                    localStorage.setItem(DAILY_DATA_KEY, newRaw);
-                    
-                    setTimeout(() => {
-                        console.log("🔥 Dispatching UI refresh for new schedule data...");
-                        window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
-                        if (window.initScheduleSystem) window.initScheduleSystem();
-                        if (window.updateTable) window.updateTable();
-                    }, 50);
+                const existingRaw = localStorage.getItem(DAILY_DATA_KEY);
+                if (existingRaw) {
+                    existingData = JSON.parse(existingRaw);
                 }
-            } catch(e) { console.error("Failed to save extracted schedules", e); }
-        } else {
-            console.log("☁️ [SYNC] Skipping daily schedule overwrite - Local changes pending upload.");
+            } catch (e) { /* ignore */ }
+            
+            // Merge: cloud data as base, preserve any local-only changes
+            const mergedData = { ...newDailyData };
+            
+            // If we have dirty local data, merge it on top
+            if (_dailyDataDirty) {
+                console.log("☁️ [SYNC] Merging local changes with cloud data...");
+                for (const [dateKey, dateData] of Object.entries(existingData)) {
+                    if (!mergedData[dateKey]) {
+                        mergedData[dateKey] = dateData;
+                    } else if (dateData.scheduleAssignments) {
+                        // Merge scheduleAssignments by user's divisions
+                        mergedData[dateKey].scheduleAssignments = mergeScheduleAssignments(
+                            mergedData[dateKey].scheduleAssignments || {},
+                            dateData.scheduleAssignments,
+                            _userDivisions
+                        );
+                    }
+                }
+            }
+            
+            // ★★★ ALWAYS save to localStorage
+            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(mergedData));
+            console.log("☁️ [SYNC] Daily schedules saved to localStorage");
+            
+            // Trigger UI refresh
+            setTimeout(() => {
+                console.log("🔥 Dispatching UI refresh for new schedule data...");
+                window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
+                if (window.initScheduleSystem) window.initScheduleSystem();
+                if (window.updateTable) window.updateTable();
+            }, 50);
+            
+        } catch(e) { 
+            console.error("☁️ Failed to save extracted schedules:", e); 
         }
+        
+        // Remove from state object (don't store in unified cache)
         delete state.daily_schedules; 
     }
 
@@ -325,7 +362,7 @@
   }
 
   // ============================================================================
-  // ★★★ FIXED: MERGE SCHEDULE ASSIGNMENTS BY DIVISION ★★★
+  // ★★★ MERGE SCHEDULE ASSIGNMENTS BY DIVISION ★★★
   // ============================================================================
   
   /**
@@ -397,7 +434,6 @@
   
   /**
    * Merge daily data with proper division-aware merging
-   * FIXED: Properly handles nested objects and avoids read-only errors
    */
   async function mergeDailyDataForSave(localDailyData) {
     // Load current cloud state
@@ -408,9 +444,8 @@
     const merged = safeDeepClone(cloudDaily);
     
     for (const [key, value] of Object.entries(localDailyData || {})) {
-      // ★★★ FIX: Skip non-date keys (like timestamps, metadata, etc.)
+      // Skip non-date keys (like timestamps, metadata, etc.)
       if (!isDateKey(key)) {
-        // For non-date keys, just copy the value
         merged[key] = safeDeepClone(value);
         continue;
       }
@@ -418,7 +453,7 @@
       const dateKey = key;
       const dateData = value;
       
-      // Skip if dateData is not an object (safety check)
+      // Skip if dateData is not an object
       if (typeof dateData !== 'object' || dateData === null) {
         merged[dateKey] = dateData;
         continue;
@@ -752,7 +787,9 @@
     return state;
   };
 
-  // Daily Data Handlers
+  // ============================================================================
+  // ★★★ CRITICAL: DAILY DATA HANDLERS ★★★
+  // ============================================================================
   window.loadCurrentDailyData = function() {
     try {
         const raw = localStorage.getItem(DAILY_DATA_KEY);
@@ -774,6 +811,18 @@
         _dailyDataDirty = true;
         scheduleCloudSync();
     } catch(e) { console.error("Daily Save Error:", e); }
+  };
+  
+  // ★★★ NEW: Force refresh from cloud ★★★
+  window.forceRefreshFromCloud = async function() {
+    console.log("☁️ Force refreshing from cloud...");
+    const cloudState = await loadFromCloud();
+    if (cloudState) {
+        _dailyDataDirty = false; // Allow overwrite
+        setLocalCache(cloudState);
+        return true;
+    }
+    return false;
   };
 
   window.syncNow = syncNow;
