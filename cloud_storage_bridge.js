@@ -1,13 +1,21 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v3.9.5 (PROPER BUNK-LEVEL MERGE)
+// VERSION: v4.0 (SIMPLIFIED MULTI-SCHEDULER)
+// =================================================================
+// 
+// ARCHITECTURE:
+// - Each scheduler works ONLY on their divisions (others don't exist)
+// - Save is SIMPLE: Add my bunks to cloud, preserve others
+// - No complex merge logic - just append!
+// - Field conflicts prevented by GlobalFieldLocks.loadFromCloud()
+//
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v3.9.5 (BUNK-LEVEL MERGE FIX)");
+  console.log("☁️ Campistry Cloud Bridge v4.0 (SIMPLIFIED MULTI-SCHEDULER)");
 
-  // DIRECT CONFIGURATION
+  // CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
   const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI";
     
@@ -155,13 +163,8 @@
     delete window._campistryMembership;
   }
 
-  function getUserRole() {
-    return _userRole;
-  }
-
-  function isTeamMember() {
-    return _isTeamMember;
-  }
+  function getUserRole() { return _userRole; }
+  function isTeamMember() { return _isTeamMember; }
 
   // ============================================================================
   // LOCAL CACHE
@@ -268,91 +271,60 @@
   }
 
   // ============================================================================
-  // ★★★ NEW: BUNK-LEVEL MERGE HELPER ★★★
+  // ★★★ HELPER: GET MY BUNKS ★★★
   // ============================================================================
   
-  function getBunksForDivisions(divisionIds) {
-      const divisions = window.divisions || {};
-      const bunks = new Set();
+  function getMyBunks() {
+      const myBunks = new Set();
       
-      for (const divId of divisionIds) {
+      // Get my divisions
+      let myDivisions = [];
+      
+      if (window.AccessControl?.getEditableDivisions) {
+          myDivisions = window.AccessControl.getEditableDivisions() || [];
+      }
+      if (myDivisions.length === 0 && window.AccessControl?.getUserDivisions) {
+          myDivisions = window.AccessControl.getUserDivisions() || [];
+      }
+      if (myDivisions.length === 0 && window.SubdivisionScheduleManager?.getDivisionsToSchedule) {
+          myDivisions = window.SubdivisionScheduleManager.getDivisionsToSchedule() || [];
+      }
+      if (myDivisions.length === 0 && window._campistryMembership?.assigned_divisions) {
+          myDivisions = window._campistryMembership.assigned_divisions;
+      }
+      
+      // Owner/Admin: null means ALL bunks
+      const role = window.AccessControl?.getCurrentRole?.() || _userRole;
+      if (!_isTeamMember || role === 'owner' || role === 'admin') {
+          return null; // null = all bunks (no filtering)
+      }
+      
+      if (myDivisions.length === 0) {
+          console.warn('☁️ [SAVE] No divisions assigned - cannot determine bunks');
+          return new Set(); // Empty = can't save anything
+      }
+      
+      // Get bunks for my divisions
+      const divisions = window.divisions || {};
+      for (const divId of myDivisions) {
           const divInfo = divisions[divId] || divisions[String(divId)];
           if (divInfo && divInfo.bunks) {
-              divInfo.bunks.forEach(b => bunks.add(String(b)));
+              divInfo.bunks.forEach(b => myBunks.add(String(b)));
           }
       }
       
-      return bunks;
-  }
-
-  function smartMergeDailySchedules(localSchedules, cloudSchedules, myDivisions) {
-      console.log('☁️ [MERGE] Starting BUNK-LEVEL merge...');
-      console.log(`☁️ [MERGE]   My divisions: [${myDivisions.join(', ')}]`);
-      
-      // Get bunk names for my divisions
-      const myBunks = getBunksForDivisions(myDivisions);
-      console.log(`☁️ [MERGE]   My bunks: ${myBunks.size} (${[...myBunks].slice(0, 5).join(', ')}${myBunks.size > 5 ? '...' : ''})`);
-      
-      // Start with cloud data as base (preserves other schedulers' work)
-      const merged = cloudSchedules ? JSON.parse(JSON.stringify(cloudSchedules)) : {};
-      
-      // For each date in local data
-      for (const [dateKey, dateData] of Object.entries(localSchedules || {})) {
-          // Ensure date entry exists in merged
-          if (!merged[dateKey]) {
-              merged[dateKey] = {};
-          }
-          
-          // Handle nested scheduleAssignments structure
-          if (dateData.scheduleAssignments) {
-              if (!merged[dateKey].scheduleAssignments) {
-                  merged[dateKey].scheduleAssignments = {};
-              }
-              
-              // Only overwrite MY bunks
-              for (const [bunkName, bunkSchedule] of Object.entries(dateData.scheduleAssignments)) {
-                  if (myBunks.has(String(bunkName))) {
-                      merged[dateKey].scheduleAssignments[bunkName] = bunkSchedule;
-                  }
-              }
-              
-              // Copy other date-level properties (like metadata)
-              for (const [key, value] of Object.entries(dateData)) {
-                  if (key !== 'scheduleAssignments') {
-                      merged[dateKey][key] = value;
-                  }
-              }
-          } else {
-              // Legacy format: dateData IS the scheduleAssignments directly
-              for (const [bunkName, bunkSchedule] of Object.entries(dateData)) {
-                  if (myBunks.has(String(bunkName))) {
-                      merged[dateKey][bunkName] = bunkSchedule;
-                  }
-              }
-          }
-      }
-      
-      // Log what we preserved vs overwrote
-      const allCloudBunks = new Set();
-      for (const dateData of Object.values(cloudSchedules || {})) {
-          const assignments = dateData.scheduleAssignments || dateData;
-          Object.keys(assignments).forEach(b => allCloudBunks.add(b));
-      }
-      
-      const preservedBunks = [...allCloudBunks].filter(b => !myBunks.has(String(b)));
-      console.log(`☁️ [MERGE]   Preserved ${preservedBunks.length} background bunks`);
-      console.log(`☁️ [MERGE]   Overwrote ${myBunks.size} local bunks`);
-      
-      return merged;
+      console.log(`☁️ [SAVE] My divisions: [${myDivisions.join(', ')}] → ${myBunks.size} bunks`);
+      return myBunks;
   }
 
   // ============================================================================
-  // SAVE TO CLOUD (FIXED)
+  // ★★★ SIMPLIFIED SAVE TO CLOUD ★★★
+  // Just add my bunks, preserve others - no complex merge!
   // ============================================================================
 
   async function saveToCloud(state) {
     try {
-      showToast("☁️ Saving Schedule & Settings...", "info");
+      showToast("☁️ Saving Schedule...", "info");
       
       const user = await getUser();
       if (!user) {
@@ -370,85 +342,104 @@
           return false;
       }
 
-      // Prepare Payload
+      // Prepare base state
       state.schema_version = SCHEMA_VERSION;
       state.updated_at = new Date().toISOString();
       const stateToSave = { ...state };
       delete stateToSave._importTimestamp;
 
-      // 🟢 BUNDLE SCHEDULES WITH SMART MERGE
+      // =====================================================================
+      // ★★★ SIMPLE SAVE LOGIC ★★★
+      // =====================================================================
       try {
         const schedulesRaw = localStorage.getItem(DAILY_DATA_KEY);
         if (schedulesRaw) {
-            let localSchedules = JSON.parse(schedulesRaw);
-            let finalSchedules = localSchedules;
-
-            // ★★★ SMART MERGE FOR MULTI-TENANT ★★★
-            if (_isTeamMember && _userRole !== 'owner') {
-                console.log("☁️ [MERGE] Multi-tenant detected. Fetching latest cloud state to merge...");
-                try {
-                    // 1. Fetch latest "truth" from cloud
-                    const currentCloudState = await loadFromCloud();
-                    
-                    if (currentCloudState) {
-                        const cloudSchedules = currentCloudState.daily_schedules || {};
-                        
-                        // 2. Identify divisions I am allowed to edit
-                        let myDivisions = [];
-                        
-                        // Primary: AccessControl.getEditableDivisions
-                        if (window.AccessControl && window.AccessControl.getEditableDivisions) {
-                             const acDivs = window.AccessControl.getEditableDivisions();
-                             if (acDivs && acDivs.length > 0) myDivisions = acDivs;
-                        } 
-                        
-                        // Fallback 1: AccessControl.getUserDivisions
-                        if (myDivisions.length === 0 && window.AccessControl && window.AccessControl.getUserDivisions) {
-                             const acDivs = window.AccessControl.getUserDivisions();
-                             if (acDivs && acDivs.length > 0) myDivisions = acDivs;
-                        }
-                        
-                        // Fallback 2: Scheduler Manager
-                        if (myDivisions.length === 0 && window.SubdivisionScheduleManager && window.SubdivisionScheduleManager.getDivisionsToSchedule) {
-                             const schedDivs = window.SubdivisionScheduleManager.getDivisionsToSchedule();
-                             if (schedDivs && schedDivs.length > 0) myDivisions = schedDivs;
-                        }
-
-                        // Fallback 3: Direct Membership Object
-                        if (myDivisions.length === 0 && window._campistryMembership && window._campistryMembership.assigned_divisions) {
-                            myDivisions = window._campistryMembership.assigned_divisions;
-                        }
-
-                        if (myDivisions && myDivisions.length > 0) {
-                             console.log(`☁️ [MERGE] Authorized divisions: [${myDivisions.join(', ')}]`);
-                             
-                             // ★★★ USE BUNK-LEVEL MERGE ★★★
-                             finalSchedules = smartMergeDailySchedules(localSchedules, cloudSchedules, myDivisions);
-                             
-                             console.log(`☁️ [MERGE] ✅ Bunk-level merge complete`);
-                        } else {
-                            console.warn("☁️ [MERGE] No authorized divisions found. Aborting to protect data.");
-                            showToast("❌ No permissions - Save Aborted", "error");
-                            return false;
-                        }
-                    } else {
-                        console.warn("☁️ [MERGE] Cloud state fetch returned null. Using local state.");
+            const localSchedules = JSON.parse(schedulesRaw);
+            const myBunks = getMyBunks();
+            
+            // OWNER MODE: Just use local data directly
+            if (myBunks === null) {
+                console.log('☁️ [SAVE] Owner mode - saving all local data');
+                stateToSave.daily_schedules = localSchedules;
+            } 
+            // TEAM MEMBER MODE: Add my bunks to cloud, preserve others
+            else if (myBunks.size > 0) {
+                console.log('☁️ [SAVE] Team member mode - merging my bunks with cloud');
+                
+                // 1. Load current cloud state
+                const cloudState = await loadFromCloud();
+                const cloudSchedules = cloudState?.daily_schedules || {};
+                
+                // 2. Start with cloud data (preserves other schedulers' work)
+                const merged = JSON.parse(JSON.stringify(cloudSchedules));
+                
+                // 3. Add/update MY bunks only
+                for (const [dateKey, dateData] of Object.entries(localSchedules)) {
+                    if (!merged[dateKey]) {
+                        merged[dateKey] = { scheduleAssignments: {} };
                     }
-                } catch (mergeErr) {
-                    console.error("☁️ [MERGE] Failed. Aborting save to protect data.", mergeErr);
-                    showToast("❌ Sync Error - Save Aborted", "error");
-                    return false;
+                    if (!merged[dateKey].scheduleAssignments) {
+                        merged[dateKey].scheduleAssignments = merged[dateKey];
+                        // Handle case where merged[dateKey] was already assignments
+                        if (typeof merged[dateKey] === 'object' && !merged[dateKey].scheduleAssignments) {
+                            const temp = merged[dateKey];
+                            merged[dateKey] = { scheduleAssignments: temp };
+                        }
+                    }
+                    
+                    // Get assignments from local data
+                    const localAssignments = dateData.scheduleAssignments || dateData;
+                    
+                    // Only add MY bunks
+                    for (const [bunkName, schedule] of Object.entries(localAssignments)) {
+                        if (myBunks.has(String(bunkName))) {
+                            merged[dateKey].scheduleAssignments[bunkName] = schedule;
+                        }
+                    }
+                    
+                    // Copy other metadata (leagueAssignments, etc.)
+                    if (dateData.leagueAssignments) {
+                        if (!merged[dateKey].leagueAssignments) {
+                            merged[dateKey].leagueAssignments = {};
+                        }
+                        // Only copy league assignments for my divisions
+                        const myDivisions = window.AccessControl?.getEditableDivisions?.() || 
+                                          window.SubdivisionScheduleManager?.getDivisionsToSchedule?.() || [];
+                        for (const [divName, leagueData] of Object.entries(dateData.leagueAssignments)) {
+                            if (myDivisions.includes(divName)) {
+                                merged[dateKey].leagueAssignments[divName] = leagueData;
+                            }
+                        }
+                    }
                 }
+                
+                // Log what we're saving
+                const cloudBunkCount = Object.keys(cloudSchedules).reduce((sum, date) => {
+                    const assignments = cloudSchedules[date]?.scheduleAssignments || cloudSchedules[date] || {};
+                    return sum + Object.keys(assignments).length;
+                }, 0);
+                
+                const mergedBunkCount = Object.keys(merged).reduce((sum, date) => {
+                    const assignments = merged[date]?.scheduleAssignments || merged[date] || {};
+                    return sum + Object.keys(assignments).length;
+                }, 0);
+                
+                console.log(`☁️ [SAVE] Cloud had ${cloudBunkCount} bunks → Now ${mergedBunkCount} bunks`);
+                
+                stateToSave.daily_schedules = merged;
+            } else {
+                console.warn('☁️ [SAVE] No bunks to save - aborting');
+                showToast("❌ No permissions", "error");
+                return false;
             }
-
-            stateToSave.daily_schedules = finalSchedules;
-            console.log("☁️ Generated schedules bundled into save.");
         }
-      } catch(e) { console.warn("Bundle error:", e); }
+      } catch(e) { 
+          console.error("☁️ [SAVE] Bundle error:", e);
+      }
 
       const ownerId = campId;
 
-      // 1. TRY PATCH FIRST
+      // TRY PATCH FIRST
       const patchUrl = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}`;
       const patchResponse = await fetch(patchUrl, {
         method: 'PATCH',
@@ -467,14 +458,18 @@
       if (patchResponse.ok) {
           const patchedData = await patchResponse.json();
           if (patchedData && patchedData.length > 0) {
-              console.log("☁️ [REST] ✅ PATCH Success");
+              console.log("☁️ [SAVE] ✅ Success");
               showToast("✅ Schedule Saved!", "success");
-              _dailyDataDirty = false; 
+              _dailyDataDirty = false;
+              
+              // Dispatch event so UI can refresh from cloud
+              window.dispatchEvent(new CustomEvent('campistry-cloud-saved'));
+              
               return true;
           }
       }
 
-      // 2. IF PATCH FAILED -> POST (only for owners)
+      // IF PATCH FAILED -> POST (only for owners)
       if (!_isTeamMember) {
           const postUrl = `${SUPABASE_URL}/rest/v1/${TABLE}`;
           const postResponse = await fetch(postUrl, {
@@ -493,18 +488,18 @@
           });
 
           if (postResponse.ok) {
-            console.log("☁️ [REST] ✅ POST Success");
+            console.log("☁️ [SAVE] ✅ Created new record");
             showToast("✅ Schedule Saved!", "success");
             _dailyDataDirty = false;
             return true;
           } else {
             console.error("Save Failed:", postResponse.status);
-            showToast("❌ Save Failed (Check Console)", "error");
+            showToast("❌ Save Failed", "error");
             return false;
           }
       } else {
           console.error("Team member cannot create new camp state");
-          showToast("❌ Cannot save - camp data not found", "error");
+          showToast("❌ Camp data not found", "error");
           return false;
       }
 
@@ -514,6 +509,69 @@
       return false;
     }
   }
+
+  // ============================================================================
+  // ★★★ LOAD COMBINED VIEW FROM CLOUD ★★★
+  // After any scheduler saves, UI can call this to get ALL data
+  // ============================================================================
+  
+  window.loadCombinedScheduleFromCloud = async function() {
+      console.log('☁️ Loading combined schedule from cloud...');
+      
+      const cloudState = await loadFromCloud();
+      if (!cloudState) {
+          console.log('☁️ No cloud data found');
+          return null;
+      }
+      
+      const cloudSchedules = cloudState.daily_schedules || {};
+      const today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+      const todayData = cloudSchedules[today];
+      
+      if (!todayData) {
+          console.log('☁️ No schedule data for today');
+          return null;
+      }
+      
+      // Update local storage with cloud data
+      const currentLocal = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
+      currentLocal[today] = todayData;
+      localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(currentLocal));
+      
+      // Update in-memory
+      const assignments = todayData.scheduleAssignments || todayData;
+      window.scheduleAssignments = assignments;
+      
+      if (todayData.leagueAssignments) {
+          window.leagueAssignments = todayData.leagueAssignments;
+      }
+      
+      // Get list of divisions that have data
+      const divisionsWithData = new Set();
+      const divisions = window.divisions || {};
+      
+      for (const bunkName of Object.keys(assignments)) {
+          // Find which division this bunk belongs to
+          for (const [divName, divInfo] of Object.entries(divisions)) {
+              if (divInfo.bunks && divInfo.bunks.map(String).includes(String(bunkName))) {
+                  divisionsWithData.add(divName);
+                  break;
+              }
+          }
+      }
+      
+      console.log(`☁️ Loaded ${Object.keys(assignments).length} bunks from cloud`);
+      console.log(`☁️ Divisions with data: [${[...divisionsWithData].join(', ')}]`);
+      
+      // Update available divisions for UI
+      window.availableDivisionsFromCloud = [...divisionsWithData];
+      
+      return {
+          scheduleAssignments: assignments,
+          leagueAssignments: todayData.leagueAssignments || {},
+          divisionsWithData: [...divisionsWithData]
+      };
+  };
     
   // ============================================================================
   // RESET & IMPORT
@@ -658,6 +716,7 @@
 
   window.syncNow = syncNow;
   window.forceSyncToCloud = syncNow;
+  window.loadFromCloud = loadFromCloud; // Expose for GlobalFieldLocks
   window.scheduleCloudSync = () => {
     _cloudSyncPending = true;
     scheduleCloudSync();
