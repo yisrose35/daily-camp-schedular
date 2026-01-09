@@ -1,12 +1,16 @@
-
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v3.9 (Added Daily Data Sync Handlers)
+// FIXED VERSION: v4.0 (Multi-Scheduler Merge Support)
 // =================================================================
+// KEY FIX: When saving, we now MERGE scheduleAssignments by division
+// instead of overwriting. This allows multiple schedulers to work
+// independently without losing each other's work.
+// =================================================================
+
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v3.9 (MULTI-TENANT MODE)");
+  console.log("☁️ Campistry Cloud Bridge v4.0 (MULTI-SCHEDULER MERGE MODE)");
 
   // DIRECT CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -39,15 +43,13 @@
           document.body.appendChild(toast);
       }
       
-      // Colors
-      if (type === 'success') toast.style.backgroundColor = '#10B981'; // Green
-      else if (type === 'error') toast.style.backgroundColor = '#EF4444'; // Red
-      else toast.style.backgroundColor = '#3B82F6'; // Blue
+      if (type === 'success') toast.style.backgroundColor = '#10B981';
+      else if (type === 'error') toast.style.backgroundColor = '#EF4444';
+      else toast.style.backgroundColor = '#3B82F6';
 
       toast.textContent = message;
       toast.style.opacity = '1';
       
-      // Auto-hide after 3s
       if (window._toastTimer) clearTimeout(window._toastTimer);
       window._toastTimer = setTimeout(() => {
           toast.style.opacity = '0';
@@ -60,23 +62,17 @@
   let _cachedCampId = null;
   let _userRole = null;
   let _isTeamMember = false;
+  let _userDivisions = []; // ★★★ NEW: Track which divisions this user can edit
 
-  /**
-   * Get the camp ID for the current user
-   * - For camp owners: returns their user ID
-   * - For invited team members: returns the camp they were invited to
-   */
   function getCampId() {
     if (_cachedCampId) return _cachedCampId;
     
-    // Check localStorage cache first (set during invite acceptance or previous login)
     const cachedUserId = localStorage.getItem('campistry_user_id');
     if (cachedUserId && cachedUserId !== 'demo_camp_001') {
       _cachedCampId = cachedUserId;
       return _cachedCampId;
     }
     
-    // Try to get from Supabase session (fallback for camp owners)
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
@@ -85,7 +81,6 @@
           if (storedSession) {
             const parsed = JSON.parse(storedSession);
             if (parsed?.user?.id) {
-              // Don't cache yet - we need to verify if this user is a team member
               return parsed.user.id;
             }
           }
@@ -96,16 +91,11 @@
     return "demo_camp_001";
   }
 
-  /**
-   * Determine the correct camp ID for a user
-   * Called after authentication to check if user is a team member
-   */
   async function determineUserCampId(userId) {
     if (!userId) return null;
     
     console.log("☁️ Determining camp ID for user:", userId);
     
-    // First, check if user owns any camps
     try {
       const { data: ownedCamp, error: ownedError } = await window.supabase
         .from('camps')
@@ -117,19 +107,19 @@
         console.log("☁️ User is a camp owner");
         _isTeamMember = false;
         _userRole = 'owner';
-        return userId; // Camp owner - their ID is the camp ID
+        _userDivisions = null; // null = ALL divisions
+        return userId;
       }
     } catch (e) {
       console.warn("☁️ Error checking camp ownership:", e);
     }
     
-    // Not a camp owner - check if they're an invited team member
     try {
       const { data: membership, error: memberError } = await window.supabase
         .from('camp_users')
-        .select('camp_id, role, subdivision_ids, accepted_at')
+        .select('camp_id, role, subdivision_ids, assigned_divisions, accepted_at')
         .eq('user_id', userId)
-        .not('accepted_at', 'is', null) // Only accepted invites
+        .not('accepted_at', 'is', null)
         .maybeSingle();
       
       if (membership && !memberError) {
@@ -140,38 +130,80 @@
         _isTeamMember = true;
         _userRole = membership.role;
         
-        // Store user's membership info for access control
+        // ★★★ Determine which divisions this user can edit
+        await determineUserDivisions(membership);
+        
         window._campistryMembership = membership;
         
-        return membership.camp_id; // Return the camp they belong to
+        return membership.camp_id;
       }
     } catch (e) {
       console.warn("☁️ Error checking team membership:", e);
     }
     
-    // User is neither owner nor team member
-    // This could be a new user who just signed up (not via invite)
     console.log("☁️ User is a new camp owner (first time)");
     _isTeamMember = false;
     _userRole = 'owner';
+    _userDivisions = null; // null = ALL
     return userId;
   }
 
   /**
-   * Update the camp ID cache
-   * Now properly handles team members vs owners
+   * ★★★ NEW: Determine which divisions the user can edit ★★★
    */
+  async function determineUserDivisions(membership) {
+    _userDivisions = [];
+    
+    if (_userRole === 'owner' || _userRole === 'admin') {
+      _userDivisions = null; // null means ALL
+      return;
+    }
+    
+    if (_userRole === 'viewer') {
+      _userDivisions = []; // empty = NONE
+      return;
+    }
+    
+    // Scheduler - get divisions from subdivisions
+    const subdivisionIds = membership.subdivision_ids || [];
+    const directAssignments = membership.assigned_divisions || [];
+    
+    if (directAssignments.length > 0) {
+      _userDivisions = [...directAssignments];
+      console.log("☁️ User divisions (direct):", _userDivisions);
+      return;
+    }
+    
+    if (subdivisionIds.length > 0) {
+      try {
+        const { data: subdivisions } = await window.supabase
+          .from('subdivisions')
+          .select('divisions')
+          .in('id', subdivisionIds);
+        
+        if (subdivisions) {
+          subdivisions.forEach(sub => {
+            if (sub.divisions) {
+              _userDivisions.push(...sub.divisions);
+            }
+          });
+        }
+      } catch (e) {
+        console.warn("☁️ Error loading subdivision divisions:", e);
+      }
+    }
+    
+    console.log("☁️ User divisions (from subdivisions):", _userDivisions);
+  }
+
   async function updateCampIdCache(userId) {
     if (!userId) return;
     
-    // Determine the correct camp ID
     const campId = await determineUserCampId(userId);
     
     if (campId) {
       _cachedCampId = campId;
       localStorage.setItem('campistry_user_id', campId);
-      
-      // Also store user's own ID for reference
       localStorage.setItem('campistry_auth_user_id', userId);
       
       console.log("☁️ Camp ID cached:", campId, _isTeamMember ? "(team member)" : "(owner)");
@@ -182,23 +214,25 @@
     _cachedCampId = null;
     _userRole = null;
     _isTeamMember = false;
+    _userDivisions = [];
     localStorage.removeItem('campistry_user_id');
     localStorage.removeItem('campistry_auth_user_id');
     delete window._campistryMembership;
   }
 
-  /**
-   * Get user's role in the current camp
-   */
   function getUserRole() {
     return _userRole;
   }
 
-  /**
-   * Check if current user is a team member (not owner)
-   */
   function isTeamMember() {
     return _isTeamMember;
+  }
+  
+  /**
+   * ★★★ NEW: Get divisions the current user can edit ★★★
+   */
+  function getUserDivisions() {
+    return _userDivisions; // null = ALL, [] = NONE, [...] = specific list
   }
 
   // ============================================================================
@@ -208,7 +242,7 @@
   let _cloudSyncPending = false;
   let _syncInProgress = false;
   let _syncTimeout = null;
-  let _dailyDataDirty = false; // ★★★ NEW TRACKER FOR DAILY DATA DIRTY STATE ★★★
+  let _dailyDataDirty = false;
   let _initialized = false;
   const SCHEMA_VERSION = 2;
 
@@ -222,8 +256,6 @@
   }
    
   function setLocalCache(state) {
-    // PROTECT LOCAL WORK: Only block overwrite if daily data specifically is dirty
-    // The previous check was too broad (_cloudSyncPending included settings changes)
     if (state.daily_schedules) {
         if (!_dailyDataDirty) {
             console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
@@ -231,11 +263,9 @@
                 const currentRaw = localStorage.getItem(DAILY_DATA_KEY);
                 const newRaw = JSON.stringify(state.daily_schedules);
                 
-                // Only write and notify if actually different
                 if (currentRaw !== newRaw) {
                     localStorage.setItem(DAILY_DATA_KEY, newRaw);
                     
-                    // 🔥 CRITICAL: Notify UI to reload immediately on other devices
                     setTimeout(() => {
                         console.log("🔥 Dispatching UI refresh for new schedule data...");
                         window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
@@ -301,6 +331,148 @@
     } catch (e) { return null; }
   }
 
+  // ============================================================================
+  // ★★★ CRITICAL FIX: MERGE SCHEDULE ASSIGNMENTS BY DIVISION ★★★
+  // ============================================================================
+  
+  /**
+   * Merge local scheduleAssignments with cloud version
+   * Only overwrites bunks that belong to user's divisions
+   */
+  function mergeScheduleAssignments(cloudAssignments, localAssignments, userDivisions) {
+    // If user has access to ALL divisions, just return local (they are the authority)
+    if (userDivisions === null) {
+      console.log("☁️ [MERGE] User has full access - using local assignments");
+      return localAssignments;
+    }
+    
+    // If user has NO divisions, return cloud (they can't change anything)
+    if (!userDivisions || userDivisions.length === 0) {
+      console.log("☁️ [MERGE] User has no edit access - keeping cloud assignments");
+      return cloudAssignments || {};
+    }
+    
+    // Get division -> bunks mapping
+    const divisions = window.divisions || {};
+    const userBunks = new Set();
+    
+    userDivisions.forEach(divName => {
+      const divInfo = divisions[divName];
+      if (divInfo?.bunks) {
+        divInfo.bunks.forEach(b => userBunks.add(b));
+      }
+    });
+    
+    console.log(`☁️ [MERGE] User can edit ${userBunks.size} bunks in ${userDivisions.length} divisions`);
+    
+    // Start with cloud version as base
+    const merged = JSON.parse(JSON.stringify(cloudAssignments || {}));
+    
+    // Overwrite ONLY user's bunks with local data
+    for (const [bunkName, slots] of Object.entries(localAssignments || {})) {
+      if (userBunks.has(bunkName)) {
+        merged[bunkName] = slots;
+        // console.log(`☁️ [MERGE] Applied local changes for ${bunkName}`);
+      }
+    }
+    
+    console.log(`☁️ [MERGE] Complete: ${Object.keys(merged).length} bunks in merged result`);
+    
+    return merged;
+  }
+  
+  /**
+   * Merge daily data with proper division-aware merging
+   */
+  async function mergeDailyDataForSave(localDailyData) {
+    // Load current cloud state
+    const cloudState = await loadFromCloud();
+    const cloudDaily = cloudState?.daily_schedules || {};
+    
+    const merged = JSON.parse(JSON.stringify(cloudDaily));
+    
+    for (const [dateKey, dateData] of Object.entries(localDailyData || {})) {
+      if (!merged[dateKey]) {
+        merged[dateKey] = {};
+      }
+      
+      // Merge scheduleAssignments with division awareness
+      if (dateData.scheduleAssignments) {
+        merged[dateKey].scheduleAssignments = mergeScheduleAssignments(
+          merged[dateKey].scheduleAssignments || {},
+          dateData.scheduleAssignments,
+          _userDivisions
+        );
+      }
+      
+      // Merge subdivisionSchedules (each user manages their own)
+      if (dateData.subdivisionSchedules) {
+        if (!merged[dateKey].subdivisionSchedules) {
+          merged[dateKey].subdivisionSchedules = {};
+        }
+        
+        // Only update subdivisions the user owns
+        const mySubIds = window.SubdivisionScheduleManager?.getEditableSubdivisions?.()
+          .map(s => s.id) || [];
+        
+        for (const [subId, subData] of Object.entries(dateData.subdivisionSchedules)) {
+          // Owner can update any, schedulers only their own
+          if (_userRole === 'owner' || _userRole === 'admin' || mySubIds.includes(subId)) {
+            merged[dateKey].subdivisionSchedules[subId] = subData;
+          }
+        }
+      }
+      
+      // Copy other date-level data (overrides, settings, etc.)
+      for (const [key, value] of Object.entries(dateData)) {
+        if (key !== 'scheduleAssignments' && key !== 'subdivisionSchedules') {
+          // For user-specific overrides like bunkActivityOverrides, merge by bunk ownership
+          if (key === 'bunkActivityOverrides' && _userDivisions !== null) {
+            merged[dateKey][key] = mergeOverridesByBunk(
+              merged[dateKey][key] || [],
+              value,
+              _userDivisions
+            );
+          } else {
+            merged[dateKey][key] = value;
+          }
+        }
+      }
+    }
+    
+    return merged;
+  }
+  
+  /**
+   * Merge bunk activity overrides by division ownership
+   */
+  function mergeOverridesByBunk(cloudOverrides, localOverrides, userDivisions) {
+    if (userDivisions === null) return localOverrides;
+    if (!userDivisions || userDivisions.length === 0) return cloudOverrides;
+    
+    const divisions = window.divisions || {};
+    const userBunks = new Set();
+    
+    userDivisions.forEach(divName => {
+      const divInfo = divisions[divName];
+      if (divInfo?.bunks) {
+        divInfo.bunks.forEach(b => userBunks.add(b));
+      }
+    });
+    
+    // Keep cloud overrides for bunks user doesn't own
+    const merged = (cloudOverrides || []).filter(o => !userBunks.has(o.bunk));
+    
+    // Add all local overrides for bunks user owns
+    (localOverrides || []).forEach(o => {
+      if (userBunks.has(o.bunk)) {
+        merged.push(o);
+      }
+    });
+    
+    return merged;
+  }
+
   async function saveToCloud(state) {
     try {
       showToast("☁️ Saving Schedule & Settings...", "info");
@@ -316,7 +488,6 @@
       
       if (campId === "demo_camp_001") return false;
 
-      // Check if user has permission to save (team members with viewer role cannot)
       if (_userRole === 'viewer') {
           showToast("❌ View-only access", "error");
           console.warn("☁️ User has viewer role, cannot save");
@@ -329,17 +500,29 @@
       const stateToSave = { ...state };
       delete stateToSave._importTimestamp;
 
-      // 🟢 BUNDLE SCHEDULES
+      // ★★★ CRITICAL: Merge daily schedules with division awareness ★★★
       try {
         const schedulesRaw = localStorage.getItem(DAILY_DATA_KEY);
         if (schedulesRaw) {
-            stateToSave.daily_schedules = JSON.parse(schedulesRaw);
-            console.log("☁️ Generated schedules bundled into save.");
+            const localDaily = JSON.parse(schedulesRaw);
+            
+            // Merge with cloud to preserve other schedulers' work
+            const mergedDaily = await mergeDailyDataForSave(localDaily);
+            stateToSave.daily_schedules = mergedDaily;
+            
+            console.log("☁️ Merged schedules bundled into save.");
         }
-      } catch(e) { console.warn("Bundle error:", e); }
+      } catch(e) { 
+        console.warn("Bundle/merge error:", e); 
+        // Fallback: just use local
+        try {
+          const schedulesRaw = localStorage.getItem(DAILY_DATA_KEY);
+          if (schedulesRaw) {
+            stateToSave.daily_schedules = JSON.parse(schedulesRaw);
+          }
+        } catch(e2) {}
+      }
 
-      // For team members, use the camp owner's ID as owner_id
-      // The camp_id IS the owner's user ID
       const ownerId = campId;
 
       // 1. TRY PATCH FIRST
@@ -363,7 +546,7 @@
           if (patchedData && patchedData.length > 0) {
               console.log("☁️ [REST] ✅ PATCH Success");
               showToast("✅ Schedule Saved!", "success");
-              _dailyDataDirty = false; // ★★★ CLEAR DIRTY FLAG ON SUCCESS ★★★
+              _dailyDataDirty = false;
               return true;
           }
       }
@@ -389,7 +572,7 @@
           if (postResponse.ok) {
             console.log("☁️ [REST] ✅ POST Success");
             showToast("✅ Schedule Saved!", "success");
-            _dailyDataDirty = false; // ★★★ CLEAR DIRTY FLAG ON SUCCESS ★★★
+            _dailyDataDirty = false;
             return true;
           } else {
             console.error("Save Failed:", postResponse.status);
@@ -413,7 +596,6 @@
   // RESET & IMPORT
   // ============================================================================
   window.resetCloudState = async function() {
-    // Only owners can reset
     if (_isTeamMember) {
         showToast("❌ Only camp owners can reset data", "error");
         return false;
@@ -466,7 +648,6 @@
   async function initialize() {
     if (_initialized) return;
     
-    // Get current user and determine their camp
     const user = await getUser();
     if (user) {
         await updateCampIdCache(user.id);
@@ -481,7 +662,6 @@
             if (cloudState) {
                 const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
                 const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
-                // Always sync on load if cloud is newer, regardless of minor local setting changes
                 if (cloudTime > localTime) {
                     setLocalCache({ ...localData, ...cloudState });
                     showToast("☁️ Data updated from Cloud", "info");
@@ -508,7 +688,8 @@
         hydrated: true, 
         hasData,
         isTeamMember: _isTeamMember,
-        userRole: _userRole
+        userRole: _userRole,
+        userDivisions: _userDivisions
       }
     }));
   }
@@ -516,7 +697,6 @@
   // PUBLIC API
   window.loadGlobalSettings = () => getLocalCache();
   window.saveGlobalSettings = (key, value) => {
-    // Check if user has write permission
     if (_userRole === 'viewer') {
         console.warn("☁️ Viewer cannot save settings");
         return getLocalCache();
@@ -531,7 +711,7 @@
     return state;
   };
 
-  // ★★★ NEW: DAILY DATA HANDLERS (Fixes Schedule Saving) ★★★
+  // Daily Data Handlers
   window.loadCurrentDailyData = function() {
     try {
         const raw = localStorage.getItem(DAILY_DATA_KEY);
@@ -549,9 +729,8 @@
         data[key] = value;
         localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(data));
         
-        // Trigger the cloud sync to bundle this data
         _cloudSyncPending = true;
-        _dailyDataDirty = true; // ★★★ MARK DAILY DATA AS DIRTY ★★★
+        _dailyDataDirty = true;
         scheduleCloudSync();
     } catch(e) { console.error("Daily Save Error:", e); }
   };
@@ -567,13 +746,12 @@
   window.getCampistryUserRole = getUserRole;
   window.isCampistryTeamMember = isTeamMember;
   window.getCampId = getCampId;
+  window.getUserDivisions = getUserDivisions; // ★★★ NEW EXPORT
 
   setTimeout(() => {
     if(window.supabase) {
         window.supabase.auth.onAuthStateChange(async (event, session) => {
             if (event === 'SIGNED_IN' && session) {
-                // IMPORTANT: Don't immediately overwrite camp ID
-                // Let determineUserCampId figure out the correct one
                 await updateCampIdCache(session.user.id);
                 _initialized = false; 
                 await initialize();
