@@ -962,6 +962,22 @@
 
 })();
 
+        // ★★★ ACTUALLY EXECUTE STEP 1.5 ★★★
+        if (existingScheduleSnapshot && Object.keys(existingScheduleSnapshot).length > 0) {
+            window.executeStep1_5(
+                existingScheduleSnapshot,
+                divisions,
+                allowedDivisions,
+                fieldUsageBySlot,
+                activityProperties
+            );
+        } else if (allowedDivisions) {
+            console.log('[STEP 1.5] No snapshot provided - generating fresh for allowed divisions only');
+        }
+
+        
+
+
         // =========================================================================
         // STEP 2: Process Bunk Overrides (Pinned specific bunks)
         // - Personal Trips: Treated as pinned (no field usage)
