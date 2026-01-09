@@ -1,660 +1,343 @@
 // ============================================================================
-// scheduler_subdivision_integration.js (v1.7 - ROBUST DATA LOOKUP)
+// scheduler_subdivision_integration.js (v2.0 - PROPER MULTI-SCHEDULER)
 // ============================================================================
-// INTEGRATION LAYER: Connects SubdivisionScheduleManager with the scheduler
+// CRITICAL FIX: Properly load and preserve schedules from other schedulers
 //
-// UPDATE v1.7:
-// - Fixed manual data lookup when window.current_date_str is missing
+// FLOW:
+// 1. Before generation: Load existing schedules from cloud
+// 2. Extract schedules for divisions we DON'T control (background)
+// 3. Pass these as "locked" snapshot to optimizer
+// 4. Optimizer restores them and registers field usage
+// 5. Generate only for OUR divisions
+// 6. Save merged result to cloud
 // ============================================================================
 
 (function() {
     'use strict';
 
-    // =========================================================================
-    // STATE
-    // =========================================================================
-
-    let _originalRunSkeletonOptimizer = null;
-    let _isIntegrationActive = false;
+    console.log('[SchedulerSubdivisionIntegration] Loading v2.0...');
 
     // =========================================================================
-    // HOOKS
+    // STORAGE KEYS
     // =========================================================================
+    
+    const DAILY_DATA_KEY = "campDailyData_v1";
 
-    /**
-     * Wrap the skeleton optimizer to add subdivision awareness
-     */
-    function installSchedulerHooks() {
-        if (_isIntegrationActive) return;
+    // =========================================================================
+    // HELPERS
+    // =========================================================================
+    
+    function getCurrentDate() {
+        return window.currentScheduleDate || new Date().toISOString().split('T')[0];
+    }
 
-        // Store original function
-        _originalRunSkeletonOptimizer = window.runSkeletonOptimizer;
+    function getMyEditableDivisions() {
+        // Method 1: AccessControl (preferred)
+        if (window.AccessControl?.getEditableDivisions) {
+            const divs = window.AccessControl.getEditableDivisions();
+            if (divs && divs.length > 0) return divs;
+        }
+        
+        // Method 2: SubdivisionScheduleManager
+        if (window.SubdivisionScheduleManager?.getDivisionsToSchedule) {
+            const divs = window.SubdivisionScheduleManager.getDivisionsToSchedule();
+            if (divs && divs.length > 0) return divs;
+        }
+        
+        // Method 3: Owner gets all
+        const role = window.AccessControl?.getCurrentRole?.();
+        if (role === 'owner' || role === 'admin') {
+            return Object.keys(window.divisions || {});
+        }
+        
+        return [];
+    }
 
-        // Replace with wrapped version
-        window.runSkeletonOptimizer = async function(manualSkeleton, externalOverrides) {
-            console.log('\n' + '='.repeat(70));
-            console.log('★★★ MULTI-SCHEDULER MODE INITIALIZING ★★★');
-            console.log('='.repeat(70));
+    function getBackgroundDivisions() {
+        const all = Object.keys(window.divisions || {});
+        const mine = new Set(getMyEditableDivisions());
+        return all.filter(d => !mine.has(d));
+    }
 
-            // 1. ROBUST INITIALIZATION CHECK
-            let retries = 0;
-            while (!window.SubdivisionScheduleManager && retries < 20) {
-                console.log(`[Integration] Waiting for SubdivisionScheduleManager (Attempt ${retries+1}/20)...`);
-                await new Promise(r => setTimeout(r, 100));
-                retries++;
-            }
+    function isOwnerOrAdmin() {
+        const role = window.AccessControl?.getCurrentRole?.();
+        return role === 'owner' || role === 'admin';
+    }
 
-            const manager = window.SubdivisionScheduleManager;
-            if (!manager) {
-                console.warn('[Integration] SubdivisionScheduleManager not available, running standard mode.');
-                return _originalRunSkeletonOptimizer(manualSkeleton, externalOverrides);
-            }
-
-            // Ensure initialized
-            if (manager.ensureInitialized) {
-                await manager.ensureInitialized();
-            } else if (!manager.isInitialized && manager.initialize) {
-                await manager.initialize();
-            }
-
-            // 2. PREPARE MULTI-TENANT DATA
-            
-            // Get current user's divisions
-            const divisionsToSchedule = manager.getDivisionsToSchedule();
-            console.log(`[Integration] 🎯 Active Divisions: ${divisionsToSchedule.join(', ') || 'NONE'}`);
-
-            // ★★★ IMPROVED BACKGROUND DETECTION ★★★
-            let allDivisions = [];
-            if (window.global_authority && window.global_authority.getAllDivisions) {
-                allDivisions = window.global_authority.getAllDivisions();
-            } else if (window.divisions) {
-                allDivisions = Object.keys(window.divisions);
-            }
-
-            // Calculate background divisions (All - Mine)
-            const backgroundDivisions = allDivisions.filter(d => !divisionsToSchedule.includes(d));
-            
-            const lockedSubs = manager.getOtherLockedSubdivisions();
-            
-            console.log(`[Integration] 🔒 Background Divisions (Calculated): ${backgroundDivisions.join(', ')}`);
-            console.log(`[Integration] 🔒 Background Subdivisions (Loaded in Manager): ${lockedSubs.length}`);
-
-            // ★★★ CRITICAL: Get Snapshot of existing schedules for background divisions
-            let scheduleSnapshot = {};
-            if (manager.getLockedScheduleSnapshot) {
-                scheduleSnapshot = manager.getLockedScheduleSnapshot() || {};
-            } else {
-                console.warn('[Integration] getLockedScheduleSnapshot not found on manager (old version?)');
-            }
-
-            // ★★★ MANUAL DATA INJECTION (Fix for "0 background subdivisions") ★★★
-            // If the manager didn't load any background schedules, we try to load them directly from global state
-            if (backgroundDivisions.length > 0 && Object.keys(scheduleSnapshot).length === 0) {
-                console.log("[Integration] ⚠️ Manager snapshot empty. Manually injecting background data...");
+    // =========================================================================
+    // LOAD EXISTING SCHEDULES FROM CLOUD
+    // =========================================================================
+    
+    async function loadSchedulesFromCloud() {
+        console.log('[Integration] 📡 Loading existing schedules from cloud...');
+        
+        try {
+            if (window.supabase && typeof window.getCampId === 'function') {
+                const campId = window.getCampId();
                 
-                try {
-                    let dailyData = null;
+                if (campId && campId !== 'demo_camp_001') {
+                    const { data: { session } } = await window.supabase.auth.getSession();
                     
-                    // 1. Try Memory (most reliable if app is running)
-                    if (window.camp_schedules && window.currentDayIndex !== undefined) {
-                        const dateKey = Object.keys(window.camp_schedules)[window.currentDayIndex];
-                        if (dateKey) dailyData = window.camp_schedules[dateKey];
-                    }
-                    
-                    // 2. Try LocalStorage (using current_date_str)
-                    if (!dailyData && window.loadCurrentDailyData) {
-                        const allDaily = window.loadCurrentDailyData();
+                    if (session) {
+                        const { data, error } = await window.supabase
+                            .from('camp_state')
+                            .select('state')
+                            .eq('camp_id', campId)
+                            .single();
                         
-                        if (window.current_date_str && allDaily[window.current_date_str]) {
-                            dailyData = allDaily[window.current_date_str];
-                        } 
-                        // 3. Fallback: Take the most recent entry from local storage if standard lookups failed
-                        else {
-                            const keys = Object.keys(allDaily).sort();
-                            if (keys.length > 0) {
-                                // Assume we are editing the latest or specific date (fallback)
-                                // Better than nothing for a safety net
-                                const latestKey = keys[keys.length - 1]; 
-                                console.log(`[Integration] ⚠️ Guessing date context: ${latestKey}`);
-                                dailyData = allDaily[latestKey];
+                        if (!error && data?.state) {
+                            console.log('[Integration] ✅ Loaded cloud state');
+                            
+                            // Extract daily schedules
+                            if (data.state.daily_schedules) {
+                                return data.state.daily_schedules;
                             }
                         }
                     }
-
-                    if (dailyData) {
-                        backgroundDivisions.forEach(divId => {
-                            // Check if dailyData[divId] exists and is array (standard format)
-                            if (dailyData[divId] && Array.isArray(dailyData[divId])) {
-                                console.log(`[Integration] 💉 Injecting ${dailyData[divId].length} blocks for Division ${divId}`);
-                                dailyData[divId].forEach(block => {
-                                    if (block && block.bunk_id && block.period && block.activity) {
-                                        if (!scheduleSnapshot[block.bunk_id]) scheduleSnapshot[block.bunk_id] = {};
-                                        scheduleSnapshot[block.bunk_id][block.period] = block.activity;
-                                    }
-                                });
-                            }
-                        });
-                        console.log(`[Integration] 📸 Manual Snapshot Size: ${Object.keys(scheduleSnapshot).length} bunks`);
-                    } else {
-                        console.log("[Integration] No daily data found to inject.");
-                    }
-                } catch (e) {
-                    console.error("[Integration] Failed to manually inject background data:", e);
                 }
-            } else {
-                console.log(`[Integration] 📸 Snapshot ready with ${Object.keys(scheduleSnapshot).length} bunks.`);
             }
-
-            // Register global field locks (Capacity constraints)
-            if (manager.registerLockedClaimsInGlobalLocks) {
-                manager.registerLockedClaimsInGlobalLocks();
-            } else {
-                // Fallback to legacy restore if new method missing
-                manager.restoreLockedSchedules();
+        } catch (e) {
+            console.warn('[Integration] Cloud load failed:', e.message);
+        }
+        
+        // Fallback to localStorage
+        try {
+            const raw = localStorage.getItem(DAILY_DATA_KEY);
+            if (raw) {
+                console.log('[Integration] 📂 Using localStorage fallback');
+                return JSON.parse(raw);
             }
-            
-            // 3. PRE-GENERATION EXTRAS (Smart Allocation)
-            applySmartResourceAllocation(manager, divisionsToSchedule);
-
-            // 4. FILTER SKELETON
-            const filteredSkeleton = filterSkeletonByDivisions(manualSkeleton, divisionsToSchedule);
-            console.log(`[Integration] 🧹 Filtered skeleton from ${manualSkeleton.length} to ${filteredSkeleton.length} items.`);
-
-            // 5. EXECUTE CORE SCHEDULER
-            // Pass extra args: allowedDivisions, scheduleSnapshot
-            const result = _originalRunSkeletonOptimizer(
-                filteredSkeleton, 
-                externalOverrides, 
-                divisionsToSchedule, 
-                scheduleSnapshot
-            );
-
-            // 6. POST-GENERATION CLEANUP
-            manager.markCurrentUserSubdivisionsAsDraft();
-            
-            // Clear temporary state
-            delete window._currentSchedulingDivisions;
-            delete window._smartResourceAllocation;
-
-            console.log('[Integration] ✅ Schedule generation complete.');
-
-            return result;
-        };
-
-        _isIntegrationActive = true;
-        console.log('[Integration] Scheduler hooks installed for multi-scheduler support');
+        } catch (e) {}
+        
+        console.log('[Integration] ⚠️ No existing schedule data found');
+        return {};
     }
 
-    /**
-     * Filter skeleton to only include divisions the user can edit
-     */
-    function filterSkeletonByDivisions(skeleton, allowedDivisions) {
+    // =========================================================================
+    // EXTRACT SNAPSHOT FOR BACKGROUND DIVISIONS
+    // =========================================================================
+    
+    function extractBackgroundSnapshot(dailyData, backgroundDivisions, dateKey) {
+        const snapshot = {};
+        const divisions = window.divisions || {};
+        const dateData = dailyData[dateKey];
+        
+        if (!dateData) {
+            console.log(`[Integration] No data for date ${dateKey}`);
+            return snapshot;
+        }
+        
+        // Try both possible locations for schedule data
+        const scheduleAssignments = dateData.scheduleAssignments || dateData;
+        
+        if (!scheduleAssignments || typeof scheduleAssignments !== 'object') {
+            console.log('[Integration] No scheduleAssignments found');
+            return snapshot;
+        }
+        
+        const backgroundSet = new Set(backgroundDivisions);
+        let extractedBunks = 0;
+        let extractedSlots = 0;
+        
+        // For each background division
+        for (const divName of backgroundDivisions) {
+            const divInfo = divisions[divName];
+            if (!divInfo || !divInfo.bunks) continue;
+            
+            // For each bunk in this division
+            for (const bunkName of divInfo.bunks) {
+                const bunkSchedule = scheduleAssignments[bunkName];
+                
+                if (bunkSchedule && Array.isArray(bunkSchedule)) {
+                    // Deep copy to avoid mutations
+                    snapshot[bunkName] = bunkSchedule.map(slot => 
+                        slot ? { ...slot, _locked: true, _backgroundDivision: divName } : null
+                    );
+                    
+                    const filledSlots = bunkSchedule.filter(Boolean).length;
+                    extractedBunks++;
+                    extractedSlots += filledSlots;
+                    
+                    console.log(`[Integration]   📋 ${bunkName} (${divName}): ${filledSlots} slots`);
+                }
+            }
+        }
+        
+        console.log(`[Integration] 📦 Extracted: ${extractedBunks} bunks, ${extractedSlots} total slots`);
+        return snapshot;
+    }
+
+    // =========================================================================
+    // FILTER SKELETON FOR MY DIVISIONS
+    // =========================================================================
+    
+    function filterSkeletonForDivisions(skeleton, allowedDivisions) {
         if (!allowedDivisions || allowedDivisions.length === 0) {
-            console.warn('[Integration] No allowed divisions - returning empty skeleton');
-            return [];
+            return skeleton;
         }
-
-        const allowedSet = new Set(allowedDivisions);
         
-        return skeleton.filter(block => {
-            // If block has no division, include it (camp-wide)
-            if (!block.division) return true;
-            
-            // Otherwise only include if division is allowed
-            return allowedSet.has(block.division);
+        const allowed = new Set(allowedDivisions);
+        const original = skeleton.length;
+        
+        const filtered = skeleton.filter(item => {
+            // Keep items without a division (global items)
+            if (!item.division) return true;
+            return allowed.has(item.division);
         });
-    }
-
-    /**
-     * Apply smart resource allocation
-     * Adjusts solver behavior to leave room for other schedulers
-     */
-    function applySmartResourceAllocation(manager, divisionsToSchedule) {
-        // Get all slots (assume first and last from unified times)
-        const slots = window.unifiedTimes?.map((_, i) => i) || [];
-        if (slots.length === 0) return;
-
-        if (!manager.getSmartResourceAllocation) return;
-
-        const allocation = manager.getSmartResourceAllocation(slots);
         
-        // Store allocation for solver to use
-        window._smartResourceAllocation = allocation;
-
-        // Log recommendations
-        const highDemandResources = Object.entries(allocation)
-            .filter(([name, info]) => info.othersWaiting > 0 && info.fairShare < info.remaining)
-            .map(([name, info]) => `${name}: use ${info.fairShare}/${info.remaining}`);
-
-        if (highDemandResources.length > 0) {
-            console.log('[Integration] Smart allocation recommendations:');
-            highDemandResources.forEach(r => console.log(`  ${r}`));
-        }
+        console.log(`[Integration] 🔍 Skeleton filtered: ${original} → ${filtered.length} items`);
+        return filtered;
     }
 
     // =========================================================================
-    // CAPACITY OVERRIDE HELPERS
+    // MAIN HOOK: Intercept schedule generation
     // =========================================================================
-
-    /**
-     * Get adjusted capacity for a field considering locked claims
-     * Used by canBlockFit and solver
-     */
-    function getAdjustedFieldCapacity(fieldName, slots) {
-        const manager = window.SubdivisionScheduleManager;
-        if (!manager?.isInitialized) {
-            return null; // No adjustment
-        }
-
-        if (manager.getRemainingFieldCapacity) {
-            return manager.getRemainingFieldCapacity(fieldName, slots);
-        }
-        return null;
-    }
-
-    /**
-     * Check if field is blocked by locked subdivision
-     */
-    function isFieldBlockedByLockedSubdivision(fieldName, slots, divisionContext) {
-        const manager = window.SubdivisionScheduleManager;
-        if (!manager?.isInitialized) {
-            return false;
-        }
-
-        if (manager.isFieldClaimedByOthers) {
-            const claimInfo = manager.isFieldClaimedByOthers(fieldName, slots, divisionContext);
-            return claimInfo.claimed;
-        }
-        return false;
-    }
-
-    // =========================================================================
-    // UI HELPERS
-    // =========================================================================
-
-    /**
-     * Create lock/unlock button for a subdivision
-     */
-    function createLockButton(subdivisionId, onStateChange) {
-        const manager = window.SubdivisionScheduleManager;
-        if (!manager) return null;
-
-        const schedule = manager.getSubdivisionSchedule(subdivisionId);
-        if (!schedule) return null;
-
-        const canEdit = manager.canEditSubdivision(subdivisionId);
-        const isLocked = schedule.status === manager.SCHEDULE_STATUS.LOCKED;
-        const isDraft = schedule.status === manager.SCHEDULE_STATUS.DRAFT;
-
-        const btn = document.createElement('button');
-        btn.className = `subdivision-lock-btn ${isLocked ? 'locked' : isDraft ? 'draft' : 'empty'}`;
+    
+    let originalRunSkeletonOptimizer = null;
+    
+    async function multiSchedulerWrapper(manualSkeleton, externalOverrides) {
+        console.log('\n' + '═'.repeat(70));
+        console.log('★★★ MULTI-SCHEDULER INTEGRATION v2.0 ★★★');
+        console.log('═'.repeat(70));
         
-        if (isLocked) {
-            btn.innerHTML = '🔒 Locked';
-            btn.disabled = !canEdit;
-            btn.title = `Locked by ${schedule.lockedBy?.name || schedule.lockedBy?.email}`;
+        const dateKey = getCurrentDate();
+        const myDivisions = getMyEditableDivisions();
+        const backgroundDivisions = getBackgroundDivisions();
+        const ownerMode = isOwnerOrAdmin();
+        
+        console.log(`[Integration] 📅 Date: ${dateKey}`);
+        console.log(`[Integration] 🎯 My Divisions: ${myDivisions.join(', ') || 'ALL'}`);
+        console.log(`[Integration] 🔒 Background Divisions: ${backgroundDivisions.join(', ') || 'NONE'}`);
+        console.log(`[Integration] 👑 Owner/Admin Mode: ${ownerMode}`);
+        
+        // =====================================================================
+        // STEP 1: Load existing schedules from cloud
+        // =====================================================================
+        let existingSnapshot = {};
+        
+        if (!ownerMode && backgroundDivisions.length > 0) {
+            console.log('\n[Integration] STEP 1: Loading background schedules...');
             
-            btn.onclick = () => {
-                if (confirm(`Unlock schedule for ${schedule.subdivisionName}? This will allow edits.`)) {
-                    const result = manager.unlockSubdivisionSchedule(subdivisionId);
-                    if (result.success && onStateChange) {
-                        onStateChange(result.schedule);
-                    } else if (!result.success) {
-                        alert(result.error);
-                    }
-                }
-            };
-        } else if (isDraft) {
-            btn.innerHTML = '🔓 Lock Schedule';
-            btn.disabled = !canEdit;
-            btn.title = 'Lock to prevent changes by others';
+            const dailyData = await loadSchedulesFromCloud();
+            existingSnapshot = extractBackgroundSnapshot(dailyData, backgroundDivisions, dateKey);
             
-            btn.onclick = () => {
-                if (confirm(`Lock schedule for ${schedule.subdivisionName}? Other schedulers will not be able to modify it.`)) {
-                    const result = manager.lockSubdivisionSchedule(subdivisionId);
-                    if (result.success && onStateChange) {
-                        onStateChange(result.schedule);
-                    } else if (!result.success) {
-                        alert(result.error);
-                    }
-                }
-            };
+            console.log(`[Integration] 📸 Background snapshot: ${Object.keys(existingSnapshot).length} bunks`);
         } else {
-            btn.innerHTML = '⬜ No Schedule';
-            btn.disabled = true;
-            btn.title = 'Generate a schedule first';
+            console.log('\n[Integration] STEP 1: Owner mode - no background to preserve');
         }
-
-        return btn;
-    }
-
-    /**
-     * Create status panel showing all subdivision schedules
-     */
-    function createSubdivisionStatusPanel(container) {
-        const manager = window.SubdivisionScheduleManager;
-        if (!manager) {
-            container.innerHTML = '<p>Subdivision manager not loaded</p>';
-            return;
-        }
-
-        if (!manager.isInitialized) {
-            container.innerHTML = '<p>Loading subdivision status...</p>';
-            // Try to initialize
-            manager.initialize?.().then(() => {
-                createSubdivisionStatusPanel(container);
-            });
-            return;
-        }
-
-        const summary = manager.getSubdivisionStatusSummary();
-
-        // Restore beautiful CSS from v1.1
-        const html = `
-            <style>
-                .subdivision-status-panel {
-                    background: #f8fafc;
-                    border: 1px solid #e2e8f0;
-                    border-radius: 12px;
-                    padding: 16px;
-                    margin-bottom: 16px;
-                }
-                .subdivision-status-header {
-                    font-size: 1.1rem;
-                    font-weight: 600;
-                    color: #1e293b;
-                    margin-bottom: 12px;
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                }
-                .subdivision-status-list {
-                    display: flex;
-                    flex-direction: column;
-                    gap: 8px;
-                }
-                .subdivision-status-item {
-                    display: flex;
-                    align-items: center;
-                    justify-content: space-between;
-                    padding: 12px 16px;
-                    background: white;
-                    border: 1px solid #e2e8f0;
-                    border-radius: 8px;
-                    transition: all 0.15s;
-                }
-                .subdivision-status-item:hover {
-                    border-color: #cbd5e1;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-                }
-                .subdivision-status-item.is-mine {
-                    border-left: 4px solid #3b82f6;
-                }
-                .subdivision-status-item.is-locked {
-                    background: #fef3c7;
-                    border-color: #f59e0b;
-                }
-                .subdivision-status-item.is-locked.is-mine {
-                    border-left: 4px solid #f59e0b;
-                }
-                .subdivision-info {
-                    flex: 1;
-                }
-                .subdivision-name {
-                    font-weight: 600;
-                    color: #1e293b;
-                    margin-bottom: 2px;
-                }
-                .subdivision-divisions {
-                    font-size: 0.85rem;
-                    color: #64748b;
-                }
-                .subdivision-status-badge {
-                    padding: 4px 10px;
-                    border-radius: 999px;
-                    font-size: 0.75rem;
-                    font-weight: 600;
-                    margin-right: 12px;
-                }
-                .badge-locked {
-                    background: #fef3c7;
-                    color: #92400e;
-                }
-                .badge-draft {
-                    background: #dbeafe;
-                    color: #1e40af;
-                }
-                .badge-empty {
-                    background: #f1f5f9;
-                    color: #64748b;
-                }
-                .subdivision-lock-btn {
-                    padding: 8px 16px;
-                    border-radius: 8px;
-                    font-weight: 600;
-                    font-size: 0.85rem;
-                    cursor: pointer;
-                    border: 1px solid;
-                    transition: all 0.15s;
-                }
-                .subdivision-lock-btn.locked {
-                    background: #fee2e2;
-                    color: #b91c1c;
-                    border-color: #fca5a5;
-                }
-                .subdivision-lock-btn.locked:hover:not(:disabled) {
-                    background: #fecaca;
-                }
-                .subdivision-lock-btn.draft {
-                    background: #22c55e;
-                    color: white;
-                    border-color: #16a34a;
-                }
-                .subdivision-lock-btn.draft:hover:not(:disabled) {
-                    background: #16a34a;
-                }
-                .subdivision-lock-btn.empty {
-                    background: #f1f5f9;
-                    color: #94a3b8;
-                    border-color: #e2e8f0;
-                }
-                .subdivision-lock-btn:disabled {
-                    opacity: 0.5;
-                    cursor: not-allowed;
-                }
-                .locked-info {
-                    font-size: 0.75rem;
-                    color: #b45309;
-                    margin-top: 4px;
-                }
-            </style>
-            
-            <div class="subdivision-status-panel">
-                <div class="subdivision-status-header">
-                    📋 Schedule Status by Subdivision
-                </div>
-                <div class="subdivision-status-list" id="subdivision-status-list">
-                    <!-- Items inserted dynamically -->
-                </div>
-            </div>
-        `;
-
-        container.innerHTML = html;
-        const listEl = container.querySelector('#subdivision-status-list');
-
-        if (!summary || summary.length === 0) {
-            listEl.innerHTML = '<p style="color:#64748b;padding:8px;">No subdivisions configured yet.</p>';
-            return;
-        }
-
-        summary.forEach(sub => {
-            const item = document.createElement('div');
-            item.className = `subdivision-status-item ${sub.isMySubdivision ? 'is-mine' : ''} ${sub.status === 'locked' ? 'is-locked' : ''}`;
-
-            const statusBadge = sub.status === 'locked' ? 'badge-locked' :
-                               sub.status === 'draft' ? 'badge-draft' : 'badge-empty';
-            
-            const statusText = sub.status === 'locked' ? '🔒 Locked' :
-                              sub.status === 'draft' ? '📝 Draft' : '⬜ Empty';
-
-            item.innerHTML = `
-                <div class="subdivision-info">
-                    <div class="subdivision-name">${sub.name} ${sub.isMySubdivision ? '(Your subdivision)' : ''}</div>
-                    <div class="subdivision-divisions">${sub.divisions.join(', ')}</div>
-                    ${sub.lockedBy ? `<div class="locked-info">Locked by ${sub.lockedBy.name || sub.lockedBy.email} at ${new Date(sub.lockedAt).toLocaleString()}</div>` : ''}
-                </div>
-                <span class="subdivision-status-badge ${statusBadge}">${statusText}</span>
-                <div class="subdivision-actions" id="actions-${sub.id}"></div>
-            `;
-
-            listEl.appendChild(item);
-
-            // Add lock/unlock button
-            const actionsEl = item.querySelector(`#actions-${sub.id}`);
-            const btn = createLockButton(sub.id, () => {
-                // Refresh the panel on state change
-                createSubdivisionStatusPanel(container);
-            });
-            if (btn) actionsEl.appendChild(btn);
-        });
-    }
-
-    // =========================================================================
-    // BUNK EDIT PROTECTION
-    // =========================================================================
-
-    /**
-     * Check if a bunk can be edited by current user
-     */
-    function canEditBunk(bunkName) {
-        const manager = window.SubdivisionScheduleManager;
-        if (!manager?.isInitialized) {
-            return true; // Allow if manager not ready
-        }
-
-        // Check if bunk belongs to a locked subdivision
-        if (manager.isBunkLocked(bunkName)) {
-            return false;
-        }
-
-        // Check if user has access to this bunk's division
-        const allDivisions = window.divisions || {};
-        for (const [divName, divInfo] of Object.entries(allDivisions)) {
-            if (divInfo.bunks?.includes(bunkName)) {
-                return manager.canEditDivision(divName);
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Get edit status for a bunk (for UI display)
-     */
-    function getBunkEditStatus(bunkName) {
-        const manager = window.SubdivisionScheduleManager;
         
-        if (!manager?.isInitialized) {
-            return { canEdit: true, reason: null };
-        }
-
-        // Find bunk's division
-        const allDivisions = window.divisions || {};
-        let bunkDivision = null;
+        // =====================================================================
+        // STEP 2: Filter skeleton for my divisions only
+        // =====================================================================
+        console.log('\n[Integration] STEP 2: Filtering skeleton...');
         
-        for (const [divName, divInfo] of Object.entries(allDivisions)) {
-            if (divInfo.bunks?.includes(bunkName)) {
-                bunkDivision = divName;
-                break;
-            }
+        const filteredSkeleton = ownerMode 
+            ? manualSkeleton 
+            : filterSkeletonForDivisions(manualSkeleton, myDivisions);
+        
+        // =====================================================================
+        // STEP 3: Call original optimizer with snapshot
+        // =====================================================================
+        console.log('\n[Integration] STEP 3: Running optimizer...');
+        console.log(`[Integration]   Skeleton items: ${filteredSkeleton.length}`);
+        console.log(`[Integration]   Allowed divisions: ${myDivisions.join(', ') || 'ALL'}`);
+        console.log(`[Integration]   Background bunks: ${Object.keys(existingSnapshot).length}`);
+        
+        // Pass to optimizer:
+        // - Filtered skeleton
+        // - External overrides
+        // - Allowed divisions (null for owner = all)
+        // - Existing snapshot (schedules to preserve)
+        const allowedDivs = ownerMode ? null : myDivisions;
+        const snapshot = Object.keys(existingSnapshot).length > 0 ? existingSnapshot : null;
+        
+        const result = originalRunSkeletonOptimizer.call(
+            window,
+            filteredSkeleton,
+            externalOverrides,
+            allowedDivs,
+            snapshot
+        );
+        
+        // =====================================================================
+        // STEP 4: Trigger save
+        // =====================================================================
+        console.log('\n[Integration] STEP 4: Scheduling cloud sync...');
+        
+        if (typeof window.scheduleCloudSync === 'function') {
+            window.scheduleCloudSync();
         }
-
-        if (!bunkDivision) {
-            return { canEdit: false, reason: 'Bunk not found in any division' };
-        }
-
-        const lockStatus = manager.getDivisionLockStatus(bunkDivision);
-
-        if (lockStatus.isLocked) {
-            return { 
-                canEdit: false, 
-                reason: `Schedule locked: ${lockStatus.message}`,
-                isLocked: true,
-                lockedBy: lockStatus.lockedBy
-            };
-        }
-
-        if (!lockStatus.canEdit) {
-            return { 
-                canEdit: false, 
-                reason: 'You do not have permission to edit this division',
-                noPermission: true
-            };
-        }
-
-        return { canEdit: true, reason: null };
+        
+        console.log('\n' + '═'.repeat(70));
+        console.log('★★★ MULTI-SCHEDULER INTEGRATION COMPLETE ★★★');
+        console.log('═'.repeat(70) + '\n');
+        
+        return result;
     }
 
     // =========================================================================
-    // AUTO-INITIALIZATION
+    // INSTALL HOOKS
     // =========================================================================
-
-    /**
-     * Auto-initialize when document is ready
-     */
-    function autoInit() {
-        // Install scheduler hooks
-        installSchedulerHooks();
-
-        // FIXED: isInitialized is a getter property, not a function
-        if (window.AccessControl?.isInitialized) {
-            window.SubdivisionScheduleManager?.initialize?.();
-        } else {
-            // Wait for AccessControl
-            const checkInterval = setInterval(() => {
-                if (window.AccessControl?.isInitialized) {
-                    clearInterval(checkInterval);
-                    window.SubdivisionScheduleManager?.initialize?.();
+    
+    function installHooks() {
+        // Hook runSkeletonOptimizer
+        if (window.runSkeletonOptimizer && !originalRunSkeletonOptimizer) {
+            originalRunSkeletonOptimizer = window.runSkeletonOptimizer;
+            
+            window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions, existingSnapshot) {
+                // If called directly with all params, use original
+                if (allowedDivisions !== undefined || existingSnapshot !== undefined) {
+                    return originalRunSkeletonOptimizer.call(window, manualSkeleton, externalOverrides, allowedDivisions, existingSnapshot);
                 }
-            }, 200);
-
-            // Timeout after 30 seconds
-            setTimeout(() => clearInterval(checkInterval), 30000);
+                
+                // Otherwise, wrap with multi-scheduler logic
+                return multiSchedulerWrapper(manualSkeleton, externalOverrides);
+            };
+            
+            console.log('[Integration] ✅ Hooked runSkeletonOptimizer');
         }
     }
 
-    // Run auto-init when DOM is ready
+    // =========================================================================
+    // INITIALIZATION
+    // =========================================================================
+    
+    function initialize() {
+        console.log('[Integration] Initializing...');
+        
+        // Wait for dependencies
+        const checkDeps = setInterval(() => {
+            if (window.runSkeletonOptimizer && window.AccessControl) {
+                clearInterval(checkDeps);
+                installHooks();
+                console.log('[Integration] ✅ Ready');
+            }
+        }, 100);
+        
+        // Timeout after 10 seconds
+        setTimeout(() => clearInterval(checkDeps), 10000);
+    }
+    
+    // Auto-initialize
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', autoInit);
+        document.addEventListener('DOMContentLoaded', initialize);
     } else {
-        // Small delay to ensure other modules are loaded
-        setTimeout(autoInit, 100);
+        setTimeout(initialize, 100);
     }
 
     // =========================================================================
     // EXPORTS
     // =========================================================================
-
+    
     window.SchedulerSubdivisionIntegration = {
-        // Hooks
-        installSchedulerHooks,
-        
-        // Capacity helpers
-        getAdjustedFieldCapacity,
-        isFieldBlockedByLockedSubdivision,
-
-        // Edit protection
-        canEditBunk,
-        getBunkEditStatus,
-
-        // UI
-        createLockButton,
-        createSubdivisionStatusPanel,
-
-        // Utilities
-        filterSkeletonByDivisions
+        initialize,
+        getMyEditableDivisions,
+        getBackgroundDivisions,
+        loadSchedulesFromCloud,
+        extractBackgroundSnapshot,
+        filterSkeletonForDivisions
     };
 
-    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.7 (ROBUST DATA LOOKUP)');
+    console.log('[SchedulerSubdivisionIntegration] Module loaded v2.0');
 
 })();
