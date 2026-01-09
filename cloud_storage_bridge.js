@@ -1,16 +1,17 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v4.0 (Multi-Scheduler Merge Support)
+// FIXED VERSION: v4.1 (Multi-Scheduler Merge Support - Bug Fixes)
 // =================================================================
-// KEY FIX: When saving, we now MERGE scheduleAssignments by division
-// instead of overwriting. This allows multiple schedulers to work
-// independently without losing each other's work.
+// KEY FIXES in v4.1:
+// 1. Fixed "Cannot assign to read only property" error in merge
+// 2. Properly deep-clones data before merging
+// 3. Skips non-date keys in daily data iteration
 // =================================================================
 
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v4.0 (MULTI-SCHEDULER MERGE MODE)");
+  console.log("☁️ Campistry Cloud Bridge v4.1 (MULTI-SCHEDULER MERGE MODE - FIXED)");
 
   // DIRECT CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -62,7 +63,7 @@
   let _cachedCampId = null;
   let _userRole = null;
   let _isTeamMember = false;
-  let _userDivisions = []; // ★★★ NEW: Track which divisions this user can edit
+  let _userDivisions = [];
 
   function getCampId() {
     if (_cachedCampId) return _cachedCampId;
@@ -107,7 +108,7 @@
         console.log("☁️ User is a camp owner");
         _isTeamMember = false;
         _userRole = 'owner';
-        _userDivisions = null; // null = ALL divisions
+        _userDivisions = null;
         return userId;
       }
     } catch (e) {
@@ -130,7 +131,6 @@
         _isTeamMember = true;
         _userRole = membership.role;
         
-        // ★★★ Determine which divisions this user can edit
         await determineUserDivisions(membership);
         
         window._campistryMembership = membership;
@@ -144,27 +144,23 @@
     console.log("☁️ User is a new camp owner (first time)");
     _isTeamMember = false;
     _userRole = 'owner';
-    _userDivisions = null; // null = ALL
+    _userDivisions = null;
     return userId;
   }
 
-  /**
-   * ★★★ NEW: Determine which divisions the user can edit ★★★
-   */
   async function determineUserDivisions(membership) {
     _userDivisions = [];
     
     if (_userRole === 'owner' || _userRole === 'admin') {
-      _userDivisions = null; // null means ALL
+      _userDivisions = null;
       return;
     }
     
     if (_userRole === 'viewer') {
-      _userDivisions = []; // empty = NONE
+      _userDivisions = [];
       return;
     }
     
-    // Scheduler - get divisions from subdivisions
     const subdivisionIds = membership.subdivision_ids || [];
     const directAssignments = membership.assigned_divisions || [];
     
@@ -228,11 +224,8 @@
     return _isTeamMember;
   }
   
-  /**
-   * ★★★ NEW: Get divisions the current user can edit ★★★
-   */
   function getUserDivisions() {
-    return _userDivisions; // null = ALL, [] = NONE, [...] = specific list
+    return _userDivisions;
   }
 
   // ============================================================================
@@ -332,9 +325,31 @@
   }
 
   // ============================================================================
-  // ★★★ CRITICAL FIX: MERGE SCHEDULE ASSIGNMENTS BY DIVISION ★★★
+  // ★★★ FIXED: MERGE SCHEDULE ASSIGNMENTS BY DIVISION ★★★
   // ============================================================================
   
+  /**
+   * Helper to check if a string looks like a date key (YYYY-MM-DD)
+   */
+  function isDateKey(key) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(key);
+  }
+  
+  /**
+   * Deep clone an object safely
+   */
+  function safeDeepClone(obj) {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj !== 'object') return obj;
+    
+    try {
+      return JSON.parse(JSON.stringify(obj));
+    } catch (e) {
+      console.warn("☁️ Deep clone failed, using shallow copy:", e);
+      return { ...obj };
+    }
+  }
+
   /**
    * Merge local scheduleAssignments with cloud version
    * Only overwrites bunks that belong to user's divisions
@@ -343,13 +358,13 @@
     // If user has access to ALL divisions, just return local (they are the authority)
     if (userDivisions === null) {
       console.log("☁️ [MERGE] User has full access - using local assignments");
-      return localAssignments;
+      return safeDeepClone(localAssignments) || {};
     }
     
     // If user has NO divisions, return cloud (they can't change anything)
     if (!userDivisions || userDivisions.length === 0) {
       console.log("☁️ [MERGE] User has no edit access - keeping cloud assignments");
-      return cloudAssignments || {};
+      return safeDeepClone(cloudAssignments) || {};
     }
     
     // Get division -> bunks mapping
@@ -365,14 +380,13 @@
     
     console.log(`☁️ [MERGE] User can edit ${userBunks.size} bunks in ${userDivisions.length} divisions`);
     
-    // Start with cloud version as base
-    const merged = JSON.parse(JSON.stringify(cloudAssignments || {}));
+    // Start with DEEP CLONE of cloud version as base
+    const merged = safeDeepClone(cloudAssignments) || {};
     
     // Overwrite ONLY user's bunks with local data
     for (const [bunkName, slots] of Object.entries(localAssignments || {})) {
       if (userBunks.has(bunkName)) {
-        merged[bunkName] = slots;
-        // console.log(`☁️ [MERGE] Applied local changes for ${bunkName}`);
+        merged[bunkName] = safeDeepClone(slots);
       }
     }
     
@@ -383,21 +397,40 @@
   
   /**
    * Merge daily data with proper division-aware merging
+   * FIXED: Properly handles nested objects and avoids read-only errors
    */
   async function mergeDailyDataForSave(localDailyData) {
     // Load current cloud state
     const cloudState = await loadFromCloud();
-    const cloudDaily = cloudState?.daily_schedules || {};
+    const cloudDaily = safeDeepClone(cloudState?.daily_schedules) || {};
     
-    const merged = JSON.parse(JSON.stringify(cloudDaily));
+    // Start with deep clone of cloud data
+    const merged = safeDeepClone(cloudDaily);
     
-    for (const [dateKey, dateData] of Object.entries(localDailyData || {})) {
-      if (!merged[dateKey]) {
+    for (const [key, value] of Object.entries(localDailyData || {})) {
+      // ★★★ FIX: Skip non-date keys (like timestamps, metadata, etc.)
+      if (!isDateKey(key)) {
+        // For non-date keys, just copy the value
+        merged[key] = safeDeepClone(value);
+        continue;
+      }
+      
+      const dateKey = key;
+      const dateData = value;
+      
+      // Skip if dateData is not an object (safety check)
+      if (typeof dateData !== 'object' || dateData === null) {
+        merged[dateKey] = dateData;
+        continue;
+      }
+      
+      // Initialize date entry if needed
+      if (!merged[dateKey] || typeof merged[dateKey] !== 'object') {
         merged[dateKey] = {};
       }
       
       // Merge scheduleAssignments with division awareness
-      if (dateData.scheduleAssignments) {
+      if (dateData.scheduleAssignments && typeof dateData.scheduleAssignments === 'object') {
         merged[dateKey].scheduleAssignments = mergeScheduleAssignments(
           merged[dateKey].scheduleAssignments || {},
           dateData.scheduleAssignments,
@@ -406,36 +439,42 @@
       }
       
       // Merge subdivisionSchedules (each user manages their own)
-      if (dateData.subdivisionSchedules) {
+      if (dateData.subdivisionSchedules && typeof dateData.subdivisionSchedules === 'object') {
         if (!merged[dateKey].subdivisionSchedules) {
           merged[dateKey].subdivisionSchedules = {};
         }
         
-        // Only update subdivisions the user owns
-        const mySubIds = window.SubdivisionScheduleManager?.getEditableSubdivisions?.()
-          .map(s => s.id) || [];
+        // Get user's subdivision IDs
+        const mySubIds = new Set();
+        try {
+          const subs = window.SubdivisionScheduleManager?.getEditableSubdivisions?.() || [];
+          subs.forEach(s => mySubIds.add(s.id));
+        } catch (e) {}
         
         for (const [subId, subData] of Object.entries(dateData.subdivisionSchedules)) {
           // Owner can update any, schedulers only their own
-          if (_userRole === 'owner' || _userRole === 'admin' || mySubIds.includes(subId)) {
-            merged[dateKey].subdivisionSchedules[subId] = subData;
+          if (_userRole === 'owner' || _userRole === 'admin' || mySubIds.has(subId)) {
+            merged[dateKey].subdivisionSchedules[subId] = safeDeepClone(subData);
           }
         }
       }
       
-      // Copy other date-level data (overrides, settings, etc.)
-      for (const [key, value] of Object.entries(dateData)) {
-        if (key !== 'scheduleAssignments' && key !== 'subdivisionSchedules') {
-          // For user-specific overrides like bunkActivityOverrides, merge by bunk ownership
-          if (key === 'bunkActivityOverrides' && _userDivisions !== null) {
-            merged[dateKey][key] = mergeOverridesByBunk(
-              merged[dateKey][key] || [],
-              value,
-              _userDivisions
-            );
-          } else {
-            merged[dateKey][key] = value;
-          }
+      // Copy other date-level data
+      for (const [dataKey, dataValue] of Object.entries(dateData)) {
+        if (dataKey === 'scheduleAssignments' || dataKey === 'subdivisionSchedules') {
+          continue; // Already handled above
+        }
+        
+        // For bunkActivityOverrides, merge by bunk ownership
+        if (dataKey === 'bunkActivityOverrides' && _userDivisions !== null && Array.isArray(dataValue)) {
+          merged[dateKey][dataKey] = mergeOverridesByBunk(
+            merged[dateKey][dataKey] || [],
+            dataValue,
+            _userDivisions
+          );
+        } else {
+          // For everything else, just copy
+          merged[dateKey][dataKey] = safeDeepClone(dataValue);
         }
       }
     }
@@ -447,8 +486,8 @@
    * Merge bunk activity overrides by division ownership
    */
   function mergeOverridesByBunk(cloudOverrides, localOverrides, userDivisions) {
-    if (userDivisions === null) return localOverrides;
-    if (!userDivisions || userDivisions.length === 0) return cloudOverrides;
+    if (userDivisions === null) return safeDeepClone(localOverrides);
+    if (!userDivisions || userDivisions.length === 0) return safeDeepClone(cloudOverrides);
     
     const divisions = window.divisions || {};
     const userBunks = new Set();
@@ -461,12 +500,12 @@
     });
     
     // Keep cloud overrides for bunks user doesn't own
-    const merged = (cloudOverrides || []).filter(o => !userBunks.has(o.bunk));
+    const merged = (cloudOverrides || []).filter(o => o && !userBunks.has(o.bunk));
     
     // Add all local overrides for bunks user owns
     (localOverrides || []).forEach(o => {
-      if (userBunks.has(o.bunk)) {
-        merged.push(o);
+      if (o && userBunks.has(o.bunk)) {
+        merged.push(safeDeepClone(o));
       }
     });
     
@@ -494,10 +533,10 @@
           return false;
       }
 
-      // Prepare Payload
-      state.schema_version = SCHEMA_VERSION;
-      state.updated_at = new Date().toISOString();
-      const stateToSave = { ...state };
+      // Prepare Payload - deep clone to avoid mutations
+      const stateToSave = safeDeepClone(state);
+      stateToSave.schema_version = SCHEMA_VERSION;
+      stateToSave.updated_at = new Date().toISOString();
       delete stateToSave._importTimestamp;
 
       // ★★★ CRITICAL: Merge daily schedules with division awareness ★★★
@@ -513,14 +552,16 @@
             console.log("☁️ Merged schedules bundled into save.");
         }
       } catch(e) { 
-        console.warn("Bundle/merge error:", e); 
+        console.warn("☁️ Bundle/merge error:", e); 
         // Fallback: just use local
         try {
           const schedulesRaw = localStorage.getItem(DAILY_DATA_KEY);
           if (schedulesRaw) {
             stateToSave.daily_schedules = JSON.parse(schedulesRaw);
           }
-        } catch(e2) {}
+        } catch(e2) {
+          console.error("☁️ Fallback also failed:", e2);
+        }
       }
 
       const ownerId = campId;
@@ -746,7 +787,7 @@
   window.getCampistryUserRole = getUserRole;
   window.isCampistryTeamMember = isTeamMember;
   window.getCampId = getCampId;
-  window.getUserDivisions = getUserDivisions; // ★★★ NEW EXPORT
+  window.getUserDivisions = getUserDivisions;
 
   setTimeout(() => {
     if(window.supabase) {
