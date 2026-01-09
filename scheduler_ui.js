@@ -193,7 +193,7 @@
 
                 if (!isAvailable) {
                     const currentPeak = window.SchedulerCoreUtils.timeline.getPeakUsage(resolvedName, startMin, endMin, bunk);
-                    warnings.push(`⚠️ CAPACITY CONFLICT: "${resolvedName}" is full during this time.\n   Current Peak: ${currentPeak} bunks.\n   Limit: ${capacityLimit}.`);
+                    warnings.push(`⚠️ CAPACITY CONFLICT: "${resolvedName}" is full during this time.\n    Current Peak: ${currentPeak} bunks.\n    Limit: ${capacityLimit}.`);
                 }
 
                 // D. TIME RULES CHECK
@@ -276,19 +276,63 @@
         container.innerHTML = "";
         const divisions = window.divisions || {};
         
-        // Use user-managed divisions if available, otherwise show all available
-        let divisionsToShow = window.availableDivisions || [];
-        if (window.AccessControl) {
-             const userDivs = window.AccessControl.getUserManagedDivisions();
-             // If user manages specific divisions, we might want to prioritize/highlight them
-             // but typically viewing all is allowed. The edit restriction is handled in editCell.
-        }
-
+        // ★★★ UPDATE: DYNAMIC DISCOVERY OF DIVISIONS ★★★
+        const assignments = window.scheduleAssignments || {};
         const daily = window.loadCurrentDailyData?.() || {};
         const manualSkeleton = daily.manualSkeleton || [];
 
-        if (!Array.isArray(manualSkeleton) || manualSkeleton.length === 0) {
-            container.innerHTML = `<p>No daily schedule generated for this date.</p>`;
+        const divisionsWithData = new Set();
+        let hasAnyData = false;
+
+        // 1. Scan Assignments (find bunks with actual data)
+        Object.keys(assignments).forEach(bunkName => {
+            const bunkSchedule = assignments[bunkName];
+            // Check if bunk has real assignments (not just empty array)
+            const hasRealItems = bunkSchedule && Array.isArray(bunkSchedule) && bunkSchedule.some(s => s && s.field);
+            
+            if (hasRealItems) {
+                // Find division for this bunk
+                for (const [divName, divInfo] of Object.entries(divisions)) {
+                    if (divInfo.bunks && (divInfo.bunks.includes(bunkName) || divInfo.bunks.map(String).includes(String(bunkName)))) {
+                        divisionsWithData.add(divName);
+                        hasAnyData = true;
+                        break;
+                    }
+                }
+            }
+        });
+
+        // 2. Scan Skeleton (find divisions with planned blocks)
+        if (Array.isArray(manualSkeleton)) {
+            manualSkeleton.forEach(block => {
+                if (block.division) {
+                    divisionsWithData.add(block.division);
+                    hasAnyData = true;
+                }
+            });
+        }
+
+        let divisionsToShow = [];
+
+        if (hasAnyData) {
+            // Sort by defined order in window.divisions
+            const allDivs = Object.keys(divisions);
+            divisionsToShow = Array.from(divisionsWithData).sort((a, b) => {
+                return allDivs.indexOf(a) - allDivs.indexOf(b);
+            });
+        } else {
+            // Fallback: If no data exists, show default available based on permissions
+            if (window.AccessControl && window.AccessControl.getUserManagedDivisions) {
+                divisionsToShow = window.AccessControl.getUserManagedDivisions();
+            } else {
+                divisionsToShow = window.availableDivisions || Object.keys(divisions);
+            }
+        }
+
+        console.log(`[UI] Render Divisions: ${divisionsToShow.join(', ')}`);
+
+        if (divisionsToShow.length === 0) {
+            container.innerHTML = `<p>No schedule data available for viewable divisions.</p>`;
             return;
         }
 
