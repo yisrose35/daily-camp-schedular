@@ -742,61 +742,225 @@
         // ★★★ STEP 1.5: RESTORE EXISTING SCHEDULE FOR LOCKED DIVISIONS ★★★
         // =========================================================================
         // This is the key fix for the "Multi-Scheduler" requirement.
-        if (allowedDivisions && existingScheduleSnapshot) {
-            console.log(`\n[STEP 1.5] Restoring background schedules from snapshot...`);
-            let restoredCount = 0;
-            
-            Object.keys(existingScheduleSnapshot).forEach(bunkName => {
-                 // 1. Find division for this bunk
-                 const divName = Object.keys(divisions).find(d => divisions[d].bunks?.includes(bunkName));
-                 
-                 // 2. Safety Check: If this division IS allowed to be scheduled, we should NOT restore it from snapshot.
-                 // We want to regenerate it.
-                 if (divName && allowedDivisions.includes(divName)) {
-                     // console.log(`   Skipping restore for ${bunkName} (Target Division: ${divName})`);
-                     return; 
-                 }
-                 
-                 // 3. Restore this bunk's schedule
-                 const sourceSchedule = existingScheduleSnapshot[bunkName];
-                 if (sourceSchedule && Array.isArray(sourceSchedule)) {
-                     // Ensure the target array exists
-                     if (!window.scheduleAssignments[bunkName]) {
-                         window.scheduleAssignments[bunkName] = new Array(window.unifiedTimes.length);
-                     }
+        (function() {
+    'use strict';
 
-                     // Deep copy assignments
-                     window.scheduleAssignments[bunkName] = sourceSchedule.map(s => s ? {...s, _locked: true} : null);
-                     
-                     // 4. Re-register resource usage (Crucial for blocking fields)
-                     sourceSchedule.forEach((slotData, slotIdx) => {
-                         if (!slotData) return;
-                         
-                         // Register Field Usage
-                         if (slotData.field && slotData.field !== TRANSITION_TYPE) {
-                             const activityName = slotData._activity || slotData.field;
-                             window.registerSingleSlotUsage(
-                                 slotIdx,
-                                 slotData.field, 
-                                 divName || 'Unknown',
-                                 bunkName,
-                                 activityName,
-                                 fieldUsageBySlot,
-                                 activityProperties
-                             );
-                             
-                             // Register Location Usage
-                             const locName = getLocationForActivity(activityName) || (activityProperties[slotData.field]?.location);
-                             if (locName) {
-                                 registerActivityAtLocation(activityName, locName, [slotIdx], divName || 'Unknown');
-                             }
-                         }
-                     });
-                     restoredCount++;
-                 }
-            });
-            console.log(`[RESTORE] Successfully locked down ${restoredCount} bunks from other divisions.`);
+    console.log('[Step1.5Patch] Loading background schedule restoration patch...');
+
+    const TRANSITION_TYPE = "Transition/Buffer";
+
+    // =========================================================================
+    // RESTORE BACKGROUND SCHEDULES INTO scheduleAssignments
+    // =========================================================================
+    
+    /**
+     * Restore schedules from the snapshot into window.scheduleAssignments
+     * @param {Object} snapshot - { bunkName: [slotAssignments...] }
+     * @param {Object} divisions - window.divisions
+     * @param {Array} allowedDivisions - divisions we ARE generating (to skip)
+     * @returns {number} - count of bunks restored
+     */
+    function restoreBackgroundSchedules(snapshot, divisions, allowedDivisions) {
+        if (!snapshot || Object.keys(snapshot).length === 0) {
+            console.log('[Step1.5] No snapshot to restore');
+            return 0;
         }
+
+        const allowedSet = new Set(allowedDivisions || []);
+        let restoredBunks = 0;
+        let restoredSlots = 0;
+
+        console.log('[Step1.5] Restoring background schedules...');
+        console.log(`[Step1.5]   Snapshot bunks: ${Object.keys(snapshot).length}`);
+        console.log(`[Step1.5]   Allowed divisions (will skip): ${allowedDivisions?.join(', ') || 'NONE'}`);
+
+        for (const [bunkName, slots] of Object.entries(snapshot)) {
+            if (!slots || !Array.isArray(slots)) continue;
+
+            // Find which division this bunk belongs to
+            const divName = Object.keys(divisions).find(d => 
+                divisions[d].bunks?.includes(bunkName)
+            );
+
+            // Skip if this is a division we're generating
+            if (divName && allowedSet.has(divName)) {
+                // console.log(`[Step1.5]   Skipping ${bunkName} (${divName}) - target division`);
+                continue;
+            }
+
+            // Initialize bunk array if needed
+            if (!window.scheduleAssignments[bunkName]) {
+                window.scheduleAssignments[bunkName] = new Array(slots.length);
+            }
+
+            // Restore each slot
+            for (let i = 0; i < slots.length; i++) {
+                if (slots[i]) {
+                    window.scheduleAssignments[bunkName][i] = {
+                        ...slots[i],
+                        _locked: true,
+                        _fromBackground: true,
+                        _backgroundDivision: divName
+                    };
+                    restoredSlots++;
+                }
+            }
+
+            restoredBunks++;
+            console.log(`[Step1.5]   ✓ Restored ${bunkName} (${divName}): ${slots.filter(Boolean).length} slots`);
+        }
+
+        console.log(`[Step1.5] ✅ Restored ${restoredBunks} bunks, ${restoredSlots} total slots`);
+        return restoredBunks;
+    }
+
+    // =========================================================================
+    // REGISTER FIELD USAGE FROM RESTORED SCHEDULES
+    // =========================================================================
+    
+    /**
+     * Register field usage for all restored schedules
+     * This ensures the solver won't double-book fields
+     */
+    function registerFieldUsageFromRestoredSchedules(snapshot, divisions, allowedDivisions, fieldUsageBySlot, activityProperties) {
+        if (!snapshot || Object.keys(snapshot).length === 0) {
+            return 0;
+        }
+
+        const allowedSet = new Set(allowedDivisions || []);
+        let registrations = 0;
+
+        console.log('[Step1.5] Registering field usage from restored schedules...');
+
+        for (const [bunkName, slots] of Object.entries(snapshot)) {
+            if (!slots || !Array.isArray(slots)) continue;
+
+            // Find division
+            const divName = Object.keys(divisions).find(d => 
+                divisions[d].bunks?.includes(bunkName)
+            );
+
+            // Skip if this is a division we're generating
+            if (divName && allowedSet.has(divName)) continue;
+
+            for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
+                const slotData = slots[slotIdx];
+                if (!slotData || !slotData.field) continue;
+
+                const fieldName = slotData.field;
+                const activityName = slotData._activity || fieldName;
+
+                // Skip transitions
+                if (fieldName === TRANSITION_TYPE || slotData._isTransition) continue;
+
+                // Initialize slot in fieldUsageBySlot
+                if (!fieldUsageBySlot[slotIdx]) {
+                    fieldUsageBySlot[slotIdx] = {};
+                }
+
+                // Get field properties for capacity
+                const props = activityProperties?.[fieldName] || {};
+                let maxCapacity = 1;
+                if (props.sharableWith?.capacity) {
+                    maxCapacity = parseInt(props.sharableWith.capacity) || 1;
+                } else if (props.sharable) {
+                    maxCapacity = 2;
+                }
+
+                // Register usage
+                if (!fieldUsageBySlot[slotIdx][fieldName]) {
+                    fieldUsageBySlot[slotIdx][fieldName] = {
+                        count: 0,
+                        divisions: [],
+                        bunks: {},
+                        _locked: true,
+                        _fromBackground: true
+                    };
+                }
+
+                const usage = fieldUsageBySlot[slotIdx][fieldName];
+                usage.count++;
+                usage.bunks[bunkName] = activityName;
+                if (divName && !usage.divisions.includes(divName)) {
+                    usage.divisions.push(divName);
+                }
+
+                // If at capacity, lock in GlobalFieldLocks
+                if (window.GlobalFieldLocks && usage.count >= maxCapacity) {
+                    window.GlobalFieldLocks.lockField(fieldName, [slotIdx], {
+                        lockedBy: 'background_schedule',
+                        division: divName || 'background',
+                        activity: `${activityName} (preserved from other scheduler)`
+                    });
+                }
+
+                // Also register location usage
+                if (window.registerLocationUsage) {
+                    const location = activityProperties?.[fieldName]?.location || 
+                                   window.getLocationForActivity?.(activityName);
+                    if (location) {
+                        window.registerLocationUsage(slotIdx, location, activityName, divName);
+                    }
+                }
+
+                registrations++;
+            }
+        }
+
+        console.log(`[Step1.5] ✅ Registered ${registrations} field usages`);
+        return registrations;
+    }
+
+    // =========================================================================
+    // EXPORT FUNCTIONS FOR USE IN scheduler_core_main.js
+    // =========================================================================
+    
+    window.restoreBackgroundSchedules = restoreBackgroundSchedules;
+    window.registerFieldUsageFromRestoredSchedules = registerFieldUsageFromRestoredSchedules;
+
+    // =========================================================================
+    // COMBINED HELPER
+    // =========================================================================
+    
+    /**
+     * Complete Step 1.5: Restore and register background schedules
+     */
+    window.executeStep1_5 = function(snapshot, divisions, allowedDivisions, fieldUsageBySlot, activityProperties) {
+        console.log('\n[STEP 1.5] ═══════════════════════════════════════════════════');
+        console.log('[STEP 1.5] RESTORING BACKGROUND SCHEDULES');
+        console.log('[STEP 1.5] ═══════════════════════════════════════════════════');
+
+        if (!snapshot || Object.keys(snapshot).length === 0) {
+            console.log('[STEP 1.5] No background snapshot provided - nothing to restore');
+            return { bunksRestored: 0, fieldsRegistered: 0 };
+        }
+
+        // Restore schedules
+        const bunksRestored = restoreBackgroundSchedules(
+            snapshot, 
+            divisions, 
+            allowedDivisions
+        );
+
+        // Register field usage
+        const fieldsRegistered = registerFieldUsageFromRestoredSchedules(
+            snapshot,
+            divisions,
+            allowedDivisions,
+            fieldUsageBySlot,
+            activityProperties
+        );
+
+        console.log('[STEP 1.5] ═══════════════════════════════════════════════════');
+        console.log(`[STEP 1.5] COMPLETE: ${bunksRestored} bunks, ${fieldsRegistered} field registrations`);
+        console.log('[STEP 1.5] ═══════════════════════════════════════════════════\n');
+
+        return { bunksRestored, fieldsRegistered };
+    };
+
+    console.log('[Step1.5Patch] ✅ Loaded');
+
+})();
 
         // =========================================================================
         // STEP 2: Process Bunk Overrides (Pinned specific bunks)
