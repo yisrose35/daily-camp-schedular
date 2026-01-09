@@ -1,3 +1,4 @@
+
 // ============================================================================
 // scheduler_core_main.js (FIXED v13 - MERGED SCHEDULE GENERATION)
 // ============================================================================
@@ -393,12 +394,7 @@
 
         // ★★★ FILTER JOBS BY ALLOWED DIVISIONS ★★★
         const filteredJobs = allowedDivisions 
-            ? smartJobs.filter(job => {
-                if (allowedDivisions instanceof Set) {
-                    return allowedDivisions.has(String(job.division));
-                }
-                return allowedDivisions.includes(job.division);
-            })
+            ? smartJobs.filter(job => allowedDivisions.includes(job.division))
             : smartJobs;
 
         console.log(`[SmartTile] Processing ${filteredJobs.length} smart tile jobs (filtered from ${smartJobs.length})`);
@@ -538,14 +534,8 @@
     window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null) {
         console.log("\n" + "=".repeat(70));
         console.log("★★★ OPTIMIZER STARTED (v13 - MULTI-TENANT MERGE SUPPORT) ★★★");
-        
-        // ★★★ SECURITY: NORMALIZE ALLOWED DIVISIONS ★★★
-        // Create a strict set for checking access. This prevents type coercion errors (string vs int)
-        // and provides O(1) lookups for the "Hard Rule" enforcement.
-        let allowedDivisionsSet = null;
-        if (allowedDivisions && Array.isArray(allowedDivisions)) {
-            allowedDivisionsSet = new Set(allowedDivisions.map(String));
-            console.log(`★★★ PARTIAL MODE ACTIVE: Generating for [${Array.from(allowedDivisionsSet).join(', ')}] only ★★★`);
+        if (allowedDivisions) {
+            console.log(`★★★ PARTIAL MODE ACTIVE: Generating for [${allowedDivisions.join(', ')}] only ★★★`);
         }
         console.log("=".repeat(70));
 
@@ -1014,9 +1004,8 @@
                 return;
             }
 
-            // ★★★ PARTIAL GEN CHECK (HARD RULE) ★★★
-            // If strict mode is on, we MUST skip overrides for divisions we don't own.
-            if (allowedDivisionsSet && !allowedDivisionsSet.has(String(divName))) {
+            // ★★★ PARTIAL GEN CHECK ★★★
+            if (allowedDivisions && !allowedDivisions.includes(divName)) {
                 // Skip processing override for locked division (it's already restored in step 1.5)
                 return; 
             }
@@ -1194,12 +1183,10 @@
         electiveTiles.forEach(elective => {
             const electiveDivision = elective.division;
             
-            // ★★★ PARTIAL GEN CHECK (HARD RULE) ★★★
-            // If we are in partial generation mode, SKIP electives for locked divisions.
-            // This prevents Scheduler A from processing Scheduler B's electives.
-            if (allowedDivisionsSet && !allowedDivisionsSet.has(String(electiveDivision))) {
-                return;
-            }
+            // ★★★ PARTIAL GEN CHECK ★★★
+            // Even if we aren't generating for this division, we need to respect its elective locks.
+            // If it's a locked division, its activities are already in 'existingScheduleSnapshot' and locked there.
+            // However, GlobalFieldLocks logic here ensures cross-division exclusion.
             
             const activities = elective.electiveActivities || [];
             const startMin = Utils.parseTimeToMinutes(elective.startTime);
@@ -1268,10 +1255,9 @@
             const bunkList = divisions[divName]?.bunks || [];
             if (bunkList.length === 0) return;
 
-            // ★★★ PARTIAL GEN CHECK (HARD RULE) ★★★
+            // ★★★ PARTIAL GEN CHECK ★★★
             // If we are in partial generation mode, SKIP items for locked divisions.
-            // This enforces that Scheduler A (1,2,3) cannot schedule 4,5,6.
-            if (allowedDivisionsSet && !allowedDivisionsSet.has(String(divName))) {
+            if (allowedDivisions && !allowedDivisions.includes(divName)) {
                 return;
             }
 
@@ -1533,7 +1519,7 @@
             specialActivityNames,
             yesterdayHistory,
             fieldUsageBySlot
-        }, allowedDivisionsSet || allowedDivisions); // Pass strict set if available, or legacy array
+        }, allowedDivisions); // Pass allowedDivisions for filtering
 
         schedulableSlotBlocks.push(...smartTileBlocks);
         console.log(`[SmartTile] Added ${smartTileBlocks.length} blocks to scheduler`);
