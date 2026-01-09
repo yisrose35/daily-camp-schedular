@@ -375,23 +375,28 @@
                 
                 // 3. Add/update MY bunks only
                 for (const [dateKey, dateData] of Object.entries(localSchedules)) {
+                    // Ensure date entry exists with proper structure
                     if (!merged[dateKey]) {
                         merged[dateKey] = { scheduleAssignments: {} };
                     }
+                    
+                    // Handle case where cloud data might be in direct format (no scheduleAssignments wrapper)
+                    // Convert to nested format if needed
                     if (!merged[dateKey].scheduleAssignments) {
-                        merged[dateKey].scheduleAssignments = merged[dateKey];
-                        // Handle case where merged[dateKey] was already assignments
-                        if (typeof merged[dateKey] === 'object' && !merged[dateKey].scheduleAssignments) {
-                            const temp = merged[dateKey];
-                            merged[dateKey] = { scheduleAssignments: temp };
-                        }
+                        // Cloud data is in direct format - wrap it
+                        const existingData = { ...merged[dateKey] };
+                        merged[dateKey] = { scheduleAssignments: existingData };
                     }
                     
-                    // Get assignments from local data
+                    // Get assignments from local data (handle both formats)
                     const localAssignments = dateData.scheduleAssignments || dateData;
                     
                     // Only add MY bunks
                     for (const [bunkName, schedule] of Object.entries(localAssignments)) {
+                        // Skip non-bunk properties
+                        if (bunkName === 'scheduleAssignments' || bunkName === 'leagueAssignments' || bunkName === 'unifiedTimes') {
+                            continue;
+                        }
                         if (myBunks.has(String(bunkName))) {
                             merged[dateKey].scheduleAssignments[bunkName] = schedule;
                         }
