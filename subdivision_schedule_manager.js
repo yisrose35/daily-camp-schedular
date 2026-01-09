@@ -1,13 +1,14 @@
+
 // ============================================================================
-// subdivision_schedule_manager.js (v1.12 - SNAPSHOT & INIT FIX)
+// subdivision_schedule_manager.js (v1.11 - STRICT FILTERING FIX)
 // ============================================================================
 // MULTI-SCHEDULER SYSTEM: Allows multiple schedulers to create schedules for
 // their assigned subdivisions while respecting each other's locked schedules.
 //
-// UPDATE v1.12:
-// - Added getLockedScheduleSnapshot() to pass data to Scheduler Core
-// - Improved initialization robustness (ensureInitialized)
-// - Preserves strict filtering and owner logic
+// UPDATE v1.11:
+// - Strict Filtering: Standard schedulers are forcefully restricted to ONLY
+//   the divisions within their assigned subdivisions.
+// - Owner Superuser: Owners retain full access to everything.
 // ============================================================================
 
 (function() {
@@ -28,7 +29,6 @@
     // =========================================================================
 
     let _initialized = false;
-    let _initializingPromise = null;
     let _currentUserSubdivisions = [];
     let _allSubdivisions = [];
     let _subdivisionSchedules = {};
@@ -38,44 +38,38 @@
     // =========================================================================
 
     async function initialize() {
-        if (_initialized) return true;
-        if (_initializingPromise) return _initializingPromise;
+        console.log('[SubdivisionScheduler] Initializing...');
 
-        _initializingPromise = (async () => {
-            console.log('[SubdivisionScheduler] Initializing...');
+        // Wait for AccessControl to be ready
+        if (!window.AccessControl?.isInitialized) {
+            console.log('[SubdivisionScheduler] Waiting for AccessControl...');
+            await new Promise(resolve => {
+                const check = setInterval(() => {
+                    if (window.AccessControl?.isInitialized) {
+                        clearInterval(check);
+                        resolve();
+                    }
+                }, 100);
+                setTimeout(() => {
+                    clearInterval(check);
+                    resolve();
+                }, 10000);
+            });
+        }
 
-            // Wait for AccessControl to be ready
-            let attempts = 0;
-            while (!window.AccessControl?.isInitialized && attempts < 50) {
-                await new Promise(r => setTimeout(r, 100));
-                attempts++;
-            }
+        _currentUserSubdivisions = window.AccessControl?.getUserSubdivisions?.() || [];
+        _allSubdivisions = window.AccessControl?.getAllSubdivisions?.() || [];
 
-            if (!window.AccessControl?.isInitialized) {
-                console.warn('[SubdivisionScheduler] AccessControl timed out or not available.');
-            }
+        await loadSubdivisionSchedules();
 
-            _currentUserSubdivisions = window.AccessControl?.getUserSubdivisions?.() || [];
-            _allSubdivisions = window.AccessControl?.getAllSubdivisions?.() || [];
+        _initialized = true;
+        console.log('[SubdivisionScheduler] Initialized');
+        console.log(`  Current user has access to ${_currentUserSubdivisions.length} subdivisions`);
+        console.log(`  Camp has ${_allSubdivisions.length} total subdivisions`);
 
-            await loadSubdivisionSchedules();
+        window.dispatchEvent(new CustomEvent('subdivisionSchedulerReady'));
 
-            _initialized = true;
-            console.log('[SubdivisionScheduler] Initialized');
-            console.log(`  Current user has access to ${_currentUserSubdivisions.length} subdivisions`);
-            console.log(`  Camp has ${_allSubdivisions.length} total subdivisions`);
-
-            window.dispatchEvent(new CustomEvent('subdivisionSchedulerReady'));
-            return true;
-        })();
-
-        return _initializingPromise;
-    }
-
-    // Helper to ensure we are ready before doing work
-    async function ensureInitialized() {
-        if (_initialized) return true;
-        return initialize();
+        return true;
     }
 
     // =========================================================================
@@ -194,59 +188,7 @@
     }
 
     // =========================================================================
-    // SNAPSHOT GENERATION (CRITICAL FOR INTEGRATION)
-    // =========================================================================
-
-    /**
-     * Returns a snapshot of schedules from ALL subdivisions NOT assigned to the current user.
-     * This allows the scheduler core to "restore" these as fixed blocks.
-     */
-    function getLockedScheduleSnapshot() {
-        const snapshot = {};
-        const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
-        const role = window.AccessControl?.getCurrentRole?.();
-        const isOwner = role === 'owner' || role === 'admin';
-
-        for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            // 1. Skip Empty
-            if (schedule.status === SCHEDULE_STATUS.EMPTY) continue;
-
-            // 2. Logic: Who do we include in the snapshot?
-            // If I am Owner: I generally want to see everything, but if I am "editing everything",
-            // I might not want them locked. However, typically owners want to preserve what exists
-            // unless they explicitly clear it.
-            // If I am Scheduler: I MUST see everything that isn't mine as locked.
-
-            let includeInSnapshot = false;
-
-            if (isOwner) {
-                // Owner generating: Don't treat anything as "locked" in the snapshot sense
-                // because we want the owner to be able to regenerate everything if they choose 'Generate All'.
-                // If the owner wants to lock specific divisions, they should do partial generation.
-                includeInSnapshot = false;
-            } else {
-                // Scheduler: Include anything I don't own
-                if (!mySubIds.has(subId)) {
-                    includeInSnapshot = true;
-                }
-            }
-
-            if (!includeInSnapshot) continue;
-
-            // Merge schedule data into snapshot
-            const subData = schedule.scheduleData || {};
-            for (const [bunkName, slots] of Object.entries(subData)) {
-                if (!snapshot[bunkName]) {
-                    snapshot[bunkName] = slots; // Array of slot objects
-                }
-            }
-        }
-
-        return snapshot;
-    }
-
-    // =========================================================================
-    // LOCKING ACTIONS
+    // SCHEDULE LOCKING
     // =========================================================================
 
     function lockSubdivisionSchedule(subdivisionId) {
@@ -333,7 +275,7 @@
     }
 
     // =========================================================================
-    // DATA EXTRACTION & CLAIM MANAGEMENT
+    // SCHEDULE DATA EXTRACTION
     // =========================================================================
 
     function extractScheduleDataForSubdivision(subdivisionId) {
@@ -402,6 +344,10 @@
         return claims;
     }
 
+    // =========================================================================
+    // CROSS-SUBDIVISION FIELD CLAIMS (THE CORE FIX)
+    // =========================================================================
+
     function getLockedFieldUsageClaims() {
         const claims = {};
         const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
@@ -409,22 +355,35 @@
         const isOwner = role === 'owner' || role === 'admin';
 
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
+            // 1. Skip Empty Schedules
             if (schedule.status === SCHEDULE_STATUS.EMPTY) continue;
 
+            // 2. Determine if we should treat this as a LOCK
             let treatAsLock = false;
+
             if (isOwner) {
+                // Owner / Admin Logic:
+                // Owners are NEVER locked out. They can overwrite/change anything.
+                // treatAsLock remains false.
                 treatAsLock = false; 
             } else {
-                // If it's NOT my subdivision, I must respect it (Draft OR Locked)
+                // Standard User Logic:
                 if (mySubIds.has(subId)) {
+                    // This is MY subdivision (assigned to me).
+                    // I ignore my own Drafts (I am working on them).
+                    // I ignore my own Locks (I can unlock/overwrite them).
                     treatAsLock = false;
                 } else {
+                    // This is SOMEONE ELSE'S subdivision (not assigned to me).
+                    // I MUST respect it if it exists (Draft OR Locked).
+                    // This creates the "Automatic Locking" effect for others.
                     treatAsLock = true;
                 }
             }
 
             if (!treatAsLock) continue;
 
+            // 3. Extract claims from the locked/blocking schedule
             const subClaims = schedule.fieldUsageClaims || {};
 
             for (const [slotIdx, slotClaims] of Object.entries(subClaims)) {
@@ -501,9 +460,6 @@
     // =========================================================================
 
     function restoreLockedSchedules() {
-        // This functionality is now largely handled by getLockedScheduleSnapshot passed to the core
-        // but we keep the logic here in case needed for legacy calls or checks.
-        // It modifies the global window.scheduleAssignments directly.
         const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
         const role = window.AccessControl?.getCurrentRole?.();
         const isOwner = role === 'owner' || role === 'admin';
@@ -511,11 +467,19 @@
         let restoredCount = 0;
 
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
+            // Logic for restoring:
+            // Standard User: Restore anything I am NOT assigned to (background constraints).
+            // Owner: Restore nothing as a "lock", because I can edit everything.
+            //        (Or restore locked items just for visibility? If I want to CHANGE them,
+            //         I shouldn't restore them as read-only locks. I should load them as active data).
+            
             let shouldRestore = false;
             
             if (isOwner) {
+                // Owner does not treat anything as a hard lock constraint in the generator
                 shouldRestore = false;
             } else {
+                // Standard User restores anything they don't own.
                 if (!mySubIds.has(subId) && schedule.status !== SCHEDULE_STATUS.EMPTY) {
                     shouldRestore = true;
                 }
@@ -573,7 +537,7 @@
     }
 
     // =========================================================================
-    // DIVISION FILTERING & STATUS UPDATE
+    // DIVISION FILTERING
     // =========================================================================
 
     function getDivisionsToSchedule() {
@@ -585,10 +549,13 @@
 
         // 1. Collect from assigned subdivisions
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
+            // STRICT FILTERING FOR STANDARD USERS
+            // If I am NOT an owner, I MUST be assigned to this subdivision to schedule it.
             if (!isOwner && !mySubIds.has(subId)) continue;
-            // Standard users cannot edit locked schedules, but we assume they can generate DRAFTS for their own.
-            // If their OWN schedule is locked, they can still generate (overwriting it essentially, 
-            // though UI usually asks to unlock first). 
+            
+            // Standard users never schedule locked subdivisions (they are read-only)
+            // Owners CAN schedule locked subdivisions (to edit them)
+            if (!isOwner && schedule.status === SCHEDULE_STATUS.LOCKED) continue;
             
             (schedule.divisions || []).forEach(d => divisionsToSchedule.add(d));
         }
@@ -606,6 +573,11 @@
                     divisionsToSchedule.add(div);
                 }
             });
+            
+            const orphans = allDivisions.filter(d => !assignedDivisions.has(d));
+            if (orphans.length > 0) {
+                 console.log(`[SubdivisionScheduler] Including ${orphans.length} orphaned divisions for Owner: ${orphans.join(', ')}`);
+            }
         }
 
         return [...divisionsToSchedule];
@@ -626,50 +598,14 @@
 
     function isBunkLocked(bunkName) {
         const allDivisions = window.divisions || {};
+        
         for (const [divName, divInfo] of Object.entries(allDivisions)) {
             if (divInfo.bunks?.includes(bunkName)) {
                 return isDivisionLocked(divName);
             }
         }
+
         return false;
-    }
-
-    function markSubdivisionAsDraft(subdivisionId) {
-        const schedule = _subdivisionSchedules[subdivisionId];
-        if (!schedule) return;
-
-        const role = window.AccessControl?.getCurrentRole?.();
-        const isOwner = role === 'owner' || role === 'admin';
-
-        if (!isOwner && schedule.status === SCHEDULE_STATUS.LOCKED) {
-            console.warn('[SubdivisionScheduler] Cannot modify locked schedule');
-            return;
-        }
-
-        schedule.status = SCHEDULE_STATUS.DRAFT;
-        schedule.lastModifiedAt = Date.now();
-        schedule.lastModifiedBy = window.AccessControl?.getCurrentUserInfo?.()?.email || 'unknown';
-
-        schedule.scheduleData = extractScheduleDataForSubdivision(subdivisionId);
-        schedule.fieldUsageClaims = extractFieldUsageClaimsForSubdivision(subdivisionId);
-
-        saveSubdivisionSchedules();
-    }
-
-    function markCurrentUserSubdivisionsAsDraft() {
-        const role = window.AccessControl?.getCurrentRole?.();
-        const isOwner = role === 'owner' || role === 'admin';
-
-        if (isOwner) {
-            _allSubdivisions.forEach(sub => {
-                const schedule = _subdivisionSchedules[sub.id];
-                if (schedule) markSubdivisionAsDraft(sub.id);
-            });
-        } else {
-            _currentUserSubdivisions.forEach(sub => {
-                markSubdivisionAsDraft(sub.id);
-            });
-        }
     }
 
     // =========================================================================
@@ -678,8 +614,10 @@
 
     function getSubdivisionStatusSummary() {
         const summary = [];
+
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
             const canEdit = canEditSubdivision(subId);
+
             summary.push({
                 id: subId,
                 name: schedule.subdivisionName,
@@ -691,15 +629,20 @@
                 isMySubdivision: canEdit
             });
         }
+
         return summary;
     }
 
     function getDivisionLockStatus(divisionName) {
         const sub = getSubdivisionForDivision(divisionName);
-        if (!sub) return { isLocked: false, canEdit: false, message: 'Division not found' };
+        if (!sub) {
+            return { isLocked: false, canEdit: false, message: 'Division not found' };
+        }
 
         const schedule = _subdivisionSchedules[sub.id];
-        if (!schedule) return { isLocked: false, canEdit: false, message: 'Schedule not found' };
+        if (!schedule) {
+            return { isLocked: false, canEdit: false, message: 'Schedule not found' };
+        }
 
         const canEdit = canEditSubdivision(sub.id);
         const isLocked = schedule.status === SCHEDULE_STATUS.LOCKED;
@@ -725,44 +668,133 @@
         };
     }
 
-    function debugPrintStatus() {
-        console.log('--- SubdivisionScheduler Status ---');
-        console.log('Init:', _initialized);
-        console.log('Schedules:', Object.keys(_subdivisionSchedules).length);
+    // =========================================================================
+    // UPDATE SCHEDULE STATUS
+    // =========================================================================
+
+    function markSubdivisionAsDraft(subdivisionId) {
+        const schedule = _subdivisionSchedules[subdivisionId];
+        if (!schedule) return;
+
+        const role = window.AccessControl?.getCurrentRole?.();
+        const isOwner = role === 'owner' || role === 'admin';
+
+        // Owners can edit locked schedules, effectively drafting them
+        if (!isOwner && schedule.status === SCHEDULE_STATUS.LOCKED) {
+            console.warn('[SubdivisionScheduler] Cannot modify locked schedule');
+            return;
+        }
+
+        schedule.status = SCHEDULE_STATUS.DRAFT;
+        schedule.lastModifiedAt = Date.now();
+        schedule.lastModifiedBy = window.AccessControl?.getCurrentUserInfo?.()?.email || 'unknown';
+
+        schedule.scheduleData = extractScheduleDataForSubdivision(subdivisionId);
+        schedule.fieldUsageClaims = extractFieldUsageClaimsForSubdivision(subdivisionId);
+
+        saveSubdivisionSchedules();
+    }
+
+    function markCurrentUserSubdivisionsAsDraft() {
+        const role = window.AccessControl?.getCurrentRole?.();
+        const isOwner = role === 'owner' || role === 'admin';
+
+        if (isOwner) {
+            // Owner behavior: Touch any non-empty schedule to keep timestamps fresh
+            _allSubdivisions.forEach(sub => {
+                const schedule = _subdivisionSchedules[sub.id];
+                if (schedule) {
+                    markSubdivisionAsDraft(sub.id);
+                }
+            });
+        } else {
+            // Standard users only mark THEIR assignments
+            _currentUserSubdivisions.forEach(sub => {
+                markSubdivisionAsDraft(sub.id);
+            });
+        }
     }
 
     // =========================================================================
-    // SMART RESOURCE SHARING STUBS (Prevents crashes if Logic Filler calls them)
+    // DEBUG
     // =========================================================================
-    
-    function getUnscheduledSubdivisionCount() { return 0; }
-    function calculateFairResourceShare(slots) { return {}; }
-    function getSmartResourceAllocation(slots) { return {}; }
-    function getRemainingFieldCapacity(fieldName, slots) { return 99; } // Default open
+
+    function debugPrintStatus() {
+        console.log('\n' + '='.repeat(70));
+        console.log('SUBDIVISION SCHEDULE MANAGER STATUS');
+        console.log('='.repeat(70));
+
+        console.log('\nCurrent User Subdivisions:');
+        _currentUserSubdivisions.forEach(sub => {
+            console.log(`  ${sub.name} (${sub.id})`);
+            console.log(`    Divisions: ${sub.divisions?.join(', ') || 'none'}`);
+        });
+
+        console.log('\nAll Subdivision Schedules:');
+        for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
+            const statusIcon = schedule.status === SCHEDULE_STATUS.LOCKED ? '🔒' :
+                              schedule.status === SCHEDULE_STATUS.DRAFT ? '📝' : '⬜';
+            const canEdit = canEditSubdivision(subId);
+            
+            console.log(`\n  ${statusIcon} ${schedule.subdivisionName}`);
+            console.log(`     ID: ${subId}`);
+            console.log(`     Status: ${schedule.status}`);
+            console.log(`     Divisions: ${schedule.divisions?.join(', ') || 'none'}`);
+            console.log(`     Can Edit: ${canEdit}`);
+            
+            if (schedule.lockedBy) {
+                console.log(`     Locked By: ${schedule.lockedBy.email}`);
+                console.log(`     Locked At: ${new Date(schedule.lockedAt).toLocaleString()}`);
+            }
+
+            const claimCount = Object.keys(schedule.fieldUsageClaims || {}).length;
+            console.log(`     Field Claims: ${claimCount} slots`);
+        }
+
+        console.log('\n' + '='.repeat(70));
+    }
 
     // =========================================================================
     // EXPORTS
     // =========================================================================
 
     window.SubdivisionScheduleManager = {
+        // Initialization
         initialize,
-        ensureInitialized,
         get isInitialized() { return _initialized; },
+
+        // Constants
         SCHEDULE_STATUS,
+
+        // Subdivision access
         getEditableSubdivisions,
         getAllSubdivisions,
         canEditSubdivision,
         canEditDivision,
         getSubdivisionForDivision,
+
+        // Schedule status
         getSubdivisionSchedule,
         getAllSubdivisionSchedules,
         isSubdivisionLocked,
         isDivisionLocked,
         getOtherLockedSubdivisions,
+
+        // Locking
         lockSubdivisionSchedule,
         unlockSubdivisionSchedule,
+
+        // Cross-subdivision awareness
         getLockedFieldUsageClaims,
-        getLockedScheduleSnapshot, // NEW
+        // isFieldClaimedByOthers,
+        getRemainingFieldCapacity,
+
+        // Smart resource sharing
+        getUnscheduledSubdivisionCount,
+        calculateFairResourceShare,
+        getSmartResourceAllocation,
+
+        // Schedule generation helpers
         markSubdivisionAsDraft,
         markCurrentUserSubdivisionsAsDraft,
         restoreLockedSchedules,
@@ -770,17 +802,15 @@
         getDivisionsToSchedule,
         getBunksToSchedule,
         isBunkLocked,
+
+        // UI helpers
         getSubdivisionStatusSummary,
         getDivisionLockStatus,
-        debugPrintStatus,
-        
-        // Smart Resource Stubs
-        getUnscheduledSubdivisionCount,
-        calculateFairResourceShare,
-        getSmartResourceAllocation,
-        getRemainingFieldCapacity
+
+        // Debug
+        debugPrintStatus
     };
 
-    console.log('[SubdivisionScheduler] Module loaded v1.12');
+    console.log('[SubdivisionScheduler] Module loaded v1.11 (Strict Filtering Fix)');
 
 })();
