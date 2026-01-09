@@ -1,5 +1,5 @@
 // ============================================================================
-// rbac_visual_restrictions.js - v2.1 (VISUAL UPDATE: VIEW ALL, EDIT SOME)
+// rbac_visual_restrictions.js - v2.2 (FIXED: API Compatibility)
 // ============================================================================
 // This version explicitly ALLOWS viewing of all divisions but restricts editing.
 // It removes any logic that might hide columns or elements.
@@ -8,7 +8,7 @@
 (function() {
     'use strict';
 
-    console.log("🚫 Visual Restrictions v2.1 (VIEW ALL) loading...");
+    console.log("🚫 Visual Restrictions v2.2 (VIEW ALL + API FIX) loading...");
 
     class VisualRestrictions {
         constructor() {
@@ -16,13 +16,19 @@
             this.editableDivisions = [];
         }
 
-        init(role, editableDivisions) {
+        // RENAMED from 'init' to 'initialize' to match rbac_init.js expectation
+        initialize(role, editableDivisions) {
             this.role = role;
             this.editableDivisions = editableDivisions || [];
             console.log(`🚫 Visual Restrictions initialized: {role: '${role}', editableDivisions: [${this.editableDivisions.join(', ')}]}`);
             
             // Apply styles for read-only cells
             this.applyReadonlyState();
+        }
+
+        // Kept for backward compatibility if any other module calls init()
+        init(role, editableDivisions) {
+            this.initialize(role, editableDivisions);
         }
 
         applyReadonlyState() {
@@ -46,7 +52,9 @@
                     background-color: #f9f9f9 !important;
                 }
                 /* Ensure columns are visible */
-                th[data-division], td[data-division] {
+                th[data-division], td[data-division],
+                .division-header, .bunk-header,
+                .schedule-cell[data-division] {
                     display: table-cell !important;
                     visibility: visible !important;
                     opacity: 1 !important;
@@ -65,7 +73,7 @@
         
         // Helper to update state if RBAC reloads
         refresh(role, divs) {
-            this.init(role, divs);
+            this.initialize(role, divs);
         }
     }
 
@@ -74,14 +82,14 @@
     
     // Auto-hook into AccessControl if available
     if (window.AccessControl && window.AccessControl.isInitialized) {
-        window.VisualRestrictions.init(
+        window.VisualRestrictions.initialize(
             window.AccessControl.getCurrentRole(),
             window.AccessControl.getEditableDivisions()
         );
     } else {
         // Listen for load
         window.addEventListener('campistry-access-loaded', (e) => {
-             window.VisualRestrictions.init(e.detail.role, e.detail.editableDivisions);
+             window.VisualRestrictions.initialize(e.detail.role, e.detail.editableDivisions);
         });
     }
 
