@@ -1,11 +1,11 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v3.9.4 (Fixes 400 Error & Cache Headers)
+// FIXED VERSION: v3.9.5 (PROPER BUNK-LEVEL MERGE)
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v3.9.4 (MULTI-TENANT SAFE)");
+  console.log("☁️ Campistry Cloud Bridge v3.9.5 (BUNK-LEVEL MERGE FIX)");
 
   // DIRECT CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -242,7 +242,6 @@
 
       console.log("☁️ Loading from cloud for camp:", campId);
 
-      // ★★★ FIX: REMOVED _t PARAMETER (CAUSED 400 BAD REQUEST) ★★★
       const url = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}&select=state`;
       
       const response = await fetch(url, {
@@ -251,7 +250,7 @@
           'apikey': SUPABASE_KEY,
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache', // Use header for cache busting instead
+          'Cache-Control': 'no-cache',
           'Pragma': 'no-cache'
         }
       });
@@ -267,6 +266,89 @@
         return null; 
     }
   }
+
+  // ============================================================================
+  // ★★★ NEW: BUNK-LEVEL MERGE HELPER ★★★
+  // ============================================================================
+  
+  function getBunksForDivisions(divisionIds) {
+      const divisions = window.divisions || {};
+      const bunks = new Set();
+      
+      for (const divId of divisionIds) {
+          const divInfo = divisions[divId] || divisions[String(divId)];
+          if (divInfo && divInfo.bunks) {
+              divInfo.bunks.forEach(b => bunks.add(String(b)));
+          }
+      }
+      
+      return bunks;
+  }
+
+  function smartMergeDailySchedules(localSchedules, cloudSchedules, myDivisions) {
+      console.log('☁️ [MERGE] Starting BUNK-LEVEL merge...');
+      console.log(`☁️ [MERGE]   My divisions: [${myDivisions.join(', ')}]`);
+      
+      // Get bunk names for my divisions
+      const myBunks = getBunksForDivisions(myDivisions);
+      console.log(`☁️ [MERGE]   My bunks: ${myBunks.size} (${[...myBunks].slice(0, 5).join(', ')}${myBunks.size > 5 ? '...' : ''})`);
+      
+      // Start with cloud data as base (preserves other schedulers' work)
+      const merged = cloudSchedules ? JSON.parse(JSON.stringify(cloudSchedules)) : {};
+      
+      // For each date in local data
+      for (const [dateKey, dateData] of Object.entries(localSchedules || {})) {
+          // Ensure date entry exists in merged
+          if (!merged[dateKey]) {
+              merged[dateKey] = {};
+          }
+          
+          // Handle nested scheduleAssignments structure
+          if (dateData.scheduleAssignments) {
+              if (!merged[dateKey].scheduleAssignments) {
+                  merged[dateKey].scheduleAssignments = {};
+              }
+              
+              // Only overwrite MY bunks
+              for (const [bunkName, bunkSchedule] of Object.entries(dateData.scheduleAssignments)) {
+                  if (myBunks.has(String(bunkName))) {
+                      merged[dateKey].scheduleAssignments[bunkName] = bunkSchedule;
+                  }
+              }
+              
+              // Copy other date-level properties (like metadata)
+              for (const [key, value] of Object.entries(dateData)) {
+                  if (key !== 'scheduleAssignments') {
+                      merged[dateKey][key] = value;
+                  }
+              }
+          } else {
+              // Legacy format: dateData IS the scheduleAssignments directly
+              for (const [bunkName, bunkSchedule] of Object.entries(dateData)) {
+                  if (myBunks.has(String(bunkName))) {
+                      merged[dateKey][bunkName] = bunkSchedule;
+                  }
+              }
+          }
+      }
+      
+      // Log what we preserved vs overwrote
+      const allCloudBunks = new Set();
+      for (const dateData of Object.values(cloudSchedules || {})) {
+          const assignments = dateData.scheduleAssignments || dateData;
+          Object.keys(assignments).forEach(b => allCloudBunks.add(b));
+      }
+      
+      const preservedBunks = [...allCloudBunks].filter(b => !myBunks.has(String(b)));
+      console.log(`☁️ [MERGE]   Preserved ${preservedBunks.length} background bunks`);
+      console.log(`☁️ [MERGE]   Overwrote ${myBunks.size} local bunks`);
+      
+      return merged;
+  }
+
+  // ============================================================================
+  // SAVE TO CLOUD (FIXED)
+  // ============================================================================
 
   async function saveToCloud(state) {
     try {
@@ -314,19 +396,25 @@
                         // 2. Identify divisions I am allowed to edit
                         let myDivisions = [];
                         
-                        // Primary: AccessControl
-                        if (window.AccessControl && window.AccessControl.getUserDivisions) {
-                             const acDivs = window.AccessControl.getUserDivisions();
+                        // Primary: AccessControl.getEditableDivisions
+                        if (window.AccessControl && window.AccessControl.getEditableDivisions) {
+                             const acDivs = window.AccessControl.getEditableDivisions();
                              if (acDivs && acDivs.length > 0) myDivisions = acDivs;
                         } 
                         
-                        // Fallback 1: Scheduler Manager
+                        // Fallback 1: AccessControl.getUserDivisions
+                        if (myDivisions.length === 0 && window.AccessControl && window.AccessControl.getUserDivisions) {
+                             const acDivs = window.AccessControl.getUserDivisions();
+                             if (acDivs && acDivs.length > 0) myDivisions = acDivs;
+                        }
+                        
+                        // Fallback 2: Scheduler Manager
                         if (myDivisions.length === 0 && window.SubdivisionScheduleManager && window.SubdivisionScheduleManager.getDivisionsToSchedule) {
                              const schedDivs = window.SubdivisionScheduleManager.getDivisionsToSchedule();
                              if (schedDivs && schedDivs.length > 0) myDivisions = schedDivs;
                         }
 
-                        // Fallback 2: Direct Membership Object
+                        // Fallback 3: Direct Membership Object
                         if (myDivisions.length === 0 && window._campistryMembership && window._campistryMembership.assigned_divisions) {
                             myDivisions = window._campistryMembership.assigned_divisions;
                         }
@@ -334,23 +422,17 @@
                         if (myDivisions && myDivisions.length > 0) {
                              console.log(`☁️ [MERGE] Authorized divisions: [${myDivisions.join(', ')}]`);
                              
-                             // 3. Start with Cloud State (Background Truth)
-                             finalSchedules = { ...cloudSchedules };
-
-                             // 4. Overlay Local State (My Work)
-                             myDivisions.forEach(divId => {
-                                 // Only apply my local data if I actually have data for this division
-                                 if (localSchedules[divId] !== undefined) {
-                                     finalSchedules[divId] = localSchedules[divId];
-                                 }
-                             });
+                             // ★★★ USE BUNK-LEVEL MERGE ★★★
+                             finalSchedules = smartMergeDailySchedules(localSchedules, cloudSchedules, myDivisions);
                              
-                             console.log(`☁️ [MERGE] Success. Combined ${Object.keys(cloudSchedules).length} cloud divs with local changes.`);
+                             console.log(`☁️ [MERGE] ✅ Bunk-level merge complete`);
                         } else {
-                            console.warn("☁️ [MERGE] No authorized divisions found. Merging failed.");
+                            console.warn("☁️ [MERGE] No authorized divisions found. Aborting to protect data.");
+                            showToast("❌ No permissions - Save Aborted", "error");
+                            return false;
                         }
                     } else {
-                        console.warn("☁️ [MERGE] Cloud state fetch returned null. Defaulting to local state.");
+                        console.warn("☁️ [MERGE] Cloud state fetch returned null. Using local state.");
                     }
                 } catch (mergeErr) {
                     console.error("☁️ [MERGE] Failed. Aborting save to protect data.", mergeErr);
