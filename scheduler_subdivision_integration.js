@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_subdivision_integration.js (v2.0 - PROPER MULTI-SCHEDULER)
+// scheduler_subdivision_integration.js (v2.1 - PROPER MULTI-SCHEDULER)
 // ============================================================================
 // CRITICAL FIX: Properly load and preserve schedules from other schedulers
 //
@@ -11,18 +11,16 @@
 // 5. Generate only for OUR divisions
 // 6. Save merged result to cloud
 // ============================================================================
-
 (function() {
     'use strict';
-
-    console.log('[SchedulerSubdivisionIntegration] Loading v2.0...');
-
+    console.log('[SchedulerSubdivisionIntegration] Loading v2.1...');
+    
     // =========================================================================
     // STORAGE KEYS
     // =========================================================================
     
     const DAILY_DATA_KEY = "campDailyData_v1";
-
+    
     // =========================================================================
     // HELPERS
     // =========================================================================
@@ -30,7 +28,7 @@
     function getCurrentDate() {
         return window.currentScheduleDate || new Date().toISOString().split('T')[0];
     }
-
+    
     function getMyEditableDivisions() {
         // Method 1: AccessControl (preferred)
         if (window.AccessControl?.getEditableDivisions) {
@@ -52,18 +50,18 @@
         
         return [];
     }
-
+    
     function getBackgroundDivisions() {
         const all = Object.keys(window.divisions || {});
         const mine = new Set(getMyEditableDivisions());
         return all.filter(d => !mine.has(d));
     }
-
+    
     function isOwnerOrAdmin() {
         const role = window.AccessControl?.getCurrentRole?.();
         return role === 'owner' || role === 'admin';
     }
-
+    
     // =========================================================================
     // LOAD EXISTING SCHEDULES FROM CLOUD
     // =========================================================================
@@ -112,7 +110,7 @@
         console.log('[Integration] ⚠️ No existing schedule data found');
         return {};
     }
-
+    
     // =========================================================================
     // EXTRACT SNAPSHOT FOR BACKGROUND DIVISIONS
     // =========================================================================
@@ -166,7 +164,7 @@
         console.log(`[Integration] 📦 Extracted: ${extractedBunks} bunks, ${extractedSlots} total slots`);
         return snapshot;
     }
-
+    
     // =========================================================================
     // FILTER SKELETON FOR MY DIVISIONS
     // =========================================================================
@@ -188,7 +186,7 @@
         console.log(`[Integration] 🔍 Skeleton filtered: ${original} → ${filtered.length} items`);
         return filtered;
     }
-
+    
     // =========================================================================
     // MAIN HOOK: Intercept schedule generation
     // =========================================================================
@@ -197,7 +195,7 @@
     
     async function multiSchedulerWrapper(manualSkeleton, externalOverrides) {
         console.log('\n' + '═'.repeat(70));
-        console.log('★★★ MULTI-SCHEDULER INTEGRATION v2.0 ★★★');
+        console.log('★★★ MULTI-SCHEDULER INTEGRATION v2.1 ★★★');
         console.log('═'.repeat(70));
         
         const dateKey = getCurrentDate();
@@ -274,7 +272,7 @@
         
         return result;
     }
-
+    
     // =========================================================================
     // INSTALL HOOKS
     // =========================================================================
@@ -297,7 +295,7 @@
             console.log('[Integration] ✅ Hooked runSkeletonOptimizer');
         }
     }
-
+    
     // =========================================================================
     // INITIALIZATION
     // =========================================================================
@@ -324,7 +322,7 @@
     } else {
         setTimeout(initialize, 100);
     }
-
+    
     // =========================================================================
     // EXPORTS
     // =========================================================================
@@ -337,7 +335,6 @@
         extractBackgroundSnapshot,
         filterSkeletonForDivisions
     };
-
-    console.log('[SchedulerSubdivisionIntegration] Module loaded v2.0');
-
+    
+    console.log('[SchedulerSubdivisionIntegration] Module loaded v2.1');
 })();
