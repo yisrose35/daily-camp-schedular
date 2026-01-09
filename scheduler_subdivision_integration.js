@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_subdivision_integration.js (v2.1 - PROPER MULTI-SCHEDULER)
+// scheduler_subdivision_integration.js (v2.2 - DEBUG LOGGING)
 // ============================================================================
 // CRITICAL FIX: Properly load and preserve schedules from other schedulers
 //
@@ -13,7 +13,7 @@
 // ============================================================================
 (function() {
     'use strict';
-    console.log('[SchedulerSubdivisionIntegration] Loading v2.1...');
+    console.log('[SchedulerSubdivisionIntegration] Loading v2.2 (DEBUG)...');
     
     // =========================================================================
     // STORAGE KEYS
@@ -120,27 +120,60 @@
         const divisions = window.divisions || {};
         const dateData = dailyData[dateKey];
         
+        // ★★★ DEBUG: Show what we're working with ★★★
+        console.log('[Integration] 🔍 DEBUG: Extraction starting...');
+        console.log(`[Integration]   Date key: "${dateKey}"`);
+        console.log(`[Integration]   Background divisions to find: [${backgroundDivisions.join(', ')}]`);
+        console.log(`[Integration]   window.divisions keys: [${Object.keys(divisions).join(', ')}]`);
+        
+        // Show bunks per division
+        for (const divKey of Object.keys(divisions)) {
+            const divInfo = divisions[divKey];
+            const bunkCount = divInfo?.bunks?.length || 0;
+            const bunkSample = divInfo?.bunks?.slice(0, 3).join(', ') || 'none';
+            console.log(`[Integration]   Division "${divKey}": ${bunkCount} bunks (${bunkSample}${bunkCount > 3 ? '...' : ''})`);
+        }
+        
         if (!dateData) {
-            console.log(`[Integration] No data for date ${dateKey}`);
+            console.log(`[Integration] ⚠️ No data for date "${dateKey}"`);
+            console.log(`[Integration]   Available dates: [${Object.keys(dailyData).slice(0, 5).join(', ')}...]`);
             return snapshot;
         }
         
         // Try both possible locations for schedule data
         const scheduleAssignments = dateData.scheduleAssignments || dateData;
         
+        // ★★★ DEBUG: Show what's in the cloud data ★★★
+        const allCloudBunks = Object.keys(scheduleAssignments).filter(k => 
+            Array.isArray(scheduleAssignments[k]) && scheduleAssignments[k].length > 0
+        );
+        console.log(`[Integration]   Cloud has ${allCloudBunks.length} bunks with schedules`);
+        console.log(`[Integration]   Sample cloud bunks: [${allCloudBunks.slice(0, 10).join(', ')}${allCloudBunks.length > 10 ? '...' : ''}]`);
+        
         if (!scheduleAssignments || typeof scheduleAssignments !== 'object') {
-            console.log('[Integration] No scheduleAssignments found');
+            console.log('[Integration] ⚠️ No scheduleAssignments found');
             return snapshot;
         }
         
-        const backgroundSet = new Set(backgroundDivisions);
         let extractedBunks = 0;
         let extractedSlots = 0;
         
         // For each background division
         for (const divName of backgroundDivisions) {
             const divInfo = divisions[divName];
-            if (!divInfo || !divInfo.bunks) continue;
+            
+            // ★★★ DEBUG: Show division lookup ★★★
+            if (!divInfo) {
+                console.log(`[Integration]   ❌ Division "${divName}" NOT FOUND in window.divisions`);
+                continue;
+            }
+            
+            if (!divInfo.bunks || divInfo.bunks.length === 0) {
+                console.log(`[Integration]   ❌ Division "${divName}" has NO bunks array`);
+                continue;
+            }
+            
+            console.log(`[Integration]   ✓ Division "${divName}" has ${divInfo.bunks.length} bunks`);
             
             // For each bunk in this division
             for (const bunkName of divInfo.bunks) {
@@ -157,6 +190,9 @@
                     extractedSlots += filledSlots;
                     
                     console.log(`[Integration]   📋 ${bunkName} (${divName}): ${filledSlots} slots`);
+                } else {
+                    // ★★★ DEBUG: Show bunks not found ★★★
+                    console.log(`[Integration]   ⚠️ Bunk "${bunkName}" (${divName}) not in cloud data`);
                 }
             }
         }
@@ -195,7 +231,7 @@
     
     async function multiSchedulerWrapper(manualSkeleton, externalOverrides) {
         console.log('\n' + '═'.repeat(70));
-        console.log('★★★ MULTI-SCHEDULER INTEGRATION v2.1 ★★★');
+        console.log('★★★ MULTI-SCHEDULER INTEGRATION v2.2 (DEBUG) ★★★');
         console.log('═'.repeat(70));
         
         const dateKey = getCurrentDate();
@@ -336,5 +372,5 @@
         filterSkeletonForDivisions
     };
     
-    console.log('[SchedulerSubdivisionIntegration] Module loaded v2.1');
+    console.log('[SchedulerSubdivisionIntegration] Module loaded v2.2 (DEBUG)');
 })();
