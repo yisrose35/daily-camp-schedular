@@ -1,18 +1,17 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v4.2 (Multi-Scheduler Merge + Proper Local Storage)
+// FIXED VERSION: v4.3 (Protected Local Storage During Save)
 // =================================================================
-// KEY FIXES in v4.2:
-// 1. Fixed "Cannot assign to read only property" error in merge
-// 2. Properly deep-clones data before merging
-// 3. Skips non-date keys in daily data iteration
-// 4. ★★★ CRITICAL: Properly unbundles scheduleAssignments to localStorage
+// KEY FIXES in v4.3:
+// 1. Added _localDataProtected flag to prevent overwrites during save
+// 2. protectLocalData() / unprotectLocalData() functions
+// 3. UI refresh events don't overwrite protected local data
 // =================================================================
 
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v4.2 (MULTI-SCHEDULER MERGE + LOCAL STORAGE FIX)");
+  console.log("☁️ Campistry Cloud Bridge v4.3 (PROTECTED LOCAL STORAGE)");
 
   // DIRECT CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -239,6 +238,10 @@
   let _dailyDataDirty = false;
   let _initialized = false;
   const SCHEMA_VERSION = 2;
+  
+  // ★★★ NEW: Protection flag to prevent overwrites during save cycle ★★★
+  let _localDataProtected = false;
+  let _protectionTimeout = null;
 
   function getLocalCache() {
     if (_memoryCache !== null) return _memoryCache;
@@ -250,48 +253,61 @@
   }
   
   // ============================================================================
-  // ★★★ CRITICAL FIX: PROPERLY UNBUNDLE DAILY SCHEDULES ★★★
+  // ★★★ LOCAL DATA PROTECTION ★★★
+  // ============================================================================
+  
+  function protectLocalData() {
+    _localDataProtected = true;
+    console.log("☁️ [PROTECT] Local data protected from overwrites");
+    
+    // Auto-unprotect after 10 seconds as safety
+    if (_protectionTimeout) clearTimeout(_protectionTimeout);
+    _protectionTimeout = setTimeout(() => {
+      if (_localDataProtected) {
+        console.log("☁️ [PROTECT] Auto-unprotecting after timeout");
+        _localDataProtected = false;
+      }
+    }, 10000);
+  }
+  
+  function unprotectLocalData() {
+    _localDataProtected = false;
+    if (_protectionTimeout) {
+      clearTimeout(_protectionTimeout);
+      _protectionTimeout = null;
+    }
+    console.log("☁️ [PROTECT] Local data protection removed");
+  }
+  
+  // ============================================================================
+  // SET LOCAL CACHE (with protection check)
   // ============================================================================
   function setLocalCache(state) {
     if (state.daily_schedules) {
+        // ★★★ CHECK PROTECTION FLAG ★★★
+        if (_localDataProtected) {
+            console.log("☁️ [SYNC] Skipping daily schedule unbundle - local data protected");
+            delete state.daily_schedules;
+            // Still save the non-daily parts
+            _memoryCache = state;
+            try {
+              localStorage.setItem(UNIFIED_CACHE_KEY, JSON.stringify(state));
+              localStorage.setItem(LEGACY_KEYS.globalSettings, JSON.stringify(state));
+              localStorage.setItem(LEGACY_KEYS.localCache, JSON.stringify(state));
+              localStorage.setItem(LEGACY_KEYS.globalRegistry, JSON.stringify({
+                divisions: state.divisions || {},
+                bunks: state.bunks || []
+              }));
+            } catch (e) { console.error("Failed to save local cache:", e); }
+            return;
+        }
+        
         console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
         try {
-            // ★★★ KEY FIX: Always write to localStorage, regardless of _dailyDataDirty
-            // The dirty flag should only prevent OVERWRITING during active editing,
-            // not during initial load from cloud
             const newDailyData = state.daily_schedules;
             
-            // Get existing local data
-            let existingData = {};
-            try {
-                const existingRaw = localStorage.getItem(DAILY_DATA_KEY);
-                if (existingRaw) {
-                    existingData = JSON.parse(existingRaw);
-                }
-            } catch (e) { /* ignore */ }
-            
-            // Merge: cloud data as base, preserve any local-only changes
-            const mergedData = { ...newDailyData };
-            
-            // If we have dirty local data, merge it on top
-            if (_dailyDataDirty) {
-                console.log("☁️ [SYNC] Merging local changes with cloud data...");
-                for (const [dateKey, dateData] of Object.entries(existingData)) {
-                    if (!mergedData[dateKey]) {
-                        mergedData[dateKey] = dateData;
-                    } else if (dateData.scheduleAssignments) {
-                        // Merge scheduleAssignments by user's divisions
-                        mergedData[dateKey].scheduleAssignments = mergeScheduleAssignments(
-                            mergedData[dateKey].scheduleAssignments || {},
-                            dateData.scheduleAssignments,
-                            _userDivisions
-                        );
-                    }
-                }
-            }
-            
-            // ★★★ ALWAYS save to localStorage
-            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(mergedData));
+            // ★★★ ALWAYS save to localStorage (no dirty flag check here) ★★★
+            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(newDailyData));
             console.log("☁️ [SYNC] Daily schedules saved to localStorage");
             
             // Trigger UI refresh
@@ -306,7 +322,6 @@
             console.error("☁️ Failed to save extracted schedules:", e); 
         }
         
-        // Remove from state object (don't store in unified cache)
         delete state.daily_schedules; 
     }
 
@@ -362,19 +377,13 @@
   }
 
   // ============================================================================
-  // ★★★ MERGE SCHEDULE ASSIGNMENTS BY DIVISION ★★★
+  // MERGE HELPERS
   // ============================================================================
   
-  /**
-   * Helper to check if a string looks like a date key (YYYY-MM-DD)
-   */
   function isDateKey(key) {
     return /^\d{4}-\d{2}-\d{2}$/.test(key);
   }
   
-  /**
-   * Deep clone an object safely
-   */
   function safeDeepClone(obj) {
     if (obj === null || obj === undefined) return obj;
     if (typeof obj !== 'object') return obj;
@@ -387,24 +396,15 @@
     }
   }
 
-  /**
-   * Merge local scheduleAssignments with cloud version
-   * Only overwrites bunks that belong to user's divisions
-   */
   function mergeScheduleAssignments(cloudAssignments, localAssignments, userDivisions) {
-    // If user has access to ALL divisions, just return local (they are the authority)
     if (userDivisions === null) {
-      console.log("☁️ [MERGE] User has full access - using local assignments");
       return safeDeepClone(localAssignments) || {};
     }
     
-    // If user has NO divisions, return cloud (they can't change anything)
     if (!userDivisions || userDivisions.length === 0) {
-      console.log("☁️ [MERGE] User has no edit access - keeping cloud assignments");
       return safeDeepClone(cloudAssignments) || {};
     }
     
-    // Get division -> bunks mapping
     const divisions = window.divisions || {};
     const userBunks = new Set();
     
@@ -417,10 +417,8 @@
     
     console.log(`☁️ [MERGE] User can edit ${userBunks.size} bunks in ${userDivisions.length} divisions`);
     
-    // Start with DEEP CLONE of cloud version as base
     const merged = safeDeepClone(cloudAssignments) || {};
     
-    // Overwrite ONLY user's bunks with local data
     for (const [bunkName, slots] of Object.entries(localAssignments || {})) {
       if (userBunks.has(bunkName)) {
         merged[bunkName] = safeDeepClone(slots);
@@ -432,19 +430,13 @@
     return merged;
   }
   
-  /**
-   * Merge daily data with proper division-aware merging
-   */
   async function mergeDailyDataForSave(localDailyData) {
-    // Load current cloud state
     const cloudState = await loadFromCloud();
     const cloudDaily = safeDeepClone(cloudState?.daily_schedules) || {};
     
-    // Start with deep clone of cloud data
     const merged = safeDeepClone(cloudDaily);
     
     for (const [key, value] of Object.entries(localDailyData || {})) {
-      // Skip non-date keys (like timestamps, metadata, etc.)
       if (!isDateKey(key)) {
         merged[key] = safeDeepClone(value);
         continue;
@@ -453,18 +445,15 @@
       const dateKey = key;
       const dateData = value;
       
-      // Skip if dateData is not an object
       if (typeof dateData !== 'object' || dateData === null) {
         merged[dateKey] = dateData;
         continue;
       }
       
-      // Initialize date entry if needed
       if (!merged[dateKey] || typeof merged[dateKey] !== 'object') {
         merged[dateKey] = {};
       }
       
-      // Merge scheduleAssignments with division awareness
       if (dateData.scheduleAssignments && typeof dateData.scheduleAssignments === 'object') {
         merged[dateKey].scheduleAssignments = mergeScheduleAssignments(
           merged[dateKey].scheduleAssignments || {},
@@ -473,13 +462,11 @@
         );
       }
       
-      // Merge subdivisionSchedules (each user manages their own)
       if (dateData.subdivisionSchedules && typeof dateData.subdivisionSchedules === 'object') {
         if (!merged[dateKey].subdivisionSchedules) {
           merged[dateKey].subdivisionSchedules = {};
         }
         
-        // Get user's subdivision IDs
         const mySubIds = new Set();
         try {
           const subs = window.SubdivisionScheduleManager?.getEditableSubdivisions?.() || [];
@@ -487,20 +474,17 @@
         } catch (e) {}
         
         for (const [subId, subData] of Object.entries(dateData.subdivisionSchedules)) {
-          // Owner can update any, schedulers only their own
           if (_userRole === 'owner' || _userRole === 'admin' || mySubIds.has(subId)) {
             merged[dateKey].subdivisionSchedules[subId] = safeDeepClone(subData);
           }
         }
       }
       
-      // Copy other date-level data
       for (const [dataKey, dataValue] of Object.entries(dateData)) {
         if (dataKey === 'scheduleAssignments' || dataKey === 'subdivisionSchedules') {
-          continue; // Already handled above
+          continue;
         }
         
-        // For bunkActivityOverrides, merge by bunk ownership
         if (dataKey === 'bunkActivityOverrides' && _userDivisions !== null && Array.isArray(dataValue)) {
           merged[dateKey][dataKey] = mergeOverridesByBunk(
             merged[dateKey][dataKey] || [],
@@ -508,7 +492,6 @@
             _userDivisions
           );
         } else {
-          // For everything else, just copy
           merged[dateKey][dataKey] = safeDeepClone(dataValue);
         }
       }
@@ -517,9 +500,6 @@
     return merged;
   }
   
-  /**
-   * Merge bunk activity overrides by division ownership
-   */
   function mergeOverridesByBunk(cloudOverrides, localOverrides, userDivisions) {
     if (userDivisions === null) return safeDeepClone(localOverrides);
     if (!userDivisions || userDivisions.length === 0) return safeDeepClone(cloudOverrides);
@@ -534,10 +514,8 @@
       }
     });
     
-    // Keep cloud overrides for bunks user doesn't own
     const merged = (cloudOverrides || []).filter(o => o && !userBunks.has(o.bunk));
     
-    // Add all local overrides for bunks user owns
     (localOverrides || []).forEach(o => {
       if (o && userBunks.has(o.bunk)) {
         merged.push(safeDeepClone(o));
@@ -568,27 +546,21 @@
           return false;
       }
 
-      // Prepare Payload - deep clone to avoid mutations
       const stateToSave = safeDeepClone(state);
       stateToSave.schema_version = SCHEMA_VERSION;
       stateToSave.updated_at = new Date().toISOString();
       delete stateToSave._importTimestamp;
 
-      // ★★★ CRITICAL: Merge daily schedules with division awareness ★★★
       try {
         const schedulesRaw = localStorage.getItem(DAILY_DATA_KEY);
         if (schedulesRaw) {
             const localDaily = JSON.parse(schedulesRaw);
-            
-            // Merge with cloud to preserve other schedulers' work
             const mergedDaily = await mergeDailyDataForSave(localDaily);
             stateToSave.daily_schedules = mergedDaily;
-            
             console.log("☁️ Merged schedules bundled into save.");
         }
       } catch(e) { 
         console.warn("☁️ Bundle/merge error:", e); 
-        // Fallback: just use local
         try {
           const schedulesRaw = localStorage.getItem(DAILY_DATA_KEY);
           if (schedulesRaw) {
@@ -601,7 +573,6 @@
 
       const ownerId = campId;
 
-      // 1. TRY PATCH FIRST
       const patchUrl = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}`;
       const patchResponse = await fetch(patchUrl, {
         method: 'PATCH',
@@ -627,7 +598,6 @@
           }
       }
 
-      // 2. IF PATCH FAILED -> POST (only for owners creating new camps)
       if (!_isTeamMember) {
           const postUrl = `${SUPABASE_URL}/rest/v1/${TABLE}`;
           const postResponse = await fetch(postUrl, {
@@ -709,6 +679,9 @@
       _cloudSyncPending = false;
       await saveToCloud(getLocalCache());
       _syncInProgress = false;
+      
+      // ★★★ Unprotect after successful sync ★★★
+      unprotectLocalData();
     }, 2000);
   }
    
@@ -718,6 +691,12 @@
     _syncInProgress = true;
     const result = await saveToCloud(getLocalCache());
     _syncInProgress = false;
+    
+    // ★★★ Unprotect after successful sync ★★★
+    if (result) {
+      unprotectLocalData();
+    }
+    
     return result;
   }
 
@@ -788,7 +767,7 @@
   };
 
   // ============================================================================
-  // ★★★ CRITICAL: DAILY DATA HANDLERS ★★★
+  // DAILY DATA HANDLERS
   // ============================================================================
   window.loadCurrentDailyData = function() {
     try {
@@ -813,12 +792,11 @@
     } catch(e) { console.error("Daily Save Error:", e); }
   };
   
-  // ★★★ NEW: Force refresh from cloud ★★★
   window.forceRefreshFromCloud = async function() {
     console.log("☁️ Force refreshing from cloud...");
+    unprotectLocalData(); // Allow overwrite
     const cloudState = await loadFromCloud();
     if (cloudState) {
-        _dailyDataDirty = false; // Allow overwrite
         setLocalCache(cloudState);
         return true;
     }
@@ -831,6 +809,10 @@
     _cloudSyncPending = true;
     scheduleCloudSync();
   };
+  
+  // ★★★ EXPOSE PROTECTION FUNCTIONS ★★★
+  window.protectLocalData = protectLocalData;
+  window.unprotectLocalData = unprotectLocalData;
   
   // Expose role info for other modules
   window.getCampistryUserRole = getUserRole;
