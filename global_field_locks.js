@@ -1,14 +1,14 @@
 // ============================================================================
-// global_field_locks.js - UNIFIED FIELD LOCK SYSTEM v2.0
+// global_field_locks.js - UNIFIED FIELD LOCK SYSTEM
 // ============================================================================
-// UPDATED: Now supports loading locks from CLOUD to enable multi-scheduler
-// coordination. Each scheduler can see what fields are taken by others.
+// Beta: This module provides a SINGLE SOURCE OF TRUTH for field availability.
+// ALL schedulers (specialty leagues, regular leagues, smart tiles, solver)
+// MUST use this system to check and register field usage.
 //
-// WORKFLOW:
-// 1. Scheduler B calls GlobalFieldLocks.loadFromCloud()
-// 2. This loads all field usage from cloud (other schedulers' work)
-// 3. Scheduler B's generator checks locks before assigning fields
-// 4. No complex merging needed - just respect the locks!
+// LOCK TYPES:
+// 1. GLOBAL LOCK - Field is locked for ALL divisions (used by leagues)
+// 2. DIVISION LOCK - Field is locked for OTHER divisions, but one division
+//    can still use it (used by electives)
 // ============================================================================
 
 (function() {
@@ -17,11 +17,21 @@
     // =========================================================================
     // GLOBAL LOCK REGISTRY
     // =========================================================================
+    // Structure: { slotIndex: { fieldName: lockInfo } }
+    // lockInfo: { 
+    //    lockedBy: 'specialty_league' | 'regular_league' | 'pinned' | 'elective',
+    //    lockType: 'global' | 'division',  // NEW for electives
+    //    allowedDivision: string | null,   // NEW for electives
+    //    leagueName: string,
+    //    division: string,
+    //    activity: string,
+    //    timestamp: number
+    // }
+    // =========================================================================
     
     const GlobalFieldLocks = {
         _locks: {},
-        _initialized: false,
-        _cloudLocksLoaded: false
+        _initialized: false
     };
 
     // =========================================================================
@@ -30,162 +40,23 @@
     GlobalFieldLocks.reset = function() {
         this._locks = {};
         this._initialized = true;
-        this._cloudLocksLoaded = false;
         console.log('[GLOBAL_LOCKS] Field lock registry RESET');
     };
 
     // =========================================================================
-    // ★★★ NEW: LOAD LOCKS FROM CLOUD ★★★
-    // This is the KEY function for multi-scheduler support
+    // LOCK A FIELD (Global) - Makes field completely unavailable at given slots
+    // Used by: Regular Leagues, Specialty Leagues, Pinned events
     // =========================================================================
     /**
-     * Load field locks from cloud data (other schedulers' work)
-     * Call this BEFORE generation to know what fields are already taken
-     * 
-     * @param {string[]} [excludeDivisions] - Divisions to SKIP (your own divisions)
-     * @returns {Promise<{success: boolean, locksLoaded: number}>}
+     * Lock a field at specific time slots (GLOBAL - no division can use)
+     * @param {string} fieldName - The field to lock
+     * @param {number[]} slots - Array of slot indices
+     * @param {object} lockInfo - Information about who is locking
+     * @param {string} lockInfo.lockedBy - 'specialty_league', 'regular_league', 'pinned'
+     * @param {string} lockInfo.leagueName - Name of the league (if applicable)
+     * @param {string} lockInfo.division - Division name
+     * @param {string} lockInfo.activity - Activity description
      */
-    GlobalFieldLocks.loadFromCloud = async function(excludeDivisions = []) {
-        console.log('[GLOBAL_LOCKS] ☁️ Loading field locks from cloud...');
-        
-        if (!this._initialized) this.reset();
-        
-        try {
-            // 1. Get current date
-            const today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-            
-            // 2. Load cloud state
-            let cloudSchedules = {};
-            
-            if (window.supabase && window.getCampId) {
-                const campId = window.getCampId();
-                if (campId && campId !== 'demo_camp_001') {
-                    const { data, error } = await window.supabase
-                        .from('camp_state')
-                        .select('state')
-                        .eq('camp_id', campId)
-                        .single();
-                    
-                    if (data && data.state) {
-                        cloudSchedules = data.state.daily_schedules || {};
-                    }
-                    if (error) {
-                        console.warn('[GLOBAL_LOCKS] Cloud load error:', error);
-                    }
-                }
-            }
-            
-            // 3. Get today's schedule data
-            const todayData = cloudSchedules[today];
-            if (!todayData) {
-                console.log('[GLOBAL_LOCKS] No cloud data for today - no locks to import');
-                this._cloudLocksLoaded = true;
-                return { success: true, locksLoaded: 0 };
-            }
-            
-            // Handle both formats: {scheduleAssignments: {...}} or direct {...}
-            const assignments = todayData.scheduleAssignments || todayData;
-            
-            // 4. Build set of bunks to EXCLUDE (my divisions' bunks)
-            const excludeBunks = new Set();
-            const divisions = window.divisions || {};
-            
-            for (const divName of excludeDivisions) {
-                const divInfo = divisions[divName] || divisions[String(divName)];
-                if (divInfo && divInfo.bunks) {
-                    divInfo.bunks.forEach(b => excludeBunks.add(String(b)));
-                }
-            }
-            
-            console.log(`[GLOBAL_LOCKS] Excluding bunks from divisions [${excludeDivisions.join(', ')}]: ${excludeBunks.size} bunks`);
-            
-            // 5. Register locks from OTHER schedulers' bunks
-            let locksLoaded = 0;
-            
-            for (const [bunkName, slots] of Object.entries(assignments)) {
-                // Skip my own bunks
-                if (excludeBunks.has(String(bunkName))) {
-                    continue;
-                }
-                
-                // Process each slot
-                if (Array.isArray(slots)) {
-                    slots.forEach((slot, slotIdx) => {
-                        if (slot && slot.field && slot.field !== 'Free' && slot.field !== '') {
-                            // Skip continuation slots (already counted in primary)
-                            if (slot.continuation) return;
-                            
-                            // Calculate how many slots this activity spans
-                            const slotsUsed = [slotIdx];
-                            for (let i = slotIdx + 1; i < slots.length; i++) {
-                                if (slots[i] && slots[i].continuation) {
-                                    slotsUsed.push(i);
-                                } else {
-                                    break;
-                                }
-                            }
-                            
-                            // Register the lock
-                            this.lockField(slot.field, slotsUsed, {
-                                lockedBy: 'cloud_scheduler',
-                                bunk: bunkName,
-                                activity: slot._activity || slot.field,
-                                source: 'cloud'
-                            });
-                            
-                            locksLoaded++;
-                        }
-                    });
-                }
-            }
-            
-            // 6. Also load league assignments if they exist
-            const leagueAssignments = todayData.leagueAssignments || {};
-            for (const [divName, divLeagues] of Object.entries(leagueAssignments)) {
-                // Skip my divisions
-                if (excludeDivisions.includes(divName)) continue;
-                
-                for (const [slotIdx, leagueData] of Object.entries(divLeagues)) {
-                    if (leagueData && leagueData.matchups) {
-                        leagueData.matchups.forEach(matchup => {
-                            if (matchup.field) {
-                                // League games typically span multiple slots
-                                const slots = leagueData.slots || [parseInt(slotIdx)];
-                                this.lockField(matchup.field, slots, {
-                                    lockedBy: 'league',
-                                    leagueName: leagueData.leagueName || 'League',
-                                    division: divName,
-                                    activity: matchup.sport,
-                                    source: 'cloud'
-                                });
-                                locksLoaded++;
-                            }
-                        });
-                    }
-                }
-            }
-            
-            this._cloudLocksLoaded = true;
-            console.log(`[GLOBAL_LOCKS] ✅ Loaded ${locksLoaded} field locks from cloud`);
-            
-            return { success: true, locksLoaded };
-            
-        } catch (e) {
-            console.error('[GLOBAL_LOCKS] Error loading from cloud:', e);
-            return { success: false, locksLoaded: 0, error: e.message };
-        }
-    };
-
-    // =========================================================================
-    // CHECK IF CLOUD LOCKS ARE LOADED
-    // =========================================================================
-    GlobalFieldLocks.areCloudLocksLoaded = function() {
-        return this._cloudLocksLoaded;
-    };
-
-    // =========================================================================
-    // LOCK A FIELD (Global) - Makes field completely unavailable at given slots
-    // =========================================================================
     GlobalFieldLocks.lockField = function(fieldName, slots, lockInfo) {
         if (!this._initialized) this.reset();
         if (!fieldName || !slots || slots.length === 0) return false;
@@ -200,20 +71,19 @@
             // Check if already locked
             if (this._locks[slotIdx][normalizedField]) {
                 const existing = this._locks[slotIdx][normalizedField];
-                // Don't warn for duplicate cloud locks
-                if (existing.source !== 'cloud' || lockInfo.source !== 'cloud') {
-                    // console.warn(`[GLOBAL_LOCKS] ⚠️ CONFLICT: "${fieldName}" at slot ${slotIdx} already locked`);
-                }
+                // console.warn(`[GLOBAL_LOCKS] ⚠️ CONFLICT: "${fieldName}" at slot ${slotIdx} already locked by ${existing.lockedBy} (${existing.leagueName || existing.activity || existing.reason})`);
                 return false;
             }
             
             // Apply global lock
             this._locks[slotIdx][normalizedField] = {
                 ...lockInfo,
-                lockType: 'global',
-                fieldName: fieldName,
+                lockType: 'global',  // Explicitly mark as global
+                fieldName: fieldName, // Store original case
                 timestamp: Date.now()
             };
+            
+            // console.log(`[GLOBAL_LOCKS] 🔒 LOCKED: "${fieldName}" at slot ${slotIdx} by ${lockInfo.lockedBy} (${lockInfo.leagueName || lockInfo.activity})`);
         }
         
         return true;
@@ -221,7 +91,15 @@
 
     // =========================================================================
     // LOCK FIELD FOR SPECIFIC DIVISION (Elective)
+    // Other divisions can't use, but the specified division CAN
     // =========================================================================
+    /**
+     * Lock a field for all divisions EXCEPT one (used by Elective tiles)
+     * @param {string} fieldName - The field to lock
+     * @param {number[]} slots - Array of slot indices
+     * @param {string} allowedDivision - The division that CAN still use this field
+     * @param {string} reason - Description (e.g., "Elective (2nd Grade)")
+     */
     GlobalFieldLocks.lockFieldForDivision = function(fieldName, slots, allowedDivision, reason) {
         if (!this._initialized) this.reset();
         if (!fieldName || !slots || slots.length === 0 || !allowedDivision) return false;
@@ -233,13 +111,18 @@
                 this._locks[slotIdx] = {};
             }
             
+            // Check if already locked (global lock takes precedence)
             if (this._locks[slotIdx][normalizedField]) {
                 const existing = this._locks[slotIdx][normalizedField];
                 if (existing.lockType === 'global') {
+                    // console.warn(`[GLOBAL_LOCKS] ⚠️ Cannot add division lock for "${fieldName}" at slot ${slotIdx} - already GLOBALLY locked by ${existing.lockedBy}`);
                     return false;
                 }
+                // If it's another division lock, warn but allow override
+                // console.warn(`[GLOBAL_LOCKS] ⚠️ Overwriting division lock for "${fieldName}" at slot ${slotIdx}`);
             }
             
+            // Apply division-specific lock
             this._locks[slotIdx][normalizedField] = {
                 lockedBy: 'elective',
                 lockType: 'division',
@@ -248,6 +131,8 @@
                 fieldName: fieldName,
                 timestamp: Date.now()
             };
+            
+            // console.log(`[GLOBAL_LOCKS] 🎯 DIVISION LOCK: "${fieldName}" at slot ${slotIdx} - reserved for ${allowedDivision}`);
         }
         
         return true;
@@ -256,6 +141,14 @@
     // =========================================================================
     // CHECK IF FIELD IS LOCKED
     // =========================================================================
+    /**
+     * Check if a field is locked at ANY of the given slots
+     * @param {string} fieldName - The field to check
+     * @param {number[]} slots - Array of slot indices to check
+     * @param {string} [divisionContext] - Optional: the division asking. For division locks,
+     * if this matches allowedDivision, field is NOT locked.
+     * @returns {object|null} - Lock info if locked, null if available
+     */
     GlobalFieldLocks.isFieldLocked = function(fieldName, slots, divisionContext) {
         if (!this._initialized) return null;
         if (!fieldName || !slots || slots.length === 0) return null;
@@ -266,12 +159,15 @@
             if (this._locks[slotIdx] && this._locks[slotIdx][normalizedField]) {
                 const lock = this._locks[slotIdx][normalizedField];
                 
+                // Check if this is a division-specific lock (elective)
                 if (lock.lockType === 'division' && lock.allowedDivision) {
+                    // If the caller's division matches the allowed division, NOT locked for them
                     if (divisionContext && divisionContext === lock.allowedDivision) {
-                        continue;
+                        continue; // Check next slot, this one is OK for this division
                     }
                 }
                 
+                // Either global lock or division lock where caller is NOT the allowed division
                 return lock;
             }
         }
@@ -280,7 +176,7 @@
     };
 
     // =========================================================================
-    // CHECK IF FIELD IS AVAILABLE
+    // CHECK IF FIELD IS AVAILABLE (inverse of isFieldLocked)
     // =========================================================================
     GlobalFieldLocks.isFieldAvailable = function(fieldName, slots, divisionContext) {
         return this.isFieldLocked(fieldName, slots, divisionContext) === null;
@@ -294,20 +190,13 @@
         
         const locked = [];
         for (const [fieldKey, lock] of Object.entries(this._locks[slotIdx])) {
+            // Skip division locks if caller is the allowed division
             if (lock.lockType === 'division' && lock.allowedDivision === divisionContext) {
                 continue;
             }
             locked.push(lock.fieldName);
         }
         return locked;
-    };
-
-    // =========================================================================
-    // GET AVAILABLE FIELDS FROM A LIST
-    // =========================================================================
-    GlobalFieldLocks.filterAvailableFields = function(fieldNames, slots, divisionContext) {
-        if (!fieldNames || fieldNames.length === 0) return [];
-        return fieldNames.filter(fieldName => this.isFieldAvailable(fieldName, slots, divisionContext));
     };
 
     // =========================================================================
@@ -323,9 +212,6 @@
         
         const slotIndices = Object.keys(this._locks).sort((a, b) => parseInt(a) - parseInt(b));
         
-        let cloudLocks = 0;
-        let localLocks = 0;
-        
         for (const slotIdx of slotIndices) {
             const slotLocks = this._locks[slotIdx];
             const fields = Object.keys(slotLocks);
@@ -334,21 +220,16 @@
                 console.log(`\nSlot ${slotIdx}:`);
                 fields.forEach(field => {
                     const lock = slotLocks[field];
-                    const source = lock.source === 'cloud' ? '☁️' : '📍';
-                    if (lock.source === 'cloud') cloudLocks++;
-                    else localLocks++;
-                    
                     if (lock.lockType === 'division') {
-                        console.log(`  ${source} 🎯 ${lock.fieldName}: DIVISION - ${lock.reason} (allowed: ${lock.allowedDivision})`);
+                        console.log(`  🎯 ${lock.fieldName}: DIVISION - ${lock.reason} (allowed: ${lock.allowedDivision})`);
                     } else {
-                        console.log(`  ${source} 🔒 ${lock.fieldName}: ${lock.lockedBy} - ${lock.bunk || lock.leagueName || lock.activity}`);
+                        console.log(`  🔒 ${lock.fieldName}: GLOBAL - ${lock.lockedBy} - ${lock.leagueName || lock.activity}`);
                     }
                 });
             }
         }
         
-        console.log(`\n📊 Summary: ${cloudLocks} cloud locks, ${localLocks} local locks`);
-        console.log('=========================\n');
+        console.log('\n=========================\n');
     };
 
     // =========================================================================
@@ -366,7 +247,29 @@
     };
 
     // =========================================================================
-    // UNLOCK A FIELD
+    // LOCK MULTIPLE FIELDS FOR DIVISION (Elective)
+    // =========================================================================
+    GlobalFieldLocks.lockMultipleFieldsForDivision = function(fieldNames, slots, allowedDivision, reason) {
+        if (!fieldNames || fieldNames.length === 0) return true;
+        
+        let allSuccess = true;
+        for (const fieldName of fieldNames) {
+            const success = this.lockFieldForDivision(fieldName, slots, allowedDivision, reason);
+            if (!success) allSuccess = false;
+        }
+        return allSuccess;
+    };
+
+    // =========================================================================
+    // GET AVAILABLE FIELDS FROM A LIST
+    // =========================================================================
+    GlobalFieldLocks.filterAvailableFields = function(fieldNames, slots, divisionContext) {
+        if (!fieldNames || fieldNames.length === 0) return [];
+        return fieldNames.filter(fieldName => this.isFieldAvailable(fieldName, slots, divisionContext));
+    };
+
+    // =========================================================================
+    // UNLOCK A FIELD (use sparingly - mainly for corrections)
     // =========================================================================
     GlobalFieldLocks.unlockField = function(fieldName, slots) {
         if (!this._initialized) return;
@@ -382,27 +285,19 @@
     };
 
     // =========================================================================
-    // GET LOCK SUMMARY
+    // GET LOCK SUMMARY - For debugging UI
     // =========================================================================
     GlobalFieldLocks.getLockSummary = function() {
         const summary = {
-            totalLocks: 0,
-            cloudLocks: 0,
-            localLocks: 0,
             globalLocks: [],
             divisionLocks: []
         };
         
         for (const [slotIdx, slotLocks] of Object.entries(this._locks)) {
             for (const [fieldKey, lock] of Object.entries(slotLocks)) {
-                summary.totalLocks++;
-                if (lock.source === 'cloud') summary.cloudLocks++;
-                else summary.localLocks++;
-                
                 const entry = {
                     field: lock.fieldName,
                     slot: parseInt(slotIdx),
-                    source: lock.source || 'local',
                     reason: lock.reason || lock.leagueName || lock.activity
                 };
                 
@@ -423,6 +318,6 @@
     // =========================================================================
     window.GlobalFieldLocks = GlobalFieldLocks;
 
-    console.log('[GLOBAL_LOCKS] Unified Field Lock System v2.0 loaded (with Cloud support)');
+    console.log('[GLOBAL_LOCKS] Unified Field Lock System loaded (with Division Lock support)');
 
 })();
