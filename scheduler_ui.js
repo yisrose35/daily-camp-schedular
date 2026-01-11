@@ -1,6 +1,11 @@
-
 // ============================================================================
-// scheduler_ui.js (COMBINED: CAMPISTRY + ELECTIVE DISPLAY + LEAGUE SOURCE OF TRUTH)
+// scheduler_ui.js (FIXED v2.0 - UNIFIED TIMES LOADING FIX)
+// ============================================================================
+// CRITICAL FIX: reconcileOrRenderSaved now checks multiple sources for unifiedTimes:
+//   1. Date-specific data (dateData.unifiedTimes)
+//   2. Root-level data (allDailyData.unifiedTimes) 
+//   3. Existing memory (window.unifiedTimes)
+//   4. Regenerate from skeleton as last resort
 // ============================================================================
 
 // Wait for Campistry cloud system
@@ -14,7 +19,10 @@
 (function () {
     "use strict";
 
+    console.log("📅 scheduler_ui.js v2.0 (UNIFIED TIMES FIX) loading...");
+
     const INCREMENT_MINS = 30;
+    const DAILY_DATA_KEY = 'campDailyData_v1';
 
     // =========================================================================
     // TIME HELPERS
@@ -107,6 +115,59 @@
             }
         }
         return slots;
+    }
+
+    // =========================================================================
+    // TIME GRID REGENERATOR (from skeleton)
+    // =========================================================================
+    
+    function regenerateTimesFromSkeleton(skeleton) {
+        console.log("📅 [scheduler_ui] Regenerating time grid from skeleton...");
+        
+        let minTime = 540, maxTime = 960; // Default 9am-4pm
+        let found = false;
+        
+        if (skeleton && Array.isArray(skeleton)) {
+            skeleton.forEach(b => {
+                const s = parseTimeToMinutes(b.startTime);
+                const e = parseTimeToMinutes(b.endTime);
+                if (s !== null) { minTime = Math.min(minTime, s); found = true; }
+                if (e !== null) { maxTime = Math.max(maxTime, e); found = true; }
+            });
+        }
+        
+        // Also check divisions for time bounds
+        if (window.divisions) {
+            Object.values(window.divisions).forEach(div => {
+                const s = parseTimeToMinutes(div.startTime);
+                const e = parseTimeToMinutes(div.endTime);
+                if (s !== null) { minTime = Math.min(minTime, s); found = true; }
+                if (e !== null) { maxTime = Math.max(maxTime, e); found = true; }
+            });
+        }
+        
+        if (found && maxTime <= minTime) maxTime = minTime + 60;
+        
+        const times = [];
+        for (let t = minTime; t < maxTime; t += INCREMENT_MINS) {
+            const d = new Date();
+            d.setHours(0, 0, 0, 0);
+            const start = new Date(d.getTime() + t * 60000);
+            const end = new Date(d.getTime() + (t + INCREMENT_MINS) * 60000);
+            let h = Math.floor(t / 60), m = t % 60;
+            const ap = h >= 12 ? 'PM' : 'AM';
+            if (h > 12) h -= 12;
+            if (h === 0) h = 12;
+            
+            times.push({
+                start: start,
+                end: end,
+                label: h + ':' + String(m).padStart(2, '0') + ' ' + ap
+            });
+        }
+        
+        console.log("📅 [scheduler_ui] Regenerated " + times.length + " time slots");
+        return times;
     }
 
     // =========================================================================
@@ -285,7 +346,7 @@
              // but typically viewing all is allowed. The edit restriction is handled in editCell.
         }
 
-       const daily = window.loadCurrentDailyData?.() || {};
+        const daily = window.loadCurrentDailyData?.() || {};
         // Fallback chain: Daily Data -> Window Global -> Window Fallback
         const manualSkeleton = daily.manualSkeleton || window.manualSkeleton || window.skeleton || [];
         if (!Array.isArray(manualSkeleton) || manualSkeleton.length === 0) {
@@ -489,19 +550,126 @@
         window.saveCurrentDailyData?.("unifiedTimes", window.unifiedTimes);
     }
 
+    // =========================================================================
+    // ★★★ CRITICAL FIX: MULTI-SOURCE TIME LOADING ★★★
+    // =========================================================================
+    
     function reconcileOrRenderSaved() {
+        console.log("📅 [scheduler_ui] reconcileOrRenderSaved() called");
+        
         try {
-            const data = window.loadCurrentDailyData?.() || {};
-            window.scheduleAssignments = data.scheduleAssignments || {};
-            window.leagueAssignments = data.leagueAssignments || {};
-            const savedTimes = data.unifiedTimes || [];
-            window.unifiedTimes = savedTimes.map((slot) => ({ ...slot, start: new Date(slot.start), end: new Date(slot.end) }));
+            // ★★★ FIX: Load ALL daily data, not just current date ★★★
+            const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            
+            // Load raw data from localStorage
+            let allDailyData = {};
+            try {
+                const raw = localStorage.getItem(DAILY_DATA_KEY);
+                if (raw) allDailyData = JSON.parse(raw);
+            } catch (e) {
+                console.error("📅 [scheduler_ui] Failed to parse daily data:", e);
+            }
+            
+            const dateData = allDailyData[dateKey] || {};
+            
+            console.log("📅 [scheduler_ui] Loading for date:", dateKey);
+            
+            // =================================================================
+            // 1. SCHEDULE ASSIGNMENTS (Date-specific)
+            // =================================================================
+            if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
+                window.scheduleAssignments = dateData.scheduleAssignments;
+                console.log("📅 [scheduler_ui] ✅ Loaded " + Object.keys(window.scheduleAssignments).length + " bunks from date folder");
+            } else if (allDailyData.scheduleAssignments && Object.keys(allDailyData.scheduleAssignments).length > 0) {
+                window.scheduleAssignments = allDailyData.scheduleAssignments;
+                console.log("📅 [scheduler_ui] ⚠️ Loaded assignments from ROOT (legacy)");
+            } else {
+                window.scheduleAssignments = {};
+            }
+            
+            // =================================================================
+            // 2. LEAGUE ASSIGNMENTS
+            // =================================================================
+            if (dateData.leagueAssignments) {
+                window.leagueAssignments = dateData.leagueAssignments;
+            } else if (allDailyData.leagueAssignments) {
+                window.leagueAssignments = allDailyData.leagueAssignments;
+            } else {
+                window.leagueAssignments = {};
+            }
+            
+            // =================================================================
+            // ★★★ 3. UNIFIED TIMES - THE CRITICAL FIX ★★★
+            // =================================================================
+            let loadedTimes = null;
+            let source = null;
+            
+            // Priority 1: Date-specific times
+            if (dateData.unifiedTimes && dateData.unifiedTimes.length > 0) {
+                loadedTimes = dateData.unifiedTimes;
+                source = "DATE folder";
+            }
+            // Priority 2: Root-level times (THIS WAS THE MISSING CHECK!)
+            else if (allDailyData.unifiedTimes && allDailyData.unifiedTimes.length > 0) {
+                loadedTimes = allDailyData.unifiedTimes;
+                source = "ROOT fallback";
+            }
+            // Priority 3: Preserve existing memory if valid
+            else if (window.unifiedTimes && window.unifiedTimes.length > 0) {
+                console.log("📅 [scheduler_ui] 🛡️ Preserving existing " + window.unifiedTimes.length + " time slots in memory");
+                loadedTimes = null; // Don't overwrite
+                source = "MEMORY (preserved)";
+            }
+            // Priority 4: Regenerate from skeleton as last resort
+            else {
+                const skeleton = dateData.manualSkeleton || dateData.skeleton || 
+                               allDailyData.manualSkeleton || window.manualSkeleton || window.skeleton;
+                if (skeleton && skeleton.length > 0) {
+                    const regenerated = regenerateTimesFromSkeleton(skeleton);
+                    if (regenerated && regenerated.length > 0) {
+                        window.unifiedTimes = regenerated;
+                        source = "REGENERATED from skeleton";
+                        console.log("📅 [scheduler_ui] ✅ " + source + ": " + window.unifiedTimes.length + " slots");
+                    }
+                }
+            }
+            
+            // Convert loaded times to Date objects
+            if (loadedTimes && loadedTimes.length > 0) {
+                window.unifiedTimes = loadedTimes.map(slot => ({
+                    ...slot,
+                    start: new Date(slot.start),
+                    end: new Date(slot.end)
+                }));
+                console.log("📅 [scheduler_ui] ✅ Loaded unifiedTimes from " + source + ": " + window.unifiedTimes.length + " slots");
+            }
+            
+            // Final check - if still empty, warn
+            if (!window.unifiedTimes || window.unifiedTimes.length === 0) {
+                console.warn("📅 [scheduler_ui] ⚠️ WARNING: No unified times available! Schedule view will be broken.");
+            }
+            
+            // =================================================================
+            // 4. SKELETON (for visual rendering)
+            // =================================================================
+            const dailySkeleton = dateData.manualSkeleton || dateData.skeleton;
+            const rootSkeleton = allDailyData.manualSkeleton;
+            
+            if (dailySkeleton && dailySkeleton.length > 0) {
+                window.manualSkeleton = dailySkeleton;
+                window.skeleton = dailySkeleton;
+            } else if (rootSkeleton && rootSkeleton.length > 0) {
+                window.manualSkeleton = rootSkeleton;
+                window.skeleton = rootSkeleton;
+            }
+            
         } catch (e) {
-            console.error("Schedule load error:", e);
+            console.error("📅 [scheduler_ui] Schedule load error:", e);
             window.scheduleAssignments = {};
             window.leagueAssignments = {};
             window.unifiedTimes = [];
         }
+        
         updateTable();
     }
 
@@ -534,8 +702,8 @@
                     
                     // 3. Get inputs
                     const daily = window.loadCurrentDailyData?.() || {};
-        // Fallback chain: Daily Data -> Window Global -> Window Fallback
-        const manualSkeleton = daily.manualSkeleton || window.manualSkeleton || window.skeleton || [];
+                    // Fallback chain: Daily Data -> Window Global -> Window Fallback
+                    const manualSkeleton = daily.manualSkeleton || window.manualSkeleton || window.skeleton || [];
                     const externalOverrides = []; // Simplified for now
                     
                     // 4. Run!
@@ -565,4 +733,7 @@
     window.updateTable = updateTable;
     window.initScheduleSystem = initScheduleSystem;
     window.saveSchedule = saveSchedule;
+    window.reconcileOrRenderSaved = reconcileOrRenderSaved; // Expose for external calls
+    
+    console.log("📅 scheduler_ui.js v2.0 loaded successfully");
 })();
