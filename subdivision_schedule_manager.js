@@ -1,13 +1,13 @@
 // ============================================================================
-// subdivision_schedule_manager.js (v1.13 - PROPER BACKGROUND RESTORATION)
+// subdivision_schedule_manager.js (v1.14 - FIXED RESTORATION CRASH)
 // ============================================================================
 // MULTI-SCHEDULER SYSTEM: Allows multiple schedulers to create schedules for
 // their assigned subdivisions while respecting each other's locked schedules.
 //
-// KEY FIX in v1.13:
-// - Properly extracts and saves scheduleData when marking as draft
-// - Background restoration now works by loading from cloud first
-// - Added debug logging for restoration process
+// KEY FIX in v1.14:
+// - Fixed crash in restoreLockedSchedules when window.scheduleAssignments undefined
+// - Fixed crash when window.fieldUsageBySlot undefined
+// - Added defensive null checks throughout restoration
 // ============================================================================
 
 (function() {
@@ -38,7 +38,7 @@
     // =========================================================================
 
     async function initialize() {
-        console.log('[SubdivisionScheduler] Initializing v1.13...');
+        console.log('[SubdivisionScheduler] Initializing v1.14...');
 
         // Wait for AccessControl to be ready
         if (!window.AccessControl?.isInitialized) {
@@ -604,7 +604,7 @@
     }
 
     // =========================================================================
-    // ★★★ CRITICAL FIX: RESTORE LOCKED SCHEDULES ★★★
+    // ★★★ CRITICAL FIX v1.14: RESTORE LOCKED SCHEDULES WITH NULL CHECKS ★★★
     // =========================================================================
 
     function restoreLockedSchedules() {
@@ -618,6 +618,16 @@
         console.log('[SubdivisionScheduler] Restoring background schedules...');
         console.log(`[SubdivisionScheduler]   My subdivisions: ${[..._currentUserSubdivisions.map(s => s.name)].join(', ') || 'none'}`);
         console.log(`[SubdivisionScheduler]   Is Owner/Admin: ${isOwner}`);
+
+        // ★★★ CRITICAL FIX: Ensure global objects exist ★★★
+        if (!window.scheduleAssignments) {
+            window.scheduleAssignments = {};
+            console.log('[SubdivisionScheduler]   Initialized window.scheduleAssignments');
+        }
+        if (!window.fieldUsageBySlot) {
+            window.fieldUsageBySlot = {};
+            console.log('[SubdivisionScheduler]   Initialized window.fieldUsageBySlot');
+        }
 
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
             // Owners don't need to restore anything as "locked" - they can edit everything
@@ -646,16 +656,28 @@
             console.log(`[SubdivisionScheduler]   ✓ Restoring ${schedule.subdivisionName}: ${bunkCount} bunks`);
 
             for (const [bunk, slots] of Object.entries(scheduleData)) {
+                // ★★★ CRITICAL FIX: Ensure bunk array exists ★★★
                 if (!window.scheduleAssignments[bunk]) {
                     window.scheduleAssignments[bunk] = [];
                 }
 
+                // ★★★ CRITICAL FIX: Check slots is actually an array ★★★
+                if (!Array.isArray(slots)) {
+                    console.warn(`[SubdivisionScheduler]   Skipping invalid slots data for bunk ${bunk}`);
+                    continue;
+                }
+
                 for (let i = 0; i < slots.length; i++) {
                     if (slots[i]) {
-                        window.scheduleAssignments[bunk][i] = JSON.parse(JSON.stringify(slots[i]));
-                        window.scheduleAssignments[bunk][i]._locked = true;
-                        window.scheduleAssignments[bunk][i]._lockedSubdivision = subId;
-                        restoredSlots++;
+                        // ★★★ CRITICAL FIX: Safe deep copy with try-catch ★★★
+                        try {
+                            window.scheduleAssignments[bunk][i] = JSON.parse(JSON.stringify(slots[i]));
+                            window.scheduleAssignments[bunk][i]._locked = true;
+                            window.scheduleAssignments[bunk][i]._lockedSubdivision = subId;
+                            restoredSlots++;
+                        } catch (e) {
+                            console.warn(`[SubdivisionScheduler]   Error restoring slot ${i} for bunk ${bunk}:`, e);
+                        }
                     }
                 }
                 restoredBunks++;
@@ -664,11 +686,12 @@
             // Also restore field usage claims
             const claims = schedule.fieldUsageClaims || {};
             for (const [slotIdx, slotClaims] of Object.entries(claims)) {
+                // ★★★ CRITICAL FIX: Ensure slot object exists ★★★
                 if (!window.fieldUsageBySlot[slotIdx]) {
                     window.fieldUsageBySlot[slotIdx] = {};
                 }
 
-                for (const [fieldName, usage] of Object.entries(slotClaims)) {
+                for (const [fieldName, usage] of Object.entries(slotClaims || {})) {
                     if (!window.fieldUsageBySlot[slotIdx][fieldName]) {
                         window.fieldUsageBySlot[slotIdx][fieldName] = {
                             count: 0,
@@ -678,7 +701,7 @@
                     }
 
                     const existing = window.fieldUsageBySlot[slotIdx][fieldName];
-                    existing.count += usage.count;
+                    existing.count += (usage.count || 0);
                     existing.divisions.push(...(usage.divisions || []));
                     existing._hasLockedClaim = true;
 
@@ -815,7 +838,7 @@
     }
 
     // =========================================================================
-    // ★★★ CRITICAL FIX: MARK AS DRAFT WITH PROPER DATA EXTRACTION ★★★
+    // MARK AS DRAFT WITH PROPER DATA EXTRACTION
     // =========================================================================
 
     function markSubdivisionAsDraft(subdivisionId) {
@@ -833,7 +856,7 @@
             return;
         }
 
-        // ★★★ KEY: Extract and save the current schedule data ★★★
+        // Extract and save the current schedule data
         const scheduleData = extractScheduleDataForSubdivision(subdivisionId);
         const fieldUsageClaims = extractFieldUsageClaimsForSubdivision(subdivisionId);
         
@@ -876,7 +899,7 @@
 
     function debugPrintStatus() {
         console.log('\n' + '='.repeat(70));
-        console.log('SUBDIVISION SCHEDULE MANAGER STATUS v1.13');
+        console.log('SUBDIVISION SCHEDULE MANAGER STATUS v1.14');
         console.log('='.repeat(70));
         console.log('Current Date:', _currentDateKey);
 
@@ -955,6 +978,6 @@
         debugPrintStatus
     };
 
-    console.log('[SubdivisionScheduler] Module loaded v1.13 (Proper Background Restoration)');
+    console.log('[SubdivisionScheduler] Module loaded v1.14 (Fixed Restoration Crash)');
 
 })();
