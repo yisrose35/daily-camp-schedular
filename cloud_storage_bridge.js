@@ -1,17 +1,17 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// FIXED VERSION: v4.3 (Protected Local Storage During Save)
+// FIXED VERSION: v4.4 (Multi-Scheduler Merge Fix)
 // =================================================================
-// KEY FIXES in v4.3:
-// 1. Added _localDataProtected flag to prevent overwrites during save
-// 2. protectLocalData() / unprotectLocalData() functions
-// 3. UI refresh events don't overwrite protected local data
+// KEY FIXES in v4.4:
+// 1. mergeScheduleAssignments now overlays local changes on cloud data 
+//    instead of overwriting (even for Owners).
+// 2. Draft/Subdivision schedules are merged properly.
 // =================================================================
 
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v4.3 (PROTECTED LOCAL STORAGE)");
+  console.log("☁️ Campistry Cloud Bridge v4.4 (MULTI-SCHEDULER SAFE)");
 
   // DIRECT CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -397,43 +397,43 @@
   }
 
   function mergeScheduleAssignments(cloudAssignments, localAssignments, userDivisions) {
-    // ★★★ FIX: OWNER/ADMIN OVERRIDE ★★★
-    // If user is Owner or Admin, they own the WHOLE schedule. 
-    // Do NOT filter by divisions. Just return the local version as the new truth.
-    if (_userRole === 'owner' || _userRole === 'admin') {
-        console.log(`☁️ [MERGE] User is ${_userRole} - skipping merge filter, saving all local data.`);
-        return safeDeepClone(localAssignments) || {};
-    }
-
-    if (userDivisions === null) {
-      return safeDeepClone(localAssignments) || {};
-    }
+    // ★★★ FIX: MULTI-SCHEDULER MERGE v4.4 ★★★
+    // Previously, Owners forcefully overwrote the entire cloud state with their local state.
+    // This caused data loss if a Scheduler updated the cloud while the Owner was active.
+    // NEW LOGIC: Always merge Local on top of Cloud.
     
-    if (!userDivisions || userDivisions.length === 0) {
-      return safeDeepClone(cloudAssignments) || {};
-    }
-    
-    const divisions = window.divisions || {};
-    const userBunks = new Set();
-    
-    userDivisions.forEach(divName => {
-      const divInfo = divisions[divName];
-      if (divInfo?.bunks) {
-        divInfo.bunks.forEach(b => userBunks.add(b));
-      }
-    });
-    
-    console.log(`☁️ [MERGE] User can edit ${userBunks.size} bunks in ${userDivisions.length} divisions`);
-    
+    // Start with a clean copy of Cloud data (Baseline)
     const merged = safeDeepClone(cloudAssignments) || {};
     
-    for (const [bunkName, slots] of Object.entries(localAssignments || {})) {
-      if (userBunks.has(bunkName)) {
-        merged[bunkName] = safeDeepClone(slots);
-      }
+    // If no local changes, just return cloud
+    if (!localAssignments) return merged;
+
+    // Determine which bunks the current user is allowed to touch
+    let allowedBunks = null; // null means ALL (Owner/Admin)
+
+    if (_userRole === 'scheduler' && userDivisions && userDivisions.length > 0) {
+        allowedBunks = new Set();
+        const divisions = window.divisions || {};
+        userDivisions.forEach(divName => {
+            const divInfo = divisions[divName];
+            if (divInfo?.bunks) divInfo.bunks.forEach(b => allowedBunks.add(b));
+        });
+        console.log(`☁️ [MERGE] Scheduler merging changes for ${allowedBunks.size} bunks`);
+    } else {
+        console.log(`☁️ [MERGE] Owner/Admin merging changes (Overlaying local on cloud)`);
     }
-    
-    console.log(`☁️ [MERGE] Complete: ${Object.keys(merged).length} bunks in merged result`);
+
+    // Apply local changes to the merged object
+    for (const [bunkName, slots] of Object.entries(localAssignments)) {
+        // If we are restricted, only merge our bunks. 
+        // If we are Owner (allowedBunks is null), merge everything.
+        if (!allowedBunks || allowedBunks.has(bunkName)) {
+            // Only update if data actually exists
+            if (slots && slots.length > 0) {
+                merged[bunkName] = safeDeepClone(slots);
+            }
+        }
+    }
     
     return merged;
   }
@@ -442,7 +442,7 @@
     const cloudState = await loadFromCloud();
     const cloudDaily = safeDeepClone(cloudState?.daily_schedules) || {};
     
-    const merged = safeDeepClone(cloudDaily);
+    const merged = safeDeepClone(cloudDaily); // Baseline is cloud
     
     for (const [key, value] of Object.entries(localDailyData || {})) {
       if (!isDateKey(key)) {
@@ -470,21 +470,15 @@
         );
       }
       
+      // Merge Subdivision Drafts (always merge overlay)
       if (dateData.subdivisionSchedules && typeof dateData.subdivisionSchedules === 'object') {
         if (!merged[dateKey].subdivisionSchedules) {
           merged[dateKey].subdivisionSchedules = {};
         }
         
-        const mySubIds = new Set();
-        try {
-          const subs = window.SubdivisionScheduleManager?.getEditableSubdivisions?.() || [];
-          subs.forEach(s => mySubIds.add(s.id));
-        } catch (e) {}
-        
+        // Simply overlay local drafts onto cloud drafts
         for (const [subId, subData] of Object.entries(dateData.subdivisionSchedules)) {
-          if (_userRole === 'owner' || _userRole === 'admin' || mySubIds.has(subId)) {
-            merged[dateKey].subdivisionSchedules[subId] = safeDeepClone(subData);
-          }
+             merged[dateKey].subdivisionSchedules[subId] = safeDeepClone(subData);
         }
       }
       
