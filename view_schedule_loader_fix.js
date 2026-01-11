@@ -1,5 +1,6 @@
+`
 // ============================================================================
-// view_schedule_loader_fix.js v3.9 - STABILITY & OWNER LOGIC
+// view_schedule_loader_fix.js v4.0 - VISIBILITY FIX
 // ============================================================================
 
 (function() {
@@ -7,7 +8,7 @@
     
     const DAILY_DATA_KEY = 'campDailyData_v1';
     
-    console.log('[ViewScheduleFix] Loading v3.9 (Stability & Owner Logic)...');
+    console.log('[ViewScheduleFix] Loading v4.0 (Visibility Fix)...');
     
     // --- TIME PARSER ---
     function parseTimeToMinutes(str) {
@@ -74,11 +75,8 @@
             }
         });
         
-        // Force Show All
+        // Force Show All (unless restricted by RBAC later)
         window.currentDivisionFilter = "All";
-        document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-            if (cb.id.toLowerCase().includes('div')) cb.checked = true;
-        });
     }
 
     // --- MAIN LOADER ---
@@ -99,16 +97,16 @@
             console.log("[ViewScheduleFix] Loaded from ROOT folder");
         }
 
-        // 2. Owner Draft Injection (Backup plan)
-        const role = window.AccessControl?.getCurrentRole?.();
-        if ((role === 'owner' || role === 'admin') && dateData.subdivisionSchedules) {
+        // 2. Draft Injection (VISIBILITY FIX: Allow ALL roles to see drafts)
+        // This ensures Schedulers can see each other's work even if not "finalized"
+        if (dateData.subdivisionSchedules) {
             let injected = 0;
             if (!window.scheduleAssignments) window.scheduleAssignments = {};
             
             Object.values(dateData.subdivisionSchedules).forEach(sub => {
                 if (sub.scheduleData) {
                     Object.entries(sub.scheduleData).forEach(([bunk, slots]) => {
-                        // Only inject if missing
+                        // Only inject if missing (Prefer main schedule, fill gaps with drafts)
                         if (!window.scheduleAssignments[bunk]) {
                             window.scheduleAssignments[bunk] = slots;
                             injected++;
@@ -116,7 +114,7 @@
                     });
                 }
             });
-            if (injected > 0) console.log(`[ViewScheduleFix] Injected ${injected} bunks from drafts`);
+            if (injected > 0) console.log(`[ViewScheduleFix] Injected ${injected} bunks from drafts (Visible to all)`);
         }
 
         // 3. Times
@@ -172,3 +170,5 @@
     });
 
 })();
+`
+}
