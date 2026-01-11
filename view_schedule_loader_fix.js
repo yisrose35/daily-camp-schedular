@@ -1,24 +1,15 @@
 // ============================================================================
-// view_schedule_loader_fix.js v3.8 - OWNER DRAFT INJECTION
-// ============================================================================
-// 1. Smart Grid: Fixes 11:00 AM start time
-// 2. Data Recovery: Finds data in Date Folder or Root
-// 3. Cloud Shield: Prevents auto-wipe
-// 4. Division Repair: Forces Div 4, 5, 6 to appear
-// 5. DRAFT INJECTION: Auto-merges team drafts for the Owner view
+// view_schedule_loader_fix.js v3.9 - STABILITY & OWNER LOGIC
 // ============================================================================
 
 (function() {
     'use strict';
     
     const DAILY_DATA_KEY = 'campDailyData_v1';
-    const INCREMENT_MINS = 30;
     
-    window.scheduleMemoryShield = { data: null, dateKey: null, timestamp: 0 };
+    console.log('[ViewScheduleFix] Loading v3.9 (Stability & Owner Logic)...');
     
-    console.log('[ViewScheduleFix] Loading v3.8 (Owner Draft Injection)...');
-    
-    // --- HELPER: Parse Time ---
+    // --- TIME PARSER ---
     function parseTimeToMinutes(str) {
         if (!str || typeof str !== 'string') return null;
         let s = str.trim().toLowerCase().replace(/[a-z]/g, '');
@@ -30,34 +21,38 @@
         return h * 60 + m;
     }
 
-    // --- HELPER: Regenerate Grid ---
+    // --- GRID REGENERATOR ---
     function regenerateUnifiedTimes(skeleton) {
-        let minTime = Infinity, maxTime = 0, found = false;
+        let minTime = 540, maxTime = 960; // Default 9am-4pm
+        let found = false;
 
+        // Scan Skeleton
         if (skeleton && Array.isArray(skeleton)) {
             skeleton.forEach(b => {
                 const s = parseTimeToMinutes(b.startTime);
                 const e = parseTimeToMinutes(b.endTime);
-                if (s !== null && s < minTime) { minTime = s; found = true; }
-                if (e !== null && e > maxTime) { maxTime = e; found = true; }
+                if (s !== null) { minTime = Math.min(minTime, s); found = true; }
+                if (e !== null) { maxTime = Math.max(maxTime, e); found = true; }
             });
         }
+        
+        // Scan Divisions
         if (window.divisions) {
             Object.values(window.divisions).forEach(div => {
                 const s = parseTimeToMinutes(div.startTime);
                 const e = parseTimeToMinutes(div.endTime);
-                if (s !== null && s < minTime) { minTime = s; found = true; }
-                if (e !== null && e > maxTime) { maxTime = e; found = true; }
+                if (s !== null) { minTime = Math.min(minTime, s); found = true; }
+                if (e !== null) { maxTime = Math.max(maxTime, e); found = true; }
             });
         }
-        if (!found) { minTime = 540; maxTime = 960; }
-        if (maxTime <= minTime) maxTime = minTime + 60;
+        
+        if (found && maxTime <= minTime) maxTime = minTime + 60;
 
         const times = [];
-        for (let t = minTime; t < maxTime; t += INCREMENT_MINS) {
+        for (let t = minTime; t < maxTime; t += 30) {
             let d = new Date(); d.setHours(0,0,0,0);
             const start = new Date(d.getTime() + t*60000);
-            const end = new Date(d.getTime() + (t+INCREMENT_MINS)*60000);
+            const end = new Date(d.getTime() + (t+30)*60000);
             let h = Math.floor(t/60), m = t%60, ap = h>=12?'PM':'AM';
             if(h>12) h-=12; if(h===0) h=12; else if(h===12) ap='PM';
             
@@ -70,173 +65,110 @@
         return times;
     }
 
-    // --- HELPER: Inject Drafts (THE FIX) ---
-    function injectDraftsForOwner(dailyData, dateKey) {
-        // Only run if Owner/Admin
-        const role = window.AccessControl?.getCurrentRole?.();
-        if (role !== 'owner' && role !== 'admin') return;
-
-        const drafts = dailyData.subdivisionSchedules || (dailyData[dateKey] ? dailyData[dateKey].subdivisionSchedules : null);
-        
-        if (drafts) {
-            let injectedCount = 0;
-            // Initialize scheduleAssignments if missing
-            if (!window.scheduleAssignments) window.scheduleAssignments = {};
-            
-            Object.values(drafts).forEach(sub => {
-                if (sub.scheduleData) { // Look for 'scheduleData' inside the draft
-                    Object.entries(sub.scheduleData).forEach(([bunk, slots]) => {
-                        // Merge logic: Overwrite only if bunk is empty in main schedule
-                        if (!window.scheduleAssignments[bunk] || window.scheduleAssignments[bunk].length === 0) {
-                            window.scheduleAssignments[bunk] = slots;
-                            injectedCount++;
-                        }
-                    });
-                }
-            });
-            
-            if (injectedCount > 0) {
-                console.log(`[ViewScheduleFix] 💉 Injected ${injectedCount} bunks from drafts for Owner view`);
-            }
-        }
-    }
-
-    // --- HELPER: Restore Missing Divisions ---
+    // --- REPAIR DIVISIONS ---
     function repairDivisions() {
-        if (!window.scheduleAssignments) return;
         if (!window.divisions) window.divisions = {};
-        
-        const requiredDivisions = ['1', '2', '3', '4', '5', '6'];
-        requiredDivisions.forEach(divId => {
-            if (!window.divisions[divId]) {
-                window.divisions[divId] = {
-                    id: divId,
-                    name: (divId.length === 1 ? `Grade ${divId}` : divId),
-                    bunks: [],
-                    startTime: '9:00 AM',
-                    endTime: '4:00 PM'
-                };
+        ['1','2','3','4','5','6'].forEach(id => {
+            if (!window.divisions[id]) {
+                window.divisions[id] = { id, name: `Grade ${id}`, bunks: [] };
             }
         });
         
         // Force Show All
         window.currentDivisionFilter = "All";
-        const checkboxes = document.querySelectorAll('input[type="checkbox"]');
-        checkboxes.forEach(cb => {
-            if (cb.id.toLowerCase().includes('div') || cb.className.toLowerCase().includes('filter')) {
-                cb.checked = true;
-            }
+        document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+            if (cb.id.toLowerCase().includes('div')) cb.checked = true;
         });
     }
 
     // --- MAIN LOADER ---
     function loadScheduleFromCorrectLocation() {
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const raw = localStorage.getItem(DAILY_DATA_KEY);
+        if (!raw) return;
         
-        try {
-            const raw = localStorage.getItem(DAILY_DATA_KEY);
-            if (!raw) return false;
+        const data = JSON.parse(raw);
+        const dateData = data[dateKey] || {};
+        
+        // 1. Load Assignments (Priority: Date -> Root)
+        if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
+            window.scheduleAssignments = dateData.scheduleAssignments;
+            console.log("[ViewScheduleFix] Loaded from DATE folder");
+        } else if (data.scheduleAssignments) {
+            window.scheduleAssignments = data.scheduleAssignments;
+            console.log("[ViewScheduleFix] Loaded from ROOT folder");
+        }
+
+        // 2. Owner Draft Injection (Backup plan)
+        const role = window.AccessControl?.getCurrentRole?.();
+        if ((role === 'owner' || role === 'admin') && dateData.subdivisionSchedules) {
+            let injected = 0;
+            if (!window.scheduleAssignments) window.scheduleAssignments = {};
             
-            const dailyData = JSON.parse(raw);
-            let loadedSource = null;
-
-            // 1. SHIELD RESTORE
-            if (window.scheduleMemoryShield.dateKey === dateKey && window.scheduleMemoryShield.data) {
-                const storageHasData = dailyData[dateKey]?.scheduleAssignments && Object.keys(dailyData[dateKey].scheduleAssignments).length > 0;
-                
-                if (!storageHasData) {
-                    console.warn("🛡️ [ViewScheduleFix] Cloud wiped data! Restoring...");
-                    if (!dailyData[dateKey]) dailyData[dateKey] = {};
-                    dailyData[dateKey].scheduleAssignments = window.scheduleMemoryShield.data;
-                    localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(dailyData));
-                    if(window.forceSyncToCloud) setTimeout(() => window.forceSyncToCloud(), 1000);
-                    
-                    setTimeout(() => { 
-                        window.scheduleAssignments = window.scheduleMemoryShield.data; 
-                        injectDraftsForOwner(dailyData, dateKey); // <--- Inject
-                        repairDivisions(); 
-                        window.updateTable && window.updateTable(); 
-                    }, 50);
+            Object.values(dateData.subdivisionSchedules).forEach(sub => {
+                if (sub.scheduleData) {
+                    Object.entries(sub.scheduleData).forEach(([bunk, slots]) => {
+                        // Only inject if missing
+                        if (!window.scheduleAssignments[bunk]) {
+                            window.scheduleAssignments[bunk] = slots;
+                            injected++;
+                        }
+                    });
                 }
-            }
+            });
+            if (injected > 0) console.log(`[ViewScheduleFix] Injected ${injected} bunks from drafts`);
+        }
 
-            // 2. LOAD SCHEDULE
-            if (dailyData[dateKey]?.scheduleAssignments && Object.keys(dailyData[dateKey].scheduleAssignments).length > 0) {
-                window.scheduleAssignments = dailyData[dateKey].scheduleAssignments;
-                loadedSource = "DATE_FOLDER";
-                window.scheduleMemoryShield.data = window.scheduleAssignments;
-                window.scheduleMemoryShield.dateKey = dateKey;
-            } else if (dailyData.scheduleAssignments && Object.keys(dailyData.scheduleAssignments).length > 0) {
-                window.scheduleAssignments = dailyData.scheduleAssignments;
-                loadedSource = "ROOT_FALLBACK";
-            }
+        // 3. Times
+        if (data.unifiedTimes) {
+            window.unifiedTimes = data.unifiedTimes.map(t => ({...t, start: new Date(t.start), end: new Date(t.end)}));
+        } else {
+            const newTimes = regenerateUnifiedTimes(dateData.skeleton || data.manualSkeleton);
+            if (newTimes) window.unifiedTimes = newTimes.map(t => ({...t, start: new Date(t.start), end: new Date(t.end)}));
+        }
 
-            // 3. INJECT DRAFTS (The new magic step)
-            injectDraftsForOwner(dailyData, dateKey);
-
-            // 4. LOAD LEAGUES
-            if (dailyData[dateKey]?.leagueAssignments) {
-                window.leagueAssignments = dailyData[dateKey].leagueAssignments;
-                window.scheduleMemoryShield.leagues = window.leagueAssignments;
-            } else if (dailyData.leagueAssignments) {
-                window.leagueAssignments = dailyData.leagueAssignments;
-            }
-
-            // 5. TIMES & SKELETON
-            if (dailyData.unifiedTimes && dailyData.unifiedTimes.length > 0) {
-                window.unifiedTimes = dailyData.unifiedTimes.map(t => ({...t, start: new Date(t.start), end: new Date(t.end)}));
-            } else {
-                const skel = dailyData[dateKey]?.skeleton || dailyData.manualSkeleton;
-                const newTimes = regenerateUnifiedTimes(skel);
-                if (newTimes) window.unifiedTimes = newTimes.map(t => ({...t, start: new Date(t.start), end: new Date(t.end)}));
-            }
-            const skel = dailyData[dateKey]?.skeleton || dailyData.manualSkeleton;
-            if (skel) window.skeleton = skel;
-
-            return !!loadedSource;
-
-        } catch (e) { console.error(e); return false; }
+        // 4. Skeleton & Leagues
+        window.skeleton = dateData.skeleton || data.manualSkeleton || window.skeleton;
+        if (dateData.leagueAssignments) window.leagueAssignments = dateData.leagueAssignments;
+        else if (data.leagueAssignments) window.leagueAssignments = data.leagueAssignments;
+        
+        repairDivisions();
     }
 
-    // --- INSTALLER ---
-    function applyPatches() {
-        const runAll = () => {
+    // --- SETUP ---
+    function init() {
+        const run = () => {
             loadScheduleFromCorrectLocation();
-            repairDivisions();
             if (window.updateTable) window.updateTable();
         };
 
-        window.reconcileOrRenderSaved = runAll;
-
-        const originalInit = window.initScheduleSystem;
+        window.reconcileOrRenderSaved = run;
+        
+        const origInit = window.initScheduleSystem;
         window.initScheduleSystem = function() {
-            runAll();
-            if (originalInit) originalInit.call(this);
+            run();
+            if (origInit) origInit.apply(this, arguments);
         };
 
-        const originalUpdate = window.updateTable;
-        if (originalUpdate) {
-            window.updateTable = function() {
-                if (!window.scheduleAssignments || Object.keys(window.scheduleAssignments).length === 0) {
-                    loadScheduleFromCorrectLocation();
-                }
-                repairDivisions();
-                originalUpdate.call(this);
-            };
-        }
-        
-        runAll();
-        setTimeout(runAll, 800);
+        const origUpdate = window.updateTable;
+        window.updateTable = function() {
+            if (!window.scheduleAssignments || Object.keys(window.scheduleAssignments).length === 0) {
+                loadScheduleFromCorrectLocation();
+            }
+            if (origUpdate) origUpdate.apply(this, arguments);
+        };
+
+        run();
+        setTimeout(run, 500); // Late refresh
     }
 
-    if (document.readyState === 'complete') applyPatches();
-    else window.addEventListener('load', applyPatches);
+    if (document.readyState === 'complete') init();
+    else window.addEventListener('load', init);
     
     window.addEventListener('campistry-daily-data-updated', () => {
-        console.log("[ViewScheduleFix] Data update detected. Refreshing...");
+        console.log("[ViewScheduleFix] Data update detected");
         loadScheduleFromCorrectLocation();
-        repairDivisions();
-        if(window.updateTable) window.updateTable();
+        if (window.updateTable) window.updateTable();
     });
 
 })();
