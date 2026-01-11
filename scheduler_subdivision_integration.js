@@ -18,7 +18,7 @@
     let _originalRunOptimizer = null;
     let _isHooked = false;
 
-    console.log('[Integration] Loading v2.0 (MULTI-SCHEDULER CORE)...');
+    console.log('[Integration] Loading v2.1 (CLOUD FETCH FIX)...');
 
     // =========================================================================
     // SKELETON FILTERING
@@ -235,16 +235,37 @@
                 }
 
                 // =============================================================
-                // STEP 2: Load existing schedule from storage
+                // STEP 2: Load existing schedule from CLOUD (critical for multi-scheduler)
                 // =============================================================
                 console.log('\n[Step 2] Loading existing schedule...');
                 
                 let existingAssignments = {};
                 try {
+                    // CRITICAL: Fetch from cloud first to get other schedulers' work
+                    if (window.fetchScheduleFromCloud) {
+                        console.log('   Fetching from cloud...');
+                        const cloudData = await window.fetchScheduleFromCloud(dateKey);
+                        if (cloudData) {
+                            existingAssignments = cloudData.scheduleAssignments || {};
+                            console.log(`   Cloud has ${Object.keys(existingAssignments).length} bunks`);
+                        }
+                    }
+                    
+                    // Also check localStorage for any local drafts
                     const raw = localStorage.getItem(DAILY_DATA_KEY);
                     if (raw) {
                         const dailyData = JSON.parse(raw);
-                        existingAssignments = dailyData[dateKey]?.scheduleAssignments || {};
+                        const localAssignments = dailyData[dateKey]?.scheduleAssignments || {};
+                        const localBunkCount = Object.keys(localAssignments).length;
+                        
+                        if (localBunkCount > 0) {
+                            console.log(`   LocalStorage has ${localBunkCount} bunks`);
+                            // Merge local on top of cloud
+                            existingAssignments = {
+                                ...existingAssignments,
+                                ...localAssignments
+                            };
+                        }
                     }
                 } catch (e) {
                     console.warn('[Integration] Error loading existing:', e);
@@ -471,6 +492,6 @@
 
     setTimeout(installHooks, 100);
 
-    console.log('[SchedulerSubdivisionIntegration] Module loaded v2.0 (MULTI-SCHEDULER CORE)');
+    console.log('[SchedulerSubdivisionIntegration] Module loaded v2.1 (CLOUD FETCH FIX)');
 
 })();
