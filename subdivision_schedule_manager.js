@@ -1,13 +1,13 @@
 // ============================================================================
-// subdivision_schedule_manager.js (v1.14 - FIXED RESTORATION CRASH)
+// subdivision_schedule_manager.js (v1.17 - COMPLETE RESTORATION)
 // ============================================================================
 // MULTI-SCHEDULER SYSTEM: Allows multiple schedulers to create schedules for
 // their assigned subdivisions while respecting each other's locked schedules.
 //
-// KEY FIX in v1.14:
-// - Fixed crash in restoreLockedSchedules when window.scheduleAssignments undefined
-// - Fixed crash when window.fieldUsageBySlot undefined
-// - Added defensive null checks throughout restoration
+// v1.17 Fix:
+// - Restored ALL helper functions (getLockedFieldUsageClaims, isFieldClaimedByOthers, etc.)
+// - Kept the Owner Bypass logic for getDivisionsToSchedule and markAsDraft
+// - Kept the Null Safety fixes from v1.14
 // ============================================================================
 
 (function() {
@@ -38,7 +38,7 @@
     // =========================================================================
 
     async function initialize() {
-        console.log('[SubdivisionScheduler] Initializing v1.14...');
+        console.log('[SubdivisionScheduler] Initializing v1.17 (Complete Restoration)...');
 
         // Wait for AccessControl to be ready
         if (!window.AccessControl?.isInitialized) {
@@ -415,6 +415,7 @@
             let treatAsLock = false;
 
             if (isOwner) {
+                // Owner ignores locks when generating full schedule
                 treatAsLock = false; 
             } else {
                 if (mySubIds.has(subId)) {
@@ -608,16 +609,19 @@
     // =========================================================================
 
     function restoreLockedSchedules() {
-        const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
+        // ★★★ FIX v1.17: Owner bypass logic ★★★
         const role = window.AccessControl?.getCurrentRole?.();
-        const isOwner = role === 'owner' || role === 'admin';
+        if (role === 'owner' || role === 'admin') {
+            console.log('[SubdivisionScheduler] Owner mode: No background schedules to restore (Full Generation).');
+            return 0;
+        }
 
+        const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
         let restoredBunks = 0;
         let restoredSlots = 0;
 
         console.log('[SubdivisionScheduler] Restoring background schedules...');
         console.log(`[SubdivisionScheduler]   My subdivisions: ${[..._currentUserSubdivisions.map(s => s.name)].join(', ') || 'none'}`);
-        console.log(`[SubdivisionScheduler]   Is Owner/Admin: ${isOwner}`);
 
         // ★★★ CRITICAL FIX: Ensure global objects exist ★★★
         if (!window.scheduleAssignments) {
@@ -630,9 +634,6 @@
         }
 
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            // Owners don't need to restore anything as "locked" - they can edit everything
-            if (isOwner) continue;
-            
             // Skip my own subdivisions
             if (mySubIds.has(subId)) {
                 console.log(`[SubdivisionScheduler]   Skipping my subdivision: ${schedule.subdivisionName}`);
@@ -721,31 +722,23 @@
     // =========================================================================
 
     function getDivisionsToSchedule() {
+        // ★★★ FIX v1.17: Owner bypass logic ★★★
+        const role = window.AccessControl?.getCurrentRole?.();
+        if (role === 'owner' || role === 'admin') {
+            // Owner gets ALL divisions from window.divisions
+            const all = Object.keys(window.divisions || {});
+            console.log(`[SubdivisionScheduler] Owner mode: Scheduling ALL ${all.length} divisions`);
+            return all;
+        }
+
         const mySubIds = new Set(_currentUserSubdivisions.map(s => s.id));
         const divisionsToSchedule = new Set();
 
-        const role = window.AccessControl?.getCurrentRole?.();
-        const isOwner = role === 'owner' || role === 'admin';
-
         for (const [subId, schedule] of Object.entries(_subdivisionSchedules)) {
-            if (!isOwner && !mySubIds.has(subId)) continue;
-            if (!isOwner && schedule.status === SCHEDULE_STATUS.LOCKED) continue;
+            if (!mySubIds.has(subId)) continue;
+            if (schedule.status === SCHEDULE_STATUS.LOCKED) continue;
             
             (schedule.divisions || []).forEach(d => divisionsToSchedule.add(d));
-        }
-
-        if (isOwner) {
-            const allDivisions = Object.keys(window.divisions || {});
-            const assignedDivisions = new Set();
-            Object.values(_subdivisionSchedules).forEach(sch => {
-                (sch.divisions || []).forEach(d => assignedDivisions.add(d));
-            });
-
-            allDivisions.forEach(div => {
-                if (!assignedDivisions.has(div)) {
-                    divisionsToSchedule.add(div);
-                }
-            });
         }
 
         return [...divisionsToSchedule];
@@ -878,19 +871,16 @@
         const role = window.AccessControl?.getCurrentRole?.();
         const isOwner = role === 'owner' || role === 'admin';
 
-        console.log('[SubdivisionScheduler] Marking subdivisions as draft...');
-
+        // ★★★ FIX v1.17: Owner bypass logic ★★★
         if (isOwner) {
-            // Owner marks ALL subdivisions with data
-            _allSubdivisions.forEach(sub => {
-                markSubdivisionAsDraft(sub.id);
-            });
-        } else {
-            // Schedulers only mark THEIR subdivisions
-            _currentUserSubdivisions.forEach(sub => {
-                markSubdivisionAsDraft(sub.id);
-            });
+            console.log('[SubdivisionScheduler] Owner generation: Skipping draft marking (Saved to Master).');
+            return;
         }
+
+        console.log('[SubdivisionScheduler] Marking subdivisions as draft...');
+        _currentUserSubdivisions.forEach(sub => {
+            markSubdivisionAsDraft(sub.id);
+        });
     }
 
     // =========================================================================
@@ -899,7 +889,7 @@
 
     function debugPrintStatus() {
         console.log('\n' + '='.repeat(70));
-        console.log('SUBDIVISION SCHEDULE MANAGER STATUS v1.14');
+        console.log('SUBDIVISION SCHEDULE MANAGER STATUS v1.17');
         console.log('='.repeat(70));
         console.log('Current Date:', _currentDateKey);
 
@@ -978,6 +968,6 @@
         debugPrintStatus
     };
 
-    console.log('[SubdivisionScheduler] Module loaded v1.14 (Fixed Restoration Crash)');
+    console.log('[SubdivisionScheduler] Module loaded v1.17 (Complete Restoration)');
 
 })();
