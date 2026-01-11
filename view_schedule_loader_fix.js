@@ -1,9 +1,10 @@
 // ============================================================================
-// view_schedule_loader_fix.js v2 - Complete fix for View Schedule loading
+// view_schedule_loader_fix.js v3 - Complete fix for View Schedule loading
 // ============================================================================
 // Fixes:
 // 1. Loads scheduleAssignments from correct date key location
 // 2. Regenerates unifiedTimes if missing (required for rendering)
+// 3. Loads skeleton/manualSkeleton (required for rendering)
 // ============================================================================
 
 (function() {
@@ -12,7 +13,7 @@
     const DAILY_DATA_KEY = 'campDailyData_v1';
     const INCREMENT_MINS = 30;
     
-    console.log('[ViewScheduleFix] Loading v2 with unifiedTimes regeneration...');
+    console.log('[ViewScheduleFix] Loading v3 with skeleton support...');
     
     // =========================================================================
     // TIME PARSING HELPER
@@ -162,20 +163,41 @@
             }
             
             // =====================================================================
-            // STEP 3: Load leagueAssignments
+            // STEP 3: Load skeleton (CRITICAL FOR RENDERING)
+            // =====================================================================
+            
+            // Try multiple locations for skeleton
+            let skeleton = null;
+            
+            // First try date-specific skeleton
+            if (dailyData[dateKey]?.skeleton && dailyData[dateKey].skeleton.length > 0) {
+                skeleton = dailyData[dateKey].skeleton;
+                console.log(`[ViewScheduleFix] ✅ Loaded skeleton from [${dateKey}].skeleton: ${skeleton.length} blocks`);
+            }
+            // Then try manualSkeleton at root (most common location)
+            else if (dailyData.manualSkeleton && dailyData.manualSkeleton.length > 0) {
+                skeleton = dailyData.manualSkeleton;
+                console.log(`[ViewScheduleFix] ✅ Loaded skeleton from manualSkeleton: ${skeleton.length} blocks`);
+            }
+            // Try date-specific manualSkeleton
+            else if (dailyData[dateKey]?.manualSkeleton && dailyData[dateKey].manualSkeleton.length > 0) {
+                skeleton = dailyData[dateKey].manualSkeleton;
+                console.log(`[ViewScheduleFix] ✅ Loaded skeleton from [${dateKey}].manualSkeleton: ${skeleton.length} blocks`);
+            }
+            
+            if (skeleton) {
+                window.skeleton = skeleton;
+            } else {
+                console.log('[ViewScheduleFix] ⚠️ No skeleton found in localStorage');
+            }
+            
+            // =====================================================================
+            // STEP 4: Load leagueAssignments
             // =====================================================================
             
             if (dailyData.leagueAssignments) {
                 window.leagueAssignments = dailyData.leagueAssignments;
                 console.log(`[ViewScheduleFix] ✅ Loaded leagueAssignments for ${Object.keys(dailyData.leagueAssignments).length} divisions`);
-            }
-            
-            // =====================================================================
-            // STEP 4: Load skeleton if available
-            // =====================================================================
-            
-            if (dailyData[dateKey]?.skeleton) {
-                window.skeleton = dailyData[dateKey].skeleton;
             }
             
             return loaded;
@@ -232,13 +254,14 @@
         
         if (typeof originalUpdate === 'function') {
             window.updateTable = function() {
-                // Check if we have schedule data AND unifiedTimes
+                // Check if we have all required data
                 const hasSchedule = window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0;
                 const hasUnifiedTimes = window.unifiedTimes && window.unifiedTimes.length > 0;
+                const hasSkeleton = window.skeleton && window.skeleton.length > 0;
                 
-                if (!hasSchedule || !hasUnifiedTimes) {
+                if (!hasSchedule || !hasUnifiedTimes || !hasSkeleton) {
                     console.log('[ViewScheduleFix] updateTable: Missing data, attempting load...');
-                    console.log(`  scheduleAssignments: ${hasSchedule}, unifiedTimes: ${hasUnifiedTimes}`);
+                    console.log(`  scheduleAssignments: ${hasSchedule}, unifiedTimes: ${hasUnifiedTimes}, skeleton: ${hasSkeleton}`);
                     loadScheduleFromCorrectLocation();
                 }
                 
@@ -267,7 +290,7 @@
     // =========================================================================
     
     window.ViewScheduleFix = {
-        version: '2.0',
+        version: '3.0',
         loadSchedule: loadScheduleFromCorrectLocation,
         regenerateUnifiedTimes: function() {
             const raw = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
@@ -284,10 +307,11 @@
         
         debug: function() {
             const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-            console.log('\n=== ViewScheduleFix v2 Debug ===');
+            console.log('\n=== ViewScheduleFix v3 Debug ===');
             console.log('Date key:', dateKey);
             console.log('window.scheduleAssignments:', Object.keys(window.scheduleAssignments || {}).length, 'bunks');
             console.log('window.unifiedTimes:', (window.unifiedTimes || []).length, 'slots');
+            console.log('window.skeleton:', (window.skeleton || []).length, 'blocks');
             console.log('window.leagueAssignments:', Object.keys(window.leagueAssignments || {}).length, 'divisions');
             
             try {
@@ -296,6 +320,7 @@
                 console.log('  Root keys:', Object.keys(raw));
                 console.log('  Root scheduleAssignments:', Object.keys(raw.scheduleAssignments || {}).length, 'bunks');
                 console.log('  Root unifiedTimes:', (raw.unifiedTimes || []).length, 'slots');
+                console.log('  Root manualSkeleton:', (raw.manualSkeleton || []).length, 'blocks');
                 console.log('  [' + dateKey + '] keys:', Object.keys(raw[dateKey] || {}));
                 console.log('  [' + dateKey + '].scheduleAssignments:', Object.keys(raw[dateKey]?.scheduleAssignments || {}).length, 'bunks');
             } catch(e) {
@@ -339,6 +364,6 @@
     setTimeout(installPatches, 500);
     setTimeout(installPatches, 1000);
     
-    console.log('[ViewScheduleFix] Module v2 loaded');
+    console.log('[ViewScheduleFix] Module v3 loaded');
     
 })();
