@@ -1,7 +1,8 @@
 // ============================================================================
-// view_schedule_loader_fix.js v4.1 - SYNTAX FIX
+// view_schedule_loader_fix.js v5.0 - PRIORITY & SAFETY FIX
 // ============================================================================
-// FIXED: Removed errant backticks that were wrapping the entire file
+// FIXED: Prioritizes Daily Times > Root Times > Existing Window Times
+// FIXED: Prevents overwriting valid time grids with generic 30-min defaults
 // ============================================================================
 
 (function() {
@@ -9,7 +10,7 @@
     
     const DAILY_DATA_KEY = 'campDailyData_v1';
     
-    console.log('[ViewScheduleFix] Loading v4.1 (Syntax Fix)...');
+    console.log('[ViewScheduleFix] Loading v5.0 (Priority Fix)...');
     
     // --- TIME PARSER ---
     function parseTimeToMinutes(str) {
@@ -25,6 +26,7 @@
 
     // --- GRID REGENERATOR ---
     function regenerateUnifiedTimes(skeleton) {
+        console.log('[ViewScheduleFix] ⚠️ Regenerating generic 30-min grid (Fallback active)');
         let minTime = 540, maxTime = 960; // Default 9am-4pm
         let found = false;
 
@@ -82,7 +84,17 @@
 
     // --- MAIN LOADER ---
     function loadScheduleFromCorrectLocation() {
-        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        // 1. Determine correct date
+        let dateKey = window.currentScheduleDate;
+        if (!dateKey) {
+            const dateInput = document.getElementById('calendar-date-picker');
+            if (dateInput && dateInput.value) {
+                dateKey = dateInput.value;
+            } else {
+                dateKey = new Date().toISOString().split('T')[0];
+            }
+        }
+        
         console.log('[ViewScheduleFix] Loading schedule for date:', dateKey);
         
         const raw = localStorage.getItem(DAILY_DATA_KEY);
@@ -101,22 +113,16 @@
         
         const dateData = data[dateKey] || {};
         
-        console.log('[ViewScheduleFix] Daily data keys:', Object.keys(data));
-        console.log('[ViewScheduleFix] Date data keys:', Object.keys(dateData));
-        
-        // 1. Load Assignments (Priority: Date -> Root)
+        // 2. Load Assignments (Priority: Date -> Root)
         if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
             window.scheduleAssignments = dateData.scheduleAssignments;
-            console.log('[ViewScheduleFix] ✅ Loaded', Object.keys(dateData.scheduleAssignments).length, 'bunks from DATE folder');
+            console.log('[ViewScheduleFix] ✅ Loaded assignments from DATE folder');
         } else if (data.scheduleAssignments && Object.keys(data.scheduleAssignments).length > 0) {
             window.scheduleAssignments = data.scheduleAssignments;
-            console.log('[ViewScheduleFix] ⚠️ Loaded from ROOT folder (legacy)');
-        } else {
-            console.log('[ViewScheduleFix] ❌ No scheduleAssignments found');
+            console.log('[ViewScheduleFix] ⚠️ Loaded assignments from ROOT folder (legacy)');
         }
 
-        // 2. Draft Injection (VISIBILITY FIX: Allow ALL roles to see drafts)
-        // This ensures Schedulers can see each other's work even if not "finalized"
+        // 3. Draft Injection
         if (dateData.subdivisionSchedules) {
             let injected = 0;
             if (!window.scheduleAssignments) window.scheduleAssignments = {};
@@ -126,7 +132,6 @@
                     Object.entries(sub.scheduleData).forEach(function(entry) {
                         const bunk = entry[0];
                         const slots = entry[1];
-                        // Only inject if missing (Prefer main schedule, fill gaps with drafts)
                         if (!window.scheduleAssignments[bunk]) {
                             window.scheduleAssignments[bunk] = slots;
                             injected++;
@@ -134,41 +139,52 @@
                     });
                 }
             });
-            if (injected > 0) {
-                console.log('[ViewScheduleFix] Injected ' + injected + ' bunks from drafts (Visible to all)');
-            }
+            if (injected > 0) console.log('[ViewScheduleFix] Injected ' + injected + ' bunks from drafts');
         }
 
-       // 3. Times
-        // FIX: Check dateData (daily) first, then data (root)
-        const sourceTimes = dateData.unifiedTimes || data.unifiedTimes;
-
-        if (sourceTimes && sourceTimes.length > 0) {
-            window.unifiedTimes = sourceTimes.map(function(t) {
-                return {
+        // 4. Times - CRITICAL FIX
+        // Priority 1: Daily Unified Times (Correct Grid)
+        // Priority 2: Root Unified Times (Legacy Grid)
+        // Priority 3: Existing Window Times (Don't overwrite if valid!)
+        // Priority 4: Regenerate (Last Resort)
+        
+        const dailyTimes = dateData.unifiedTimes;
+        const rootTimes = data.unifiedTimes;
+        
+        if (dailyTimes && dailyTimes.length > 0) {
+            window.unifiedTimes = dailyTimes.map(t => ({
+                start: new Date(t.start),
+                end: new Date(t.end),
+                label: t.label
+            }));
+            console.log('[ViewScheduleFix] ✅ Loaded unifiedTimes from DATE data');
+        } 
+        else if (rootTimes && rootTimes.length > 0) {
+            window.unifiedTimes = rootTimes.map(t => ({
+                start: new Date(t.start),
+                end: new Date(t.end),
+                label: t.label
+            }));
+            console.log('[ViewScheduleFix] ⚠️ Loaded unifiedTimes from ROOT data');
+        } 
+        else if (window.unifiedTimes && window.unifiedTimes.length > 0) {
+            console.log('[ViewScheduleFix] 🛡️ Preserving existing window.unifiedTimes (Safety Check)');
+        } 
+        else {
+            const newTimes = regenerateUnifiedTimes(dateData.skeleton || data.manualSkeleton);
+            if (newTimes) {
+                window.unifiedTimes = newTimes.map(t => ({
                     start: new Date(t.start),
                     end: new Date(t.end),
                     label: t.label
-                };
-            });
-            console.log('[ViewScheduleFix] ✅ Loaded unifiedTimes from storage');
-        } else {
-            console.log('[ViewScheduleFix] ⚠️ Regenerating unifiedTimes (Fallback)');
-            const newTimes = regenerateUnifiedTimes(dateData.skeleton || data.manualSkeleton);
-            if (newTimes) {
-                window.unifiedTimes = newTimes.map(function(t) {
-                    return {
-                        start: new Date(t.start),
-                        end: new Date(t.end),
-                        label: t.label
-                    };
-                });
+                }));
+                console.log('[ViewScheduleFix] ⚠️ Regenerated default grid');
             }
         }
 
-        // 4. Skeleton & Leagues
+        // 5. Skeleton & Leagues
         window.skeleton = dateData.skeleton || data.manualSkeleton || window.skeleton;
-        window.manualSkeleton = window.skeleton; // Ensure both are set
+        window.manualSkeleton = window.skeleton;
         
         if (dateData.leagueAssignments) {
             window.leagueAssignments = dateData.leagueAssignments;
@@ -177,12 +193,6 @@
         }
         
         repairDivisions();
-        
-        // Debug output
-        console.log('[ViewScheduleFix] Final state:');
-        console.log('  - scheduleAssignments:', Object.keys(window.scheduleAssignments || {}).length, 'bunks');
-        console.log('  - unifiedTimes:', (window.unifiedTimes || []).length, 'slots');
-        console.log('  - skeleton:', (window.skeleton || []).length, 'blocks');
     }
 
     // --- SETUP ---
