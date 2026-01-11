@@ -1,8 +1,8 @@
 // ============================================================================
-// view_schedule_loader_fix.js v5.0 - PRIORITY & SAFETY FIX
+// view_schedule_loader_fix.js v5.1 - SKELETON SYNC FIX
 // ============================================================================
-// FIXED: Prioritizes Daily Times > Root Times > Existing Window Times
-// FIXED: Prevents overwriting valid time grids with generic 30-min defaults
+// FIXED: Loads SKELETON from Daily Data (dateData.manualSkeleton) first.
+// FIXED: Prevents mismatch between Time Grid (Data) and Skeleton (Visuals).
 // ============================================================================
 
 (function() {
@@ -10,7 +10,7 @@
     
     const DAILY_DATA_KEY = 'campDailyData_v1';
     
-    console.log('[ViewScheduleFix] Loading v5.0 (Priority Fix)...');
+    console.log('[ViewScheduleFix] Loading v5.1 (Skeleton Sync Fix)...');
     
     // --- TIME PARSER ---
     function parseTimeToMinutes(str) {
@@ -77,8 +77,6 @@
                 window.divisions[id] = { id: id, name: 'Grade ' + id, bunks: [] };
             }
         });
-        
-        // Force Show All (unless restricted by RBAC later)
         window.currentDivisionFilter = "All";
     }
 
@@ -142,12 +140,7 @@
             if (injected > 0) console.log('[ViewScheduleFix] Injected ' + injected + ' bunks from drafts');
         }
 
-        // 4. Times - CRITICAL FIX
-        // Priority 1: Daily Unified Times (Correct Grid)
-        // Priority 2: Root Unified Times (Legacy Grid)
-        // Priority 3: Existing Window Times (Don't overwrite if valid!)
-        // Priority 4: Regenerate (Last Resort)
-        
+        // 4. Times
         const dailyTimes = dateData.unifiedTimes;
         const rootTimes = data.unifiedTimes;
         
@@ -168,10 +161,12 @@
             console.log('[ViewScheduleFix] ⚠️ Loaded unifiedTimes from ROOT data');
         } 
         else if (window.unifiedTimes && window.unifiedTimes.length > 0) {
-            console.log('[ViewScheduleFix] 🛡️ Preserving existing window.unifiedTimes (Safety Check)');
+            console.log('[ViewScheduleFix] 🛡️ Preserving existing window.unifiedTimes');
         } 
         else {
-            const newTimes = regenerateUnifiedTimes(dateData.skeleton || data.manualSkeleton);
+            // Priority 5: Fallback Skeleton Logic for Times
+            const fallbackSkeleton = dateData.manualSkeleton || dateData.skeleton || data.manualSkeleton;
+            const newTimes = regenerateUnifiedTimes(fallbackSkeleton);
             if (newTimes) {
                 window.unifiedTimes = newTimes.map(t => ({
                     start: new Date(t.start),
@@ -182,9 +177,21 @@
             }
         }
 
-        // 5. Skeleton & Leagues
-        window.skeleton = dateData.skeleton || data.manualSkeleton || window.skeleton;
-        window.manualSkeleton = window.skeleton;
+        // 5. Skeleton & Leagues - CRITICAL VISUAL FIX
+        // We MUST load 'manualSkeleton' from dateData first. 
+        // Previously we only looked for 'skeleton' which might be undefined.
+        const dailySkeleton = dateData.manualSkeleton || dateData.skeleton;
+        const rootSkeleton = data.manualSkeleton;
+        
+        if (dailySkeleton && dailySkeleton.length > 0) {
+            window.skeleton = dailySkeleton;
+            window.manualSkeleton = dailySkeleton;
+            console.log('[ViewScheduleFix] ✅ Loaded VISUAL SKELETON from DATE data');
+        } else if (rootSkeleton && rootSkeleton.length > 0) {
+            window.skeleton = rootSkeleton;
+            window.manualSkeleton = rootSkeleton;
+            console.log('[ViewScheduleFix] ⚠️ Loaded VISUAL SKELETON from ROOT data (Legacy)');
+        }
         
         if (dateData.leagueAssignments) {
             window.leagueAssignments = dateData.leagueAssignments;
@@ -216,6 +223,7 @@
 
         const origUpdate = window.updateTable;
         window.updateTable = function() {
+            // Force reload if data looks empty or stale
             if (!window.scheduleAssignments || Object.keys(window.scheduleAssignments).length === 0) {
                 loadScheduleFromCorrectLocation();
             }
