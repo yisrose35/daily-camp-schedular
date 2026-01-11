@@ -191,13 +191,38 @@
     return _memoryCache;
   }
     
+  // ★★★ HELPER: Clean legacy ROOT-level schedule data ★★★
+  function cleanLegacyRootData(data) {
+      if (!data) return data;
+      
+      const legacyKeys = ['scheduleAssignments', 'leagueAssignments', 'unifiedTimes', 'manualSkeleton', 'skeleton'];
+      let cleaned = false;
+      
+      for (const key of legacyKeys) {
+          if (data[key] !== undefined) {
+              console.log(`☁️ [SYNC] 🧹 Removing legacy ROOT key from daily_schedules: ${key}`);
+              delete data[key];
+              cleaned = true;
+          }
+      }
+      
+      return { data, cleaned };
+  }
+
   function setLocalCache(state) {
     if (state.daily_schedules) {
         if (!_dailyDataDirty) {
             console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
             try {
+                // ★★★ CRITICAL: Clean legacy ROOT-level data before saving ★★★
+                const { data: cleanedData, cleaned } = cleanLegacyRootData(state.daily_schedules);
+                
+                if (cleaned) {
+                    console.log("☁️ [SYNC] 🧹 Cleaned legacy ROOT data from cloud response");
+                }
+                
                 const currentRaw = localStorage.getItem(DAILY_DATA_KEY);
-                const newRaw = JSON.stringify(state.daily_schedules);
+                const newRaw = JSON.stringify(cleanedData);
                 
                 if (currentRaw !== newRaw) {
                     localStorage.setItem(DAILY_DATA_KEY, newRaw);
