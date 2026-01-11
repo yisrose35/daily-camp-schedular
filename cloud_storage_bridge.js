@@ -397,6 +397,14 @@
   }
 
   function mergeScheduleAssignments(cloudAssignments, localAssignments, userDivisions) {
+    // ★★★ FIX: OWNER/ADMIN OVERRIDE ★★★
+    // If user is Owner or Admin, they own the WHOLE schedule. 
+    // Do NOT filter by divisions. Just return the local version as the new truth.
+    if (_userRole === 'owner' || _userRole === 'admin') {
+        console.log(`☁️ [MERGE] User is ${_userRole} - skipping merge filter, saving all local data.`);
+        return safeDeepClone(localAssignments) || {};
+    }
+
     if (userDivisions === null) {
       return safeDeepClone(localAssignments) || {};
     }
