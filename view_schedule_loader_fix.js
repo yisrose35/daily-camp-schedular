@@ -1,6 +1,7 @@
-`
 // ============================================================================
-// view_schedule_loader_fix.js v4.0 - VISIBILITY FIX
+// view_schedule_loader_fix.js v4.1 - SYNTAX FIX
+// ============================================================================
+// FIXED: Removed errant backticks that were wrapping the entire file
 // ============================================================================
 
 (function() {
@@ -8,7 +9,7 @@
     
     const DAILY_DATA_KEY = 'campDailyData_v1';
     
-    console.log('[ViewScheduleFix] Loading v4.0 (Visibility Fix)...');
+    console.log('[ViewScheduleFix] Loading v4.1 (Syntax Fix)...');
     
     // --- TIME PARSER ---
     function parseTimeToMinutes(str) {
@@ -60,7 +61,7 @@
             times.push({
                 start: start.toISOString(),
                 end: end.toISOString(),
-                label: `${h}:${String(m).padStart(2,'0')} ${ap}`
+                label: h + ':' + String(m).padStart(2,'0') + ' ' + ap
             });
         }
         return times;
@@ -71,7 +72,7 @@
         if (!window.divisions) window.divisions = {};
         ['1','2','3','4','5','6'].forEach(id => {
             if (!window.divisions[id]) {
-                window.divisions[id] = { id, name: `Grade ${id}`, bunks: [] };
+                window.divisions[id] = { id: id, name: 'Grade ' + id, bunks: [] };
             }
         });
         
@@ -82,19 +83,36 @@
     // --- MAIN LOADER ---
     function loadScheduleFromCorrectLocation() {
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        const raw = localStorage.getItem(DAILY_DATA_KEY);
-        if (!raw) return;
+        console.log('[ViewScheduleFix] Loading schedule for date:', dateKey);
         
-        const data = JSON.parse(raw);
+        const raw = localStorage.getItem(DAILY_DATA_KEY);
+        if (!raw) {
+            console.log('[ViewScheduleFix] No daily data found in localStorage');
+            return;
+        }
+        
+        let data;
+        try {
+            data = JSON.parse(raw);
+        } catch (e) {
+            console.error('[ViewScheduleFix] Failed to parse daily data:', e);
+            return;
+        }
+        
         const dateData = data[dateKey] || {};
+        
+        console.log('[ViewScheduleFix] Daily data keys:', Object.keys(data));
+        console.log('[ViewScheduleFix] Date data keys:', Object.keys(dateData));
         
         // 1. Load Assignments (Priority: Date -> Root)
         if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
             window.scheduleAssignments = dateData.scheduleAssignments;
-            console.log("[ViewScheduleFix] Loaded from DATE folder");
-        } else if (data.scheduleAssignments) {
+            console.log('[ViewScheduleFix] ✅ Loaded', Object.keys(dateData.scheduleAssignments).length, 'bunks from DATE folder');
+        } else if (data.scheduleAssignments && Object.keys(data.scheduleAssignments).length > 0) {
             window.scheduleAssignments = data.scheduleAssignments;
-            console.log("[ViewScheduleFix] Loaded from ROOT folder");
+            console.log('[ViewScheduleFix] ⚠️ Loaded from ROOT folder (legacy)');
+        } else {
+            console.log('[ViewScheduleFix] ❌ No scheduleAssignments found');
         }
 
         // 2. Draft Injection (VISIBILITY FIX: Allow ALL roles to see drafts)
@@ -105,7 +123,9 @@
             
             Object.values(dateData.subdivisionSchedules).forEach(sub => {
                 if (sub.scheduleData) {
-                    Object.entries(sub.scheduleData).forEach(([bunk, slots]) => {
+                    Object.entries(sub.scheduleData).forEach(function(entry) {
+                        const bunk = entry[0];
+                        const slots = entry[1];
                         // Only inject if missing (Prefer main schedule, fill gaps with drafts)
                         if (!window.scheduleAssignments[bunk]) {
                             window.scheduleAssignments[bunk] = slots;
@@ -114,30 +134,61 @@
                     });
                 }
             });
-            if (injected > 0) console.log(`[ViewScheduleFix] Injected ${injected} bunks from drafts (Visible to all)`);
+            if (injected > 0) {
+                console.log('[ViewScheduleFix] Injected ' + injected + ' bunks from drafts (Visible to all)');
+            }
         }
 
         // 3. Times
         if (data.unifiedTimes) {
-            window.unifiedTimes = data.unifiedTimes.map(t => ({...t, start: new Date(t.start), end: new Date(t.end)}));
+            window.unifiedTimes = data.unifiedTimes.map(function(t) {
+                return {
+                    start: new Date(t.start),
+                    end: new Date(t.end),
+                    label: t.label
+                };
+            });
         } else {
             const newTimes = regenerateUnifiedTimes(dateData.skeleton || data.manualSkeleton);
-            if (newTimes) window.unifiedTimes = newTimes.map(t => ({...t, start: new Date(t.start), end: new Date(t.end)}));
+            if (newTimes) {
+                window.unifiedTimes = newTimes.map(function(t) {
+                    return {
+                        start: new Date(t.start),
+                        end: new Date(t.end),
+                        label: t.label
+                    };
+                });
+            }
         }
 
         // 4. Skeleton & Leagues
         window.skeleton = dateData.skeleton || data.manualSkeleton || window.skeleton;
-        if (dateData.leagueAssignments) window.leagueAssignments = dateData.leagueAssignments;
-        else if (data.leagueAssignments) window.leagueAssignments = data.leagueAssignments;
+        window.manualSkeleton = window.skeleton; // Ensure both are set
+        
+        if (dateData.leagueAssignments) {
+            window.leagueAssignments = dateData.leagueAssignments;
+        } else if (data.leagueAssignments) {
+            window.leagueAssignments = data.leagueAssignments;
+        }
         
         repairDivisions();
+        
+        // Debug output
+        console.log('[ViewScheduleFix] Final state:');
+        console.log('  - scheduleAssignments:', Object.keys(window.scheduleAssignments || {}).length, 'bunks');
+        console.log('  - unifiedTimes:', (window.unifiedTimes || []).length, 'slots');
+        console.log('  - skeleton:', (window.skeleton || []).length, 'blocks');
     }
 
     // --- SETUP ---
     function init() {
-        const run = () => {
+        console.log('[ViewScheduleFix] Initializing...');
+        
+        const run = function() {
             loadScheduleFromCorrectLocation();
-            if (window.updateTable) window.updateTable();
+            if (window.updateTable) {
+                window.updateTable();
+            }
         };
 
         window.reconcileOrRenderSaved = run;
@@ -158,17 +209,27 @@
 
         run();
         setTimeout(run, 500); // Late refresh
+        
+        console.log('[ViewScheduleFix] Initialization complete');
     }
 
-    if (document.readyState === 'complete') init();
-    else window.addEventListener('load', init);
+    if (document.readyState === 'complete') {
+        init();
+    } else {
+        window.addEventListener('load', init);
+    }
     
-    window.addEventListener('campistry-daily-data-updated', () => {
-        console.log("[ViewScheduleFix] Data update detected");
+    window.addEventListener('campistry-daily-data-updated', function() {
+        console.log('[ViewScheduleFix] Data update detected');
         loadScheduleFromCorrectLocation();
         if (window.updateTable) window.updateTable();
     });
 
+    // Expose for debugging
+    window.ViewScheduleFix = {
+        loadScheduleFromCorrectLocation: loadScheduleFromCorrectLocation,
+        regenerateUnifiedTimes: regenerateUnifiedTimes,
+        repairDivisions: repairDivisions
+    };
+
 })();
-`
-}
