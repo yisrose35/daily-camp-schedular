@@ -1,12 +1,13 @@
 // ============================================================================
-// scheduler_subdivision_integration.js (v1.6 - VISUAL SYNC FIX)
+// scheduler_subdivision_integration.js (v2.0 - MULTI-SCHEDULER CORE INTEGRATION)
 // ============================================================================
 // Integrates multi-scheduler functionality with the core schedule generator.
 // 
-// UPDATES v1.6:
-// - Dispatches immediate UI refresh event after generation to fix visual lag.
-// - Ensures unprotectLocalData is called in RBAC mode to allow future syncs.
-// - Maintains strict overwrite and storage logic from v1.5.
+// v2.0 Changes:
+// - Integrates with MultiSchedulerCore for proper conflict detection
+// - Implements first-come-first-served resource allocation
+// - Non-destructive generation (preserves other schedulers' work)
+// - Better owner vs scheduler mode handling
 // ============================================================================
 
 (function() {
@@ -16,6 +17,8 @@
     
     let _originalRunOptimizer = null;
     let _isHooked = false;
+
+    console.log('[Integration] Loading v2.0 (MULTI-SCHEDULER CORE)...');
 
     // =========================================================================
     // SKELETON FILTERING
@@ -28,81 +31,159 @@
         const allowedSet = new Set(allowedDivisions.map(String));
 
         return skeleton.filter(block => {
-            if (!block.divisions || block.divisions.length === 0) {
+            // Include blocks with no division restriction
+            if (!block.division && (!block.divisions || block.divisions.length === 0)) {
                 return true;
             }
 
-            return block.divisions.some(d => allowedSet.has(String(d)));
+            // Check single division field
+            if (block.division && allowedSet.has(String(block.division))) {
+                return true;
+            }
+
+            // Check divisions array
+            if (block.divisions && block.divisions.some(d => allowedSet.has(String(d)))) {
+                return true;
+            }
+
+            return false;
         });
     }
 
-    function filterBunksByDivisions(allowedDivisions) {
+    function getBunksForDivisions(divisions) {
         const allDivisions = window.divisions || {};
-        const allowedBunks = new Set();
+        const bunks = new Set();
 
-        (allowedDivisions || []).forEach(divName => {
+        (divisions || []).forEach(divName => {
             const divInfo = allDivisions[divName];
             if (divInfo?.bunks) {
-                divInfo.bunks.forEach(b => allowedBunks.add(b));
+                divInfo.bunks.forEach(b => bunks.add(b));
             }
         });
 
-        return allowedBunks;
+        return bunks;
     }
 
     // =========================================================================
-    // STORAGE MANAGEMENT (v1.4 Logic)
+    // STORAGE MANAGEMENT
     // =========================================================================
 
-    function saveScheduleToLocalStorage() {
+    function saveScheduleToLocalStorage(scheduleAssignments, myDivisions) {
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         
-        if (!window.scheduleAssignments || Object.keys(window.scheduleAssignments).length === 0) {
+        if (!scheduleAssignments || Object.keys(scheduleAssignments).length === 0) {
             console.log('[Integration] No scheduleAssignments to save');
             return;
         }
         
-        console.log(`[Integration] 💾 Saving scheduleAssignments for ${dateKey}...`);
+        console.log(`[Integration] 💾 Saving schedule for ${dateKey}...`);
         
         try {
-            // Load existing daily data
             let dailyData = {};
             try {
                 const raw = localStorage.getItem(DAILY_DATA_KEY);
                 if (raw) dailyData = JSON.parse(raw);
             } catch (e) { /* ignore */ }
             
-            // Initialize the DATE KEY object if missing
             if (!dailyData[dateKey]) {
                 dailyData[dateKey] = {};
             }
             
-            // Save INSIDE the date key
-            dailyData[dateKey].scheduleAssignments = JSON.parse(JSON.stringify(window.scheduleAssignments));
+            // Save the full merged schedule
+            dailyData[dateKey].scheduleAssignments = JSON.parse(JSON.stringify(scheduleAssignments));
             
-            // Also save skeleton inside the date key
+            // Save skeleton if present
             if (window.skeleton && window.skeleton.length > 0) {
                 dailyData[dateKey].skeleton = JSON.parse(JSON.stringify(window.skeleton));
             }
             
-            // Save to localStorage
             localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(dailyData));
             
-            const bunkCount = Object.keys(window.scheduleAssignments).length;
-            console.log(`[Integration] 💾 Saved ${bunkCount} bunks to localStorage[${dateKey}].scheduleAssignments`);
-            
-            // Verify the save
-            const verifyRaw = localStorage.getItem(DAILY_DATA_KEY);
-            const verifyData = JSON.parse(verifyRaw);
-            if (verifyData[dateKey]?.scheduleAssignments) {
-                console.log(`[Integration] ✅ Verified: ${Object.keys(verifyData[dateKey].scheduleAssignments).length} bunks saved correctly`);
-            } else {
-                console.error('[Integration] ❌ Verification failed - data not found at correct path!');
-            }
+            const bunkCount = Object.keys(scheduleAssignments).length;
+            console.log(`[Integration] 💾 Saved ${bunkCount} bunks to localStorage`);
             
         } catch (e) {
-            console.error('[Integration] Error saving to localStorage:', e);
+            console.error('[Integration] Error saving:', e);
         }
+    }
+
+    // =========================================================================
+    // BLOCKED RESOURCES EXTRACTION
+    // =========================================================================
+
+    /**
+     * Extract resources already used by OTHER schedulers
+     * @param {Object} existingAssignments - Current scheduleAssignments from storage
+     * @param {Set} myBunks - Bunks belonging to current user's divisions
+     * @returns {Object} - { slotIndex: { resourceName: usageCount } }
+     */
+    function extractBlockedResources(existingAssignments, myBunks) {
+        const blocked = {};
+
+        for (const [bunk, slots] of Object.entries(existingAssignments || {})) {
+            // Skip MY bunks - only track OTHER schedulers' usage
+            if (myBunks.has(bunk)) {
+                continue;
+            }
+
+            if (!Array.isArray(slots)) continue;
+
+            slots.forEach((slot, slotIdx) => {
+                if (slot && !slot.continuation) {
+                    const resourceName = slot.field || slot._activity;
+                    
+                    if (resourceName && resourceName !== 'Free' && resourceName !== 'free') {
+                        if (!blocked[slotIdx]) blocked[slotIdx] = {};
+                        if (!blocked[slotIdx][resourceName]) {
+                            blocked[slotIdx][resourceName] = { count: 0, bunks: [] };
+                        }
+                        blocked[slotIdx][resourceName].count++;
+                        blocked[slotIdx][resourceName].bunks.push(bunk);
+                    }
+                }
+            });
+        }
+
+        return blocked;
+    }
+
+    /**
+     * Register blocked resources in GlobalFieldLocks
+     */
+    function registerBlockedInGlobalLocks(blockedResources, activityProperties) {
+        if (!window.GlobalFieldLocks) {
+            console.warn('[Integration] GlobalFieldLocks not available');
+            return;
+        }
+
+        window.GlobalFieldLocks.reset();
+        let lockedCount = 0;
+
+        for (const [slotIdx, resources] of Object.entries(blockedResources)) {
+            for (const [resourceName, usage] of Object.entries(resources)) {
+                // Get capacity for this resource
+                const props = activityProperties[resourceName] || {};
+                let maxCapacity = 1;
+                
+                if (props.sharableWith?.capacity) {
+                    maxCapacity = parseInt(props.sharableWith.capacity) || 1;
+                } else if (props.sharable || props.sharableWith?.type === 'all') {
+                    maxCapacity = 2;
+                }
+
+                // If at or over capacity, lock it
+                if (usage.count >= maxCapacity) {
+                    window.GlobalFieldLocks.lockField(resourceName, [parseInt(slotIdx)], {
+                        lockedBy: 'other_scheduler',
+                        activity: `Used by: ${usage.bunks.join(', ')}`,
+                        division: 'external'
+                    });
+                    lockedCount++;
+                }
+            }
+        }
+
+        console.log(`[Integration] 🔒 Registered ${lockedCount} blocked slots in GlobalFieldLocks`);
     }
 
     // =========================================================================
@@ -110,217 +191,210 @@
     // =========================================================================
 
     function createIntegratedOptimizer(originalOptimizer) {
-        // Updated signature to handle variable arguments from UI (v1.5)
-        // arg2: usually overrides or options object
-        // arg3: usually allowedDivisions
-        // arg4: usually snapshot
         return async function integratedRunSkeletonOptimizer(skeleton, arg2, arg3, arg4) {
             const role = window.AccessControl?.getCurrentRole?.();
+            const isOwner = role === 'owner' || role === 'admin';
             const SSM = window.SubdivisionScheduleManager;
+            const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
             
-            // Protect local data before starting
+            // Protect local data during generation
             if (typeof window.protectLocalData === 'function') {
                 window.protectLocalData();
             }
-            
-            if (SSM?.isInitialized) {
-                console.log('\n' + '='.repeat(70));
-                console.log('★★★ MULTI-SCHEDULER MODE ACTIVE (STRICT OVERWRITE) ★★★');
-                console.log('='.repeat(70));
 
-                // 1. Determine Scope
-                const divisionsToSchedule = SSM.getDivisionsToSchedule();
+            console.log('\n' + '═'.repeat(70));
+            console.log('🎯 MULTI-SCHEDULER GENERATION v2.0');
+            console.log('═'.repeat(70));
+            console.log(`Date: ${dateKey}`);
+            console.log(`Role: ${role}`);
+            console.log(`Mode: ${isOwner ? 'OWNER (Full Generation)' : 'SCHEDULER (Partial Generation)'}`);
+
+            try {
+                // =============================================================
+                // STEP 1: Determine user's divisions
+                // =============================================================
+                let divisionsToSchedule;
                 
-                if (divisionsToSchedule.length === 0) {
-                    console.warn('[Integration] No divisions to schedule!');
-                    alert('You have no divisions assigned to schedule. Please contact your camp admin.');
-                    if (typeof window.unprotectLocalData === 'function') {
-                        window.unprotectLocalData();
-                    }
-                    return;
+                if (SSM?.isInitialized) {
+                    divisionsToSchedule = SSM.getDivisionsToSchedule();
+                } else if (window.AccessControl?.getUserManagedDivisions) {
+                    divisionsToSchedule = window.AccessControl.getUserManagedDivisions();
+                } else if (isOwner) {
+                    divisionsToSchedule = Object.keys(window.divisions || {});
+                } else {
+                    throw new Error('Cannot determine divisions to schedule');
                 }
 
-                console.log('[Integration] Divisions to schedule:', divisionsToSchedule.join(', '));
+                const myBunks = getBunksForDivisions(divisionsToSchedule);
                 
-                // 2. Filter Skeleton (Workload)
-                const originalLength = skeleton?.length || 0;
-                const filteredSkeleton = filterSkeletonByDivisions(skeleton, divisionsToSchedule);
-                console.log(`[Integration] Filtered skeleton: ${filteredSkeleton.length} blocks (from ${originalLength})`);
+                console.log(`\nDivisions to schedule: ${divisionsToSchedule.join(', ')}`);
+                console.log(`Bunks to schedule: ${myBunks.size} total`);
 
-                // 3. Load Base State (Full Schedule context)
-                await loadExistingSchedule();
+                if (divisionsToSchedule.length === 0) {
+                    throw new Error('No divisions assigned to current user');
+                }
 
-                // 4. Wipe The Slate Clean (Overwrite Step)
-                // We clear ONLY the bunks we are about to schedule.
-                // For Owners: This clears everything.
-                // For Schedulers: This clears only their bunks.
-                const ourBunks = filterBunksByDivisions(divisionsToSchedule);
-                clearOurBunksOnly(ourBunks);
-
-                console.log('\n[Integration] Pre-generation setup...');
+                // =============================================================
+                // STEP 2: Load existing schedule from storage
+                // =============================================================
+                console.log('\n[Step 2] Loading existing schedule...');
                 
-                // 5. Restore Context (Other People's Work)
-                console.log('[Integration] Restoring locked schedules...');
-                // For Schedulers: Puts other subdivisions' data back into window.scheduleAssignments as LOCKED
-                const restoredCount = SSM.restoreLockedSchedules();
-                
-                // 6. Register Locks
-                console.log('[Integration] Registering locked claims in GlobalFieldLocks...');
-                SSM.registerLockedClaimsInGlobalLocks();
-                
-                // 7. Resource Allocation
-                console.log('[Integration] Calculating smart resource allocation...');
-                const slots = getUniqueSlots(filteredSkeleton);
-                const allocation = SSM.getSmartResourceAllocation(slots);
-
-                // 8. Run Core Optimizer
-                // CRITICAL: We pass 'null' for snapshot to force the core to generate fresh.
-                // We do NOT want it to try and "merge" with old data for the active divisions.
-                
+                let existingAssignments = {};
                 try {
-                    // Check signature style
-                    if (arg2 && !Array.isArray(arg2) && typeof arg2 === 'object' && !arg3) {
-                        // Options object signature
-                        await originalOptimizer(filteredSkeleton, {
-                            ...arg2,
-                            divisionsToSchedule,
-                            resourceAllocation: allocation
-                        });
-                    } else {
-                        // Standard 4-arg signature: (skeleton, overrides, allowedDivisions, snapshot)
-                        // arg2 = overrides
-                        // arg3 = allowedDivisions (ignored, we use our calculated one)
-                        // arg4 = snapshot (ignored, forced to null)
-                        
-                        await originalOptimizer(
-                            filteredSkeleton, 
-                            arg2, 
-                            divisionsToSchedule, 
-                            null // <--- FORCE OVERWRITE (Ignore previous UI snapshot)
-                        );
+                    const raw = localStorage.getItem(DAILY_DATA_KEY);
+                    if (raw) {
+                        const dailyData = JSON.parse(raw);
+                        existingAssignments = dailyData[dateKey]?.scheduleAssignments || {};
                     }
                 } catch (e) {
-                    console.error("[Integration] Optimization failed:", e);
-                    alert("Optimization failed. See console.");
-                    return;
-                }
-
-                // 9. Save Result
-                console.log('\n[Integration] Post-generation cleanup...');
-                saveScheduleToLocalStorage();
-                
-                // 10. Mark Draft Status
-                SSM.markCurrentUserSubdivisionsAsDraft();
-
-                // 11. FORCE UI REFRESH (v1.6 Fix)
-                // We dispatch this immediately to ensure the grid updates visually 
-                // without waiting for the Cloud Bridge loop.
-                console.log('[Integration] 🔄 Dispatching immediate UI refresh...');
-                window.dispatchEvent(new Event('campistry-daily-data-updated'));
-                
-                // 12. Unprotect after delay (v1.6 Fix)
-                // Ensures normal syncs can resume.
-                if (typeof window.unprotectLocalData === 'function') {
-                    setTimeout(() => {
-                        window.unprotectLocalData();
-                    }, 5000);
+                    console.warn('[Integration] Error loading existing:', e);
                 }
                 
-                console.log('[Integration] Schedule generation complete');
+                const existingBunkCount = Object.keys(existingAssignments).length;
+                console.log(`   Found ${existingBunkCount} existing bunk schedules`);
 
-            } else {
-                // Standard mode (Single Scheduler / No RBAC)
-                console.log('[Integration] Standard mode (Full Overwrite)');
-                
-                // Pass through but ensure null snapshot for consistency in overwrite behavior
-                if (arg2 && !Array.isArray(arg2) && typeof arg2 === 'object' && !arg3) {
-                    await originalOptimizer(skeleton, arg2);
-                } else {
-                    await originalOptimizer(skeleton, arg2, arg3, null);
-                }
-                
-                saveScheduleToLocalStorage();
+                // =============================================================
+                // STEP 3: Extract blocked resources (SCHEDULER MODE ONLY)
+                // =============================================================
+                if (!isOwner && existingBunkCount > 0) {
+                    console.log('\n[Step 3] Extracting blocked resources from other schedulers...');
+                    
+                    const blockedResources = extractBlockedResources(existingAssignments, myBunks);
+                    const blockedSlotCount = Object.keys(blockedResources).length;
+                    
+                    console.log(`   Found ${blockedSlotCount} slots with blocked resources`);
+                    
+                    // Debug: Print blocked summary
+                    for (const [slot, resources] of Object.entries(blockedResources)) {
+                        const resourceList = Object.entries(resources)
+                            .map(([name, info]) => `${name}(${info.count})`)
+                            .join(', ');
+                        console.log(`   Slot ${slot}: ${resourceList}`);
+                    }
 
-                // Force UI refresh here too
-                window.dispatchEvent(new Event('campistry-daily-data-updated'));
-                
-                if (typeof window.unprotectLocalData === 'function') {
-                    setTimeout(() => {
-                        window.unprotectLocalData();
-                    }, 3000);
-                }
-            }
-        };
-    }
-
-    // =========================================================================
-    // HELPER: Load existing schedule from localStorage
-    // =========================================================================
-
-    async function loadExistingSchedule() {
-        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        
-        try {
-            const raw = localStorage.getItem(DAILY_DATA_KEY);
-            if (!raw) return;
-            
-            const dailyData = JSON.parse(raw);
-            const dateData = dailyData[dateKey]; // Load from inside date key
-            
-            if (dateData?.scheduleAssignments) {
-                if (!window.scheduleAssignments) {
-                    window.scheduleAssignments = {};
-                }
-                
-                for (const [bunk, slots] of Object.entries(dateData.scheduleAssignments)) {
-                    if (!window.scheduleAssignments[bunk]) {
-                        window.scheduleAssignments[bunk] = slots;
+                    // Register in GlobalFieldLocks
+                    const activityProps = window.activityProperties || {};
+                    registerBlockedInGlobalLocks(blockedResources, activityProps);
+                } else if (isOwner) {
+                    console.log('\n[Step 3] Owner mode - skipping blocked resource extraction');
+                    if (window.GlobalFieldLocks) {
+                        window.GlobalFieldLocks.reset();
                     }
                 }
-                console.log(`[Integration] Loaded existing schedule: ${Object.keys(dateData.scheduleAssignments).length} bunks`);
+
+                // =============================================================
+                // STEP 4: Clear ONLY current user's bunks
+                // =============================================================
+                console.log('\n[Step 4] Preparing schedule space...');
+                
+                // Start with existing schedule (preserve others' work)
+                window.scheduleAssignments = JSON.parse(JSON.stringify(existingAssignments));
+                
+                // Clear ONLY my bunks for fresh generation
+                let clearedCount = 0;
+                for (const bunk of myBunks) {
+                    if (window.scheduleAssignments[bunk]) {
+                        window.scheduleAssignments[bunk] = [];
+                        clearedCount++;
+                    }
+                }
+                console.log(`   Cleared ${clearedCount} of my bunks for fresh generation`);
+                console.log(`   Preserved ${existingBunkCount - clearedCount} bunks from other schedulers`);
+
+                // =============================================================
+                // STEP 5: Filter skeleton for my divisions
+                // =============================================================
+                const originalLength = skeleton?.length || 0;
+                const filteredSkeleton = filterSkeletonByDivisions(skeleton, divisionsToSchedule);
+                console.log(`\n[Step 5] Filtered skeleton: ${filteredSkeleton.length} blocks (from ${originalLength})`);
+
+                // =============================================================
+                // STEP 6: Run core optimizer
+                // =============================================================
+                console.log('\n[Step 6] Running core optimizer...');
+                
+                // Pass filtered skeleton and divisions to core
+                if (arg2 && !Array.isArray(arg2) && typeof arg2 === 'object' && !arg3) {
+                    await originalOptimizer(filteredSkeleton, {
+                        ...arg2,
+                        divisionsToSchedule,
+                        isPartialGeneration: !isOwner
+                    });
+                } else {
+                    await originalOptimizer(
+                        filteredSkeleton,
+                        arg2,
+                        divisionsToSchedule,
+                        null // Force fresh generation for our bunks
+                    );
+                }
+
+                // =============================================================
+                // STEP 7: Merge and verify (non-destructive)
+                // =============================================================
+                console.log('\n[Step 7] Verifying merge integrity...');
+                
+                // Count final bunks
+                const finalBunkCount = Object.keys(window.scheduleAssignments || {}).length;
+                const myBunksFilled = [...myBunks].filter(b => 
+                    window.scheduleAssignments[b] && 
+                    window.scheduleAssignments[b].some(s => s && s.field)
+                ).length;
+
+                console.log(`   Total bunks in final schedule: ${finalBunkCount}`);
+                console.log(`   My bunks with schedules: ${myBunksFilled}/${myBunks.size}`);
+
+                // Verify we didn't overwrite others' work
+                let preservedCount = 0;
+                for (const [bunk, slots] of Object.entries(existingAssignments)) {
+                    if (!myBunks.has(bunk)) {
+                        if (window.scheduleAssignments[bunk]) {
+                            preservedCount++;
+                        } else {
+                            console.warn(`   ⚠️ Lost schedule for bunk: ${bunk}`);
+                        }
+                    }
+                }
+                console.log(`   Verified preserved: ${preservedCount} bunks from other schedulers`);
+
+                // =============================================================
+                // STEP 8: Save to storage
+                // =============================================================
+                console.log('\n[Step 8] Saving to storage...');
+                saveScheduleToLocalStorage(window.scheduleAssignments, divisionsToSchedule);
+
+                // =============================================================
+                // STEP 9: Update subdivision status
+                // =============================================================
+                if (SSM?.markCurrentUserSubdivisionsAsDraft && !isOwner) {
+                    console.log('[Step 9] Marking subdivisions as draft...');
+                    SSM.markCurrentUserSubdivisionsAsDraft();
+                }
+
+                // =============================================================
+                // STEP 10: Trigger UI refresh
+                // =============================================================
+                console.log('\n[Step 10] Refreshing UI...');
+                window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
+                
+                if (typeof window.unprotectLocalData === 'function') {
+                    setTimeout(() => window.unprotectLocalData(), 3000);
+                }
+
+                console.log('\n' + '═'.repeat(70));
+                console.log('✅ GENERATION COMPLETE');
+                console.log('═'.repeat(70) + '\n');
+
+            } catch (error) {
+                console.error('[Integration] Generation failed:', error);
+                
+                if (typeof window.unprotectLocalData === 'function') {
+                    window.unprotectLocalData();
+                }
+                
+                throw error;
             }
-            
-            if (dateData?.skeleton) {
-                window.skeleton = dateData.skeleton;
-            }
-        } catch (e) {
-            console.warn('[Integration] Error loading existing schedule:', e);
-        }
-    }
-
-    // =========================================================================
-    // HELPER: Clear only our bunks (The Eraser - v1.5)
-    // =========================================================================
-
-    function clearOurBunksOnly(ourBunks) {
-        if (!window.scheduleAssignments) {
-            window.scheduleAssignments = {};
-            return;
-        }
-        
-        let clearedCount = 0;
-        for (const bunk of ourBunks) {
-            if (window.scheduleAssignments[bunk]) {
-                // Completely wipe the array to ensure no residual data
-                window.scheduleAssignments[bunk] = [];
-                clearedCount++;
-            }
-        }
-        
-        console.log(`[Integration] 🧹 Cleared ${clearedCount} bunks for FRESH generation`);
-    }
-
-    // =========================================================================
-    // HELPER FUNCTIONS
-    // =========================================================================
-
-    function getUniqueSlots(skeleton) {
-        const slots = new Set();
-        (skeleton || []).forEach(block => {
-            const slotIdx = Math.floor((block.startTime - 540) / 60);
-            if (slotIdx >= 0) slots.add(slotIdx);
-        });
-        return [...slots];
+        };
     }
 
     // =========================================================================
@@ -333,7 +407,7 @@
         if (typeof window.runSkeletonOptimizer === 'function') {
             _originalRunOptimizer = window.runSkeletonOptimizer;
             window.runSkeletonOptimizer = createIntegratedOptimizer(_originalRunOptimizer);
-            console.log('[Integration] Scheduler hooks installed for multi-scheduler support');
+            console.log('[Integration] ✅ Scheduler hooks installed for multi-scheduler support');
             _isHooked = true;
         } else {
             setTimeout(installHooks, 500);
@@ -348,8 +422,9 @@
         const newDate = e.detail?.date;
         if (newDate) {
             console.log('[Integration] Date changed to:', newDate);
+            window.currentScheduleDate = newDate;
+            
             if (window.SubdivisionScheduleManager?.initialize) {
-                window.currentScheduleDate = newDate;
                 window.SubdivisionScheduleManager.initialize();
             }
         }
@@ -357,11 +432,13 @@
 
     window.addEventListener('campistry-daily-data-updated', function() {
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        
         try {
             const raw = localStorage.getItem(DAILY_DATA_KEY);
             if (raw) {
                 const dailyData = JSON.parse(raw);
                 const dateData = dailyData[dateKey];
+                
                 if (dateData?.scheduleAssignments) {
                     window.scheduleAssignments = dateData.scheduleAssignments;
                     console.log('[Integration] Reloaded scheduleAssignments from localStorage');
@@ -379,10 +456,13 @@
     window.SchedulerSubdivisionIntegration = {
         get isHooked() { return _isHooked; },
         filterSkeletonByDivisions,
-        filterBunksByDivisions,
+        getBunksForDivisions,
+        extractBlockedResources,
+        registerBlockedInGlobalLocks,
         saveScheduleToLocalStorage
     };
 
+    // Initialize hooks
     if (document.readyState === 'complete') {
         installHooks();
     } else {
@@ -391,6 +471,6 @@
 
     setTimeout(installHooks, 100);
 
-    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.6 (VISUAL SYNC FIX)');
+    console.log('[SchedulerSubdivisionIntegration] Module loaded v2.0 (MULTI-SCHEDULER CORE)');
 
 })();
