@@ -1,5 +1,9 @@
 // ============================================================================
-// view_schedule_loader_fix.js v3.2 - AGGRESSIVE LOADER
+// view_schedule_loader_fix.js v3.3 - CLOUD DEFENDER EDITION
+// ============================================================================
+// 1. Smart Grid: Fixes 11:00 AM start time
+// 2. Data Recovery: Finds data in Date Folder or Root
+// 3. CLOUD SHIELD: Prevents Cloud Sync from wiping your just-generated schedule
 // ============================================================================
 
 (function() {
@@ -8,7 +12,14 @@
     const DAILY_DATA_KEY = 'campDailyData_v1';
     const INCREMENT_MINS = 30;
     
-    console.log('[ViewScheduleFix] Loading v3.2 (Aggressive Date Loader)...');
+    // MEMORY SHIELD
+    window.scheduleMemoryShield = {
+        data: null,
+        dateKey: null,
+        timestamp: 0
+    };
+    
+    console.log('[ViewScheduleFix] Loading v3.3 (Cloud Defender)...');
     
     // =========================================================================
     // SMART TIME GRID GENERATOR
@@ -25,10 +36,8 @@
     }
 
     function regenerateUnifiedTimes(skeleton) {
-        console.log('[ViewScheduleFix] Regenerating Smart Grid...');
         let minTime = Infinity, maxTime = 0, found = false;
 
-        // 1. Scan Skeleton
         if (skeleton && Array.isArray(skeleton)) {
             skeleton.forEach(b => {
                 const s = parseTimeToMinutes(b.startTime);
@@ -38,7 +47,6 @@
             });
         }
 
-        // 2. Scan Global Divisions (The "Anti-11AM" Fix)
         if (window.divisions) {
             Object.values(window.divisions).forEach(div => {
                 const s = parseTimeToMinutes(div.startTime);
@@ -48,7 +56,7 @@
             });
         }
 
-        if (!found) { minTime = 540; maxTime = 960; } // Default 9am-4pm
+        if (!found) { minTime = 540; maxTime = 960; }
         if (maxTime <= minTime) maxTime = minTime + 60;
 
         const times = [];
@@ -69,10 +77,9 @@
     }
 
     // =========================================================================
-    // CORE LOADER
+    // CORE LOADER WITH SHIELD
     // =========================================================================
     function loadScheduleFromCorrectLocation() {
-        // 1. Determine Date Key
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         
         try {
@@ -80,22 +87,42 @@
             if (!raw) return false;
             
             const dailyData = JSON.parse(raw);
-            let loaded = false;
+            let loadedSource = null;
 
-            // 2. Load Assignments (Priority: Date Key -> Root)
-            if (dailyData[dateKey] && dailyData[dateKey].scheduleAssignments && Object.keys(dailyData[dateKey].scheduleAssignments).length > 0) {
-                window.scheduleAssignments = dailyData[dateKey].scheduleAssignments;
-                console.log(`[ViewScheduleFix] ✅ LOADED from [${dateKey}] (${Object.keys(window.scheduleAssignments).length} bunks)`);
-                loaded = true;
-            } else if (dailyData.scheduleAssignments && Object.keys(dailyData.scheduleAssignments).length > 0) {
-                window.scheduleAssignments = dailyData.scheduleAssignments;
-                console.log(`[ViewScheduleFix] ⚠️ LOADED from ROOT (Legacy) (${Object.keys(window.scheduleAssignments).length} bunks)`);
-                loaded = true;
-            } else {
-                console.warn(`[ViewScheduleFix] ❌ No scheduleAssignments found in [${dateKey}] or ROOT.`);
+            // 1. TRY MEMORY SHIELD RESTORE (If storage was wiped)
+            if (window.scheduleMemoryShield.dateKey === dateKey && window.scheduleMemoryShield.data) {
+                // If storage is empty/missing but Shield has data -> RESTORE IT
+                const storageHasData = dailyData[dateKey]?.scheduleAssignments && Object.keys(dailyData[dateKey].scheduleAssignments).length > 0;
+                
+                if (!storageHasData) {
+                    console.warn("🛡️ [ViewScheduleFix] Cloud wiped data! Restoring from Shield...");
+                    if (!dailyData[dateKey]) dailyData[dateKey] = {};
+                    dailyData[dateKey].scheduleAssignments = window.scheduleMemoryShield.data;
+                    localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(dailyData));
+                    
+                    // Force push back to cloud to fix server
+                    if(window.forceSyncToCloud) setTimeout(() => window.forceSyncToCloud(), 1000);
+                }
             }
 
-            // 3. Load/Regen Times
+            // 2. LOAD ASSIGNMENTS
+            if (dailyData[dateKey]?.scheduleAssignments && Object.keys(dailyData[dateKey].scheduleAssignments).length > 0) {
+                window.scheduleAssignments = dailyData[dateKey].scheduleAssignments;
+                loadedSource = "DATE_FOLDER";
+                
+                // UPDATE SHIELD
+                window.scheduleMemoryShield.data = window.scheduleAssignments;
+                window.scheduleMemoryShield.dateKey = dateKey;
+                window.scheduleMemoryShield.timestamp = Date.now();
+                
+            } else if (dailyData.scheduleAssignments && Object.keys(dailyData.scheduleAssignments).length > 0) {
+                window.scheduleAssignments = dailyData.scheduleAssignments;
+                loadedSource = "ROOT_FALLBACK";
+            }
+
+            console.log(`[ViewScheduleFix] Loaded schedule from: ${loadedSource || "NONE"}`);
+
+            // 3. LOAD TIMES
             if (dailyData.unifiedTimes && dailyData.unifiedTimes.length > 0) {
                 window.unifiedTimes = dailyData.unifiedTimes.map(t => ({...t, start: new Date(t.start), end: new Date(t.end)}));
             } else {
@@ -104,14 +131,14 @@
                 if (newTimes) window.unifiedTimes = newTimes.map(t => ({...t, start: new Date(t.start), end: new Date(t.end)}));
             }
 
-            // 4. Load Skeleton
+            // 4. LOAD SKELETON
             const skel = dailyData[dateKey]?.skeleton || dailyData.manualSkeleton;
             if (skel) window.skeleton = skel;
 
-            // 5. Load League Assignments
+            // 5. LOAD LEAGUE
             if (dailyData.leagueAssignments) window.leagueAssignments = dailyData.leagueAssignments;
 
-            return loaded;
+            return !!loadedSource;
 
         } catch (e) {
             console.error("[ViewScheduleFix] Error:", e);
@@ -123,6 +150,12 @@
     // PATCHING SYSTEM
     // =========================================================================
     function applyPatches() {
+        // Patch Render
+        window.reconcileOrRenderSaved = function() {
+            loadScheduleFromCorrectLocation();
+            if (window.updateTable) window.updateTable();
+        };
+
         // Patch Init
         const originalInit = window.initScheduleSystem;
         window.initScheduleSystem = function() {
@@ -130,35 +163,26 @@
             if (originalInit) originalInit.call(this);
         };
 
-        // Patch Render
-        window.reconcileOrRenderSaved = function() {
-            loadScheduleFromCorrectLocation();
-            if (window.updateTable) window.updateTable();
-        };
-
-        // Patch Table Update (Safety Net)
+        // Safety Net Update
         const originalUpdate = window.updateTable;
         if (originalUpdate) {
             window.updateTable = function() {
                 if (!window.scheduleAssignments || Object.keys(window.scheduleAssignments).length === 0) {
-                    console.log("[ViewScheduleFix] Data missing during update, forcing load...");
                     loadScheduleFromCorrectLocation();
                 }
                 originalUpdate.call(this);
             };
         }
         
-        // Initial Load
         loadScheduleFromCorrectLocation();
     }
 
-    // Initialize
     if (document.readyState === 'complete') applyPatches();
     else window.addEventListener('load', applyPatches);
     
-    // Listen for updates
+    // Listen for Cloud Updates and Re-Apply Shield
     window.addEventListener('campistry-daily-data-updated', () => {
-        console.log("[ViewScheduleFix] Data update detected!");
+        console.log("[ViewScheduleFix] Cloud update detected. Re-verifying data...");
         loadScheduleFromCorrectLocation();
         if(window.updateTable) window.updateTable();
     });
