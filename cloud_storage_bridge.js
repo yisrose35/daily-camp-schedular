@@ -1,6 +1,6 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// VERSION: v4.0 (SIMPLIFIED MULTI-SCHEDULER)
+// VERSION: v4.1 (DELETE FIX - Proper Cloud Deletion Support)
 // =================================================================
 // 
 // ARCHITECTURE:
@@ -9,11 +9,16 @@
 // - No complex merge logic - just append!
 // - Field conflicts prevented by GlobalFieldLocks.loadFromCloud()
 //
+// v4.1 FIXES:
+// - Added clearCloudKeys() function for partial resets
+// - Fixed resetCloudState() to include daily_schedules: {}
+// - Ensured deletions properly sync to cloud
+//
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v4.0 (SIMPLIFIED MULTI-SCHEDULER)");
+  console.log("☁️ Campistry Cloud Bridge v4.1 (DELETE FIX)");
 
   // CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -324,7 +329,7 @@
 
   async function saveToCloud(state) {
     try {
-      showToast("☁️ Saving Schedule...", "info");
+      showToast("☁️ Saving...", "info");
       
       const user = await getUser();
       if (!user) {
@@ -349,11 +354,18 @@
       delete stateToSave._importTimestamp;
 
       // =====================================================================
-      // ★★★ SIMPLE SAVE LOGIC ★★★
+      // ★★★ DAILY SCHEDULES BUNDLING ★★★
       // =====================================================================
       try {
         const schedulesRaw = localStorage.getItem(DAILY_DATA_KEY);
-        if (schedulesRaw) {
+        
+        // ★★★ FIX: Handle case where localStorage was cleared (deletion) ★★★
+        // If daily_schedules is explicitly set in state (from resetCloudState/clearCloudKeys), use it
+        if (state.daily_schedules !== undefined) {
+            console.log('☁️ [SAVE] Using explicit daily_schedules from state');
+            stateToSave.daily_schedules = state.daily_schedules;
+        }
+        else if (schedulesRaw) {
             const localSchedules = JSON.parse(schedulesRaw);
             const myBunks = getMyBunks();
             
@@ -438,6 +450,9 @@
                 return false;
             }
         }
+        // ★★★ FIX: If localStorage is empty BUT we're not explicitly setting daily_schedules,
+        // don't remove it from cloud - just don't include it in this update
+        // This prevents accidental cloud deletion during normal operations
       } catch(e) { 
           console.error("☁️ [SAVE] Bundle error:", e);
       }
@@ -464,7 +479,7 @@
           const patchedData = await patchResponse.json();
           if (patchedData && patchedData.length > 0) {
               console.log("☁️ [SAVE] ✅ Success");
-              showToast("✅ Schedule Saved!", "success");
+              showToast("✅ Saved!", "success");
               _dailyDataDirty = false;
               
               // Dispatch event so UI can refresh from cloud
@@ -494,7 +509,7 @@
 
           if (postResponse.ok) {
             console.log("☁️ [SAVE] ✅ Created new record");
-            showToast("✅ Schedule Saved!", "success");
+            showToast("✅ Saved!", "success");
             _dailyDataDirty = false;
             return true;
           } else {
@@ -577,25 +592,124 @@
           divisionsWithData: [...divisionsWithData]
       };
   };
-    
+
   // ============================================================================
-  // RESET & IMPORT
+  // ★★★ RESET CLOUD STATE - Complete Data Wipe ★★★
   // ============================================================================
-  window.resetCloudState = async function() {
+  window.resetCloudState = async function(newState = null) {
     if (_isTeamMember) {
         showToast("❌ Only camp owners can reset data", "error");
         return false;
     }
     
-    const emptyState = {
-      divisions: {}, bunks: [], app1: { divisions: {}, bunks: [], fields: [], specialActivities: [] },
+    console.log("☁️ resetCloudState called - FULL DATA WIPE");
+    
+    const emptyState = newState || {
+      divisions: {},
+      bunks: [],
+      app1: {
+        divisions: {},
+        bunks: [],
+        fields: [],
+        specialActivities: [],
+        allSports: [],
+        bunkMetaData: {},
+        sportMetaData: {},
+        savedSkeletons: {},
+        skeletonAssignments: {}
+      },
+      locationZones: {},
+      pinnedTileDefaults: {},
+      leaguesByName: {},
+      leagueRoundState: {},
+      leagueHistory: {},
+      specialtyLeagueHistory: {},
+      specialtyLeagues: {},
+      smartTileHistory: {},
+      manualUsageOffsets: {},
+      historicalCounts: {},
+      rotationHistory: { bunks: {}, leagues: {} },
+      daily_schedules: {}, // ★ CRITICAL: Explicitly set to empty to clear cloud
       updated_at: new Date().toISOString()
     };
+    
+    // ★ Clear localStorage AFTER setting up the empty state
     localStorage.removeItem(DAILY_DATA_KEY);
-    setLocalCache(emptyState);
-    return await saveToCloud(emptyState);
+    
+    // ★ Update memory cache
+    _memoryCache = emptyState;
+    
+    // ★ Save empty state to all localStorage keys
+    try {
+      const stateJSON = JSON.stringify(emptyState);
+      localStorage.setItem(UNIFIED_CACHE_KEY, stateJSON);
+      localStorage.setItem(LEGACY_KEYS.globalSettings, stateJSON);
+      localStorage.setItem(LEGACY_KEYS.localCache, stateJSON);
+      localStorage.setItem(LEGACY_KEYS.globalRegistry, JSON.stringify({
+        divisions: {},
+        bunks: []
+      }));
+      console.log("☁️ Local storage cleared with empty state");
+    } catch (e) {
+      console.error("☁️ Failed to clear localStorage:", e);
+    }
+    
+    // ★ Force sync the empty state to cloud (with explicit daily_schedules: {})
+    const success = await saveToCloud(emptyState);
+    console.log("☁️ Cloud reset result:", success ? "SUCCESS" : "FAILED");
+    return success;
   };
 
+  // ============================================================================
+  // ★★★ CLEAR SPECIFIC CLOUD KEYS - For partial resets (New Half, etc.) ★★★
+  // ============================================================================
+  window.clearCloudKeys = async function(keysToReset) {
+    console.log("☁️ clearCloudKeys called for:", keysToReset);
+    
+    const state = getLocalCache();
+    
+    // Reset specified keys to empty values
+    keysToReset.forEach(key => {
+      if (key === 'leagueRoundState') state.leagueRoundState = {};
+      else if (key === 'leagueHistory') state.leagueHistory = {};
+      else if (key === 'specialtyLeagueHistory') state.specialtyLeagueHistory = {};
+      else if (key === 'daily_schedules') {
+        state.daily_schedules = {};
+        // Also clear localStorage
+        localStorage.removeItem(DAILY_DATA_KEY);
+      }
+      else if (key === 'manualUsageOffsets') state.manualUsageOffsets = {};
+      else if (key === 'historicalCounts') state.historicalCounts = {};
+      else if (key === 'smartTileHistory') state.smartTileHistory = {};
+      else if (key === 'rotationHistory') state.rotationHistory = { bunks: {}, leagues: {} };
+      else {
+        // For unknown keys, set to empty object
+        state[key] = {};
+      }
+    });
+    
+    state.updated_at = new Date().toISOString();
+    
+    // Update memory cache and localStorage
+    _memoryCache = state;
+    try {
+      const stateJSON = JSON.stringify(state);
+      localStorage.setItem(UNIFIED_CACHE_KEY, stateJSON);
+      localStorage.setItem(LEGACY_KEYS.globalSettings, stateJSON);
+      localStorage.setItem(LEGACY_KEYS.localCache, stateJSON);
+    } catch (e) {
+      console.error("☁️ Failed to update localStorage:", e);
+    }
+    
+    // Force sync to cloud immediately (with explicit empty values)
+    const success = await saveToCloud(state);
+    console.log("☁️ Partial reset result:", success ? "SUCCESS" : "FAILED");
+    return success;
+  };
+
+  // ============================================================================
+  // SET CLOUD STATE (Import)
+  // ============================================================================
   window.setCloudState = async function(newState) {
     if (!newState || typeof newState !== 'object') return false;
     newState.updated_at = new Date().toISOString();
