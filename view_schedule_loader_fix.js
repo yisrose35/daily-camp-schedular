@@ -1,9 +1,9 @@
 // ============================================================================
-// view_schedule_loader_fix.js v5.2 - NO LEGACY ROOT FALLBACK
+// view_schedule_loader_fix.js v5.3 - MIGRATION + NO LEGACY ROOT FALLBACK
 // ============================================================================
-// FIXED: Removed ROOT-level fallback loading that was restoring deleted data
+// FIXED: Migrates ROOT-level skeleton to date-specific (preserves shared structure)
+// FIXED: Cleans ROOT-level user data (scheduleAssignments) that causes ghost data
 // Data MUST be stored in date-keyed format: data["2026-01-11"].scheduleAssignments
-// ROOT-level data (data.scheduleAssignments) is LEGACY and should be ignored
 // ============================================================================
 
 (function() {
@@ -11,7 +11,7 @@
     
     const DAILY_DATA_KEY = 'campDailyData_v1';
     
-    console.log('[ViewScheduleFix] Loading v5.2 (NO LEGACY ROOT FALLBACK)...');
+    console.log('[ViewScheduleFix] Loading v5.3 (MIGRATION + NO LEGACY ROOT FALLBACK)...');
     
     // --- TIME PARSER ---
     function parseTimeToMinutes(str) {
