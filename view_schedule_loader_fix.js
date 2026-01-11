@@ -1,10 +1,10 @@
 // ============================================================================
-// view_schedule_loader_fix.js v3 - Complete fix for View Schedule loading
+// view_schedule_loader_fix.js v3.1 - Smart Grid & Data Recovery
 // ============================================================================
 // Fixes:
-// 1. Loads scheduleAssignments from correct date key location
-// 2. Regenerates unifiedTimes if missing (required for rendering)
-// 3. Loads skeleton/manualSkeleton (required for rendering)
+// 1. "Smart Grid": Checks GLOBAL DIVISIONS for start/end times (fixes 11am bug)
+// 2. "Data Recovery": Auto-detects if data is in ROOT or DATE key
+// 3. "Auto-Patching": Hooks into all system render calls
 // ============================================================================
 
 (function() {
@@ -13,7 +13,7 @@
     const DAILY_DATA_KEY = 'campDailyData_v1';
     const INCREMENT_MINS = 30;
     
-    console.log('[ViewScheduleFix] Loading v3 with skeleton support...');
+    console.log('[ViewScheduleFix] Loading v3.1 with Smart Grid support...');
     
     // =========================================================================
     // TIME PARSING HELPER
@@ -35,30 +35,48 @@
     }
     
     // =========================================================================
-    // REGENERATE unifiedTimes FROM manualSkeleton
+    // REGENERATE unifiedTimes (SMART VERSION)
     // =========================================================================
     
     function regenerateUnifiedTimes(skeleton) {
-        if (!skeleton || skeleton.length === 0) {
-            console.log('[ViewScheduleFix] No skeleton to generate unifiedTimes from');
-            return null;
+        console.log('[ViewScheduleFix] Regenerating unifiedTimes (Smart Mode)...');
+        
+        let minTime = Infinity;
+        let maxTime = 0;
+        let foundData = false;
+
+        // 1. Check Skeleton (Current working blocks)
+        if (skeleton && skeleton.length > 0) {
+            skeleton.forEach(block => {
+                const start = parseTimeToMinutes(block.startTime);
+                const end = parseTimeToMinutes(block.endTime);
+                if (start !== null && start < minTime) { minTime = start; foundData = true; }
+                if (end !== null && end > maxTime) { maxTime = end; foundData = true; }
+            });
         }
-        
-        // Find earliest and latest times from skeleton
-        let minTime = Infinity, maxTime = 0;
-        skeleton.forEach(block => {
-            const start = parseTimeToMinutes(block.startTime);
-            const end = parseTimeToMinutes(block.endTime);
-            if (start !== null && start < minTime) minTime = start;
-            if (end !== null && end > maxTime) maxTime = end;
-        });
-        
-        if (minTime === Infinity || maxTime === 0) {
-            console.log('[ViewScheduleFix] Could not determine time range from skeleton');
-            return null;
+
+        // 2. Check Global Divisions (CRITICAL FIX)
+        // This checks your settings to find the "True" start time (e.g. 9:00 AM)
+        if (window.divisions) {
+            Object.values(window.divisions).forEach(div => {
+                const s = parseTimeToMinutes(div.startTime);
+                const e = parseTimeToMinutes(div.endTime);
+                if (s !== null && s < minTime) { minTime = s; foundData = true; }
+                if (e !== null && e > maxTime) { maxTime = e; foundData = true; }
+            });
         }
-        
-        console.log(`[ViewScheduleFix] Regenerating unifiedTimes: ${minTime} to ${maxTime} minutes`);
+
+        // 3. Defaults if nothing found
+        if (!foundData) {
+            console.log('[ViewScheduleFix] No time data found, using defaults (9am-4pm)');
+            minTime = 540; // 9:00 AM
+            maxTime = 960; // 4:00 PM
+        }
+
+        // Buffer: Ensure we don't start/end too tight if using strict skeleton
+        if (maxTime <= minTime) maxTime = minTime + 60;
+
+        console.log(`[ViewScheduleFix] Time Range Calculated: ${minTime} (${Math.floor(minTime/60)}:${minTime%60}) to ${maxTime}`);
         
         // Generate unified time slots
         const baseDate = new Date();
@@ -85,12 +103,11 @@
     }
     
     // =========================================================================
-    // CORE FIX: Proper schedule loading from date key
+    // CORE FIX: Proper schedule loading from date key OR root
     // =========================================================================
     
     function loadScheduleFromCorrectLocation() {
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        
         console.log(`[ViewScheduleFix] Loading schedule for ${dateKey}...`);
         
         try {
@@ -104,29 +121,20 @@
             let loaded = false;
             
             // =====================================================================
-            // STEP 1: Load scheduleAssignments
+            // STEP 1: Load scheduleAssignments (Date Key -> Root Fallback)
             // =====================================================================
             
-            // Check INSIDE the date key first (correct location)
-            if (dailyData[dateKey]?.scheduleAssignments) {
-                const scheduleData = dailyData[dateKey].scheduleAssignments;
-                const bunkCount = Object.keys(scheduleData).length;
-                
-                if (bunkCount > 0) {
-                    window.scheduleAssignments = scheduleData;
-                    console.log(`[ViewScheduleFix] ✅ Loaded ${bunkCount} bunks from [${dateKey}].scheduleAssignments`);
-                    loaded = true;
-                }
+            // 1A. Check Date Key (Preferred)
+            if (dailyData[dateKey]?.scheduleAssignments && Object.keys(dailyData[dateKey].scheduleAssignments).length > 0) {
+                window.scheduleAssignments = dailyData[dateKey].scheduleAssignments;
+                console.log(`[ViewScheduleFix] ✅ Loaded bunks from [${dateKey}].scheduleAssignments`);
+                loaded = true;
             }
-            
-            // Fallback: Check root level (legacy location)
-            if (!loaded && dailyData.scheduleAssignments) {
-                const bunkCount = Object.keys(dailyData.scheduleAssignments).length;
-                if (bunkCount > 0) {
-                    window.scheduleAssignments = dailyData.scheduleAssignments;
-                    console.log(`[ViewScheduleFix] ⚠️ Loaded ${bunkCount} bunks from ROOT (legacy location)`);
-                    loaded = true;
-                }
+            // 1B. Check Root (Legacy/Fallback)
+            else if (dailyData.scheduleAssignments && Object.keys(dailyData.scheduleAssignments).length > 0) {
+                window.scheduleAssignments = dailyData.scheduleAssignments;
+                console.log(`[ViewScheduleFix] ⚠️ Loaded bunks from ROOT (legacy location)`);
+                loaded = true;
             }
             
             // =====================================================================
@@ -139,21 +147,22 @@
                     start: new Date(slot.start),
                     end: new Date(slot.end)
                 }));
-                console.log(`[ViewScheduleFix] ✅ Loaded ${window.unifiedTimes.length} unifiedTimes slots`);
+                console.log(`[ViewScheduleFix] ✅ Loaded ${window.unifiedTimes.length} unifiedTimes slots from storage`);
             } else {
-                // Need to regenerate from skeleton
                 console.log('[ViewScheduleFix] ⚠️ unifiedTimes missing - regenerating...');
-                
                 const skeleton = dailyData.manualSkeleton || dailyData[dateKey]?.manualSkeleton;
+                
+                // Use the new SMART regenerator
                 const regenerated = regenerateUnifiedTimes(skeleton);
                 
                 if (regenerated) {
-                    // Save to localStorage for future use
                     dailyData.unifiedTimes = regenerated;
-                    localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(dailyData));
-                    console.log('[ViewScheduleFix] ✅ Saved regenerated unifiedTimes to localStorage');
+                    // Only save if we actually found data, to avoid empty overwrites
+                    if(regenerated.length > 0) {
+                        localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(dailyData));
+                        console.log('[ViewScheduleFix] ✅ Saved regenerated unifiedTimes to localStorage');
+                    }
                     
-                    // Load into window
                     window.unifiedTimes = regenerated.map(slot => ({
                         ...slot,
                         start: new Date(slot.start),
@@ -163,30 +172,17 @@
             }
             
             // =====================================================================
-            // STEP 3: Load skeleton (CRITICAL FOR RENDERING)
+            // STEP 3: Load skeleton
             // =====================================================================
             
-            // Try multiple locations for skeleton
-            let skeleton = null;
+            let skeleton = 
+                dailyData[dateKey]?.skeleton || 
+                dailyData.manualSkeleton || 
+                dailyData[dateKey]?.manualSkeleton;
             
-            // First try date-specific skeleton
-            if (dailyData[dateKey]?.skeleton && dailyData[dateKey].skeleton.length > 0) {
-                skeleton = dailyData[dateKey].skeleton;
-                console.log(`[ViewScheduleFix] ✅ Loaded skeleton from [${dateKey}].skeleton: ${skeleton.length} blocks`);
-            }
-            // Then try manualSkeleton at root (most common location)
-            else if (dailyData.manualSkeleton && dailyData.manualSkeleton.length > 0) {
-                skeleton = dailyData.manualSkeleton;
-                console.log(`[ViewScheduleFix] ✅ Loaded skeleton from manualSkeleton: ${skeleton.length} blocks`);
-            }
-            // Try date-specific manualSkeleton
-            else if (dailyData[dateKey]?.manualSkeleton && dailyData[dateKey].manualSkeleton.length > 0) {
-                skeleton = dailyData[dateKey].manualSkeleton;
-                console.log(`[ViewScheduleFix] ✅ Loaded skeleton from [${dateKey}].manualSkeleton: ${skeleton.length} blocks`);
-            }
-            
-            if (skeleton) {
+            if (skeleton && skeleton.length > 0) {
                 window.skeleton = skeleton;
+                console.log(`[ViewScheduleFix] ✅ Loaded skeleton: ${skeleton.length} blocks`);
             } else {
                 console.log('[ViewScheduleFix] ⚠️ No skeleton found in localStorage');
             }
@@ -197,7 +193,6 @@
             
             if (dailyData.leagueAssignments) {
                 window.leagueAssignments = dailyData.leagueAssignments;
-                console.log(`[ViewScheduleFix] ✅ Loaded leagueAssignments for ${Object.keys(dailyData.leagueAssignments).length} divisions`);
             }
             
             return loaded;
@@ -209,161 +204,60 @@
     }
     
     // =========================================================================
-    // PATCH: Override reconcileOrRenderSaved to use correct loader
+    // PATCHES: Hook into system
     // =========================================================================
     
-    function patchReconcile() {
-        const originalReconcile = window.reconcileOrRenderSaved;
-        
+    function installPatches() {
+        // Patch Reconcile
         window.reconcileOrRenderSaved = function() {
             console.log('[ViewScheduleFix] Intercepted reconcileOrRenderSaved');
             loadScheduleFromCorrectLocation();
-            
-            if (typeof window.updateTable === 'function') {
-                window.updateTable();
-            }
+            if (typeof window.updateTable === 'function') window.updateTable();
         };
-        
-        console.log('[ViewScheduleFix] ✅ Patched reconcileOrRenderSaved');
-    }
-    
-    // =========================================================================
-    // PATCH: Hook into initScheduleSystem
-    // =========================================================================
-    
-    function patchInitScheduleSystem() {
+
+        // Patch Init
         const originalInit = window.initScheduleSystem;
-        
         if (typeof originalInit === 'function') {
             window.initScheduleSystem = function() {
                 console.log('[ViewScheduleFix] Intercepted initScheduleSystem');
                 loadScheduleFromCorrectLocation();
                 originalInit.call(this);
             };
-            
-            console.log('[ViewScheduleFix] ✅ Patched initScheduleSystem');
         }
-    }
-    
-    // =========================================================================
-    // PATCH: Hook into updateTable to ensure data is loaded
-    // =========================================================================
-    
-    function patchUpdateTable() {
+
+        // Patch UpdateTable (Fail-safe)
         const originalUpdate = window.updateTable;
-        
         if (typeof originalUpdate === 'function') {
             window.updateTable = function() {
-                // Check if we have all required data
-                const hasSchedule = window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0;
-                const hasUnifiedTimes = window.unifiedTimes && window.unifiedTimes.length > 0;
-                const hasSkeleton = window.skeleton && window.skeleton.length > 0;
-                
-                if (!hasSchedule || !hasUnifiedTimes || !hasSkeleton) {
+                if (!window.scheduleAssignments || !window.unifiedTimes) {
                     console.log('[ViewScheduleFix] updateTable: Missing data, attempting load...');
-                    console.log(`  scheduleAssignments: ${hasSchedule}, unifiedTimes: ${hasUnifiedTimes}, skeleton: ${hasSkeleton}`);
                     loadScheduleFromCorrectLocation();
                 }
-                
                 originalUpdate.call(this);
             };
-            
-            console.log('[ViewScheduleFix] ✅ Patched updateTable');
         }
-    }
-    
-    // =========================================================================
-    // Listen for data update events
-    // =========================================================================
-    
-    window.addEventListener('campistry-daily-data-updated', function() {
-        console.log('[ViewScheduleFix] Data update event - reloading schedule');
-        loadScheduleFromCorrectLocation();
         
-        if (typeof window.updateTable === 'function') {
-            window.updateTable();
-        }
-    });
-    
-    // =========================================================================
-    // PUBLIC API
-    // =========================================================================
-    
-    window.ViewScheduleFix = {
-        version: '3.0',
-        loadSchedule: loadScheduleFromCorrectLocation,
-        regenerateUnifiedTimes: function() {
-            const raw = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
-            const skeleton = raw.manualSkeleton;
-            return regenerateUnifiedTimes(skeleton);
-        },
-        
-        forceRefresh: function() {
-            loadScheduleFromCorrectLocation();
-            if (typeof window.updateTable === 'function') {
-                window.updateTable();
-            }
-        },
-        
-        debug: function() {
-            const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-            console.log('\n=== ViewScheduleFix v3 Debug ===');
-            console.log('Date key:', dateKey);
-            console.log('window.scheduleAssignments:', Object.keys(window.scheduleAssignments || {}).length, 'bunks');
-            console.log('window.unifiedTimes:', (window.unifiedTimes || []).length, 'slots');
-            console.log('window.skeleton:', (window.skeleton || []).length, 'blocks');
-            console.log('window.leagueAssignments:', Object.keys(window.leagueAssignments || {}).length, 'divisions');
-            
-            try {
-                const raw = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
-                console.log('\nlocalStorage structure:');
-                console.log('  Root keys:', Object.keys(raw));
-                console.log('  Root scheduleAssignments:', Object.keys(raw.scheduleAssignments || {}).length, 'bunks');
-                console.log('  Root unifiedTimes:', (raw.unifiedTimes || []).length, 'slots');
-                console.log('  Root manualSkeleton:', (raw.manualSkeleton || []).length, 'blocks');
-                console.log('  [' + dateKey + '] keys:', Object.keys(raw[dateKey] || {}));
-                console.log('  [' + dateKey + '].scheduleAssignments:', Object.keys(raw[dateKey]?.scheduleAssignments || {}).length, 'bunks');
-            } catch(e) {
-                console.error('Debug error:', e);
-            }
-        }
-    };
-    
-    // =========================================================================
-    // INSTALL PATCHES
-    // =========================================================================
-    
-    function installPatches() {
-        patchReconcile();
-        patchInitScheduleSystem();
-        patchUpdateTable();
-        
-        // Also do an immediate load if we're on the schedule page
+        // Immediate Load
         const scheduleTable = document.getElementById('scheduleTable');
         if (scheduleTable) {
             console.log('[ViewScheduleFix] Schedule table found, loading data...');
             loadScheduleFromCorrectLocation();
-            
             if (typeof window.updateTable === 'function') {
-                setTimeout(() => {
-                    window.updateTable();
-                }, 100);
+                setTimeout(() => window.updateTable(), 100);
             }
         }
     }
     
-    // Install when ready
-    if (document.readyState === 'complete') {
-        installPatches();
-    } else {
-        window.addEventListener('load', installPatches);
-    }
+    // Install
+    if (document.readyState === 'complete') installPatches();
+    else window.addEventListener('load', installPatches);
     
-    // Also try after delays in case scheduler_ui.js loads late
-    setTimeout(installPatches, 100);
-    setTimeout(installPatches, 500);
-    setTimeout(installPatches, 1000);
+    // Public API
+    window.ViewScheduleFix = {
+        version: '3.1',
+        loadSchedule: loadScheduleFromCorrectLocation,
+        regenerateUnifiedTimes: regenerateUnifiedTimes
+    };
     
-    console.log('[ViewScheduleFix] Module v3 loaded');
-    
+    console.log('[ViewScheduleFix] Module v3.1 loaded');
 })();
