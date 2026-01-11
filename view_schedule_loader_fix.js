@@ -1,8 +1,9 @@
 // ============================================================================
-// view_schedule_loader_fix.js v5.1 - SKELETON SYNC FIX
+// view_schedule_loader_fix.js v5.2 - NO LEGACY ROOT FALLBACK
 // ============================================================================
-// FIXED: Loads SKELETON from Daily Data (dateData.manualSkeleton) first.
-// FIXED: Prevents mismatch between Time Grid (Data) and Skeleton (Visuals).
+// FIXED: Removed ROOT-level fallback loading that was restoring deleted data
+// Data MUST be stored in date-keyed format: data["2026-01-11"].scheduleAssignments
+// ROOT-level data (data.scheduleAssignments) is LEGACY and should be ignored
 // ============================================================================
 
 (function() {
@@ -10,7 +11,7 @@
     
     const DAILY_DATA_KEY = 'campDailyData_v1';
     
-    console.log('[ViewScheduleFix] Loading v5.1 (Skeleton Sync Fix)...');
+    console.log('[ViewScheduleFix] Loading v5.2 (NO LEGACY ROOT FALLBACK)...');
     
     // --- TIME PARSER ---
     function parseTimeToMinutes(str) {
@@ -26,7 +27,7 @@
 
     // --- GRID REGENERATOR ---
     function regenerateUnifiedTimes(skeleton) {
-        console.log('[ViewScheduleFix] ⚠️ Regenerating generic 30-min grid (Fallback active)');
+        console.log('[ViewScheduleFix] Regenerating time grid from skeleton...');
         let minTime = 540, maxTime = 960; // Default 9am-4pm
         let found = false;
 
@@ -80,6 +81,35 @@
         window.currentDivisionFilter = "All";
     }
 
+    // --- CLEAN LEGACY ROOT DATA ---
+    // Remove ROOT-level schedule data that shouldn't exist
+    function cleanLegacyRootData(data) {
+        if (!data) return data;
+        
+        const legacyKeys = ['scheduleAssignments', 'leagueAssignments', 'unifiedTimes', 'manualSkeleton', 'skeleton'];
+        let cleaned = false;
+        
+        for (const key of legacyKeys) {
+            if (data[key] !== undefined) {
+                console.log(`[ViewScheduleFix] 🧹 Removing legacy ROOT key: ${key}`);
+                delete data[key];
+                cleaned = true;
+            }
+        }
+        
+        if (cleaned) {
+            // Save cleaned data back
+            try {
+                localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(data));
+                console.log('[ViewScheduleFix] 🧹 Cleaned legacy ROOT data from localStorage');
+            } catch (e) {
+                console.error('[ViewScheduleFix] Failed to save cleaned data:', e);
+            }
+        }
+        
+        return data;
+    }
+
     // --- MAIN LOADER ---
     function loadScheduleFromCorrectLocation() {
         // 1. Determine correct date
@@ -98,6 +128,12 @@
         const raw = localStorage.getItem(DAILY_DATA_KEY);
         if (!raw) {
             console.log('[ViewScheduleFix] No daily data found in localStorage');
+            // Initialize empty state
+            window.scheduleAssignments = {};
+            window.leagueAssignments = {};
+            window.unifiedTimes = [];
+            window.skeleton = [];
+            window.manualSkeleton = [];
             return;
         }
         
@@ -109,18 +145,23 @@
             return;
         }
         
+        // ★★★ CRITICAL FIX: Clean legacy ROOT-level data ★★★
+        data = cleanLegacyRootData(data);
+        
+        // Get date-specific data ONLY (no ROOT fallback!)
         const dateData = data[dateKey] || {};
         
-        // 2. Load Assignments (Priority: Date -> Root)
+        // 2. Load Assignments - DATE LEVEL ONLY
         if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
             window.scheduleAssignments = dateData.scheduleAssignments;
-            console.log('[ViewScheduleFix] ✅ Loaded assignments from DATE folder');
-        } else if (data.scheduleAssignments && Object.keys(data.scheduleAssignments).length > 0) {
-            window.scheduleAssignments = data.scheduleAssignments;
-            console.log('[ViewScheduleFix] ⚠️ Loaded assignments from ROOT folder (legacy)');
+            console.log('[ViewScheduleFix] ✅ Loaded assignments from DATE folder:', Object.keys(dateData.scheduleAssignments).length, 'bunks');
+        } else {
+            // ★★★ NO ROOT FALLBACK - If no date-specific data, it's empty ★★★
+            console.log('[ViewScheduleFix] No schedule data for this date');
+            window.scheduleAssignments = {};
         }
 
-        // 3. Draft Injection
+        // 3. Draft Injection (subdivision schedules)
         if (dateData.subdivisionSchedules) {
             let injected = 0;
             if (!window.scheduleAssignments) window.scheduleAssignments = {};
@@ -140,63 +181,56 @@
             if (injected > 0) console.log('[ViewScheduleFix] Injected ' + injected + ' bunks from drafts');
         }
 
-        // 4. Times
-        const dailyTimes = dateData.unifiedTimes;
-        const rootTimes = data.unifiedTimes;
-        
-        if (dailyTimes && dailyTimes.length > 0) {
-            window.unifiedTimes = dailyTimes.map(t => ({
+        // 4. Times - DATE LEVEL ONLY
+        if (dateData.unifiedTimes && dateData.unifiedTimes.length > 0) {
+            window.unifiedTimes = dateData.unifiedTimes.map(t => ({
                 start: new Date(t.start),
                 end: new Date(t.end),
                 label: t.label
             }));
-            console.log('[ViewScheduleFix] ✅ Loaded unifiedTimes from DATE data');
-        } 
-        else if (rootTimes && rootTimes.length > 0) {
-            window.unifiedTimes = rootTimes.map(t => ({
-                start: new Date(t.start),
-                end: new Date(t.end),
-                label: t.label
-            }));
-            console.log('[ViewScheduleFix] ⚠️ Loaded unifiedTimes from ROOT data');
+            console.log('[ViewScheduleFix] ✅ Loaded unifiedTimes from DATE data:', window.unifiedTimes.length, 'slots');
         } 
         else if (window.unifiedTimes && window.unifiedTimes.length > 0) {
+            // Preserve existing memory if valid
             console.log('[ViewScheduleFix] 🛡️ Preserving existing window.unifiedTimes');
         } 
         else {
-            // Priority 5: Fallback Skeleton Logic for Times
-            const fallbackSkeleton = dateData.manualSkeleton || dateData.skeleton || data.manualSkeleton;
-            const newTimes = regenerateUnifiedTimes(fallbackSkeleton);
-            if (newTimes) {
-                window.unifiedTimes = newTimes.map(t => ({
-                    start: new Date(t.start),
-                    end: new Date(t.end),
-                    label: t.label
-                }));
-                console.log('[ViewScheduleFix] ⚠️ Regenerated default grid');
+            // Regenerate from skeleton if available
+            const skeleton = dateData.manualSkeleton || dateData.skeleton;
+            if (skeleton && skeleton.length > 0) {
+                const newTimes = regenerateUnifiedTimes(skeleton);
+                if (newTimes && newTimes.length > 0) {
+                    window.unifiedTimes = newTimes.map(t => ({
+                        start: new Date(t.start),
+                        end: new Date(t.end),
+                        label: t.label
+                    }));
+                    console.log('[ViewScheduleFix] ⚠️ Regenerated time grid from skeleton');
+                }
+            } else {
+                window.unifiedTimes = [];
             }
         }
 
-        // 5. Skeleton & Leagues - CRITICAL VISUAL FIX
-        // We MUST load 'manualSkeleton' from dateData first. 
-        // Previously we only looked for 'skeleton' which might be undefined.
+        // 5. Skeleton - DATE LEVEL ONLY
         const dailySkeleton = dateData.manualSkeleton || dateData.skeleton;
-        const rootSkeleton = data.manualSkeleton;
         
         if (dailySkeleton && dailySkeleton.length > 0) {
             window.skeleton = dailySkeleton;
             window.manualSkeleton = dailySkeleton;
             console.log('[ViewScheduleFix] ✅ Loaded VISUAL SKELETON from DATE data');
-        } else if (rootSkeleton && rootSkeleton.length > 0) {
-            window.skeleton = rootSkeleton;
-            window.manualSkeleton = rootSkeleton;
-            console.log('[ViewScheduleFix] ⚠️ Loaded VISUAL SKELETON from ROOT data (Legacy)');
+        } else {
+            // ★★★ NO ROOT FALLBACK ★★★
+            console.log('[ViewScheduleFix] No skeleton for this date');
+            window.skeleton = [];
+            window.manualSkeleton = [];
         }
         
+        // 6. League Assignments - DATE LEVEL ONLY
         if (dateData.leagueAssignments) {
             window.leagueAssignments = dateData.leagueAssignments;
-        } else if (data.leagueAssignments) {
-            window.leagueAssignments = data.leagueAssignments;
+        } else {
+            window.leagueAssignments = {};
         }
         
         repairDivisions();
@@ -252,7 +286,8 @@
     window.ViewScheduleFix = {
         loadScheduleFromCorrectLocation: loadScheduleFromCorrectLocation,
         regenerateUnifiedTimes: regenerateUnifiedTimes,
-        repairDivisions: repairDivisions
+        repairDivisions: repairDivisions,
+        cleanLegacyRootData: cleanLegacyRootData
     };
 
 })();
