@@ -285,9 +285,9 @@
              // but typically viewing all is allowed. The edit restriction is handled in editCell.
         }
 
-        const daily = window.loadCurrentDailyData?.() || {};
-        const manualSkeleton = daily.manualSkeleton || [];
-
+       const daily = window.loadCurrentDailyData?.() || {};
+        // Fallback chain: Daily Data -> Window Global -> Window Fallback
+        const manualSkeleton = daily.manualSkeleton || window.manualSkeleton || window.skeleton || [];
         if (!Array.isArray(manualSkeleton) || manualSkeleton.length === 0) {
             container.innerHTML = `<p>No daily schedule generated for this date.</p>`;
             return;
@@ -534,7 +534,8 @@
                     
                     // 3. Get inputs
                     const daily = window.loadCurrentDailyData?.() || {};
-                    const manualSkeleton = daily.manualSkeleton || [];
+        // Fallback chain: Daily Data -> Window Global -> Window Fallback
+        const manualSkeleton = daily.manualSkeleton || window.manualSkeleton || window.skeleton || [];
                     const externalOverrides = []; // Simplified for now
                     
                     // 4. Run!
