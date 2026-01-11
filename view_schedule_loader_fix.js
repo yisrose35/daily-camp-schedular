@@ -139,16 +139,21 @@
             }
         }
 
-        // 3. Times
-        if (data.unifiedTimes) {
-            window.unifiedTimes = data.unifiedTimes.map(function(t) {
+       // 3. Times
+        // FIX: Check dateData (daily) first, then data (root)
+        const sourceTimes = dateData.unifiedTimes || data.unifiedTimes;
+
+        if (sourceTimes && sourceTimes.length > 0) {
+            window.unifiedTimes = sourceTimes.map(function(t) {
                 return {
                     start: new Date(t.start),
                     end: new Date(t.end),
                     label: t.label
                 };
             });
+            console.log('[ViewScheduleFix] ✅ Loaded unifiedTimes from storage');
         } else {
+            console.log('[ViewScheduleFix] ⚠️ Regenerating unifiedTimes (Fallback)');
             const newTimes = regenerateUnifiedTimes(dateData.skeleton || data.manualSkeleton);
             if (newTimes) {
                 window.unifiedTimes = newTimes.map(function(t) {
