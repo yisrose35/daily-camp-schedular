@@ -191,16 +191,44 @@
     return _memoryCache;
   }
     
-  // ★★★ HELPER: Clean legacy ROOT-level schedule data ★★★
+  // ★★★ HELPER: Migrate legacy ROOT-level data ★★★
+  // - MIGRATE skeleton/unifiedTimes to date-specific (shared structure)
+  // - CLEAN scheduleAssignments (user-specific data)
   function cleanLegacyRootData(data) {
-      if (!data) return data;
+      if (!data) return { data, cleaned: false };
       
-      const legacyKeys = ['scheduleAssignments', 'leagueAssignments', 'unifiedTimes', 'manualSkeleton', 'skeleton'];
+      // Get current date for migration target
+      const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+      
+      // Keys that are SHARED STRUCTURE - migrate, don't delete
+      const sharedStructureKeys = ['unifiedTimes', 'manualSkeleton', 'skeleton'];
+      
+      // Keys that are USER-SPECIFIC - clean from ROOT
+      const userDataKeys = ['scheduleAssignments', 'leagueAssignments'];
+      
       let cleaned = false;
       
-      for (const key of legacyKeys) {
+      // Initialize date key if needed
+      if (!data[dateKey]) {
+          data[dateKey] = {};
+      }
+      
+      // MIGRATE shared structure to date-specific
+      for (const key of sharedStructureKeys) {
+          if (data[key] !== undefined && data[key] !== null) {
+              if (!data[dateKey][key] || (Array.isArray(data[dateKey][key]) && data[dateKey][key].length === 0)) {
+                  console.log(`☁️ [SYNC] 📦 Migrating ROOT "${key}" to date ${dateKey}`);
+                  data[dateKey][key] = data[key];
+              }
+              delete data[key];
+              cleaned = true;
+          }
+      }
+      
+      // CLEAN user-specific data from ROOT
+      for (const key of userDataKeys) {
           if (data[key] !== undefined) {
-              console.log(`☁️ [SYNC] 🧹 Removing legacy ROOT key from daily_schedules: ${key}`);
+              console.log(`☁️ [SYNC] 🧹 Cleaning ROOT "${key}" (user-specific data)`);
               delete data[key];
               cleaned = true;
           }
