@@ -351,7 +351,25 @@
         const manualSkeleton = dateData.manualSkeleton || dateData.skeleton || window.manualSkeleton || window.skeleton || [];
         
         if (!Array.isArray(manualSkeleton) || manualSkeleton.length === 0) {
-            container.innerHTML = `<p>No daily schedule generated for this date.</p>`;
+            const role = window.AccessControl?.getCurrentRole?.();
+            const isScheduler = role === 'scheduler' || role === 'viewer';
+            
+            if (isScheduler) {
+                container.innerHTML = `
+                    <div style="padding: 20px; text-align: center; color: #666;">
+                        <h3 style="color: #333;">⏳ No Day Structure Yet</h3>
+                        <p>The camp owner hasn't created a schedule structure for this date yet.</p>
+                        <p style="font-size: 0.9em;">Once they build the day (time slots, activity blocks, etc.), you'll be able to generate schedules for your divisions.</p>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = `
+                    <div style="padding: 20px; text-align: center; color: #666;">
+                        <h3 style="color: #333;">📋 No Schedule for This Date</h3>
+                        <p>Use the <strong>Build Day</strong> button to create the day structure first.</p>
+                    </div>
+                `;
+            }
             return;
         }
 
@@ -555,6 +573,58 @@
     // ★★★ CRITICAL FIX: NO ROOT FALLBACK - DATE-SPECIFIC ONLY ★★★
     // =========================================================================
     
+    // =========================================================================
+    // ★★★ MIGRATE LEGACY ROOT DATA - Preserve skeleton (shared structure) ★★★
+    // =========================================================================
+    
+    function migrateLegacyRootData(allDailyData, dateKey) {
+        if (!allDailyData) return allDailyData;
+        
+        // Keys that are SHARED STRUCTURE - migrate to date-specific
+        const sharedStructureKeys = ['unifiedTimes', 'manualSkeleton', 'skeleton'];
+        
+        // Keys that are USER-SPECIFIC - clean from ROOT
+        const userDataKeys = ['scheduleAssignments', 'leagueAssignments'];
+        
+        let changed = false;
+        
+        // Initialize date key if needed
+        if (!allDailyData[dateKey]) {
+            allDailyData[dateKey] = {};
+        }
+        
+        // MIGRATE shared structure
+        for (const key of sharedStructureKeys) {
+            if (allDailyData[key] !== undefined && allDailyData[key] !== null) {
+                if (!allDailyData[dateKey][key] || (Array.isArray(allDailyData[dateKey][key]) && allDailyData[dateKey][key].length === 0)) {
+                    console.log(`📅 [scheduler_ui] 📦 Migrating ROOT "${key}" to date ${dateKey}`);
+                    allDailyData[dateKey][key] = allDailyData[key];
+                }
+                delete allDailyData[key];
+                changed = true;
+            }
+        }
+        
+        // CLEAN user-specific data
+        for (const key of userDataKeys) {
+            if (allDailyData[key] !== undefined) {
+                console.log(`📅 [scheduler_ui] 🧹 Cleaning ROOT "${key}"`);
+                delete allDailyData[key];
+                changed = true;
+            }
+        }
+        
+        if (changed) {
+            try {
+                localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allDailyData));
+            } catch (e) {
+                console.error('📅 [scheduler_ui] Failed to save migrated data:', e);
+            }
+        }
+        
+        return allDailyData;
+    }
+
     function reconcileOrRenderSaved() {
         console.log("📅 [scheduler_ui] reconcileOrRenderSaved() called");
         
@@ -571,7 +641,10 @@
                 console.error("📅 [scheduler_ui] Failed to parse daily data:", e);
             }
             
-            // ★★★ Get DATE-SPECIFIC data ONLY (no ROOT fallback!) ★★★
+            // ★★★ MIGRATE legacy ROOT data (preserve skeleton) ★★★
+            allDailyData = migrateLegacyRootData(allDailyData, dateKey);
+            
+            // ★★★ Get DATE-SPECIFIC data ONLY ★★★
             const dateData = allDailyData[dateKey] || {};
             
             console.log("📅 [scheduler_ui] Loading for date:", dateKey);
@@ -682,6 +755,17 @@
                     const dateData = daily[dateKey] || {};
                     const manualSkeleton = dateData.manualSkeleton || dateData.skeleton || window.manualSkeleton || window.skeleton || [];
                     const externalOverrides = []; // Simplified for now
+                    
+                    // ★★★ CHECK: Is there a skeleton to generate against? ★★★
+                    if (!manualSkeleton || manualSkeleton.length === 0) {
+                        const role = window.AccessControl?.getCurrentRole?.();
+                        if (role === 'scheduler' || role === 'viewer') {
+                            alert("⏳ No day structure found for this date.\n\nThe camp owner needs to create the day structure first using the 'Build Day' feature.\n\nOnce they do, you'll be able to generate schedules for your divisions.");
+                        } else {
+                            alert("📋 No day structure found.\n\nPlease use the 'Build Day' button to create the schedule structure before generating.");
+                        }
+                        return;
+                    }
                     
                     // 4. Run!
                     if (window.runSkeletonOptimizer) {
