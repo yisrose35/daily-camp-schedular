@@ -1,9 +1,9 @@
 // =================================================================
-// calendar.js (FIXED v2.7 - League History Cloud Reset)
+// calendar.js (FIXED v2.8 - Delete Cloud Sync Fix)
 // =================================================================
 (function() {
     'use strict';
-    console.log("🗓️ calendar.js v2.7 (LEAGUE HISTORY CLOUD RESET) loaded");
+    console.log("🗓️ calendar.js v2.8 (DELETE CLOUD SYNC FIX) loaded");
     
     // ==========================================================
     // 1. STORAGE KEYS - UNIFIED
@@ -178,12 +178,14 @@
                 await window.clearCloudKeys([
                     'manualUsageOffsets',
                     'historicalCounts',
-                    'smartTileHistory'
+                    'smartTileHistory',
+                    'rotationHistory'
                 ]);
             } else {
-                window.saveGlobalSettings?.('manualUsageOffsets', undefined);
+                window.saveGlobalSettings?.('manualUsageOffsets', {});
                 window.saveGlobalSettings?.('historicalCounts', {});
                 window.saveGlobalSettings?.('smartTileHistory', {});
+                window.saveGlobalSettings?.('rotationHistory', { bunks: {}, leagues: {} });
                 
                 if (typeof window.forceSyncToCloud === 'function') {
                     await window.forceSyncToCloud();
@@ -242,23 +244,25 @@
                 console.log("☁️ Clearing cloud keys for new half...");
                 await window.clearCloudKeys([
                     'leagueRoundState',
-                    'leagueHistory',              // ★ NEW: Regular league history (gamesPerDate)
-                    'specialtyLeagueHistory',     // ★ NEW: Specialty league history
-                    'daily_schedules',            // ★ NEW: Clear saved schedules from cloud
+                    'leagueHistory',              // ★ Regular league history (gamesPerDate)
+                    'specialtyLeagueHistory',     // ★ Specialty league history
+                    'daily_schedules',            // ★ Clear saved schedules from cloud
                     'manualUsageOffsets', 
                     'historicalCounts',
-                    'smartTileHistory'
+                    'smartTileHistory',
+                    'rotationHistory'
                 ]);
                 console.log("☁️ Cloud keys cleared");
             } else {
                 // Fallback: Set empty objects
                 window.saveGlobalSettings?.('leagueRoundState', {});
-                window.saveGlobalSettings?.('leagueHistory', {});              // ★ NEW
-                window.saveGlobalSettings?.('specialtyLeagueHistory', {});     // ★ NEW
-                window.saveGlobalSettings?.('daily_schedules', {});            // ★ NEW
-                window.saveGlobalSettings?.('manualUsageOffsets', undefined);
+                window.saveGlobalSettings?.('leagueHistory', {});
+                window.saveGlobalSettings?.('specialtyLeagueHistory', {});
+                window.saveGlobalSettings?.('daily_schedules', {});
+                window.saveGlobalSettings?.('manualUsageOffsets', {});
                 window.saveGlobalSettings?.('historicalCounts', {});
                 window.saveGlobalSettings?.('smartTileHistory', {});
+                window.saveGlobalSettings?.('rotationHistory', { bunks: {}, leagues: {} });
                 
                 if (typeof window.forceSyncToCloud === 'function') {
                     await window.forceSyncToCloud();
@@ -322,6 +326,7 @@
                     console.log("  Removed:", key);
                 });
                 
+                // ★★★ CRITICAL: Use resetCloudState to properly clear cloud ★★★
                 if (typeof window.resetCloudState === 'function') {
                     console.log("☁️ Resetting cloud state...");
                     const success = await window.resetCloudState();
@@ -345,8 +350,9 @@
                         pinnedTileDefaults: {},
                         leaguesByName: {},
                         leagueRoundState: {},
-                        leagueHistory: {},              // ★ NEW
-                        specialtyLeagueHistory: {},     // ★ NEW
+                        leagueHistory: {},
+                        specialtyLeagueHistory: {},
+                        daily_schedules: {}, // ★ CRITICAL: Set empty to clear cloud
                         updated_at: new Date().toISOString()
                     };
                     
@@ -377,33 +383,58 @@
     }
     
     // ==========================================================
-    // 6. ERASE CURRENT DAY
+    // 6. ERASE CURRENT DAY - ★ FIXED to sync deletion to cloud ★
     // ==========================================================
-    window.eraseCurrentDailyData = function() {
+    window.eraseCurrentDailyData = async function() {
         const all = window.loadAllDailyData();
         const date = window.currentScheduleDate;
+        
         if (all[date]) {
             delete all[date];
             localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(all));
+            console.log(`🗑️ Erased schedule for ${date}`);
             
-            // 🟢 Trigger Sync
-            if (typeof window.scheduleCloudSync === 'function') window.scheduleCloudSync();
+            // ★★★ FIX: Force sync the deletion to cloud ★★★
+            // We need to explicitly tell the cloud about the deletion
+            if (typeof window.forceSyncToCloud === 'function') {
+                console.log("☁️ Syncing deletion to cloud...");
+                await window.forceSyncToCloud();
+            } else if (typeof window.scheduleCloudSync === 'function') {
+                window.scheduleCloudSync();
+            }
         }
+        
         window.loadCurrentDailyData();
         window.initScheduleSystem?.();
     };
     
     // ==========================================================
-    // 7. ERASE ALL SCHEDULE DAYS
+    // 7. ERASE ALL SCHEDULE DAYS - ★ FIXED to sync deletion to cloud ★
     // ==========================================================
-    window.eraseAllDailyData = function() {
+    window.eraseAllDailyData = async function() {
         if (!window.AccessControl?.canEraseData?.()) {
             window.AccessControl?.showPermissionDenied?.('erase all daily data');
             return;
         }
+        
+        console.log("🗑️ Erasing all daily data...");
+        
+        // Clear localStorage first
         localStorage.removeItem(DAILY_DATA_KEY);
-        // 🟢 Trigger Sync
-        if (typeof window.scheduleCloudSync === 'function') window.scheduleCloudSync();
+        
+        // ★★★ FIX: Explicitly clear daily_schedules in cloud ★★★
+        if (typeof window.clearCloudKeys === 'function') {
+            console.log("☁️ Clearing daily_schedules from cloud...");
+            await window.clearCloudKeys(['daily_schedules']);
+        } else {
+            // Fallback: Set to empty and force sync
+            window.saveGlobalSettings?.('daily_schedules', {});
+            if (typeof window.forceSyncToCloud === 'function') {
+                await window.forceSyncToCloud();
+            }
+        }
+        
+        console.log("✅ All daily data erased");
         window.location.reload();
     };
     
@@ -803,7 +834,7 @@
         setupEraseAll();
         startAutoSaveTimer();
         
-        console.log("🗓️ Calendar initialized (FIXED v2.7)");
+        console.log("🗓️ Calendar initialized (FIXED v2.8)");
     }
     
     window.initCalendar = initCalendar;
