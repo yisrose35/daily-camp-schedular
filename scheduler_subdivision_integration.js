@@ -1,13 +1,12 @@
 // ============================================================================
-// scheduler_subdivision_integration.js (v1.5 - STRICT OVERWRITE + STORAGE FIX)
+// scheduler_subdivision_integration.js (v1.6 - VISUAL SYNC FIX)
 // ============================================================================
 // Integrates multi-scheduler functionality with the core schedule generator.
 // 
-// UPDATES v1.5:
-// - Enforces strict overwrite on generation (Owner = All, Scheduler = Theirs).
-// - Fixes argument passing from UI to Core (handles 4-arg signature).
-// - Passes 'null' snapshot to core to prevent "stickiness" of old data.
-// - Maintains v1.4 correct storage location fix (campDailyData_v1[dateKey]).
+// UPDATES v1.6:
+// - Dispatches immediate UI refresh event after generation to fix visual lag.
+// - Ensures unprotectLocalData is called in RBAC mode to allow future syncs.
+// - Maintains strict overwrite and storage logic from v1.5.
 // ============================================================================
 
 (function() {
@@ -212,6 +211,20 @@
                 
                 // 10. Mark Draft Status
                 SSM.markCurrentUserSubdivisionsAsDraft();
+
+                // 11. FORCE UI REFRESH (v1.6 Fix)
+                // We dispatch this immediately to ensure the grid updates visually 
+                // without waiting for the Cloud Bridge loop.
+                console.log('[Integration] 🔄 Dispatching immediate UI refresh...');
+                window.dispatchEvent(new Event('campistry-daily-data-updated'));
+                
+                // 12. Unprotect after delay (v1.6 Fix)
+                // Ensures normal syncs can resume.
+                if (typeof window.unprotectLocalData === 'function') {
+                    setTimeout(() => {
+                        window.unprotectLocalData();
+                    }, 5000);
+                }
                 
                 console.log('[Integration] Schedule generation complete');
 
@@ -227,6 +240,9 @@
                 }
                 
                 saveScheduleToLocalStorage();
+
+                // Force UI refresh here too
+                window.dispatchEvent(new Event('campistry-daily-data-updated'));
                 
                 if (typeof window.unprotectLocalData === 'function') {
                     setTimeout(() => {
@@ -375,6 +391,6 @@
 
     setTimeout(installHooks, 100);
 
-    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.5 (STRICT OVERWRITE + STORAGE FIX)');
+    console.log('[SchedulerSubdivisionIntegration] Module loaded v1.6 (VISUAL SYNC FIX)');
 
 })();
