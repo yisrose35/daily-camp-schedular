@@ -1,917 +1,755 @@
-// =================================================================
-// cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// VERSION: v4.1 (DELETE FIX - Proper Cloud Deletion Support)
-// =================================================================
+// ============================================================================
+// cloud_storage_bridge.js v5.0 - MULTI-SCHEDULER MERGE FIX
+// ============================================================================
+// CRITICAL FIX: Properly handles date-keyed schedule storage
+// CRITICAL FIX: Fetch-Merge-Update pattern for multi-scheduler support
 // 
-// ARCHITECTURE:
-// - Each scheduler works ONLY on their divisions (others don't exist)
-// - Save is SIMPLE: Add my bunks to cloud, preserve others
-// - No complex merge logic - just append!
-// - Field conflicts prevented by GlobalFieldLocks.loadFromCloud()
-//
-// v4.1 FIXES:
-// - Added clearCloudKeys() function for partial resets
-// - Fixed resetCloudState() to include daily_schedules: {}
-// - Ensured deletions properly sync to cloud
-//
-// =================================================================
+// The daily_schedules structure in cloud MUST be:
+// {
+//   "2026-01-11": {
+//     scheduleAssignments: { bunk: slots },
+//     skeleton: [...],
+//     subdivisionSchedules: {...}
+//   }
+// }
+// 
+// NOT the flat structure:
+// {
+//   bunk1: slots,
+//   bunk2: slots
+// }
+// ============================================================================
+
 (function () {
-  'use strict';
-
-  console.log("☁️ Campistry Cloud Bridge v4.1 (DELETE FIX)");
-
-  // CONFIGURATION
-  const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
-  const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI";
+    "use strict";
     
-  const TABLE = "camp_state";
-  const UNIFIED_CACHE_KEY = "CAMPISTRY_UNIFIED_STATE";
-  const DAILY_DATA_KEY = "campDailyData_v1"; 
-
-  const LEGACY_KEYS = {
-    globalSettings: "campGlobalSettings_v1",
-    localCache: "CAMPISTRY_LOCAL_CACHE", 
-    globalRegistry: "campistry_global_registry"
-  };
-
-  // ============================================================================
-  // UI FEEDBACK
-  // ============================================================================
-  function showToast(message, type = 'info') {
-      let toast = document.getElementById('cloud-toast');
-      if (!toast) {
-          toast = document.createElement('div');
-          toast.id = 'cloud-toast';
-          toast.style.cssText = `
-              position: fixed; bottom: 20px; right: 20px;
-              padding: 12px 24px; border-radius: 8px; color: white;
-              font-family: sans-serif; font-size: 14px; z-index: 9999;
-              box-shadow: 0 4px 12px rgba(0,0,0,0.15); transition: opacity 0.3s;
-          `;
-          document.body.appendChild(toast);
-      }
-      
-      if (type === 'success') toast.style.backgroundColor = '#10B981';
-      else if (type === 'error') toast.style.backgroundColor = '#EF4444';
-      else toast.style.backgroundColor = '#3B82F6';
-
-      toast.textContent = message;
-      toast.style.opacity = '1';
-      
-      if (window._toastTimer) clearTimeout(window._toastTimer);
-      window._toastTimer = setTimeout(() => {
-          toast.style.opacity = '0';
-      }, 3000);
-  }
-
-  // ============================================================================
-  // CAMP ID MANAGEMENT
-  // ============================================================================
-  let _cachedCampId = null;
-  let _userRole = null;
-  let _isTeamMember = false;
-
-  function getCampId() {
-    if (_cachedCampId) return _cachedCampId;
+    const VERSION = "5.1";
+    const STORAGE_KEY = "campGlobalSettings_v1";
+    const DAILY_DATA_KEY = "campDailyData_v1";
     
-    const cachedUserId = localStorage.getItem('campistry_user_id');
-    if (cachedUserId && cachedUserId !== 'demo_camp_001') {
-      _cachedCampId = cachedUserId;
-      return _cachedCampId;
-    }
+    console.log(`☁️ Campistry Cloud Bridge v${VERSION} (MULTI-SCHEDULER MERGE FIX + SAVE LOCK)`);
+
+    // =========================================================================
+    // STATE
+    // =========================================================================
     
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
-          const storedSession = localStorage.getItem(key);
-          if (storedSession) {
-            const parsed = JSON.parse(storedSession);
-            if (parsed?.user?.id) {
-              return parsed.user.id;
-            }
-          }
+    let _campId = null;
+    let _userRole = null;
+    let _userDivisions = [];
+    let _memoryCache = {};
+    let _dailyDataDirty = false;
+    let _localDataProtected = false;
+    let _syncTimeout = null;
+    let _saveLock = false;  // Prevent parallel saves
+    let _pendingSave = null; // Queue for pending save
+
+    // =========================================================================
+    // PROTECTION FLAGS (for generation)
+    // =========================================================================
+    
+    window.protectLocalData = function() {
+        _localDataProtected = true;
+        console.log("☁️ [PROTECT] Local data protected during generation");
+    };
+    
+    window.unprotectLocalData = function() {
+        _localDataProtected = false;
+        console.log("☁️ [PROTECT] Local data protection lifted");
+    };
+
+    // =========================================================================
+    // HELPER: Get current user's divisions
+    // =========================================================================
+    
+    function getUserDivisions() {
+        if (window.AccessControl?.getUserManagedDivisions) {
+            return window.AccessControl.getUserManagedDivisions() || [];
         }
-      }
-    } catch (e) { console.warn("Error reading storage:", e); }
-    
-    return "demo_camp_001";
-  }
-
-  async function determineUserCampId(userId) {
-    if (!userId) return null;
-    
-    console.log("☁️ Determining camp ID for user:", userId);
-    
-    try {
-      const { data: ownedCamp, error: ownedError } = await window.supabase
-        .from('camps')
-        .select('owner')
-        .eq('owner', userId)
-        .maybeSingle();
-      
-      if (ownedCamp && !ownedError) {
-        console.log("☁️ User is a camp owner");
-        _isTeamMember = false;
-        _userRole = 'owner';
-        return userId; 
-      }
-    } catch (e) {
-      console.warn("☁️ Error checking camp ownership:", e);
+        if (window.SubdivisionScheduleManager?.getDivisionsToSchedule) {
+            return window.SubdivisionScheduleManager.getDivisionsToSchedule() || [];
+        }
+        return [];
     }
-    
-    try {
-      const { data: membership, error: memberError } = await window.supabase
-        .from('camp_users')
-        .select('camp_id, role, subdivision_ids, accepted_at')
-        .eq('user_id', userId)
-        .not('accepted_at', 'is', null)
-        .maybeSingle();
-      
-      if (membership && !memberError) {
-        console.log("☁️ User is a team member:", {
-          campId: membership.camp_id,
-          role: membership.role
+
+    function getBunksForDivisions(divisions) {
+        const bunks = new Set();
+        const allDivisions = window.divisions || {};
+        
+        (divisions || []).forEach(divName => {
+            const divInfo = allDivisions[divName];
+            if (divInfo?.bunks) {
+                divInfo.bunks.forEach(b => bunks.add(b));
+            }
         });
-        _isTeamMember = true;
-        _userRole = membership.role;
-        window._campistryMembership = membership;
-        return membership.camp_id;
-      }
-    } catch (e) {
-      console.warn("☁️ Error checking team membership:", e);
+        
+        return bunks;
     }
-    
-    console.log("☁️ User is a new camp owner (first time)");
-    _isTeamMember = false;
-    _userRole = 'owner';
-    return userId;
-  }
 
-  async function updateCampIdCache(userId) {
-    if (!userId) return;
-    const campId = await determineUserCampId(userId);
-    if (campId) {
-      _cachedCampId = campId;
-      localStorage.setItem('campistry_user_id', campId);
-      localStorage.setItem('campistry_auth_user_id', userId);
-      console.log("☁️ Camp ID cached:", campId, _isTeamMember ? "(team member)" : "(owner)");
+    function isOwnerOrAdmin() {
+        const role = window.AccessControl?.getCurrentRole?.();
+        return role === 'owner' || role === 'admin';
     }
-  }
 
-  function clearCampIdCache() {
-    _cachedCampId = null;
-    _userRole = null;
-    _isTeamMember = false;
-    localStorage.removeItem('campistry_user_id');
-    localStorage.removeItem('campistry_auth_user_id');
-    delete window._campistryMembership;
-  }
-
-  function getUserRole() { return _userRole; }
-  function isTeamMember() { return _isTeamMember; }
-
-  // ============================================================================
-  // LOCAL CACHE
-  // ============================================================================
-  let _memoryCache = null;
-  let _cloudSyncPending = false;
-  let _syncInProgress = false;
-  let _syncTimeout = null;
-  let _dailyDataDirty = false;
-  let _initialized = false;
-  const SCHEMA_VERSION = 2;
-
-  function getLocalCache() {
-    if (_memoryCache !== null) return _memoryCache;
-    try {
-      const raw = localStorage.getItem(UNIFIED_CACHE_KEY);
-      _memoryCache = raw ? JSON.parse(raw) : {};
-    } catch (e) { _memoryCache = {}; }
-    return _memoryCache;
-  }
+    // =========================================================================
+    // CAMP ID RESOLUTION
+    // =========================================================================
     
-  // ★★★ HELPER: Migrate legacy ROOT-level data ★★★
-  // - MIGRATE skeleton/unifiedTimes to date-specific (shared structure)
-  // - CLEAN scheduleAssignments (user-specific data)
-  function cleanLegacyRootData(data) {
-      if (!data) return { data, cleaned: false };
-      
-      // Get current date for migration target
-      const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-      
-      // Keys that are SHARED STRUCTURE - migrate, don't delete
-      const sharedStructureKeys = ['unifiedTimes', 'manualSkeleton', 'skeleton'];
-      
-      // Keys that are USER-SPECIFIC - clean from ROOT
-      const userDataKeys = ['scheduleAssignments', 'leagueAssignments'];
-      
-      let cleaned = false;
-      
-      // Initialize date key if needed
-      if (!data[dateKey]) {
-          data[dateKey] = {};
-      }
-      
-      // MIGRATE shared structure to date-specific
-      for (const key of sharedStructureKeys) {
-          if (data[key] !== undefined && data[key] !== null) {
-              if (!data[dateKey][key] || (Array.isArray(data[dateKey][key]) && data[dateKey][key].length === 0)) {
-                  console.log(`☁️ [SYNC] 📦 Migrating ROOT "${key}" to date ${dateKey}`);
-                  data[dateKey][key] = data[key];
-              }
-              delete data[key];
-              cleaned = true;
-          }
-      }
-      
-      // CLEAN user-specific data from ROOT
-      for (const key of userDataKeys) {
-          if (data[key] !== undefined) {
-              console.log(`☁️ [SYNC] 🧹 Cleaning ROOT "${key}" (user-specific data)`);
-              delete data[key];
-              cleaned = true;
-          }
-      }
-      
-      return { data, cleaned };
-  }
+    async function getCampId() {
+        if (_campId) return _campId;
+        
+        const { data: { user } } = await window.supabase.auth.getUser();
+        if (!user) return null;
+        
+        console.log("☁️ Determining camp ID for user:", user.id);
+        
+        // Check if user is a camp owner
+        const { data: ownerData } = await window.supabase
+            .from('camps')
+            .select('id')
+            .eq('owner_id', user.id)
+            .maybeSingle();
+            
+        if (ownerData) {
+            _campId = ownerData.id;
+            _userRole = 'owner';
+            console.log("☁️ User is a camp owner");
+            console.log("☁️ Camp ID cached:", _campId, "(owner)");
+            return _campId;
+        }
+        
+        // Check if user is a team member
+        const { data: memberData } = await window.supabase
+            .from('camp_team_members')
+            .select('camp_id, role')
+            .eq('user_id', user.id)
+            .eq('status', 'active')
+            .maybeSingle();
+            
+        if (memberData) {
+            _campId = memberData.camp_id;
+            _userRole = memberData.role;
+            console.log("☁️ User is a team member:", { campId: _campId, role: _userRole });
+            console.log("☁️ Camp ID cached:", _campId, "(team member)");
+            return _campId;
+        }
+        
+        console.warn("☁️ No camp found for user");
+        return null;
+    }
 
-  function setLocalCache(state) {
-    if (state.daily_schedules) {
-        if (!_dailyDataDirty) {
-            console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
-            try {
-                // ★★★ CRITICAL: Clean legacy ROOT-level data before saving ★★★
-                const { data: cleanedData, cleaned } = cleanLegacyRootData(state.daily_schedules);
-                
-                if (cleaned) {
-                    console.log("☁️ [SYNC] 🧹 Cleaned legacy ROOT data from cloud response");
+    // =========================================================================
+    // MIGRATE LEGACY ROOT DATA
+    // =========================================================================
+    
+    function migrateLegacyCloudData(cloudData, dateKey) {
+        if (!cloudData) return cloudData;
+        
+        // Keys that should be inside date-specific objects
+        const scheduleKeys = ['scheduleAssignments', 'leagueAssignments', 'unifiedTimes', 'manualSkeleton', 'skeleton'];
+        
+        let needsMigration = false;
+        
+        // Check if any schedule keys exist at ROOT level
+        for (const key of scheduleKeys) {
+            if (cloudData[key] !== undefined) {
+                needsMigration = true;
+                break;
+            }
+        }
+        
+        // Also check if there are bunk-like keys at root (flat structure)
+        const rootKeys = Object.keys(cloudData);
+        const hasFlatBunks = rootKeys.some(key => {
+            // If the key looks like a bunk name and value is an array of slots
+            return Array.isArray(cloudData[key]) && 
+                   !['unifiedTimes', 'skeleton', 'manualSkeleton'].includes(key) &&
+                   !key.match(/^\d{4}-\d{2}-\d{2}$/);
+        });
+        
+        if (hasFlatBunks) {
+            console.log("☁️ [MIGRATE] Detected FLAT bunk structure at root level");
+            needsMigration = true;
+        }
+        
+        if (!needsMigration) return cloudData;
+        
+        console.log("☁️ [MIGRATE] Migrating legacy cloud data structure...");
+        
+        // Initialize date key if needed
+        if (!cloudData[dateKey]) {
+            cloudData[dateKey] = {};
+        }
+        
+        // Migrate schedule keys
+        for (const key of scheduleKeys) {
+            if (cloudData[key] !== undefined) {
+                if (!cloudData[dateKey][key]) {
+                    console.log(`☁️ [MIGRATE] Moving ROOT "${key}" to date ${dateKey}`);
+                    cloudData[dateKey][key] = cloudData[key];
                 }
+                delete cloudData[key];
+            }
+        }
+        
+        // Migrate flat bunk structure
+        if (hasFlatBunks) {
+            const migratedAssignments = {};
+            const keysToDelete = [];
+            
+            for (const key of rootKeys) {
+                if (Array.isArray(cloudData[key]) && 
+                    !['unifiedTimes', 'skeleton', 'manualSkeleton'].includes(key) &&
+                    !key.match(/^\d{4}-\d{2}-\d{2}$/)) { // Not a date key
+                    
+                    migratedAssignments[key] = cloudData[key];
+                    keysToDelete.push(key);
+                }
+            }
+            
+            if (Object.keys(migratedAssignments).length > 0) {
+                console.log(`☁️ [MIGRATE] Moving ${Object.keys(migratedAssignments).length} flat bunks to scheduleAssignments`);
+                cloudData[dateKey].scheduleAssignments = {
+                    ...(cloudData[dateKey].scheduleAssignments || {}),
+                    ...migratedAssignments
+                };
                 
-                const currentRaw = localStorage.getItem(DAILY_DATA_KEY);
-                const newRaw = JSON.stringify(cleanedData);
+                keysToDelete.forEach(key => delete cloudData[key]);
+            }
+        }
+        
+        return cloudData;
+    }
+
+    // =========================================================================
+    // LOCAL CACHE MANAGEMENT
+    // =========================================================================
+    
+    function setLocalCache(state) {
+        // Handle daily_schedules specially
+        if (state.daily_schedules) {
+            if (!_dailyDataDirty && !_localDataProtected) {
+                console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
                 
-                if (currentRaw !== newRaw) {
-                    localStorage.setItem(DAILY_DATA_KEY, newRaw);
+                try {
+                    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                    
+                    // Migrate any legacy structure
+                    let cloudDailyData = migrateLegacyCloudData(state.daily_schedules, dateKey);
+                    
+                    // Load current localStorage
+                    let localDailyData = {};
+                    try {
+                        const raw = localStorage.getItem(DAILY_DATA_KEY);
+                        if (raw) localDailyData = JSON.parse(raw);
+                    } catch (e) { /* ignore */ }
+                    
+                    // Merge cloud data with local (cloud wins for structure, but preserve local edits)
+                    const merged = mergeCloudWithLocal(cloudDailyData, localDailyData, dateKey);
+                    
+                    localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(merged));
+                    
                     setTimeout(() => {
                         console.log("🔥 Dispatching UI refresh for new schedule data...");
                         window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
                         if (window.initScheduleSystem) window.initScheduleSystem();
                         if (window.updateTable) window.updateTable();
                     }, 50);
+                    
+                } catch (e) {
+                    console.error("☁️ Failed to unbundle daily schedules:", e);
                 }
-            } catch(e) { console.error("Failed to save extracted schedules", e); }
-        } else {
-            console.log("☁️ [SYNC] Skipping daily schedule overwrite - Local changes pending upload.");
+            } else {
+                console.log("☁️ [SYNC] Skipping daily overwrite - Local data protected or dirty");
+            }
+            delete state.daily_schedules;
         }
-        delete state.daily_schedules; 
-    }
-
-    _memoryCache = state;
-    try {
-      localStorage.setItem(UNIFIED_CACHE_KEY, JSON.stringify(state));
-      localStorage.setItem(LEGACY_KEYS.globalSettings, JSON.stringify(state));
-      localStorage.setItem(LEGACY_KEYS.localCache, JSON.stringify(state));
-      localStorage.setItem(LEGACY_KEYS.globalRegistry, JSON.stringify({
-        divisions: state.divisions || {},
-        bunks: state.bunks || []
-      }));
-    } catch (e) { console.error("Failed to save local cache:", e); }
-  }
-
-  // ============================================================================
-  // DIRECT REST API OPERATIONS
-  // ============================================================================
-  async function getSessionToken() {
-    try {
-        const { data } = await window.supabase.auth.getSession();
-        return data.session?.access_token || null;
-    } catch (e) { return null; }
-  }
-
-  async function getUser() {
-    const { data } = await window.supabase.auth.getUser();
-    return data?.user;
-  }
-
-  async function loadFromCloud() {
-    try {
-      const token = await getSessionToken();
-      if (!token) return null;
-      const campId = getCampId();
-
-      console.log("☁️ Loading from cloud for camp:", campId);
-
-      const url = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}&select=state`;
-      
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
-        }
-      });
-
-      if (!response.ok) {
-          console.error("☁️ Load failed:", response.status, response.statusText);
-          return null;
-      }
-      const data = await response.json();
-      return (data && data.length > 0) ? data[0].state : null;
-    } catch (e) { 
-        console.error("☁️ Load exception:", e);
-        return null; 
-    }
-  }
-
-  // ============================================================================
-  // ★★★ HELPER: GET MY BUNKS ★★★
-  // ============================================================================
-  
-  function getMyBunks() {
-      const myBunks = new Set();
-      
-      // Get my divisions
-      let myDivisions = [];
-      
-      if (window.AccessControl?.getEditableDivisions) {
-          myDivisions = window.AccessControl.getEditableDivisions() || [];
-      }
-      if (myDivisions.length === 0 && window.AccessControl?.getUserDivisions) {
-          myDivisions = window.AccessControl.getUserDivisions() || [];
-      }
-      if (myDivisions.length === 0 && window.SubdivisionScheduleManager?.getDivisionsToSchedule) {
-          myDivisions = window.SubdivisionScheduleManager.getDivisionsToSchedule() || [];
-      }
-      if (myDivisions.length === 0 && window._campistryMembership?.assigned_divisions) {
-          myDivisions = window._campistryMembership.assigned_divisions;
-      }
-      
-      // Owner/Admin: null means ALL bunks
-      const role = window.AccessControl?.getCurrentRole?.() || _userRole;
-      if (!_isTeamMember || role === 'owner' || role === 'admin') {
-          return null; // null = all bunks (no filtering)
-      }
-      
-      if (myDivisions.length === 0) {
-          console.warn('☁️ [SAVE] No divisions assigned - cannot determine bunks');
-          return new Set(); // Empty = can't save anything
-      }
-      
-      // Get bunks for my divisions
-      const divisions = window.divisions || {};
-      for (const divId of myDivisions) {
-          const divInfo = divisions[divId] || divisions[String(divId)];
-          if (divInfo && divInfo.bunks) {
-              divInfo.bunks.forEach(b => myBunks.add(String(b)));
-          }
-      }
-      
-      console.log(`☁️ [SAVE] My divisions: [${myDivisions.join(', ')}] → ${myBunks.size} bunks`);
-      return myBunks;
-  }
-
-  // ============================================================================
-  // ★★★ SIMPLIFIED SAVE TO CLOUD ★★★
-  // Just add my bunks, preserve others - no complex merge!
-  // ============================================================================
-
-  async function saveToCloud(state) {
-    try {
-      showToast("☁️ Saving...", "info");
-      
-      const user = await getUser();
-      if (!user) {
-          showToast("❌ Not logged in", "error");
-          return false;
-      }
-      
-      const token = await getSessionToken();
-      const campId = getCampId();
-      
-      if (campId === "demo_camp_001") return false;
-
-      if (_userRole === 'viewer') {
-          showToast("❌ View-only access", "error");
-          return false;
-      }
-
-      // Prepare base state
-      state.schema_version = SCHEMA_VERSION;
-      state.updated_at = new Date().toISOString();
-      const stateToSave = { ...state };
-      delete stateToSave._importTimestamp;
-
-      // =====================================================================
-      // ★★★ DAILY SCHEDULES BUNDLING ★★★
-      // =====================================================================
-      try {
-        const schedulesRaw = localStorage.getItem(DAILY_DATA_KEY);
         
-        // ★★★ FIX: Handle case where localStorage was cleared (deletion) ★★★
-        // If daily_schedules is explicitly set in state (from resetCloudState/clearCloudKeys), use it
-        if (state.daily_schedules !== undefined) {
-            console.log('☁️ [SAVE] Using explicit daily_schedules from state');
-            stateToSave.daily_schedules = state.daily_schedules;
+        // Handle other keys normally
+        for (const [key, value] of Object.entries(state)) {
+            try {
+                localStorage.setItem(key, JSON.stringify(value));
+            } catch (e) {
+                console.warn(`☁️ Failed to cache ${key}:`, e);
+            }
         }
-        else if (schedulesRaw) {
-            const localSchedules = JSON.parse(schedulesRaw);
-            const myBunks = getMyBunks();
+        
+        _memoryCache = { ..._memoryCache, ...state };
+    }
+
+    function mergeCloudWithLocal(cloudData, localData, dateKey) {
+        const merged = { ...localData };
+        
+        // Copy all date keys from cloud
+        for (const key of Object.keys(cloudData)) {
+            if (key.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                // It's a date key - merge carefully
+                if (!merged[key]) {
+                    merged[key] = cloudData[key];
+                } else {
+                    // Merge date-specific data
+                    merged[key] = {
+                        ...merged[key],
+                        ...cloudData[key],
+                        // For scheduleAssignments, merge at bunk level
+                        scheduleAssignments: {
+                            ...(merged[key].scheduleAssignments || {}),
+                            ...(cloudData[key].scheduleAssignments || {})
+                        },
+                        subdivisionSchedules: {
+                            ...(merged[key].subdivisionSchedules || {}),
+                            ...(cloudData[key].subdivisionSchedules || {})
+                        }
+                    };
+                }
+            }
+        }
+        
+        return merged;
+    }
+
+    // =========================================================================
+    // LOAD FROM CLOUD
+    // =========================================================================
+    
+    async function loadFromCloud() {
+        const campId = await getCampId();
+        if (!campId) return null;
+        
+        console.log("☁️ Loading from cloud for camp:", campId);
+        
+        const { data, error } = await window.supabase
+            .from('camp_settings')
+            .select('settings')
+            .eq('camp_id', campId)
+            .maybeSingle();
             
-            // OWNER MODE: Just use local data directly
-            if (myBunks === null) {
-                console.log('☁️ [SAVE] Owner mode - saving all local data');
-                stateToSave.daily_schedules = localSchedules;
-            } 
-            // TEAM MEMBER MODE: Add my bunks to cloud, preserve others
-            else if (myBunks.size > 0) {
-                console.log('☁️ [SAVE] Team member mode - merging my bunks with cloud');
+        if (error) {
+            console.error("☁️ Load error:", error);
+            return null;
+        }
+        
+        if (data?.settings) {
+            setLocalCache(data.settings);
+            window.__CAMPISTRY_CLOUD_READY__ = true;
+            window.dispatchEvent(new Event('campistry-cloud-hydrated'));
+            return data.settings;
+        }
+        
+        window.__CAMPISTRY_CLOUD_READY__ = true;
+        window.dispatchEvent(new Event('campistry-cloud-hydrated'));
+        return null;
+    }
+
+    // =========================================================================
+    // ★★★ CRITICAL: SAVE TO CLOUD WITH FETCH-MERGE-UPDATE ★★★
+    // =========================================================================
+    
+    async function saveToCloud(localState) {
+        // ================================================================
+        // SAVE LOCK: Prevent parallel saves from racing
+        // ================================================================
+        if (_saveLock) {
+            console.log("☁️ [SAVE] Already saving, queueing this request...");
+            return new Promise((resolve) => {
+                _pendingSave = async () => {
+                    const result = await saveToCloud(localState);
+                    resolve(result);
+                };
+            });
+        }
+        
+        _saveLock = true;
+        
+        const campId = await getCampId();
+        if (!campId) {
+            console.warn("☁️ Cannot save - no camp ID");
+            _saveLock = false;
+            return false;
+        }
+        
+        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const userDivisions = getUserDivisions();
+        const myBunks = getBunksForDivisions(userDivisions);
+        const isOwner = isOwnerOrAdmin();
+        
+        console.log(`☁️ [SAVE] Role: ${isOwner ? 'owner' : 'scheduler'}`);
+        console.log(`☁️ [SAVE] My divisions: [${userDivisions.join(', ')}] → ${myBunks.size} bunks`);
+        
+        try {
+            // ================================================================
+            // STEP 1: FETCH CURRENT CLOUD STATE
+            // ================================================================
+            console.log("☁️ [SAVE] Step 1: Fetching current cloud state...");
+            
+            const { data: currentData, error: fetchError } = await window.supabase
+                .from('camp_settings')
+                .select('settings')
+                .eq('camp_id', campId)
+                .maybeSingle();
                 
-                // 1. Load current cloud state
-                const cloudState = await loadFromCloud();
-                const cloudSchedules = cloudState?.daily_schedules || {};
+            if (fetchError) {
+                console.error("☁️ [SAVE] Fetch error:", fetchError);
+                _saveLock = false;
+                return false;
+            }
+            
+            let cloudState = currentData?.settings || {};
+            let cloudDailySchedules = cloudState.daily_schedules || {};
+            
+            // Migrate any legacy structure in cloud
+            cloudDailySchedules = migrateLegacyCloudData(cloudDailySchedules, dateKey);
+            
+            // ================================================================
+            // STEP 2: PREPARE LOCAL DAILY DATA
+            // ================================================================
+            console.log("☁️ [SAVE] Step 2: Preparing local daily data...");
+            
+            let localDailyData = {};
+            try {
+                const raw = localStorage.getItem(DAILY_DATA_KEY);
+                if (raw) localDailyData = JSON.parse(raw);
+            } catch (e) { /* ignore */ }
+            
+            const localDateData = localDailyData[dateKey] || {};
+            const localAssignments = localDateData.scheduleAssignments || {};
+            
+            // ================================================================
+            // STEP 3: MERGE LOGIC (CRITICAL FOR MULTI-SCHEDULER)
+            // ================================================================
+            console.log("☁️ [SAVE] Step 3: Merging schedules...");
+            
+            // Get cloud's date-specific data
+            let cloudDateData = cloudDailySchedules[dateKey] || {};
+            let cloudAssignments = cloudDateData.scheduleAssignments || {};
+            
+            const cloudBunkCount = Object.keys(cloudAssignments).length;
+            console.log(`☁️ [SAVE] Cloud has ${cloudBunkCount} bunks for ${dateKey}`);
+            
+            let mergedAssignments;
+            
+            if (isOwner) {
+                // ============================================================
+                // OWNER MODE: Full overwrite for date
+                // ============================================================
+                console.log("☁️ [SAVE] Owner mode - full save");
+                mergedAssignments = localAssignments;
                 
-                // 2. Start with cloud data (preserves other schedulers' work)
-                const merged = JSON.parse(JSON.stringify(cloudSchedules));
+            } else {
+                // ============================================================
+                // SCHEDULER MODE: Fetch-Merge-Update (FIXED)
+                // ============================================================
+                console.log("☁️ [SAVE] Scheduler mode - merge with cloud");
                 
-                // 3. Add/update MY bunks only
-                for (const [dateKey, dateData] of Object.entries(localSchedules)) {
-                    // Ensure date entry exists with proper structure
-                    if (!merged[dateKey]) {
-                        merged[dateKey] = { scheduleAssignments: {} };
+                // Start with cloud's assignments
+                mergedAssignments = { ...cloudAssignments };
+                
+                // CRITICAL FIX: First REMOVE all cloud bunks that belong to MY divisions
+                // This ensures we don't keep stale data from my divisions
+                let removedCount = 0;
+                for (const bunk of Object.keys(mergedAssignments)) {
+                    if (myBunks.has(bunk)) {
+                        delete mergedAssignments[bunk];
+                        removedCount++;
                     }
-                    
-                    // Handle case where cloud data might be in direct format (no scheduleAssignments wrapper)
-                    // Convert to nested format if needed
-                    if (!merged[dateKey].scheduleAssignments) {
-                        // Cloud data is in direct format - wrap it
-                        const existingData = { ...merged[dateKey] };
-                        merged[dateKey] = { scheduleAssignments: existingData };
+                }
+                console.log(`☁️ [SAVE] Removed ${removedCount} old bunks from my divisions`);
+                
+                // Count preserved bunks (from OTHER schedulers)
+                const preservedCount = Object.keys(mergedAssignments).length;
+                console.log(`☁️ [SAVE] Preserved ${preservedCount} bunks from other schedulers`);
+                
+                // THEN add all my local bunks
+                let myBunkCount = 0;
+                for (const bunk of Object.keys(localAssignments)) {
+                    if (myBunks.has(bunk)) {
+                        mergedAssignments[bunk] = localAssignments[bunk];
+                        myBunkCount++;
                     }
-                    
-                    // Get assignments from local data (handle both formats)
-                    const localAssignments = dateData.scheduleAssignments || dateData;
-                    
-                    // Only add MY bunks
-                    for (const [bunkName, schedule] of Object.entries(localAssignments)) {
-                        // Skip non-bunk properties
-                        if (bunkName === 'scheduleAssignments' || bunkName === 'leagueAssignments' || bunkName === 'unifiedTimes') {
-                            continue;
-                        }
-                        if (myBunks.has(String(bunkName))) {
-                            merged[dateKey].scheduleAssignments[bunkName] = schedule;
-                        }
-                    }
-                    
-                    // Copy other metadata (leagueAssignments, etc.)
-                    if (dateData.leagueAssignments) {
-                        if (!merged[dateKey].leagueAssignments) {
-                            merged[dateKey].leagueAssignments = {};
-                        }
-                        // Only copy league assignments for my divisions
-                        const myDivisions = window.AccessControl?.getEditableDivisions?.() || 
-                                          window.SubdivisionScheduleManager?.getDivisionsToSchedule?.() || [];
-                        for (const [divName, leagueData] of Object.entries(dateData.leagueAssignments)) {
-                            if (myDivisions.includes(divName)) {
-                                merged[dateKey].leagueAssignments[divName] = leagueData;
+                }
+                console.log(`☁️ [SAVE] Added ${myBunkCount} bunks from my divisions`);
+            }
+            
+            const mergedBunkCount = Object.keys(mergedAssignments).length;
+            console.log(`☁️ [SAVE] Cloud had ${cloudBunkCount} bunks → Now ${mergedBunkCount} bunks`);
+            
+            // ================================================================
+            // STEP 4: BUILD FINAL STATE
+            // ================================================================
+            
+            // Merge the date-specific data
+            const mergedDateData = {
+                ...cloudDateData,
+                ...localDateData,
+                scheduleAssignments: mergedAssignments,
+                // Merge subdivision schedules too
+                subdivisionSchedules: {
+                    ...(cloudDateData.subdivisionSchedules || {}),
+                    ...(localDateData.subdivisionSchedules || {})
+                }
+            };
+            
+            // Build final daily_schedules
+            const finalDailySchedules = {
+                ...cloudDailySchedules,
+                [dateKey]: mergedDateData
+            };
+            
+            // Build final state (merge with non-daily data)
+            const stateToSave = { ...cloudState };
+            
+            // Copy non-daily keys from local
+            for (const [key, value] of Object.entries(localState || {})) {
+                if (key !== 'daily_schedules') {
+                    stateToSave[key] = value;
+                }
+            }
+            
+            // Set the merged daily schedules
+            stateToSave.daily_schedules = finalDailySchedules;
+            
+            // ================================================================
+            // STEP 5: SAVE TO CLOUD
+            // ================================================================
+            console.log("☁️ [SAVE] Step 5: Saving to cloud...");
+            
+            const { error: saveError } = await window.supabase
+                .from('camp_settings')
+                .upsert({
+                    camp_id: campId,
+                    settings: stateToSave,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'camp_id' });
+                
+            if (saveError) {
+                console.error("☁️ [SAVE] Save error:", saveError);
+                _saveLock = false;
+                return false;
+            }
+            
+            console.log("☁️ [SAVE] ✅ Success");
+            _dailyDataDirty = false;
+            
+            // Release lock and process any pending save
+            _saveLock = false;
+            if (_pendingSave) {
+                const pendingFn = _pendingSave;
+                _pendingSave = null;
+                setTimeout(pendingFn, 100);
+            }
+            
+            return true;
+            
+        } catch (e) {
+            console.error("☁️ [SAVE] Exception:", e);
+            _saveLock = false;
+            return false;
+        }
+    }
+
+    // =========================================================================
+    // CLEAR CLOUD KEYS (for delete operations)
+    // =========================================================================
+    
+    async function clearCloudKeys(keys) {
+        console.log("☁️ [CLEAR] Clearing keys:", keys);
+        
+        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const isOwner = isOwnerOrAdmin();
+        const myBunks = getBunksForDivisions(getUserDivisions());
+        
+        // Load current local data
+        let localDailyData = {};
+        try {
+            const raw = localStorage.getItem(DAILY_DATA_KEY);
+            if (raw) localDailyData = JSON.parse(raw);
+        } catch (e) { /* ignore */ }
+        
+        // Clear the specified keys appropriately
+        for (const key of keys) {
+            if (key === 'daily_schedules') {
+                if (isOwner) {
+                    // Owner clears everything
+                    localDailyData = {};
+                } else {
+                    // Scheduler only clears their bunks
+                    if (localDailyData[dateKey]?.scheduleAssignments) {
+                        const assignments = localDailyData[dateKey].scheduleAssignments;
+                        for (const bunk of Object.keys(assignments)) {
+                            if (myBunks.has(bunk)) {
+                                delete assignments[bunk];
                             }
                         }
                     }
                 }
-                
-                // Log what we're saving
-                const cloudBunkCount = Object.keys(cloudSchedules).reduce((sum, date) => {
-                    const assignments = cloudSchedules[date]?.scheduleAssignments || cloudSchedules[date] || {};
-                    return sum + Object.keys(assignments).length;
-                }, 0);
-                
-                const mergedBunkCount = Object.keys(merged).reduce((sum, date) => {
-                    const assignments = merged[date]?.scheduleAssignments || merged[date] || {};
-                    return sum + Object.keys(assignments).length;
-                }, 0);
-                
-                console.log(`☁️ [SAVE] Cloud had ${cloudBunkCount} bunks → Now ${mergedBunkCount} bunks`);
-                
-                stateToSave.daily_schedules = merged;
-            } else {
-                console.warn('☁️ [SAVE] No bunks to save - aborting');
-                showToast("❌ No permissions", "error");
-                return false;
+            } else if (localDailyData[dateKey]) {
+                // Clear specific key in current date
+                delete localDailyData[dateKey][key];
             }
         }
-        // ★★★ FIX: If localStorage is empty BUT we're not explicitly setting daily_schedules,
-        // don't remove it from cloud - just don't include it in this update
-        // This prevents accidental cloud deletion during normal operations
-      } catch(e) { 
-          console.error("☁️ [SAVE] Bundle error:", e);
-      }
-
-      const ownerId = campId;
-
-      // TRY PATCH FIRST
-      const patchUrl = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}`;
-      const patchResponse = await fetch(patchUrl, {
-        method: 'PATCH',
-        headers: {
-          'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=representation'
-        },
-        body: JSON.stringify({ 
-            state: stateToSave,
-            owner_id: ownerId 
-        })
-      });
-
-      if (patchResponse.ok) {
-          const patchedData = await patchResponse.json();
-          if (patchedData && patchedData.length > 0) {
-              console.log("☁️ [SAVE] ✅ Success");
-              showToast("✅ Saved!", "success");
-              _dailyDataDirty = false;
-              
-              // Dispatch event so UI can refresh from cloud
-              window.dispatchEvent(new CustomEvent('campistry-cloud-saved'));
-              
-              return true;
-          }
-      }
-
-      // IF PATCH FAILED -> POST (only for owners)
-      if (!_isTeamMember) {
-          const postUrl = `${SUPABASE_URL}/rest/v1/${TABLE}`;
-          const postResponse = await fetch(postUrl, {
-            method: 'POST',
-            headers: {
-              'apikey': SUPABASE_KEY,
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-              'Prefer': 'resolution=merge-duplicates'
-            },
-            body: JSON.stringify({
-              camp_id: campId,
-              owner_id: ownerId,
-              state: stateToSave
-            })
-          });
-
-          if (postResponse.ok) {
-            console.log("☁️ [SAVE] ✅ Created new record");
-            showToast("✅ Saved!", "success");
-            _dailyDataDirty = false;
-            return true;
-          } else {
-            console.error("Save Failed:", postResponse.status);
-            showToast("❌ Save Failed", "error");
-            return false;
-          }
-      } else {
-          console.error("Team member cannot create new camp state");
-          showToast("❌ Camp data not found", "error");
-          return false;
-      }
-
-    } catch (e) {
-      console.error("Save Error:", e);
-      showToast("❌ Network Error", "error");
-      return false;
-    }
-  }
-
-  // ============================================================================
-  // ★★★ LOAD COMBINED VIEW FROM CLOUD ★★★
-  // After any scheduler saves, UI can call this to get ALL data
-  // ============================================================================
-  
-  window.loadCombinedScheduleFromCloud = async function() {
-      console.log('☁️ Loading combined schedule from cloud...');
-      
-      const cloudState = await loadFromCloud();
-      if (!cloudState) {
-          console.log('☁️ No cloud data found');
-          return null;
-      }
-      
-      const cloudSchedules = cloudState.daily_schedules || {};
-      const today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-      const todayData = cloudSchedules[today];
-      
-      if (!todayData) {
-          console.log('☁️ No schedule data for today');
-          return null;
-      }
-      
-      // Update local storage with cloud data
-      const currentLocal = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
-      currentLocal[today] = todayData;
-      localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(currentLocal));
-      
-      // Update in-memory
-      const assignments = todayData.scheduleAssignments || todayData;
-      window.scheduleAssignments = assignments;
-      
-      if (todayData.leagueAssignments) {
-          window.leagueAssignments = todayData.leagueAssignments;
-      }
-      
-      // Get list of divisions that have data
-      const divisionsWithData = new Set();
-      const divisions = window.divisions || {};
-      
-      for (const bunkName of Object.keys(assignments)) {
-          // Find which division this bunk belongs to
-          for (const [divName, divInfo] of Object.entries(divisions)) {
-              if (divInfo.bunks && divInfo.bunks.map(String).includes(String(bunkName))) {
-                  divisionsWithData.add(divName);
-                  break;
-              }
-          }
-      }
-      
-      console.log(`☁️ Loaded ${Object.keys(assignments).length} bunks from cloud`);
-      console.log(`☁️ Divisions with data: [${[...divisionsWithData].join(', ')}]`);
-      
-      // Update available divisions for UI
-      window.availableDivisionsFromCloud = [...divisionsWithData];
-      
-      return {
-          scheduleAssignments: assignments,
-          leagueAssignments: todayData.leagueAssignments || {},
-          divisionsWithData: [...divisionsWithData]
-      };
-  };
-
-  // ============================================================================
-  // ★★★ RESET CLOUD STATE - Complete Data Wipe ★★★
-  // ============================================================================
-  window.resetCloudState = async function(newState = null) {
-    if (_isTeamMember) {
-        showToast("❌ Only camp owners can reset data", "error");
-        return false;
-    }
-    
-    console.log("☁️ resetCloudState called - FULL DATA WIPE");
-    
-    const emptyState = newState || {
-      divisions: {},
-      bunks: [],
-      app1: {
-        divisions: {},
-        bunks: [],
-        fields: [],
-        specialActivities: [],
-        allSports: [],
-        bunkMetaData: {},
-        sportMetaData: {},
-        savedSkeletons: {},
-        skeletonAssignments: {}
-      },
-      locationZones: {},
-      pinnedTileDefaults: {},
-      leaguesByName: {},
-      leagueRoundState: {},
-      leagueHistory: {},
-      specialtyLeagueHistory: {},
-      specialtyLeagues: {},
-      smartTileHistory: {},
-      manualUsageOffsets: {},
-      historicalCounts: {},
-      rotationHistory: { bunks: {}, leagues: {} },
-      daily_schedules: {}, // ★ CRITICAL: Explicitly set to empty to clear cloud
-      updated_at: new Date().toISOString()
-    };
-    
-    // ★ Clear localStorage AFTER setting up the empty state
-    localStorage.removeItem(DAILY_DATA_KEY);
-    
-    // ★ Update memory cache
-    _memoryCache = emptyState;
-    
-    // ★ Save empty state to all localStorage keys
-    try {
-      const stateJSON = JSON.stringify(emptyState);
-      localStorage.setItem(UNIFIED_CACHE_KEY, stateJSON);
-      localStorage.setItem(LEGACY_KEYS.globalSettings, stateJSON);
-      localStorage.setItem(LEGACY_KEYS.localCache, stateJSON);
-      localStorage.setItem(LEGACY_KEYS.globalRegistry, JSON.stringify({
-        divisions: {},
-        bunks: []
-      }));
-      console.log("☁️ Local storage cleared with empty state");
-    } catch (e) {
-      console.error("☁️ Failed to clear localStorage:", e);
-    }
-    
-    // ★ Force sync the empty state to cloud (with explicit daily_schedules: {})
-    const success = await saveToCloud(emptyState);
-    console.log("☁️ Cloud reset result:", success ? "SUCCESS" : "FAILED");
-    return success;
-  };
-
-  // ============================================================================
-  // ★★★ CLEAR SPECIFIC CLOUD KEYS - For partial resets (New Half, etc.) ★★★
-  // ============================================================================
-  window.clearCloudKeys = async function(keysToReset) {
-    console.log("☁️ clearCloudKeys called for:", keysToReset);
-    
-    const state = getLocalCache();
-    
-    // Reset specified keys to empty values
-    keysToReset.forEach(key => {
-      if (key === 'leagueRoundState') state.leagueRoundState = {};
-      else if (key === 'leagueHistory') state.leagueHistory = {};
-      else if (key === 'specialtyLeagueHistory') state.specialtyLeagueHistory = {};
-      else if (key === 'daily_schedules') {
-        state.daily_schedules = {};
-        // Also clear localStorage
-        localStorage.removeItem(DAILY_DATA_KEY);
-      }
-      else if (key === 'manualUsageOffsets') state.manualUsageOffsets = {};
-      else if (key === 'historicalCounts') state.historicalCounts = {};
-      else if (key === 'smartTileHistory') state.smartTileHistory = {};
-      else if (key === 'rotationHistory') state.rotationHistory = { bunks: {}, leagues: {} };
-      else {
-        // For unknown keys, set to empty object
-        state[key] = {};
-      }
-    });
-    
-    state.updated_at = new Date().toISOString();
-    
-    // Update memory cache and localStorage
-    _memoryCache = state;
-    try {
-      const stateJSON = JSON.stringify(state);
-      localStorage.setItem(UNIFIED_CACHE_KEY, stateJSON);
-      localStorage.setItem(LEGACY_KEYS.globalSettings, stateJSON);
-      localStorage.setItem(LEGACY_KEYS.localCache, stateJSON);
-    } catch (e) {
-      console.error("☁️ Failed to update localStorage:", e);
-    }
-    
-    // Force sync to cloud immediately (with explicit empty values)
-    const success = await saveToCloud(state);
-    console.log("☁️ Partial reset result:", success ? "SUCCESS" : "FAILED");
-    return success;
-  };
-
-  // ============================================================================
-  // SET CLOUD STATE (Import)
-  // ============================================================================
-  window.setCloudState = async function(newState) {
-    if (!newState || typeof newState !== 'object') return false;
-    newState.updated_at = new Date().toISOString();
-    setLocalCache(newState);
-    const cloudSuccess = await saveToCloud(newState);
-    if (!cloudSuccess) { _cloudSyncPending = true; scheduleCloudSync(); }
-    return true;
-  };
-
-  // ============================================================================
-  // SYNC LOGIC & INIT
-  // ============================================================================
-    
-  function scheduleCloudSync() {
-    if (_syncTimeout) clearTimeout(_syncTimeout);
-    _syncTimeout = setTimeout(async () => {
-      if (!_cloudSyncPending) return;
-      if (_syncInProgress) { scheduleCloudSync(); return; }
-      
-      _syncInProgress = true;
-      _cloudSyncPending = false;
-      await saveToCloud(getLocalCache());
-      _syncInProgress = false;
-    }, 2000);
-  }
-    
-  async function syncNow() {
-    if (_syncTimeout) clearTimeout(_syncTimeout);
-    _cloudSyncPending = false;
-    _syncInProgress = true;
-    const result = await saveToCloud(getLocalCache());
-    _syncInProgress = false;
-    return result;
-  }
-
-  async function initialize() {
-    if (_initialized) return;
-    
-    const user = await getUser();
-    if (user) {
-        await updateCampIdCache(user.id);
-    }
-    
-    const localData = getLocalCache();
-    const hasLocalData = localData && (Object.keys(localData).length > 2);
-
-    if (hasLocalData) {
-        finishInit(true);
-        loadFromCloud().then(cloudState => {
-            if (cloudState) {
-                const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
-                const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
-                if (cloudTime > localTime) {
-                    setLocalCache({ ...localData, ...cloudState });
-                    showToast("☁️ Data updated from Cloud", "info");
-                }
-            }
-        });
-        return;
-    }
-
-    const cloudState = await loadFromCloud();
-    if (cloudState) {
-       setLocalCache(cloudState);
-       finishInit(true);
-    } else {
-       finishInit(false);
-    }
-  }
-
-  function finishInit(hasData) {
-    _initialized = true;
-    window.__CAMPISTRY_CLOUD_READY__ = true;
-    window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated', { 
-      detail: { 
-        hydrated: true, 
-        hasData,
-        isTeamMember: _isTeamMember,
-        userRole: _userRole
-      }
-    }));
-  }
-
-  // PUBLIC API
-  window.loadGlobalSettings = () => getLocalCache();
-  window.saveGlobalSettings = (key, value) => {
-    if (_userRole === 'viewer') {
-        console.warn("☁️ Viewer cannot save settings");
-        return getLocalCache();
-    }
-    
-    const state = getLocalCache();
-    state[key] = value;
-    state.updated_at = new Date().toISOString();
-    setLocalCache(state);
-    _cloudSyncPending = true;
-    scheduleCloudSync();
-    return state;
-  };
-
-  window.loadCurrentDailyData = function() {
-    try {
-        const raw = localStorage.getItem(DAILY_DATA_KEY);
-        return raw ? JSON.parse(raw) : {};
-    } catch(e) { return {}; }
-  };
-
-  window.saveCurrentDailyData = function(key, value) {
-    if (_userRole === 'viewer') {
-        console.warn("Viewers cannot save daily data");
-        return;
-    }
-    try {
-        const data = window.loadCurrentDailyData();
-        data[key] = value;
-        localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(data));
         
-        _cloudSyncPending = true;
-        _dailyDataDirty = true; 
-        scheduleCloudSync();
-    } catch(e) { console.error("Daily Save Error:", e); }
-  };
+        // Save back to localStorage
+        localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(localDailyData));
+        
+        // Sync to cloud
+        await forceSyncToCloud();
+    }
 
-  window.syncNow = syncNow;
-  window.forceSyncToCloud = syncNow;
-  window.loadFromCloud = loadFromCloud; // Expose for GlobalFieldLocks
-  window.scheduleCloudSync = () => {
-    _cloudSyncPending = true;
-    scheduleCloudSync();
-  };
-   
-  window.getCampistryUserRole = getUserRole;
-  window.isCampistryTeamMember = isTeamMember;
-  window.getCampId = getCampId;
+    // =========================================================================
+    // RESET CLOUD STATE (for Erase All)
+    // =========================================================================
+    
+    async function resetCloudState() {
+        console.log("☁️ [RESET] Resetting cloud state...");
+        
+        const campId = await getCampId();
+        if (!campId) return false;
+        
+        // Clear localStorage
+        localStorage.removeItem(DAILY_DATA_KEY);
+        localStorage.removeItem(STORAGE_KEY);
+        
+        // Reset cloud
+        const emptyState = {
+            daily_schedules: {},
+            [STORAGE_KEY]: {}
+        };
+        
+        const { error } = await window.supabase
+            .from('camp_settings')
+            .upsert({
+                camp_id: campId,
+                settings: emptyState,
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'camp_id' });
+            
+        if (error) {
+            console.error("☁️ [RESET] Error:", error);
+            return false;
+        }
+        
+        console.log("☁️ [RESET] ✅ Success");
+        return true;
+    }
 
-  setTimeout(() => {
-    if(window.supabase) {
-        window.supabase.auth.onAuthStateChange(async (event, session) => {
-            if (event === 'SIGNED_IN' && session) {
-                await updateCampIdCache(session.user.id);
-                _initialized = false; 
-                await initialize();
-            } else if (event === 'SIGNED_OUT') {
-                clearCampIdCache();
-                _memoryCache = null;
-            }
+    // =========================================================================
+    // FORCE SYNC (Debounced)
+    // =========================================================================
+    
+    async function forceSyncToCloud() {
+        clearTimeout(_syncTimeout);
+        
+        return new Promise((resolve) => {
+            _syncTimeout = setTimeout(async () => {
+                console.log("☁️ [FORCE SYNC] Starting...");
+                
+                // Gather all local data
+                const localState = {};
+                
+                try {
+                    const globalRaw = localStorage.getItem(STORAGE_KEY);
+                    if (globalRaw) localState[STORAGE_KEY] = JSON.parse(globalRaw);
+                } catch (e) { /* ignore */ }
+                
+                try {
+                    const dailyRaw = localStorage.getItem(DAILY_DATA_KEY);
+                    if (dailyRaw) localState.daily_schedules = JSON.parse(dailyRaw);
+                } catch (e) { /* ignore */ }
+                
+                const result = await saveToCloud(localState);
+                resolve(result);
+                
+            }, 300);
         });
     }
-  }, 500);
 
-  initialize();
+    // =========================================================================
+    // AUTO-SAVE INTERCEPTOR
+    // =========================================================================
+    
+    function setupAutoSave() {
+        const originalSetItem = localStorage.setItem.bind(localStorage);
+        
+        localStorage.setItem = function(key, value) {
+            originalSetItem(key, value);
+            
+            if (key === DAILY_DATA_KEY) {
+                _dailyDataDirty = true;
+                
+                // Debounced cloud sync
+                clearTimeout(_syncTimeout);
+                _syncTimeout = setTimeout(async () => {
+                    if (_dailyDataDirty && !_localDataProtected) {
+                        await forceSyncToCloud();
+                    }
+                }, 2000);
+            }
+        };
+    }
+
+    // =========================================================================
+    // INITIALIZATION
+    // =========================================================================
+    
+    async function initialize() {
+        if (!window.supabase) {
+            console.warn("☁️ Supabase not available, waiting...");
+            setTimeout(initialize, 500);
+            return;
+        }
+        
+        setupAutoSave();
+        await loadFromCloud();
+    }
+
+    // =========================================================================
+    // EXPORTS
+    // =========================================================================
+    
+    // Helper for multi-scheduler to fetch schedule directly from cloud
+    async function fetchScheduleFromCloud(dateKey) {
+        const campId = await getCampId();
+        if (!campId) return null;
+        
+        console.log(`☁️ [FETCH] Getting schedule for ${dateKey} from cloud...`);
+        
+        const { data, error } = await window.supabase
+            .from('camp_settings')
+            .select('settings')
+            .eq('camp_id', campId)
+            .maybeSingle();
+            
+        if (error || !data?.settings) {
+            console.log(`☁️ [FETCH] No cloud data found`);
+            return null;
+        }
+        
+        const dailySchedules = data.settings.daily_schedules || {};
+        const dateData = dailySchedules[dateKey] || {};
+        const assignments = dateData.scheduleAssignments || {};
+        
+        console.log(`☁️ [FETCH] Found ${Object.keys(assignments).length} bunks for ${dateKey}`);
+        
+        return {
+            scheduleAssignments: assignments,
+            subdivisionSchedules: dateData.subdivisionSchedules || {},
+            skeleton: dateData.skeleton || null,
+            unifiedTimes: dateData.unifiedTimes || null
+        };
+    }
+    
+    window.loadFromCloud = loadFromCloud;
+    window.saveToCloud = saveToCloud;
+    window.forceSyncToCloud = forceSyncToCloud;
+    window.clearCloudKeys = clearCloudKeys;
+    window.resetCloudState = resetCloudState;
+    window.getCampId = getCampId;
+    window.fetchScheduleFromCloud = fetchScheduleFromCloud;
+    
+    // Start initialization
+    if (document.readyState === 'complete') {
+        setTimeout(initialize, 100);
+    } else {
+        window.addEventListener('load', () => setTimeout(initialize, 100));
+    }
+
 })();
