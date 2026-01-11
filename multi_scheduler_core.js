@@ -22,7 +22,7 @@
 
     const DAILY_DATA_KEY = 'campDailyData_v1';
 
-    console.log('🎯 Multi-Scheduler Core v1.0 loading...');
+    console.log('🎯 Multi-Scheduler Core v1.1 (CLOUD FETCH FIX) loading...');
 
     // =========================================================================
     // ROLE DEFINITIONS
@@ -262,7 +262,8 @@
     // =========================================================================
 
     /**
-     * Load the current schedule from localStorage/cloud
+     * Load the current schedule from CLOUD (not just localStorage)
+     * This is CRITICAL for multi-scheduler: we need the latest data from other schedulers
      * @param {string} dateKey - Date in YYYY-MM-DD format
      * @returns {Object} - { scheduleAssignments, subdivisionSchedules, fieldUsageClaims }
      */
@@ -274,24 +275,54 @@
         let fieldUsageClaims = {};
 
         try {
-            // Load from localStorage
+            // ================================================================
+            // CRITICAL: Fetch from CLOUD first to get other schedulers' work
+            // ================================================================
+            if (window.fetchScheduleFromCloud) {
+                console.log(`[MultiScheduler]   Fetching from cloud...`);
+                const cloudData = await window.fetchScheduleFromCloud(dateKey);
+                
+                if (cloudData) {
+                    scheduleAssignments = cloudData.scheduleAssignments || {};
+                    subdivisionSchedules = cloudData.subdivisionSchedules || {};
+                    console.log(`[MultiScheduler]   Cloud has ${Object.keys(scheduleAssignments).length} bunks`);
+                }
+            }
+            
+            // ================================================================
+            // Also check localStorage for any local drafts not yet synced
+            // ================================================================
             const raw = localStorage.getItem(DAILY_DATA_KEY);
             if (raw) {
                 const dailyData = JSON.parse(raw);
                 const dateData = dailyData[dateKey] || {};
+                const localAssignments = dateData.scheduleAssignments || {};
+                const localSubdivisions = dateData.subdivisionSchedules || {};
+                
+                // Merge local data on top of cloud data
+                // (local might have newer data not yet synced)
+                const localBunkCount = Object.keys(localAssignments).length;
+                if (localBunkCount > 0) {
+                    console.log(`[MultiScheduler]   LocalStorage has ${localBunkCount} bunks`);
+                    scheduleAssignments = {
+                        ...scheduleAssignments,
+                        ...localAssignments
+                    };
+                    subdivisionSchedules = {
+                        ...subdivisionSchedules,
+                        ...localSubdivisions
+                    };
+                }
+            }
 
-                scheduleAssignments = dateData.scheduleAssignments || {};
-                subdivisionSchedules = dateData.subdivisionSchedules || {};
-
-                // Extract field usage claims from subdivision schedules
-                for (const [subId, subSchedule] of Object.entries(subdivisionSchedules)) {
-                    if (subSchedule.fieldUsageClaims) {
-                        for (const [slotIdx, claims] of Object.entries(subSchedule.fieldUsageClaims)) {
-                            if (!fieldUsageClaims[slotIdx]) {
-                                fieldUsageClaims[slotIdx] = {};
-                            }
-                            Object.assign(fieldUsageClaims[slotIdx], claims);
+            // Extract field usage claims from subdivision schedules
+            for (const [subId, subSchedule] of Object.entries(subdivisionSchedules)) {
+                if (subSchedule.fieldUsageClaims) {
+                    for (const [slotIdx, claims] of Object.entries(subSchedule.fieldUsageClaims)) {
+                        if (!fieldUsageClaims[slotIdx]) {
+                            fieldUsageClaims[slotIdx] = {};
                         }
+                        Object.assign(fieldUsageClaims[slotIdx], claims);
                     }
                 }
             }
@@ -857,7 +888,7 @@
         window.addEventListener('load', () => setTimeout(installOptimizerHook, 100));
     }
 
-    console.log('🎯 Multi-Scheduler Core v1.0 loaded');
+    console.log('🎯 Multi-Scheduler Core v1.1 (CLOUD FETCH FIX) loaded');
     console.log('   - Role-based division access ✅');
     console.log('   - First-come-first-served conflict detection ✅');
     console.log('   - Non-destructive merging ✅');
