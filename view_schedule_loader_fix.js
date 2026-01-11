@@ -81,29 +81,56 @@
         window.currentDivisionFilter = "All";
     }
 
-    // --- CLEAN LEGACY ROOT DATA ---
-    // Remove ROOT-level schedule data that shouldn't exist
-    function cleanLegacyRootData(data) {
+    // --- MIGRATE LEGACY ROOT DATA ---
+    // Migrate ROOT-level skeleton to date-specific location (skeleton is SHARED structure)
+    // Clean ROOT-level schedule data (user-specific assignments)
+    function cleanLegacyRootData(data, dateKey) {
         if (!data) return data;
         
-        const legacyKeys = ['scheduleAssignments', 'leagueAssignments', 'unifiedTimes', 'manualSkeleton', 'skeleton'];
-        let cleaned = false;
+        // Keys that are USER-SPECIFIC and should be cleaned from ROOT
+        const userDataKeys = ['scheduleAssignments', 'leagueAssignments'];
         
-        for (const key of legacyKeys) {
-            if (data[key] !== undefined) {
-                console.log(`[ViewScheduleFix] 🧹 Removing legacy ROOT key: ${key}`);
+        // Keys that are SHARED STRUCTURE and should be MIGRATED, not deleted
+        const sharedStructureKeys = ['unifiedTimes', 'manualSkeleton', 'skeleton'];
+        
+        let changed = false;
+        
+        // Initialize date key if needed
+        if (!data[dateKey]) {
+            data[dateKey] = {};
+        }
+        
+        // MIGRATE shared structure keys to date-specific location
+        for (const key of sharedStructureKeys) {
+            if (data[key] !== undefined && data[key] !== null) {
+                // Only migrate if date-specific doesn't already have it
+                if (!data[dateKey][key] || (Array.isArray(data[dateKey][key]) && data[dateKey][key].length === 0)) {
+                    console.log(`[ViewScheduleFix] 📦 Migrating ROOT "${key}" to date ${dateKey}`);
+                    data[dateKey][key] = data[key];
+                    changed = true;
+                }
+                // Remove from ROOT after migration
                 delete data[key];
-                cleaned = true;
+                changed = true;
             }
         }
         
-        if (cleaned) {
-            // Save cleaned data back
+        // CLEAN user-specific data from ROOT (don't migrate - it's outdated)
+        for (const key of userDataKeys) {
+            if (data[key] !== undefined) {
+                console.log(`[ViewScheduleFix] 🧹 Removing legacy ROOT key: ${key}`);
+                delete data[key];
+                changed = true;
+            }
+        }
+        
+        if (changed) {
+            // Save migrated/cleaned data back
             try {
                 localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(data));
-                console.log('[ViewScheduleFix] 🧹 Cleaned legacy ROOT data from localStorage');
+                console.log('[ViewScheduleFix] ✅ Migrated/cleaned legacy ROOT data');
             } catch (e) {
-                console.error('[ViewScheduleFix] Failed to save cleaned data:', e);
+                console.error('[ViewScheduleFix] Failed to save:', e);
             }
         }
         
@@ -145,8 +172,8 @@
             return;
         }
         
-        // ★★★ CRITICAL FIX: Clean legacy ROOT-level data ★★★
-        data = cleanLegacyRootData(data);
+        // ★★★ CRITICAL FIX: Migrate legacy ROOT data (preserve skeleton) ★★★
+        data = cleanLegacyRootData(data, dateKey);
         
         // Get date-specific data ONLY (no ROOT fallback!)
         const dateData = data[dateKey] || {};
