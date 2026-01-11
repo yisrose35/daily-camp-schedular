@@ -1,9 +1,9 @@
 // ============================================================================
-// scheduler_ui.js (FIXED v2.1 - NO LEGACY ROOT FALLBACK)
+// scheduler_ui.js (v2.2 - MIGRATION + MULTI-SCHEDULER SUPPORT)
 // ============================================================================
-// CRITICAL FIX: Removed ROOT-level fallback loading that was restoring deleted data
-// Data MUST be stored in date-keyed format: data["2026-01-11"].scheduleAssignments
-// ROOT-level data (data.scheduleAssignments) is LEGACY and should be ignored
+// CRITICAL FIX: Migrates ROOT-level skeleton to date-specific
+// CRITICAL FIX: Cleans ROOT-level user data (prevents ghost schedules)
+// ENHANCED: Better error messages for scheduler role
 // ============================================================================
 
 // Wait for Campistry cloud system
