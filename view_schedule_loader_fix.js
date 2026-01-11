@@ -1,10 +1,11 @@
 // ============================================================================
-// view_schedule_loader_fix.js v3.7 - VISIBILITY ENFORCER
+// view_schedule_loader_fix.js v3.8 - OWNER DRAFT INJECTION
 // ============================================================================
 // 1. Smart Grid: Fixes 11:00 AM start time
 // 2. Data Recovery: Finds data in Date Folder or Root
 // 3. Cloud Shield: Prevents auto-wipe
-// 4. DIVISION REPAIR: Forces Div 4, 5, 6 to appear in the table
+// 4. Division Repair: Forces Div 4, 5, 6 to appear
+// 5. DRAFT INJECTION: Auto-merges team drafts for the Owner view
 // ============================================================================
 
 (function() {
@@ -13,10 +14,9 @@
     const DAILY_DATA_KEY = 'campDailyData_v1';
     const INCREMENT_MINS = 30;
     
-    // MEMORY SHIELD
     window.scheduleMemoryShield = { data: null, dateKey: null, timestamp: 0 };
     
-    console.log('[ViewScheduleFix] Loading v3.7 (Visibility Enforcer)...');
+    console.log('[ViewScheduleFix] Loading v3.8 (Owner Draft Injection)...');
     
     // --- HELPER: Parse Time ---
     function parseTimeToMinutes(str) {
@@ -34,7 +34,6 @@
     function regenerateUnifiedTimes(skeleton) {
         let minTime = Infinity, maxTime = 0, found = false;
 
-        // Check Skeleton
         if (skeleton && Array.isArray(skeleton)) {
             skeleton.forEach(b => {
                 const s = parseTimeToMinutes(b.startTime);
@@ -43,7 +42,6 @@
                 if (e !== null && e > maxTime) { maxTime = e; found = true; }
             });
         }
-        // Check Global Divisions
         if (window.divisions) {
             Object.values(window.divisions).forEach(div => {
                 const s = parseTimeToMinutes(div.startTime);
@@ -52,7 +50,6 @@
                 if (e !== null && e > maxTime) { maxTime = e; found = true; }
             });
         }
-        
         if (!found) { minTime = 540; maxTime = 960; }
         if (maxTime <= minTime) maxTime = minTime + 60;
 
@@ -73,37 +70,56 @@
         return times;
     }
 
-    // --- HELPER: Restore Missing Divisions (CRITICAL FIX) ---
-    function repairDivisions() {
-        // If we have schedule data but the division is missing from window.divisions, the UI won't draw it.
-        // We must re-inject it.
+    // --- HELPER: Inject Drafts (THE FIX) ---
+    function injectDraftsForOwner(dailyData, dateKey) {
+        // Only run if Owner/Admin
+        const role = window.AccessControl?.getCurrentRole?.();
+        if (role !== 'owner' && role !== 'admin') return;
+
+        const drafts = dailyData.subdivisionSchedules || (dailyData[dateKey] ? dailyData[dateKey].subdivisionSchedules : null);
         
+        if (drafts) {
+            let injectedCount = 0;
+            // Initialize scheduleAssignments if missing
+            if (!window.scheduleAssignments) window.scheduleAssignments = {};
+            
+            Object.values(drafts).forEach(sub => {
+                if (sub.scheduleData) { // Look for 'scheduleData' inside the draft
+                    Object.entries(sub.scheduleData).forEach(([bunk, slots]) => {
+                        // Merge logic: Overwrite only if bunk is empty in main schedule
+                        if (!window.scheduleAssignments[bunk] || window.scheduleAssignments[bunk].length === 0) {
+                            window.scheduleAssignments[bunk] = slots;
+                            injectedCount++;
+                        }
+                    });
+                }
+            });
+            
+            if (injectedCount > 0) {
+                console.log(`[ViewScheduleFix] 💉 Injected ${injectedCount} bunks from drafts for Owner view`);
+            }
+        }
+    }
+
+    // --- HELPER: Restore Missing Divisions ---
+    function repairDivisions() {
         if (!window.scheduleAssignments) return;
         if (!window.divisions) window.divisions = {};
-
-        // 1. Identify which divisions have data
-        // We scan bunks to find their division (assuming bunk mapping exists or inferring)
-        // Since we know 4, 5, 6 are the issue, we hardcode a check for them or scan all.
         
-        const knownDivisions = Object.keys(window.divisions);
-        
-        // Quick list of divisions to ensure exist (You can expand this if needed)
         const requiredDivisions = ['1', '2', '3', '4', '5', '6'];
-        
         requiredDivisions.forEach(divId => {
             if (!window.divisions[divId]) {
-                console.log(`[ViewScheduleFix] 🔧 Repairing missing division: ${divId}`);
                 window.divisions[divId] = {
                     id: divId,
-                    name: (divId.length === 1 ? `Grade ${divId}` : divId), // Fallback name
-                    bunks: [], // Empty list is fine, UI iterates keys
+                    name: (divId.length === 1 ? `Grade ${divId}` : divId),
+                    bunks: [],
                     startTime: '9:00 AM',
                     endTime: '4:00 PM'
                 };
             }
         });
         
-        // 2. Reset Filters
+        // Force Show All
         window.currentDivisionFilter = "All";
         const checkboxes = document.querySelectorAll('input[type="checkbox"]');
         checkboxes.forEach(cb => {
@@ -130,22 +146,15 @@
                 
                 if (!storageHasData) {
                     console.warn("🛡️ [ViewScheduleFix] Cloud wiped data! Restoring...");
-                    
                     if (!dailyData[dateKey]) dailyData[dateKey] = {};
                     dailyData[dateKey].scheduleAssignments = window.scheduleMemoryShield.data;
-                    
-                    if (window.scheduleMemoryShield.leagues) {
-                        dailyData[dateKey].leagueAssignments = window.scheduleMemoryShield.leagues;
-                    }
-
                     localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(dailyData));
-                    
                     if(window.forceSyncToCloud) setTimeout(() => window.forceSyncToCloud(), 1000);
                     
                     setTimeout(() => { 
                         window.scheduleAssignments = window.scheduleMemoryShield.data; 
-                        window.leagueAssignments = window.scheduleMemoryShield.leagues;
-                        repairDivisions(); // <--- CRITICAL
+                        injectDraftsForOwner(dailyData, dateKey); // <--- Inject
+                        repairDivisions(); 
                         window.updateTable && window.updateTable(); 
                     }, 50);
                 }
@@ -162,7 +171,10 @@
                 loadedSource = "ROOT_FALLBACK";
             }
 
-            // 3. LOAD LEAGUES
+            // 3. INJECT DRAFTS (The new magic step)
+            injectDraftsForOwner(dailyData, dateKey);
+
+            // 4. LOAD LEAGUES
             if (dailyData[dateKey]?.leagueAssignments) {
                 window.leagueAssignments = dailyData[dateKey].leagueAssignments;
                 window.scheduleMemoryShield.leagues = window.leagueAssignments;
@@ -170,7 +182,7 @@
                 window.leagueAssignments = dailyData.leagueAssignments;
             }
 
-            // 4. TIMES & SKELETON
+            // 5. TIMES & SKELETON
             if (dailyData.unifiedTimes && dailyData.unifiedTimes.length > 0) {
                 window.unifiedTimes = dailyData.unifiedTimes.map(t => ({...t, start: new Date(t.start), end: new Date(t.end)}));
             } else {
@@ -208,13 +220,13 @@
                 if (!window.scheduleAssignments || Object.keys(window.scheduleAssignments).length === 0) {
                     loadScheduleFromCorrectLocation();
                 }
-                repairDivisions(); // Ensure Div 4,5,6 exist before render
+                repairDivisions();
                 originalUpdate.call(this);
             };
         }
         
         runAll();
-        setTimeout(runAll, 800); // Delayed kick for slow loading
+        setTimeout(runAll, 800);
     }
 
     if (document.readyState === 'complete') applyPatches();
