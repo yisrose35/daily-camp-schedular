@@ -1,20 +1,20 @@
 // ============================================================================
-// cloud_storage_bridge.js v5.2 - ACCESSCONTROL INTEGRATION FIX
+// cloud_storage_bridge.js v5.3 - ACCESSCONTROL + GLOBALAUTHORITY FIX
 // ============================================================================
-// CRITICAL FIX: Wait for AccessControl to initialize before querying cloud
-// CRITICAL FIX: Use AccessControl's camp context instead of direct Supabase queries
-// CRITICAL FIX: Properly handles date-keyed schedule storage
+// CRITICAL FIX: isInitialized is a PROPERTY not a function
+// CRITICAL FIX: Proper try-catch around AccessControl calls
+// CRITICAL FIX: Hydrates GlobalAuthority with divisions/bunks from cloud
 // CRITICAL FIX: Fetch-Merge-Update pattern for multi-scheduler support
 // ============================================================================
 
 (function () {
     "use strict";
     
-    const VERSION = "5.2";
+    const VERSION = "5.3";
     const STORAGE_KEY = "campGlobalSettings_v1";
     const DAILY_DATA_KEY = "campDailyData_v1";
     
-    console.log(`☁️ Campistry Cloud Bridge v${VERSION} (ACCESSCONTROL INTEGRATION FIX)`);
+    console.log(`☁️ Campistry Cloud Bridge v${VERSION} (ACCESSCONTROL + GLOBALAUTHORITY FIX)`);
 
     // =========================================================================
     // STATE
@@ -30,7 +30,38 @@
     let _saveLock = false;
     let _pendingSave = null;
     let _initRetries = 0;
-    const MAX_INIT_RETRIES = 20; // More retries to wait for AccessControl
+    const MAX_INIT_RETRIES = 20;
+
+    // =========================================================================
+    // HELPER: Check if AccessControl is ready (handles both property and method)
+    // =========================================================================
+    
+    function isAccessControlReady() {
+        try {
+            if (!window.AccessControl) return false;
+            
+            // Check if isInitialized is a function or property
+            if (typeof window.AccessControl.isInitialized === 'function') {
+                return window.AccessControl.isInitialized();
+            }
+            // It's a property (boolean)
+            if (typeof window.AccessControl.isInitialized === 'boolean') {
+                return window.AccessControl.isInitialized;
+            }
+            // Try _isInitialized as fallback
+            if (typeof window.AccessControl._isInitialized === 'boolean') {
+                return window.AccessControl._isInitialized;
+            }
+            // Check if it has essential methods as proxy for being ready
+            if (window.AccessControl.getCurrentRole && window.AccessControl.getEditableDivisions) {
+                return true;
+            }
+            return false;
+        } catch (e) {
+            console.warn("☁️ Error checking AccessControl ready state:", e);
+            return false;
+        }
+    }
 
     // =========================================================================
     // PROTECTION FLAGS (for generation)
@@ -51,14 +82,18 @@
     // =========================================================================
     
     function getUserDivisions() {
-        if (window.AccessControl?.getEditableDivisions) {
-            return window.AccessControl.getEditableDivisions() || [];
-        }
-        if (window.AccessControl?.getUserManagedDivisions) {
-            return window.AccessControl.getUserManagedDivisions() || [];
-        }
-        if (window.SubdivisionScheduleManager?.getDivisionsToSchedule) {
-            return window.SubdivisionScheduleManager.getDivisionsToSchedule() || [];
+        try {
+            if (window.AccessControl?.getEditableDivisions) {
+                return window.AccessControl.getEditableDivisions() || [];
+            }
+            if (window.AccessControl?.getUserManagedDivisions) {
+                return window.AccessControl.getUserManagedDivisions() || [];
+            }
+            if (window.SubdivisionScheduleManager?.getDivisionsToSchedule) {
+                return window.SubdivisionScheduleManager.getDivisionsToSchedule() || [];
+            }
+        } catch (e) {
+            console.warn("☁️ Error getting user divisions:", e);
         }
         return [];
     }
@@ -78,12 +113,16 @@
     }
 
     function isOwnerOrAdmin() {
-        const role = window.AccessControl?.getCurrentRole?.() || _userRole;
-        return role === 'owner' || role === 'admin';
+        try {
+            const role = window.AccessControl?.getCurrentRole?.() || _userRole;
+            return role === 'owner' || role === 'admin';
+        } catch (e) {
+            return _userRole === 'owner' || _userRole === 'admin';
+        }
     }
 
     // =========================================================================
-    // CAMP ID RESOLUTION - WAITS FOR ACCESSCONTROL
+    // CAMP ID RESOLUTION - SAFE ACCESS TO ACCESSCONTROL
     // =========================================================================
     
     async function getCampId() {
@@ -92,39 +131,43 @@
         // ================================================================
         // PRIORITY 1: Use AccessControl's context (MOST RELIABLE)
         // ================================================================
-        if (window.AccessControl?.isInitialized?.()) {
-            // Try getCampId first
-            if (window.AccessControl.getCampId) {
-                const acCampId = window.AccessControl.getCampId();
-                if (acCampId) {
-                    _campId = acCampId;
-                    _userRole = window.AccessControl.getCurrentRole?.() || 'scheduler';
-                    console.log("☁️ Got camp ID from AccessControl.getCampId():", _campId);
+        try {
+            if (isAccessControlReady()) {
+                // Try getCampId first
+                if (typeof window.AccessControl.getCampId === 'function') {
+                    const acCampId = window.AccessControl.getCampId();
+                    if (acCampId) {
+                        _campId = acCampId;
+                        _userRole = window.AccessControl.getCurrentRole?.() || 'scheduler';
+                        console.log("☁️ Got camp ID from AccessControl.getCampId():", _campId);
+                        window.__CAMPISTRY_CAMP_ID__ = _campId;
+                        return _campId;
+                    }
+                }
+                
+                // Try getCampContext
+                if (typeof window.AccessControl.getCampContext === 'function') {
+                    const ctx = window.AccessControl.getCampContext();
+                    if (ctx?.campId) {
+                        _campId = ctx.campId;
+                        _userRole = ctx.role || 'scheduler';
+                        console.log("☁️ Got camp ID from AccessControl.getCampContext():", _campId);
+                        window.__CAMPISTRY_CAMP_ID__ = _campId;
+                        return _campId;
+                    }
+                }
+                
+                // Try internal state
+                if (window.AccessControl._campId) {
+                    _campId = window.AccessControl._campId;
+                    _userRole = window.AccessControl._role || 'scheduler';
+                    console.log("☁️ Got camp ID from AccessControl._campId:", _campId);
                     window.__CAMPISTRY_CAMP_ID__ = _campId;
                     return _campId;
                 }
             }
-            
-            // Try getCampContext
-            if (window.AccessControl.getCampContext) {
-                const ctx = window.AccessControl.getCampContext();
-                if (ctx?.campId) {
-                    _campId = ctx.campId;
-                    _userRole = ctx.role || 'scheduler';
-                    console.log("☁️ Got camp ID from AccessControl.getCampContext():", _campId);
-                    window.__CAMPISTRY_CAMP_ID__ = _campId;
-                    return _campId;
-                }
-            }
-            
-            // Try internal state
-            if (window.AccessControl._campId) {
-                _campId = window.AccessControl._campId;
-                _userRole = window.AccessControl._role || 'scheduler';
-                console.log("☁️ Got camp ID from AccessControl._campId:", _campId);
-                window.__CAMPISTRY_CAMP_ID__ = _campId;
-                return _campId;
-            }
+        } catch (e) {
+            console.warn("☁️ Error accessing AccessControl:", e);
         }
         
         // ================================================================
@@ -140,21 +183,25 @@
         // ================================================================
         // PRIORITY 3: Check localStorage cache
         // ================================================================
-        const cachedCampId = localStorage.getItem('campistry_camp_id');
-        if (cachedCampId && cachedCampId !== 'undefined' && cachedCampId !== 'null') {
-            _campId = cachedCampId;
-            _userRole = localStorage.getItem('campistry_user_role') || 'scheduler';
-            console.log("☁️ Got camp ID from localStorage:", _campId);
-            window.__CAMPISTRY_CAMP_ID__ = _campId;
-            return _campId;
+        try {
+            const cachedCampId = localStorage.getItem('campistry_camp_id');
+            if (cachedCampId && cachedCampId !== 'undefined' && cachedCampId !== 'null') {
+                _campId = cachedCampId;
+                _userRole = localStorage.getItem('campistry_user_role') || 'scheduler';
+                console.log("☁️ Got camp ID from localStorage:", _campId);
+                window.__CAMPISTRY_CAMP_ID__ = _campId;
+                return _campId;
+            }
+        } catch (e) {
+            console.warn("☁️ Error reading localStorage:", e);
         }
         
         // ================================================================
-        // PRIORITY 4: Wait for AccessControl to initialize
+        // PRIORITY 4: AccessControl exists but not ready - return null to retry
         // ================================================================
-        if (window.AccessControl && !window.AccessControl.isInitialized?.()) {
-            console.log("☁️ Waiting for AccessControl to initialize...");
-            return null; // Will retry via initialization loop
+        if (window.AccessControl && !isAccessControlReady()) {
+            console.log("☁️ AccessControl exists but not ready yet...");
+            return null;
         }
         
         // ================================================================
@@ -225,6 +272,81 @@
         
         console.warn("☁️ Could not determine camp ID");
         return null;
+    }
+
+    // =========================================================================
+    // ★★★ HYDRATE GLOBAL AUTHORITY ★★★
+    // =========================================================================
+    
+    function hydrateGlobalAuthority(state) {
+        console.log("☁️ [HYDRATE] Hydrating GlobalAuthority from cloud data...");
+        
+        try {
+            // Extract divisions and bunks from state
+            let divisions = state.divisions || state.app1?.divisions || {};
+            let bunks = state.bunks || state.app1?.bunks || [];
+            let fields = state.fields || state.app1?.fields || [];
+            
+            // Also check STORAGE_KEY wrapper
+            if (state[STORAGE_KEY]) {
+                divisions = state[STORAGE_KEY].divisions || divisions;
+                bunks = state[STORAGE_KEY].bunks || bunks;
+                fields = state[STORAGE_KEY].fields || fields;
+                
+                // Check app1 inside STORAGE_KEY
+                if (state[STORAGE_KEY].app1) {
+                    divisions = state[STORAGE_KEY].app1.divisions || divisions;
+                    bunks = state[STORAGE_KEY].app1.bunks || bunks;
+                    fields = state[STORAGE_KEY].app1.fields || fields;
+                }
+            }
+            
+            const divCount = typeof divisions === 'object' ? Object.keys(divisions).length : 0;
+            const bunkCount = Array.isArray(bunks) ? bunks.length : 0;
+            const fieldCount = Array.isArray(fields) ? fields.length : 0;
+            
+            console.log(`☁️ [HYDRATE] Found: ${divCount} divisions, ${bunkCount} bunks, ${fieldCount} fields`);
+            
+            // Hydrate GlobalAuthority if available
+            if (window.GlobalAuthority) {
+                if (divCount > 0 && typeof window.GlobalAuthority.setDivisions === 'function') {
+                    window.GlobalAuthority.setDivisions(divisions);
+                    console.log("☁️ [HYDRATE] ✅ Set divisions in GlobalAuthority");
+                }
+                if (bunkCount > 0 && typeof window.GlobalAuthority.setBunks === 'function') {
+                    window.GlobalAuthority.setBunks(bunks);
+                    console.log("☁️ [HYDRATE] ✅ Set bunks in GlobalAuthority");
+                }
+                if (fieldCount > 0 && typeof window.GlobalAuthority.setFields === 'function') {
+                    window.GlobalAuthority.setFields(fields);
+                    console.log("☁️ [HYDRATE] ✅ Set fields in GlobalAuthority");
+                }
+                
+                // Trigger reload if available
+                if (typeof window.GlobalAuthority.reload === 'function') {
+                    window.GlobalAuthority.reload();
+                }
+            }
+            
+            // Also set on window directly for legacy compatibility
+            if (divCount > 0) {
+                window.divisions = divisions;
+            }
+            if (bunkCount > 0) {
+                window.bunks = bunks;
+            }
+            if (fieldCount > 0) {
+                window.fields = fields;
+            }
+            
+            // Dispatch event for UI refresh
+            window.dispatchEvent(new CustomEvent('campistry-data-hydrated', {
+                detail: { divisions: divCount, bunks: bunkCount, fields: fieldCount }
+            }));
+            
+        } catch (e) {
+            console.error("☁️ [HYDRATE] Error hydrating GlobalAuthority:", e);
+        }
     }
 
     // =========================================================================
@@ -308,6 +430,9 @@
     // =========================================================================
     
     function setLocalCache(state) {
+        // ★★★ HYDRATE GLOBAL AUTHORITY FIRST ★★★
+        hydrateGlobalAuthority(state);
+        
         if (state.daily_schedules) {
             if (!_dailyDataDirty && !_localDataProtected) {
                 console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
@@ -330,8 +455,8 @@
                     setTimeout(() => {
                         console.log("🔥 Dispatching UI refresh for new schedule data...");
                         window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
-                        if (window.initScheduleSystem) window.initScheduleSystem();
-                        if (window.updateTable) window.updateTable();
+                        if (typeof window.initScheduleSystem === 'function') window.initScheduleSystem();
+                        if (typeof window.updateTable === 'function') window.updateTable();
                     }, 50);
                     
                 } catch (e) {
@@ -793,57 +918,69 @@
     }
 
     // =========================================================================
-    // INITIALIZATION - WAITS FOR ACCESSCONTROL
+    // INITIALIZATION - SAFE, NON-CRASHING
     // =========================================================================
     
     async function initialize() {
-        if (!window.supabase) {
-            console.warn("☁️ Supabase not available, waiting...");
-            setTimeout(initialize, 500);
-            return;
-        }
-        
-        setupAutoSave();
-        
-        // Check if AccessControl is ready
-        const acReady = window.AccessControl?.isInitialized?.();
-        
-        if (!acReady && _initRetries < MAX_INIT_RETRIES) {
-            _initRetries++;
-            console.log(`☁️ Waiting for AccessControl (${_initRetries}/${MAX_INIT_RETRIES})...`);
-            setTimeout(initialize, 250);
-            return;
-        }
-        
-        // Try to load from cloud
-        const success = await loadFromCloud();
-        
-        if (!success && _initRetries < MAX_INIT_RETRIES) {
-            _initRetries++;
-            console.log(`☁️ Load failed, retry ${_initRetries}/${MAX_INIT_RETRIES}...`);
-            setTimeout(initialize, 500);
-            return;
-        }
-        
-        if (!success) {
-            console.warn("☁️ Could not load from cloud, proceeding with local data");
+        try {
+            if (!window.supabase) {
+                console.warn("☁️ Supabase not available, waiting...");
+                setTimeout(initialize, 500);
+                return;
+            }
+            
+            setupAutoSave();
+            
+            // Check if AccessControl is ready using our safe helper
+            const acReady = isAccessControlReady();
+            
+            if (!acReady && _initRetries < MAX_INIT_RETRIES) {
+                _initRetries++;
+                console.log(`☁️ Waiting for AccessControl (${_initRetries}/${MAX_INIT_RETRIES})...`);
+                setTimeout(initialize, 250);
+                return;
+            }
+            
+            // Try to load from cloud
+            const success = await loadFromCloud();
+            
+            if (!success && _initRetries < MAX_INIT_RETRIES) {
+                _initRetries++;
+                console.log(`☁️ Load failed, retry ${_initRetries}/${MAX_INIT_RETRIES}...`);
+                setTimeout(initialize, 500);
+                return;
+            }
+            
+            if (!success) {
+                console.warn("☁️ Could not load from cloud, proceeding with local data");
+                window.__CAMPISTRY_CLOUD_READY__ = true;
+                window.dispatchEvent(new Event('campistry-cloud-hydrated'));
+            }
+            
+            console.log("☁️ Cloud bridge initialization complete");
+            
+        } catch (e) {
+            console.error("☁️ Initialization error:", e);
+            // Don't crash - fire hydration event anyway
             window.__CAMPISTRY_CLOUD_READY__ = true;
             window.dispatchEvent(new Event('campistry-cloud-hydrated'));
         }
-        
-        console.log("☁️ Cloud bridge initialization complete");
     }
     
     // Listen for RBAC ready event
     window.addEventListener('campistry-rbac-ready', async () => {
         console.log("☁️ RBAC ready event received, reloading cloud data...");
         
-        // Clear cached camp ID to force refresh from AccessControl
-        _campId = null;
-        
-        const campId = await getCampId();
-        if (campId) {
-            await loadFromCloud();
+        try {
+            // Clear cached camp ID to force refresh from AccessControl
+            _campId = null;
+            
+            const campId = await getCampId();
+            if (campId) {
+                await loadFromCloud();
+            }
+        } catch (e) {
+            console.error("☁️ Error handling RBAC ready:", e);
         }
     });
 
@@ -858,6 +995,7 @@
     window.resetCloudState = resetCloudState;
     window.getCampId = getCampId;
     window.fetchScheduleFromCloud = fetchScheduleFromCloud;
+    window.hydrateGlobalAuthority = hydrateGlobalAuthority;
     
     // Start initialization
     if (document.readyState === 'complete') {
