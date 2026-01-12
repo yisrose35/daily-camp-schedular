@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v14 - STRICT RBAC & PARTIAL GEN)
+// scheduler_core_main.js (FIXED v15 - STRICT RBAC & TIME MAPPING RESTORATION)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
@@ -534,10 +534,11 @@
      * @param {Object} externalOverrides - Manual overrides
      * @param {Array<string>|null} allowedDivisions - [OPTIONAL] If provided, only generates for these divisions.
      * @param {Object|null} existingScheduleSnapshot - [OPTIONAL] Snapshot of existing assignments to preserve for locked divisions.
+     * @param {Array|null} existingUnifiedTimes - [OPTIONAL] Time grid corresponding to the snapshot (for mapping)
      */
-    window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null) {
+    window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v14 - STRICT RBAC & PARTIAL GEN) ★★★");
+        console.log("★★★ OPTIMIZER STARTED (v15 - STRICT RBAC & TIME MAPPING) ★★★");
 
         // ★★★ 1. AUTO-DETECT ALLOWED DIVISIONS ★★★
         // If not explicitly provided, check what the current user is allowed to schedule.
@@ -586,6 +587,8 @@
             if (snapshotSource && Object.keys(snapshotSource).length > 0) {
                 // Deep copy to prevent reference issues during reset
                 existingScheduleSnapshot = JSON.parse(JSON.stringify(snapshotSource));
+                // Try to grab times if not passed
+                if (!existingUnifiedTimes) existingUnifiedTimes = window.unifiedTimes;
                 console.log(`[OPTIMIZER] ✅ Preserved snapshot of ${Object.keys(existingScheduleSnapshot).length} bunks for background restoration.`);
             } else {
                 console.warn("[OPTIMIZER] ⚠️ No existing schedule found to preserve. Generating fresh.");
@@ -807,247 +810,292 @@
         // =========================================================================
         // This is the key fix for the "Multi-Scheduler" requirement.
         (function() {
-    'use strict';
+            'use strict';
 
-    console.log('[Step1.5Patch] Loading background schedule restoration patch...');
+            console.log('[Step1.5Patch] Loading time-mapping restoration patch...');
 
-    const TRANSITION_TYPE = "Transition/Buffer";
+            const TRANSITION_TYPE = "Transition/Buffer";
 
-    // =========================================================================
-    // RESTORE BACKGROUND SCHEDULES INTO scheduleAssignments
-    // =========================================================================
-    
-    /**
-     * Restore schedules from the snapshot into window.scheduleAssignments
-     * @param {Object} snapshot - { bunkName: [slotAssignments...] }
-     * @param {Object} divisions - window.divisions
-     * @param {Array} allowedDivisions - divisions we ARE generating (to skip)
-     * @returns {number} - count of bunks restored
-     */
-    function restoreBackgroundSchedules(snapshot, divisions, allowedDivisions) {
-        if (!snapshot || Object.keys(snapshot).length === 0) {
-            console.log('[Step1.5] No snapshot to restore');
-            return 0;
-        }
-
-        const allowedSet = new Set(allowedDivisions || []);
-        let restoredBunks = 0;
-        let restoredSlots = 0;
-
-        console.log('[Step1.5] Restoring background schedules...');
-        console.log(`[Step1.5]   Snapshot bunks: ${Object.keys(snapshot).length}`);
-        console.log(`[Step1.5]   Allowed divisions (will skip): ${allowedDivisions?.join(', ') || 'NONE'}`);
-
-        for (const [bunkName, slots] of Object.entries(snapshot)) {
-            if (!slots || !Array.isArray(slots)) continue;
-
-            // Find which division this bunk belongs to
-            const divName = Object.keys(divisions).find(d => 
-                divisions[d].bunks?.includes(bunkName)
-            );
-
-            // Skip if this is a division we're generating
-            if (divName && allowedSet.has(divName)) {
-                // console.log(`[Step1.5]   Skipping ${bunkName} (${divName}) - target division`);
-                continue;
+            function getTimeSig(t) {
+                if (!t) return null;
+                if (t instanceof Date) return t.toISOString();
+                if (t.start instanceof Date) return t.start.toISOString();
+                if (typeof t.start === 'string') return t.start; // ISO string
+                return String(t);
             }
 
-            // Initialize bunk array if needed
-            if (!window.scheduleAssignments[bunkName]) {
-                window.scheduleAssignments[bunkName] = new Array(slots.length);
+            // =========================================================================
+            // RESTORE BACKGROUND SCHEDULES INTO scheduleAssignments
+            // =========================================================================
+            
+            /**
+             * Restore schedules from the snapshot into window.scheduleAssignments
+             * @param {Object} snapshot - { bunkName: [slotAssignments...] }
+             * @param {Object} divisions - window.divisions
+             * @param {Array} allowedDivisions - divisions we ARE generating (to skip)
+             * @param {Array} existingUnifiedTimes - time grid from snapshot
+             * @returns {number} - count of bunks restored
+             */
+            function restoreBackgroundSchedules(snapshot, divisions, allowedDivisions, existingUnifiedTimes) {
+                if (!snapshot || Object.keys(snapshot).length === 0) {
+                    console.log('[Step1.5] No snapshot to restore');
+                    return 0;
+                }
+
+                const allowedSet = new Set(allowedDivisions || []);
+                let restoredBunks = 0;
+                let restoredSlots = 0;
+
+                // Build TIME MAP for new grid (New Time -> New Index)
+                const newTimeMap = new Map();
+                window.unifiedTimes.forEach((t, i) => {
+                    const sig = getTimeSig(t);
+                    if (sig) newTimeMap.set(sig, i);
+                });
+
+                console.log(`[Step1.5] Mapping existing data to ${window.unifiedTimes.length} slots...`);
+                console.log(`[Step1.5]   Snapshot bunks: ${Object.keys(snapshot).length}`);
+                console.log(`[Step1.5]   Allowed divisions (will skip): ${allowedDivisions?.join(', ') || 'NONE'}`);
+
+                for (const [bunkName, slots] of Object.entries(snapshot)) {
+                    if (!slots || !Array.isArray(slots)) continue;
+
+                    // Find which division this bunk belongs to
+                    const divName = Object.keys(divisions).find(d => 
+                        divisions[d].bunks?.includes(bunkName)
+                    );
+
+                    // Skip if this is a division we're generating
+                    if (divName && allowedSet.has(divName)) {
+                        continue;
+                    }
+
+                    // Initialize bunk array if needed
+                    if (!window.scheduleAssignments[bunkName]) {
+                        window.scheduleAssignments[bunkName] = new Array(window.unifiedTimes.length);
+                    }
+
+                    // Restore each slot using Time Mapping if possible
+                    for (let i = 0; i < slots.length; i++) {
+                        if (slots[i]) {
+                            let targetIndex = i;
+
+                            // IF we have time mapping info
+                            if (existingUnifiedTimes && existingUnifiedTimes[i]) {
+                                const oldSig = getTimeSig(existingUnifiedTimes[i]);
+                                if (newTimeMap.has(oldSig)) {
+                                    targetIndex = newTimeMap.get(oldSig);
+                                } else {
+                                    // Old slot time doesn't exist in new grid -> SKIP
+                                    continue;
+                                }
+                            } else if (window.unifiedTimes.length !== slots.length) {
+                                // Fallback: Length mismatch and no map.
+                                // If array expanded, indexes align? 
+                                // Risk of misalignment, but we have no choice.
+                            }
+
+                            if (targetIndex < window.scheduleAssignments[bunkName].length) {
+                                window.scheduleAssignments[bunkName][targetIndex] = {
+                                    ...slots[i],
+                                    _locked: true,
+                                    _fromBackground: true,
+                                    _backgroundDivision: divName
+                                };
+                                restoredSlots++;
+                            }
+                        }
+                    }
+
+                    restoredBunks++;
+                    console.log(`[Step1.5]   ✓ Restored ${bunkName} (${divName})`);
+                }
+
+                console.log(`[Step1.5] ✅ Restored ${restoredBunks} bunks, ${restoredSlots} total slots mapped`);
+                return restoredBunks;
             }
 
-            // Restore each slot
-            for (let i = 0; i < slots.length; i++) {
-                if (slots[i]) {
-                    window.scheduleAssignments[bunkName][i] = {
-                        ...slots[i],
-                        _locked: true,
-                        _fromBackground: true,
-                        _backgroundDivision: divName
-                    };
-                    restoredSlots++;
-                }
-            }
-
-            restoredBunks++;
-            console.log(`[Step1.5]   ✓ Restored ${bunkName} (${divName}): ${slots.filter(Boolean).length} slots`);
-        }
-
-        console.log(`[Step1.5] ✅ Restored ${restoredBunks} bunks, ${restoredSlots} total slots`);
-        return restoredBunks;
-    }
-
-    // =========================================================================
-    // REGISTER FIELD USAGE FROM RESTORED SCHEDULES
-    // =========================================================================
-    
-    /**
-     * Register field usage for all restored schedules
-     * This ensures the solver won't double-book fields
-     */
-    function registerFieldUsageFromRestoredSchedules(snapshot, divisions, allowedDivisions, fieldUsageBySlot, activityProperties) {
-        if (!snapshot || Object.keys(snapshot).length === 0) {
-            return 0;
-        }
-
-        const allowedSet = new Set(allowedDivisions || []);
-        let registrations = 0;
-
-        console.log('[Step1.5] Registering field usage from restored schedules...');
-
-        for (const [bunkName, slots] of Object.entries(snapshot)) {
-            if (!slots || !Array.isArray(slots)) continue;
-
-            // Find division
-            const divName = Object.keys(divisions).find(d => 
-                divisions[d].bunks?.includes(bunkName)
-            );
-
-            // Skip if this is a division we're generating
-            if (divName && allowedSet.has(divName)) continue;
-
-            for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
-                const slotData = slots[slotIdx];
-                if (!slotData || !slotData.field) continue;
-
-                const fieldName = slotData.field;
-                const activityName = slotData._activity || fieldName;
-
-                // Skip transitions
-                if (fieldName === TRANSITION_TYPE || slotData._isTransition) continue;
-
-                // Initialize slot in fieldUsageBySlot
-                if (!fieldUsageBySlot[slotIdx]) {
-                    fieldUsageBySlot[slotIdx] = {};
+            // =========================================================================
+            // REGISTER FIELD USAGE FROM RESTORED SCHEDULES
+            // =========================================================================
+            
+            /**
+             * Register field usage for all restored schedules
+             * This ensures the solver won't double-book fields
+             */
+            function registerFieldUsageFromRestoredSchedules(snapshot, divisions, allowedDivisions, fieldUsageBySlot, activityProperties, existingUnifiedTimes) {
+                if (!snapshot || Object.keys(snapshot).length === 0) {
+                    return 0;
                 }
 
-                // Get field properties for capacity
-                const props = activityProperties?.[fieldName] || {};
-                let maxCapacity = 1;
-                if (props.sharableWith?.capacity) {
-                    maxCapacity = parseInt(props.sharableWith.capacity) || 1;
-                } else if (props.sharable) {
-                    maxCapacity = 2;
-                }
+                const allowedSet = new Set(allowedDivisions || []);
+                let registrations = 0;
 
-                // Register usage
-                if (!fieldUsageBySlot[slotIdx][fieldName]) {
-                    fieldUsageBySlot[slotIdx][fieldName] = {
-                        count: 0,
-                        divisions: [],
-                        bunks: {},
-                        _locked: true,
-                        _fromBackground: true
-                    };
-                }
+                // Build TIME MAP
+                const newTimeMap = new Map();
+                window.unifiedTimes.forEach((t, i) => {
+                    const sig = getTimeSig(t);
+                    if (sig) newTimeMap.set(sig, i);
+                });
 
-                const usage = fieldUsageBySlot[slotIdx][fieldName];
-                usage.count++;
-                usage.bunks[bunkName] = activityName;
-                if (divName && !usage.divisions.includes(divName)) {
-                    usage.divisions.push(divName);
-                }
+                console.log('[Step1.5] Registering field usage from restored schedules...');
 
-                // If at capacity, lock in GlobalFieldLocks
-                if (window.GlobalFieldLocks && usage.count >= maxCapacity) {
-                    window.GlobalFieldLocks.lockField(fieldName, [slotIdx], {
-                        lockedBy: 'background_schedule',
-                        division: divName || 'background',
-                        activity: `${activityName} (preserved from other scheduler)`
-                    });
-                }
+                for (const [bunkName, slots] of Object.entries(snapshot)) {
+                    if (!slots || !Array.isArray(slots)) continue;
 
-                // Also register location usage
-                if (window.registerLocationUsage) {
-                    const location = activityProperties?.[fieldName]?.location || 
-                                   window.getLocationForActivity?.(activityName);
-                    if (location) {
-                        window.registerLocationUsage(slotIdx, location, activityName, divName);
+                    // Find division
+                    const divName = Object.keys(divisions).find(d => 
+                        divisions[d].bunks?.includes(bunkName)
+                    );
+
+                    // Skip if this is a division we're generating
+                    if (divName && allowedSet.has(divName)) continue;
+
+                    for (let i = 0; i < slots.length; i++) {
+                        const slotData = slots[i];
+                        if (!slotData || !slotData.field) continue;
+
+                        // MAP TARGET INDEX
+                        let targetIndex = i;
+                        if (existingUnifiedTimes && existingUnifiedTimes[i]) {
+                            const oldSig = getTimeSig(existingUnifiedTimes[i]);
+                            if (newTimeMap.has(oldSig)) targetIndex = newTimeMap.get(oldSig);
+                            else continue;
+                        }
+
+                        const fieldName = slotData.field;
+                        const activityName = slotData._activity || fieldName;
+
+                        // Skip transitions
+                        if (fieldName === TRANSITION_TYPE || slotData._isTransition) continue;
+
+                        // Initialize slot in fieldUsageBySlot
+                        if (!fieldUsageBySlot[targetIndex]) {
+                            fieldUsageBySlot[targetIndex] = {};
+                        }
+
+                        // Get field properties for capacity
+                        const props = activityProperties?.[fieldName] || {};
+                        let maxCapacity = 1;
+                        if (props.sharableWith?.capacity) {
+                            maxCapacity = parseInt(props.sharableWith.capacity) || 1;
+                        } else if (props.sharable) {
+                            maxCapacity = 2;
+                        }
+
+                        // Register usage
+                        if (!fieldUsageBySlot[targetIndex][fieldName]) {
+                            fieldUsageBySlot[targetIndex][fieldName] = {
+                                count: 0,
+                                divisions: [],
+                                bunks: {},
+                                _locked: true,
+                                _fromBackground: true
+                            };
+                        }
+
+                        const usage = fieldUsageBySlot[targetIndex][fieldName];
+                        usage.count++;
+                        usage.bunks[bunkName] = activityName;
+                        if (divName && !usage.divisions.includes(divName)) {
+                            usage.divisions.push(divName);
+                        }
+
+                        // If at capacity, lock in GlobalFieldLocks
+                        if (window.GlobalFieldLocks && usage.count >= maxCapacity) {
+                            window.GlobalFieldLocks.lockField(fieldName, [targetIndex], {
+                                lockedBy: 'background_schedule',
+                                division: divName || 'background',
+                                activity: `${activityName} (preserved from other scheduler)`
+                            });
+                        }
+
+                        // Also register location usage
+                        if (window.registerLocationUsage) {
+                            const location = activityProperties?.[fieldName]?.location || 
+                                           window.getLocationForActivity?.(activityName);
+                            if (location) {
+                                window.registerLocationUsage(targetIndex, location, activityName, divName);
+                            }
+                        }
+
+                        registrations++;
                     }
                 }
 
-                registrations++;
+                console.log(`[Step1.5] ✅ Registered ${registrations} field usages`);
+                return registrations;
             }
-        }
 
-        console.log(`[Step1.5] ✅ Registered ${registrations} field usages`);
-        return registrations;
-    }
+            // =========================================================================
+            // EXPORT FUNCTIONS FOR USE IN scheduler_core_main.js
+            // =========================================================================
+            
+            window.restoreBackgroundSchedules = restoreBackgroundSchedules;
+            window.registerFieldUsageFromRestoredSchedules = registerFieldUsageFromRestoredSchedules;
 
-    // =========================================================================
-    // EXPORT FUNCTIONS FOR USE IN scheduler_core_main.js
-    // =========================================================================
-    
-    window.restoreBackgroundSchedules = restoreBackgroundSchedules;
-    window.registerFieldUsageFromRestoredSchedules = registerFieldUsageFromRestoredSchedules;
+            // =========================================================================
+            // COMBINED HELPER
+            // =========================================================================
+            
+            /**
+             * Complete Step 1.5: Restore and register background schedules
+             */
+            window.executeStep1_5 = function(snapshot, divisions, allowedDivisions, fieldUsageBySlot, activityProperties, existingUnifiedTimes) {
+                console.log('\n[STEP 1.5] ═══════════════════════════════════════════════════');
+                console.log('[STEP 1.5] RESTORING BACKGROUND SCHEDULES WITH TIME MAPPING');
+                console.log('[STEP 1.5] ═══════════════════════════════════════════════════');
 
-    // =========================================================================
-    // COMBINED HELPER
-    // =========================================================================
-    
-    /**
-     * Complete Step 1.5: Restore and register background schedules
-     */
-    window.executeStep1_5 = function(snapshot, divisions, allowedDivisions, fieldUsageBySlot, activityProperties) {
-        console.log('\n[STEP 1.5] ═══════════════════════════════════════════════════');
-        console.log('[STEP 1.5] RESTORING BACKGROUND SCHEDULES');
-        console.log('[STEP 1.5] ═══════════════════════════════════════════════════');
+                if (!snapshot || Object.keys(snapshot).length === 0) {
+                    console.log('[STEP 1.5] No background snapshot provided - nothing to restore');
+                    return { bunksRestored: 0, fieldsRegistered: 0 };
+                }
 
-        if (!snapshot || Object.keys(snapshot).length === 0) {
-            console.log('[STEP 1.5] No background snapshot provided - nothing to restore');
-            return { bunksRestored: 0, fieldsRegistered: 0 };
-        }
+                // Restore schedules
+                const bunksRestored = restoreBackgroundSchedules(
+                    snapshot, 
+                    divisions, 
+                    allowedDivisions,
+                    existingUnifiedTimes
+                );
 
-        // Restore schedules
-        const bunksRestored = restoreBackgroundSchedules(
-            snapshot, 
-            divisions, 
-            allowedDivisions
-        );
+                // Register field usage
+                const fieldsRegistered = registerFieldUsageFromRestoredSchedules(
+                    snapshot,
+                    divisions,
+                    allowedDivisions,
+                    fieldUsageBySlot,
+                    activityProperties,
+                    existingUnifiedTimes
+                );
 
-        // Register field usage
-        const fieldsRegistered = registerFieldUsageFromRestoredSchedules(
-            snapshot,
-            divisions,
-            allowedDivisions,
-            fieldUsageBySlot,
-            activityProperties
-        );
+                console.log('[STEP 1.5] ═══════════════════════════════════════════════════');
+                console.log(`[STEP 1.5] COMPLETE: ${bunksRestored} bunks, ${fieldsRegistered} field registrations`);
+                console.log('[STEP 1.5] ═══════════════════════════════════════════════════\n');
 
-        console.log('[STEP 1.5] ═══════════════════════════════════════════════════');
-        console.log(`[STEP 1.5] COMPLETE: ${bunksRestored} bunks, ${fieldsRegistered} field registrations`);
-        console.log('[STEP 1.5] ═══════════════════════════════════════════════════\n');
+                return { bunksRestored, fieldsRegistered };
+            };
 
-        return { bunksRestored, fieldsRegistered };
-    };
+            console.log('[Step1.5Patch] ✅ Loaded');
 
-    console.log('[Step1.5Patch] ✅ Loaded');
+        })();
 
-})();
-
-        // ★★★ ACTUALLY EXECUTE STEP 1.5 ★★★
+        // ★★★ ACTUALLY EXECUTE STEP 1.5 WITH TIME MAPPING ★★★
         if (existingScheduleSnapshot && Object.keys(existingScheduleSnapshot).length > 0) {
             window.executeStep1_5(
                 existingScheduleSnapshot,
                 divisions,
                 allowedDivisions,
                 fieldUsageBySlot,
-                activityProperties
+                activityProperties,
+                existingUnifiedTimes // <--- PASSING THE OLD GRID
             );
         } else if (allowedDivisions) {
             console.log('[STEP 1.5] No snapshot provided - generating fresh for allowed divisions only');
         }
 
-        
-
-
         // =========================================================================
         // STEP 2: Process Bunk Overrides (Pinned specific bunks)
-        // - Personal Trips: Treated as pinned (no field usage)
-        // - Sports: Register field usage for capacity tracking
-        // - Specials: Register field usage for capacity tracking
-        // - Checks Location Conflicts for Specials
         // =========================================================================
 
         console.log("\n[STEP 2] Processing bunk overrides...");
