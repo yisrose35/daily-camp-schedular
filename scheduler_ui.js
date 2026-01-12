@@ -749,6 +749,9 @@
                         snapshot = JSON.parse(JSON.stringify(window.scheduleAssignments));
                     }
                     
+                    // NEW: Capture times for mapping
+                    const currentUnifiedTimes = window.unifiedTimes ? JSON.parse(JSON.stringify(window.unifiedTimes)) : [];
+                    
                     // 3. Get inputs - DATE-SPECIFIC ONLY
                     const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
                     const daily = window.loadCurrentDailyData?.() || {};
@@ -773,7 +776,8 @@
                             manualSkeleton, 
                             externalOverrides, 
                             allowedDivisions, 
-                            snapshot
+                            snapshot,
+                            currentUnifiedTimes // <--- NEW 5th ARGUMENT
                         );
                         alert("Schedule Generated Successfully!");
                     } else {
