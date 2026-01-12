@@ -483,7 +483,6 @@
 <script src="supabase_client.js"></script>
 <script src="hydration_lock.js"></script>
 <script src="cloud_storage_bridge.js"></script>
-    <script src="cloud_storage_bridge_patch.js"></script>
 <script src="global_authority.js"></script>
 <script src="global_bootstrap.js"></script>
 
@@ -633,20 +632,25 @@
 <script src="skeleton_sandbox.js"></script>
 <script src="daily_adjustments.js"></script>
 <script src="rainy_day_manager.js"></script>
-
 <script src="special_activities.js"></script>
 <script src="fields.js"></script>
 <script src="leagues.js"></script>
 <script src="specialty_leagues.js"></script>
 <script src="master_schedule_builder.js"></script>
 <script src="smart_logic_adapter.js"></script>
+    
+    <!-- =============================================================== -->
+<!-- ⭐ NEW: PERMISSIONS & VERSIONING SYSTEM -->
+<!-- =============================================================== -->
+<script src="permissions_guard.js"></script>
+<script src="schedule_versioning.js"></script>
 
 <!-- =============================================================== -->
 <!-- ⭐ RBAC & MULTI-SCHEDULER SYSTEM (LOAD BEFORE SCHEDULER CORE) -->
 <!-- =============================================================== -->
 <script src="access_control.js"></script>
 <script src="subdivision_schedule_manager.js"></script>
-    <script src="multi_scheduler_core.js"></script>
+<script src="multi_scheduler_core.js"></script>
 <script src="scheduler_subdivision_integration.js"></script>
 <script src="rbac_init.js"></script>
 
@@ -663,8 +667,13 @@
 <script src="scheduler_logic_fillers.js"></script>
 <script src="scheduler_core_main.js"></script>
 <script src="scheduler_ui.js"></script>
-    <script src="view_schedule_loader_fix.js"></script>
-   <script src="render_sync_fix.js"></script>
+<script src="view_schedule_loader_fix.js"></script>
+<script src="render_sync_fix.js"></script>
+    
+    <!-- =============================================================== -->
+<!-- ⭐ NEW: SCHEDULE VERSION UI (LOAD AFTER SCHEDULER UI) -->
+<!-- =============================================================== -->
+<script src="schedule_version_ui.js"></script>
 
 <!-- =============================================================== -->
 <!-- OUTPUT / HELP -->
