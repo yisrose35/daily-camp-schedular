@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v13 - MERGED SCHEDULE GENERATION)
+// scheduler_core_main.js (FIXED v14 - STRICT RBAC & PARTIAL GEN)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
@@ -537,7 +537,60 @@
      */
     window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v13 - MULTI-TENANT MERGE SUPPORT) ★★★");
+        console.log("★★★ OPTIMIZER STARTED (v14 - STRICT RBAC & PARTIAL GEN) ★★★");
+
+        // ★★★ 1. AUTO-DETECT ALLOWED DIVISIONS ★★★
+        // If not explicitly provided, check what the current user is allowed to schedule.
+        if (!allowedDivisions) {
+            // Priority 1: MultiSchedulerCore (Advanced Logic)
+            if (window.MultiSchedulerCore && typeof window.MultiSchedulerCore.getUserDivisions === 'function') {
+                const userDivs = window.MultiSchedulerCore.getUserDivisions();
+                if (userDivs && userDivs.length > 0) {
+                    const allDivs = Object.keys(window.divisions || {});
+                    // If userDivs is smaller than allDivs, treat as partial generation
+                    if (userDivs.length < allDivs.length) {
+                        allowedDivisions = userDivs;
+                        console.log(`[RBAC] Auto-detected restricted divisions via MultiScheduler: ${allowedDivisions.join(', ')}`);
+                    }
+                }
+            } 
+            // Priority 2: AccessControl (Basic Role)
+            else if (window.AccessControl && typeof window.AccessControl.getUserManagedDivisions === 'function') {
+                const userDivs = window.AccessControl.getUserManagedDivisions();
+                if (userDivs && userDivs.length > 0) {
+                    const allDivs = Object.keys(window.divisions || {});
+                    if (userDivs.length < allDivs.length) {
+                        allowedDivisions = userDivs;
+                        console.log(`[RBAC] Auto-detected restricted divisions via AccessControl: ${allowedDivisions.join(', ')}`);
+                    }
+                }
+            }
+        }
+
+        // ★★★ 2. AUTO-SNAPSHOT FOR PRESERVATION ★★★
+        // If we are doing a partial generation (subset of divisions) and no snapshot was provided,
+        // we MUST fetch the current state from memory/storage before we wipe it.
+        // This ensures "Background" schedules are not deleted.
+        if (allowedDivisions && (!existingScheduleSnapshot || Object.keys(existingScheduleSnapshot).length === 0)) {
+            console.log("[OPTIMIZER] Partial generation detected without snapshot. Attempting to preserve existing data...");
+            
+            // Try memory first
+            let snapshotSource = window.scheduleAssignments;
+            
+            // If memory is empty, try loading from daily data (persistence)
+            if (!snapshotSource || Object.keys(snapshotSource).length === 0) {
+                 const currentData = window.loadCurrentDailyData?.() || {};
+                 snapshotSource = currentData.scheduleAssignments;
+            }
+
+            if (snapshotSource && Object.keys(snapshotSource).length > 0) {
+                // Deep copy to prevent reference issues during reset
+                existingScheduleSnapshot = JSON.parse(JSON.stringify(snapshotSource));
+                console.log(`[OPTIMIZER] ✅ Preserved snapshot of ${Object.keys(existingScheduleSnapshot).length} bunks for background restoration.`);
+            } else {
+                console.warn("[OPTIMIZER] ⚠️ No existing schedule found to preserve. Generating fresh.");
+            }
+        }
         
         // ★★★ SECURITY: NORMALIZE ALLOWED DIVISIONS ★★★
         // Create a strict set for checking access. This prevents type coercion errors (string vs int)
