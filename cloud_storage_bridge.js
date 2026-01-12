@@ -521,7 +521,7 @@
         
         try {
             const { data, error } = await window.supabase
-                .from('camp_settings')
+                .from('camp_state')
                 .select('settings')
                 .eq('camp_id', campId)
                 .maybeSingle();
@@ -590,7 +590,7 @@
             console.log("☁️ [SAVE] Step 1: Fetching current cloud state...");
             
             const { data: currentData, error: fetchError } = await window.supabase
-                .from('camp_settings')
+                .from('camp_state')
                 .select('settings')
                 .eq('camp_id', campId)
                 .maybeSingle();
@@ -707,7 +707,7 @@
             console.log("☁️ [SAVE] Step 5: Saving to cloud...");
             
             const { error: saveError } = await window.supabase
-                .from('camp_settings')
+                .from('camp_state')
                 .upsert({
                     camp_id: campId,
                     settings: stateToSave,
@@ -755,7 +755,7 @@
         
         try {
             const { data, error } = await window.supabase
-                .from('camp_settings')
+                .from('camp_state')
                 .select('settings')
                 .eq('camp_id', campId)
                 .maybeSingle();
@@ -844,7 +844,7 @@
         
         try {
             const { error } = await window.supabase
-                .from('camp_settings')
+                .from('camp_state')
                 .upsert({
                     camp_id: campId,
                     settings: emptyState,
