@@ -1,7 +1,7 @@
 // ============================================================================
-// scheduler_subdivision_integration.js (v2.3 - FORCE RELOAD ON COMPLETE)
+// scheduler_subdivision_integration.js (v2.2 - PASS UNIFIED TIMES)
 // ============================================================================
-// Updated to force a page reload after generation to ensure unified view
+// Updated to pass window.unifiedTimes to runSkeletonOptimizer
 // ============================================================================
 
 (function() {
@@ -12,7 +12,7 @@
     let _originalRunOptimizer = null;
     let _isHooked = false;
 
-    console.log('[Integration] Loading v2.3 (FORCE RELOAD ON COMPLETE)...');
+    console.log('[Integration] Loading v2.2 (PASS UNIFIED TIMES)...');
 
     // =========================================================================
     // SKELETON FILTERING
@@ -197,7 +197,7 @@
             }
 
             console.log('\n' + '═'.repeat(70));
-            console.log('🎯 MULTI-SCHEDULER GENERATION v2.3');
+            console.log('🎯 MULTI-SCHEDULER GENERATION v2.2');
             console.log('═'.repeat(70));
             console.log(`Date: ${dateKey}`);
             console.log(`Role: ${role}`);
@@ -391,22 +391,17 @@
                 }
 
                 // =============================================================
-                // STEP 10: FORCE PAGE RELOAD
+                // STEP 10: Trigger UI refresh
                 // =============================================================
-                console.log('\n[Step 10] 🔄 Force reloading page to unify schedules...');
+                console.log('\n[Step 10] Refreshing UI...');
+                window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
                 
                 if (typeof window.unprotectLocalData === 'function') {
-                    window.unprotectLocalData();
+                    setTimeout(() => window.unprotectLocalData(), 3000);
                 }
 
-                // Wait 1.5 seconds to ensure local storage commit, then reload
-                setTimeout(() => {
-                    console.log('🔄 Reloading now...');
-                    window.location.reload();
-                }, 1500);
-
                 console.log('\n' + '═'.repeat(70));
-                console.log('✅ GENERATION COMPLETE - RELOADING...');
+                console.log('✅ GENERATION COMPLETE');
                 console.log('═'.repeat(70) + '\n');
 
             } catch (error) {
@@ -495,6 +490,6 @@
 
     setTimeout(installHooks, 100);
 
-    console.log('[SchedulerSubdivisionIntegration] Module loaded v2.3 (FORCE RELOAD ON COMPLETE)');
+    console.log('[SchedulerSubdivisionIntegration] Module loaded v2.2 (PASS UNIFIED TIMES)');
 
 })();
