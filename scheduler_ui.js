@@ -1,12 +1,12 @@
 // ============================================================================
-// scheduler_ui.js (v2.4 - UNIFIED VIEW ENABLED + DEBUG)
+// scheduler_ui.js (v2.5 - BUNKS FALLBACK FIX)
 // ============================================================================
 // CRITICAL FIX: Migrates ROOT-level skeleton to date-specific
 // CRITICAL FIX: Cleans ROOT-level user data (prevents ghost schedules)
 // ENHANCED: Better error messages for scheduler role
 // UPDATE: Disables button permanently on success (waiting for reload)
 // UPDATE: Forces display of ALL divisions (Read-Only for non-owners)
-// DEBUG: Added console logs to trace visibility issues
+// FIX: Fallback bunk discovery if window.divisions is filtered by RBAC
 // ============================================================================
 
 // Wait for Campistry cloud system
@@ -20,7 +20,7 @@
 (function () {
     "use strict";
 
-    console.log("📅 scheduler_ui.js v2.4 (UNIFIED VIEW) loading...");
+    console.log("📅 scheduler_ui.js v2.5 (BUNKS FALLBACK) loading...");
 
     const INCREMENT_MINS = 30;
     const DAILY_DATA_KEY = 'campDailyData_v1';
@@ -179,7 +179,6 @@
         if (!bunk) return;
         
         // CHECK PERMISSIONS FOR EDITING THIS BUNK
-        // This is the CRITICAL check that allows viewing all but editing only some
         if (window.AccessControl && !window.AccessControl.canEditBunk(bunk)) {
             alert("You do not have permission to edit this schedule.\n\n(You are viewing the Unified Schedule, but can only edit your assigned divisions.)");
             return;
@@ -339,26 +338,16 @@
     function renderStaggeredView(container) {
         container.innerHTML = "";
         
-        // ★★★ DEBUG START: VISIBILITY CHECK ★★★
         const role = window.AccessControl?.getCurrentRole?.();
         console.log(`📅 [scheduler_ui] Rendering table for role: ${role}`);
         
-        const allDivisions = Object.keys(window.divisions || {});
-        console.log(`📅 [scheduler_ui] All divisions in system:`, allDivisions);
-        
-        // Use user-managed divisions if available, otherwise show all available
+        // Force show all divisions (Unified View)
         let divisionsToShow = [];
-        
-        // ★★★ CRITICAL FIX: FORCE SHOW ALL DIVISIONS ★★★
-        // We ignore the user's specific managed list for VIEWING purposes.
         if (window.divisions && Object.keys(window.divisions).length > 0) {
             divisionsToShow = Object.keys(window.divisions);
         } else if (window.availableDivisions) {
             divisionsToShow = window.availableDivisions;
         }
-        
-        console.log(`📅 [scheduler_ui] Divisions selected for rendering:`, divisionsToShow);
-        // ★★★ DEBUG END ★★★
 
         const daily = window.loadCurrentDailyData?.() || {};
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
@@ -367,7 +356,6 @@
         
         if (!Array.isArray(manualSkeleton) || manualSkeleton.length === 0) {
             const isScheduler = role === 'scheduler' || role === 'viewer';
-            
             if (isScheduler) {
                 container.innerHTML = `
                     <div style="padding: 20px; text-align: center; color: #666;">
@@ -393,7 +381,24 @@
 
         divisionsToShow.forEach((div) => {
             const divisions = window.divisions || {};
-            const bunks = (divisions[div]?.bunks || []).slice().sort((a, b) =>
+            
+            // ★★★ FALLBACK BUNK DISCOVERY ★★★
+            // If window.divisions is filtered by RBAC (e.g. empty bunks list), try to recover from bunkMetaData or scheduleAssignments
+            let bunks = divisions[div]?.bunks || [];
+            
+            if (bunks.length === 0) {
+                // Try finding bunks from schedule assignments that match this division (via bunkMetaData)
+                if (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0) {
+                    const allBunks = Object.keys(window.scheduleAssignments);
+                    // We need to know which division a bunk belongs to. Check bunkMetaData if available.
+                    if (window.bunkMetaData) {
+                        bunks = allBunks.filter(b => window.bunkMetaData[b]?.division === div);
+                    } 
+                    // Fallback: If no metadata, we might be stuck, but usually metadata is global.
+                }
+            }
+
+            bunks = bunks.slice().sort((a, b) =>
                 String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
             );
 
@@ -825,5 +830,5 @@
     window.saveSchedule = saveSchedule;
     window.reconcileOrRenderSaved = reconcileOrRenderSaved;
     
-    console.log("📅 scheduler_ui.js v2.4 loaded successfully");
+    console.log("📅 scheduler_ui.js v2.5 loaded successfully");
 })();
