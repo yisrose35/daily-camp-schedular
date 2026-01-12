@@ -1,9 +1,10 @@
 // ============================================================================
-// scheduler_ui.js (v2.2 - MIGRATION + MULTI-SCHEDULER SUPPORT)
+// scheduler_ui.js (v2.3 - MIGRATION + MULTI-SCHEDULER RELOAD)
 // ============================================================================
 // CRITICAL FIX: Migrates ROOT-level skeleton to date-specific
 // CRITICAL FIX: Cleans ROOT-level user data (prevents ghost schedules)
 // ENHANCED: Better error messages for scheduler role
+// UPDATE: Disables button permanently on success (waiting for reload)
 // ============================================================================
 
 // Wait for Campistry cloud system
@@ -17,7 +18,7 @@
 (function () {
     "use strict";
 
-    console.log("📅 scheduler_ui.js v2.1 (NO LEGACY ROOT FALLBACK) loading...");
+    console.log("📅 scheduler_ui.js v2.3 (RELOAD SUPPORT) loading...");
 
     const INCREMENT_MINS = 30;
     const DAILY_DATA_KEY = 'campDailyData_v1';
@@ -767,6 +768,8 @@
                         } else {
                             alert("📋 No day structure found.\n\nPlease use the 'Build Day' button to create the schedule structure before generating.");
                         }
+                        genBtn.disabled = false;
+                        genBtn.textContent = "Generate Schedule";
                         return;
                     }
                     
@@ -779,18 +782,21 @@
                             snapshot,
                             currentUnifiedTimes // <--- NEW 5th ARGUMENT
                         );
-                        alert("Schedule Generated Successfully!");
+                        // ALERT REMOVED - Page will reload
+                        // alert("Schedule Generated Successfully!");
                     } else {
                         alert("Error: Scheduler Core not loaded.");
+                        genBtn.disabled = false;
+                        genBtn.textContent = "Generate Schedule";
                     }
                 } catch (e) {
                     console.error(e);
                     alert("An error occurred during generation.");
-                } finally {
                     genBtn.disabled = false;
                     genBtn.textContent = "Generate Schedule";
-                    updateTable();
-                }
+                } 
+                // REMOVED 'finally' block that re-enables button
+                // The page is about to reload, so we want it to stay disabled to prevent double-submit
             };
         }
     }
@@ -800,5 +806,5 @@
     window.saveSchedule = saveSchedule;
     window.reconcileOrRenderSaved = reconcileOrRenderSaved;
     
-    console.log("📅 scheduler_ui.js v2.1 loaded successfully");
+    console.log("📅 scheduler_ui.js v2.3 loaded successfully");
 })();
