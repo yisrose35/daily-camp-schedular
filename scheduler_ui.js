@@ -1,10 +1,12 @@
 // ============================================================================
-// scheduler_ui.js (v2.3 - MIGRATION + MULTI-SCHEDULER RELOAD)
+// scheduler_ui.js (v2.4 - UNIFIED VIEW ENABLED + DEBUG)
 // ============================================================================
 // CRITICAL FIX: Migrates ROOT-level skeleton to date-specific
 // CRITICAL FIX: Cleans ROOT-level user data (prevents ghost schedules)
 // ENHANCED: Better error messages for scheduler role
 // UPDATE: Disables button permanently on success (waiting for reload)
+// UPDATE: Forces display of ALL divisions (Read-Only for non-owners)
+// DEBUG: Added console logs to trace visibility issues
 // ============================================================================
 
 // Wait for Campistry cloud system
@@ -18,7 +20,7 @@
 (function () {
     "use strict";
 
-    console.log("📅 scheduler_ui.js v2.3 (RELOAD SUPPORT) loading...");
+    console.log("📅 scheduler_ui.js v2.4 (UNIFIED VIEW) loading...");
 
     const INCREMENT_MINS = 30;
     const DAILY_DATA_KEY = 'campDailyData_v1';
@@ -177,8 +179,9 @@
         if (!bunk) return;
         
         // CHECK PERMISSIONS FOR EDITING THIS BUNK
+        // This is the CRITICAL check that allows viewing all but editing only some
         if (window.AccessControl && !window.AccessControl.canEditBunk(bunk)) {
-            alert("You do not have permission to edit this schedule.");
+            alert("You do not have permission to edit this schedule.\n\n(You are viewing the Unified Schedule, but can only edit your assigned divisions.)");
             return;
         }
 
@@ -335,24 +338,34 @@
     // --- DYNAMIC GRID (RENDERER) ---
     function renderStaggeredView(container) {
         container.innerHTML = "";
-        const divisions = window.divisions || {};
+        
+        // ★★★ DEBUG START: VISIBILITY CHECK ★★★
+        const role = window.AccessControl?.getCurrentRole?.();
+        console.log(`📅 [scheduler_ui] Rendering table for role: ${role}`);
+        
+        const allDivisions = Object.keys(window.divisions || {});
+        console.log(`📅 [scheduler_ui] All divisions in system:`, allDivisions);
         
         // Use user-managed divisions if available, otherwise show all available
-        let divisionsToShow = window.availableDivisions || [];
-        if (window.AccessControl) {
-             const userDivs = window.AccessControl.getUserManagedDivisions();
-             // If user manages specific divisions, we might want to prioritize/highlight them
-             // but typically viewing all is allowed. The edit restriction is handled in editCell.
+        let divisionsToShow = [];
+        
+        // ★★★ CRITICAL FIX: FORCE SHOW ALL DIVISIONS ★★★
+        // We ignore the user's specific managed list for VIEWING purposes.
+        if (window.divisions && Object.keys(window.divisions).length > 0) {
+            divisionsToShow = Object.keys(window.divisions);
+        } else if (window.availableDivisions) {
+            divisionsToShow = window.availableDivisions;
         }
+        
+        console.log(`📅 [scheduler_ui] Divisions selected for rendering:`, divisionsToShow);
+        // ★★★ DEBUG END ★★★
 
         const daily = window.loadCurrentDailyData?.() || {};
-        // Get skeleton from DATE-specific data only (no ROOT fallback)
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         const dateData = daily[dateKey] || {};
         const manualSkeleton = dateData.manualSkeleton || dateData.skeleton || window.manualSkeleton || window.skeleton || [];
         
         if (!Array.isArray(manualSkeleton) || manualSkeleton.length === 0) {
-            const role = window.AccessControl?.getCurrentRole?.();
             const isScheduler = role === 'scheduler' || role === 'viewer';
             
             if (isScheduler) {
@@ -379,11 +392,17 @@
         container.appendChild(wrapper);
 
         divisionsToShow.forEach((div) => {
+            const divisions = window.divisions || {};
             const bunks = (divisions[div]?.bunks || []).slice().sort((a, b) =>
                 String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
             );
 
-            if (bunks.length === 0) return;
+            if (bunks.length === 0) {
+                console.warn(`📅 [scheduler_ui] Skipping render for ${div} - no bunks found`);
+                return;
+            }
+
+            console.log(`📅 [scheduler_ui] Rendering table for ${div} with ${bunks.length} bunks`);
 
             const table = document.createElement("table");
             table.className = "schedule-division-table";
@@ -806,5 +825,5 @@
     window.saveSchedule = saveSchedule;
     window.reconcileOrRenderSaved = reconcileOrRenderSaved;
     
-    console.log("📅 scheduler_ui.js v2.3 loaded successfully");
+    console.log("📅 scheduler_ui.js v2.4 loaded successfully");
 })();
