@@ -1,13 +1,7 @@
 // ============================================================================
-// scheduler_subdivision_integration.js (v2.0 - MULTI-SCHEDULER CORE INTEGRATION)
+// scheduler_subdivision_integration.js (v2.2 - PASS UNIFIED TIMES)
 // ============================================================================
-// Integrates multi-scheduler functionality with the core schedule generator.
-// 
-// v2.0 Changes:
-// - Integrates with MultiSchedulerCore for proper conflict detection
-// - Implements first-come-first-served resource allocation
-// - Non-destructive generation (preserves other schedulers' work)
-// - Better owner vs scheduler mode handling
+// Updated to pass window.unifiedTimes to runSkeletonOptimizer
 // ============================================================================
 
 (function() {
@@ -18,7 +12,7 @@
     let _originalRunOptimizer = null;
     let _isHooked = false;
 
-    console.log('[Integration] Loading v2.1 (CLOUD FETCH FIX)...');
+    console.log('[Integration] Loading v2.2 (PASS UNIFIED TIMES)...');
 
     // =========================================================================
     // SKELETON FILTERING
@@ -203,7 +197,7 @@
             }
 
             console.log('\n' + '═'.repeat(70));
-            console.log('🎯 MULTI-SCHEDULER GENERATION v2.0');
+            console.log('🎯 MULTI-SCHEDULER GENERATION v2.2');
             console.log('═'.repeat(70));
             console.log(`Date: ${dateKey}`);
             console.log(`Role: ${role}`);
@@ -304,7 +298,7 @@
                 }
 
                 // =============================================================
-                // STEP 4: Clear ONLY current user's bunks
+                // STEP 4: Prepare schedule space
                 // =============================================================
                 console.log('\n[Step 4] Preparing schedule space...');
                 
@@ -334,6 +328,9 @@
                 // =============================================================
                 console.log('\n[Step 6] Running core optimizer...');
                 
+                // CAPTURE CURRENT TIMES BEFORE OPTIMIZER WIPES THEM
+                const currentUnifiedTimes = window.unifiedTimes ? JSON.parse(JSON.stringify(window.unifiedTimes)) : [];
+
                 // Pass filtered skeleton and divisions to core
                 if (arg2 && !Array.isArray(arg2) && typeof arg2 === 'object' && !arg3) {
                     await originalOptimizer(filteredSkeleton, {
@@ -346,7 +343,8 @@
                         filteredSkeleton,
                         arg2,
                         divisionsToSchedule,
-                        null // Force fresh generation for our bunks
+                        null, // snapshot handled internally or passed via arg4 if needed, but we rely on window.scheduleAssignments state here
+                        currentUnifiedTimes // <--- NEW 5th ARGUMENT
                     );
                 }
 
@@ -492,6 +490,6 @@
 
     setTimeout(installHooks, 100);
 
-    console.log('[SchedulerSubdivisionIntegration] Module loaded v2.1 (CLOUD FETCH FIX)');
+    console.log('[SchedulerSubdivisionIntegration] Module loaded v2.2 (PASS UNIFIED TIMES)');
 
 })();
