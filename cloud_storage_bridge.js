@@ -619,33 +619,104 @@
   async function initialize() {
     if (_initialized) return;
     
+    console.log("☁️ [INIT] Starting Read-Side Merge initialization...");
+
     const user = await getUser();
     if (user) await updateCampIdCache(user.id);
     
-    const localData = getLocalCache();
-    const hasLocalData = localData && Object.keys(localData).length > 2;
+    // 1. Fetch Cloud Data
+    const cloudState = await loadFromCloud();
 
-    if (hasLocalData) {
-        finishInit(true);
-        loadFromCloud().then(cloudState => {
-            if (cloudState) {
-                const localTime = localData.updated_at ? new Date(localData.updated_at).getTime() : 0;
-                const cloudTime = cloudState.updated_at ? new Date(cloudState.updated_at).getTime() : 0;
-                if (cloudTime > localTime) {
-                    setLocalCache({ ...localData, ...cloudState });
-                    showToast("☁️ Data updated from Cloud", "info");
+    // 2. Fetch Local Data
+    const localState = getLocalCache();
+    let localDaily = {};
+    try {
+        const raw = localStorage.getItem(DAILY_DATA_KEY);
+        if (raw) localDaily = JSON.parse(raw);
+    } catch(e) { console.error("Error reading local daily:", e); }
+
+    // 3. Merge Strategy
+    if (cloudState) {
+        console.log("☁️ [INIT] Cloud data found. Merging...");
+        
+        // A. Global Settings: Cloud wins (usually admin controlled)
+        // We'll trust cloud for the base structure
+        const mergedState = { ...localState, ...cloudState };
+        
+        // Ensure divisions are available for permission checks in step B
+        // (If local cache was empty, window.divisions might be undefined)
+        if (!window.divisions && mergedState.divisions) {
+            window.divisions = mergedState.divisions;
+        }
+        
+        // B. Daily Schedules: Selective Merge
+        const cloudDaily = cloudState.daily_schedules || {};
+        const mergedDaily = { ...cloudDaily }; // Start with Cloud as baseline
+        
+        // Get Permissions
+        const editableGrades = getUserEditableGrades();
+        const editableDivisions = getUserEditableDivisions();
+        const hasFull = hasFullAccess();
+        
+        // Overlay Local Data ONLY for editable fields
+        // This ensures I see everyone else's work (Cloud wins non-editable)
+        // But keeps my own drafts (Local wins editable)
+        for (const [dateKey, localDay] of Object.entries(localDaily)) {
+            if (!mergedDaily[dateKey]) mergedDaily[dateKey] = {};
+            
+            // 1. Schedule Assignments
+            if (localDay.scheduleAssignments) {
+                if (!mergedDaily[dateKey].scheduleAssignments) {
+                    mergedDaily[dateKey].scheduleAssignments = {};
+                }
+                
+                for (const [gradeId, schedule] of Object.entries(localDay.scheduleAssignments)) {
+                    // CRITICAL LOGIC: Local wins IF editable
+                    let canEdit = hasFull || editableGrades.has(String(gradeId));
+                    if (canEdit) {
+                        mergedDaily[dateKey].scheduleAssignments[gradeId] = schedule;
+                    }
+                    // Else: Keep Cloud version (already in mergedDaily via clone)
                 }
             }
-        });
-        return;
-    }
+            
+            // 2. League Assignments
+            if (localDay.leagueAssignments) {
+                if (!mergedDaily[dateKey].leagueAssignments) {
+                    mergedDaily[dateKey].leagueAssignments = {};
+                }
+                for (const [divId, leagueData] of Object.entries(localDay.leagueAssignments)) {
+                    let canEdit = hasFull || editableDivisions.includes(String(divId));
+                    if (canEdit) {
+                        mergedDaily[dateKey].leagueAssignments[divId] = leagueData;
+                    }
+                }
+            }
+        }
+        
+        // 4. Save Result to Storage
+        // Assign the merged daily schedules to the state object
+        mergedState.daily_schedules = mergedDaily;
+        
+        // setLocalCache will:
+        // 1. Detect daily_schedules
+        // 2. Save them to DAILY_DATA_KEY (campDailyData_v1)
+        // 3. Remove them from state
+        // 4. Save the rest to UNIFIED_CACHE_KEY
+        setLocalCache(mergedState); 
+        
+        // Force memory cache update just in case setLocalCache didn't update the memory reference for daily data
+        if (_memoryCache) _memoryCache.daily_schedules = mergedDaily;
 
-    const cloudState = await loadFromCloud();
-    if (cloudState) {
-       setLocalCache(cloudState);
-       finishInit(true);
+        console.log("☁️ [INIT] Merge complete.");
+        finishInit(true);
+        showToast("☁️ Schedule Synced with Cloud", "success");
+
     } else {
-       finishInit(false);
+        // Fallback: No cloud data found
+        console.log("☁️ [INIT] No cloud data found. Using local.");
+        const hasData = localState && Object.keys(localState).length > 0;
+        finishInit(hasData);
     }
   }
 
