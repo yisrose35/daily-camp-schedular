@@ -1,17 +1,12 @@
 // ============================================================================
-// view_schedule_loader_fix.js v5.3 - MIGRATION + NO LEGACY ROOT FALLBACK
+// view_schedule_loader_fix.js v5.4 - ROBUST LOAD & WIPE PROTECTION
 // ============================================================================
-// FIXED: Migrates ROOT-level skeleton to date-specific (preserves shared structure)
-// FIXED: Cleans ROOT-level user data (scheduleAssignments) that causes ghost data
-// Data MUST be stored in date-keyed format: data["2026-01-11"].scheduleAssignments
-// ============================================================================
-
 (function() {
     'use strict';
     
     const DAILY_DATA_KEY = 'campDailyData_v1';
     
-    console.log('[ViewScheduleFix] Loading v5.3 (MIGRATION + NO LEGACY ROOT FALLBACK)...');
+    console.log('[ViewScheduleFix] Loading v5.4 (ROBUST LOAD + WIPE PROTECTION)...');
     
     // --- TIME PARSER ---
     function parseTimeToMinutes(str) {
@@ -82,8 +77,6 @@
     }
 
     // --- MIGRATE LEGACY ROOT DATA ---
-    // Migrate ROOT-level skeleton to date-specific location (skeleton is SHARED structure)
-    // Clean ROOT-level schedule data (user-specific assignments)
     function cleanLegacyRootData(data, dateKey) {
         if (!data) return data;
         
@@ -154,13 +147,15 @@
         
         const raw = localStorage.getItem(DAILY_DATA_KEY);
         if (!raw) {
-            console.log('[ViewScheduleFix] No daily data found in localStorage');
-            // Initialize empty state
-            window.scheduleAssignments = {};
-            window.leagueAssignments = {};
-            window.unifiedTimes = [];
-            window.skeleton = [];
-            window.manualSkeleton = [];
+            // Only clear if we really have no data anywhere
+            if (!window.scheduleAssignments || Object.keys(window.scheduleAssignments).length === 0) {
+                console.log('[ViewScheduleFix] No daily data found in localStorage');
+                window.scheduleAssignments = {};
+                window.leagueAssignments = {};
+                window.unifiedTimes = [];
+                window.skeleton = [];
+                window.manualSkeleton = [];
+            }
             return;
         }
         
@@ -172,21 +167,30 @@
             return;
         }
         
-        // ★★★ CRITICAL FIX: Migrate legacy ROOT data (preserve skeleton) ★★★
         data = cleanLegacyRootData(data, dateKey);
-        
-        // Get date-specific data ONLY (no ROOT fallback!)
         const dateData = data[dateKey] || {};
         
-        // 2. Load Assignments - DATE LEVEL ONLY
-        if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
-            window.scheduleAssignments = dateData.scheduleAssignments;
-            console.log('[ViewScheduleFix] ✅ Loaded assignments from DATE folder:', Object.keys(dateData.scheduleAssignments).length, 'bunks');
-        } else {
-            // ★★★ NO ROOT FALLBACK - If no date-specific data, it's empty ★★★
-            console.log('[ViewScheduleFix] No schedule data for this date');
-            window.scheduleAssignments = {};
+        // ★★★ WIPE PROTECTION ★★★
+        const newAssignments = dateData.scheduleAssignments || {};
+        const newCount = Object.keys(newAssignments).length;
+        const currentCount = Object.keys(window.scheduleAssignments || {}).length;
+
+        // If we have existing data (e.g. 30 bunks) and the new load has 0 or very few (e.g. < 2)
+        // AND this was triggered by a "sync" (detected via event usually, but we check counts here)
+        // We prevent the wipe ONLY IF we suspect a race condition.
+        if (currentCount > 5 && newCount === 0) {
+             console.warn(`[ViewScheduleFix] 🛡️ WIPE PROTECTION TRIGGERED: Ignoring empty update. Keeping ${currentCount} bunks.`);
+             // We do NOT overwrite window.scheduleAssignments with empty object
+             // We force a save back to local storage of the GOOD data
+             if (window.saveScheduleAssignments) {
+                 window.saveScheduleAssignments(dateKey, window.scheduleAssignments);
+             }
+             return;
         }
+
+        // Normal Load
+        window.scheduleAssignments = newAssignments;
+        console.log(`[ViewScheduleFix] ✅ Loaded ${newCount} bunks.`);
 
         // 3. Draft Injection (subdivision schedules)
         if (dateData.subdivisionSchedules) {
