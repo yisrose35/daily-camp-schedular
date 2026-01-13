@@ -1,14 +1,20 @@
 // =============================================================================
 // scheduler_data_management.js — Deletion Sync & Regeneration Support
-// VERSION: v2.0.0
+// VERSION: v2.1.0 (SYNC RACE FIX)
 // =============================================================================
 //
-// FIXES TWO CRITICAL ISSUES:
+// FIXES THREE CRITICAL ISSUES:
 //
 // 1. DELETION SYNC: The cloud_storage_bridge's merge logic was RE-INTRODUCING
 //    deleted data from the cloud. This fix patches deletion to be EXPLICIT.
 //
-// 2. REGENERATION: When a scheduler wants to regenerate their schedule for a day
+// 2. ROOT-LEVEL LEGACY DATA: The view_schedule_loader_fix.js was migrating
+//    ROOT-level scheduleAssignments back into the date path after deletion.
+//
+// 3. SYNC RACE CONDITION: After direct PATCH, subsequent syncs could re-introduce
+//    data due to timing issues. Now we suppress syncs during deletion.
+//
+// 4. REGENERATION: When a scheduler wants to regenerate their schedule for a day
 //    that already has data in the cloud, we need to:
 //    a) Clear ONLY their divisions (preserve other schedulers' work)
 //    b) Sync that deletion to cloud BEFORE the merge logic runs
@@ -20,7 +26,7 @@
 (function() {
     'use strict';
 
-    console.log("🗑️ Scheduler Data Management v2.0.0 loading...");
+    console.log("🗑️ Scheduler Data Management v2.1.0 loading...");
 
     // =========================================================================
     // CONFIGURATION
@@ -30,6 +36,9 @@
     const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI";
     const TABLE = "camp_state";
     const DAILY_DATA_KEY = "campDailyData_v1";
+    
+    // Sync suppression flag to prevent race conditions during deletion
+    window._suppressCloudSync = false;
 
     // =========================================================================
     // HELPER: Get Auth & Camp Info
@@ -202,6 +211,8 @@
      * - For owners: Deletes entire day
      * - For schedulers: Deletes only their divisions
      * - Directly modifies cloud (bypasses merge)
+     * - Also clears ROOT-level legacy data to prevent re-migration
+     * - Suppresses sync during operation to prevent race conditions
      */
     async function patchedEraseCurrentDailyData() {
         const dateKey = window.currentScheduleDate;
@@ -226,63 +237,35 @@
         
         if (!confirm(confirmMsg)) return;
         
-        // 1. Modify localStorage
-        const all = window.loadAllDailyData?.() || JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
+        // ⭐ SUPPRESS SYNC to prevent race conditions
+        window._suppressCloudSync = true;
+        console.log('🗑️ Sync suppression ON');
         
-        if (isOwner) {
-            // Owner deletes entire day
-            delete all[dateKey];
-            console.log(`🗑️ Deleted entire day from localStorage`);
-        } else {
-            // Scheduler deletes only their bunks
-            if (all[dateKey]?.scheduleAssignments) {
-                let deletedCount = 0;
-                for (const bunkId of myBunks) {
-                    if (all[dateKey].scheduleAssignments[bunkId]) {
-                        delete all[dateKey].scheduleAssignments[bunkId];
-                        deletedCount++;
-                    }
-                }
-                console.log(`🗑️ Deleted ${deletedCount} bunks from localStorage`);
-            }
-            
-            // Also clear subdivision status
-            if (all[dateKey]?.subdivisionSchedules) {
-                const myDivisionsSet = new Set(myDivisions);
-                for (const [subId, subData] of Object.entries(all[dateKey].subdivisionSchedules)) {
-                    const subDivisions = subData.divisions || [];
-                    if (subDivisions.some(d => myDivisionsSet.has(d))) {
-                        subData.status = 'empty';
-                        subData.scheduleData = {};
-                        subData.fieldUsageClaims = {};
-                    }
-                }
-            }
-        }
-        
-        localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(all));
-        
-        // 2. Directly modify cloud (bypasses merge logic!)
-        const cloudSuccess = await modifyCloudStateDirectly((cloudState) => {
-            if (!cloudState.daily_schedules) cloudState.daily_schedules = {};
+        try {
+            // 1. Modify localStorage - BOTH date-specific AND root-level legacy data
+            const all = window.loadAllDailyData?.() || JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
             
             if (isOwner) {
                 // Owner deletes entire day
-                delete cloudState.daily_schedules[dateKey];
-                console.log(`🗑️ Deleted entire day from cloud`);
+                delete all[dateKey];
+                console.log(`🗑️ Deleted entire day from localStorage`);
             } else {
                 // Scheduler deletes only their bunks
-                const dateData = cloudState.daily_schedules[dateKey];
-                if (dateData?.scheduleAssignments) {
+                if (all[dateKey]?.scheduleAssignments) {
+                    let deletedCount = 0;
                     for (const bunkId of myBunks) {
-                        delete dateData.scheduleAssignments[bunkId];
+                        if (all[dateKey].scheduleAssignments[bunkId]) {
+                            delete all[dateKey].scheduleAssignments[bunkId];
+                            deletedCount++;
+                        }
                     }
+                    console.log(`🗑️ Deleted ${deletedCount} bunks from localStorage (date path)`);
                 }
                 
-                // Clear subdivision status
-                if (dateData?.subdivisionSchedules) {
+                // Also clear subdivision status
+                if (all[dateKey]?.subdivisionSchedules) {
                     const myDivisionsSet = new Set(myDivisions);
-                    for (const [subId, subData] of Object.entries(dateData.subdivisionSchedules)) {
+                    for (const [subId, subData] of Object.entries(all[dateKey].subdivisionSchedules)) {
                         const subDivisions = subData.divisions || [];
                         if (subDivisions.some(d => myDivisionsSet.has(d))) {
                             subData.status = 'empty';
@@ -292,27 +275,115 @@
                     }
                 }
             }
-        });
-        
-        if (cloudSuccess) {
-            console.log('🗑️ ✅ Deletion synced to cloud');
-        } else {
-            console.warn('🗑️ ⚠️ Cloud sync failed, local deletion complete');
+            
+            // ⭐ FIX: Also clear ROOT-level legacy data to prevent re-migration
+            if (all.scheduleAssignments) {
+                if (isOwner) {
+                    delete all.scheduleAssignments;
+                    console.log('🗑️ Deleted ROOT scheduleAssignments');
+                } else {
+                    for (const bunkId of myBunks) {
+                        if (all.scheduleAssignments[bunkId]) {
+                            delete all.scheduleAssignments[bunkId];
+                        }
+                    }
+                    console.log('🗑️ Cleared bunks from ROOT scheduleAssignments');
+                }
+            }
+            if (all.leagueAssignments) {
+                if (isOwner) {
+                    delete all.leagueAssignments;
+                    console.log('🗑️ Deleted ROOT leagueAssignments');
+                }
+            }
+            
+            // Also clear window.scheduleAssignments (in-memory)
+            if (window.scheduleAssignments) {
+                if (isOwner) {
+                    window.scheduleAssignments = {};
+                } else {
+                    for (const bunkId of myBunks) {
+                        delete window.scheduleAssignments[bunkId];
+                    }
+                }
+                console.log('🗑️ Cleared window.scheduleAssignments');
+            }
+            
+            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(all));
+            
+            // 2. Directly modify cloud (bypasses merge logic!)
+            const cloudSuccess = await modifyCloudStateDirectly((cloudState) => {
+                if (!cloudState.daily_schedules) cloudState.daily_schedules = {};
+                
+                if (isOwner) {
+                    // Owner deletes entire day
+                    delete cloudState.daily_schedules[dateKey];
+                    console.log(`🗑️ Deleted entire day from cloud`);
+                } else {
+                    // Scheduler deletes only their bunks
+                    const dateData = cloudState.daily_schedules[dateKey];
+                    if (dateData?.scheduleAssignments) {
+                        for (const bunkId of myBunks) {
+                            delete dateData.scheduleAssignments[bunkId];
+                        }
+                    }
+                    
+                    // Clear subdivision status
+                    if (dateData?.subdivisionSchedules) {
+                        const myDivisionsSet = new Set(myDivisions);
+                        for (const [subId, subData] of Object.entries(dateData.subdivisionSchedules)) {
+                            const subDivisions = subData.divisions || [];
+                            if (subDivisions.some(d => myDivisionsSet.has(d))) {
+                                subData.status = 'empty';
+                                subData.scheduleData = {};
+                                subData.fieldUsageClaims = {};
+                            }
+                        }
+                    }
+                }
+                
+                // ⭐ FIX: Also clear ROOT-level data in cloud
+                if (cloudState.scheduleAssignments) {
+                    if (isOwner) {
+                        delete cloudState.scheduleAssignments;
+                    } else {
+                        for (const bunkId of myBunks) {
+                            delete cloudState.scheduleAssignments[bunkId];
+                        }
+                    }
+                    console.log('🗑️ Cleared ROOT cloud scheduleAssignments');
+                }
+                if (cloudState.leagueAssignments && isOwner) {
+                    delete cloudState.leagueAssignments;
+                    console.log('🗑️ Cleared ROOT cloud leagueAssignments');
+                }
+            });
+            
+            if (cloudSuccess) {
+                console.log('🗑️ ✅ Deletion synced to cloud');
+            } else {
+                console.warn('🗑️ ⚠️ Cloud sync failed, local deletion complete');
+            }
+            
+            // 3. Refresh UI WITHOUT triggering cloud sync
+            // Clear cached data first
+            window._cloudBlockedResources = null;
+            window._cloudScheduleData = null;
+            
+            // Manually refresh the UI state from localStorage (don't call functions that trigger syncs)
+            if (typeof window.updateTable === 'function') {
+                window.updateTable();
+            }
+            
+            console.log(`🗑️ ✅ Erase complete for ${dateKey}`);
+            
+        } finally {
+            // ⭐ Re-enable sync after a delay to let UI settle
+            setTimeout(() => {
+                window._suppressCloudSync = false;
+                console.log('🗑️ Sync suppression OFF');
+            }, 2000);
         }
-        
-        // 3. Reload data and refresh UI
-        window.loadCurrentDailyData?.();
-        window.initScheduleSystem?.();
-        
-        if (typeof window.updateTable === 'function') {
-            window.updateTable();
-        }
-        
-        // Clear any cached blocked resources
-        window._cloudBlockedResources = null;
-        window._cloudScheduleData = null;
-        
-        console.log(`🗑️ ✅ Erase complete for ${dateKey}`);
     }
 
     // =========================================================================
@@ -321,6 +392,7 @@
     
     /**
      * Fixed version of eraseAllDailyData that directly modifies cloud
+     * Also clears ROOT-level legacy data
      */
     async function patchedEraseAllDailyData() {
         // Only owners can delete all data
@@ -338,21 +410,36 @@
         
         console.log('🗑️ [PATCHED] Erasing all daily data...');
         
-        // 1. Clear localStorage
-        localStorage.removeItem(DAILY_DATA_KEY);
+        // Suppress sync during operation
+        window._suppressCloudSync = true;
         
-        // 2. Directly clear from cloud
-        const cloudSuccess = await modifyCloudStateDirectly((cloudState) => {
-            cloudState.daily_schedules = {};
-            console.log('🗑️ Cleared daily_schedules in cloud');
-        });
-        
-        if (cloudSuccess) {
-            console.log('🗑️ ✅ All daily data erased from cloud');
+        try {
+            // 1. Clear localStorage completely
+            localStorage.removeItem(DAILY_DATA_KEY);
+            
+            // Also clear any in-memory state
+            window.scheduleAssignments = {};
+            window.leagueAssignments = {};
+            
+            // 2. Directly clear from cloud (including ROOT level)
+            const cloudSuccess = await modifyCloudStateDirectly((cloudState) => {
+                cloudState.daily_schedules = {};
+                // Also clear ROOT-level legacy data
+                delete cloudState.scheduleAssignments;
+                delete cloudState.leagueAssignments;
+                console.log('🗑️ Cleared daily_schedules and ROOT data in cloud');
+            });
+            
+            if (cloudSuccess) {
+                console.log('🗑️ ✅ All daily data erased from cloud');
+            }
+            
+            alert('All daily schedules deleted. Reloading...');
+            window.location.reload();
+            
+        } finally {
+            window._suppressCloudSync = false;
         }
-        
-        alert('All daily schedules deleted. Reloading...');
-        window.location.reload();
     }
 
     // =========================================================================
@@ -798,6 +885,39 @@
     // INITIALIZATION
     // =========================================================================
     
+    /**
+     * Intercept sync-related functions to respect suppression flag
+     */
+    function hookCloudSync() {
+        // Hook forceSyncToCloud
+        const originalSync = window.forceSyncToCloud;
+        if (originalSync && !originalSync._suppressed) {
+            window.forceSyncToCloud = async function(...args) {
+                if (window._suppressCloudSync) {
+                    console.log('🗑️ [SYNC INTERCEPTOR] Suppressing forceSyncToCloud');
+                    return true; // Pretend success
+                }
+                return originalSync.apply(this, args);
+            };
+            window.forceSyncToCloud._suppressed = true;
+            console.log('🗑️ ✅ forceSyncToCloud interceptor installed');
+        }
+        
+        // Hook saveCurrentDailyData if it exists (might trigger syncs)
+        const originalSave = window.saveCurrentDailyData;
+        if (originalSave && !originalSave._suppressed) {
+            window.saveCurrentDailyData = function(...args) {
+                if (window._suppressCloudSync) {
+                    console.log('🗑️ [SYNC INTERCEPTOR] Suppressing saveCurrentDailyData');
+                    return; // Skip
+                }
+                return originalSave.apply(this, args);
+            };
+            window.saveCurrentDailyData._suppressed = true;
+            console.log('🗑️ ✅ saveCurrentDailyData interceptor installed');
+        }
+    }
+    
     function initialize() {
         console.log('🗑️ Initializing data management...');
         
@@ -806,6 +926,10 @@
         
         // Hook UI buttons
         hookDeletionButtons();
+        
+        // Hook cloud sync to respect suppression flag
+        hookCloudSync();
+        setTimeout(hookCloudSync, 1000); // Retry in case it loads later
         
         // Hook generate button
         setTimeout(hookGenerateButton, 1000);
@@ -864,9 +988,10 @@
         initialize,
         hookDeletionButtons,
         hookGenerateButton,
+        hookCloudSync,
         addRegenerateButton
     };
     
-    console.log("🗑️ Scheduler Data Management v2.0.0 loaded");
+    console.log("🗑️ Scheduler Data Management v2.1.0 loaded");
 
 })();
