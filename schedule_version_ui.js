@@ -1,18 +1,18 @@
 // =================================================================
 // schedule_version_ui.js — Self-Mounting Version UI
-// VERSION: v3.2 (SELECTOR FIX FOR INDEX.HTML)
+// VERSION: v3.3 (ROBUST MOUNT & ERROR HANDLING)
 // =================================================================
 //
 // FIXES:
-// 1. Explicitly targets #schedule and #scheduleTable (matching index.html)
-// 2. Inserts BEFORE the schedule table, inside the schedule tab
-// 3. Waits for tab visibility if needed
+// 1. Selector fix for #schedule (matches index.html)
+// 2. Stops infinite retry loops (max 20 attempts)
+// 3. Better 403/Permission error messages
 //
 // =================================================================
 (function() {
     'use strict';
 
-    console.log("📋 Schedule Version UI v3.2 (SELECTOR FIX) loading...");
+    console.log("📋 Schedule Version UI v3.3 (ROBUST MOUNT) loading...");
 
     // =========================================================================
     // STATE
@@ -21,6 +21,7 @@
     let currentVersionId = null;
     let isInitialized = false;
     let mountRetryCount = 0;
+    const MAX_RETRIES = 20;
 
     // =========================================================================
     // HELPERS
@@ -49,45 +50,38 @@
     function createToolbar() {
         // Check if toolbar already exists
         let toolbar = document.getElementById('schedule-version-toolbar');
-        if (toolbar) {
-            console.log("📋 Toolbar already exists");
-            return toolbar;
-        }
+        if (toolbar) return toolbar;
 
-        // Expanded list of potential containers - prioritized by index.html structure
-        const selectors = [
-            '#scheduleTable',         // Direct table container (Best)
-            '#schedule',              // The tab itself
-            '#scheduleContainer',     // Fallback
-            '.schedule-table-container',
-            '[data-schedule]'
-        ];
-
+        // TARGET SPECIFIC ELEMENTS FROM INDEX.HTML
+        // Priority 1: Inside the #schedule tab, before the table
+        const scheduleTable = document.getElementById('scheduleTable');
+        
+        // Priority 2: The #schedule tab itself (if table not ready)
+        const scheduleTab = document.getElementById('schedule');
+        
         let targetElement = null;
-        let insertPosition = 'beforebegin'; // Default: insert before the element
+        let insertPosition = 'beforebegin';
 
-        for (const sel of selectors) {
-            const el = document.querySelector(sel);
-            if (el) {
-                console.log(`📋 Found target via "${sel}"`);
-                targetElement = el;
-                // If targeting the tab (#schedule), we might want to insert at the top or after the header
-                if (sel === '#schedule') {
-                    const header = el.querySelector('h3') || el.querySelector('div'); // Try to find header div
-                    if (header) {
-                        targetElement = header.parentNode; // Insert after the header row
-                        insertPosition = 'afterend'; 
-                    } else {
-                        insertPosition = 'afterbegin'; // Top of tab
-                    }
-                }
-                break;
+        if (scheduleTable) {
+            targetElement = scheduleTable;
+            insertPosition = 'beforebegin';
+            // console.log("📋 Found target: #scheduleTable");
+        } else if (scheduleTab) {
+            // Try to put it after the header div
+            const header = scheduleTab.querySelector('div'); 
+            if (header) {
+                targetElement = header;
+                insertPosition = 'afterend';
+            } else {
+                targetElement = scheduleTab;
+                insertPosition = 'afterbegin';
             }
+            // console.log("📋 Found target: #schedule tab");
         }
 
         if (!targetElement) {
-            if (mountRetryCount % 10 === 0) { 
-                console.warn(`📋 No schedule container found (Attempt ${mountRetryCount})`);
+            if (mountRetryCount % 5 === 0 && mountRetryCount < MAX_RETRIES) { 
+                console.log(`📋 Waiting for schedule container... (${mountRetryCount}/${MAX_RETRIES})`);
             }
             return null;
         }
@@ -109,6 +103,7 @@
                     font-family: system-ui, -apple-system, sans-serif;
                     width: 100%;
                     box-sizing: border-box;
+                    color: white;
                 }
                 #schedule-version-toolbar .version-label {
                     color: #e0e0e0;
@@ -157,7 +152,6 @@
                 #schedule-version-toolbar .spacer {
                     flex: 1;
                 }
-                /* Mobile responsiveness */
                 @media (max-width: 600px) {
                     #schedule-version-toolbar {
                         flex-wrap: wrap;
@@ -182,23 +176,8 @@
             </button>
         `;
 
-        // Insert
-        if (targetElement.id === 'scheduleTable') {
-            targetElement.parentNode.insertBefore(toolbar, targetElement);
-        } else {
-             // Append to top of schedule container if table not found yet
-             const container = document.getElementById('schedule');
-             if (container) {
-                 const header = container.querySelector('div'); // The header row
-                 if (header) {
-                     header.insertAdjacentElement('afterend', toolbar);
-                 } else {
-                     container.prepend(toolbar);
-                 }
-             }
-        }
-        
-        console.log("📋 ✅ Toolbar created and inserted");
+        targetElement.insertAdjacentElement(insertPosition, toolbar);
+        console.log("📋 ✅ Toolbar mounted successfully");
         return toolbar;
     }
 
@@ -466,7 +445,12 @@
             alert(`✅ Saved as "${name}"`);
         } else {
             console.error("📋 ❌ Save failed:", result.error);
-            alert(`❌ Failed to save: ${result.error}`);
+            // Enhanced error message for 403
+            if (String(result.error).includes('403')) {
+                alert(`❌ Permission Denied (403)\n\nYou don't have permission to create schedule versions.\nPlease ask the camp owner to check 'schedule_versions' table policies.`);
+            } else {
+                alert(`❌ Failed to save: ${result.error}`);
+            }
         }
     }
 
@@ -496,7 +480,11 @@
             alert(`✅ Created "${newName}" based on "${sourceName}"`);
         } else {
             console.error("📋 ❌ Base On failed:", result.error);
-            alert(`❌ Failed to create version: ${result.error}`);
+            if (String(result.error).includes('403')) {
+                alert(`❌ Permission Denied (403)\n\nYou cannot create new versions. Check your role permissions.`);
+            } else {
+                alert(`❌ Failed to create version: ${result.error}`);
+            }
         }
     }
 
@@ -588,8 +576,8 @@
 
         const toolbar = createToolbar();
         if (!toolbar) {
-            // Keep retrying for a while
-            if (mountRetryCount < 100) setTimeout(init, 500); // Increased retries
+            // Keep retrying for a while, but stop after max retries
+            if (mountRetryCount < MAX_RETRIES) setTimeout(init, 500);
             return;
         }
 
@@ -599,7 +587,7 @@
         window.addEventListener('campistry-date-changed', refreshToolbar);
         document.getElementById('dateInput')?.addEventListener('change', refreshToolbar);
 
-        console.log("📋 ✅ Schedule Version UI v3.2 initialized");
+        console.log("📋 ✅ Schedule Version UI v3.3 initialized");
     }
 
     // Multiple init triggers for reliability
