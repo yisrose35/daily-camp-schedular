@@ -1,6 +1,6 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// VERSION: v4.5 (AUTO-SYNC BACK)
+// VERSION: v4.6 (RBAC AWARE MERGE + OPTIMISTIC INIT)
 // =================================================================
 // 
 // FEATURES:
@@ -8,12 +8,13 @@
 // - Permission enforcement (Schedulers limited to their divisions)
 // - Schedule versioning ("Base On" creates new version, preserves original)
 // - Auto-Sync Back: Updates local storage with merged state after save
+// - RBAC Race Condition Fix: Optimistic load during boot, strict sync after RBAC init
 //
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v4.5 (AUTO-SYNC BACK)");
+  console.log("☁️ Campistry Cloud Bridge v4.6 (RBAC AWARE)");
 
   // CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -103,7 +104,7 @@
   async function determineUserCampId(userId) {
     if (!userId) return null;
     
-    console.log("☁️ Determining camp ID for user:", userId);
+    // console.log("☁️ Determining camp ID for user:", userId);
     
     try {
       const { data: ownedCamp } = await window.supabase
@@ -617,8 +618,6 @@
   }
 
   async function initialize() {
-    if (_initialized) return;
-    
     console.log("☁️ [INIT] Starting Read-Side Merge initialization...");
 
     const user = await getUser();
@@ -640,43 +639,71 @@
         console.log("☁️ [INIT] Cloud data found. Merging...");
         
         // A. Global Settings: Cloud wins (usually admin controlled)
-        // We'll trust cloud for the base structure
-        const mergedState = { ...localState, ...cloudState };
+        // We'll trust cloud for the base structure, but preserve local settings if needed
+        const mergedState = { ...cloudState }; // Start with Cloud as base
         
         // Ensure divisions are available for permission checks in step B
-        // (If local cache was empty, window.divisions might be undefined)
         if (!window.divisions && mergedState.divisions) {
             window.divisions = mergedState.divisions;
         }
         
         // B. Daily Schedules: Selective Merge
         const cloudDaily = cloudState.daily_schedules || {};
-        const mergedDaily = { ...cloudDaily }; // Start with Cloud as baseline
+        
+        // DEEP CLONE to prevent reference issues
+        const mergedDaily = JSON.parse(JSON.stringify(cloudDaily));
         
         // Get Permissions
         const editableGrades = getUserEditableGrades();
         const editableDivisions = getUserEditableDivisions();
         const hasFull = hasFullAccess();
+        const rbacReady = window.AccessControl && window.AccessControl.isInitialized;
         
+        // Debug Permissions
+        console.log(`☁️ [INIT] Merge Permissions: RBACReady=${rbacReady}, Full=${hasFull}, Grades=${editableGrades.size}, Divs=${editableDivisions.length}`);
+
         // Overlay Local Data ONLY for editable fields
         // This ensures I see everyone else's work (Cloud wins non-editable)
         // But keeps my own drafts (Local wins editable)
+        let mergedCount = 0;
+        let preservedCount = 0;
+        let pendingCount = 0;
+
         for (const [dateKey, localDay] of Object.entries(localDaily)) {
             if (!mergedDaily[dateKey]) mergedDaily[dateKey] = {};
             
+            // Handle both legacy (root is assignments) and v1 (nested) data structures
+            const localAssignments = localDay.scheduleAssignments || localDay;
+            
             // 1. Schedule Assignments
-            if (localDay.scheduleAssignments) {
+            if (localAssignments && typeof localAssignments === 'object') {
                 if (!mergedDaily[dateKey].scheduleAssignments) {
                     mergedDaily[dateKey].scheduleAssignments = {};
                 }
                 
-                for (const [gradeId, schedule] of Object.entries(localDay.scheduleAssignments)) {
+                for (const [gradeId, schedule] of Object.entries(localAssignments)) {
+                    // Skip metadata keys if present in assignment object (legacy data often mixed)
+                    if (['unifiedTimes', 'skeleton', 'leagueAssignments', 'subdivisionSchedules'].includes(gradeId)) continue;
+
                     // CRITICAL LOGIC: Local wins IF editable
                     let canEdit = hasFull || editableGrades.has(String(gradeId));
+                    
+                    // ★★★ RBAC RACE CONDITION FIX ★★★
+                    // If RBAC is NOT ready, we must not be destructive. 
+                    // We optimistically preserve local data until RBAC loads and triggers a re-sync.
+                    // Otherwise, we'd treat a Scheduler as a "Viewer" during boot and wipe their work.
+                    if (!rbacReady && !hasFull) {
+                        canEdit = true; // Temporary Optimistic Permission
+                        pendingCount++;
+                    }
+
                     if (canEdit) {
                         mergedDaily[dateKey].scheduleAssignments[gradeId] = schedule;
+                        mergedCount++;
+                    } else {
+                        // Else: Keep Cloud version (already in mergedDaily via clone)
+                        preservedCount++;
                     }
-                    // Else: Keep Cloud version (already in mergedDaily via clone)
                 }
             }
             
@@ -687,6 +714,10 @@
                 }
                 for (const [divId, leagueData] of Object.entries(localDay.leagueAssignments)) {
                     let canEdit = hasFull || editableDivisions.includes(String(divId));
+                    
+                    // Optimistic override
+                    if (!rbacReady && !hasFull) canEdit = true;
+
                     if (canEdit) {
                         mergedDaily[dateKey].leagueAssignments[divId] = leagueData;
                     }
@@ -694,6 +725,8 @@
             }
         }
         
+        console.log(`☁️ [INIT] Merge Stats: Applied Local=${mergedCount}, Preserved Cloud=${preservedCount}, Pending Validation=${pendingCount}`);
+
         // 4. Save Result to Storage
         // Assign the merged daily schedules to the state object
         mergedState.daily_schedules = mergedDaily;
@@ -710,7 +743,12 @@
 
         console.log("☁️ [INIT] Merge complete.");
         finishInit(true);
-        showToast("☁️ Schedule Synced with Cloud", "success");
+        if (pendingCount > 0) {
+            // Don't toast success yet if we are just guessing permissions
+            console.log("☁️ [INIT] Performed optimistic merge. Waiting for RBAC...");
+        } else {
+            showToast("☁️ Schedule Synced with Cloud", "success");
+        }
 
     } else {
         // Fallback: No cloud data found
@@ -890,6 +928,12 @@
         });
     }
   }, 500);
+
+  // ★★★ RBAC LISTENER - Re-run sync when permissions are ready ★★★
+  window.addEventListener('campistry-rbac-ready', async () => {
+     console.log("☁️ RBAC Ready - Re-running Cloud Merge with correct permissions...");
+     await initialize();
+  });
 
   initialize();
 })();
