@@ -1,6 +1,6 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// VERSION: v4.3 (PERMISSIONS FIX + NON-DESTRUCTIVE MERGE)
+// VERSION: v4.4 (ROBUST MERGE + DEBUGGING)
 // =================================================================
 // 
 // FEATURES:
@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v4.3 (PERMISSIONS + VERSIONING)");
+  console.log("☁️ Campistry Cloud Bridge v4.4 (ROBUST MERGE)");
 
   // CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -41,7 +41,7 @@
   let _syncTimeout = null;
   let _dailyDataDirty = false;
   let _initialized = false;
-  const SCHEMA_VERSION = 3; // Bumped for versioning support
+  const SCHEMA_VERSION = 3; 
 
   // ============================================================================
   // UI FEEDBACK
@@ -220,7 +220,7 @@
   function setLocalCache(state) {
     if (state.daily_schedules) {
         if (!_dailyDataDirty) {
-            console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
+            // console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
             try {
                 localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(state.daily_schedules));
                 setTimeout(() => {
@@ -321,7 +321,7 @@
       // =====================================================================
       // STEP 2: BASE = CLOUD DATA
       // =====================================================================
-      console.log('☁️ [SAVE] Step 2: Creating base from cloud data...');
+      // CRITICAL: Start with the cloud state so anything NOT in local is preserved automatically
       const finalSchedule = JSON.parse(JSON.stringify(cloudSchedules));
 
       // =====================================================================
@@ -337,7 +337,7 @@
       // =====================================================================
       // STEP 4: PERMISSION-ENFORCED MERGE
       // =====================================================================
-      console.log('☁️ [SAVE] Step 4: Permission-enforced merge (with Preservation)...');
+      console.log('☁️ [SAVE] Step 4: Permission-enforced merge...');
       
       const METADATA_KEYS = ['scheduleAssignments', 'leagueAssignments', 'unifiedTimes', 
                              'skeleton', 'manualSkeleton', 'subdivisionSchedules'];
@@ -346,6 +346,7 @@
       const editableDivisions = getUserEditableDivisions();
       let blockedCount = 0;
       let savedCount = 0;
+      let preservedCount = 0;
       
       for (const [dateKey, localDateData] of Object.entries(localSchedules)) {
           if (!finalSchedule[dateKey]) finalSchedule[dateKey] = {};
@@ -360,15 +361,20 @@
               if (METADATA_KEYS.includes(gradeId)) continue;
               
               // PERMISSION CHECK: Can user edit this grade?
-              // FIX: Use centralized AccessControl if available for robust Bunk->Division lookup
               let canEdit = false;
               
-              if (window.AccessControl && typeof window.AccessControl.canEditBunk === 'function') {
-                  // Use robust check from AccessControl v3.3
+              // Use AccessControl if initialized
+              if (window.AccessControl && window.AccessControl.isInitialized && typeof window.AccessControl.canEditBunk === 'function') {
                   canEdit = window.AccessControl.canEditBunk(gradeId);
               } else {
-                  // Fallback to internal logic if AccessControl not ready
+                  // Fallback: Check our own cache or assume true if owner
                   canEdit = hasFullAccess() || editableGrades.has(String(gradeId));
+                  
+                  // If AccessControl isn't ready but we're a scheduler, this might fail incorrectly.
+                  // We default to PRESERVING data if we're unsure to prevent data loss.
+                  if (!canEdit && !hasFullAccess() && !window.AccessControl?.isInitialized) {
+                      console.warn(`🛡️ AccessControl not ready for "${gradeId}". Defaulting to deny-and-preserve.`);
+                  }
               }
 
               if (canEdit) {
@@ -376,26 +382,26 @@
                   finalSchedule[dateKey].scheduleAssignments[gradeId] = schedule;
                   savedCount++;
               } else {
-                  // User NO permission: PRESERVE existing cloud data (Non-destructive merge)
+                  // User NO permission: PRESERVE existing cloud data
+                  // Since finalSchedule is initialized as a clone of cloudSchedules,
+                  // we only need to restore if we somehow wiped it or if we want to be explicit.
                   if (cloudSchedules[dateKey] && 
                       cloudSchedules[dateKey].scheduleAssignments && 
                       cloudSchedules[dateKey].scheduleAssignments[gradeId]) {
                       
                       finalSchedule[dateKey].scheduleAssignments[gradeId] = cloudSchedules[dateKey].scheduleAssignments[gradeId];
-                      // console.log(`🛡️ Preserved cloud version for restricted bunk "${gradeId}"`);
+                      preservedCount++;
                   } else {
-                      // New data that user isn't allowed to create, or valid block
+                      // Blocked: It's new in local, but not in cloud, and user can't create it.
                       blockedCount++;
-                      console.warn(`🛡️ [BLOCKED] Cannot update grade "${gradeId}" - permission denied`);
+                      // console.warn(`🛡️ [BLOCKED] "${gradeId}" - permission denied & not in cloud`);
                   }
               }
           }
           
-          // Merge other data (unifiedTimes, skeleton, etc.)
+          // Merge other data
           if (localDateData.unifiedTimes) {
-              if (!finalSchedule[dateKey].unifiedTimes) {
-                  finalSchedule[dateKey].unifiedTimes = {};
-              }
+              if (!finalSchedule[dateKey].unifiedTimes) finalSchedule[dateKey].unifiedTimes = {};
               for (const [slotKey, slotData] of Object.entries(localDateData.unifiedTimes)) {
                   finalSchedule[dateKey].unifiedTimes[slotKey] = slotData;
               }
@@ -405,34 +411,22 @@
               finalSchedule[dateKey].skeleton = localDateData.skeleton;
           }
           
-          // League assignments - permission check per division
           if (localDateData.leagueAssignments) {
-              if (!finalSchedule[dateKey].leagueAssignments) {
-                  finalSchedule[dateKey].leagueAssignments = {};
-              }
+              if (!finalSchedule[dateKey].leagueAssignments) finalSchedule[dateKey].leagueAssignments = {};
               for (const [divId, leagueData] of Object.entries(localDateData.leagueAssignments)) {
                   if (hasFullAccess() || editableDivisions.includes(divId) || editableDivisions.includes(String(divId))) {
                       finalSchedule[dateKey].leagueAssignments[divId] = leagueData;
-                  } else {
-                      console.warn(`🛡️ [BLOCKED] Cannot save division "${divId}" leagues`);
                   }
               }
           }
           
-          // Subdivision schedules
           if (localDateData.subdivisionSchedules) {
-              if (!finalSchedule[dateKey].subdivisionSchedules) {
-                  finalSchedule[dateKey].subdivisionSchedules = {};
-              }
+              if (!finalSchedule[dateKey].subdivisionSchedules) finalSchedule[dateKey].subdivisionSchedules = {};
               Object.assign(finalSchedule[dateKey].subdivisionSchedules, localDateData.subdivisionSchedules);
           }
       }
 
-      if (blockedCount > 0) {
-          console.warn(`🛡️ [SAVE] ${blockedCount} new items blocked due to permissions`);
-      }
-      
-      console.log(`☁️ [SAVE] Saved ${savedCount} grades`);
+      console.log(`☁️ [SAVE] Stats: Saved=${savedCount}, Preserved=${preservedCount}, Blocked=${blockedCount}`);
 
       // =====================================================================
       // STEP 5: BUILD FINAL STATE
@@ -442,7 +436,6 @@
       stateToSave.schema_version = SCHEMA_VERSION;
       stateToSave.updated_at = new Date().toISOString();
       
-      // Include versioning metadata if present
       if (window.ScheduleVersioning?.prepareForCloudSync) {
           const versionData = window.ScheduleVersioning.prepareForCloudSync();
           stateToSave.schedule_versions = versionData.schedule_versions;
@@ -498,7 +491,8 @@
           }
       }
       
-      showToast("❌ Save Failed", "error");
+      console.error("☁️ Save Failed:", patchResponse.status, patchResponse.statusText);
+      showToast("❌ Save Failed: " + patchResponse.status, "error");
       return false;
 
     } catch (e) {
