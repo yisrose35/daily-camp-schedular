@@ -1,3 +1,4 @@
+
 // =================================================================
 // permissions_guard.js — Campistry Permission Enforcement Layer
 // VERSION: v1.0
