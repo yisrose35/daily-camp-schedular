@@ -1,9 +1,9 @@
 // =============================================================================
 // scheduler_data_management.js — Deletion Sync & Regeneration Support
-// VERSION: v2.1.0 (SYNC RACE FIX)
+// VERSION: v2.2.0 (SCHEDULE VERSIONS FIX)
 // =============================================================================
 //
-// FIXES THREE CRITICAL ISSUES:
+// FIXES FOUR CRITICAL ISSUES:
 //
 // 1. DELETION SYNC: The cloud_storage_bridge's merge logic was RE-INTRODUCING
 //    deleted data from the cloud. This fix patches deletion to be EXPLICIT.
@@ -14,19 +14,22 @@
 // 3. SYNC RACE CONDITION: After direct PATCH, subsequent syncs could re-introduce
 //    data due to timing issues. Now we suppress syncs during deletion.
 //
-// 4. REGENERATION: When a scheduler wants to regenerate their schedule for a day
+// 4. SCHEDULE VERSIONS TABLE: The schedule_version_merger.js was reconstructing
+//    data from the schedule_versions Supabase table. Now we delete those records.
+//
+// 5. REGENERATION: When a scheduler wants to regenerate their schedule for a day
 //    that already has data in the cloud, we need to:
 //    a) Clear ONLY their divisions (preserve other schedulers' work)
 //    b) Sync that deletion to cloud BEFORE the merge logic runs
 //    c) Then allow fresh generation
 //
-// INTEGRATES WITH: calendar.js v2.8
+// INTEGRATES WITH: calendar.js v2.8, schedule_versions_db.js
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log("🗑️ Scheduler Data Management v2.1.0 loading...");
+    console.log("🗑️ Scheduler Data Management v2.2.0 loading...");
 
     // =========================================================================
     // CONFIGURATION
@@ -50,156 +53,212 @@
             return null;
         }
         
-        try {
-            const { data: { session } } = await window.supabase.auth.getSession();
-            if (!session) {
-                console.warn('🗑️ No active session');
-                return null;
-            }
-            
-            const campId = window.getCampId?.() || localStorage.getItem('campistry_user_id');
-            if (!campId || campId === 'demo_camp_001') {
-                console.warn('🗑️ No valid camp ID (demo mode)');
-                return null;
-            }
-            
-            return {
-                token: session.access_token,
-                campId: campId,
-                userId: session.user.id,
-                email: session.user.email
-            };
-        } catch (e) {
-            console.error('🗑️ Auth error:', e);
+        const { data: { session } } = await window.supabase.auth.getSession();
+        if (!session?.user) {
+            console.warn('🗑️ No session');
             return null;
         }
+        
+        // Get camp_id from localStorage or window
+        let campId = window._currentCampId || localStorage.getItem('currentCampId');
+        if (!campId) {
+            // Try to find it from camp_state
+            const all = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
+            campId = all.camp_id;
+        }
+        
+        if (!campId) {
+            // Query team_members to find our camp
+            const { data } = await window.supabase
+                .from('team_members')
+                .select('camp_id')
+                .eq('user_id', session.user.id)
+                .single();
+            campId = data?.camp_id;
+        }
+        
+        return { session, campId };
     }
 
     // =========================================================================
-    // HELPER: Get User's Editable Divisions & Bunks
+    // HELPER: Get User Role & Permissions
     // =========================================================================
     
+    function isOwnerOrAdmin() {
+        const ac = window.AccessControl;
+        if (ac?.isInitialized) {
+            const role = ac.getRole?.() || ac.role;
+            return role === 'owner' || role === 'admin';
+        }
+        // Fallback
+        return false;
+    }
+    
     function getUserEditableDivisions() {
-        // Method 1: AccessControl
-        if (window.AccessControl?.getEditableDivisions) {
-            const divs = window.AccessControl.getEditableDivisions();
-            if (divs?.length > 0) return divs;
+        const ac = window.AccessControl;
+        if (ac?.isInitialized && typeof ac.getEditableDivisions === 'function') {
+            return ac.getEditableDivisions();
         }
-        
-        // Method 2: SubdivisionScheduleManager
-        if (window.SubdivisionScheduleManager?.getDivisionsToSchedule) {
-            const divs = window.SubdivisionScheduleManager.getDivisionsToSchedule();
-            if (divs?.length > 0) return divs;
-        }
-        
-        // Method 3: Check role - Owner/Admin gets all
-        const role = window.AccessControl?.getCurrentRole?.() || 
-                    window.getCampistryUserRole?.() || 'owner';
-        
-        if (role === 'owner' || role === 'admin') {
-            return Object.keys(window.divisions || {});
-        }
-        
         return [];
     }
     
     function getUserEditableBunks() {
         const divisions = getUserEditableDivisions();
-        const allDivisions = window.divisions || {};
-        const bunks = new Set();
+        if (!divisions.length) return [];
         
-        for (const divName of divisions) {
-            const divInfo = allDivisions[divName];
-            if (divInfo?.bunks) {
-                divInfo.bunks.forEach(b => bunks.add(b));
+        // Get all bunks for these divisions
+        const bunks = [];
+        const registry = window.GlobalAuthority?.getRegistry?.();
+        
+        if (registry?.bunks) {
+            for (const [bunkId, bunk] of Object.entries(registry.bunks)) {
+                if (divisions.includes(String(bunk.division))) {
+                    bunks.push(String(bunkId));
+                }
+            }
+        } else {
+            // Fallback: Get from DOM or global bunks
+            const allBunks = window.bunks || [];
+            for (const bunk of allBunks) {
+                if (divisions.includes(String(bunk.division))) {
+                    bunks.push(String(bunk.id));
+                }
             }
         }
         
         return bunks;
     }
-    
-    function isOwnerOrAdmin() {
-        const role = window.AccessControl?.getCurrentRole?.() || 
-                    window.getCampistryUserRole?.() || 'owner';
-        return role === 'owner' || role === 'admin';
-    }
 
     // =========================================================================
-    // CORE: DIRECT CLOUD STATE MODIFICATION
+    // HELPER: Direct Cloud Modification (bypasses merge)
     // =========================================================================
     
-    /**
-     * Directly modify cloud state - bypasses merge logic
-     * This is critical for deletions to actually persist
-     * 
-     * @param {Function} modifyFn - Function that modifies the state object
-     * @returns {Promise<boolean>}
-     */
-    async function modifyCloudStateDirectly(modifyFn) {
-        const auth = await getAuthInfo();
-        if (!auth) {
-            console.log('🗑️ Not authenticated, local-only operation');
+    async function modifyCloudStateDirectly(modifierFn) {
+        const authInfo = await getAuthInfo();
+        if (!authInfo?.campId) {
+            console.warn('🗑️ Cannot modify cloud: no camp ID');
             return false;
         }
         
         try {
-            // 1. Fetch current cloud state
-            const url = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${auth.campId}&select=state`;
-            const response = await fetch(url, {
+            // Fetch current state
+            const response = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${authInfo.campId}`, {
                 method: 'GET',
                 headers: {
                     'apikey': SUPABASE_KEY,
-                    'Authorization': `Bearer ${auth.token}`,
-                    'Content-Type': 'application/json',
-                    'Cache-Control': 'no-cache, no-store'
+                    'Authorization': `Bearer ${authInfo.session.access_token}`,
+                    'Content-Type': 'application/json'
                 }
             });
             
             if (!response.ok) {
-                console.error('🗑️ Failed to fetch cloud state:', response.status);
+                console.warn('🗑️ Failed to fetch cloud state');
                 return false;
             }
             
-            const data = await response.json();
-            if (!data || data.length === 0) {
-                console.log('🗑️ No cloud data exists yet');
-                return true; // Nothing to modify
+            const rows = await response.json();
+            if (!rows.length) {
+                console.warn('🗑️ No cloud state found');
+                return false;
             }
             
-            // 2. Apply modification function
-            const cloudState = data[0].state || {};
-            modifyFn(cloudState);
-            cloudState.updated_at = new Date().toISOString();
+            const cloudState = rows[0].state || {};
             
-            // 3. Save back to cloud (PATCH, not merge)
-            const patchUrl = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${auth.campId}`;
-            const patchResponse = await fetch(patchUrl, {
+            // Apply modification
+            modifierFn(cloudState);
+            
+            // PATCH back
+            const patchResponse = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${authInfo.campId}`, {
                 method: 'PATCH',
                 headers: {
                     'apikey': SUPABASE_KEY,
-                    'Authorization': `Bearer ${auth.token}`,
+                    'Authorization': `Bearer ${authInfo.session.access_token}`,
                     'Content-Type': 'application/json',
                     'Prefer': 'return=minimal'
                 },
-                body: JSON.stringify({ 
-                    state: cloudState, 
-                    owner_id: auth.campId,
-                    updated_at: new Date().toISOString()
-                })
+                body: JSON.stringify({ state: cloudState })
             });
             
             if (patchResponse.ok) {
                 console.log('🗑️ ✅ Cloud state modified directly');
                 return true;
             } else {
-                console.error('🗑️ Cloud modification failed:', patchResponse.status);
+                console.warn('🗑️ PATCH failed:', patchResponse.status);
                 return false;
             }
             
-        } catch (e) {
-            console.error('🗑️ Direct cloud modification error:', e);
+        } catch (err) {
+            console.error('🗑️ Cloud modification error:', err);
             return false;
         }
+    }
+
+    // =========================================================================
+    // NEW: Delete Schedule Versions from Supabase
+    // =========================================================================
+    
+    /**
+     * Deletes schedule_versions records for a given date.
+     * This prevents the VersionMerger from reconstructing deleted data.
+     * 
+     * @param {string} dateKey - The date (YYYY-MM-DD format)
+     * @param {string[]} subdivisionIds - Optional: specific subdivisions to delete (for schedulers)
+     * @param {boolean} deleteAll - If true, delete all versions for the date
+     */
+    async function deleteScheduleVersions(dateKey, subdivisionIds = null, deleteAll = false) {
+        const authInfo = await getAuthInfo();
+        if (!authInfo?.campId) {
+            console.warn('🗑️ Cannot delete versions: no camp ID');
+            return false;
+        }
+        
+        try {
+            console.log(`🗑️ Deleting schedule_versions for ${dateKey}...`);
+            
+            // Build the query
+            let url = `${SUPABASE_URL}/rest/v1/schedule_versions?camp_id=eq.${authInfo.campId}&schedule_date=eq.${dateKey}`;
+            
+            // If not deleting all, filter by subdivision_id
+            if (!deleteAll && subdivisionIds && subdivisionIds.length > 0) {
+                // Delete only versions for specific subdivisions
+                url += `&subdivision_id=in.(${subdivisionIds.map(id => `"${id}"`).join(',')})`;
+            }
+            
+            const response = await fetch(url, {
+                method: 'DELETE',
+                headers: {
+                    'apikey': SUPABASE_KEY,
+                    'Authorization': `Bearer ${authInfo.session.access_token}`,
+                    'Content-Type': 'application/json',
+                    'Prefer': 'return=representation'
+                }
+            });
+            
+            if (response.ok) {
+                const deleted = await response.json();
+                console.log(`🗑️ ✅ Deleted ${deleted.length} schedule_versions records`);
+                return true;
+            } else {
+                const errText = await response.text();
+                console.warn('🗑️ Failed to delete schedule_versions:', response.status, errText);
+                return false;
+            }
+            
+        } catch (err) {
+            console.error('🗑️ schedule_versions deletion error:', err);
+            return false;
+        }
+    }
+    
+    /**
+     * Get the user's subdivision IDs for partial deletion
+     */
+    function getUserSubdivisionIds() {
+        const ac = window.AccessControl;
+        if (ac?.isInitialized) {
+            return ac.userSubdivisionIds || [];
+        }
+        return [];
     }
 
     // =========================================================================
@@ -212,6 +271,7 @@
      * - For schedulers: Deletes only their divisions
      * - Directly modifies cloud (bypasses merge)
      * - Also clears ROOT-level legacy data to prevent re-migration
+     * - Deletes schedule_versions to prevent VersionMerger reconstruction
      * - Suppresses sync during operation to prevent race conditions
      */
     async function patchedEraseCurrentDailyData() {
@@ -221,9 +281,11 @@
         const isOwner = isOwnerOrAdmin();
         const myDivisions = getUserEditableDivisions();
         const myBunks = getUserEditableBunks();
+        const mySubdivisionIds = getUserSubdivisionIds();
         
         console.log(`🗑️ User role: ${isOwner ? 'owner/admin' : 'scheduler'}`);
         console.log(`🗑️ Editable divisions: ${myDivisions.join(', ') || 'ALL'}`);
+        console.log(`🗑️ Subdivision IDs: ${mySubdivisionIds.join(', ') || 'ALL'}`);
         
         // Confirmation message varies by role
         let confirmMsg;
@@ -242,6 +304,13 @@
         console.log('🗑️ Sync suppression ON');
         
         try {
+            // ⭐ STEP 0: Delete schedule_versions FIRST to prevent VersionMerger reconstruction
+            if (isOwner) {
+                await deleteScheduleVersions(dateKey, null, true);
+            } else {
+                await deleteScheduleVersions(dateKey, mySubdivisionIds, false);
+            }
+            
             // 1. Modify localStorage - BOTH date-specific AND root-level legacy data
             const all = window.loadAllDailyData?.() || JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
             
@@ -392,7 +461,7 @@
     
     /**
      * Fixed version of eraseAllDailyData that directly modifies cloud
-     * Also clears ROOT-level legacy data
+     * Also clears ROOT-level legacy data and schedule_versions
      */
     async function patchedEraseAllDailyData() {
         // Only owners can delete all data
@@ -401,130 +470,186 @@
             return;
         }
         
-        const confirmed = confirm(
-            "⚠️ DELETE ALL DAILY SCHEDULES?\n\n" +
-            "This will delete schedules for ALL dates from ALL schedulers.\n\n" +
-            "This action cannot be undone."
-        );
-        if (!confirmed) return;
+        if (!confirm("Delete ALL daily schedules for ALL dates?\n\nThis action cannot be undone.")) {
+            return;
+        }
         
-        console.log('🗑️ [PATCHED] Erasing all daily data...');
+        console.log('🗑️ [PATCHED] Erasing ALL daily schedules...');
         
-        // Suppress sync during operation
+        // ⭐ SUPPRESS SYNC
         window._suppressCloudSync = true;
+        console.log('🗑️ Sync suppression ON');
         
         try {
-            // 1. Clear localStorage completely
-            localStorage.removeItem(DAILY_DATA_KEY);
+            // ⭐ STEP 0: Delete ALL schedule_versions for this camp
+            const authInfo = await getAuthInfo();
+            if (authInfo?.campId) {
+                try {
+                    const url = `${SUPABASE_URL}/rest/v1/schedule_versions?camp_id=eq.${authInfo.campId}`;
+                    const response = await fetch(url, {
+                        method: 'DELETE',
+                        headers: {
+                            'apikey': SUPABASE_KEY,
+                            'Authorization': `Bearer ${authInfo.session.access_token}`,
+                            'Content-Type': 'application/json',
+                            'Prefer': 'return=representation'
+                        }
+                    });
+                    if (response.ok) {
+                        const deleted = await response.json();
+                        console.log(`🗑️ ✅ Deleted ${deleted.length} total schedule_versions records`);
+                    }
+                } catch (err) {
+                    console.warn('🗑️ Could not delete schedule_versions:', err);
+                }
+            }
             
-            // Also clear any in-memory state
+            // 1. Clear localStorage
+            const all = window.loadAllDailyData?.() || JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
+            
+            // Find all date keys
+            const dateKeys = Object.keys(all).filter(key => /^\d{4}-\d{2}-\d{2}$/.test(key));
+            
+            for (const dateKey of dateKeys) {
+                delete all[dateKey];
+            }
+            
+            // Clear ROOT-level legacy data too
+            delete all.scheduleAssignments;
+            delete all.leagueAssignments;
+            
+            console.log(`🗑️ Cleared ${dateKeys.length} days and ROOT data from localStorage`);
+            
+            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(all));
+            
+            // Clear in-memory
             window.scheduleAssignments = {};
-            window.leagueAssignments = {};
             
-            // 2. Directly clear from cloud (including ROOT level)
+            // 2. Clear from cloud
             const cloudSuccess = await modifyCloudStateDirectly((cloudState) => {
                 cloudState.daily_schedules = {};
-                // Also clear ROOT-level legacy data
                 delete cloudState.scheduleAssignments;
                 delete cloudState.leagueAssignments;
-                console.log('🗑️ Cleared daily_schedules and ROOT data in cloud');
+                console.log('🗑️ Cleared all daily_schedules and ROOT data from cloud');
             });
             
             if (cloudSuccess) {
-                console.log('🗑️ ✅ All daily data erased from cloud');
+                console.log('🗑️ ✅ All schedules deleted from cloud');
             }
             
-            alert('All daily schedules deleted. Reloading...');
-            window.location.reload();
+            // 3. Refresh UI
+            window._cloudBlockedResources = null;
+            window._cloudScheduleData = null;
+            
+            if (typeof window.updateTable === 'function') {
+                window.updateTable();
+            }
+            
+            console.log('🗑️ ✅ All daily schedules erased');
             
         } finally {
-            window._suppressCloudSync = false;
+            setTimeout(() => {
+                window._suppressCloudSync = false;
+                console.log('🗑️ Sync suppression OFF');
+            }, 2000);
         }
     }
 
     // =========================================================================
-    // FIX 3: REGENERATION - Clear Before Generate
+    // FIX 3: PATCHED saveCurrentDailyData (to avoid overwrite issues)
+    // =========================================================================
+    
+    // This wraps the original to ensure proper division filtering
+    function createSaveWrapper(originalSave) {
+        return async function patchedSave() {
+            if (window._suppressCloudSync) {
+                console.log('🗑️ [SYNC INTERCEPTOR] Suppressing saveCurrentDailyData');
+                return;
+            }
+            return originalSave.apply(this, arguments);
+        };
+    }
+
+    // =========================================================================
+    // FIX 4: Regenerate Button for Schedulers
     // =========================================================================
     
     /**
-     * Clear current user's schedule data before regenerating
-     * This ensures a clean slate for the optimizer
-     * 
-     * @param {string} dateKey - Date to clear
-     * @param {boolean} syncToCloud - Whether to sync deletion to cloud
-     * @returns {Promise<boolean>}
+     * Adds a "Regenerate My Schedule" button for schedulers
+     * This clears their divisions and allows fresh generation
      */
-    async function clearMyScheduleBeforeRegenerate(dateKey, syncToCloud = true) {
-        console.log(`🔄 Clearing my schedule before regenerate for ${dateKey}...`);
-        
-        const myBunks = getUserEditableBunks();
+    async function regenerateMySchedule() {
+        const dateKey = window.currentScheduleDate;
         const myDivisions = getUserEditableDivisions();
+        const myBunks = getUserEditableBunks();
+        const mySubdivisionIds = getUserSubdivisionIds();
         
-        console.log(`🔄 My divisions: ${myDivisions.join(', ')}`);
-        console.log(`🔄 My bunks: ${myBunks.size} bunks`);
-        
-        // 1. Clear from window.scheduleAssignments (in-memory)
-        if (window.scheduleAssignments) {
-            let clearedCount = 0;
-            for (const bunkId of myBunks) {
-                if (window.scheduleAssignments[bunkId]) {
-                    delete window.scheduleAssignments[bunkId];
-                    clearedCount++;
-                }
-            }
-            console.log(`🔄 Cleared ${clearedCount} bunks from memory`);
+        if (!myDivisions.length) {
+            alert('You do not have any divisions assigned to regenerate.');
+            return;
         }
         
-        // 2. Clear from localStorage
+        const confirmMsg = `Regenerate schedule for ${dateKey}?\n\n` +
+            `This will clear your divisions (${myDivisions.join(', ')}) and generate fresh.\n\n` +
+            `Other schedulers' work will be preserved.`;
+        
+        if (!confirm(confirmMsg)) return;
+        
+        console.log(`🔄 Regenerating schedule for divisions: ${myDivisions.join(', ')}`);
+        
+        // ⭐ SUPPRESS SYNC
+        window._suppressCloudSync = true;
+        console.log('🗑️ Sync suppression ON for regeneration');
+        
         try {
-            const dailyData = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
-            const dateData = dailyData[dateKey];
+            // Delete schedule versions for my subdivisions
+            await deleteScheduleVersions(dateKey, mySubdivisionIds, false);
             
-            if (dateData?.scheduleAssignments) {
+            // 1. Clear my data from localStorage
+            const all = window.loadAllDailyData?.() || JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
+            
+            if (all[dateKey]?.scheduleAssignments) {
                 for (const bunkId of myBunks) {
-                    delete dateData.scheduleAssignments[bunkId];
+                    delete all[dateKey].scheduleAssignments[bunkId];
                 }
+                console.log(`🔄 Cleared ${myBunks.length} bunks from localStorage`);
             }
             
-            // Clear subdivision schedule data
-            if (dateData?.subdivisionSchedules) {
+            // Clear subdivision status
+            if (all[dateKey]?.subdivisionSchedules) {
                 const myDivisionsSet = new Set(myDivisions);
-                for (const [subId, subData] of Object.entries(dateData.subdivisionSchedules)) {
+                for (const [subId, subData] of Object.entries(all[dateKey].subdivisionSchedules)) {
                     const subDivisions = subData.divisions || [];
                     if (subDivisions.some(d => myDivisionsSet.has(d))) {
                         subData.status = 'empty';
                         subData.scheduleData = {};
                         subData.fieldUsageClaims = {};
-                        subData.lockedBy = null;
-                        subData.lockedAt = null;
                     }
                 }
             }
             
-            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(dailyData));
-            console.log(`🔄 Cleared my data from localStorage`);
+            // Clear ROOT-level for my bunks
+            if (all.scheduleAssignments) {
+                for (const bunkId of myBunks) {
+                    delete all.scheduleAssignments[bunkId];
+                }
+            }
             
-        } catch (e) {
-            console.error('🔄 localStorage clear error:', e);
-        }
-        
-        // 3. Clear from cloud (critical for multi-scheduler!)
-        let cloudSuccess = true;
-        if (syncToCloud) {
-            cloudSuccess = await modifyCloudStateDirectly((cloudState) => {
-                if (!cloudState.daily_schedules) return;
+            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(all));
+            
+            // 2. Clear my data from cloud
+            await modifyCloudStateDirectly((cloudState) => {
+                if (!cloudState.daily_schedules?.[dateKey]) return;
                 
                 const dateData = cloudState.daily_schedules[dateKey];
-                if (!dateData) return;
                 
-                // Clear my bunks
                 if (dateData.scheduleAssignments) {
                     for (const bunkId of myBunks) {
                         delete dateData.scheduleAssignments[bunkId];
                     }
                 }
                 
-                // Clear my subdivision status
+                // Clear subdivision status
                 if (dateData.subdivisionSchedules) {
                     const myDivisionsSet = new Set(myDivisions);
                     for (const [subId, subData] of Object.entries(dateData.subdivisionSchedules)) {
@@ -537,361 +662,104 @@
                     }
                 }
                 
-                console.log(`🔄 Cleared my data from cloud`);
+                // Clear ROOT-level
+                if (cloudState.scheduleAssignments) {
+                    for (const bunkId of myBunks) {
+                        delete cloudState.scheduleAssignments[bunkId];
+                    }
+                }
             });
-        }
-        
-        // 4. Clear SubdivisionScheduleManager state
-        if (window.SubdivisionScheduleManager) {
-            const mySubdivisions = window.SubdivisionScheduleManager.getEditableSubdivisions?.() || [];
-            for (const sub of mySubdivisions) {
-                const schedule = window.SubdivisionScheduleManager.getSubdivisionSchedule?.(sub.id);
-                if (schedule) {
-                    schedule.status = 'empty';
-                    schedule.scheduleData = {};
-                    schedule.fieldUsageClaims = {};
+            
+            // Clear memory
+            if (window.scheduleAssignments) {
+                for (const bunkId of myBunks) {
+                    delete window.scheduleAssignments[bunkId];
                 }
             }
-        }
-        
-        console.log(`🔄 ✅ Pre-regenerate clear complete`);
-        return cloudSuccess;
-    }
-
-    // =========================================================================
-    // REGENERATION WORKFLOW
-    // =========================================================================
-    
-    /**
-     * Complete regeneration workflow:
-     * 1. Clear MY old schedule data (local + cloud)
-     * 2. Fetch fresh blocked resources from other schedulers
-     * 3. Ready for optimizer to run fresh
-     * 
-     * @param {Object} options
-     * @param {string} options.dateKey - Date to regenerate
-     * @returns {Promise<Object>} - Result
-     */
-    async function regenerateMySchedule(options = {}) {
-        const {
-            dateKey = window.currentScheduleDate
-        } = options;
-        
-        console.log('\n' + '═'.repeat(60));
-        console.log('🔄 REGENERATE SCHEDULE WORKFLOW');
-        console.log('═'.repeat(60));
-        console.log(`Date: ${dateKey}`);
-        
-        try {
-            // Step 1: Clear my old data first
-            console.log('\n🗑️ Step 1: Clearing old schedule data...');
-            const clearSuccess = await clearMyScheduleBeforeRegenerate(dateKey, true);
+            window._cloudBlockedResources = null;
+            window._cloudScheduleData = null;
             
-            if (!clearSuccess) {
-                console.warn('🔄 ⚠️ Cloud clear may have failed');
+            console.log('🔄 ✅ Data cleared, ready for regeneration');
+            
+            // Re-enable sync before regeneration
+            window._suppressCloudSync = false;
+            console.log('🗑️ Sync suppression OFF');
+            
+            // 3. Trigger the optimizer
+            if (typeof window.runSkeletonOptimizer === 'function') {
+                console.log('🔄 Running optimizer...');
+                await window.runSkeletonOptimizer();
+            } else if (typeof window.initMasterScheduler === 'function') {
+                console.log('🔄 Running master scheduler...');
+                await window.initMasterScheduler();
+            } else {
+                alert('Schedule cleared. Please click "Run Optimizer" to generate fresh schedule.');
             }
             
-            // Step 2: Fetch fresh blocked resources from cloud
-            console.log('\n📥 Step 2: Fetching blocked resources from other schedulers...');
-            
-            if (window.SchedulerCloudFetch?.initializeSchedulerView) {
-                await window.SchedulerCloudFetch.initializeSchedulerView(dateKey);
-                console.log('✅ Blocked resources loaded');
-            }
-            
-            // Step 3: Refresh local data state
-            console.log('\n🔄 Step 3: Refreshing local state...');
-            window.loadCurrentDailyData?.();
-            
-            // Reinitialize schedule system
-            if (window.initScheduleSystem) {
-                window.initScheduleSystem();
-            }
-            
-            console.log('\n✅ Ready for schedule generation!');
-            console.log('   - Your old schedule has been cleared');
-            console.log('   - Other schedulers\' data is preserved');
-            console.log('   - Use "Generate Schedule" to create new schedule');
-            console.log('═'.repeat(60) + '\n');
-            
-            return {
-                success: true,
-                dateKey,
-                message: 'Ready for regeneration'
-            };
-            
-        } catch (error) {
-            console.error('🔄 Regeneration prep failed:', error);
-            return {
-                success: false,
-                error: error.message
-            };
+        } catch (err) {
+            console.error('🔄 Regeneration error:', err);
+            window._suppressCloudSync = false;
         }
     }
 
     // =========================================================================
-    // HOOK INTO EXISTING CALENDAR.JS FUNCTIONS
+    // INSTALLATION: Patch calendar.js functions
     // =========================================================================
     
     function patchCalendarFunctions() {
         console.log('🗑️ Patching calendar.js functions...');
         
-        // Store originals
-        const originalEraseCurrentDailyData = window.eraseCurrentDailyData;
-        const originalEraseAllDailyData = window.eraseAllDailyData;
+        // Replace window functions
+        if (typeof window.eraseCurrentDailyData === 'function') {
+            window._originalEraseCurrentDailyData = window.eraseCurrentDailyData;
+            window.eraseCurrentDailyData = patchedEraseCurrentDailyData;
+            console.log('🗑️ ✅ Patched eraseCurrentDailyData');
+        }
         
-        // Replace with patched versions
-        window.eraseCurrentDailyData = patchedEraseCurrentDailyData;
-        window.eraseAllDailyData = patchedEraseAllDailyData;
-        
-        // Keep originals accessible
-        window._originalEraseCurrentDailyData = originalEraseCurrentDailyData;
-        window._originalEraseAllDailyData = originalEraseAllDailyData;
+        if (typeof window.eraseAllDailyData === 'function') {
+            window._originalEraseAllDailyData = window.eraseAllDailyData;
+            window.eraseAllDailyData = patchedEraseAllDailyData;
+            console.log('🗑️ ✅ Patched eraseAllDailyData');
+        }
         
         console.log('🗑️ ✅ Calendar functions patched');
     }
 
-    // =========================================================================
-    // HOOK INTO UI BUTTONS
-    // =========================================================================
-    
-    function hookDeletionButtons() {
-        // Hook "Erase Today" button
+    function hookEraseButtons() {
+        // Hook the Erase Today button
         const eraseTodayBtn = document.getElementById('eraseTodayBtn');
-        if (eraseTodayBtn && !eraseTodayBtn._patched) {
-            eraseTodayBtn.onclick = async function(e) {
+        if (eraseTodayBtn) {
+            // Remove existing onclick
+            eraseTodayBtn.onclick = null;
+            eraseTodayBtn.addEventListener('click', async (e) => {
                 e.preventDefault();
+                e.stopPropagation();
                 await patchedEraseCurrentDailyData();
-            };
-            eraseTodayBtn._patched = true;
+            });
             console.log('🗑️ ✅ Hooked eraseTodayBtn');
         }
         
-        // Hook "Erase All Schedules" button (if exists)
-        const eraseAllSchedulesBtn = document.getElementById('eraseAllSchedulesBtn');
-        if (eraseAllSchedulesBtn && !eraseAllSchedulesBtn._patched) {
-            eraseAllSchedulesBtn.onclick = async function(e) {
+        // Hook the Erase All button
+        const eraseAllBtn = document.getElementById('eraseAllSchedulesBtn');
+        if (eraseAllBtn) {
+            eraseAllBtn.onclick = null;
+            eraseAllBtn.addEventListener('click', async (e) => {
                 e.preventDefault();
+                e.stopPropagation();
                 await patchedEraseAllDailyData();
-            };
-            eraseAllSchedulesBtn._patched = true;
+            });
             console.log('🗑️ ✅ Hooked eraseAllSchedulesBtn');
         }
     }
 
     // =========================================================================
-    // ADD REGENERATE BUTTON TO UI
+    // INSTALLATION: Hook cloud sync to respect suppression
     // =========================================================================
     
-    function addRegenerateButton() {
-        // Find container
-        const masterScheduler = document.getElementById('master-scheduler-content') ||
-                               document.getElementById('master-scheduler');
-        if (!masterScheduler) {
-            setTimeout(addRegenerateButton, 1000);
-            return;
-        }
-        
-        // Check if button already exists
-        if (document.getElementById('btn-regenerate-schedule')) return;
-        
-        // Find or create toolbar
-        let toolbar = document.querySelector('.scheduler-action-toolbar, .regenerate-toolbar');
-        if (!toolbar) {
-            toolbar = document.createElement('div');
-            toolbar.className = 'regenerate-toolbar';
-            toolbar.style.cssText = `
-                display: flex;
-                gap: 10px;
-                margin-bottom: 16px;
-                padding: 12px;
-                background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
-                border-radius: 8px;
-                border: 1px solid #f59e0b;
-                flex-wrap: wrap;
-                align-items: center;
-            `;
-            
-            // Insert after any existing header
-            const header = masterScheduler.querySelector('h2, .header, .title');
-            if (header) {
-                header.after(toolbar);
-            } else {
-                masterScheduler.insertBefore(toolbar, masterScheduler.firstChild);
-            }
-        }
-        
-        // Create info text
-        const infoText = document.createElement('span');
-        infoText.style.cssText = `
-            font-size: 12px;
-            color: #92400e;
-            margin-right: auto;
-        `;
-        infoText.innerHTML = '🔄 <strong>Regenerate:</strong> Clear your schedule and start fresh (preserves other schedulers\' work)';
-        toolbar.appendChild(infoText);
-        
-        // Create regenerate button
-        const btn = document.createElement('button');
-        btn.id = 'btn-regenerate-schedule';
-        btn.innerHTML = '🔄 Clear & Regenerate';
-        btn.style.cssText = `
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 16px;
-            border-radius: 6px;
-            border: 1px solid #d97706;
-            background: white;
-            color: #92400e;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-        `;
-        
-        btn.onmouseover = () => {
-            btn.style.background = '#fffbeb';
-            btn.style.borderColor = '#b45309';
-        };
-        btn.onmouseout = () => {
-            btn.style.background = 'white';
-            btn.style.borderColor = '#d97706';
-        };
-        
-        btn.onclick = async (e) => {
-            e.preventDefault();
-            
-            const dateKey = window.currentScheduleDate;
-            const myDivisions = getUserEditableDivisions();
-            
-            const confirmed = confirm(
-                `🔄 REGENERATE YOUR SCHEDULE\n\n` +
-                `Date: ${dateKey}\n` +
-                `Your divisions: ${myDivisions.join(', ') || 'ALL'}\n\n` +
-                `This will:\n` +
-                `• Clear your current schedule for this date\n` +
-                `• Preserve other schedulers' data\n` +
-                `• Sync deletion to cloud\n` +
-                `• Prepare for fresh generation\n\n` +
-                `Continue?`
-            );
-            
-            if (!confirmed) return;
-            
-            btn.innerHTML = '⏳ Preparing...';
-            btn.disabled = true;
-            
-            try {
-                const result = await regenerateMySchedule({ dateKey });
-                
-                if (result.success) {
-                    alert(
-                        '✅ Ready for regeneration!\n\n' +
-                        'Your old schedule has been cleared.\n' +
-                        'Other schedulers\' data is preserved.\n\n' +
-                        'Now click "Generate Schedule" to create your new schedule.'
-                    );
-                    
-                    // Refresh UI
-                    if (window.initMasterScheduler) {
-                        window.initMasterScheduler();
-                    }
-                    if (window.updateTable) {
-                        window.updateTable();
-                    }
-                } else {
-                    alert('❌ Failed: ' + (result.error || 'Unknown error'));
-                }
-            } catch (error) {
-                console.error('Regeneration error:', error);
-                alert('❌ Error: ' + error.message);
-            } finally {
-                btn.innerHTML = '🔄 Clear & Regenerate';
-                btn.disabled = false;
-            }
-        };
-        
-        toolbar.appendChild(btn);
-        console.log('🔄 ✅ Added regenerate button');
-    }
-
-    // =========================================================================
-    // HOOK INTO GENERATE BUTTON
-    // =========================================================================
-    
-    function hookGenerateButton() {
-        // Find generate buttons (there may be multiple)
-        const generateBtns = document.querySelectorAll(
-            '[onclick*="runSkeletonOptimizer"], ' +
-            '[onclick*="generateSchedule"], ' +
-            '#generateScheduleBtn, ' +
-            '#btnGenerateSchedule, ' +
-            '.generate-schedule-btn'
-        );
-        
-        generateBtns.forEach(btn => {
-            if (btn._regenerateHooked) return;
-            
-            const originalOnClick = btn.onclick;
-            
-            btn.onclick = async function(e) {
-                const dateKey = window.currentScheduleDate;
-                
-                // Check if user has existing data
-                const dailyData = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
-                const dateData = dailyData[dateKey]?.scheduleAssignments || {};
-                const myBunks = getUserEditableBunks();
-                
-                const hasExistingData = [...myBunks].some(b => {
-                    const slots = dateData[b];
-                    return slots && slots.some(s => s && !s.continuation && s.field);
-                });
-                
-                if (hasExistingData) {
-                    const confirmRegen = confirm(
-                        `⚠️ You already have a schedule for ${dateKey}.\n\n` +
-                        `Generating will REPLACE your current schedule.\n` +
-                        `Other schedulers' data will be preserved.\n\n` +
-                        `Continue?`
-                    );
-                    
-                    if (!confirmRegen) {
-                        e.preventDefault();
-                        return false;
-                    }
-                    
-                    // Clear existing data before generation
-                    console.log('🔄 Clearing existing data before regenerate...');
-                    await clearMyScheduleBeforeRegenerate(dateKey, true);
-                    
-                    // Reload data
-                    window.loadCurrentDailyData?.();
-                }
-                
-                // Call original handler
-                if (originalOnClick) {
-                    return originalOnClick.call(this, e);
-                }
-            };
-            
-            btn._regenerateHooked = true;
-            console.log('🔄 ✅ Hooked generate button:', btn.id || btn.className);
-        });
-    }
-
-    // =========================================================================
-    // INITIALIZATION
-    // =========================================================================
-    
-    /**
-     * Intercept sync-related functions to respect suppression flag
-     */
     function hookCloudSync() {
-        // Hook forceSyncToCloud
-        const originalSync = window.forceSyncToCloud;
-        if (originalSync && !originalSync._suppressed) {
+        // Intercept forceSyncToCloud
+        if (typeof window.forceSyncToCloud === 'function') {
+            const originalSync = window.forceSyncToCloud;
             window.forceSyncToCloud = async function(...args) {
                 if (window._suppressCloudSync) {
                     console.log('🗑️ [SYNC INTERCEPTOR] Suppressing forceSyncToCloud');
@@ -899,99 +767,106 @@
                 }
                 return originalSync.apply(this, args);
             };
-            window.forceSyncToCloud._suppressed = true;
             console.log('🗑️ ✅ forceSyncToCloud interceptor installed');
         }
         
-        // Hook saveCurrentDailyData if it exists (might trigger syncs)
-        const originalSave = window.saveCurrentDailyData;
-        if (originalSave && !originalSave._suppressed) {
-            window.saveCurrentDailyData = function(...args) {
+        // Intercept saveCurrentDailyData
+        if (typeof window.saveCurrentDailyData === 'function') {
+            const originalSave = window.saveCurrentDailyData;
+            window.saveCurrentDailyData = async function(...args) {
                 if (window._suppressCloudSync) {
                     console.log('🗑️ [SYNC INTERCEPTOR] Suppressing saveCurrentDailyData');
-                    return; // Skip
+                    return;
                 }
                 return originalSave.apply(this, args);
             };
-            window.saveCurrentDailyData._suppressed = true;
             console.log('🗑️ ✅ saveCurrentDailyData interceptor installed');
         }
     }
+
+    // =========================================================================
+    // UI: Add Regenerate Button
+    // =========================================================================
+    
+    function addRegenerateButton() {
+        // Only add for schedulers (non-owners)
+        if (isOwnerOrAdmin()) {
+            console.log('🔄 Owner/admin - regenerate button not needed');
+            return;
+        }
+        
+        // Find the toolbar or button container
+        const toolbar = document.querySelector('.calendar-toolbar') || 
+                       document.querySelector('#calendar-controls') ||
+                       document.querySelector('.btn-group');
+        
+        if (!toolbar) {
+            console.log('🔄 No toolbar found for regenerate button');
+            return;
+        }
+        
+        // Check if already added
+        if (document.getElementById('regenerateScheduleBtn')) {
+            return;
+        }
+        
+        const btn = document.createElement('button');
+        btn.id = 'regenerateScheduleBtn';
+        btn.className = 'btn btn-warning btn-sm';
+        btn.innerHTML = '🔄 Regenerate My Schedule';
+        btn.title = 'Clear your schedule and generate fresh (preserves other schedulers)';
+        btn.style.marginLeft = '5px';
+        btn.onclick = regenerateMySchedule;
+        
+        toolbar.appendChild(btn);
+        console.log('🔄 ✅ Added regenerate button');
+    }
+
+    // =========================================================================
+    // INITIALIZE
+    // =========================================================================
     
     function initialize() {
         console.log('🗑️ Initializing data management...');
         
-        // Patch calendar.js functions
+        // Patch calendar functions
         patchCalendarFunctions();
         
-        // Hook UI buttons
-        hookDeletionButtons();
+        // Hook erase buttons
+        hookEraseButtons();
         
-        // Hook cloud sync to respect suppression flag
+        // Hook cloud sync
         hookCloudSync();
-        setTimeout(hookCloudSync, 1000); // Retry in case it loads later
         
-        // Hook generate button
-        setTimeout(hookGenerateButton, 1000);
-        
-        // Add regenerate button
-        setTimeout(addRegenerateButton, 2000);
-        
-        // Re-hook when tabs change
-        const origShowTab = window.showTab;
-        if (origShowTab) {
-            window.showTab = function(tabId) {
-                origShowTab.call(this, tabId);
-                
-                if (tabId === 'master-scheduler') {
-                    setTimeout(() => {
-                        addRegenerateButton();
-                        hookGenerateButton();
-                    }, 100);
-                }
-            };
-        }
+        // Export functions
+        window.patchedEraseCurrentDailyData = patchedEraseCurrentDailyData;
+        window.patchedEraseAllDailyData = patchedEraseAllDailyData;
+        window.regenerateMySchedule = regenerateMySchedule;
+        window.deleteScheduleVersions = deleteScheduleVersions;
         
         console.log('🗑️ ✅ Data management initialized');
     }
-    
-    // Auto-initialize when DOM is ready
-    if (document.readyState === 'complete') {
-        setTimeout(initialize, 500);
-    } else {
-        window.addEventListener('load', () => setTimeout(initialize, 500));
-    }
 
-    // =========================================================================
-    // EXPORTS
-    // =========================================================================
+    // Run when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initialize);
+    } else {
+        // Small delay to ensure other scripts have loaded
+        setTimeout(initialize, 100);
+    }
     
-    window.SchedulerDataManagement = {
-        // Core functions
-        modifyCloudStateDirectly,
-        
-        // Deletion functions
-        patchedEraseCurrentDailyData,
-        patchedEraseAllDailyData,
-        
-        // Regeneration functions
-        clearMyScheduleBeforeRegenerate,
-        regenerateMySchedule,
-        
-        // Helpers
-        getUserEditableDivisions,
-        getUserEditableBunks,
-        isOwnerOrAdmin,
-        getAuthInfo,
-        
-        // Manual initialization
-        initialize,
-        hookDeletionButtons,
-        hookGenerateButton,
-        hookCloudSync,
-        addRegenerateButton
-    };
+    // Add regenerate button after RBAC init
+    const checkForRBAC = setInterval(() => {
+        const ac = window.AccessControl;
+        if (ac?.isInitialized) {
+            clearInterval(checkForRBAC);
+            setTimeout(addRegenerateButton, 500);
+        }
+    }, 200);
     
-    console.log("🗑️ Scheduler Data Management v2.1.0 loaded");
+    // Timeout after 10 seconds
+    setTimeout(() => clearInterval(checkForRBAC), 10000);
+
+    console.log("🗑️ Scheduler Data Management v2.2.0 loaded");
 
 })();
