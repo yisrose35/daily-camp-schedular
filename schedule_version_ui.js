@@ -1,13 +1,13 @@
 // =================================================================
 // schedule_version_ui.js
 // UI for Managing Schedule Versions (Save, Load, Merge)
-// VERSION: v3.7 (METHOD NAME FIX)
+// VERSION: v3.8 (DIRECT SAVE FIX)
 // =================================================================
 
 (function () {
     'use strict';
 
-    console.log("📋 Schedule Version UI v3.7 (METHOD NAME FIX) loading...");
+    console.log("📋 Schedule Version UI v3.8 (DIRECT SAVE FIX) loading...");
 
     // =================================================================
     // CONFIGURATION
@@ -25,6 +25,13 @@
     function getDate() {
         const input = document.getElementById('calendar-date-picker') || document.getElementById('schedule-date-input');
         return input ? input.value : null;
+    }
+
+    function getCampId() {
+        // Try multiple sources for the ID
+        return (window.getCampId && window.getCampId()) || 
+               localStorage.getItem('campistry_user_id') || 
+               'demo_camp_001';
     }
 
     // =================================================================
@@ -76,41 +83,34 @@
         const name = prompt("Enter a name for this version (e.g. 'Draft 1', 'Morning Final'):");
         if (!name) return;
 
-        // Capture current state from local storage (Source of Truth for UI)
-        let scheduleData = {};
+        // 1. Capture & Filter Data
+        let payload = {};
         try {
             const dailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             const rawDateData = dailyData[date] || {};
 
-            // ★ FILTER PAYLOAD (SMART SAVE) ★
-            // We create a clean object containing only the critical scheduling data.
-            const payload = {};
-
-            // 1. Assignments (The core grid: sports, fields, pinned events)
+            // ★ STRICT FILTERING ★
+            // Only save what is strictly needed for the schedule grid.
+            
+            // Core Assignments (Bunks, Activities, Fields)
             if (rawDateData.scheduleAssignments) {
                 payload.scheduleAssignments = rawDateData.scheduleAssignments;
             }
 
-            // 2. League Assignments (Critical metadata for league games)
-            // This ensures matchups and standings data is preserved
+            // League Metadata (Matchups, Locations)
             if (rawDateData.leagueAssignments) {
                 payload.leagueAssignments = rawDateData.leagueAssignments;
             }
 
-            // 3. Unified Times (Optional but good for alignment)
-            // Keeping this ensures the grid structure matches the assignments
+            // Unified Times (Slot definitions)
             if (rawDateData.unifiedTimes) {
                 payload.unifiedTimes = rawDateData.unifiedTimes;
             }
 
-            // NOTE: We intentionally EXCLUDE 'skeleton' and 'subdivisionSchedules'
-            // to keep the payload focused on the actual output (assignments).
-
-            // Fallback for legacy flat structures (if new structure is empty)
+            // If empty, fallback to raw data to prevent saving nothing
             if (Object.keys(payload).length === 0) {
-                scheduleData = rawDateData;
-            } else {
-                scheduleData = payload;
+                console.warn("Payload empty after filtering, using raw data.");
+                payload = rawDateData;
             }
 
         } catch (e) {
@@ -119,29 +119,42 @@
             return;
         }
 
-        if (window.ScheduleVersionsDB) {
-            // FIX: Try 'createVersion' if 'saveVersion' doesn't exist (API compatibility)
-            const saveMethod = window.ScheduleVersionsDB.saveVersion || window.ScheduleVersionsDB.createVersion;
-
-            if (typeof saveMethod !== 'function') {
-                 console.error("ScheduleVersionsDB API mismatch. Available methods:", Object.keys(window.ScheduleVersionsDB));
-                 alert("❌ Error: Save method not found in database module. Check console.");
-                 return;
-            }
-
+        // 2. Direct Save to Supabase (Bypassing potentially buggy DB module)
+        if (window.supabase) {
+            console.log("📋 Saving version directly to Supabase...");
+            const campId = getCampId();
+            
             try {
-                const result = await saveMethod(date, name, scheduleData);
-                if (result && result.success) {
-                    alert("✅ Version saved successfully!");
+                // Get current user ID for 'created_by'
+                const { data: { user } } = await window.supabase.auth.getUser();
+                const userId = user ? user.id : 'anon';
+
+                const { data, error } = await window.supabase
+                    .from('schedule_versions')
+                    .insert({
+                        camp_id: campId,
+                        date: date,
+                        name: name,
+                        schedule_data: payload,
+                        created_by: userId, 
+                        created_at: new Date().toISOString()
+                    })
+                    .select();
+
+                if (error) {
+                    console.error("❌ Supabase Insert Error:", error);
+                    alert(`Save Failed: ${error.message}\n(Check console for details)`);
                 } else {
-                    alert("❌ Error saving version: " + (result ? result.error : "Unknown error"));
+                    console.log("✅ Version Saved:", data);
+                    alert("✅ Version saved successfully!");
                 }
             } catch (err) {
-                console.error("Save failed:", err);
-                alert("❌ Exception during save: " + err.message);
+                console.error("❌ Unexpected Error during save:", err);
+                alert("An unexpected error occurred. Check console.");
             }
+
         } else {
-            alert("❌ Database module (ScheduleVersionsDB) not loaded.");
+            alert("❌ Supabase client not initialized.");
         }
     }
 
@@ -149,44 +162,54 @@
         const date = getDate();
         if (!date) return alert("Please select a date first.");
 
-        if (!window.ScheduleVersionsDB) return alert("Database module not loaded.");
+        // Direct Load from Supabase to ensure consistency
+        if (!window.supabase) return alert("Supabase not loaded.");
+        const campId = getCampId();
 
-        const versions = await window.ScheduleVersionsDB.getVersions(date);
-        if (!versions || versions.length === 0) {
-            return alert("No saved versions found for this date.");
-        }
+        try {
+            const { data: versions, error } = await window.supabase
+                .from('schedule_versions')
+                .select('*')
+                .eq('camp_id', campId)
+                .eq('date', date)
+                .order('created_at', { ascending: false });
 
-        // Simple prompt for now (could be a nice modal later)
-        let msg = "Select a version to load (enter number):\n";
-        versions.forEach((v, i) => {
-            const time = new Date(v.created_at).toLocaleTimeString();
-            msg += `${i + 1}. ${v.name || 'Untitled'} (${time}) - by ${v.created_by_email || 'User'}\n`;
-        });
+            if (error) throw error;
+            if (!versions || versions.length === 0) return alert("No saved versions found for this date.");
 
-        const choice = prompt(msg);
-        if (!choice) return;
-        
-        const index = parseInt(choice) - 1;
-        if (isNaN(index) || index < 0 || index >= versions.length) return alert("Invalid selection.");
+            // Simple prompt
+            let msg = "Select a version to load (enter number):\n";
+            versions.forEach((v, i) => {
+                const time = new Date(v.created_at).toLocaleTimeString();
+                msg += `${i + 1}. ${v.name || 'Untitled'} (${time})\n`;
+            });
 
-        const selected = versions[index];
-        
-        if (confirm(`Load "${selected.name}"? This will overwrite your current view.`)) {
-            // Push to UI via Cloud Bridge
-            if (window.saveScheduleAssignments) {
-                // Determine data structure (handles legacy vs new)
-                let dataToLoad = selected.schedule_data;
-                if (typeof dataToLoad === 'string') {
-                    try { dataToLoad = JSON.parse(dataToLoad); } catch(e) {}
+            const choice = prompt(msg);
+            if (!choice) return;
+            
+            const index = parseInt(choice) - 1;
+            if (isNaN(index) || index < 0 || index >= versions.length) return alert("Invalid selection.");
+
+            const selected = versions[index];
+            
+            if (confirm(`Load "${selected.name}"? This will overwrite your current view.`)) {
+                if (window.saveScheduleAssignments) {
+                    // Extract data structure
+                    let dataToLoad = selected.schedule_data;
+                    if (typeof dataToLoad === 'string') {
+                        try { dataToLoad = JSON.parse(dataToLoad); } catch(e) {}
+                    }
+                    const assignments = dataToLoad.scheduleAssignments || dataToLoad;
+                    
+                    window.saveScheduleAssignments(date, assignments);
+                    alert("✅ Version loaded!");
+                    
+                    if(window.loadScheduleForDate) window.loadScheduleForDate(date);
                 }
-                const assignments = dataToLoad.scheduleAssignments || dataToLoad;
-                
-                window.saveScheduleAssignments(date, assignments);
-                alert("✅ Version loaded!");
-                
-                // Refresh UI
-                if(window.loadScheduleForDate) window.loadScheduleForDate(date);
             }
+        } catch (e) {
+            console.error("Load Error:", e);
+            alert("Failed to load versions: " + e.message);
         }
     }
 
@@ -203,7 +226,6 @@
             return;
         }
 
-        // Show loading state
         const btn = document.getElementById('btn-merge-versions');
         const originalText = btn ? btn.innerHTML : '';
         if(btn) btn.innerHTML = '<span>⏳</span> Merging...';
@@ -233,9 +255,6 @@
     // =================================================================
 
     function init() {
-        // Find a place to inject the toolbar. 
-        // We'll look for .header-right or create a container below the header.
-        
         let container = document.getElementById(CONTAINER_ID);
         if (!container) {
             const header = document.querySelector('.app-header');
@@ -254,7 +273,6 @@
                 toolbarRow.appendChild(container);
                 header.parentNode.insertBefore(toolbarRow, header.nextSibling);
             } else {
-                // Fallback: floating
                 container = document.createElement('div');
                 container.id = CONTAINER_ID;
                 container.style.cssText = `
@@ -266,18 +284,10 @@
             }
         }
 
-        // Clear existing
         container.innerHTML = '';
-
-        // Add Buttons
-        
-        // 1. Save
         container.appendChild(createButton("Save Version", "💾", handleSaveVersion));
-        
-        // 2. Load
         container.appendChild(createButton("Load Version", "📂", handleLoadVersion));
 
-        // 3. Merge (The requested feature)
         const mergeBtn = createButton("Merge & Sync", "⚡", handleMergeVersions, 'warning');
         mergeBtn.id = 'btn-merge-versions';
         mergeBtn.title = "Combine all saved versions for this date into one schedule";
@@ -286,11 +296,10 @@
         console.log("📋 ✅ Toolbar mounted successfully");
     }
 
-    // Run Init
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {
-        setTimeout(init, 1000); // Wait for header to exist
+        setTimeout(init, 1000); 
     }
 
 })();
