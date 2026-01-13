@@ -1,19 +1,19 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// VERSION: v4.4 (ROBUST MERGE + DEBUGGING)
+// VERSION: v4.5 (AUTO-SYNC BACK)
 // =================================================================
 // 
 // FEATURES:
 // - Universal Additive Merge (no destructive overwrites)
 // - Permission enforcement (Schedulers limited to their divisions)
 // - Schedule versioning ("Base On" creates new version, preserves original)
-// - Read access for everyone, write access by division
+// - Auto-Sync Back: Updates local storage with merged state after save
 //
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v4.4 (ROBUST MERGE)");
+  console.log("☁️ Campistry Cloud Bridge v4.5 (AUTO-SYNC BACK)");
 
   // CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -462,7 +462,25 @@
           const patchedData = await patchResponse.json();
           if (patchedData && patchedData.length > 0) {
               console.log("☁️ [SAVE] ✅ Success");
-              showToast("✅ Schedule Saved!", "success");
+              
+              // ★★★ AUTO-SYNC BACK: UPDATE LOCAL STORAGE WITH MERGED RESULT ★★★
+              // This is critical for ensuring the local user sees the data they just "merged"
+              // but didn't have locally (e.g. from other schedulers)
+              try {
+                  console.log("☁️ [SYNC] Updating local storage with merged state...");
+                  localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(finalSchedule));
+                  if (_memoryCache) _memoryCache.daily_schedules = finalSchedule;
+                  
+                  // Trigger UI refresh to show other schedulers' data immediately
+                  setTimeout(() => {
+                      window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
+                      if (window.updateTable) window.updateTable();
+                  }, 50);
+              } catch(e) {
+                  console.error("☁️ Error auto-syncing back to local:", e);
+              }
+
+              showToast("✅ Schedule Saved & Synced!", "success");
               _dailyDataDirty = false;
               window.dispatchEvent(new CustomEvent('campistry-cloud-saved'));
               return true;
