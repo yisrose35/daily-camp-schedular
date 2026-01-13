@@ -1,7 +1,6 @@
-
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// VERSION: v4.2 (PERMISSIONS + VERSIONING)
+// VERSION: v4.3 (PERMISSIONS FIX + NON-DESTRUCTIVE MERGE)
 // =================================================================
 // 
 // FEATURES:
@@ -14,7 +13,7 @@
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v4.2 (PERMISSIONS + VERSIONING)");
+  console.log("☁️ Campistry Cloud Bridge v4.3 (PERMISSIONS + VERSIONING)");
 
   // CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -163,7 +162,7 @@
   // ============================================================================
   // PERMISSION HELPERS
   // ============================================================================
-  
+   
   function hasFullAccess() {
     return _userRole === 'owner' || _userRole === 'admin';
   }
@@ -338,10 +337,10 @@
       // =====================================================================
       // STEP 4: PERMISSION-ENFORCED MERGE
       // =====================================================================
-      console.log('☁️ [SAVE] Step 4: Permission-enforced merge...');
+      console.log('☁️ [SAVE] Step 4: Permission-enforced merge (with Preservation)...');
       
       const METADATA_KEYS = ['scheduleAssignments', 'leagueAssignments', 'unifiedTimes', 
-                            'skeleton', 'manualSkeleton', 'subdivisionSchedules'];
+                             'skeleton', 'manualSkeleton', 'subdivisionSchedules'];
       
       const editableGrades = getUserEditableGrades();
       const editableDivisions = getUserEditableDivisions();
@@ -361,12 +360,34 @@
               if (METADATA_KEYS.includes(gradeId)) continue;
               
               // PERMISSION CHECK: Can user edit this grade?
-              if (hasFullAccess() || editableGrades.has(String(gradeId))) {
+              // FIX: Use centralized AccessControl if available for robust Bunk->Division lookup
+              let canEdit = false;
+              
+              if (window.AccessControl && typeof window.AccessControl.canEditBunk === 'function') {
+                  // Use robust check from AccessControl v3.3
+                  canEdit = window.AccessControl.canEditBunk(gradeId);
+              } else {
+                  // Fallback to internal logic if AccessControl not ready
+                  canEdit = hasFullAccess() || editableGrades.has(String(gradeId));
+              }
+
+              if (canEdit) {
+                  // User has permission: Apply local changes
                   finalSchedule[dateKey].scheduleAssignments[gradeId] = schedule;
                   savedCount++;
               } else {
-                  blockedCount++;
-                  console.warn(`🛡️ [BLOCKED] Cannot save grade "${gradeId}" - not in your divisions`);
+                  // User NO permission: PRESERVE existing cloud data (Non-destructive merge)
+                  if (cloudSchedules[dateKey] && 
+                      cloudSchedules[dateKey].scheduleAssignments && 
+                      cloudSchedules[dateKey].scheduleAssignments[gradeId]) {
+                      
+                      finalSchedule[dateKey].scheduleAssignments[gradeId] = cloudSchedules[dateKey].scheduleAssignments[gradeId];
+                      // console.log(`🛡️ Preserved cloud version for restricted bunk "${gradeId}"`);
+                  } else {
+                      // New data that user isn't allowed to create, or valid block
+                      blockedCount++;
+                      console.warn(`🛡️ [BLOCKED] Cannot update grade "${gradeId}" - permission denied`);
+                  }
               }
           }
           
@@ -408,8 +429,7 @@
       }
 
       if (blockedCount > 0) {
-          console.warn(`🛡️ [SAVE] ${blockedCount} grades blocked due to permissions`);
-          showToast(`⚠️ ${blockedCount} grades skipped (outside your divisions)`, "warning");
+          console.warn(`🛡️ [SAVE] ${blockedCount} new items blocked due to permissions`);
       }
       
       console.log(`☁️ [SAVE] Saved ${savedCount} grades`);
@@ -495,8 +515,7 @@
   /**
    * Create a new schedule based on an existing one
    * CRITICAL: This preserves the original and creates a NEW copy
-   * 
-   * @param {string} sourceDateKey - Source date to copy from
+   * * @param {string} sourceDateKey - Source date to copy from
    * @param {string} targetDateKey - Target date for new schedule
    * @param {string} name - Name for the new version
    * @param {string} sourceVersionId - Optional specific version to copy
