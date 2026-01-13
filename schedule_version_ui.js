@@ -1,5 +1,5 @@
 // =================================================================
-// schedule_version_ui_v3.js — Self-Mounting Version UI
+// schedule_version_ui.js — Self-Mounting Version UI
 // VERSION: v3.0 (SELF-MOUNTING + SAVE INTERCEPT)
 // =================================================================
 //
