@@ -1,9 +1,9 @@
 // =============================================================================
 // scheduler_data_management.js — Deletion Sync & Regeneration Support
-// VERSION: v2.2.0 (SCHEDULE VERSIONS FIX)
+// VERSION: v2.2.1 (CAMP ID FIX)
 // =============================================================================
 //
-// FIXES FOUR CRITICAL ISSUES:
+// FIXES FIVE CRITICAL ISSUES:
 //
 // 1. DELETION SYNC: The cloud_storage_bridge's merge logic was RE-INTRODUCING
 //    deleted data from the cloud. This fix patches deletion to be EXPLICIT.
@@ -17,7 +17,10 @@
 // 4. SCHEDULE VERSIONS TABLE: The schedule_version_merger.js was reconstructing
 //    data from the schedule_versions Supabase table. Now we delete those records.
 //
-// 5. REGENERATION: When a scheduler wants to regenerate their schedule for a day
+// 5. CAMP ID LOOKUP: Fixed getCampId to work for owners (via camps table) and
+//    team members (via team_members table) with proper fallback chain.
+//
+// 6. REGENERATION: When a scheduler wants to regenerate their schedule for a day
 //    that already has data in the cloud, we need to:
 //    a) Clear ONLY their divisions (preserve other schedulers' work)
 //    b) Sync that deletion to cloud BEFORE the merge logic runs
@@ -29,7 +32,7 @@
 (function() {
     'use strict';
 
-    console.log("🗑️ Scheduler Data Management v2.2.0 loading...");
+    console.log("🗑️ Scheduler Data Management v2.2.1 loading...");
 
     // =========================================================================
     // CONFIGURATION
@@ -59,22 +62,88 @@
             return null;
         }
         
-        // Get camp_id from localStorage or window
+        // Get camp_id from multiple sources (robust fallback chain)
         let campId = window._currentCampId || localStorage.getItem('currentCampId');
+        console.log(`🗑️ [getAuthInfo] Check 1 - window/localStorage: ${campId || 'none'}`);
+        
         if (!campId) {
-            // Try to find it from camp_state
+            // Try to find it from camp_state localStorage
             const all = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
             campId = all.camp_id;
+            console.log(`🗑️ [getAuthInfo] Check 2 - campDailyData: ${campId || 'none'}`);
+        }
+        
+        if (!campId && window.CloudBridge?.campId) {
+            campId = window.CloudBridge.campId;
+            console.log(`🗑️ [getAuthInfo] Check 3 - CloudBridge: ${campId || 'none'}`);
+        }
+        
+        // Try AccessControl which often has the camp ID
+        if (!campId && window.AccessControl?.campId) {
+            campId = window.AccessControl.campId;
+            console.log(`🗑️ [getAuthInfo] Check 3b - AccessControl: ${campId || 'none'}`);
+        }
+        
+        // Try from URL query params or path
+        if (!campId) {
+            const urlParams = new URLSearchParams(window.location.search);
+            campId = urlParams.get('campId') || urlParams.get('camp_id');
+            if (campId) {
+                console.log(`🗑️ [getAuthInfo] Check 3c - URL params: ${campId}`);
+            }
         }
         
         if (!campId) {
-            // Query team_members to find our camp
-            const { data } = await window.supabase
-                .from('team_members')
-                .select('camp_id')
-                .eq('user_id', session.user.id)
-                .single();
-            campId = data?.camp_id;
+            // Try camps table (for owners)
+            try {
+                console.log(`🗑️ [getAuthInfo] Check 4 - Querying camps table for owner ${session.user.id}...`);
+                const { data: ownerCamps, error } = await window.supabase
+                    .from('camps')
+                    .select('id')
+                    .eq('owner_id', session.user.id)
+                    .limit(1);
+                if (error) {
+                    console.log(`🗑️ [getAuthInfo] camps query error:`, error.message);
+                } else if (ownerCamps?.length) {
+                    campId = ownerCamps[0].id;
+                    console.log(`🗑️ [getAuthInfo] Check 4 - Found camp: ${campId}`);
+                } else {
+                    console.log(`🗑️ [getAuthInfo] Check 4 - No camps found for owner`);
+                }
+            } catch (e) {
+                console.log('🗑️ camps query failed:', e.message);
+            }
+        }
+        
+        if (!campId) {
+            // Query team_members to find our camp (for schedulers/admins)
+            try {
+                console.log(`🗑️ [getAuthInfo] Check 5 - Querying team_members for user ${session.user.id}...`);
+                const { data, error } = await window.supabase
+                    .from('team_members')
+                    .select('camp_id')
+                    .eq('user_id', session.user.id)
+                    .limit(1);
+                if (error) {
+                    console.log(`🗑️ [getAuthInfo] team_members query error:`, error.message);
+                } else if (data?.length) {
+                    campId = data[0].camp_id;
+                    console.log(`🗑️ [getAuthInfo] Check 5 - Found camp: ${campId}`);
+                } else {
+                    console.log(`🗑️ [getAuthInfo] Check 5 - No team_members found`);
+                }
+            } catch (e) {
+                console.log('🗑️ team_members query failed:', e.message);
+            }
+        }
+        
+        // Cache for future use
+        if (campId) {
+            window._currentCampId = campId;
+            localStorage.setItem('currentCampId', campId);
+            console.log(`🗑️ [getAuthInfo] ✅ Camp ID found and cached: ${campId}`);
+        } else {
+            console.warn(`🗑️ [getAuthInfo] ❌ Could not find camp ID!`);
         }
         
         return { session, campId };
@@ -206,14 +275,21 @@
      * @param {boolean} deleteAll - If true, delete all versions for the date
      */
     async function deleteScheduleVersions(dateKey, subdivisionIds = null, deleteAll = false) {
+        console.log(`🗑️ [deleteScheduleVersions] Starting for ${dateKey}, deleteAll=${deleteAll}`);
+        
         const authInfo = await getAuthInfo();
+        console.log(`🗑️ [deleteScheduleVersions] authInfo:`, {
+            hasSession: !!authInfo?.session,
+            campId: authInfo?.campId || 'NONE'
+        });
+        
         if (!authInfo?.campId) {
-            console.warn('🗑️ Cannot delete versions: no camp ID');
+            console.warn('🗑️ Cannot delete versions: no camp ID found');
             return false;
         }
         
         try {
-            console.log(`🗑️ Deleting schedule_versions for ${dateKey}...`);
+            console.log(`🗑️ Deleting schedule_versions for ${dateKey} from camp ${authInfo.campId}...`);
             
             // Build the query
             let url = `${SUPABASE_URL}/rest/v1/schedule_versions?camp_id=eq.${authInfo.campId}&schedule_date=eq.${dateKey}`;
@@ -223,6 +299,8 @@
                 // Delete only versions for specific subdivisions
                 url += `&subdivision_id=in.(${subdivisionIds.map(id => `"${id}"`).join(',')})`;
             }
+            
+            console.log(`🗑️ DELETE URL: ${url}`);
             
             const response = await fetch(url, {
                 method: 'DELETE',
@@ -867,6 +945,6 @@
     // Timeout after 10 seconds
     setTimeout(() => clearInterval(checkForRBAC), 10000);
 
-    console.log("🗑️ Scheduler Data Management v2.2.0 loaded");
+    console.log("🗑️ Scheduler Data Management v2.2.1 loaded");
 
 })();
