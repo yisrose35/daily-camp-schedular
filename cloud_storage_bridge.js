@@ -1,6 +1,6 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// VERSION: v4.6 (RBAC AWARE MERGE + OPTIMISTIC INIT)
+// VERSION: v4.7 (RACE CONDITION FIX)
 // =================================================================
 // 
 // FEATURES:
@@ -8,13 +8,14 @@
 // - Permission enforcement (Schedulers limited to their divisions)
 // - Schedule versioning ("Base On" creates new version, preserves original)
 // - Auto-Sync Back: Updates local storage with merged state after save
-// - RBAC Race Condition Fix: Optimistic load during boot, strict sync after RBAC init
+// - RBAC Race Condition Fix: Optimistic load during boot
+// - Write Conflict Protection: Prevents background saves from wiping new local work
 //
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v4.6 (RBAC AWARE)");
+  console.log("☁️ Campistry Cloud Bridge v4.7 (RACE CONDITION FIX)");
 
   // CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -464,15 +465,32 @@
           if (patchedData && patchedData.length > 0) {
               console.log("☁️ [SAVE] ✅ Success");
               
-              // ★★★ AUTO-SYNC BACK: UPDATE LOCAL STORAGE WITH MERGED RESULT ★★★
-              // This is critical for ensuring the local user sees the data they just "merged"
-              // but didn't have locally (e.g. from other schedulers)
+              // ★★★ AUTO-SYNC BACK: SAFE UPDATE LOCAL STORAGE ★★★
+              // Instead of blindly overwriting, we perform a "safe" update
+              // to protect any data created locally while the save was in flight.
               try {
                   console.log("☁️ [SYNC] Updating local storage with merged state...");
-                  localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(finalSchedule));
-                  if (_memoryCache) _memoryCache.daily_schedules = finalSchedule;
                   
-                  // Trigger UI refresh to show other schedulers' data immediately
+                  // 1. Get the current fresh local state (post-save, possibly changed)
+                  const freshLocal = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
+                  const mergedBack = { ...finalSchedule };
+                  let rescuedCount = 0;
+
+                  // 2. Rescue any new dates/keys that exist locally but not in the saved state
+                  Object.keys(freshLocal).forEach(dateKey => {
+                      if (!mergedBack[dateKey]) {
+                          // This date was created while we were saving! Keep it.
+                          console.log(`☁️ [SYNC] 🛡️ Rescuing local data for ${dateKey} (Race Condition Fix)`);
+                          mergedBack[dateKey] = freshLocal[dateKey];
+                          rescuedCount++;
+                      }
+                  });
+
+                  // 3. Write back the safe merge
+                  localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(mergedBack));
+                  if (_memoryCache) _memoryCache.daily_schedules = mergedBack;
+                  
+                  // Trigger UI refresh
                   setTimeout(() => {
                       window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
                       if (window.updateTable) window.updateTable();
