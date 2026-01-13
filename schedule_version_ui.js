@@ -1,13 +1,13 @@
 // =================================================================
 // schedule_version_ui.js
 // UI for Managing Schedule Versions (Save, Load, Merge)
-// VERSION: v3.9 (RESTORED DB MODULE)
+// VERSION: v4.0 (OVERWRITE SUPPORT)
 // =================================================================
 
 (function () {
     'use strict';
 
-    console.log("📋 Schedule Version UI v3.9 (RESTORED DB MODULE) loading...");
+    console.log("📋 Schedule Version UI v4.0 (OVERWRITE SUPPORT) loading...");
 
     const CONTAINER_ID = "version-toolbar-container";
 
@@ -53,10 +53,7 @@
         const date = getDate();
         if (!date) return alert("Please select a date first.");
 
-        const name = prompt("Enter a name for this version (e.g. 'Draft 1', 'Morning Final'):");
-        if (!name) return;
-
-        // 1. Filter Data
+        // 1. Prepare Payload
         let payload = {};
         try {
             const dailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
@@ -72,19 +69,47 @@
             return alert("Failed to read schedule data");
         }
 
-        // 2. Use DB Module
-        if (window.ScheduleVersionsDB) {
-            // Using the alias or main method
-            const result = await window.ScheduleVersionsDB.createVersion(date, name, payload);
-            
-            if (result.success) {
-                alert("✅ Version saved successfully!");
-            } else {
-                console.error("Save error:", result.error);
-                alert("❌ Error saving version: " + result.error);
-            }
-        } else {
-            alert("❌ DB Module not loaded. Refresh page.");
+        // 2. Check for DB Module
+        if (!window.ScheduleVersionsDB) return alert("❌ DB Module not loaded. Refresh page.");
+
+        // 3. Get Name & Check for Existing
+        let existingVersion = null;
+        try {
+             // Pre-fetch versions to check for duplicates
+             const versions = await window.ScheduleVersionsDB.listVersions(date);
+             
+             // Prompt User
+             const name = prompt("Enter a name for this version (e.g. 'Draft 1', 'Morning Final'):");
+             if (!name) return;
+
+             // Check if name matches
+             existingVersion = versions.find(v => v.name.toLowerCase() === name.toLowerCase());
+             
+             if (existingVersion) {
+                 // 4a. OVERWRITE FLOW
+                 if (confirm(`Version "${existingVersion.name}" already exists. Overwrite it?`)) {
+                     // Use updateVersion if available
+                     if (window.ScheduleVersionsDB.updateVersion) {
+                         const result = await window.ScheduleVersionsDB.updateVersion(existingVersion.id, payload);
+                         if (result.success) alert("✅ Version updated successfully!");
+                         else alert("❌ Error updating: " + result.error);
+                     } else {
+                         alert("❌ Update method missing in DB module.");
+                     }
+                 } else {
+                     // Cancelled overwrite
+                     return; 
+                 }
+             } else {
+                 // 4b. CREATE NEW FLOW
+                 const result = await window.ScheduleVersionsDB.createVersion(date, name, payload);
+                 if (result.success) alert("✅ Version saved successfully!");
+                 else alert("❌ Error saving: " + result.error);
+             }
+
+        } catch (err) {
+            console.error("Version Check Error:", err);
+            alert("Error checking existing versions: " + err.message);
         }
     }
 
