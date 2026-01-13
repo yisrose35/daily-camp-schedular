@@ -1,18 +1,18 @@
 // =================================================================
 // schedule_version_ui.js — Self-Mounting Version UI
-// VERSION: v3.3 (ROBUST MOUNT & ERROR HANDLING)
+// VERSION: v3.4 (403 HANDLING & QUIET MOUNT)
 // =================================================================
 //
 // FIXES:
-// 1. Selector fix for #schedule (matches index.html)
-// 2. Stops infinite retry loops (max 20 attempts)
-// 3. Better 403/Permission error messages
+// 1. Handles 403 Forbidden errors gracefully (RLS policy violation)
+// 2. Reduces retry noise in console
+// 3. Targets #schedule tab correctly
 //
 // =================================================================
 (function() {
     'use strict';
 
-    console.log("📋 Schedule Version UI v3.3 (ROBUST MOUNT) loading...");
+    console.log("📋 Schedule Version UI v3.4 (403 HANDLING) loading...");
 
     // =========================================================================
     // STATE
@@ -65,7 +65,6 @@
         if (scheduleTable) {
             targetElement = scheduleTable;
             insertPosition = 'beforebegin';
-            // console.log("📋 Found target: #scheduleTable");
         } else if (scheduleTab) {
             // Try to put it after the header div
             const header = scheduleTab.querySelector('div'); 
@@ -76,11 +75,11 @@
                 targetElement = scheduleTab;
                 insertPosition = 'afterbegin';
             }
-            // console.log("📋 Found target: #schedule tab");
         }
 
         if (!targetElement) {
-            if (mountRetryCount % 5 === 0 && mountRetryCount < MAX_RETRIES) { 
+            // Only log sparingly to avoid console spam
+            if (mountRetryCount === 0 || mountRetryCount === MAX_RETRIES - 1) { 
                 console.log(`📋 Waiting for schedule container... (${mountRetryCount}/${MAX_RETRIES})`);
             }
             return null;
@@ -446,8 +445,9 @@
         } else {
             console.error("📋 ❌ Save failed:", result.error);
             // Enhanced error message for 403
-            if (String(result.error).includes('403')) {
-                alert(`❌ Permission Denied (403)\n\nYou don't have permission to create schedule versions.\nPlease ask the camp owner to check 'schedule_versions' table policies.`);
+            const errString = String(result.error);
+            if (errString.includes('403') || errString.includes('security policy')) {
+                alert(`🚫 Permission Denied\n\nYou do not have permission to create new schedule versions. This action is restricted to Camp Owners or Admins.\n\n(Error: Database 403 Forbidden)`);
             } else {
                 alert(`❌ Failed to save: ${result.error}`);
             }
@@ -480,8 +480,9 @@
             alert(`✅ Created "${newName}" based on "${sourceName}"`);
         } else {
             console.error("📋 ❌ Base On failed:", result.error);
-            if (String(result.error).includes('403')) {
-                alert(`❌ Permission Denied (403)\n\nYou cannot create new versions. Check your role permissions.`);
+            const errString = String(result.error);
+            if (errString.includes('403') || errString.includes('security policy')) {
+                alert(`🚫 Permission Denied\n\nYou cannot create new versions. Check your role permissions.\n\n(Error: Database 403 Forbidden)`);
             } else {
                 alert(`❌ Failed to create version: ${result.error}`);
             }
@@ -587,7 +588,7 @@
         window.addEventListener('campistry-date-changed', refreshToolbar);
         document.getElementById('dateInput')?.addEventListener('change', refreshToolbar);
 
-        console.log("📋 ✅ Schedule Version UI v3.3 initialized");
+        console.log("📋 ✅ Schedule Version UI v3.4 initialized");
     }
 
     // Multiple init triggers for reliability
