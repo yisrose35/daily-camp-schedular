@@ -1,47 +1,34 @@
 // =================================================================
-// schedule_version_ui.js — UI for Schedule Versioning
-// VERSION: v1.0
+// schedule_version_ui.js v2.0 — Database-Backed UI
 // =================================================================
 //
-// Provides UI components for:
-// - Viewing schedule versions
-// - Creating new versions ("Base On" feature)
-// - Switching between versions
-// - Comparing versions
+// This UI connects to ScheduleVersionsDB for proper database storage.
+// Each version is a SEPARATE ROW in the database.
+// "Base On" creates a NEW row, never modifies the source.
 //
 // =================================================================
 (function() {
     'use strict';
 
-    console.log("📋 Schedule Version UI v1.0 loading...");
+    console.log("📋 Schedule Version UI v2.0 (DB-backed) loading...");
 
     // =========================================================================
-    // MODAL TEMPLATE
+    // STATE
     // =========================================================================
+    let _modal = null;
+    let _currentDate = null;
+    let _versions = [];
+    let _isLoading = false;
 
-    function createVersionModal() {
-        const modal = document.createElement('div');
-        modal.id = 'version-modal';
-        modal.innerHTML = `
-            <div class="version-modal-overlay" onclick="window.ScheduleVersionUI.closeModal()">
-                <div class="version-modal-content" onclick="event.stopPropagation()">
-                    <div class="version-modal-header">
-                        <h2>📋 Schedule Versions</h2>
-                        <button class="version-modal-close" onclick="window.ScheduleVersionUI.closeModal()">×</button>
-                    </div>
-                    <div class="version-modal-body">
-                        <div id="version-list"></div>
-                        <div class="version-actions">
-                            <button class="btn-create-version" onclick="window.ScheduleVersionUI.showCreateDialog()">
-                                + Create New Version
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
+    // =========================================================================
+    // STYLES
+    // =========================================================================
+    
+    function injectStyles() {
+        if (document.getElementById('version-ui-styles')) return;
         
         const style = document.createElement('style');
+        style.id = 'version-ui-styles';
         style.textContent = `
             .version-modal-overlay {
                 position: fixed;
@@ -54,159 +41,314 @@
                 align-items: center;
                 justify-content: center;
                 z-index: 10000;
+                backdrop-filter: blur(2px);
             }
             .version-modal-content {
                 background: white;
-                border-radius: 12px;
+                border-radius: 16px;
                 width: 90%;
-                max-width: 600px;
-                max-height: 80vh;
+                max-width: 700px;
+                max-height: 85vh;
                 overflow: hidden;
-                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                box-shadow: 0 25px 80px rgba(0,0,0,0.3);
+                animation: slideIn 0.2s ease-out;
+            }
+            @keyframes slideIn {
+                from { transform: translateY(-20px); opacity: 0; }
+                to { transform: translateY(0); opacity: 1; }
             }
             .version-modal-header {
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                padding: 16px 24px;
+                padding: 20px 24px;
                 border-bottom: 1px solid #e5e7eb;
-                background: #f9fafb;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
             }
             .version-modal-header h2 {
                 margin: 0;
-                font-size: 18px;
+                font-size: 20px;
+                font-weight: 600;
+            }
+            .version-modal-header .date-badge {
+                background: rgba(255,255,255,0.2);
+                padding: 4px 12px;
+                border-radius: 20px;
+                font-size: 14px;
             }
             .version-modal-close {
-                background: none;
+                background: rgba(255,255,255,0.2);
                 border: none;
                 font-size: 24px;
                 cursor: pointer;
-                color: #6b7280;
+                color: white;
+                width: 36px;
+                height: 36px;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: background 0.2s;
+            }
+            .version-modal-close:hover {
+                background: rgba(255,255,255,0.3);
             }
             .version-modal-body {
                 padding: 24px;
                 overflow-y: auto;
-                max-height: 60vh;
+                max-height: calc(85vh - 80px);
+            }
+            
+            /* Version List */
+            .version-list {
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
             }
             .version-item {
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                padding: 12px 16px;
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
-                margin-bottom: 8px;
+                padding: 16px 20px;
+                border: 2px solid #e5e7eb;
+                border-radius: 12px;
                 transition: all 0.2s;
+                background: white;
             }
             .version-item:hover {
-                border-color: #3b82f6;
-                background: #f0f9ff;
+                border-color: #667eea;
+                box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
             }
             .version-item.active {
                 border-color: #10b981;
-                background: #ecfdf5;
+                background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+            }
+            .version-info {
+                flex: 1;
             }
             .version-info h4 {
                 margin: 0 0 4px 0;
-                font-size: 14px;
+                font-size: 16px;
+                font-weight: 600;
+                color: #1f2937;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .version-info .active-badge {
+                background: #10b981;
+                color: white;
+                padding: 2px 8px;
+                border-radius: 12px;
+                font-size: 11px;
+                font-weight: 500;
             }
             .version-meta {
-                font-size: 12px;
+                font-size: 13px;
                 color: #6b7280;
             }
+            .version-meta .based-on {
+                color: #8b5cf6;
+                font-style: italic;
+            }
+            .version-buttons {
+                display: flex;
+                gap: 8px;
+            }
             .version-buttons button {
-                padding: 6px 12px;
-                margin-left: 8px;
+                padding: 8px 14px;
                 border: none;
-                border-radius: 4px;
+                border-radius: 8px;
                 cursor: pointer;
-                font-size: 12px;
+                font-size: 13px;
+                font-weight: 500;
+                transition: all 0.2s;
             }
             .btn-activate {
                 background: #3b82f6;
                 color: white;
             }
-            .btn-copy {
+            .btn-activate:hover {
+                background: #2563eb;
+            }
+            .btn-base-on {
                 background: #8b5cf6;
                 color: white;
             }
-            .btn-delete {
-                background: #ef4444;
-                color: white;
+            .btn-base-on:hover {
+                background: #7c3aed;
             }
+            .btn-delete {
+                background: #fee2e2;
+                color: #dc2626;
+            }
+            .btn-delete:hover {
+                background: #fecaca;
+            }
+            
+            /* Create Button */
             .btn-create-version {
                 width: 100%;
-                padding: 12px;
-                background: #10b981;
+                padding: 16px;
+                background: linear-gradient(135deg, #10b981 0%, #059669 100%);
                 color: white;
                 border: none;
-                border-radius: 8px;
-                font-size: 14px;
+                border-radius: 12px;
+                font-size: 16px;
+                font-weight: 600;
                 cursor: pointer;
-                margin-top: 16px;
+                margin-top: 20px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+                transition: all 0.2s;
             }
             .btn-create-version:hover {
-                background: #059669;
-            }
-            .version-locked {
-                background: #fef3c7;
-                border-color: #f59e0b;
-            }
-            .lock-badge {
-                background: #f59e0b;
-                color: white;
-                padding: 2px 6px;
-                border-radius: 4px;
-                font-size: 10px;
-                margin-left: 8px;
+                transform: translateY(-2px);
+                box-shadow: 0 8px 20px rgba(16, 185, 129, 0.3);
             }
             
             /* Create Dialog */
             .create-version-dialog {
-                margin-top: 16px;
-                padding: 16px;
+                margin-top: 20px;
+                padding: 20px;
                 background: #f9fafb;
-                border-radius: 8px;
-                border: 1px solid #e5e7eb;
+                border-radius: 12px;
+                border: 2px solid #e5e7eb;
+            }
+            .create-version-dialog h3 {
+                margin: 0 0 16px 0;
+                font-size: 16px;
+                color: #374151;
             }
             .create-version-dialog label {
                 display: block;
-                margin-bottom: 4px;
-                font-size: 12px;
+                margin-bottom: 6px;
+                font-size: 13px;
                 font-weight: 600;
                 color: #374151;
             }
             .create-version-dialog input,
             .create-version-dialog select {
                 width: 100%;
-                padding: 8px 12px;
-                border: 1px solid #d1d5db;
-                border-radius: 6px;
-                margin-bottom: 12px;
+                padding: 10px 14px;
+                border: 2px solid #e5e7eb;
+                border-radius: 8px;
+                margin-bottom: 16px;
                 font-size: 14px;
+                transition: border-color 0.2s;
             }
-            .create-version-dialog .dialog-buttons {
+            .create-version-dialog input:focus,
+            .create-version-dialog select:focus {
+                outline: none;
+                border-color: #667eea;
+            }
+            .dialog-buttons {
                 display: flex;
-                gap: 8px;
+                gap: 12px;
                 justify-content: flex-end;
             }
-            .create-version-dialog .dialog-buttons button {
-                padding: 8px 16px;
+            .dialog-buttons button {
+                padding: 10px 20px;
                 border: none;
-                border-radius: 6px;
+                border-radius: 8px;
                 cursor: pointer;
+                font-weight: 500;
             }
             .btn-cancel {
                 background: #e5e7eb;
                 color: #374151;
             }
             .btn-confirm {
-                background: #10b981;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 color: white;
             }
+            
+            /* Loading State */
+            .version-loading {
+                text-align: center;
+                padding: 40px;
+                color: #6b7280;
+            }
+            .version-loading .spinner {
+                width: 40px;
+                height: 40px;
+                border: 3px solid #e5e7eb;
+                border-top-color: #667eea;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+                margin: 0 auto 16px;
+            }
+            @keyframes spin {
+                to { transform: rotate(360deg); }
+            }
+            
+            /* Empty State */
+            .version-empty {
+                text-align: center;
+                padding: 40px;
+                color: #9ca3af;
+            }
+            .version-empty .icon {
+                font-size: 48px;
+                margin-bottom: 16px;
+            }
+            
+            /* Toolbar Button */
+            #version-toolbar-btn {
+                padding: 10px 18px;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                border: none;
+                border-radius: 8px;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: 500;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                transition: all 0.2s;
+            }
+            #version-toolbar-btn:hover {
+                transform: translateY(-1px);
+                box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    // =========================================================================
+    // MODAL
+    // =========================================================================
+
+    function createModal() {
+        injectStyles();
+        
+        const modal = document.createElement('div');
+        modal.id = 'version-modal';
+        modal.innerHTML = `
+            <div class="version-modal-overlay" onclick="window.ScheduleVersionUI.closeModal()">
+                <div class="version-modal-content" onclick="event.stopPropagation()">
+                    <div class="version-modal-header">
+                        <div>
+                            <h2>📋 Schedule Versions</h2>
+                            <span class="date-badge" id="version-date-badge"></span>
+                        </div>
+                        <button class="version-modal-close" onclick="window.ScheduleVersionUI.closeModal()">×</button>
+                    </div>
+                    <div class="version-modal-body">
+                        <div id="version-list-container"></div>
+                        <button class="btn-create-version" onclick="window.ScheduleVersionUI.showCreateDialog()">
+                            <span>+</span> Create New Version
+                        </button>
+                        <div id="create-dialog-container"></div>
+                    </div>
+                </div>
+            </div>
         `;
         
-        document.head.appendChild(style);
         document.body.appendChild(modal);
         modal.style.display = 'none';
         
@@ -214,21 +356,21 @@
     }
 
     // =========================================================================
-    // UI FUNCTIONS
+    // OPEN/CLOSE
     // =========================================================================
 
-    let _modal = null;
-    let _currentDate = null;
-
-    function openModal(dateKey) {
+    async function openModal(dateKey) {
         if (!_modal) {
-            _modal = createVersionModal();
+            _modal = createModal();
         }
         
         _currentDate = dateKey || window.currentScheduleDate || new Date().toISOString().split('T')[0];
         
-        renderVersionList();
+        document.getElementById('version-date-badge').textContent = _currentDate;
+        
         _modal.style.display = 'block';
+        
+        await loadVersions();
     }
 
     function closeModal() {
@@ -237,239 +379,370 @@
         }
     }
 
+    // =========================================================================
+    // LOAD & RENDER
+    // =========================================================================
+
+    async function loadVersions() {
+        const container = document.getElementById('version-list-container');
+        
+        // Show loading
+        container.innerHTML = `
+            <div class="version-loading">
+                <div class="spinner"></div>
+                <div>Loading versions...</div>
+            </div>
+        `;
+        
+        _isLoading = true;
+        
+        try {
+            // Check if DB module is available
+            if (!window.ScheduleVersionsDB) {
+                console.warn("📋 ScheduleVersionsDB not loaded, using fallback");
+                container.innerHTML = `
+                    <div class="version-empty">
+                        <div class="icon">⚠️</div>
+                        <div>Database versioning not available.</div>
+                        <div style="margin-top: 8px; font-size: 12px;">
+                            Run the SQL migration script first.
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+            
+            _versions = await window.ScheduleVersionsDB.listVersions(_currentDate);
+            
+            renderVersionList();
+            
+        } catch (e) {
+            console.error("📋 Error loading versions:", e);
+            container.innerHTML = `
+                <div class="version-empty">
+                    <div class="icon">❌</div>
+                    <div>Error loading versions</div>
+                    <div style="margin-top: 8px; font-size: 12px;">${e.message}</div>
+                </div>
+            `;
+        } finally {
+            _isLoading = false;
+        }
+    }
+
     function renderVersionList() {
-        const listEl = document.getElementById('version-list');
-        if (!listEl) return;
+        const container = document.getElementById('version-list-container');
         
-        // Ensure versioning is available
-        if (!window.ScheduleVersioning) {
-            listEl.innerHTML = '<p>Versioning system not loaded</p>';
+        if (_versions.length === 0) {
+            container.innerHTML = `
+                <div class="version-empty">
+                    <div class="icon">📅</div>
+                    <div>No saved versions for ${_currentDate}</div>
+                    <div style="margin-top: 8px; font-size: 12px;">
+                        Create your first version below!
+                    </div>
+                </div>
+            `;
             return;
         }
         
-        // Ensure default version exists
-        window.ScheduleVersioning.ensureDefaultVersion(_currentDate);
-        
-        const versions = window.ScheduleVersioning.getVersionsForDate(_currentDate);
-        const activeVersion = window.ScheduleVersioning.getActiveVersion(_currentDate);
-        
-        if (versions.length === 0) {
-            listEl.innerHTML = '<p style="color: #6b7280; text-align: center;">No versions yet for this date</p>';
-            return;
-        }
-        
-        listEl.innerHTML = versions.map(v => {
-            const isActive = v.id === activeVersion;
-            const isLocked = v.is_locked;
-            const basedOnText = v.based_on ? ` (based on ${v.based_on})` : '';
+        const html = _versions.map(v => {
+            const isActive = v.is_active;
+            const createdAt = new Date(v.created_at).toLocaleString();
+            const basedOnVersion = v.based_on ? _versions.find(x => x.id === v.based_on) : null;
+            const basedOnText = basedOnVersion ? `Based on "${basedOnVersion.name}"` : '';
+            const bunkCount = Object.keys(v.schedule_data?.scheduleAssignments || {}).length;
             
             return `
-                <div class="version-item ${isActive ? 'active' : ''} ${isLocked ? 'version-locked' : ''}">
+                <div class="version-item ${isActive ? 'active' : ''}" data-id="${v.id}">
                     <div class="version-info">
                         <h4>
                             ${v.name}
-                            ${isActive ? '<span style="color: #10b981;">✓ Active</span>' : ''}
-                            ${isLocked ? '<span class="lock-badge">🔒 Locked</span>' : ''}
+                            ${isActive ? '<span class="active-badge">✓ Active</span>' : ''}
                         </h4>
                         <div class="version-meta">
-                            Created: ${new Date(v.created_at).toLocaleString()}${basedOnText}
+                            ${bunkCount} bunks • Created ${createdAt}
+                            ${basedOnText ? `<span class="based-on">• ${basedOnText}</span>` : ''}
                         </div>
                     </div>
                     <div class="version-buttons">
-                        ${!isActive ? `<button class="btn-activate" onclick="window.ScheduleVersionUI.activateVersion('${v.id}')">Use</button>` : ''}
-                        <button class="btn-copy" onclick="window.ScheduleVersionUI.copyVersion('${v.id}')">Copy</button>
-                        ${!isActive && !isLocked ? `<button class="btn-delete" onclick="window.ScheduleVersionUI.deleteVersion('${v.id}')">Delete</button>` : ''}
+                        ${!isActive ? `
+                            <button class="btn-activate" onclick="window.ScheduleVersionUI.activateVersion('${v.id}')">
+                                Use This
+                            </button>
+                        ` : ''}
+                        <button class="btn-base-on" onclick="window.ScheduleVersionUI.baseOnVersion('${v.id}', '${v.name.replace(/'/g, "\\'")}')">
+                            Base On
+                        </button>
+                        ${!isActive ? `
+                            <button class="btn-delete" onclick="window.ScheduleVersionUI.deleteVersion('${v.id}')">
+                                Delete
+                            </button>
+                        ` : ''}
                     </div>
                 </div>
             `;
         }).join('');
+        
+        container.innerHTML = `<div class="version-list">${html}</div>`;
     }
 
+    // =========================================================================
+    // CREATE DIALOG
+    // =========================================================================
+
     function showCreateDialog() {
-        const existing = document.querySelector('.create-version-dialog');
-        if (existing) {
-            existing.remove();
+        const container = document.getElementById('create-dialog-container');
+        
+        // Toggle off if already showing
+        if (container.innerHTML) {
+            container.innerHTML = '';
             return;
         }
         
-        const versions = window.ScheduleVersioning?.getVersionsForDate(_currentDate) || [];
-        const versionOptions = versions.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+        const versionOptions = _versions.map(v => 
+            `<option value="${v.id}">${v.name}</option>`
+        ).join('');
         
-        const dialog = document.createElement('div');
-        dialog.className = 'create-version-dialog';
-        dialog.innerHTML = `
-            <label>Version Name</label>
-            <input type="text" id="new-version-name" placeholder="e.g., Morning Revision, Rainy Day Plan">
-            
-            <label>Base On (Optional)</label>
-            <select id="base-on-version">
-                <option value="">Start from scratch</option>
-                ${versionOptions}
-            </select>
-            
-            <div class="dialog-buttons">
-                <button class="btn-cancel" onclick="this.closest('.create-version-dialog').remove()">Cancel</button>
-                <button class="btn-confirm" onclick="window.ScheduleVersionUI.createNewVersion()">Create</button>
+        container.innerHTML = `
+            <div class="create-version-dialog">
+                <h3>Create New Version</h3>
+                
+                <label for="new-version-name">Version Name *</label>
+                <input type="text" id="new-version-name" placeholder="e.g., Rainy Day Plan, Version 2">
+                
+                <label for="base-on-select">Base On (Optional)</label>
+                <select id="base-on-select">
+                    <option value="">Start from scratch (empty)</option>
+                    <option value="current">Current schedule in editor</option>
+                    ${versionOptions}
+                </select>
+                
+                <div class="dialog-buttons">
+                    <button class="btn-cancel" onclick="window.ScheduleVersionUI.hideCreateDialog()">Cancel</button>
+                    <button class="btn-confirm" onclick="window.ScheduleVersionUI.createVersion()">Create Version</button>
+                </div>
             </div>
         `;
         
-        document.getElementById('version-list').after(dialog);
+        document.getElementById('new-version-name').focus();
     }
 
-    function createNewVersion() {
+    function hideCreateDialog() {
+        document.getElementById('create-dialog-container').innerHTML = '';
+    }
+
+    // =========================================================================
+    // ACTIONS
+    // =========================================================================
+
+    async function createVersion() {
         const nameInput = document.getElementById('new-version-name');
-        const baseSelect = document.getElementById('base-on-version');
+        const baseSelect = document.getElementById('base-on-select');
         
-        const name = nameInput.value.trim() || `Version ${Date.now()}`;
-        const basedOn = baseSelect.value || null;
+        const name = nameInput.value.trim();
+        const baseOn = baseSelect.value;
         
-        if (!window.ScheduleVersioning) {
-            alert('Versioning system not loaded');
+        if (!name) {
+            alert('Please enter a version name');
+            nameInput.focus();
             return;
         }
         
-        const result = window.ScheduleVersioning.createVersion(_currentDate, name, basedOn);
+        if (!window.ScheduleVersionsDB) {
+            alert('Database versioning not available');
+            return;
+        }
         
-        if (result.success) {
-            // Remove dialog
-            document.querySelector('.create-version-dialog')?.remove();
+        // Show loading
+        const btn = document.querySelector('.create-version-dialog .btn-confirm');
+        const originalText = btn.textContent;
+        btn.textContent = 'Creating...';
+        btn.disabled = true;
+        
+        try {
+            let result;
             
-            // Refresh list
-            renderVersionList();
-            
-            // Show success
-            if (window.showToast) {
-                window.showToast(`✅ Created "${name}"`, 'success');
+            if (baseOn && baseOn !== 'current') {
+                // Base on existing version
+                result = await window.ScheduleVersionsDB.createBasedOn(baseOn, name);
+            } else {
+                // Get schedule data
+                let scheduleData;
+                
+                if (baseOn === 'current') {
+                    // Use current editor data
+                    const dailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+                    scheduleData = dailyData[_currentDate] || { scheduleAssignments: {} };
+                } else {
+                    // Start fresh
+                    scheduleData = { scheduleAssignments: {} };
+                }
+                
+                result = await window.ScheduleVersionsDB.createVersion(
+                    _currentDate,
+                    name,
+                    scheduleData,
+                    null
+                );
             }
-        } else {
-            alert('Failed to create version: ' + result.error);
+            
+            if (result.success) {
+                hideCreateDialog();
+                await loadVersions();
+                
+                if (window.showToast) {
+                    window.showToast(`✅ Created "${name}"`, 'success');
+                }
+            } else {
+                alert('Failed to create version: ' + result.error);
+            }
+            
+        } catch (e) {
+            alert('Error: ' + e.message);
+        } finally {
+            btn.textContent = originalText;
+            btn.disabled = false;
         }
     }
 
-    function activateVersion(versionId) {
-        if (!window.ScheduleVersioning) return;
+    async function baseOnVersion(sourceId, sourceName) {
+        const newName = prompt(`Create new version based on "${sourceName}":\n\nEnter name for the new version:`, `${sourceName} - Copy`);
         
-        window.ScheduleVersioning.setActiveVersion(_currentDate, versionId);
+        if (!newName) return;
         
-        // Load version data into current schedule
-        const data = window.ScheduleVersioning.getVersionData(_currentDate, versionId);
-        if (data) {
-            const dailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
-            dailyData[_currentDate] = data;
-            localStorage.setItem('campDailyData_v1', JSON.stringify(dailyData));
+        if (!window.ScheduleVersionsDB) {
+            alert('Database versioning not available');
+            return;
+        }
+        
+        try {
+            const result = await window.ScheduleVersionsDB.createBasedOn(sourceId, newName);
             
-            // Refresh UI
-            window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
-            if (window.initScheduleSystem) window.initScheduleSystem();
-            if (window.updateTable) window.updateTable();
-        }
-        
-        renderVersionList();
-        
-        if (window.showToast) {
-            window.showToast(`✅ Switched to version`, 'success');
+            if (result.success) {
+                await loadVersions();
+                
+                if (window.showToast) {
+                    window.showToast(`✅ Created "${newName}" based on "${sourceName}"`, 'success');
+                }
+                
+                // Log for debugging
+                console.log(`📋 ✅ BASE ON COMPLETE`);
+                console.log(`📋    Source: "${sourceName}" (${sourceId}) - UNCHANGED`);
+                console.log(`📋    New: "${newName}" (${result.version.id}) - CREATED`);
+            } else {
+                alert('Failed: ' + result.error);
+            }
+            
+        } catch (e) {
+            alert('Error: ' + e.message);
         }
     }
 
-    function copyVersion(sourceVersionId) {
-        // Show prompt for name
-        const name = prompt('Name for the copy:', `Copy of version`);
-        if (!name) return;
+    async function activateVersion(versionId) {
+        if (!window.ScheduleVersionsDB) {
+            alert('Database versioning not available');
+            return;
+        }
         
-        if (!window.ScheduleVersioning) return;
-        
-        const result = window.ScheduleVersioning.createVersion(_currentDate, name, sourceVersionId);
-        
-        if (result.success) {
-            renderVersionList();
-            if (window.showToast) {
-                window.showToast(`✅ Created copy "${name}"`, 'success');
+        try {
+            // Get the version data
+            const version = await window.ScheduleVersionsDB.getVersion(versionId);
+            
+            if (!version) {
+                alert('Version not found');
+                return;
             }
-        } else {
-            alert('Failed to copy: ' + result.error);
+            
+            // Set as active in database
+            const result = await window.ScheduleVersionsDB.setActiveVersion(versionId);
+            
+            if (result.success) {
+                // Load the schedule data into the editor
+                const dailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+                dailyData[_currentDate] = version.schedule_data;
+                localStorage.setItem('campDailyData_v1', JSON.stringify(dailyData));
+                
+                // Refresh UI
+                window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
+                if (window.initScheduleSystem) window.initScheduleSystem();
+                if (window.updateTable) window.updateTable();
+                
+                // Refresh version list
+                await loadVersions();
+                
+                if (window.showToast) {
+                    window.showToast(`✅ Now using "${version.name}"`, 'success');
+                }
+            } else {
+                alert('Failed to activate: ' + result.error);
+            }
+            
+        } catch (e) {
+            alert('Error: ' + e.message);
         }
     }
 
-    function deleteVersion(versionId) {
-        if (!confirm('Are you sure you want to delete this version?')) return;
+    async function deleteVersion(versionId) {
+        const version = _versions.find(v => v.id === versionId);
+        if (!version) return;
         
-        if (!window.ScheduleVersioning) return;
+        if (!confirm(`Delete "${version.name}"?\n\nThis cannot be undone.`)) {
+            return;
+        }
         
-        const result = window.ScheduleVersioning.deleteVersion(_currentDate, versionId);
+        if (!window.ScheduleVersionsDB) {
+            alert('Database versioning not available');
+            return;
+        }
         
-        if (result.success) {
-            renderVersionList();
-            if (window.showToast) {
-                window.showToast(`🗑️ Version deleted`, 'info');
+        try {
+            const result = await window.ScheduleVersionsDB.deleteVersion(versionId, true);
+            
+            if (result.success) {
+                await loadVersions();
+                
+                if (window.showToast) {
+                    window.showToast(`🗑️ Deleted "${version.name}"`, 'info');
+                }
+            } else {
+                alert('Failed to delete: ' + result.error);
             }
-        } else {
-            alert('Cannot delete: ' + result.error);
+            
+        } catch (e) {
+            alert('Error: ' + e.message);
         }
     }
 
     // =========================================================================
-    // "BASE ON" QUICK ACTION - For Creating Tomorrow's Schedule from Today
+    // TOOLBAR BUTTON
     // =========================================================================
 
-    function createScheduleForDate(targetDate, sourceDate, name) {
-        sourceDate = sourceDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        name = name || `Schedule for ${targetDate}`;
-        
-        if (window.createScheduleBasedOn) {
-            return window.createScheduleBasedOn(sourceDate, targetDate, name);
-        } else if (window.ScheduleVersioning) {
-            // Fallback to direct copy
-            const sourceData = window.ScheduleVersioning.getVersionData(sourceDate, 'v1') ||
-                              JSON.parse(localStorage.getItem('campDailyData_v1') || '{}')[sourceDate];
-            
-            if (!sourceData) {
-                return { success: false, error: 'No source schedule found' };
-            }
-            
-            const cloned = JSON.parse(JSON.stringify(sourceData));
-            const dailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
-            dailyData[targetDate] = cloned;
-            localStorage.setItem('campDailyData_v1', JSON.stringify(dailyData));
-            
-            window.ScheduleVersioning.createVersion(targetDate, name, null);
-            
-            return { success: true };
-        }
-        
-        return { success: false, error: 'No versioning system available' };
-    }
-
-    // =========================================================================
-    // ADD VERSION BUTTON TO UI
-    // =========================================================================
-
-    function addVersionButtonToUI() {
-        // Look for existing toolbar/header
+    function addToolbarButton() {
+        // Find toolbar
         const toolbar = document.querySelector('.schedule-toolbar') ||
                        document.querySelector('.calendar-header') ||
-                       document.querySelector('.main-controls');
+                       document.querySelector('.main-controls') ||
+                       document.querySelector('#main-toolbar');
         
-        if (!toolbar) return;
+        if (!toolbar) {
+            console.log("📋 No toolbar found, will retry...");
+            setTimeout(addToolbarButton, 2000);
+            return;
+        }
         
-        // Check if button already exists
-        if (document.getElementById('version-btn')) return;
+        // Check if already added
+        if (document.getElementById('version-toolbar-btn')) return;
+        
+        injectStyles();
         
         const btn = document.createElement('button');
-        btn.id = 'version-btn';
+        btn.id = 'version-toolbar-btn';
         btn.innerHTML = '📋 Versions';
-        btn.style.cssText = `
-            padding: 8px 16px;
-            background: #8b5cf6;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 14px;
-            margin-left: 8px;
-        `;
         btn.onclick = () => openModal();
         
         toolbar.appendChild(btn);
+        console.log("📋 Toolbar button added");
     }
 
     // =========================================================================
@@ -480,21 +753,22 @@
         openModal,
         closeModal,
         showCreateDialog,
-        createNewVersion,
+        hideCreateDialog,
+        createVersion,
+        baseOnVersion,
         activateVersion,
-        copyVersion,
         deleteVersion,
-        createScheduleForDate,
-        addVersionButtonToUI
+        loadVersions,
+        addToolbarButton
     };
 
-    // Auto-add button when DOM is ready
+    // Auto-add button
     if (document.readyState === 'complete') {
-        setTimeout(addVersionButtonToUI, 1000);
+        setTimeout(addToolbarButton, 1000);
     } else {
-        window.addEventListener('load', () => setTimeout(addVersionButtonToUI, 1000));
+        window.addEventListener('load', () => setTimeout(addToolbarButton, 1000));
     }
 
-    console.log("📋 Schedule Version UI v1.0 loaded");
+    console.log("📋 Schedule Version UI v2.0 loaded");
 
 })();
