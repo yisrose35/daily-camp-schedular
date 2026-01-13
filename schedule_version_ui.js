@@ -1,120 +1,72 @@
-/**
- * Schedule Version UI v4.0 - AGGRESSIVE MOUNT
- * 
- * Finds actual schedule elements and mounts toolbar above them.
- * Falls back to floating toolbar if no container found.
- */
+// =================================================================
+// schedule_version_ui_v3.js — Self-Mounting Version UI
+// VERSION: v3.0 (SELF-MOUNTING + SAVE INTERCEPT)
+// =================================================================
+//
+// FIXES:
+// 1. Creates its own toolbar if none exists
+// 2. Intercepts save operations to use versioning
+// 3. Proper "Base On" that creates NEW rows
+//
+// =================================================================
 (function() {
     'use strict';
+
+    console.log("📋 Schedule Version UI v3.0 (SELF-MOUNT) loading...");
+
+    // =========================================================================
+    // STATE
+    // =========================================================================
     
-    console.log("📋 Schedule Version UI v4.0 (AGGRESSIVE MOUNT) loading...");
-    
-    let toolbar = null;
     let currentVersionId = null;
-    let currentVersionName = 'Unsaved Draft';
-    let initAttempts = 0;
-    const MAX_INIT_ATTEMPTS = 50;
-    
-    // =============================================
-    // TOOLBAR CREATION - AGGRESSIVE SELECTOR
-    // =============================================
-    
-    function findMountPoint() {
-        // Priority list of selectors - try many options
-        const selectors = [
-            // Common schedule containers
-            '#scheduleContainer',
-            '#schedule-container',
-            '#schedule-area',
-            '#schedule',
-            '.schedule-container',
-            '.schedule-area',
-            '.schedule-table-container',
-            
-            // Staggered view containers (from your scheduler_ui.js)
-            '#staggered-container',
-            '.staggered-container',
-            '#staggered-view',
-            '.staggered-view',
-            
-            // Grade/division containers
-            '.grade-container',
-            '.division-container',
-            '[data-division]',
-            '[data-grade]',
-            
-            // Generic table containers
-            '.schedule-tables',
-            '.tables-container',
-            '#tables',
-            
-            // App content areas
-            '#app-content',
-            '#main-content',
-            '.main-content',
-            '#scheduler-content',
-            '.scheduler-content',
-            '#content',
-            'main',
-            
-            // Fallback: find any element that contains schedule tables
-            '[class*="schedule"]',
-            '[id*="schedule"]',
-        ];
-        
-        for (const selector of selectors) {
-            const el = document.querySelector(selector);
-            if (el) {
-                console.log(`📋 Found mount point: ${selector}`);
-                return el;
-            }
-        }
-        
-        // Try to find the first table that looks like a schedule
-        const tables = document.querySelectorAll('table');
-        for (const table of tables) {
-            // Look for tables with time-related headers or schedule-like content
-            const text = table.textContent || '';
-            if (text.includes('AM') || text.includes('PM') || 
-                text.includes(':00') || text.includes('Slot') ||
-                table.closest('[class*="grade"]') ||
-                table.closest('[class*="division"]')) {
-                console.log('📋 Found schedule table, using parent');
-                return table.parentElement;
-            }
-        }
-        
-        return null;
+    let isInitialized = false;
+
+    // =========================================================================
+    // HELPERS
+    // =========================================================================
+
+    function getCurrentDateKey() {
+        return window.currentlySelectedDate || 
+               document.getElementById('dateInput')?.value ||
+               new Date().toISOString().split('T')[0];
     }
-    
+
+    function getScheduleData() {
+        const dateKey = getCurrentDateKey();
+        const dailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+        return dailyData[dateKey] || {
+            scheduleAssignments: window.scheduleAssignments || {},
+            unifiedTimes: window.unifiedTimes || [],
+            skeleton: window.skeleton || []
+        };
+    }
+
+    // =========================================================================
+    // CREATE TOOLBAR (if needed)
+    // =========================================================================
+
     function createToolbar() {
-        if (toolbar && document.contains(toolbar)) {
+        // Check if toolbar already exists
+        let toolbar = document.getElementById('schedule-version-toolbar');
+        if (toolbar) {
+            console.log("📋 Toolbar already exists");
             return toolbar;
         }
-        
-        let mountPoint = findMountPoint();
-        
-        // If no mount point, create floating toolbar
-        const useFloating = !mountPoint;
-        
-        if (!mountPoint) {
-            console.log("📋 No container found, using floating toolbar");
-            mountPoint = document.body;
+
+        // Find a good place to insert
+        const scheduleContainer = document.getElementById('scheduleContainer') ||
+                                  document.getElementById('schedule-area') ||
+                                  document.querySelector('.schedule-table-container') ||
+                                  document.querySelector('[data-schedule]');
+
+        if (!scheduleContainer) {
+            console.warn("📋 No schedule container found, will retry...");
+            return null;
         }
-        
+
         // Create the toolbar
         toolbar = document.createElement('div');
         toolbar.id = 'schedule-version-toolbar';
-        
-        const floatingStyles = useFloating ? `
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            z-index: 10000;
-        ` : `
-            margin-bottom: 16px;
-        `;
-        
         toolbar.innerHTML = `
             <style>
                 #schedule-version-toolbar {
@@ -124,8 +76,8 @@
                     padding: 12px 16px;
                     background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
                     border-radius: 8px;
-                    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-                    ${floatingStyles}
+                    margin-bottom: 16px;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
                 }
                 #schedule-version-toolbar .version-label {
                     color: #e0e0e0;
@@ -168,521 +120,509 @@
                 #schedule-version-toolbar .spacer {
                     flex: 1;
                 }
-                
-                /* Modal styles */
-                .version-modal-overlay {
+            </style>
+            <span class="version-label">Current:</span>
+            <span class="version-name" id="current-version-name">Loading...</span>
+            <div class="spacer"></div>
+            <button class="btn-save-as" onclick="ScheduleVersionUI.saveAsNewVersion()">
+                📋 Save As New Version
+            </button>
+            <button class="btn-versions" onclick="ScheduleVersionUI.openVersionsModal()">
+                📂 Manage Versions
+            </button>
+        `;
+
+        scheduleContainer.parentNode.insertBefore(toolbar, scheduleContainer);
+        console.log("📋 ✅ Toolbar created and inserted");
+        return toolbar;
+    }
+
+    // =========================================================================
+    // VERSIONS MODAL
+    // =========================================================================
+
+    async function openVersionsModal() {
+        const dateKey = getCurrentDateKey();
+        
+        // Create modal if it doesn't exist
+        let modal = document.getElementById('versions-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'versions-modal';
+            document.body.appendChild(modal);
+        }
+
+        // Show loading state
+        modal.innerHTML = `
+            <style>
+                #versions-modal {
                     position: fixed;
                     top: 0;
                     left: 0;
                     right: 0;
                     bottom: 0;
                     background: rgba(0,0,0,0.7);
-                    z-index: 100000;
                     display: flex;
                     align-items: center;
                     justify-content: center;
+                    z-index: 10000;
                 }
-                .version-modal {
-                    background: #1e1e2e;
+                .versions-content {
+                    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
                     border-radius: 12px;
                     padding: 24px;
-                    min-width: 400px;
-                    max-width: 600px;
+                    min-width: 500px;
+                    max-width: 700px;
                     max-height: 80vh;
                     overflow-y: auto;
-                    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+                    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
                 }
-                .version-modal h2 {
-                    color: #fff;
-                    margin: 0 0 20px 0;
+                .versions-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 20px;
+                    padding-bottom: 12px;
+                    border-bottom: 1px solid rgba(255,255,255,0.1);
+                }
+                .versions-header h2 {
+                    color: white;
+                    margin: 0;
                     font-size: 20px;
                 }
-                .version-modal .close-btn {
-                    position: absolute;
-                    top: 12px;
-                    right: 12px;
+                .versions-close {
                     background: none;
                     border: none;
                     color: #888;
                     font-size: 24px;
                     cursor: pointer;
+                    padding: 4px 8px;
                 }
-                .version-list {
-                    display: flex;
-                    flex-direction: column;
-                    gap: 12px;
-                }
+                .versions-close:hover { color: white; }
                 .version-item {
                     display: flex;
                     align-items: center;
-                    gap: 12px;
-                    padding: 12px;
+                    padding: 12px 16px;
+                    margin: 8px 0;
                     background: rgba(255,255,255,0.05);
                     border-radius: 8px;
                     border: 1px solid rgba(255,255,255,0.1);
+                    transition: all 0.2s;
+                }
+                .version-item:hover {
+                    background: rgba(255,255,255,0.1);
+                    border-color: rgba(79, 195, 247, 0.3);
                 }
                 .version-item.active {
                     border-color: #4fc3f7;
                     background: rgba(79, 195, 247, 0.1);
                 }
-                .version-item .version-info {
+                .version-info {
                     flex: 1;
                 }
-                .version-item .version-info h3 {
-                    color: #fff;
-                    margin: 0 0 4px 0;
+                .version-name-text {
+                    color: white;
+                    font-weight: 600;
                     font-size: 15px;
                 }
-                .version-item .version-info p {
+                .version-meta {
                     color: #888;
-                    margin: 0;
                     font-size: 12px;
+                    margin-top: 4px;
                 }
-                .version-item .version-actions {
+                .version-badge {
+                    background: #4fc3f7;
+                    color: #1a1a2e;
+                    padding: 2px 8px;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    font-weight: 600;
+                    margin-left: 8px;
+                }
+                .version-actions {
                     display: flex;
                     gap: 8px;
                 }
-                .version-item button {
+                .version-actions button {
                     padding: 6px 12px;
                     border: none;
                     border-radius: 4px;
                     font-size: 12px;
                     cursor: pointer;
+                    transition: all 0.2s;
                 }
-                .version-item .btn-use {
+                .btn-use {
                     background: #4fc3f7;
-                    color: #000;
+                    color: #1a1a2e;
                 }
-                .version-item .btn-base {
-                    background: #ff9800;
-                    color: #000;
+                .btn-base {
+                    background: #667eea;
+                    color: white;
                 }
-                .version-item .btn-delete {
-                    background: #f44336;
-                    color: #fff;
+                .btn-delete {
+                    background: #ff5252;
+                    color: white;
                 }
                 .no-versions {
                     color: #888;
                     text-align: center;
                     padding: 40px;
                 }
-            </style>
-            
-            <span class="version-label">📋 Version:</span>
-            <span class="version-name" id="current-version-name">${currentVersionName}</span>
-            <div class="spacer"></div>
-            <button class="btn-save-as" onclick="window.ScheduleVersionUI.saveAsNewVersion()">
-                💾 Save As New Version
-            </button>
-            <button class="btn-versions" onclick="window.ScheduleVersionUI.showVersionsModal()">
-                📚 Manage Versions
-            </button>
-        `;
-        
-        // Insert toolbar
-        if (useFloating) {
-            document.body.appendChild(toolbar);
-        } else {
-            mountPoint.insertBefore(toolbar, mountPoint.firstChild);
-        }
-        
-        console.log("📋 Toolbar mounted successfully" + (useFloating ? " (floating)" : ""));
-        return toolbar;
-    }
-    
-    // =============================================
-    // VERSION OPERATIONS
-    // =============================================
-    
-    function getCurrentDate() {
-        const selectedDate = window.selectedDate || localStorage.getItem('selectedDate');
-        if (selectedDate) return selectedDate;
-        
-        const today = new Date();
-        return today.toISOString().split('T')[0];
-    }
-    
-    function getCampId() {
-        return window.currentCampId || localStorage.getItem('currentCampId');
-    }
-    
-    function getCurrentScheduleData() {
-        const date = getCurrentDate();
-        const dateKey = `schedules_${date}`;
-        const stored = localStorage.getItem(dateKey);
-        
-        if (stored) {
-            try {
-                return JSON.parse(stored);
-            } catch (e) {
-                console.error('📋 Failed to parse schedule data:', e);
-            }
-        }
-        
-        // Fallback to window data
-        return {
-            assignments: window.scheduleAssignments || {},
-            skeleton: window.skeleton || [],
-            unifiedTimes: window.unifiedTimes || []
-        };
-    }
-    
-    async function saveAsNewVersion() {
-        const name = prompt('Enter a name for this version:', `Schedule ${new Date().toLocaleString()}`);
-        if (!name) return;
-        
-        const campId = getCampId();
-        const date = getCurrentDate();
-        const data = getCurrentScheduleData();
-        
-        if (!campId) {
-            alert('Error: Camp ID not found. Please refresh the page.');
-            return;
-        }
-        
-        console.log("📋 Saving new version:", name);
-        
-        try {
-            // Use the database module if available
-            if (window.ScheduleVersionsDB) {
-                const result = await window.ScheduleVersionsDB.createVersion(campId, date, name, data);
-                if (result) {
-                    currentVersionId = result.id;
-                    currentVersionName = name;
-                    updateToolbarDisplay();
-                    alert(`✅ Version "${name}" saved successfully!`);
+                .create-first-btn {
+                    margin-top: 16px;
+                    padding: 12px 24px;
+                    background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    font-size: 14px;
+                    font-weight: 500;
+                    cursor: pointer;
                 }
-            } else {
-                // Fallback to localStorage
-                const versions = JSON.parse(localStorage.getItem('schedule_versions') || '{}');
-                const key = `${campId}_${date}`;
-                if (!versions[key]) versions[key] = [];
-                
-                const version = {
-                    id: Date.now().toString(),
-                    name,
-                    date,
-                    campId,
-                    data,
-                    createdAt: new Date().toISOString()
-                };
-                
-                versions[key].push(version);
-                localStorage.setItem('schedule_versions', JSON.stringify(versions));
-                
-                currentVersionId = version.id;
-                currentVersionName = name;
-                updateToolbarDisplay();
-                alert(`✅ Version "${name}" saved locally!`);
-            }
-        } catch (err) {
-            console.error('📋 Save failed:', err);
-            alert('❌ Failed to save version: ' + err.message);
-        }
-    }
-    
-    async function showVersionsModal() {
-        const campId = getCampId();
-        const date = getCurrentDate();
-        
-        let versions = [];
-        
-        try {
-            if (window.ScheduleVersionsDB) {
-                versions = await window.ScheduleVersionsDB.listVersions(campId, date);
-            } else {
-                const stored = JSON.parse(localStorage.getItem('schedule_versions') || '{}');
-                const key = `${campId}_${date}`;
-                versions = stored[key] || [];
-            }
-        } catch (err) {
-            console.error('📋 Failed to load versions:', err);
-        }
-        
-        const overlay = document.createElement('div');
-        overlay.className = 'version-modal-overlay';
-        overlay.onclick = (e) => {
-            if (e.target === overlay) overlay.remove();
-        };
-        
-        let versionListHTML = '';
-        
-        if (versions.length === 0) {
-            versionListHTML = '<div class="no-versions">No saved versions for this date.<br>Click "Save As New Version" to create one.</div>';
-        } else {
-            versions.forEach(v => {
-                const isActive = v.id === currentVersionId;
-                const createdDate = new Date(v.created_at || v.createdAt).toLocaleString();
-                const bunkCount = v.bunk_count || (v.data?.assignments ? Object.keys(v.data.assignments).length : 0);
-                
-                versionListHTML += `
-                    <div class="version-item ${isActive ? 'active' : ''}">
-                        <div class="version-info">
-                            <h3>${v.name || v.version_name}${isActive ? ' ✓' : ''}</h3>
-                            <p>Created: ${createdDate} • ${bunkCount} bunks</p>
-                            ${v.based_on_name ? `<p>Based on: ${v.based_on_name}</p>` : ''}
-                        </div>
-                        <div class="version-actions">
-                            ${!isActive ? `<button class="btn-use" onclick="window.ScheduleVersionUI.useVersion('${v.id}')">Use</button>` : ''}
-                            <button class="btn-base" onclick="window.ScheduleVersionUI.baseOnVersion('${v.id}', '${(v.name || v.version_name).replace(/'/g, "\\'")}')">Base On</button>
-                            <button class="btn-delete" onclick="window.ScheduleVersionUI.deleteVersion('${v.id}')">Delete</button>
-                        </div>
-                    </div>
-                `;
-            });
-        }
-        
-        overlay.innerHTML = `
-            <div class="version-modal" style="position: relative;">
-                <button class="close-btn" onclick="this.closest('.version-modal-overlay').remove()">×</button>
-                <h2>📚 Schedule Versions for ${date}</h2>
-                <div class="version-list">
-                    ${versionListHTML}
+            </style>
+            <div class="versions-content">
+                <div class="versions-header">
+                    <h2>📋 Schedule Versions for ${dateKey}</h2>
+                    <button class="versions-close" onclick="ScheduleVersionUI.closeModal()">×</button>
+                </div>
+                <div style="color:#888; text-align:center; padding:40px;">
+                    Loading versions...
                 </div>
             </div>
         `;
+
+        // Fetch versions from database
+        let versions = [];
+        if (window.ScheduleVersionsDB) {
+            versions = await window.ScheduleVersionsDB.listVersions(dateKey);
+        }
+
+        // Render versions list
+        const content = modal.querySelector('.versions-content');
         
-        document.body.appendChild(overlay);
+        if (versions.length === 0) {
+            content.innerHTML = `
+                <div class="versions-header">
+                    <h2>📋 Schedule Versions for ${dateKey}</h2>
+                    <button class="versions-close" onclick="ScheduleVersionUI.closeModal()">×</button>
+                </div>
+                <div class="no-versions">
+                    <p>No saved versions yet.</p>
+                    <p style="font-size:13px;">Create your first version to start tracking changes.</p>
+                    <button class="create-first-btn" onclick="ScheduleVersionUI.saveAsNewVersion()">
+                        ✨ Save Current as Version 1
+                    </button>
+                </div>
+            `;
+        } else {
+            let versionsHtml = versions.map(v => {
+                const isActive = v.is_active;
+                const bunks = Object.keys(v.schedule_data?.scheduleAssignments || {}).length;
+                const createdDate = new Date(v.created_at).toLocaleString();
+                const basedOnText = v.based_on ? '(cloned)' : '(original)';
+                
+                return `
+                    <div class="version-item ${isActive ? 'active' : ''}" data-id="${v.id}">
+                        <div class="version-info">
+                            <span class="version-name-text">${v.name}</span>
+                            ${isActive ? '<span class="version-badge">ACTIVE</span>' : ''}
+                            <div class="version-meta">
+                                ${bunks} bunks • Created ${createdDate} ${basedOnText}
+                            </div>
+                        </div>
+                        <div class="version-actions">
+                            ${!isActive ? `<button class="btn-use" onclick="ScheduleVersionUI.useVersion('${v.id}')">Use</button>` : ''}
+                            <button class="btn-base" onclick="ScheduleVersionUI.baseOnVersion('${v.id}', '${v.name}')">Base On</button>
+                            ${!isActive ? `<button class="btn-delete" onclick="ScheduleVersionUI.deleteVersion('${v.id}')">Delete</button>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            content.innerHTML = `
+                <div class="versions-header">
+                    <h2>📋 Schedule Versions for ${dateKey}</h2>
+                    <button class="versions-close" onclick="ScheduleVersionUI.closeModal()">×</button>
+                </div>
+                ${versionsHtml}
+                <div style="margin-top: 16px; text-align: center;">
+                    <button class="create-first-btn" onclick="ScheduleVersionUI.saveAsNewVersion()">
+                        ➕ Save Current as New Version
+                    </button>
+                </div>
+            `;
+        }
     }
-    
+
+    function closeModal() {
+        const modal = document.getElementById('versions-modal');
+        if (modal) modal.remove();
+    }
+
+    // =========================================================================
+    // ★★★ CRITICAL: SAVE AS NEW VERSION ★★★
+    // =========================================================================
+
+    async function saveAsNewVersion() {
+        console.log("📋 ═══════════════════════════════════════════");
+        console.log("📋 SAVE AS NEW VERSION");
+        console.log("📋 ═══════════════════════════════════════════");
+
+        const dateKey = getCurrentDateKey();
+        
+        // Count existing versions
+        let versions = [];
+        if (window.ScheduleVersionsDB) {
+            versions = await window.ScheduleVersionsDB.listVersions(dateKey);
+        }
+        
+        const nextNum = versions.length + 1;
+        const defaultName = `Schedule ${nextNum}`;
+        
+        const name = prompt(
+            `Enter a name for this version:`,
+            defaultName
+        );
+        
+        if (!name) {
+            console.log("📋 Save cancelled");
+            return;
+        }
+
+        // Get current schedule data
+        const scheduleData = getScheduleData();
+        
+        console.log("📋 Saving version:", {
+            date: dateKey,
+            name: name,
+            bunks: Object.keys(scheduleData.scheduleAssignments || {}).length
+        });
+
+        if (!window.ScheduleVersionsDB) {
+            alert("❌ Versioning database not loaded. Check console for errors.");
+            return;
+        }
+
+        // ★★★ CREATE NEW VERSION (INSERT, NOT UPDATE) ★★★
+        const result = await window.ScheduleVersionsDB.createVersion(
+            dateKey,
+            name,
+            scheduleData,
+            null  // No base (fresh save)
+        );
+
+        if (result.success) {
+            console.log("📋 ✅ Version saved with ID:", result.version.id);
+            
+            // Set as active
+            await window.ScheduleVersionsDB.setActiveVersion(result.version.id);
+            currentVersionId = result.version.id;
+            
+            updateToolbarDisplay(name);
+            closeModal();
+            alert(`✅ Saved as "${name}"`);
+        } else {
+            console.error("📋 ❌ Save failed:", result.error);
+            alert(`❌ Failed to save: ${result.error}`);
+        }
+    }
+
+    // =========================================================================
+    // ★★★ CRITICAL: BASE ON VERSION (CLONE, NOT MODIFY) ★★★
+    // =========================================================================
+
+    async function baseOnVersion(sourceId, sourceName) {
+        console.log("📋 ═══════════════════════════════════════════");
+        console.log("📋 BASE ON VERSION");
+        console.log("📋 Source ID:", sourceId);
+        console.log("📋 Source Name:", sourceName);
+        console.log("📋 ═══════════════════════════════════════════");
+
+        const newName = prompt(
+            `Create a new version based on "${sourceName}":\n\nEnter name for the new version:`,
+            `${sourceName} (copy)`
+        );
+
+        if (!newName) {
+            console.log("📋 Base On cancelled");
+            return;
+        }
+
+        if (!window.ScheduleVersionsDB) {
+            alert("❌ Versioning database not loaded.");
+            return;
+        }
+
+        // ★★★ THIS IS THE CRITICAL CALL ★★★
+        // createBasedOn does:
+        // 1. Load source (READ ONLY)
+        // 2. Deep clone data
+        // 3. INSERT new row (POST, NOT PATCH)
+        // 4. Source remains UNCHANGED
+        const result = await window.ScheduleVersionsDB.createBasedOn(sourceId, newName);
+
+        if (result.success) {
+            console.log("📋 ═══════════════════════════════════════════");
+            console.log("📋 ✅ BASE ON COMPLETE");
+            console.log("📋 Source:", sourceName, "(", sourceId, ") - UNCHANGED");
+            console.log("📋 New:", newName, "(", result.version.id, ") - CREATED");
+            console.log("📋 ═══════════════════════════════════════════");
+            
+            // Load the new version into the editor
+            await useVersion(result.version.id);
+            
+            closeModal();
+            alert(`✅ Created "${newName}" based on "${sourceName}"\n\nThe original "${sourceName}" is preserved.`);
+        } else {
+            console.error("📋 ❌ Base On failed:", result.error);
+            alert(`❌ Failed to create version: ${result.error}`);
+        }
+    }
+
+    // =========================================================================
+    // USE VERSION (Load into editor)
+    // =========================================================================
+
     async function useVersion(versionId) {
         console.log("📋 Loading version:", versionId);
-        
-        try {
-            let versionData;
-            
-            if (window.ScheduleVersionsDB) {
-                versionData = await window.ScheduleVersionsDB.getVersion(versionId);
-            } else {
-                const stored = JSON.parse(localStorage.getItem('schedule_versions') || '{}');
-                for (const key in stored) {
-                    const found = stored[key].find(v => v.id === versionId);
-                    if (found) {
-                        versionData = found;
-                        break;
-                    }
-                }
-            }
-            
-            if (!versionData) {
-                alert('Version not found');
-                return;
-            }
-            
-            // Load the data
-            const data = versionData.schedule_data || versionData.data;
-            const date = versionData.schedule_date || versionData.date;
-            
-            if (data.assignments) {
-                window.scheduleAssignments = data.assignments;
-            }
-            if (data.skeleton) {
-                window.skeleton = data.skeleton;
-            }
-            if (data.unifiedTimes) {
-                window.unifiedTimes = data.unifiedTimes;
-            }
-            
-            // Save to localStorage
-            const dateKey = `schedules_${date}`;
-            localStorage.setItem(dateKey, JSON.stringify(data));
-            
-            // Update UI
-            currentVersionId = versionId;
-            currentVersionName = versionData.version_name || versionData.name;
-            updateToolbarDisplay();
-            
-            // Refresh display
-            if (window.updateTable) {
-                window.updateTable();
-            }
-            
-            // Close modal
-            document.querySelector('.version-modal-overlay')?.remove();
-            
-            alert(`✅ Loaded version: ${currentVersionName}`);
-            
-        } catch (err) {
-            console.error('📋 Failed to load version:', err);
-            alert('❌ Failed to load version: ' + err.message);
+
+        if (!window.ScheduleVersionsDB) {
+            alert("❌ Versioning database not loaded.");
+            return;
         }
-    }
-    
-    async function baseOnVersion(sourceId, sourceName) {
-        const newName = prompt(`Create new version based on "${sourceName}":`, `${sourceName} (copy)`);
-        if (!newName) return;
-        
-        console.log("📋 Creating version based on:", sourceId);
-        
-        try {
-            if (window.ScheduleVersionsDB) {
-                const result = await window.ScheduleVersionsDB.createBasedOn(sourceId, newName);
-                if (result) {
-                    currentVersionId = result.id;
-                    currentVersionName = newName;
-                    updateToolbarDisplay();
-                    
-                    // Load the new version's data
-                    await useVersion(result.id);
-                    
-                    alert(`✅ Created new version "${newName}" based on "${sourceName}"`);
-                }
-            } else {
-                // Fallback: copy locally
-                const stored = JSON.parse(localStorage.getItem('schedule_versions') || '{}');
-                let sourceVersion;
-                for (const key in stored) {
-                    const found = stored[key].find(v => v.id === sourceId);
-                    if (found) {
-                        sourceVersion = found;
-                        break;
-                    }
-                }
-                
-                if (sourceVersion) {
-                    const campId = getCampId();
-                    const date = getCurrentDate();
-                    const key = `${campId}_${date}`;
-                    
-                    if (!stored[key]) stored[key] = [];
-                    
-                    const newVersion = {
-                        id: Date.now().toString(),
-                        name: newName,
-                        date,
-                        campId,
-                        data: JSON.parse(JSON.stringify(sourceVersion.data)),
-                        basedOn: sourceId,
-                        basedOnName: sourceName,
-                        createdAt: new Date().toISOString()
-                    };
-                    
-                    stored[key].push(newVersion);
-                    localStorage.setItem('schedule_versions', JSON.stringify(stored));
-                    
-                    await useVersion(newVersion.id);
-                }
-            }
-        } catch (err) {
-            console.error('📋 Base on failed:', err);
-            alert('❌ Failed to create based-on version: ' + err.message);
+
+        const version = await window.ScheduleVersionsDB.getVersion(versionId);
+        if (!version) {
+            alert("❌ Version not found.");
+            return;
         }
+
+        // Load schedule data into the app
+        const dateKey = version.date;
+        const data = version.schedule_data;
+
+        // Update localStorage
+        const dailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+        dailyData[dateKey] = data;
+        localStorage.setItem('campDailyData_v1', JSON.stringify(dailyData));
+
+        // Update window objects
+        window.scheduleAssignments = data.scheduleAssignments || {};
+        window.unifiedTimes = data.unifiedTimes || [];
+        if (data.skeleton) window.skeleton = data.skeleton;
+
+        // Set as active
+        await window.ScheduleVersionsDB.setActiveVersion(versionId);
+        currentVersionId = versionId;
+
+        // Update UI
+        updateToolbarDisplay(version.name);
         
-        document.querySelector('.version-modal-overlay')?.remove();
+        // Trigger refresh
+        if (window.updateTable) window.updateTable();
+        window.dispatchEvent(new CustomEvent('storage'));
+
+        closeModal();
+        console.log("📋 ✅ Loaded version:", version.name);
     }
-    
+
+    // =========================================================================
+    // DELETE VERSION
+    // =========================================================================
+
     async function deleteVersion(versionId) {
-        if (!confirm('Are you sure you want to delete this version?')) return;
+        if (!confirm("Are you sure you want to delete this version?\n\nThis cannot be undone.")) {
+            return;
+        }
+
+        const result = await window.ScheduleVersionsDB.deleteVersion(versionId, true);
         
-        try {
-            if (window.ScheduleVersionsDB) {
-                await window.ScheduleVersionsDB.deleteVersion(versionId);
-            } else {
-                const stored = JSON.parse(localStorage.getItem('schedule_versions') || '{}');
-                for (const key in stored) {
-                    stored[key] = stored[key].filter(v => v.id !== versionId);
-                }
-                localStorage.setItem('schedule_versions', JSON.stringify(stored));
-            }
-            
-            if (currentVersionId === versionId) {
-                currentVersionId = null;
-                currentVersionName = 'Unsaved Draft';
-                updateToolbarDisplay();
-            }
-            
+        if (result.success) {
+            console.log("📋 ✅ Deleted version:", versionId);
             // Refresh modal
-            document.querySelector('.version-modal-overlay')?.remove();
-            showVersionsModal();
-            
-        } catch (err) {
-            console.error('📋 Delete failed:', err);
-            alert('❌ Failed to delete version: ' + err.message);
+            openVersionsModal();
+        } else {
+            alert("❌ Failed to delete: " + result.error);
         }
     }
-    
-    function updateToolbarDisplay() {
+
+    // =========================================================================
+    // UPDATE TOOLBAR DISPLAY
+    // =========================================================================
+
+    function updateToolbarDisplay(versionName) {
         const nameEl = document.getElementById('current-version-name');
         if (nameEl) {
-            nameEl.textContent = currentVersionName;
+            nameEl.textContent = versionName || 'Unsaved';
         }
     }
-    
-    // =============================================
+
+    async function refreshToolbar() {
+        const dateKey = getCurrentDateKey();
+        
+        if (window.ScheduleVersionsDB) {
+            const activeVersion = await window.ScheduleVersionsDB.getActiveVersion(dateKey);
+            if (activeVersion) {
+                currentVersionId = activeVersion.id;
+                updateToolbarDisplay(activeVersion.name);
+            } else {
+                currentVersionId = null;
+                updateToolbarDisplay('Unsaved');
+            }
+        } else {
+            updateToolbarDisplay('DB Not Ready');
+        }
+    }
+
+    // =========================================================================
     // INITIALIZATION
-    // =============================================
-    
+    // =========================================================================
+
     function init() {
-        initAttempts++;
-        
-        // Check if already initialized
-        if (toolbar && document.contains(toolbar)) {
-            console.log("📋 Toolbar already exists");
+        if (isInitialized) return;
+
+        const toolbar = createToolbar();
+        if (!toolbar) {
+            // Retry later
+            setTimeout(init, 1000);
             return;
         }
-        
-        // Wait for DOM to be more ready
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => setTimeout(init, 100));
-            return;
-        }
-        
-        // Try to create toolbar
-        const created = createToolbar();
-        
-        if (!created && initAttempts < MAX_INIT_ATTEMPTS) {
-            // Retry with increasing delay
-            setTimeout(init, Math.min(500, 100 * initAttempts));
-            return;
-        }
-        
-        if (!created) {
-            console.log("📋 Creating floating toolbar as fallback");
-            createToolbar(); // Will use floating mode
-        }
+
+        isInitialized = true;
+        refreshToolbar();
+
+        // Listen for date changes
+        window.addEventListener('campistry-date-changed', refreshToolbar);
+        document.getElementById('dateInput')?.addEventListener('change', refreshToolbar);
+
+        console.log("📋 ✅ Schedule Version UI v3.0 initialized");
     }
-    
-    // Export API
-    window.ScheduleVersionUI = {
-        saveAsNewVersion,
-        showVersionsModal,
-        useVersion,
-        baseOnVersion,
-        deleteVersion,
-        init,
-        
-        // For debugging
-        getCurrentDate,
-        getCampId,
-        getCurrentScheduleData
-    };
-    
-    // Auto-initialize
+
+    // Try to init after DOM ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => setTimeout(init, 500));
     } else {
         setTimeout(init, 500);
     }
-    
-    // Also try on cloud-hydration-complete
-    document.addEventListener('cloud-hydration-complete', () => {
-        console.log("📋 Cloud hydration complete, initializing...");
-        setTimeout(init, 200);
-    });
-    
-    // Retry periodically until success
-    const retryInterval = setInterval(() => {
-        if (toolbar && document.contains(toolbar)) {
-            clearInterval(retryInterval);
-            return;
-        }
-        if (initAttempts < MAX_INIT_ATTEMPTS) {
-            init();
-        } else {
-            clearInterval(retryInterval);
-        }
-    }, 1000);
-    
-    console.log("📋 Schedule Version UI v4.0 loaded");
-    
+
+    // Also try after cloud hydration
+    window.addEventListener('cloud-hydration-complete', () => setTimeout(init, 500));
+
+    // =========================================================================
+    // EXPORTS
+    // =========================================================================
+
+    window.ScheduleVersionUI = {
+        openVersionsModal,
+        closeModal,
+        saveAsNewVersion,
+        baseOnVersion,
+        useVersion,
+        deleteVersion,
+        refreshToolbar,
+        init
+    };
+
+    console.log("📋 Schedule Version UI v3.0 loaded");
+
 })();
