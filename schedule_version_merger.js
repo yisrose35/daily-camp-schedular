@@ -37,6 +37,7 @@
          * @param {string} dateKey - The date to check (YYYY-MM-DD)
          */
         mergeAndPush: async function(dateKey) {
+            if (!dateKey) return;
             console.log(`[VersionMerger] Checking for versions on ${dateKey}...`);
             
             const supabase = await getSupabase();
@@ -74,14 +75,12 @@
 
                 versions.forEach((ver, index) => {
                     // ROBUSTNESS FIX: Check multiple potential column names for the data
-                    // This supports existing tables that might use 'data', 'payload', or 'state'
                     let scheduleData = ver.schedule_data || ver.data || ver.payload || ver.state || ver.json || ver.schedule;
                     
                     if (index === 0 && !scheduleData) {
                          console.warn("[VersionMerger] ⚠️ Could not find schedule data in version record. Available keys:", Object.keys(ver));
                     } else if (!schemaDetected && scheduleData) {
                         schemaDetected = true;
-                        // console.log("[VersionMerger] Successfully detected data schema.");
                     }
 
                     // Handle stringified JSON if necessary
@@ -92,7 +91,6 @@
                     if (!scheduleData) return;
 
                     // Extract actual assignments (handle various data shapes)
-                    // Sometimes the data is the assignments object itself, sometimes it's nested
                     const assignments = scheduleData.scheduleAssignments || scheduleData;
 
                     if (assignments && typeof assignments === 'object') {
@@ -107,8 +105,6 @@
                 console.log(`[VersionMerger] Merge complete. Combined ${bunksTouched.size} bunks from ${versions.length} versions.`);
 
                 // 3. Push to Daily Schedule View (Main State)
-                // We use the existing Cloud Bridge exposed method if available to ensure
-                // it follows standard save protocols (and syncs to other users).
                 if (window.saveScheduleAssignments) {
                     console.log("[VersionMerger] Pushing merged data to Daily View via Bridge...");
                     
@@ -117,8 +113,9 @@
                     if (result) {
                         console.log("[VersionMerger] ✅ Successfully updated Daily View.");
                         
-                        // Optional: Trigger UI refresh
+                        // Optional: Trigger UI refresh if available
                         if (window.loadScheduleForDate) window.loadScheduleForDate(dateKey);
+                        else if (window.updateTable) window.updateTable();
                         
                         return { success: true, count: versions.length, bunks: bunksTouched.size };
                     }
@@ -150,22 +147,39 @@
     };
 
     // =================================================================
-    // EXPORT & AUTO-RUN CHECK
+    // EXPORT & LISTENERS
     // =================================================================
     
     window.ScheduleVersionMerger = ScheduleVersionMerger;
 
-    // Optional: Hook into the cloud hydration event to auto-check on load
+    // 1. Hook into the cloud hydration event to auto-check on load
     window.addEventListener('campistry-cloud-hydrated', (e) => {
         if (e.detail && e.detail.hasData) {
-            // Check the currently viewed date if possible
-            const dateInput = document.getElementById('schedule-date-input');
+            // FIX: Check for the correct ID 'calendar-date-picker' used in HTML
+            const dateInput = document.getElementById('calendar-date-picker') || document.getElementById('schedule-date-input');
+            
             if (dateInput && dateInput.value) {
                 // We debounce this slightly to allow the UI to settle
                 setTimeout(() => {
                     ScheduleVersionMerger.mergeAndPush(dateInput.value);
                 }, 2000);
+            } else {
+                console.warn("[VersionMerger] Could not find date input to run initial merge.");
             }
+        }
+    });
+
+    // 2. Hook into date changes (so it runs when user switches days)
+    document.addEventListener('DOMContentLoaded', () => {
+        const dateInput = document.getElementById('calendar-date-picker') || document.getElementById('schedule-date-input');
+        if (dateInput) {
+            dateInput.addEventListener('change', (e) => {
+                // Small delay to let other loaders finish first
+                setTimeout(() => {
+                    ScheduleVersionMerger.mergeAndPush(e.target.value);
+                }, 500);
+            });
+            console.log("[VersionMerger] Listening for date changes on:", dateInput.id);
         }
     });
 
