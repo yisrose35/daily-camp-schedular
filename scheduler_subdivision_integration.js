@@ -1,13 +1,13 @@
 // =================================================================
 // scheduler_subdivision_integration.js
 // Bridges the Core Scheduler with the Subdivision/Multi-Scheduler System
-// VERSION: v2.4 (PARANOID DATA RESCUE)
+// VERSION: v2.5 (THE ASSEMBLER)
 // =================================================================
 
 (function () {
     'use strict';
 
-    console.log("[Integration] Loading v2.4 (PARANOID DATA RESCUE)...");
+    console.log("[Integration] Loading v2.5 (THE ASSEMBLER)...");
 
     const INTEGRATION_KEY = "campistry_subdivision_integration";
 
@@ -70,7 +70,7 @@
 
     async function startMultiSchedulerGeneration(dateKey) {
         console.log("\n══════════════════════════════════════════════════════════════════════");
-        console.log("🎯 MULTI-SCHEDULER GENERATION v2.4");
+        console.log("🎯 MULTI-SCHEDULER GENERATION v2.5");
         console.log("══════════════════════════════════════════════════════════════════════");
         console.log(`Date: ${dateKey}`);
         
@@ -168,66 +168,110 @@
     }
 
     // =================================================================
-    // 3. POST-GENERATION MERGE & SAVE (THE FIX)
+    // 3. THE ASSEMBLER (Data Merge Logic)
+    // =================================================================
+    
+    const ScheduleAssembler = {
+        
+        /**
+         * Joins Generated (My) and Preserved (Their) data into a single final schedule.
+         * Enforces strict permission boundaries to prevent overwrites.
+         */
+        assemble: function(generatedAssignments, dateKey) {
+            console.log("[Assembler] 🧩 Starting assembly process...");
+
+            // --- A. IDENTIFY AUTHORITIES ---
+            const allDivs = Object.keys(window.divisions || {});
+            const myDivs = window.AccessControl ? window.AccessControl.getEditableDivisions() : allDivs;
+            const allBunks = window.bunks || [];
+            
+            // Set of Bunk IDs that I explicitly own and am allowed to update
+            const myBunkIds = new Set(
+                allBunks.filter(b => myDivs.includes(String(b.divisionId))).map(b => String(b.id))
+            );
+            
+            console.log(`[Assembler]    My Bunks (Authority): ${myBunkIds.size}`);
+
+            // --- B. RETRIEVE PRESERVED DATA (THEIRS) ---
+            let preservedData = { ..._preservedBunksBackup };
+            let source = "Closure Backup";
+
+            // Rescue Logic: If backup is suspiciously empty, check storage
+            if (Object.keys(preservedData).length === 0) {
+                console.log("[Assembler]    ⚠️ Backup empty. Attempting storage rescue...");
+                try {
+                    const dailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+                    const stored = dailyData[dateKey]?.scheduleAssignments || dailyData[dateKey] || {};
+                    
+                    let rescueCount = 0;
+                    Object.keys(stored).forEach(bunkId => {
+                        // If it's NOT mine, it must be theirs. Rescue it.
+                        if (!myBunkIds.has(String(bunkId))) {
+                            preservedData[bunkId] = stored[bunkId];
+                            rescueCount++;
+                        }
+                    });
+                    if (rescueCount > 0) source = `Storage Rescue (+${rescueCount})`;
+                } catch(e) { console.error("[Assembler] Rescue failed:", e); }
+            }
+            console.log(`[Assembler]    Preserved Source: ${source}`);
+            console.log(`[Assembler]    Preserved Bunks: ${Object.keys(preservedData).length}`);
+
+            // --- C. PERFORM THE JOIN ---
+            const finalSchedule = {};
+            let generatedApplied = 0;
+            let preservedApplied = 0;
+            let conflictAvoided = 0;
+
+            // 1. Apply Preserved Data (Theirs)
+            Object.keys(preservedData).forEach(bunkId => {
+                finalSchedule[bunkId] = preservedData[bunkId];
+                preservedApplied++;
+            });
+
+            // 2. Apply Generated Data (Mine) - STRICT FILTER
+            Object.keys(generatedAssignments).forEach(bunkId => {
+                if (myBunkIds.has(String(bunkId))) {
+                    finalSchedule[bunkId] = generatedAssignments[bunkId];
+                    generatedApplied++;
+                } else {
+                    // This is the critical fix: If generator produced data for a bunk I don't own, IGNORE IT.
+                    // This prevents "Senior" generator from overwriting "Junior" with blanks/garbage.
+                    conflictAvoided++;
+                }
+            });
+
+            console.log(`[Assembler]    Generated Applied: ${generatedApplied}`);
+            console.log(`[Assembler]    Preserved Applied: ${preservedApplied}`);
+            console.log(`[Assembler]    Conflicts Avoided: ${conflictAvoided} (Ignored unowned generated data)`);
+            console.log(`[Assembler] 🧩 Assembly Complete. Total Bunks: ${Object.keys(finalSchedule).length}`);
+
+            return finalSchedule;
+        }
+    };
+
+    // =================================================================
+    // 4. POST-GENERATION HANDLER
     // =================================================================
     
     function finalizeMultiSchedulerGeneration(generatedAssignments, dateKey) {
-        console.log("\n[Step 7] Verifying merge integrity...");
+        console.log("\n[Step 7] Finalizing generation via Assembler...");
         
-        // 1. Get the preserved bunks (Primary Source: Closure Backup)
-        let preserved = { ..._preservedBunksBackup };
-        let source = "Closure Backup";
-
-        // 2. FALLBACK RESCUE: If backup is empty, verify against Storage
-        if (Object.keys(preserved).length === 0) {
-            console.log("    ⚠️ No preserved bunks in backup. Checking localStorage for rescue...");
-            try {
-                const dailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
-                const todayData = dailyData[dateKey] || {};
-                const stored = todayData.scheduleAssignments || todayData;
-                
-                // Identify "Theirs" again
-                const allDivs = Object.keys(window.divisions || {});
-                const myDivs = window.AccessControl ? window.AccessControl.getEditableDivisions() : allDivs;
-                const allBunks = window.bunks || [];
-                const myBunkIds = allBunks.filter(b => myDivs.includes(String(b.divisionId))).map(b => String(b.id));
-
-                Object.keys(stored).forEach(bunkId => {
-                    if (!myBunkIds.includes(String(bunkId))) {
-                         preserved[bunkId] = stored[bunkId];
-                    }
-                });
-                if (Object.keys(preserved).length > 0) source = "Storage Rescue";
-            } catch(e) { console.error("Rescue failed:", e); }
-        }
-
-        console.log(`    Preserved Source: ${source}`);
-        console.log(`    Preserved Count: ${Object.keys(preserved).length}`);
-
-        // 3. Combine Generated + Preserved
-        const finalAssignments = { ...generatedAssignments };
+        // 1. Run the Assembler
+        const finalAssignments = ScheduleAssembler.assemble(generatedAssignments, dateKey);
         
-        // CRITICAL: Force overwrite any "generated" data for preserved bunks (safety net)
-        // This ensures that even if the optimizer accidentally scheduled a Senior bunk when it shouldn't have,
-        // or tried to schedule a Junior bunk, we revert to the preserved state for "Theirs".
-        Object.keys(preserved).forEach(bunkId => {
-            finalAssignments[bunkId] = preserved[bunkId];
-        });
-        
-        console.log(`    Total bunks in final schedule: ${Object.keys(finalAssignments).length}`);
-        
-        // 4. Save to Storage
+        // 2. Save to Storage
         console.log("\n[Step 8] Saving to storage...");
         saveToLocalStorage(dateKey, finalAssignments);
 
-        // 5. Update Subdivision Status
+        // 3. Update Subdivision Status (Drafts)
         console.log("[Step 9] Marking subdivisions as draft...");
         if (window.SubdivisionScheduleManager) {
-            const myAssignments = {};
-            // Filter only what I generated to save as MY draft
             const myDivs = window.AccessControl ? window.AccessControl.getEditableDivisions() : [];
             const allBunks = window.bunks || [];
             
+            // Extract just my parts for the draft system
+            const myAssignments = {};
             Object.keys(finalAssignments).forEach(bId => {
                  const bunk = allBunks.find(b => String(b.id) === String(bId));
                  if (bunk && myDivs.includes(String(bunk.divisionId))) {
@@ -238,7 +282,7 @@
             window.SubdivisionScheduleManager.markMySubdivisionsAsDraft(dateKey, myAssignments);
         }
 
-        // 6. Cleanup
+        // 4. Cleanup
         window.__MULTI_SCHEDULER_CONTEXT__ = null;
         _isMultiMode = false;
         
