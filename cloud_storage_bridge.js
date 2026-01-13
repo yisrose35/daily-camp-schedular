@@ -1,6 +1,6 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// VERSION: v4.7 (RACE CONDITION FIX)
+// VERSION: v4.8 (ENHANCED RACE PROTECTION)
 // =================================================================
 // 
 // FEATURES:
@@ -9,13 +9,13 @@
 // - Schedule versioning ("Base On" creates new version, preserves original)
 // - Auto-Sync Back: Updates local storage with merged state after save
 // - RBAC Race Condition Fix: Optimistic load during boot
-// - Write Conflict Protection: Prevents background saves from wiping new local work
+// - Write Conflict Protection: Smart-weight check to rescue new local work from stale saves
 //
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v4.7 (RACE CONDITION FIX)");
+  console.log("☁️ Campistry Cloud Bridge v4.8 (ENHANCED RACE PROTECTION)");
 
   // CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -474,15 +474,38 @@
                   // 1. Get the current fresh local state (post-save, possibly changed)
                   const freshLocal = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
                   const mergedBack = { ...finalSchedule };
-                  let rescuedCount = 0;
-
-                  // 2. Rescue any new dates/keys that exist locally but not in the saved state
+                  
                   Object.keys(freshLocal).forEach(dateKey => {
-                      if (!mergedBack[dateKey]) {
-                          // This date was created while we were saving! Keep it.
-                          console.log(`☁️ [SYNC] 🛡️ Rescuing local data for ${dateKey} (Race Condition Fix)`);
-                          mergedBack[dateKey] = freshLocal[dateKey];
-                          rescuedCount++;
+                      const localData = freshLocal[dateKey];
+                      const cloudData = mergedBack[dateKey];
+
+                      if (!cloudData) {
+                          // CASE 1: Date key completely missing in the save result.
+                          // It must have been added locally during the save. Rescue it.
+                          console.log(`☁️ [SYNC] 🛡️ Rescuing NEW local date ${dateKey} (Race Condition Fix)`);
+                          mergedBack[dateKey] = localData;
+                      } else {
+                          // CASE 2: Date exists, but might be empty in the save result vs full locally.
+                          // Determine "weight" (number of scheduled items)
+                          const getCount = (d) => {
+                              if (!d) return 0;
+                              const assignments = d.scheduleAssignments || d;
+                              // Filter out metadata keys to get actual schedule count
+                              return Object.keys(assignments).filter(k => 
+                                  !['unifiedTimes', 'skeleton', 'leagueAssignments', 'subdivisionSchedules'].includes(k)
+                              ).length;
+                          };
+
+                          const localCount = getCount(localData);
+                          const cloudCount = getCount(cloudData);
+
+                          // If local has significant data and cloud has essentially none,
+                          // and we are in this "race" window (post-save), we assume local is the winner
+                          // (i.e., the user just generated it).
+                          if (localCount > 5 && cloudCount < 2) {
+                               console.log(`☁️ [SYNC] 🛡️ Rescuing local content for ${dateKey} (Local=${localCount} vs Cloud=${cloudCount})`);
+                               mergedBack[dateKey] = localData;
+                          }
                       }
                   });
 
