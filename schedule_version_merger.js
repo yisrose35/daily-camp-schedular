@@ -1,6 +1,7 @@
 // =================================================================
 // schedule_version_merger.js
 // Aggregates distinct schedule versions into the main view
+// Now includes "Smart" Time Grid Generation to handle staggered starts
 // =================================================================
 
 (function () {
@@ -9,9 +10,93 @@
     console.log("🔄 Schedule Version Merger Service Loading...");
 
     const VERSIONS_TABLE = "schedule_versions";
+    const INCREMENT_MINS = 30;
 
     // =================================================================
-    // UTILITIES
+    // TIME & GRID UTILITIES (Ported from scheduler_ui.js)
+    // =================================================================
+
+    function parseTimeToMinutes(str) {
+        if (!str || typeof str !== "string") return null;
+        let s = str.trim().toLowerCase();
+        let mer = null;
+        if (s.endsWith("am") || s.endsWith("pm")) {
+            mer = s.endsWith("am") ? "am" : "pm";
+            s = s.replace(/am|pm/g, "").trim();
+        } else return null;
+
+        const m = s.match(/^(\d{1,2})\s*[:]\s*(\d{2})$/);
+        if (!m) return null;
+
+        let h = parseInt(m[1], 10);
+        const mm = parseInt(m[2], 10);
+
+        if (mm < 0 || mm > 59) return null;
+
+        if (h === 12) h = (mer === "am" ? 0 : 12);
+        else if (mer === "pm") h += 12;
+
+        return h * 60 + mm;
+    }
+
+    /**
+     * Rebuilds the master time grid based on the skeleton/divisions.
+     * This ensures the grid expands to fit the earliest start and latest end
+     * of ALL divisions found in the data.
+     */
+    function regenerateTimesFromSkeleton(skeleton) {
+        console.log("🔄 [VersionMerger] Regenerating master time grid...");
+        
+        let minTime = 540; // Default 9am
+        let maxTime = 960; // Default 4pm
+        let found = false;
+        
+        // 1. Check Skeleton Blocks
+        if (skeleton && Array.isArray(skeleton)) {
+            skeleton.forEach(b => {
+                const s = parseTimeToMinutes(b.startTime);
+                const e = parseTimeToMinutes(b.endTime);
+                if (s !== null) { minTime = Math.min(minTime, s); found = true; }
+                if (e !== null) { maxTime = Math.max(maxTime, e); found = true; }
+            });
+        }
+        
+        // 2. Check Global Divisions (if available in window context)
+        if (window.divisions) {
+            Object.values(window.divisions).forEach(div => {
+                const s = parseTimeToMinutes(div.startTime);
+                const e = parseTimeToMinutes(div.endTime);
+                if (s !== null) { minTime = Math.min(minTime, s); found = true; }
+                if (e !== null) { maxTime = Math.max(maxTime, e); found = true; }
+            });
+        }
+        
+        if (found && maxTime <= minTime) maxTime = minTime + 60;
+        
+        const times = [];
+        for (let t = minTime; t < maxTime; t += INCREMENT_MINS) {
+            const d = new Date();
+            d.setHours(0, 0, 0, 0);
+            const start = new Date(d.getTime() + t * 60000);
+            const end = new Date(d.getTime() + (t + INCREMENT_MINS) * 60000);
+            let h = Math.floor(t / 60), m = t % 60;
+            const ap = h >= 12 ? 'PM' : 'AM';
+            if (h > 12) h -= 12;
+            if (h === 0) h = 12;
+            
+            times.push({
+                start: start,
+                end: end,
+                label: h + ':' + String(m).padStart(2, '0') + ' ' + ap
+            });
+        }
+        
+        console.log(`🔄 [VersionMerger] Grid generated: ${times.length} slots (${times[0]?.label} - ${times[times.length-1]?.label})`);
+        return times;
+    }
+
+    // =================================================================
+    // DATA UTILITIES
     // =================================================================
 
     function getCampId() {
@@ -21,7 +106,6 @@
 
     async function getSupabase() {
         if (window.supabase) return window.supabase;
-        // Wait briefly if not ready
         return new Promise(resolve => setTimeout(() => resolve(window.supabase), 500));
     }
 
@@ -33,7 +117,7 @@
         
         /**
          * Checks for multiple versions on a given date and merges them
-         * into the active daily view.
+         * into the active daily view, ensuring the Time Grid is correct.
          * @param {string} dateKey - The date to check (YYYY-MM-DD)
          */
         mergeAndPush: async function(dateKey) {
@@ -50,7 +134,6 @@
 
             try {
                 // 1. Fetch all versions for this date/camp
-                // We select * to handle whatever columns exist in the pre-existing table
                 const { data: versions, error } = await supabase
                     .from(VERSIONS_TABLE)
                     .select('*')
@@ -65,37 +148,69 @@
                     return { success: true, count: 0 };
                 }
 
-                console.log(`[VersionMerger] Found ${versions.length} versions. merging...`);
+                console.log(`[VersionMerger] Found ${versions.length} versions. Analyzing structure...`);
 
-                // 2. Perform the Merge
-                // We start with an empty object and layer versions on top.
+                // 2. Identify the Master Skeleton & Rebuild Time Grid
+                // We look for the MOST RECENT skeleton definition to ensure the grid is current.
+                let latestSkeleton = null;
+                let latestLeagueData = null;
+
+                // Scan backwards to find the latest structural data
+                for (let i = versions.length - 1; i >= 0; i--) {
+                    let vData = versions[i].schedule_data || versions[i].data || versions[i].payload || versions[i].state || versions[i].json;
+                    if (typeof vData === 'string') { try { vData = JSON.parse(vData); } catch(e){} }
+                    
+                    if (vData) {
+                        if (!latestSkeleton && (vData.manualSkeleton || vData.skeleton)) {
+                            latestSkeleton = vData.manualSkeleton || vData.skeleton;
+                        }
+                        if (!latestLeagueData && vData.leagueAssignments) {
+                            latestLeagueData = vData.leagueAssignments;
+                        }
+                    }
+                    if (latestSkeleton) break; // Optimization: stop once we have the latest structure
+                }
+
+                // If no skeleton in versions, try fallback to current window state or localstorage
+                if (!latestSkeleton && window.manualSkeleton) latestSkeleton = window.manualSkeleton;
+
+                let generatedTimes = null;
+                if (latestSkeleton) {
+                    // ★★★ SMART LOGIC: Regenerate Unified Times based on Skeleton ★★★
+                    // This ensures that if Division A starts at 9am and Division B at 10am,
+                    // the grid covers 9am onwards, and data is placed correctly.
+                    generatedTimes = regenerateTimesFromSkeleton(latestSkeleton);
+                    
+                    // Push the correct time grid to state immediately
+                    if (window.saveCurrentDailyData) {
+                        window.saveCurrentDailyData("unifiedTimes", generatedTimes);
+                        // Also update global variable for immediate access
+                        window.unifiedTimes = generatedTimes;
+                    }
+                } else {
+                    console.warn("[VersionMerger] No skeleton found. Merging arrays blindly (indices might be misaligned).");
+                }
+
+                // 3. Perform the Merge
                 const mergedAssignments = {};
                 let bunksTouched = new Set();
-                let schemaDetected = false;
 
                 versions.forEach((ver, index) => {
-                    // ROBUSTNESS FIX: Check multiple potential column names for the data
                     let scheduleData = ver.schedule_data || ver.data || ver.payload || ver.state || ver.json || ver.schedule;
                     
-                    if (index === 0 && !scheduleData) {
-                         console.warn("[VersionMerger] ⚠️ Could not find schedule data in version record. Available keys:", Object.keys(ver));
-                    } else if (!schemaDetected && scheduleData) {
-                        schemaDetected = true;
-                    }
-
-                    // Handle stringified JSON if necessary
                     if (typeof scheduleData === 'string') {
                         try { scheduleData = JSON.parse(scheduleData); } catch(e) {}
                     }
                     
                     if (!scheduleData) return;
 
-                    // Extract actual assignments (handle various data shapes)
+                    // Extract actual assignments
                     const assignments = scheduleData.scheduleAssignments || scheduleData;
 
                     if (assignments && typeof assignments === 'object') {
                         Object.entries(assignments).forEach(([bunkId, slots]) => {
-                            // Add to merged set
+                            // If we have generated times, we might want to validate array length here
+                            // For now, we trust the DB data corresponds to the skeleton we found
                             mergedAssignments[bunkId] = slots;
                             bunksTouched.add(bunkId);
                         });
@@ -104,11 +219,16 @@
 
                 console.log(`[VersionMerger] Merge complete. Combined ${bunksTouched.size} bunks from ${versions.length} versions.`);
 
-                // 3. Push to Daily Schedule View (Main State)
+                // 4. Push to Daily Schedule View (Main State)
                 if (window.saveScheduleAssignments) {
                     console.log("[VersionMerger] Pushing merged data to Daily View via Bridge...");
                     
                     const result = window.saveScheduleAssignments(dateKey, mergedAssignments);
+                    
+                    // If we found league data in the versions, push that too
+                    if (latestLeagueData && window.saveCurrentDailyData) {
+                        window.saveCurrentDailyData("leagueAssignments", latestLeagueData);
+                    }
                     
                     if (result) {
                         console.log("[VersionMerger] ✅ Successfully updated Daily View.");
@@ -120,20 +240,30 @@
                         return { success: true, count: versions.length, bunks: bunksTouched.size };
                     }
                 } else {
-                    console.warn("[VersionMerger] window.saveScheduleAssignments not found. Cannot push to view.");
-                    // Fallback: Manual LocalStorage manipulation + Sync Trigger
+                    // Fallback: Manual LocalStorage manipulation
+                    console.warn("[VersionMerger] Bridge not found. Using fallback save.");
+                    
                     const dailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
                     if (!dailyData[dateKey]) dailyData[dateKey] = {};
                     
-                    // Merge into local storage
+                    // Merge assignments
                     dailyData[dateKey].scheduleAssignments = {
                         ...(dailyData[dateKey].scheduleAssignments || {}),
                         ...mergedAssignments
                     };
+
+                    // Merge Times (Critical for alignment)
+                    if (generatedTimes) {
+                        dailyData[dateKey].unifiedTimes = generatedTimes;
+                    }
+
+                    // Merge League Data
+                    if (latestLeagueData) {
+                         dailyData[dateKey].leagueAssignments = latestLeagueData;
+                    }
                     
                     localStorage.setItem('campDailyData_v1', JSON.stringify(dailyData));
                     
-                    // Force Sync
                     if (window.scheduleCloudSync) window.scheduleCloudSync();
                     
                     return { success: true, mode: 'fallback' };
@@ -155,26 +285,21 @@
     // 1. Hook into the cloud hydration event to auto-check on load
     window.addEventListener('campistry-cloud-hydrated', (e) => {
         if (e.detail && e.detail.hasData) {
-            // FIX: Check for the correct ID 'calendar-date-picker' used in HTML
             const dateInput = document.getElementById('calendar-date-picker') || document.getElementById('schedule-date-input');
             
             if (dateInput && dateInput.value) {
-                // We debounce this slightly to allow the UI to settle
                 setTimeout(() => {
                     ScheduleVersionMerger.mergeAndPush(dateInput.value);
                 }, 2000);
-            } else {
-                console.warn("[VersionMerger] Could not find date input to run initial merge.");
             }
         }
     });
 
-    // 2. Hook into date changes (so it runs when user switches days)
+    // 2. Hook into date changes
     document.addEventListener('DOMContentLoaded', () => {
         const dateInput = document.getElementById('calendar-date-picker') || document.getElementById('schedule-date-input');
         if (dateInput) {
             dateInput.addEventListener('change', (e) => {
-                // Small delay to let other loaders finish first
                 setTimeout(() => {
                     ScheduleVersionMerger.mergeAndPush(e.target.value);
                 }, 500);
