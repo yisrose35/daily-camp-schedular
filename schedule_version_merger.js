@@ -49,6 +49,7 @@
 
             try {
                 // 1. Fetch all versions for this date/camp
+                // We select * to handle whatever columns exist in the pre-existing table
                 const { data: versions, error } = await supabase
                     .from(VERSIONS_TABLE)
                     .select('*')
@@ -67,20 +68,31 @@
 
                 // 2. Perform the Merge
                 // We start with an empty object and layer versions on top.
-                // Since we ordered by created_at ascending, newer versions will overwrite older ones
-                // for the *same* bunk ID. However, typically different schedulers work on different bunks.
                 const mergedAssignments = {};
                 let bunksTouched = new Set();
+                let schemaDetected = false;
 
-                versions.forEach(ver => {
-                    let scheduleData = ver.schedule_data;
+                versions.forEach((ver, index) => {
+                    // ROBUSTNESS FIX: Check multiple potential column names for the data
+                    // This supports existing tables that might use 'data', 'payload', or 'state'
+                    let scheduleData = ver.schedule_data || ver.data || ver.payload || ver.state || ver.json || ver.schedule;
                     
+                    if (index === 0 && !scheduleData) {
+                         console.warn("[VersionMerger] ⚠️ Could not find schedule data in version record. Available keys:", Object.keys(ver));
+                    } else if (!schemaDetected && scheduleData) {
+                        schemaDetected = true;
+                        // console.log("[VersionMerger] Successfully detected data schema.");
+                    }
+
                     // Handle stringified JSON if necessary
                     if (typeof scheduleData === 'string') {
                         try { scheduleData = JSON.parse(scheduleData); } catch(e) {}
                     }
+                    
+                    if (!scheduleData) return;
 
                     // Extract actual assignments (handle various data shapes)
+                    // Sometimes the data is the assignments object itself, sometimes it's nested
                     const assignments = scheduleData.scheduleAssignments || scheduleData;
 
                     if (assignments && typeof assignments === 'object') {
@@ -100,11 +112,6 @@
                 if (window.saveScheduleAssignments) {
                     console.log("[VersionMerger] Pushing merged data to Daily View via Bridge...");
                     
-                    // We need to fetch the current daily view first to ensure we don't wipe 
-                    // anything that wasn't in the versions table (e.g. manual edits not yet versioned).
-                    // BUT, the goal here is usually to make the versions the authority. 
-                    // We'll perform a smart update: Update existing daily data with merged version data.
-                    
                     const result = window.saveScheduleAssignments(dateKey, mergedAssignments);
                     
                     if (result) {
@@ -118,7 +125,6 @@
                 } else {
                     console.warn("[VersionMerger] window.saveScheduleAssignments not found. Cannot push to view.");
                     // Fallback: Manual LocalStorage manipulation + Sync Trigger
-                    // (This code block mimics what the Bridge does if the Bridge isn't exposed)
                     const dailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
                     if (!dailyData[dateKey]) dailyData[dateKey] = {};
                     
