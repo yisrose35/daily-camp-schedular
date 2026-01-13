@@ -1,3 +1,4 @@
+
 // =============================================================================
 // scheduler_ui_blocking.js — Visual Blocking & Drag-Drop Prevention
 // VERSION: v1.0.0
