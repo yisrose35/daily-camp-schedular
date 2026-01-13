@@ -1,13 +1,13 @@
 // =================================================================
 // schedule_version_ui.js
 // UI for Managing Schedule Versions (Save, Load, Merge)
-// VERSION: v3.6 (INCLUDES LEAGUES)
+// VERSION: v3.7 (METHOD NAME FIX)
 // =================================================================
 
 (function () {
     'use strict';
 
-    console.log("📋 Schedule Version UI v3.6 (INCLUDES LEAGUES) loading...");
+    console.log("📋 Schedule Version UI v3.7 (METHOD NAME FIX) loading...");
 
     // =================================================================
     // CONFIGURATION
@@ -120,14 +120,28 @@
         }
 
         if (window.ScheduleVersionsDB) {
-            const result = await window.ScheduleVersionsDB.saveVersion(date, name, scheduleData);
-            if (result.success) {
-                alert("✅ Version saved successfully!");
-            } else {
-                alert("❌ Error saving version: " + result.error);
+            // FIX: Try 'createVersion' if 'saveVersion' doesn't exist (API compatibility)
+            const saveMethod = window.ScheduleVersionsDB.saveVersion || window.ScheduleVersionsDB.createVersion;
+
+            if (typeof saveMethod !== 'function') {
+                 console.error("ScheduleVersionsDB API mismatch. Available methods:", Object.keys(window.ScheduleVersionsDB));
+                 alert("❌ Error: Save method not found in database module. Check console.");
+                 return;
+            }
+
+            try {
+                const result = await saveMethod(date, name, scheduleData);
+                if (result && result.success) {
+                    alert("✅ Version saved successfully!");
+                } else {
+                    alert("❌ Error saving version: " + (result ? result.error : "Unknown error"));
+                }
+            } catch (err) {
+                console.error("Save failed:", err);
+                alert("❌ Exception during save: " + err.message);
             }
         } else {
-            alert("❌ Database module not loaded.");
+            alert("❌ Database module (ScheduleVersionsDB) not loaded.");
         }
     }
 
@@ -166,11 +180,6 @@
                     try { dataToLoad = JSON.parse(dataToLoad); } catch(e) {}
                 }
                 const assignments = dataToLoad.scheduleAssignments || dataToLoad;
-                
-                // If the version has league assignments, we might need to manually inject them 
-                // because saveScheduleAssignments primarily targets the grid.
-                // However, the Cloud Bridge usually handles merging the whole object if we used setLocalCache.
-                // For now, we rely on the bridge's permission-aware save.
                 
                 window.saveScheduleAssignments(date, assignments);
                 alert("✅ Version loaded!");
