@@ -1,18 +1,18 @@
 // =================================================================
 // schedule_version_ui.js — Self-Mounting Version UI
-// VERSION: v3.0 (SELF-MOUNTING + SAVE INTERCEPT)
+// VERSION: v3.2 (SELECTOR FIX FOR INDEX.HTML)
 // =================================================================
 //
 // FIXES:
-// 1. Creates its own toolbar if none exists
-// 2. Intercepts save operations to use versioning
-// 3. Proper "Base On" that creates NEW rows
+// 1. Explicitly targets #schedule and #scheduleTable (matching index.html)
+// 2. Inserts BEFORE the schedule table, inside the schedule tab
+// 3. Waits for tab visibility if needed
 //
 // =================================================================
 (function() {
     'use strict';
 
-    console.log("📋 Schedule Version UI v3.0 (SELF-MOUNT) loading...");
+    console.log("📋 Schedule Version UI v3.2 (SELECTOR FIX) loading...");
 
     // =========================================================================
     // STATE
@@ -20,6 +20,7 @@
     
     let currentVersionId = null;
     let isInitialized = false;
+    let mountRetryCount = 0;
 
     // =========================================================================
     // HELPERS
@@ -53,14 +54,41 @@
             return toolbar;
         }
 
-        // Find a good place to insert
-        const scheduleContainer = document.getElementById('scheduleContainer') ||
-                                  document.getElementById('schedule-area') ||
-                                  document.querySelector('.schedule-table-container') ||
-                                  document.querySelector('[data-schedule]');
+        // Expanded list of potential containers - prioritized by index.html structure
+        const selectors = [
+            '#scheduleTable',         // Direct table container (Best)
+            '#schedule',              // The tab itself
+            '#scheduleContainer',     // Fallback
+            '.schedule-table-container',
+            '[data-schedule]'
+        ];
 
-        if (!scheduleContainer) {
-            console.warn("📋 No schedule container found, will retry...");
+        let targetElement = null;
+        let insertPosition = 'beforebegin'; // Default: insert before the element
+
+        for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (el) {
+                console.log(`📋 Found target via "${sel}"`);
+                targetElement = el;
+                // If targeting the tab (#schedule), we might want to insert at the top or after the header
+                if (sel === '#schedule') {
+                    const header = el.querySelector('h3') || el.querySelector('div'); // Try to find header div
+                    if (header) {
+                        targetElement = header.parentNode; // Insert after the header row
+                        insertPosition = 'afterend'; 
+                    } else {
+                        insertPosition = 'afterbegin'; // Top of tab
+                    }
+                }
+                break;
+            }
+        }
+
+        if (!targetElement) {
+            if (mountRetryCount % 10 === 0) { 
+                console.warn(`📋 No schedule container found (Attempt ${mountRetryCount})`);
+            }
             return null;
         }
 
@@ -78,10 +106,14 @@
                     border-radius: 8px;
                     margin-bottom: 16px;
                     box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+                    font-family: system-ui, -apple-system, sans-serif;
+                    width: 100%;
+                    box-sizing: border-box;
                 }
                 #schedule-version-toolbar .version-label {
                     color: #e0e0e0;
                     font-size: 14px;
+                    white-space: nowrap;
                 }
                 #schedule-version-toolbar .version-name {
                     color: #4fc3f7;
@@ -91,6 +123,10 @@
                     background: rgba(79, 195, 247, 0.15);
                     border-radius: 4px;
                     border: 1px solid rgba(79, 195, 247, 0.3);
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    max-width: 200px;
                 }
                 #schedule-version-toolbar button {
                     padding: 8px 16px;
@@ -100,6 +136,7 @@
                     font-size: 13px;
                     font-weight: 500;
                     transition: all 0.2s;
+                    white-space: nowrap;
                 }
                 #schedule-version-toolbar .btn-versions {
                     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -120,19 +157,47 @@
                 #schedule-version-toolbar .spacer {
                     flex: 1;
                 }
+                /* Mobile responsiveness */
+                @media (max-width: 600px) {
+                    #schedule-version-toolbar {
+                        flex-wrap: wrap;
+                    }
+                    #schedule-version-toolbar .spacer {
+                        display: none;
+                    }
+                    #schedule-version-toolbar button {
+                        flex: 1;
+                        text-align: center;
+                    }
+                }
             </style>
-            <span class="version-label">Current:</span>
-            <span class="version-name" id="current-version-name">Loading...</span>
+            <span class="version-label">Version:</span>
+            <span class="version-name" id="current-version-name">Unsaved</span>
             <div class="spacer"></div>
             <button class="btn-save-as" onclick="ScheduleVersionUI.saveAsNewVersion()">
-                📋 Save As New Version
+                💾 Save As New Version
             </button>
             <button class="btn-versions" onclick="ScheduleVersionUI.openVersionsModal()">
-                📂 Manage Versions
+                📂 History
             </button>
         `;
 
-        scheduleContainer.parentNode.insertBefore(toolbar, scheduleContainer);
+        // Insert
+        if (targetElement.id === 'scheduleTable') {
+            targetElement.parentNode.insertBefore(toolbar, targetElement);
+        } else {
+             // Append to top of schedule container if table not found yet
+             const container = document.getElementById('schedule');
+             if (container) {
+                 const header = container.querySelector('div'); // The header row
+                 if (header) {
+                     header.insertAdjacentElement('afterend', toolbar);
+                 } else {
+                     container.prepend(toolbar);
+                 }
+             }
+        }
+        
         console.log("📋 ✅ Toolbar created and inserted");
         return toolbar;
     }
@@ -144,7 +209,6 @@
     async function openVersionsModal() {
         const dateKey = getCurrentDateKey();
         
-        // Create modal if it doesn't exist
         let modal = document.getElementById('versions-modal');
         if (!modal) {
             modal = document.createElement('div');
@@ -152,7 +216,6 @@
             document.body.appendChild(modal);
         }
 
-        // Show loading state
         modal.innerHTML = `
             <style>
                 #versions-modal {
@@ -166,6 +229,7 @@
                     align-items: center;
                     justify-content: center;
                     z-index: 10000;
+                    font-family: system-ui, -apple-system, sans-serif;
                 }
                 .versions-content {
                     background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
@@ -291,13 +355,15 @@
             </div>
         `;
 
-        // Fetch versions from database
         let versions = [];
         if (window.ScheduleVersionsDB) {
             versions = await window.ScheduleVersionsDB.listVersions(dateKey);
+        } else {
+            console.error("📋 ScheduleVersionsDB not loaded");
+            alert("Database connection not ready. Please try again.");
+            return;
         }
 
-        // Render versions list
         const content = modal.querySelector('.versions-content');
         
         if (versions.length === 0) {
@@ -360,64 +426,41 @@
     }
 
     // =========================================================================
-    // ★★★ CRITICAL: SAVE AS NEW VERSION ★★★
+    // SAVE AS NEW VERSION
     // =========================================================================
 
     async function saveAsNewVersion() {
-        console.log("📋 ═══════════════════════════════════════════");
-        console.log("📋 SAVE AS NEW VERSION");
-        console.log("📋 ═══════════════════════════════════════════");
-
         const dateKey = getCurrentDateKey();
-        
-        // Count existing versions
         let versions = [];
+        
         if (window.ScheduleVersionsDB) {
             versions = await window.ScheduleVersionsDB.listVersions(dateKey);
         }
         
         const nextNum = versions.length + 1;
         const defaultName = `Schedule ${nextNum}`;
+        const name = prompt(`Enter a name for this version:`, defaultName);
         
-        const name = prompt(
-            `Enter a name for this version:`,
-            defaultName
-        );
-        
-        if (!name) {
-            console.log("📋 Save cancelled");
-            return;
-        }
+        if (!name) return;
 
-        // Get current schedule data
         const scheduleData = getScheduleData();
         
-        console.log("📋 Saving version:", {
-            date: dateKey,
-            name: name,
-            bunks: Object.keys(scheduleData.scheduleAssignments || {}).length
-        });
-
         if (!window.ScheduleVersionsDB) {
-            alert("❌ Versioning database not loaded. Check console for errors.");
+            alert("❌ Versioning database not loaded.");
             return;
         }
 
-        // ★★★ CREATE NEW VERSION (INSERT, NOT UPDATE) ★★★
         const result = await window.ScheduleVersionsDB.createVersion(
             dateKey,
             name,
             scheduleData,
-            null  // No base (fresh save)
+            null 
         );
 
         if (result.success) {
-            console.log("📋 ✅ Version saved with ID:", result.version.id);
-            
-            // Set as active
+            console.log("📋 ✅ Version saved:", result.version.id);
             await window.ScheduleVersionsDB.setActiveVersion(result.version.id);
             currentVersionId = result.version.id;
-            
             updateToolbarDisplay(name);
             closeModal();
             alert(`✅ Saved as "${name}"`);
@@ -428,51 +471,29 @@
     }
 
     // =========================================================================
-    // ★★★ CRITICAL: BASE ON VERSION (CLONE, NOT MODIFY) ★★★
+    // BASE ON VERSION
     // =========================================================================
 
     async function baseOnVersion(sourceId, sourceName) {
-        console.log("📋 ═══════════════════════════════════════════");
-        console.log("📋 BASE ON VERSION");
-        console.log("📋 Source ID:", sourceId);
-        console.log("📋 Source Name:", sourceName);
-        console.log("📋 ═══════════════════════════════════════════");
-
         const newName = prompt(
             `Create a new version based on "${sourceName}":\n\nEnter name for the new version:`,
             `${sourceName} (copy)`
         );
 
-        if (!newName) {
-            console.log("📋 Base On cancelled");
-            return;
-        }
+        if (!newName) return;
 
         if (!window.ScheduleVersionsDB) {
             alert("❌ Versioning database not loaded.");
             return;
         }
 
-        // ★★★ THIS IS THE CRITICAL CALL ★★★
-        // createBasedOn does:
-        // 1. Load source (READ ONLY)
-        // 2. Deep clone data
-        // 3. INSERT new row (POST, NOT PATCH)
-        // 4. Source remains UNCHANGED
         const result = await window.ScheduleVersionsDB.createBasedOn(sourceId, newName);
 
         if (result.success) {
-            console.log("📋 ═══════════════════════════════════════════");
-            console.log("📋 ✅ BASE ON COMPLETE");
-            console.log("📋 Source:", sourceName, "(", sourceId, ") - UNCHANGED");
-            console.log("📋 New:", newName, "(", result.version.id, ") - CREATED");
-            console.log("📋 ═══════════════════════════════════════════");
-            
-            // Load the new version into the editor
+            console.log("📋 ✅ Base On Complete");
             await useVersion(result.version.id);
-            
             closeModal();
-            alert(`✅ Created "${newName}" based on "${sourceName}"\n\nThe original "${sourceName}" is preserved.`);
+            alert(`✅ Created "${newName}" based on "${sourceName}"`);
         } else {
             console.error("📋 ❌ Base On failed:", result.error);
             alert(`❌ Failed to create version: ${result.error}`);
@@ -480,16 +501,13 @@
     }
 
     // =========================================================================
-    // USE VERSION (Load into editor)
+    // USE VERSION
     // =========================================================================
 
     async function useVersion(versionId) {
         console.log("📋 Loading version:", versionId);
 
-        if (!window.ScheduleVersionsDB) {
-            alert("❌ Versioning database not loaded.");
-            return;
-        }
+        if (!window.ScheduleVersionsDB) return;
 
         const version = await window.ScheduleVersionsDB.getVersion(versionId);
         if (!version) {
@@ -497,7 +515,6 @@
             return;
         }
 
-        // Load schedule data into the app
         const dateKey = version.date;
         const data = version.schedule_data;
 
@@ -506,24 +523,22 @@
         dailyData[dateKey] = data;
         localStorage.setItem('campDailyData_v1', JSON.stringify(dailyData));
 
-        // Update window objects
+        // Update window state
         window.scheduleAssignments = data.scheduleAssignments || {};
         window.unifiedTimes = data.unifiedTimes || [];
         if (data.skeleton) window.skeleton = data.skeleton;
 
-        // Set as active
+        // Set active
         await window.ScheduleVersionsDB.setActiveVersion(versionId);
         currentVersionId = versionId;
 
-        // Update UI
         updateToolbarDisplay(version.name);
         
-        // Trigger refresh
+        // Refresh UI
         if (window.updateTable) window.updateTable();
-        window.dispatchEvent(new CustomEvent('storage'));
+        window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
 
         closeModal();
-        console.log("📋 ✅ Loaded version:", version.name);
     }
 
     // =========================================================================
@@ -531,24 +546,16 @@
     // =========================================================================
 
     async function deleteVersion(versionId) {
-        if (!confirm("Are you sure you want to delete this version?\n\nThis cannot be undone.")) {
-            return;
-        }
+        if (!confirm("Are you sure you want to delete this version?")) return;
 
         const result = await window.ScheduleVersionsDB.deleteVersion(versionId, true);
         
         if (result.success) {
-            console.log("📋 ✅ Deleted version:", versionId);
-            // Refresh modal
             openVersionsModal();
         } else {
             alert("❌ Failed to delete: " + result.error);
         }
     }
-
-    // =========================================================================
-    // UPDATE TOOLBAR DISPLAY
-    // =========================================================================
 
     function updateToolbarDisplay(versionName) {
         const nameEl = document.getElementById('current-version-name');
@@ -559,7 +566,6 @@
 
     async function refreshToolbar() {
         const dateKey = getCurrentDateKey();
-        
         if (window.ScheduleVersionsDB) {
             const activeVersion = await window.ScheduleVersionsDB.getActiveVersion(dateKey);
             if (activeVersion) {
@@ -569,48 +575,45 @@
                 currentVersionId = null;
                 updateToolbarDisplay('Unsaved');
             }
-        } else {
-            updateToolbarDisplay('DB Not Ready');
         }
     }
 
     // =========================================================================
-    // INITIALIZATION
+    // INIT
     // =========================================================================
 
     function init() {
         if (isInitialized) return;
+        mountRetryCount++;
 
         const toolbar = createToolbar();
         if (!toolbar) {
-            // Retry later
-            setTimeout(init, 1000);
+            // Keep retrying for a while
+            if (mountRetryCount < 100) setTimeout(init, 500); // Increased retries
             return;
         }
 
         isInitialized = true;
         refreshToolbar();
 
-        // Listen for date changes
         window.addEventListener('campistry-date-changed', refreshToolbar);
         document.getElementById('dateInput')?.addEventListener('change', refreshToolbar);
 
-        console.log("📋 ✅ Schedule Version UI v3.0 initialized");
+        console.log("📋 ✅ Schedule Version UI v3.2 initialized");
     }
 
-    // Try to init after DOM ready
+    // Multiple init triggers for reliability
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => setTimeout(init, 500));
     } else {
         setTimeout(init, 500);
     }
-
-    // Also try after cloud hydration
-    window.addEventListener('cloud-hydration-complete', () => setTimeout(init, 500));
-
-    // =========================================================================
-    // EXPORTS
-    // =========================================================================
+    
+    // Also try using MutationObserver to detect when schedule container appears
+    const observer = new MutationObserver((mutations) => {
+        if (!isInitialized) init();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
 
     window.ScheduleVersionUI = {
         openVersionsModal,
@@ -622,7 +625,5 @@
         refreshToolbar,
         init
     };
-
-    console.log("📋 Schedule Version UI v3.0 loaded");
 
 })();
