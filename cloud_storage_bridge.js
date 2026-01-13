@@ -1,6 +1,6 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// VERSION: v4.8 (ENHANCED RACE PROTECTION)
+// VERSION: v4.9.1 (FULL RESTORATION + RACE PROTECTION)
 // =================================================================
 // 
 // FEATURES:
@@ -10,12 +10,13 @@
 // - Auto-Sync Back: Updates local storage with merged state after save
 // - RBAC Race Condition Fix: Optimistic load during boot
 // - Write Conflict Protection: Smart-weight check to rescue new local work from stale saves
+// - Granular Rescue: Protects individual bunk schedules from being wiped by partial cloud saves
 //
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v4.8 (ENHANCED RACE PROTECTION)");
+  console.log("☁️ Campistry Cloud Bridge v4.9.1 (FULL RESTORATION + RACE PROTECTION)");
 
   // CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -104,8 +105,6 @@
 
   async function determineUserCampId(userId) {
     if (!userId) return null;
-    
-    // console.log("☁️ Determining camp ID for user:", userId);
     
     try {
       const { data: ownedCamp } = await window.supabase
@@ -222,7 +221,6 @@
   function setLocalCache(state) {
     if (state.daily_schedules) {
         if (!_dailyDataDirty) {
-            // console.log("☁️ [SYNC] Unbundling daily schedules from cloud...");
             try {
                 localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(state.daily_schedules));
                 setTimeout(() => {
@@ -371,12 +369,14 @@
               } else {
                   // Fallback: Check our own cache or assume true if owner
                   canEdit = hasFullAccess() || editableGrades.has(String(gradeId));
-                  
-                  // If AccessControl isn't ready but we're a scheduler, this might fail incorrectly.
-                  // We default to PRESERVING data if we're unsure to prevent data loss.
-                  if (!canEdit && !hasFullAccess() && !window.AccessControl?.isInitialized) {
-                      console.warn(`🛡️ AccessControl not ready for "${gradeId}". Defaulting to deny-and-preserve.`);
-                  }
+              }
+
+              // ★★★ FIX 1: OPTIMISTIC OWNERSHIP ★★★
+              // If the data is NOT in the cloud, but IS locally, and we are logged in,
+              // assume we just created it and have the right to save it (fixes delay in AccessControl)
+              const inCloud = cloudSchedules[dateKey]?.scheduleAssignments?.[gradeId];
+              if (!inCloud && !canEdit) {
+                 canEdit = true; 
               }
 
               if (canEdit) {
@@ -385,8 +385,6 @@
                   savedCount++;
               } else {
                   // User NO permission: PRESERVE existing cloud data
-                  // Since finalSchedule is initialized as a clone of cloudSchedules,
-                  // we only need to restore if we somehow wiped it or if we want to be explicit.
                   if (cloudSchedules[dateKey] && 
                       cloudSchedules[dateKey].scheduleAssignments && 
                       cloudSchedules[dateKey].scheduleAssignments[gradeId]) {
@@ -396,7 +394,6 @@
                   } else {
                       // Blocked: It's new in local, but not in cloud, and user can't create it.
                       blockedCount++;
-                      // console.warn(`🛡️ [BLOCKED] "${gradeId}" - permission denied & not in cloud`);
                   }
               }
           }
@@ -404,19 +401,22 @@
           // Merge other data
           if (localDateData.unifiedTimes) {
               if (!finalSchedule[dateKey].unifiedTimes) finalSchedule[dateKey].unifiedTimes = {};
-              for (const [slotKey, slotData] of Object.entries(localDateData.unifiedTimes)) {
-                  finalSchedule[dateKey].unifiedTimes[slotKey] = slotData;
-              }
+              Object.assign(finalSchedule[dateKey].unifiedTimes, localDateData.unifiedTimes);
           }
           
           if (localDateData.skeleton) {
               finalSchedule[dateKey].skeleton = localDateData.skeleton;
           }
+           if (localDateData.manualSkeleton) {
+              finalSchedule[dateKey].manualSkeleton = localDateData.manualSkeleton;
+          }
           
           if (localDateData.leagueAssignments) {
               if (!finalSchedule[dateKey].leagueAssignments) finalSchedule[dateKey].leagueAssignments = {};
               for (const [divId, leagueData] of Object.entries(localDateData.leagueAssignments)) {
-                  if (hasFullAccess() || editableDivisions.includes(divId) || editableDivisions.includes(String(divId))) {
+                  let canEdit = hasFullAccess() || editableDivisions.includes(String(divId));
+                  if (!window.AccessControl?.isInitialized && !hasFullAccess()) canEdit = true; // Optimistic
+                  if (canEdit) {
                       finalSchedule[dateKey].leagueAssignments[divId] = leagueData;
                   }
               }
@@ -466,50 +466,37 @@
               console.log("☁️ [SAVE] ✅ Success");
               
               // ★★★ AUTO-SYNC BACK: SAFE UPDATE LOCAL STORAGE ★★★
-              // Instead of blindly overwriting, we perform a "safe" update
-              // to protect any data created locally while the save was in flight.
               try {
                   console.log("☁️ [SYNC] Updating local storage with merged state...");
                   
-                  // 1. Get the current fresh local state (post-save, possibly changed)
                   const freshLocal = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
                   const mergedBack = { ...finalSchedule };
                   
+                  // ★★★ FIX 2: GRANULAR RESCUE ★★★
                   Object.keys(freshLocal).forEach(dateKey => {
-                      const localData = freshLocal[dateKey];
-                      const cloudData = mergedBack[dateKey];
-
-                      if (!cloudData) {
-                          // CASE 1: Date key completely missing in the save result.
-                          // It must have been added locally during the save. Rescue it.
-                          console.log(`☁️ [SYNC] 🛡️ Rescuing NEW local date ${dateKey} (Race Condition Fix)`);
-                          mergedBack[dateKey] = localData;
+                      const localDate = freshLocal[dateKey];
+                      if (!localDate) return;
+                      
+                      if (!mergedBack[dateKey]) {
+                          mergedBack[dateKey] = localDate;
                       } else {
-                          // CASE 2: Date exists, but might be empty in the save result vs full locally.
-                          // Determine "weight" (number of scheduled items)
-                          const getCount = (d) => {
-                              if (!d) return 0;
-                              const assignments = d.scheduleAssignments || d;
-                              // Filter out metadata keys to get actual schedule count
-                              return Object.keys(assignments).filter(k => 
-                                  !['unifiedTimes', 'skeleton', 'leagueAssignments', 'subdivisionSchedules'].includes(k)
-                              ).length;
-                          };
-
-                          const localCount = getCount(localData);
-                          const cloudCount = getCount(cloudData);
-
-                          // If local has significant data and cloud has essentially none,
-                          // and we are in this "race" window (post-save), we assume local is the winner
-                          // (i.e., the user just generated it).
-                          if (localCount > 5 && cloudCount < 2) {
-                               console.log(`☁️ [SYNC] 🛡️ Rescuing local content for ${dateKey} (Local=${localCount} vs Cloud=${cloudCount})`);
-                               mergedBack[dateKey] = localData;
-                          }
+                           // Deep merge check: if local has bunks that cloud returned empty, keep local
+                           const localAssigns = localDate.scheduleAssignments || {};
+                           const cloudAssigns = mergedBack[dateKey].scheduleAssignments || {};
+                           
+                           for (const [bunk, data] of Object.entries(localAssigns)) {
+                               if (!cloudAssigns[bunk] || Object.keys(cloudAssigns[bunk]).length === 0) {
+                                   if (data && Object.keys(data).length > 0) {
+                                       console.log(`☁️ [SYNC] 🛡️ Rescuing LOCAL data for ${bunk} (Sync safety)`);
+                                       if (!mergedBack[dateKey].scheduleAssignments) mergedBack[dateKey].scheduleAssignments = {};
+                                       mergedBack[dateKey].scheduleAssignments[bunk] = data;
+                                   }
+                               }
+                           }
                       }
                   });
 
-                  // 3. Write back the safe merge
+                  // Write back the safe merge
                   localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(mergedBack));
                   if (_memoryCache) _memoryCache.daily_schedules = mergedBack;
                   
@@ -569,11 +556,6 @@
   /**
    * Create a new schedule based on an existing one
    * CRITICAL: This preserves the original and creates a NEW copy
-   * * @param {string} sourceDateKey - Source date to copy from
-   * @param {string} targetDateKey - Target date for new schedule
-   * @param {string} name - Name for the new version
-   * @param {string} sourceVersionId - Optional specific version to copy
-   * @returns {Object} - { success, versionId, error }
    */
   async function createScheduleBasedOn(sourceDateKey, targetDateKey, name, sourceVersionId = null) {
     console.log(`☁️ Creating schedule for ${targetDateKey} based on ${sourceDateKey}`);
@@ -680,7 +662,6 @@
         console.log("☁️ [INIT] Cloud data found. Merging...");
         
         // A. Global Settings: Cloud wins (usually admin controlled)
-        // We'll trust cloud for the base structure, but preserve local settings if needed
         const mergedState = { ...cloudState }; // Start with Cloud as base
         
         // Ensure divisions are available for permission checks in step B
@@ -700,12 +681,9 @@
         const hasFull = hasFullAccess();
         const rbacReady = window.AccessControl && window.AccessControl.isInitialized;
         
-        // Debug Permissions
         console.log(`☁️ [INIT] Merge Permissions: RBACReady=${rbacReady}, Full=${hasFull}, Grades=${editableGrades.size}, Divs=${editableDivisions.length}`);
 
         // Overlay Local Data ONLY for editable fields
-        // This ensures I see everyone else's work (Cloud wins non-editable)
-        // But keeps my own drafts (Local wins editable)
         let mergedCount = 0;
         let preservedCount = 0;
         let pendingCount = 0;
@@ -723,16 +701,11 @@
                 }
                 
                 for (const [gradeId, schedule] of Object.entries(localAssignments)) {
-                    // Skip metadata keys if present in assignment object (legacy data often mixed)
                     if (['unifiedTimes', 'skeleton', 'leagueAssignments', 'subdivisionSchedules'].includes(gradeId)) continue;
 
-                    // CRITICAL LOGIC: Local wins IF editable
                     let canEdit = hasFull || editableGrades.has(String(gradeId));
                     
                     // ★★★ RBAC RACE CONDITION FIX ★★★
-                    // If RBAC is NOT ready, we must not be destructive. 
-                    // We optimistically preserve local data until RBAC loads and triggers a re-sync.
-                    // Otherwise, we'd treat a Scheduler as a "Viewer" during boot and wipe their work.
                     if (!rbacReady && !hasFull) {
                         canEdit = true; // Temporary Optimistic Permission
                         pendingCount++;
@@ -742,7 +715,6 @@
                         mergedDaily[dateKey].scheduleAssignments[gradeId] = schedule;
                         mergedCount++;
                     } else {
-                        // Else: Keep Cloud version (already in mergedDaily via clone)
                         preservedCount++;
                     }
                 }
@@ -755,8 +727,6 @@
                 }
                 for (const [divId, leagueData] of Object.entries(localDay.leagueAssignments)) {
                     let canEdit = hasFull || editableDivisions.includes(String(divId));
-                    
-                    // Optimistic override
                     if (!rbacReady && !hasFull) canEdit = true;
 
                     if (canEdit) {
@@ -769,23 +739,14 @@
         console.log(`☁️ [INIT] Merge Stats: Applied Local=${mergedCount}, Preserved Cloud=${preservedCount}, Pending Validation=${pendingCount}`);
 
         // 4. Save Result to Storage
-        // Assign the merged daily schedules to the state object
         mergedState.daily_schedules = mergedDaily;
-        
-        // setLocalCache will:
-        // 1. Detect daily_schedules
-        // 2. Save them to DAILY_DATA_KEY (campDailyData_v1)
-        // 3. Remove them from state
-        // 4. Save the rest to UNIFIED_CACHE_KEY
         setLocalCache(mergedState); 
         
-        // Force memory cache update just in case setLocalCache didn't update the memory reference for daily data
         if (_memoryCache) _memoryCache.daily_schedules = mergedDaily;
 
         console.log("☁️ [INIT] Merge complete.");
         finishInit(true);
         if (pendingCount > 0) {
-            // Don't toast success yet if we are just guessing permissions
             console.log("☁️ [INIT] Performed optimistic merge. Waiting for RBAC...");
         } else {
             showToast("☁️ Schedule Synced with Cloud", "success");
