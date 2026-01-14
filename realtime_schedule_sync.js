@@ -20,7 +20,7 @@
     // =========================================================================
 
     const SUPABASE_URL = 'https://jxadnhevclwltyugijkw.supabase.co';
-    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4YWRuaGV2Y2x3bHR5dWdpamt3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ1OTk5ODYsImV4cCI6MjA2MDE3NTk4Nn0.9h3J2uvSKB9lu7dPFDjMJszFk';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4YWRuaGV2Y2x3bHR5dWdpamt3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ1OTk5ODYsImV4cCI6MjA2MDE3NTk4Nn0.9h3J2uvSKB2manFKFj6jCEMfNqcH9lu7dPFDjMJszFk';
     
     // Use the existing camp_daily_data table
     const TABLE_NAME = 'camp_daily_data';
@@ -35,49 +35,41 @@
     let _isOnline = true;
 
     // =========================================================================
-    // CAMP ID DETECTION - Multiple fallback methods
+    // CAMP ID DETECTION - Use shared global from cloud_storage_bridge
     // =========================================================================
 
     function getCampId() {
-        // Try multiple sources
-        if (_campId) return _campId;
-        
-        // Method 1: Window global
-        if (window.CAMP_ID) {
-            _campId = window.CAMP_ID;
-            return _campId;
+        // PRIORITY 1: Shared global (set by cloud_storage_bridge or UnifiedCloudSchedule)
+        if (window._cloudBridgeCampId) {
+            return window._cloudBridgeCampId;
         }
         
-        // Method 2: localStorage
+        // PRIORITY 2: Get from UnifiedCloudSchedule if available
+        if (window.UnifiedCloudSchedule?.getCampId) {
+            const id = window.UnifiedCloudSchedule.getCampId();
+            if (id) return id;
+        }
+        
+        // PRIORITY 3: Window global
+        if (window.CAMP_ID) {
+            return window.CAMP_ID;
+        }
+        
+        // PRIORITY 4: localStorage
         const stored = localStorage.getItem('camp_id');
         if (stored) {
-            _campId = stored;
-            return _campId;
+            return stored;
         }
         
-        // Method 3: Extract from cloud_storage_bridge logs or data
-        const dailyData = localStorage.getItem('campDailyData_v1');
-        if (dailyData) {
-            try {
-                const parsed = JSON.parse(dailyData);
-                if (parsed._campId) {
-                    _campId = parsed._campId;
-                    return _campId;
-                }
-            } catch (e) {}
-        }
-        
-        // Method 4: Check session storage
-        const sessionCamp = sessionStorage.getItem('camp_id');
-        if (sessionCamp) {
-            _campId = sessionCamp;
-            return _campId;
-        }
-        
-        // Method 5: Look for it in Supabase auth
-        if (window.supabase?.auth?.getUser) {
-            // Will be set async
-        }
+        // PRIORITY 5: Extract from Supabase session
+        try {
+            const session = localStorage.getItem('sb-jxadnhevclwltyugijkw-auth-token');
+            if (session) {
+                const parsed = JSON.parse(session);
+                const campId = parsed?.user?.user_metadata?.camp_id;
+                if (campId) return campId;
+            }
+        } catch (e) {}
         
         return null;
     }
@@ -616,28 +608,65 @@
         createSyncIndicator();
         updateSyncStatus('syncing', 'Connecting...');
         
-        // Wait for camp ID with multiple attempts
-        let attempts = 0;
-        while (!getCampId() && attempts < 30) {
-            await new Promise(r => setTimeout(r, 200));
-            attempts++;
-            
-            // Try to extract from other sources
-            if (attempts === 10) {
-                // Check if cloud bridge has camp ID
-                if (window.cloudStorageBridge?.campId) {
-                    _campId = window.cloudStorageBridge.campId;
+        // Wait for cloud hydration event (this is when camp ID is definitely available)
+        let hydrated = false;
+        const hydrationPromise = new Promise(resolve => {
+            const handler = () => {
+                hydrated = true;
+                resolve();
+            };
+            window.addEventListener('campistry-cloud-hydrated', handler, { once: true });
+            // Also resolve after timeout
+            setTimeout(() => {
+                window.removeEventListener('campistry-cloud-hydrated', handler);
+                resolve();
+            }, 10000);
+        });
+        
+        // Wait up to 10 seconds for hydration
+        await hydrationPromise;
+        
+        // After hydration, try to get camp ID from the cloud bridge's logged value
+        // The bridge logs: "Loading from cloud for camp: XXX"
+        // We can intercept this by checking what the bridge loaded
+        
+        // Try to extract camp ID from the merged data
+        if (!getCampId()) {
+            // Check if campDailyData now has the correct _campId after hydration
+            try {
+                const raw = localStorage.getItem('campDailyData_v1');
+                if (raw) {
+                    const data = JSON.parse(raw);
+                    if (data._campId) {
+                        window._cloudBridgeCampId = data._campId;
+                        console.log('[RealtimeSync] Got camp ID from hydrated data:', data._campId);
+                    }
                 }
-            }
+            } catch (e) {}
         }
         
         const campId = getCampId();
         if (!campId) {
-            console.warn('[RealtimeSync] No camp ID found - limited functionality');
+            console.warn('[RealtimeSync] No camp ID found - will retry on next hydration');
             updateSyncStatus('error', 'No camp ID');
+            
+            // Set up listener to retry
+            window.addEventListener('campistry-cloud-hydrated', () => {
+                setTimeout(() => {
+                    if (getCampId()) {
+                        console.log('[RealtimeSync] Camp ID now available, completing init');
+                        completeInitialization();
+                    }
+                }, 1000);
+            }, { once: true });
             return;
         }
         
+        await completeInitialization();
+    }
+    
+    async function completeInitialization() {
+        const campId = getCampId();
         console.log('[RealtimeSync] Camp ID:', campId);
         
         // Install event hooks
