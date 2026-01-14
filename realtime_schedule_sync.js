@@ -334,6 +334,12 @@
             return { success: true };
             
         } catch (err) {
+            // Network errors are expected - cloud_storage_bridge is the primary save mechanism
+            if (err.message?.includes('Failed to fetch')) {
+                if (DEBUG) console.log('[RealtimeSync] Direct save unavailable - cloud_storage_bridge handles saves');
+                updateSyncStatus('synced', 'Bridge active');
+                return { success: false, reason: 'network', handledByBridge: true };
+            }
             console.error('[RealtimeSync] Save error:', err);
             updateSyncStatus('error', 'Save failed');
             return { success: false, error: err.message };
@@ -417,6 +423,12 @@
             return { success: true, hasData: true };
             
         } catch (err) {
+            // Network errors are expected - cloud_storage_bridge handles data
+            if (err.message?.includes('Failed to fetch')) {
+                if (DEBUG) console.log('[RealtimeSync] Network unavailable - data handled by bridge');
+                updateSyncStatus('synced', 'Ready');
+                return { success: false, reason: 'network' };
+            }
             console.error('[RealtimeSync] Load error:', err);
             updateSyncStatus('error', 'Load failed');
             return { success: false, error: err.message };
@@ -721,7 +733,7 @@
         // Install event hooks
         installEventHooks();
         
-        // Try to setup realtime subscription
+        // Try to setup realtime subscription (for receiving updates from others)
         const realtimeOk = await setupRealtimeSubscription();
         
         if (!realtimeOk) {
@@ -729,8 +741,16 @@
             startPolling();
         }
         
-        // Initial load from cloud
-        await loadFromCloud();
+        // NOTE: We do NOT load from cloud here
+        // The cloud_storage_bridge already handles loading from camp_daily_data
+        // We just listen for updates from other users via realtime subscription
+        
+        // Set initial status based on online state
+        if (navigator.onLine) {
+            updateSyncStatus('synced', 'Ready');
+        } else {
+            updateSyncStatus('offline', 'Offline');
+        }
         
         console.log('[RealtimeSync] ✅ Initialization complete');
     }
