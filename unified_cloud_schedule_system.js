@@ -566,61 +566,24 @@
 
     /**
      * Hook into the scheduler's save flow to auto-sync to cloud
+     * NOTE: We do NOT auto-save here - cloud_storage_bridge handles all saves
+     * This system is only for LOADING and MERGING multi-scheduler data
      */
     function installAutoSaveHook() {
-        // Hook saveCurrentDailyData
-        const originalSave = window.saveCurrentDailyData;
-        if (originalSave && !originalSave._cloudHooked) {
-            window.saveCurrentDailyData = function(key, data) {
-                const result = originalSave.call(this, key, data);
-                
-                // Auto-save to cloud when scheduleAssignments is saved
-                if (key === 'scheduleAssignments' || key === 'leagueAssignments' || key === 'unifiedTimes') {
-                    // Debounce cloud saves (500ms)
-                    if (window._cloudSaveTimeout) clearTimeout(window._cloudSaveTimeout);
-                    window._cloudSaveTimeout = setTimeout(() => {
-                        saveScheduleToCloud().then(result => {
-                            if (result.success) {
-                                console.log('[CloudSchedule] ✅ Auto-saved to cloud');
-                            }
-                        });
-                    }, 500);
-                }
-                
-                return result;
-            };
-            window.saveCurrentDailyData._cloudHooked = true;
-            if (DEBUG) console.log('[CloudSchedule] ✅ Hooked saveCurrentDailyData for auto-sync');
-        }
+        // Just log that we're ready - do NOT hook saveCurrentDailyData
+        // The cloud_storage_bridge already handles saves
+        if (DEBUG) console.log('[CloudSchedule] ✅ Ready (saves handled by cloud_storage_bridge)');
         
-        // Listen for generation complete event - save IMMEDIATELY
+        // Listen for generation complete to dispatch our event (for UI indicator)
         window.addEventListener('campistry-generation-complete', () => {
-            console.log('[CloudSchedule] Generation complete - saving immediately');
-            // Clear any pending save and save now
-            if (window._cloudSaveTimeout) clearTimeout(window._cloudSaveTimeout);
-            saveScheduleToCloud().then(result => {
-                if (result.success) {
-                    console.log('[CloudSchedule] ✅ Saved after generation');
-                    // Dispatch event so other users know
-                    window.dispatchEvent(new CustomEvent('campistry-cloud-save-complete', {
-                        detail: { dateKey: getDateKey() }
-                    }));
-                }
-            });
+            if (DEBUG) console.log('[CloudSchedule] Generation complete event received');
+            // Dispatch event after a delay (give bridge time to save)
+            setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('campistry-cloud-save-complete', {
+                    detail: { dateKey: getDateKey() }
+                }));
+            }, 1500);
         });
-        
-        // Also hook forceSyncToCloud if it exists
-        const originalForceSync = window.forceSyncToCloud;
-        if (originalForceSync && !originalForceSync._cloudHooked) {
-            window.forceSyncToCloud = async function(...args) {
-                const result = await originalForceSync.apply(this, args);
-                // After force sync, also save to our system
-                setTimeout(() => saveScheduleToCloud(), 100);
-                return result;
-            };
-            window.forceSyncToCloud._cloudHooked = true;
-            if (DEBUG) console.log('[CloudSchedule] ✅ Hooked forceSyncToCloud');
-        }
     }
 
     // =========================================================================
