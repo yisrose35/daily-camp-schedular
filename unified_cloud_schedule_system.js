@@ -1,5 +1,5 @@
 // =============================================================================
-// unified_cloud_schedule_system.js v1.0 — CAMPISTRY CLOUD SCHEDULE SYNC
+// unified_cloud_schedule_system.js v1.1 — CAMPISTRY CLOUD SCHEDULE SYNC
 // =============================================================================
 //
 // PURPOSE: Fix the slot index mismatch between stored data and rendered view
@@ -13,13 +13,15 @@
 // - Store unifiedTimes WITH the schedule data
 // - On load, use the STORED unifiedTimes (don't rebuild)
 // - Automatic version overwrite per-scheduler per-date
+// - Better camp ID detection with multiple fallbacks
+// - Immediate save after generation
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('☁️ Unified Cloud Schedule System v1.0 loading...');
+    console.log('☁️ Unified Cloud Schedule System v1.1 loading...');
 
     const SUPABASE_URL = 'https://jxadnhevclwltyugijkw.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4YWRuaGV2Y2x3bHR5dWdpamt3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ1OTk5ODYsImV4cCI6MjA2MDE3NTk4Nn0.9h3J2uvSKB2manFKFj6jCEMfNqcH9lu7dPFDjMJszFk';
@@ -32,6 +34,7 @@
     
     let DEBUG = true;
     let _useNewTable = false; // Will be set after checking if table exists
+    let _cachedCampId = null; // Cache camp ID after first detection
 
     // =========================================================================
     // SUPABASE CLIENT
@@ -91,11 +94,95 @@
     }
 
     // =========================================================================
-    // GET CURRENT CONTEXT
+    // GET CURRENT CONTEXT - IMPROVED CAMP ID DETECTION
     // =========================================================================
 
     function getCampId() {
-        return window.CAMP_ID || localStorage.getItem('camp_id') || null;
+        // Return cached if we have it
+        if (_cachedCampId) return _cachedCampId;
+        
+        // Method 1: Direct window global
+        if (window.CAMP_ID) {
+            _cachedCampId = window.CAMP_ID;
+            if (DEBUG) console.log('[CloudSchedule] Camp ID from window.CAMP_ID:', _cachedCampId);
+            return _cachedCampId;
+        }
+        
+        // Method 2: localStorage camp_id
+        const storedCampId = localStorage.getItem('camp_id');
+        if (storedCampId) {
+            _cachedCampId = storedCampId;
+            if (DEBUG) console.log('[CloudSchedule] Camp ID from localStorage:', _cachedCampId);
+            return _cachedCampId;
+        }
+        
+        // Method 3: Extract from campDailyData_v1
+        try {
+            const dailyDataRaw = localStorage.getItem('campDailyData_v1');
+            if (dailyDataRaw) {
+                const dailyData = JSON.parse(dailyDataRaw);
+                if (dailyData._campId) {
+                    _cachedCampId = dailyData._campId;
+                    if (DEBUG) console.log('[CloudSchedule] Camp ID from dailyData._campId:', _cachedCampId);
+                    return _cachedCampId;
+                }
+            }
+        } catch (e) {}
+        
+        // Method 4: Extract from cloudStorageBridge
+        if (window.cloudStorageBridge?.campId) {
+            _cachedCampId = window.cloudStorageBridge.campId;
+            if (DEBUG) console.log('[CloudSchedule] Camp ID from cloudStorageBridge:', _cachedCampId);
+            return _cachedCampId;
+        }
+        
+        // Method 5: Extract from Supabase session/user metadata
+        try {
+            const session = localStorage.getItem('sb-jxadnhevclwltyugijkw-auth-token');
+            if (session) {
+                const parsed = JSON.parse(session);
+                const campId = parsed?.user?.user_metadata?.camp_id;
+                if (campId) {
+                    _cachedCampId = campId;
+                    if (DEBUG) console.log('[CloudSchedule] Camp ID from Supabase session:', _cachedCampId);
+                    return _cachedCampId;
+                }
+            }
+        } catch (e) {}
+        
+        // Method 6: Check sessionStorage
+        const sessionCampId = sessionStorage.getItem('camp_id');
+        if (sessionCampId) {
+            _cachedCampId = sessionCampId;
+            if (DEBUG) console.log('[CloudSchedule] Camp ID from sessionStorage:', _cachedCampId);
+            return _cachedCampId;
+        }
+        
+        // Method 7: Look for camp_id in any localStorage key
+        try {
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.includes('camp')) {
+                    const value = localStorage.getItem(key);
+                    // Look for UUID pattern
+                    const uuidMatch = value?.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+                    if (uuidMatch) {
+                        _cachedCampId = uuidMatch[0];
+                        if (DEBUG) console.log('[CloudSchedule] Camp ID extracted from', key, ':', _cachedCampId);
+                        return _cachedCampId;
+                    }
+                }
+            }
+        } catch (e) {}
+        
+        return null;
+    }
+
+    // Allow external setting of camp ID
+    function setCampId(id) {
+        _cachedCampId = id;
+        localStorage.setItem('camp_id', id);
+        if (DEBUG) console.log('[CloudSchedule] Camp ID set to:', id);
     }
 
     function getUserId() {
@@ -471,13 +558,13 @@
     function installAutoSaveHook() {
         // Hook saveCurrentDailyData
         const originalSave = window.saveCurrentDailyData;
-        if (originalSave) {
+        if (originalSave && !originalSave._cloudHooked) {
             window.saveCurrentDailyData = function(key, data) {
                 const result = originalSave.call(this, key, data);
                 
                 // Auto-save to cloud when scheduleAssignments is saved
-                if (key === 'scheduleAssignments') {
-                    // Debounce cloud saves
+                if (key === 'scheduleAssignments' || key === 'leagueAssignments' || key === 'unifiedTimes') {
+                    // Debounce cloud saves (500ms)
                     if (window._cloudSaveTimeout) clearTimeout(window._cloudSaveTimeout);
                     window._cloudSaveTimeout = setTimeout(() => {
                         saveScheduleToCloud().then(result => {
@@ -485,12 +572,42 @@
                                 console.log('[CloudSchedule] ✅ Auto-saved to cloud');
                             }
                         });
-                    }, 2000);
+                    }, 500);
                 }
                 
                 return result;
             };
+            window.saveCurrentDailyData._cloudHooked = true;
             if (DEBUG) console.log('[CloudSchedule] ✅ Hooked saveCurrentDailyData for auto-sync');
+        }
+        
+        // Listen for generation complete event - save IMMEDIATELY
+        window.addEventListener('campistry-generation-complete', () => {
+            console.log('[CloudSchedule] Generation complete - saving immediately');
+            // Clear any pending save and save now
+            if (window._cloudSaveTimeout) clearTimeout(window._cloudSaveTimeout);
+            saveScheduleToCloud().then(result => {
+                if (result.success) {
+                    console.log('[CloudSchedule] ✅ Saved after generation');
+                    // Dispatch event so other users know
+                    window.dispatchEvent(new CustomEvent('campistry-cloud-save-complete', {
+                        detail: { dateKey: getDateKey() }
+                    }));
+                }
+            });
+        });
+        
+        // Also hook forceSyncToCloud if it exists
+        const originalForceSync = window.forceSyncToCloud;
+        if (originalForceSync && !originalForceSync._cloudHooked) {
+            window.forceSyncToCloud = async function(...args) {
+                const result = await originalForceSync.apply(this, args);
+                // After force sync, also save to our system
+                setTimeout(() => saveScheduleToCloud(), 100);
+                return result;
+            };
+            window.forceSyncToCloud._cloudHooked = true;
+            if (DEBUG) console.log('[CloudSchedule] ✅ Hooked forceSyncToCloud');
         }
     }
 
@@ -501,17 +618,45 @@
     async function initialize() {
         if (DEBUG) console.log('[CloudSchedule] Initializing...');
         
-        // Wait for camp ID
+        // Wait for cloud hydration event first (indicates camp ID should be available)
+        let hydrated = false;
+        const hydrationHandler = () => { hydrated = true; };
+        window.addEventListener('campistry-cloud-hydrated', hydrationHandler, { once: true });
+        
+        // Wait up to 10 seconds for hydration OR camp ID
         let attempts = 0;
-        while (!getCampId() && attempts < 20) {
+        while (!getCampId() && !hydrated && attempts < 50) {
             await new Promise(r => setTimeout(r, 200));
             attempts++;
         }
         
-        if (!getCampId()) {
-            console.warn('[CloudSchedule] No camp ID found after waiting');
+        window.removeEventListener('campistry-cloud-hydrated', hydrationHandler);
+        
+        // Try one more time after hydration
+        if (!getCampId() && hydrated) {
+            await new Promise(r => setTimeout(r, 500));
+        }
+        
+        const campId = getCampId();
+        if (!campId) {
+            console.warn('[CloudSchedule] No camp ID found - will retry when available');
+            // Set up a listener to initialize later
+            window.addEventListener('campistry-cloud-hydrated', () => {
+                setTimeout(() => {
+                    if (getCampId()) {
+                        console.log('[CloudSchedule] Camp ID now available, completing initialization');
+                        completeInitialization();
+                    }
+                }, 500);
+            }, { once: true });
             return;
         }
+        
+        await completeInitialization();
+    }
+    
+    async function completeInitialization() {
+        if (DEBUG) console.log('[CloudSchedule] Camp ID:', getCampId());
         
         // Check which table to use
         await checkNewTableExists();
@@ -535,7 +680,7 @@
             }
         }
         
-        if (DEBUG) console.log('[CloudSchedule] ✅ Initialized');
+        if (DEBUG) console.log('[CloudSchedule] ✅ Initialization complete');
     }
 
     // =========================================================================
@@ -577,7 +722,7 @@
     // =========================================================================
 
     window.UnifiedCloudSchedule = {
-        version: '1.0',
+        version: '1.1',
         saveScheduleToCloud,
         loadAndMergeSchedules,
         
@@ -597,6 +742,10 @@
             return result;
         },
         
+        // Camp ID management
+        setCampId: setCampId,
+        getCampId: getCampId,
+        
         // Debug
         DEBUG_ON: () => { DEBUG = true; },
         DEBUG_OFF: () => { DEBUG = false; },
@@ -609,11 +758,18 @@
             scheduleAssignments: Object.keys(window.scheduleAssignments || {}).length,
             unifiedTimes: (window.unifiedTimes || []).length,
             unifiedTimesFromCloud: window._unifiedTimesFromCloud || false,
-            useNewTable: _useNewTable
+            useNewTable: _useNewTable,
+            cachedCampId: _cachedCampId
         }),
         
         // Check table status
-        checkTables: checkNewTableExists
+        checkTables: checkNewTableExists,
+        
+        // Re-initialize
+        reinit: () => {
+            _cachedCampId = null;
+            initialize();
+        }
     };
 
     // Initialize when DOM ready
@@ -623,8 +779,9 @@
         setTimeout(initialize, 500);
     }
 
-    console.log('☁️ Unified Cloud Schedule System v1.0 loaded');
-    console.log('   Auto-saves unifiedTimes WITH schedule data');
+    console.log('☁️ Unified Cloud Schedule System v1.1 loaded');
+    console.log('   Better camp ID detection with fallbacks');
+    console.log('   Immediate save after generation');
     console.log('   Use: window.UnifiedCloudSchedule.save() to save');
     console.log('   Use: window.UnifiedCloudSchedule.load() to load & merge');
     console.log('   Use: window.UnifiedCloudSchedule.forceRefresh() to reload from cloud');
