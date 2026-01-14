@@ -1,41 +1,43 @@
 // =============================================================================
-// unified_schedule_system.js v1.0 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
+// unified_schedule_system.js v3.0 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
 // =============================================================================
 //
-// This file REPLACES the following three files:
+// This file REPLACES ALL of the following:
 // ❌ scheduler_ui.js
 // ❌ render_sync_fix.js  
 // ❌ view_schedule_loader_fix.js
+// ❌ schedule_version_merger.js
+// ❌ schedule_version_ui.js
 //
-// WHAT THIS FILE DOES:
-// ✅ Loads schedule data from localStorage/cloud with proper priority
-// ✅ Renders daily schedule view with proper slot alignment
-// ✅ Handles league assignments and matchup display
-// ✅ Supports multi-scheduler blocking and RBAC
-// ✅ Provides edit functionality for schedule cells
-// ✅ Prevents render storms with debouncing
-// ✅ Fixes wipe protection race conditions
+// CRITICAL FIXES:
+// ✅ Uses skeleton blocks DIRECTLY (not 30-min grid) for proper alignment
+// ✅ Proper cloud hydration timing
+// ✅ Correct slot index mapping for variable-length time blocks
+// ✅ League matchup display
+// ✅ Version save/load/merge integrated
+// ✅ Toolbar hidden by default
+// ✅ RBAC and multi-scheduler support
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('📅 Unified Schedule System v1.0 loading...');
+    console.log('📅 Unified Schedule System v3.0 loading...');
 
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
     
-    const INCREMENT_MINS = 30;
-    const RENDER_DEBOUNCE_MS = 100;
-    const DEBUG = false;
+    const RENDER_DEBOUNCE_MS = 150;
+    let DEBUG = false;
+    const HIDE_VERSION_TOOLBAR = true;
     
-    // Render throttling state
     let _lastRenderTime = 0;
     let _renderQueued = false;
     let _renderTimeout = null;
     let _initialized = false;
+    let _cloudHydrated = false;
 
     // =========================================================================
     // TIME UTILITIES
@@ -51,6 +53,12 @@
             meridiem = s.endsWith('am') ? 'am' : 'pm';
             s = s.replace(/am|pm/g, '').trim();
         } else {
+            const match24 = s.match(/^(\d{1,2}):(\d{2})$/);
+            if (match24) {
+                const h = parseInt(match24[1], 10);
+                const m = parseInt(match24[2], 10);
+                return h * 60 + m;
+            }
             return null;
         }
         
@@ -77,119 +85,113 @@
         return `${h12}:${String(m).padStart(2, '0')} ${ap}`;
     }
 
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
     // =========================================================================
-    // DATA LOADING - SINGLE SOURCE OF TRUTH
+    // HIDE VERSION TOOLBAR
+    // =========================================================================
+    
+    function hideVersionToolbar() {
+        if (!HIDE_VERSION_TOOLBAR) return;
+        
+        const toolbar = document.getElementById('version-toolbar-container');
+        if (toolbar) {
+            toolbar.style.display = 'none';
+            const parent = toolbar.parentElement;
+            if (parent && parent.children.length === 1) {
+                parent.style.display = 'none';
+            }
+            if (DEBUG) console.log('[UnifiedSchedule] Hidden version toolbar');
+        }
+    }
+
+    // =========================================================================
+    // DATA LOADING - CLOUD-AWARE
     // =========================================================================
 
-    function loadScheduleForDate(dateKey) {
-        if (!dateKey) {
-            dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        }
-        
-        if (DEBUG) console.log(`[UnifiedSchedule] Loading schedule for date: ${dateKey}`);
-        
-        let dailyData = {};
+    function getDateKey() {
+        return window.currentScheduleDate || new Date().toISOString().split('T')[0];
+    }
+
+    function loadDailyData() {
         try {
             const raw = localStorage.getItem('campDailyData_v1');
-            if (raw) dailyData = JSON.parse(raw);
+            if (raw) return JSON.parse(raw);
         } catch (e) {
             console.error('[UnifiedSchedule] Error loading daily data:', e);
         }
+        return {};
+    }
 
+    function loadScheduleForDate(dateKey) {
+        if (!dateKey) dateKey = getDateKey();
+        
+        if (DEBUG) console.log(`[UnifiedSchedule] Loading data for: ${dateKey}`);
+        
+        const dailyData = loadDailyData();
         const dateData = dailyData[dateKey] || {};
         
         // =====================================================================
-        // 1. SCHEDULE ASSIGNMENTS - Priority Loading with Wipe Protection
+        // 1. SCHEDULE ASSIGNMENTS - Priority loading
         // =====================================================================
         
-        let newAssignments = {};
+        let loadedAssignments = false;
         
-        // Priority 1: Date-specific data
-        if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
-            newAssignments = dateData.scheduleAssignments;
-            if (DEBUG) console.log('[UnifiedSchedule] Loaded from date-specific:', Object.keys(newAssignments).length);
+        // Priority 1: Window global (set by cloud bridge, version merger, generator)
+        if (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0) {
+            loadedAssignments = true;
+            if (DEBUG) console.log('[UnifiedSchedule] Using window.scheduleAssignments:', Object.keys(window.scheduleAssignments).length);
         }
-        // Priority 2: Root-level legacy data
+        // Priority 2: Date-specific localStorage
+        else if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
+            window.scheduleAssignments = dateData.scheduleAssignments;
+            loadedAssignments = true;
+            if (DEBUG) console.log('[UnifiedSchedule] Loaded from dateData:', Object.keys(window.scheduleAssignments).length);
+        }
+        // Priority 3: Root-level legacy
         else if (dailyData.scheduleAssignments && Object.keys(dailyData.scheduleAssignments).length > 0) {
-            newAssignments = dailyData.scheduleAssignments;
-            if (DEBUG) console.log('[UnifiedSchedule] Loaded from root-level:', Object.keys(newAssignments).length);
-            
-            // Migrate to date-specific
-            migrateRootLevelData(dailyData, dateKey);
+            window.scheduleAssignments = dailyData.scheduleAssignments;
+            loadedAssignments = true;
+            if (DEBUG) console.log('[UnifiedSchedule] Loaded from root:', Object.keys(window.scheduleAssignments).length);
         }
         
-        // WIPE PROTECTION: Don't overwrite good data with empty
-        const currentCount = Object.keys(window.scheduleAssignments || {}).length;
-        const newCount = Object.keys(newAssignments).length;
-        
-        if (newCount === 0 && currentCount > 0) {
-            if (DEBUG) console.log(`[UnifiedSchedule] 🛡️ WIPE PROTECTION: Keeping ${currentCount} bunks`);
-            // Keep existing data, don't overwrite
-        } else {
-            window.scheduleAssignments = newAssignments;
-            if (DEBUG) console.log(`[UnifiedSchedule] ✅ Loaded ${newCount} bunks`);
+        if (!loadedAssignments) {
+            window.scheduleAssignments = window.scheduleAssignments || {};
         }
         
         // =====================================================================
-        // 2. INJECT SUBDIVISION DRAFTS
+        // 2. LEAGUE ASSIGNMENTS
         // =====================================================================
         
-        if (dateData.subdivisionSchedules) {
-            let injected = 0;
-            if (!window.scheduleAssignments) window.scheduleAssignments = {};
-            
-            Object.values(dateData.subdivisionSchedules).forEach(sub => {
-                if (sub.scheduleData) {
-                    Object.entries(sub.scheduleData).forEach(([bunk, slots]) => {
-                        if (!window.scheduleAssignments[bunk] || 
-                            !hasValidData(window.scheduleAssignments[bunk])) {
-                            window.scheduleAssignments[bunk] = slots;
-                            injected++;
-                        }
-                    });
-                }
-            });
-            if (injected > 0 && DEBUG) {
-                console.log(`[UnifiedSchedule] Injected ${injected} bunks from drafts`);
+        if (!window.leagueAssignments || Object.keys(window.leagueAssignments).length === 0) {
+            if (dateData.leagueAssignments && Object.keys(dateData.leagueAssignments).length > 0) {
+                window.leagueAssignments = dateData.leagueAssignments;
+            } else {
+                window.leagueAssignments = {};
             }
         }
         
         // =====================================================================
-        // 3. LEAGUE ASSIGNMENTS
-        // =====================================================================
-        
-        if (dateData.leagueAssignments && Object.keys(dateData.leagueAssignments).length > 0) {
-            window.leagueAssignments = dateData.leagueAssignments;
-        } else if (!window.leagueAssignments) {
-            window.leagueAssignments = {};
-        }
-        
-        // =====================================================================
-        // 4. UNIFIED TIMES - With Regeneration Fallback
+        // 3. UNIFIED TIMES - Build from skeleton if needed
         // =====================================================================
         
         if (dateData.unifiedTimes && dateData.unifiedTimes.length > 0) {
             window.unifiedTimes = normalizeUnifiedTimes(dateData.unifiedTimes);
-            if (DEBUG) console.log(`[UnifiedSchedule] ✅ Loaded ${window.unifiedTimes.length} time slots`);
-        }
-        else if (window.unifiedTimes && window.unifiedTimes.length > 0) {
-            // Preserve existing
-            if (DEBUG) console.log('[UnifiedSchedule] 🛡️ Preserving existing unifiedTimes');
-        }
-        else {
-            // Regenerate from skeleton
-            const skeleton = dateData.manualSkeleton || dateData.skeleton || 
-                            window.manualSkeleton || window.skeleton;
-            if (skeleton && skeleton.length > 0) {
-                window.unifiedTimes = regenerateTimesFromSkeleton(skeleton);
-                if (DEBUG) console.log(`[UnifiedSchedule] ⚠️ Regenerated ${window.unifiedTimes.length} time slots from skeleton`);
-            } else {
-                window.unifiedTimes = [];
+        } else if (!window.unifiedTimes || window.unifiedTimes.length === 0) {
+            const skeleton = getSkeleton(dateKey);
+            if (skeleton.length > 0) {
+                window.unifiedTimes = buildUnifiedTimesFromSkeleton(skeleton);
+                if (DEBUG) console.log('[UnifiedSchedule] Built unifiedTimes from skeleton:', window.unifiedTimes.length);
             }
         }
         
         // =====================================================================
-        // 5. SKELETON
+        // 4. SKELETON
         // =====================================================================
         
         if (dateData.manualSkeleton && dateData.manualSkeleton.length > 0) {
@@ -197,19 +199,29 @@
         } else if (dateData.skeleton && dateData.skeleton.length > 0) {
             window.manualSkeleton = dateData.skeleton;
         }
-        // Don't clear existing skeleton if date-specific is empty
+        
+        if (DEBUG) {
+            console.log('[UnifiedSchedule] Data state:', {
+                assignments: Object.keys(window.scheduleAssignments || {}).length,
+                leagues: Object.keys(window.leagueAssignments || {}).length,
+                times: (window.unifiedTimes || []).length,
+                skeleton: (window.manualSkeleton || window.skeleton || []).length
+            });
+        }
         
         return {
-            scheduleAssignments: window.scheduleAssignments,
-            leagueAssignments: window.leagueAssignments,
-            unifiedTimes: window.unifiedTimes,
+            scheduleAssignments: window.scheduleAssignments || {},
+            leagueAssignments: window.leagueAssignments || {},
+            unifiedTimes: window.unifiedTimes || [],
             skeleton: window.manualSkeleton || window.skeleton || []
         };
     }
 
-    function hasValidData(slots) {
-        if (!Array.isArray(slots)) return false;
-        return slots.some(s => s && (s.field || s._activity));
+    function getSkeleton(dateKey) {
+        const dailyData = loadDailyData();
+        const dateData = dailyData[dateKey || getDateKey()] || {};
+        return dateData.manualSkeleton || dateData.skeleton || 
+               window.manualSkeleton || window.skeleton || [];
     }
 
     function normalizeUnifiedTimes(times) {
@@ -221,132 +233,137 @@
         }));
     }
 
-    function regenerateTimesFromSkeleton(skeleton) {
-        if (!skeleton || !Array.isArray(skeleton) || skeleton.length === 0) {
-            return [];
-        }
-
-        let minTime = 540; // 9:00 AM default
-        let maxTime = 960; // 4:00 PM default
-
+    /**
+     * Build unifiedTimes directly from skeleton blocks.
+     * Each unique (startTime, endTime) pair becomes a slot.
+     * This handles variable-length blocks correctly.
+     */
+    function buildUnifiedTimesFromSkeleton(skeleton) {
+        const timeSlots = [];
+        const seen = new Set();
+        
         skeleton.forEach(block => {
-            const start = parseTimeToMinutes(block.startTime);
-            const end = parseTimeToMinutes(block.endTime);
-            if (start !== null) minTime = Math.min(minTime, start);
-            if (end !== null) maxTime = Math.max(maxTime, end);
-        });
-
-        const slots = [];
-        const baseDate = new Date();
-        baseDate.setHours(0, 0, 0, 0);
-
-        for (let m = minTime; m < maxTime; m += INCREMENT_MINS) {
+            const startMin = parseTimeToMinutes(block.startTime);
+            const endMin = parseTimeToMinutes(block.endTime);
+            
+            if (startMin === null || endMin === null) return;
+            
+            const key = `${startMin}-${endMin}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            
+            const baseDate = new Date();
+            baseDate.setHours(0, 0, 0, 0);
+            
             const startDate = new Date(baseDate);
-            startDate.setMinutes(m);
+            startDate.setMinutes(startMin);
+            
             const endDate = new Date(baseDate);
-            endDate.setMinutes(m + INCREMENT_MINS);
-
-            slots.push({
+            endDate.setMinutes(endMin);
+            
+            timeSlots.push({
                 start: startDate,
                 end: endDate,
-                label: `${minutesToTimeLabel(m)} - ${minutesToTimeLabel(m + INCREMENT_MINS)}`
+                startMin,
+                endMin,
+                label: `${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}`
             });
-        }
-
-        return slots;
-    }
-
-    function migrateRootLevelData(dailyData, dateKey) {
-        // Migrate legacy root-level data to date-specific
-        const keysToMigrate = ['scheduleAssignments', 'leagueAssignments', 'unifiedTimes', 'manualSkeleton', 'skeleton'];
-        
-        if (!dailyData[dateKey]) dailyData[dateKey] = {};
-        
-        keysToMigrate.forEach(key => {
-            if (dailyData[key] && !dailyData[dateKey][key]) {
-                dailyData[dateKey][key] = dailyData[key];
-                delete dailyData[key];
-                if (DEBUG) console.log(`[UnifiedSchedule] 📦 Migrated ${key} to date ${dateKey}`);
-            }
         });
         
-        try {
-            localStorage.setItem('campDailyData_v1', JSON.stringify(dailyData));
-        } catch (e) {
-            console.error('[UnifiedSchedule] Migration save failed:', e);
-        }
+        // Sort by start time
+        timeSlots.sort((a, b) => a.startMin - b.startMin);
+        
+        return timeSlots;
     }
 
     // =========================================================================
-    // SLOT INDEX CALCULATION - FIXED ALIGNMENT
+    // SLOT INDEX MAPPING - CRITICAL FOR VARIABLE TIME BLOCKS
     // =========================================================================
-
-    function findFirstSlotForTime(startMin) {
-        const times = window.unifiedTimes || [];
-        if (!times || times.length === 0 || startMin === null) return -1;
+    
+    /**
+     * Find the slot index in unifiedTimes that matches a time in minutes.
+     * Handles variable-length blocks by checking if time falls within any slot.
+     */
+    function findSlotIndexForTime(targetMin, unifiedTimes) {
+        if (!unifiedTimes || unifiedTimes.length === 0 || targetMin === null) {
+            return -1;
+        }
         
-        for (let i = 0; i < times.length; i++) {
-            const t = times[i];
-            let slotStart;
+        // Build slot info with start/end in minutes
+        const slots = unifiedTimes.map((t, idx) => {
+            let startMin, endMin;
             
-            if (t.start instanceof Date) {
-                slotStart = t.start.getHours() * 60 + t.start.getMinutes();
+            if (t.startMin !== undefined) {
+                startMin = t.startMin;
+                endMin = t.endMin;
+            } else if (t.start instanceof Date) {
+                startMin = t.start.getHours() * 60 + t.start.getMinutes();
+                endMin = t.end ? (t.end.getHours() * 60 + t.end.getMinutes()) : startMin + 30;
             } else if (t.start) {
-                const d = new Date(t.start);
-                slotStart = d.getHours() * 60 + d.getMinutes();
-            } else continue;
+                const sd = new Date(t.start);
+                const ed = t.end ? new Date(t.end) : null;
+                startMin = sd.getHours() * 60 + sd.getMinutes();
+                endMin = ed ? (ed.getHours() * 60 + ed.getMinutes()) : startMin + 30;
+            } else {
+                return null;
+            }
             
-            // Match within INCREMENT_MINS window
-            if (slotStart <= startMin && startMin < slotStart + INCREMENT_MINS) {
-                return i;
+            return { idx, startMin, endMin };
+        }).filter(Boolean);
+        
+        // Exact match on start time
+        for (const slot of slots) {
+            if (slot.startMin === targetMin) {
+                return slot.idx;
             }
         }
         
-        // Fallback: find closest slot
+        // Within slot range
+        for (const slot of slots) {
+            if (targetMin >= slot.startMin && targetMin < slot.endMin) {
+                return slot.idx;
+            }
+        }
+        
+        // Closest match (fallback)
         let closest = -1;
         let minDiff = Infinity;
         
-        for (let i = 0; i < times.length; i++) {
-            const t = times[i];
-            let slotStart;
-            
-            if (t.start instanceof Date) {
-                slotStart = t.start.getHours() * 60 + t.start.getMinutes();
-            } else if (t.start) {
-                slotStart = new Date(t.start).getHours() * 60 + new Date(t.start).getMinutes();
-            } else continue;
-            
-            const diff = Math.abs(slotStart - startMin);
+        for (const slot of slots) {
+            const diff = Math.abs(slot.startMin - targetMin);
             if (diff < minDiff) {
                 minDiff = diff;
-                closest = i;
+                closest = slot.idx;
             }
         }
         
         return closest;
     }
 
-    function findSlotsForRange(startMin, endMin) {
-        const times = window.unifiedTimes || [];
-        if (!times || times.length === 0) return [];
+    /**
+     * Find all slot indices that fall within a time range
+     */
+    function findSlotsForRange(startMin, endMin, unifiedTimes) {
+        if (!unifiedTimes || unifiedTimes.length === 0) return [];
         if (startMin === null || endMin === null) return [];
         
         const slots = [];
         
-        for (let i = 0; i < times.length; i++) {
-            const t = times[i];
+        unifiedTimes.forEach((t, idx) => {
             let slotStart;
             
-            if (t.start instanceof Date) {
+            if (t.startMin !== undefined) {
+                slotStart = t.startMin;
+            } else if (t.start instanceof Date) {
                 slotStart = t.start.getHours() * 60 + t.start.getMinutes();
             } else if (t.start) {
                 slotStart = new Date(t.start).getHours() * 60 + new Date(t.start).getMinutes();
-            } else continue;
+            } else return;
             
             if (slotStart >= startMin && slotStart < endMin) {
-                slots.push(i);
+                slots.push(idx);
             }
-        }
+        });
         
         return slots;
     }
@@ -361,12 +378,6 @@
         return assignments[bunk][slotIndex] || null;
     }
 
-    function getLeagueData(division, slotIndex) {
-        const leagues = window.leagueAssignments || {};
-        if (!leagues[division]) return null;
-        return leagues[division][slotIndex] || null;
-    }
-
     function formatEntry(entry) {
         if (!entry) return '';
         if (entry._isDismissal) return 'Dismissal';
@@ -378,15 +389,12 @@
         const field = typeof entry.field === 'object' ? entry.field.name : (entry.field || '');
         const sport = entry.sport || '';
         
-        // League game
         if (entry._h2h) {
             return entry._gameLabel || sport || 'League Game';
         }
         
-        // Fixed activity
         if (entry._fixed) return activity || field;
         
-        // Regular activity with field
         if (field && sport && field !== sport) {
             return `${field} – ${sport}`;
         }
@@ -424,45 +432,46 @@
         return eventName.toLowerCase().includes('league');
     }
 
-    function isGeneratedBlockType(eventName) {
-        if (!eventName) return false;
-        const lower = eventName.toLowerCase();
-        return lower.includes('activity') || lower.includes('sport') || 
-               lower.includes('special') || eventName.includes('/');
-    }
-
-    function escapeHtml(text) {
-        if (!text) return '';
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
     // =========================================================================
     // LEAGUE MATCHUPS RETRIEVAL
     // =========================================================================
 
     function getLeagueMatchups(divName, slotIdx) {
-        // Priority 1: leagueAssignments
-        const leagueData = getLeagueData(divName, slotIdx);
-        if (leagueData && leagueData.matchups) {
+        const leagues = window.leagueAssignments || {};
+        
+        // Priority 1: Direct leagueAssignments lookup
+        if (leagues[divName] && leagues[divName][slotIdx]) {
+            const data = leagues[divName][slotIdx];
             return {
-                matchups: leagueData.matchups,
-                gameLabel: leagueData.gameLabel || '',
-                sport: leagueData.sport || ''
+                matchups: data.matchups || [],
+                gameLabel: data.gameLabel || '',
+                sport: data.sport || ''
             };
         }
         
         // Priority 2: Scan scheduleAssignments for _allMatchups
         const divisions = window.divisions || {};
         const bunks = divisions[divName]?.bunks || [];
+        const assignments = window.scheduleAssignments || {};
         
         for (const bunk of bunks) {
-            const entry = getEntry(bunk, slotIdx);
+            const entry = assignments[bunk]?.[slotIdx];
             if (entry && entry._allMatchups && entry._allMatchups.length > 0) {
                 return {
                     matchups: entry._allMatchups,
                     gameLabel: entry._gameLabel || '',
+                    sport: entry.sport || ''
+                };
+            }
+        }
+        
+        // Priority 3: Check if ANY bunk has _h2h at this slot
+        for (const bunk of bunks) {
+            const entry = assignments[bunk]?.[slotIdx];
+            if (entry && entry._h2h) {
+                return {
+                    matchups: [],
+                    gameLabel: entry._gameLabel || 'Game',
                     sport: entry.sport || ''
                 };
             }
@@ -481,15 +490,31 @@
             if (!container) return;
         }
         
+        const dateKey = getDateKey();
+        
+        // Load data
+        loadScheduleForDate(dateKey);
+        
+        // Get skeleton - THE SOURCE OF TRUTH FOR ROWS
+        const skeleton = getSkeleton(dateKey);
+        const unifiedTimes = window.unifiedTimes || [];
+        const divisions = window.divisions || {};
+        
+        // Clear container
         container.innerHTML = '';
         
-        const role = window.AccessControl?.getCurrentRole?.();
-        if (DEBUG) console.log(`📅 [UnifiedSchedule] Rendering for role: ${role}`);
+        if (!skeleton || skeleton.length === 0) {
+            container.innerHTML = `
+                <div style="padding: 40px; text-align: center; color: #6b7280;">
+                    <p style="font-size: 1.1rem; margin-bottom: 10px;">No daily schedule structure found for this date.</p>
+                    <p style="font-size: 0.9rem;">Use <strong>"Build Day"</strong> in the Master Schedule Builder to create a schedule structure.</p>
+                </div>
+            `;
+            return;
+        }
         
-        // Get divisions
-        const divisions = window.divisions || {};
+        // Get divisions to show
         let divisionsToShow = Object.keys(divisions);
-        
         if (divisionsToShow.length === 0 && window.availableDivisions) {
             divisionsToShow = window.availableDivisions;
         }
@@ -502,31 +527,10 @@
             return String(a).localeCompare(String(b));
         });
         
-        // Load daily data
-        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        let dailyData = {};
-        try {
-            const raw = localStorage.getItem('campDailyData_v1');
-            if (raw) dailyData = JSON.parse(raw);
-        } catch (e) {}
-        
-        const dateData = dailyData[dateKey] || dailyData;
-        const skeleton = dateData.manualSkeleton || window.manualSkeleton || window.skeleton || [];
-        
-        if (!skeleton || skeleton.length === 0) {
-            container.innerHTML = `
-                <div style="padding: 40px; text-align: center; color: #6b7280;">
-                    <p style="font-size: 1.1rem; margin-bottom: 10px;">No daily schedule structure found for this date.</p>
-                    <p style="font-size: 0.9rem;">Use <strong>"Build Day"</strong> in the Master Schedule Builder to create a schedule structure.</p>
-                </div>
-            `;
-            return;
-        }
-        
         if (divisionsToShow.length === 0) {
             container.innerHTML = `
                 <div style="padding: 40px; text-align: center; color: #6b7280;">
-                    <p>No divisions configured. Go to the <strong>Divisions</strong> tab to create divisions and add bunks.</p>
+                    <p>No divisions configured. Go to the <strong>Divisions</strong> tab to create divisions.</p>
                 </div>
             `;
             return;
@@ -540,34 +544,30 @@
         // Get editable divisions for RBAC
         const editableDivisions = window.AccessControl?.getEditableDivisions?.() || divisionsToShow;
         
+        if (DEBUG) {
+            console.log('[UnifiedSchedule] Rendering:', {
+                divisions: divisionsToShow.length,
+                skeletonBlocks: skeleton.length,
+                unifiedTimes: unifiedTimes.length,
+                assignments: Object.keys(window.scheduleAssignments || {}).length
+            });
+        }
+        
         // Render each division
         divisionsToShow.forEach(divName => {
             const divInfo = divisions[divName];
             if (!divInfo) return;
             
             let bunks = divInfo.bunks || [];
-            
-            // Fallback: find bunks from assignments
-            if (bunks.length === 0 && window.scheduleAssignments) {
-                const allBunks = Object.keys(window.scheduleAssignments);
-                const bunkMeta = window.bunkMetaData || {};
-                bunks = allBunks.filter(b => bunkMeta[b]?.division === divName);
-            }
+            if (bunks.length === 0) return;
             
             bunks = bunks.slice().sort((a, b) => 
                 String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
             );
             
-            if (bunks.length === 0) {
-                if (DEBUG) console.log(`📅 [UnifiedSchedule] Skipping ${divName} - no bunks`);
-                return;
-            }
-            
-            if (DEBUG) console.log(`📅 [UnifiedSchedule] Rendering ${divName} with ${bunks.length} bunks`);
-            
             const isEditable = editableDivisions.includes(divName);
-            const table = renderDivisionTable(divName, divInfo, bunks, skeleton, isEditable);
-            wrapper.appendChild(table);
+            const table = renderDivisionTable(divName, divInfo, bunks, skeleton, unifiedTimes, isEditable);
+            if (table) wrapper.appendChild(table);
         });
         
         container.appendChild(wrapper);
@@ -581,9 +581,27 @@
         window.dispatchEvent(new CustomEvent('campistry-schedule-rendered', {
             detail: { dateKey }
         }));
+        
+        if (DEBUG) console.log('[UnifiedSchedule] Render complete');
     }
 
-    function renderDivisionTable(divName, divInfo, bunks, skeleton, isEditable) {
+    function renderDivisionTable(divName, divInfo, bunks, skeleton, unifiedTimes, isEditable) {
+        // Filter skeleton blocks for this division
+        const divBlocks = skeleton
+            .filter(b => b.division === divName)
+            .map(b => ({
+                ...b,
+                startMin: parseTimeToMinutes(b.startTime),
+                endMin: parseTimeToMinutes(b.endTime)
+            }))
+            .filter(b => b.startMin !== null && b.endMin !== null)
+            .sort((a, b) => a.startMin - b.startMin);
+        
+        if (divBlocks.length === 0) {
+            if (DEBUG) console.log(`[UnifiedSchedule] No blocks for division: ${divName}`);
+            return null;
+        }
+        
         const table = document.createElement('table');
         table.className = 'schedule-division-table';
         table.style.cssText = `
@@ -593,6 +611,7 @@
             border-radius: 8px;
             overflow: hidden;
             background: #fff;
+            margin-bottom: 8px;
         `;
         
         const divColor = divInfo.color || '#4b5563';
@@ -622,13 +641,13 @@
         
         const thTime = document.createElement('th');
         thTime.textContent = 'Time';
-        thTime.style.cssText = 'padding: 10px 12px; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; min-width: 120px;';
+        thTime.style.cssText = 'padding: 10px 12px; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; min-width: 140px;';
         tr2.appendChild(thTime);
         
         bunks.forEach(bunk => {
             const thB = document.createElement('th');
             thB.textContent = bunk;
-            thB.style.cssText = 'padding: 10px 12px; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; min-width: 100px;';
+            thB.style.cssText = 'padding: 10px 12px; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; min-width: 100px; text-align: center;';
             tr2.appendChild(thB);
         });
         thead.appendChild(tr2);
@@ -637,72 +656,35 @@
         // ===== BODY =====
         const tbody = document.createElement('tbody');
         
-        // Process skeleton blocks for this division
-        const blocks = skeleton
-            .filter(b => b.division === divName)
-            .map(b => ({
-                ...b,
-                startMin: parseTimeToMinutes(b.startTime),
-                endMin: parseTimeToMinutes(b.endTime)
-            }))
-            .filter(b => b.startMin !== null && b.endMin !== null)
-            .sort((a, b) => a.startMin - b.startMin);
-        
-        // Expand split blocks
-        const expandedBlocks = [];
-        blocks.forEach(block => {
-            if (block.type === 'split') {
-                const mid = block.startMin + Math.floor((block.endMin - block.startMin) / 2);
-                expandedBlocks.push({
-                    ...block,
-                    endMin: mid,
-                    label: `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(mid)}`
-                });
-                expandedBlocks.push({
-                    ...block,
-                    startMin: mid,
-                    label: `${minutesToTimeLabel(mid)} - ${minutesToTimeLabel(block.endMin)}`
-                });
-            } else {
-                expandedBlocks.push({
-                    ...block,
-                    label: `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(block.endMin)}`
-                });
-            }
-        });
-        
-        // Render each row
-        expandedBlocks.forEach((block, idx) => {
+        // Render each skeleton block as a row
+        divBlocks.forEach((block, blockIdx) => {
+            const timeLabel = `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(block.endMin)}`;
+            
+            // Find the slot index that corresponds to this block's start time
+            const slotIdx = findSlotIndexForTime(block.startMin, unifiedTimes);
+            
             const tr = document.createElement('tr');
-            tr.style.background = idx % 2 === 0 ? '#fff' : '#fafafa';
+            tr.style.background = blockIdx % 2 === 0 ? '#fff' : '#fafafa';
             
             // Time cell
             const tdTime = document.createElement('td');
-            tdTime.textContent = block.label;
+            tdTime.textContent = timeLabel;
             tdTime.style.cssText = 'padding: 10px 12px; font-weight: 500; color: #4b5563; border-right: 1px solid #e5e7eb; white-space: nowrap;';
             tr.appendChild(tdTime);
             
             // League block - merged cell with matchups
             if (isLeagueBlockType(block.event)) {
-                const td = renderLeagueCell(block, bunks, divName, isEditable);
+                const td = renderLeagueCell(block, bunks, divName, slotIdx, isEditable);
                 tr.appendChild(td);
                 tbody.appendChild(tr);
                 return;
             }
             
-            // Regular cells
-            if (bunks.length === 0) {
-                const td = document.createElement('td');
-                td.colSpan = 1;
-                td.textContent = 'No bunks configured';
-                td.style.cssText = 'padding: 10px; color: #999; font-style: italic;';
+            // Regular cells - one per bunk
+            bunks.forEach(bunk => {
+                const td = renderBunkCell(block, bunk, divName, slotIdx, isEditable);
                 tr.appendChild(td);
-            } else {
-                bunks.forEach(bunk => {
-                    const td = renderBunkCell(block, bunk, divName, isEditable);
-                    tr.appendChild(td);
-                });
-            }
+            });
             
             tbody.appendChild(tr);
         });
@@ -711,7 +693,7 @@
         return table;
     }
 
-    function renderLeagueCell(block, bunks, divName, isEditable) {
+    function renderLeagueCell(block, bunks, divName, slotIdx, isEditable) {
         const td = document.createElement('td');
         td.colSpan = bunks.length;
         td.style.cssText = `
@@ -719,18 +701,16 @@
             background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
             border-left: 4px solid #0284c7;
             vertical-align: top;
-            font-weight: bold;
         `;
         
-        const slotIdx = findFirstSlotForTime(block.startMin);
         const leagueInfo = getLeagueMatchups(divName, slotIdx);
         
         let title = leagueInfo.gameLabel || block.event;
-        if (leagueInfo.sport && !title.includes(leagueInfo.sport)) {
+        if (leagueInfo.sport && !title.toLowerCase().includes(leagueInfo.sport.toLowerCase())) {
             title += ` - ${leagueInfo.sport}`;
         }
         
-        let html = `<div style="font-size: 1rem; color: #0369a1; margin-bottom: 8px;">🏆 ${escapeHtml(title)}</div>`;
+        let html = `<div style="font-weight: 600; font-size: 1rem; color: #0369a1; margin-bottom: 8px;">🏆 ${escapeHtml(title)}</div>`;
         
         if (leagueInfo.matchups && leagueInfo.matchups.length > 0) {
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
@@ -767,11 +747,10 @@
         return td;
     }
 
-    function renderBunkCell(block, bunk, divName, isEditable) {
+    function renderBunkCell(block, bunk, divName, slotIdx, isEditable) {
         const td = document.createElement('td');
         td.style.cssText = 'padding: 8px 10px; text-align: center; border: 1px solid #e5e7eb;';
         
-        const slotIdx = findFirstSlotForTime(block.startMin);
         const entry = getEntry(bunk, slotIdx);
         
         // Check multi-scheduler blocking
@@ -794,15 +773,13 @@
             displayText = formatEntry(entry);
             bgColor = getEntryBackground(entry, block.event);
         } else if (!entry) {
+            // No data - show skeleton event or empty
             if (isFixedBlockType(block.event)) {
                 displayText = block.event;
                 bgColor = '#fff8e1';
-            } else if (isGeneratedBlockType(block.event)) {
+            } else {
                 displayText = '';
                 bgColor = '#f9fafb';
-            } else {
-                displayText = block.event;
-                bgColor = '#fff7ed';
             }
         }
         
@@ -844,7 +821,8 @@
     function editCell(bunk, startMin, endMin, current) {
         if (!bunk) return;
         
-        const slotIdx = findFirstSlotForTime(startMin);
+        const unifiedTimes = window.unifiedTimes || [];
+        const slotIdx = findSlotIndexForTime(startMin, unifiedTimes);
         
         // Check multi-scheduler blocking
         if (window.MultiSchedulerAutonomous?.isBunkSlotBlocked) {
@@ -877,11 +855,16 @@
         const isClear = value === '' || value.toUpperCase() === 'CLEAR' || value.toUpperCase() === 'FREE';
         
         // Find slots for this time range
-        const slots = findSlotsForRange(startMin, endMin);
+        let slots = findSlotsForRange(startMin, endMin, unifiedTimes);
         
         if (!slots || slots.length === 0) {
-            alert('Error: Could not match this time range to the schedule grid. Please refresh the page.');
-            return;
+            // Fallback to single slot
+            if (slotIdx >= 0) {
+                slots = [slotIdx];
+            } else {
+                alert('Error: Could not match this time range. Please refresh the page.');
+                return;
+            }
         }
         
         // Initialize if needed
@@ -889,7 +872,7 @@
             window.scheduleAssignments = {};
         }
         if (!window.scheduleAssignments[bunk]) {
-            window.scheduleAssignments[bunk] = new Array(window.unifiedTimes.length);
+            window.scheduleAssignments[bunk] = new Array((window.unifiedTimes || []).length);
         }
         
         // Apply edit
@@ -943,59 +926,359 @@
     }
 
     // =========================================================================
+    // VERSION MANAGEMENT - INTEGRATED
+    // =========================================================================
+    
+    const VersionManager = {
+        
+        async saveVersion(name) {
+            const dateKey = getDateKey();
+            if (!dateKey) {
+                alert('Please select a date first.');
+                return { success: false };
+            }
+            
+            if (!name) {
+                name = prompt('Enter a name for this version (e.g., "Draft 1", "Morning Final"):');
+                if (!name) return { success: false };
+            }
+            
+            const dailyData = loadDailyData();
+            const dateData = dailyData[dateKey] || {};
+            
+            const payload = {
+                scheduleAssignments: window.scheduleAssignments || dateData.scheduleAssignments || {},
+                leagueAssignments: window.leagueAssignments || dateData.leagueAssignments || {},
+                unifiedTimes: window.unifiedTimes || dateData.unifiedTimes || []
+            };
+            
+            if (Object.keys(payload.scheduleAssignments).length === 0) {
+                alert('No schedule data to save.');
+                return { success: false };
+            }
+            
+            if (!window.ScheduleVersionsDB) {
+                alert('Version database not available. Please refresh the page.');
+                return { success: false };
+            }
+            
+            try {
+                const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
+                const existing = versions.find(v => v.name.toLowerCase() === name.toLowerCase());
+                
+                if (existing) {
+                    if (!confirm(`Version "${existing.name}" already exists. Overwrite it?`)) {
+                        return { success: false };
+                    }
+                    
+                    if (window.ScheduleVersionsDB.updateVersion) {
+                        const result = await window.ScheduleVersionsDB.updateVersion(existing.id, payload);
+                        if (result.success) {
+                            alert('✅ Version updated successfully!');
+                            return { success: true };
+                        } else {
+                            alert('❌ Error updating: ' + result.error);
+                            return { success: false };
+                        }
+                    }
+                }
+                
+                const result = await window.ScheduleVersionsDB.createVersion(dateKey, name, payload);
+                if (result.success) {
+                    alert('✅ Version saved successfully!');
+                    return { success: true };
+                } else {
+                    alert('❌ Error saving: ' + result.error);
+                    return { success: false };
+                }
+                
+            } catch (err) {
+                console.error('Version save error:', err);
+                alert('Error saving version: ' + err.message);
+                return { success: false };
+            }
+        },
+        
+        async loadVersion() {
+            const dateKey = getDateKey();
+            if (!dateKey) {
+                alert('Please select a date first.');
+                return;
+            }
+            
+            if (!window.ScheduleVersionsDB) {
+                alert('Version database not available.');
+                return;
+            }
+            
+            try {
+                const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
+                
+                if (!versions || versions.length === 0) {
+                    alert('No saved versions found for this date.');
+                    return;
+                }
+                
+                let msg = 'Select a version to load:\n\n';
+                versions.forEach((v, i) => {
+                    const time = new Date(v.created_at).toLocaleTimeString();
+                    msg += `${i + 1}. ${v.name} (${time})\n`;
+                });
+                
+                const choice = prompt(msg);
+                if (!choice) return;
+                
+                const index = parseInt(choice) - 1;
+                if (isNaN(index) || !versions[index]) {
+                    alert('Invalid selection');
+                    return;
+                }
+                
+                const selected = versions[index];
+                if (!confirm(`Load "${selected.name}"? This will overwrite the current view.`)) {
+                    return;
+                }
+                
+                let data = selected.schedule_data;
+                if (typeof data === 'string') {
+                    try { data = JSON.parse(data); } catch(e) {}
+                }
+                
+                const assignments = data.scheduleAssignments || data;
+                
+                window.scheduleAssignments = assignments;
+                
+                if (data.leagueAssignments) {
+                    window.leagueAssignments = data.leagueAssignments;
+                }
+                
+                if (data.unifiedTimes) {
+                    window.unifiedTimes = normalizeUnifiedTimes(data.unifiedTimes);
+                }
+                
+                saveSchedule();
+                updateTable();
+                
+                alert('✅ Version loaded!');
+                
+            } catch (err) {
+                console.error('Version load error:', err);
+                alert('Error loading version: ' + err.message);
+            }
+        },
+        
+        async mergeVersions() {
+            const dateKey = getDateKey();
+            if (!dateKey) {
+                alert('Please select a date first.');
+                return { success: false };
+            }
+            
+            if (!window.ScheduleVersionsDB) {
+                alert('Version database not available.');
+                return { success: false };
+            }
+            
+            if (!confirm(`Merge ALL versions for ${dateKey}?`)) {
+                return { success: false };
+            }
+            
+            try {
+                const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
+                
+                if (!versions || versions.length === 0) {
+                    alert('No versions to merge.');
+                    return { success: false };
+                }
+                
+                if (DEBUG) console.log(`[VersionMerger] Merging ${versions.length} versions...`);
+                
+                const mergedAssignments = {};
+                const bunksTouched = new Set();
+                let latestLeagueData = null;
+                
+                versions.forEach(ver => {
+                    let scheduleData = ver.schedule_data || ver.data || ver.payload;
+                    
+                    if (typeof scheduleData === 'string') {
+                        try { scheduleData = JSON.parse(scheduleData); } catch(e) {}
+                    }
+                    
+                    if (!scheduleData) return;
+                    
+                    const assignments = scheduleData.scheduleAssignments || scheduleData;
+                    
+                    if (assignments && typeof assignments === 'object') {
+                        Object.entries(assignments).forEach(([bunkId, slots]) => {
+                            mergedAssignments[bunkId] = slots;
+                            bunksTouched.add(bunkId);
+                        });
+                    }
+                    
+                    if (scheduleData.leagueAssignments) {
+                        latestLeagueData = scheduleData.leagueAssignments;
+                    }
+                });
+                
+                if (DEBUG) console.log(`[VersionMerger] Merged ${bunksTouched.size} bunks from ${versions.length} versions`);
+                
+                window.scheduleAssignments = mergedAssignments;
+                
+                if (latestLeagueData) {
+                    window.leagueAssignments = latestLeagueData;
+                }
+                
+                saveSchedule();
+                updateTable();
+                
+                alert(`✅ Merged ${versions.length} versions (${bunksTouched.size} bunks).`);
+                
+                return { success: true, count: versions.length, bunks: bunksTouched.size };
+                
+            } catch (err) {
+                console.error('Version merge error:', err);
+                alert('Error merging versions: ' + err.message);
+                return { success: false };
+            }
+        }
+    };
+
+    // =========================================================================
     // INITIALIZATION
     // =========================================================================
 
     function initScheduleSystem() {
         if (_initialized) return;
         
-        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const dateKey = getDateKey();
         loadScheduleForDate(dateKey);
-        updateTable();
         
         _initialized = true;
         if (DEBUG) console.log('[UnifiedSchedule] System initialized');
     }
 
+    function reconcileOrRenderSaved() {
+        const dateKey = getDateKey();
+        loadScheduleForDate(dateKey);
+        updateTable();
+    }
+
+    // =========================================================================
+    // EVENT LISTENERS
+    // =========================================================================
+
+    // Listen for cloud hydration
+    window.addEventListener('campistry-cloud-hydrated', () => {
+        if (DEBUG) console.log('[UnifiedSchedule] Cloud hydration event received');
+        _cloudHydrated = true;
+        
+        setTimeout(() => {
+            loadScheduleForDate(getDateKey());
+            updateTable();
+        }, 100);
+    });
+
     // Listen for data updates
     window.addEventListener('campistry-daily-data-updated', () => {
         if (DEBUG) console.log('[UnifiedSchedule] Data update event received');
-        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        loadScheduleForDate(dateKey);
+        loadScheduleForDate(getDateKey());
         updateTable();
     });
+
+    // Listen for date changes
+    window.addEventListener('campistry-date-changed', (e) => {
+        if (DEBUG) console.log('[UnifiedSchedule] Date changed:', e.detail?.dateKey);
+        loadScheduleForDate(e.detail?.dateKey || getDateKey());
+        updateTable();
+    });
+
+    // Hide toolbar when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', hideVersionToolbar);
+    } else {
+        hideVersionToolbar();
+    }
+
+    // Also try after delays (for dynamically added toolbar)
+    setTimeout(hideVersionToolbar, 500);
+    setTimeout(hideVersionToolbar, 1500);
+    setTimeout(hideVersionToolbar, 3000);
 
     // =========================================================================
     // EXPORTS
     // =========================================================================
 
+    // Core functions
     window.updateTable = updateTable;
     window.renderStaggeredView = renderStaggeredView;
     window.initScheduleSystem = initScheduleSystem;
     window.saveSchedule = saveSchedule;
     window.loadScheduleForDate = loadScheduleForDate;
+    window.reconcileOrRenderSaved = reconcileOrRenderSaved;
     
-    // Compatibility exports
-    window.findFirstSlotForTime = findFirstSlotForTime;
-    window.findSlotsForRange = findSlotsForRange;
+    // Edit functions
+    window.editCell = editCell;
+    window.findFirstSlotForTime = (min) => findSlotIndexForTime(min, window.unifiedTimes);
+    window.findSlotsForRange = (start, end) => findSlotsForRange(start, end, window.unifiedTimes);
+    
+    // Time utilities
     window.parseTimeToMinutes = parseTimeToMinutes;
     window.minutesToTimeLabel = minutesToTimeLabel;
+    
+    // Entry functions
     window.getEntry = getEntry;
     window.formatEntry = formatEntry;
-    window.editCell = editCell;
     
-    // For debugging
+    // Version management
+    window.ScheduleVersionManager = VersionManager;
+    
+    // Legacy compatibility - ScheduleVersionMerger (used by other modules)
+    window.ScheduleVersionMerger = {
+        mergeAndPush: async (dateKey) => {
+            window.currentScheduleDate = dateKey;
+            return await VersionManager.mergeVersions();
+        }
+    };
+    
+    // Debug namespace
     window.UnifiedScheduleSystem = {
+        version: '3.0',
         loadScheduleForDate,
         renderStaggeredView,
-        findFirstSlotForTime,
+        findSlotIndexForTime,
         findSlotsForRange,
         getLeagueMatchups,
-        DEBUG_ON: () => { DEBUG = true; },
-        DEBUG_OFF: () => { DEBUG = false; }
+        buildUnifiedTimesFromSkeleton,
+        VersionManager,
+        DEBUG_ON: () => { DEBUG = true; console.log('[UnifiedSchedule] Debug enabled'); },
+        DEBUG_OFF: () => { DEBUG = false; console.log('[UnifiedSchedule] Debug disabled'); },
+        dumpBunkData: (bunk) => {
+            const assignments = window.scheduleAssignments || {};
+            const data = assignments[bunk];
+            if (!data) {
+                console.log(`No data for bunk: ${bunk}`);
+                return;
+            }
+            console.log(`Bunk ${bunk}:`, data.length, 'slots');
+            data.forEach((e, i) => {
+                if (e && !e.continuation) {
+                    console.log(`  [${i}]`, formatEntry(e));
+                }
+            });
+        },
+        getState: () => ({
+            dateKey: getDateKey(),
+            assignments: Object.keys(window.scheduleAssignments || {}).length,
+            leagues: Object.keys(window.leagueAssignments || {}).length,
+            times: (window.unifiedTimes || []).length,
+            skeleton: (window.manualSkeleton || window.skeleton || []).length,
+            cloudHydrated: _cloudHydrated,
+            initialized: _initialized
+        })
     };
 
-    console.log('📅 Unified Schedule System v1.0 loaded successfully');
+    console.log('📅 Unified Schedule System v3.0 loaded successfully');
     console.log('   Replaces: scheduler_ui.js, render_sync_fix.js, view_schedule_loader_fix.js');
+    console.log('   Replaces: schedule_version_merger.js, schedule_version_ui.js');
 
 })();
