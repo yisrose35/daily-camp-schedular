@@ -1,5 +1,5 @@
 // =============================================================================
-// unified_schedule_system.js v3.3 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
+// unified_schedule_system.js v3.4 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
 // =============================================================================
 //
 // This file REPLACES ALL of the following:
@@ -14,16 +14,19 @@
 // ✅ Uses findSlotsForRange() to map skeleton blocks to 30-min slot indices
 // ✅ Properly handles variable-length skeleton blocks (60min, 20min, etc.)
 // ✅ AUTO-DEBUG: Logs render state to console to help diagnose issues
+// ✅ Cloud integration: Listens for cloud-loaded unifiedTimes
 // ✅ Version save/load/merge integrated
 // ✅ Toolbar hidden by default
 // ✅ RBAC and multi-scheduler support
+//
+// REQUIRES: unified_cloud_schedule_system.js for proper cloud sync
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('📅 Unified Schedule System v3.3 loading...');
+    console.log('📅 Unified Schedule System v3.4 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -180,17 +183,26 @@
         // 3. UNIFIED TIMES - Preserve scheduler-generated data
         // =====================================================================
         
-        // Priority 1: Keep existing window.unifiedTimes if valid (set by scheduler after generation)
-        if (window.unifiedTimes && window.unifiedTimes.length > 0) {
+        // CRITICAL: Check if unifiedTimes was already loaded from cloud
+        // Cloud-loaded times have correct slot count; don't overwrite them
+        const cloudLoaded = window._unifiedTimesFromCloud === true;
+        
+        // Priority 1: Keep existing window.unifiedTimes if valid AND from cloud
+        if (cloudLoaded && window.unifiedTimes && window.unifiedTimes.length > 0) {
+            if (DEBUG) console.log('[UnifiedSchedule] Using cloud-loaded unifiedTimes:', window.unifiedTimes.length);
+            // Don't overwrite - cloud data is authoritative
+        }
+        // Priority 2: Keep existing window.unifiedTimes if valid (set by scheduler after generation)
+        else if (window.unifiedTimes && window.unifiedTimes.length > 0) {
             if (DEBUG) console.log('[UnifiedSchedule] Using existing window.unifiedTimes:', window.unifiedTimes.length);
             // Don't overwrite - scheduler already set this
         }
-        // Priority 2: Load from localStorage (saved from previous session)
+        // Priority 3: Load from localStorage (saved from previous session)
         else if (dateData.unifiedTimes && dateData.unifiedTimes.length > 0) {
             window.unifiedTimes = normalizeUnifiedTimes(dateData.unifiedTimes);
             if (DEBUG) console.log('[UnifiedSchedule] Loaded unifiedTimes from dateData:', window.unifiedTimes.length);
         }
-        // Priority 3: Build from skeleton (fallback)
+        // Priority 4: Build from skeleton (fallback)
         else {
             const skeleton = getSkeleton(dateKey);
             if (skeleton.length > 0) {
@@ -1311,9 +1323,9 @@
     // EVENT LISTENERS
     // =========================================================================
 
-    // Listen for cloud hydration
+    // Listen for cloud hydration (legacy)
     window.addEventListener('campistry-cloud-hydrated', () => {
-        if (DEBUG) console.log('[UnifiedSchedule] Cloud hydration event received');
+        console.log('[UnifiedSchedule] Cloud hydration event received');
         _cloudHydrated = true;
         
         setTimeout(() => {
@@ -1322,17 +1334,57 @@
         }, 100);
     });
 
+    // Listen for NEW cloud schedule loaded (from UnifiedCloudSchedule)
+    window.addEventListener('campistry-cloud-schedule-loaded', (e) => {
+        console.log('[UnifiedSchedule] Cloud schedule loaded:', e.detail);
+        _cloudHydrated = true;
+        
+        // Don't call loadScheduleForDate - the cloud system already set window globals
+        // Just refresh the UI
+        setTimeout(() => updateTable(), 100);
+    });
+
     // Listen for data updates
     window.addEventListener('campistry-daily-data-updated', () => {
-        if (DEBUG) console.log('[UnifiedSchedule] Data update event received');
+        console.log('[UnifiedSchedule] Data update event received');
         loadScheduleForDate(getDateKey());
         updateTable();
     });
 
     // Listen for date changes
     window.addEventListener('campistry-date-changed', (e) => {
-        if (DEBUG) console.log('[UnifiedSchedule] Date changed:', e.detail?.dateKey);
-        loadScheduleForDate(e.detail?.dateKey || getDateKey());
+        console.log('[UnifiedSchedule] Date changed:', e.detail?.dateKey);
+        
+        // Try to load from cloud first
+        if (window.UnifiedCloudSchedule?.load) {
+            window.UnifiedCloudSchedule.load().then(result => {
+                if (!result.merged) {
+                    // No cloud data, load from localStorage
+                    loadScheduleForDate(e.detail?.dateKey || getDateKey());
+                }
+                updateTable();
+            });
+        } else {
+            loadScheduleForDate(e.detail?.dateKey || getDateKey());
+            updateTable();
+        }
+    });
+
+    // Listen for generation complete
+    window.addEventListener('campistry-generation-complete', () => {
+        console.log('[UnifiedSchedule] Generation complete - saving to cloud');
+        
+        // Auto-save to cloud after generation
+        if (window.UnifiedCloudSchedule?.save) {
+            setTimeout(() => {
+                window.UnifiedCloudSchedule.save().then(result => {
+                    if (result.success) {
+                        console.log('[UnifiedSchedule] ✅ Saved to cloud after generation');
+                    }
+                });
+            }, 500);
+        }
+        
         updateTable();
     });
 
@@ -1386,7 +1438,7 @@
     
     // Debug namespace
     window.UnifiedScheduleSystem = {
-        version: '3.3',
+        version: '3.4',
         loadScheduleForDate,
         renderStaggeredView,
         findSlotIndexForTime,
@@ -1523,10 +1575,9 @@
         })
     };
 
-    console.log('📅 Unified Schedule System v3.3 loaded successfully');
+    console.log('📅 Unified Schedule System v3.4 loaded successfully');
     console.log('   Replaces: scheduler_ui.js, render_sync_fix.js, view_schedule_loader_fix.js');
     console.log('   Replaces: schedule_version_merger.js, schedule_version_ui.js');
-    console.log('   FIX: normalizeUnifiedTimes now preserves startMin/endMin');
-    console.log('   AUTO-DEBUG: Check console after generation for diagnostic info');
+    console.log('   REQUIRES: unified_cloud_schedule_system.js for proper cloud sync');
 
 })();
