@@ -1,5 +1,5 @@
 // =============================================================================
-// unified_cloud_schedule_system.js v1.1 — CAMPISTRY CLOUD SCHEDULE SYNC
+// unified_cloud_schedule_system.js v1.2 — CAMPISTRY CLOUD SCHEDULE SYNC
 // =============================================================================
 //
 // PURPOSE: Fix the slot index mismatch between stored data and rendered view
@@ -21,7 +21,28 @@
 (function() {
     'use strict';
 
-    console.log('☁️ Unified Cloud Schedule System v1.1 loading...');
+    console.log('☁️ Unified Cloud Schedule System v1.2 loading...');
+    
+    // Attempt to intercept camp ID from cloud_storage_bridge logs
+    // NOTE: For best results, also use camp_id_interceptor.js BEFORE cloud_storage_bridge.js
+    (function earlyIntercept() {
+        // Patch console.log to capture camp ID from bridge
+        const originalLog = console.log;
+        if (!console.log._campIdPatched) {
+            console.log = function(...args) {
+                const msg = args.join(' ');
+                // Look for: "☁️ Loading from cloud for camp: XXX"
+                const match = msg.match(/Loading from cloud for camp:\s*([0-9a-f-]{36})/i);
+                if (match) {
+                    const foundCampId = match[1];
+                    window._cloudBridgeCampId = foundCampId;
+                    localStorage.setItem('camp_id', foundCampId);
+                }
+                return originalLog.apply(console, args);
+            };
+            console.log._campIdPatched = true;
+        }
+    })();
 
     const SUPABASE_URL = 'https://jxadnhevclwltyugijkw.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4YWRuaGV2Y2x3bHR5dWdpamt3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ1OTk5ODYsImV4cCI6MjA2MDE3NTk4Nn0.9h3J2uvSKB2manFKFj6jCEMfNqcH9lu7dPFDjMJszFk';
@@ -101,42 +122,31 @@
         // Return cached if we have it
         if (_cachedCampId) return _cachedCampId;
         
-        // Method 1: Direct window global
-        if (window.CAMP_ID) {
-            _cachedCampId = window.CAMP_ID;
-            if (DEBUG) console.log('[CloudSchedule] Camp ID from window.CAMP_ID:', _cachedCampId);
+        // PRIORITY 1: Shared global (set by cloud_storage_bridge or us)
+        if (window._cloudBridgeCampId) {
+            _cachedCampId = window._cloudBridgeCampId;
+            if (DEBUG) console.log('[CloudSchedule] Camp ID from _cloudBridgeCampId:', _cachedCampId);
             return _cachedCampId;
         }
         
-        // Method 2: localStorage camp_id
+        // PRIORITY 2: localStorage camp_id (should be set by auth or bridge)
         const storedCampId = localStorage.getItem('camp_id');
-        if (storedCampId) {
+        if (storedCampId && storedCampId !== 'null' && storedCampId !== 'undefined') {
             _cachedCampId = storedCampId;
+            window._cloudBridgeCampId = storedCampId;
             if (DEBUG) console.log('[CloudSchedule] Camp ID from localStorage:', _cachedCampId);
             return _cachedCampId;
         }
         
-        // Method 3: Extract from campDailyData_v1
-        try {
-            const dailyDataRaw = localStorage.getItem('campDailyData_v1');
-            if (dailyDataRaw) {
-                const dailyData = JSON.parse(dailyDataRaw);
-                if (dailyData._campId) {
-                    _cachedCampId = dailyData._campId;
-                    if (DEBUG) console.log('[CloudSchedule] Camp ID from dailyData._campId:', _cachedCampId);
-                    return _cachedCampId;
-                }
-            }
-        } catch (e) {}
-        
-        // Method 4: Extract from cloudStorageBridge
-        if (window.cloudStorageBridge?.campId) {
-            _cachedCampId = window.cloudStorageBridge.campId;
-            if (DEBUG) console.log('[CloudSchedule] Camp ID from cloudStorageBridge:', _cachedCampId);
+        // PRIORITY 3: Window global
+        if (window.CAMP_ID) {
+            _cachedCampId = window.CAMP_ID;
+            window._cloudBridgeCampId = _cachedCampId;
+            if (DEBUG) console.log('[CloudSchedule] Camp ID from window.CAMP_ID:', _cachedCampId);
             return _cachedCampId;
         }
         
-        // Method 5: Extract from Supabase session/user metadata
+        // PRIORITY 4: Extract from Supabase auth token
         try {
             const session = localStorage.getItem('sb-jxadnhevclwltyugijkw-auth-token');
             if (session) {
@@ -144,33 +154,34 @@
                 const campId = parsed?.user?.user_metadata?.camp_id;
                 if (campId) {
                     _cachedCampId = campId;
+                    window._cloudBridgeCampId = campId;
+                    localStorage.setItem('camp_id', campId);
                     if (DEBUG) console.log('[CloudSchedule] Camp ID from Supabase session:', _cachedCampId);
                     return _cachedCampId;
                 }
             }
         } catch (e) {}
         
-        // Method 6: Check sessionStorage
+        // PRIORITY 5: sessionStorage
         const sessionCampId = sessionStorage.getItem('camp_id');
         if (sessionCampId) {
             _cachedCampId = sessionCampId;
+            window._cloudBridgeCampId = sessionCampId;
             if (DEBUG) console.log('[CloudSchedule] Camp ID from sessionStorage:', _cachedCampId);
             return _cachedCampId;
         }
         
-        // Method 7: Look for camp_id in any localStorage key
+        // PRIORITY 6 (LAST RESORT): campDailyData_v1._campId 
+        // NOTE: This may be stale/incorrect, use with caution
         try {
-            for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i);
-                if (key && key.includes('camp')) {
-                    const value = localStorage.getItem(key);
-                    // Look for UUID pattern
-                    const uuidMatch = value?.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-                    if (uuidMatch) {
-                        _cachedCampId = uuidMatch[0];
-                        if (DEBUG) console.log('[CloudSchedule] Camp ID extracted from', key, ':', _cachedCampId);
-                        return _cachedCampId;
-                    }
+            const dailyDataRaw = localStorage.getItem('campDailyData_v1');
+            if (dailyDataRaw) {
+                const dailyData = JSON.parse(dailyDataRaw);
+                if (dailyData._campId) {
+                    // Only use if we have no other option
+                    console.warn('[CloudSchedule] Using campDailyData._campId (may be stale):', dailyData._campId);
+                    _cachedCampId = dailyData._campId;
+                    return _cachedCampId;
                 }
             }
         } catch (e) {}
@@ -178,9 +189,10 @@
         return null;
     }
 
-    // Allow external setting of camp ID
+    // Allow external setting of camp ID (called by cloud_storage_bridge)
     function setCampId(id) {
         _cachedCampId = id;
+        window._cloudBridgeCampId = id;
         localStorage.setItem('camp_id', id);
         if (DEBUG) console.log('[CloudSchedule] Camp ID set to:', id);
     }
@@ -618,7 +630,11 @@
     async function initialize() {
         if (DEBUG) console.log('[CloudSchedule] Initializing...');
         
-        // Wait for cloud hydration event first (indicates camp ID should be available)
+        // STEP 1: Try to intercept camp ID from cloud_storage_bridge
+        // Hook into the bridge to capture camp ID when it loads
+        interceptCloudBridgeCampId();
+        
+        // STEP 2: Wait for cloud hydration event (indicates camp ID should be available)
         let hydrated = false;
         const hydrationHandler = () => { hydrated = true; };
         window.addEventListener('campistry-cloud-hydrated', hydrationHandler, { once: true });
@@ -632,9 +648,10 @@
         
         window.removeEventListener('campistry-cloud-hydrated', hydrationHandler);
         
-        // Try one more time after hydration
+        // After hydration, extract camp ID from hydrated data
         if (!getCampId() && hydrated) {
             await new Promise(r => setTimeout(r, 500));
+            extractCampIdFromHydratedData();
         }
         
         const campId = getCampId();
@@ -643,6 +660,7 @@
             // Set up a listener to initialize later
             window.addEventListener('campistry-cloud-hydrated', () => {
                 setTimeout(() => {
+                    extractCampIdFromHydratedData();
                     if (getCampId()) {
                         console.log('[CloudSchedule] Camp ID now available, completing initialization');
                         completeInitialization();
@@ -653,6 +671,46 @@
         }
         
         await completeInitialization();
+    }
+    
+    /**
+     * Hook into cloud_storage_bridge to capture camp ID
+     */
+    function interceptCloudBridgeCampId() {
+        // Check if bridge already exposed camp ID via window global
+        if (window.cloudStorageBridge?.campId) {
+            _cachedCampId = window.cloudStorageBridge.campId;
+            window._cloudBridgeCampId = _cachedCampId;
+            if (DEBUG) console.log('[CloudSchedule] Got camp ID from cloudStorageBridge.campId:', _cachedCampId);
+            return;
+        }
+        
+        // Check if we captured it from console.log (done in early intercept)
+        if (window._cloudBridgeCampId) {
+            _cachedCampId = window._cloudBridgeCampId;
+            if (DEBUG) console.log('[CloudSchedule] Got camp ID from early intercept:', _cachedCampId);
+            return;
+        }
+    }
+    
+    /**
+     * Extract camp ID from hydrated localStorage data
+     */
+    function extractCampIdFromHydratedData() {
+        try {
+            const raw = localStorage.getItem('campDailyData_v1');
+            if (raw) {
+                const data = JSON.parse(raw);
+                if (data._campId) {
+                    _cachedCampId = data._campId;
+                    window._cloudBridgeCampId = _cachedCampId;
+                    localStorage.setItem('camp_id', _cachedCampId);
+                    if (DEBUG) console.log('[CloudSchedule] Extracted camp ID from hydrated data:', _cachedCampId);
+                }
+            }
+        } catch (e) {
+            console.warn('[CloudSchedule] Failed to extract camp ID from hydrated data:', e);
+        }
     }
     
     async function completeInitialization() {
@@ -722,7 +780,7 @@
     // =========================================================================
 
     window.UnifiedCloudSchedule = {
-        version: '1.1',
+        version: '1.2',
         saveScheduleToCloud,
         loadAndMergeSchedules,
         
@@ -745,6 +803,11 @@
         // Camp ID management
         setCampId: setCampId,
         getCampId: getCampId,
+        resetCampId: () => {
+            _cachedCampId = null;
+            window._cloudBridgeCampId = null;
+            console.log('[CloudSchedule] Camp ID cache cleared');
+        },
         
         // Debug
         DEBUG_ON: () => { DEBUG = true; },
@@ -759,7 +822,8 @@
             unifiedTimes: (window.unifiedTimes || []).length,
             unifiedTimesFromCloud: window._unifiedTimesFromCloud || false,
             useNewTable: _useNewTable,
-            cachedCampId: _cachedCampId
+            cachedCampId: _cachedCampId,
+            globalCampId: window._cloudBridgeCampId
         }),
         
         // Check table status
@@ -779,11 +843,10 @@
         setTimeout(initialize, 500);
     }
 
-    console.log('☁️ Unified Cloud Schedule System v1.1 loaded');
-    console.log('   Better camp ID detection with fallbacks');
-    console.log('   Immediate save after generation');
+    console.log('☁️ Unified Cloud Schedule System v1.2 loaded');
+    console.log('   REQUIRES: camp_id_interceptor.js loaded BEFORE cloud_storage_bridge.js');
     console.log('   Use: window.UnifiedCloudSchedule.save() to save');
     console.log('   Use: window.UnifiedCloudSchedule.load() to load & merge');
-    console.log('   Use: window.UnifiedCloudSchedule.forceRefresh() to reload from cloud');
+    console.log('   Use: window.UnifiedCloudSchedule.getState() to check camp ID');
 
 })();
