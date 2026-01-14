@@ -411,11 +411,13 @@
     }
     
     function getMyDivisions() {
+        console.log('🔄 [MSS] === GETTING MY DIVISIONS ===');
+        
         // PRIORITY 1: AccessControl.getEditableDivisions (most reliable for schedulers)
         if (window.AccessControl?.isInitialized && window.AccessControl?.getEditableDivisions) {
             const divs = window.AccessControl.getEditableDivisions();
+            console.log('🔄 [MSS] AccessControl.getEditableDivisions() =', JSON.stringify(divs));
             if (divs && divs.length > 0) {
-                console.log('🔄 [MSS] My divisions (from AccessControl.getEditableDivisions):', divs);
                 return divs.map(String);
             }
         }
@@ -423,14 +425,14 @@
         // PRIORITY 2: AccessControl.getUserManagedDivisions
         if (window.AccessControl?.getUserManagedDivisions) {
             const divs = window.AccessControl.getUserManagedDivisions();
+            console.log('🔄 [MSS] AccessControl.getUserManagedDivisions() =', JSON.stringify(divs));
             // null means "all divisions" for owners/admins
             if (divs === null) {
                 const allDivs = Object.keys(window.divisions || {}).map(String);
-                console.log('🔄 [MSS] My divisions (owner/admin - all):', allDivs);
+                console.log('🔄 [MSS] Owner/admin - returning all divisions:', JSON.stringify(allDivs));
                 return allDivs;
             }
             if (divs && divs.length > 0) {
-                console.log('🔄 [MSS] My divisions (from getUserManagedDivisions):', divs);
                 return divs.map(String);
             }
         }
@@ -438,8 +440,8 @@
         // PRIORITY 3: SubdivisionScheduleManager
         if (window.SubdivisionScheduleManager?.getDivisionsToSchedule) {
             const divs = window.SubdivisionScheduleManager.getDivisionsToSchedule();
+            console.log('🔄 [MSS] SubdivisionScheduleManager.getDivisionsToSchedule() =', JSON.stringify(divs));
             if (divs && divs.length > 0) {
-                console.log('🔄 [MSS] My divisions (from SubdivisionScheduleManager):', divs);
                 return divs.map(String);
             }
         }
@@ -448,25 +450,31 @@
         const role = window.AccessControl?.getCurrentRole?.() || 
                     window.getCampistryUserRole?.() || 
                     'owner';
+        console.log('🔄 [MSS] Current role:', role);
         
         if (role === 'owner' || role === 'admin') {
             const allDivs = Object.keys(window.divisions || {}).map(String);
-            console.log('🔄 [MSS] My divisions (role-based, all):', allDivs);
+            console.log('🔄 [MSS] Owner/admin role - returning all:', JSON.stringify(allDivs));
             return allDivs;
         }
         
         // PRIORITY 5: Check team membership data
         if (window._campistryMembership?.assigned_divisions) {
             const divs = window._campistryMembership.assigned_divisions;
-            console.log('🔄 [MSS] My divisions (from membership):', divs);
+            console.log('🔄 [MSS] _campistryMembership.assigned_divisions =', JSON.stringify(divs));
             return divs.map(String);
         }
         
-        // PRIORITY 6: Check for direct division assignments
-        if (window.AccessControl?._directDivisionAssignments) {
-            const divs = window.AccessControl._directDivisionAssignments;
-            if (divs && divs.length > 0) {
-                console.log('🔄 [MSS] My divisions (from direct assignments):', divs);
+        // PRIORITY 6: Check user subdivision details directly
+        const subDetails = window.AccessControl?._userSubdivisionDetails;
+        if (subDetails && subDetails.length > 0) {
+            console.log('🔄 [MSS] User subdivision details:', JSON.stringify(subDetails));
+            const divs = [];
+            subDetails.forEach(sub => {
+                if (sub.divisions) divs.push(...sub.divisions);
+            });
+            if (divs.length > 0) {
+                console.log('🔄 [MSS] Extracted from subdivision details:', JSON.stringify(divs));
                 return divs.map(String);
             }
         }
@@ -978,14 +986,43 @@
             window._cloudScheduleData = null;
         },
         
-        // Debug helper
+        // Comprehensive debug helper
         debugPermissions: () => {
-            console.log('=== MSS Debug ===');
-            console.log('My divisions:', STATE.myDivisions);
-            console.log('Blocked divisions:', [...(STATE.blockedMap?.stats?.blockedDivisions || [])]);
-            console.log('AccessControl.getEditableDivisions:', window.AccessControl?.getEditableDivisions?.());
-            console.log('AccessControl.getCurrentRole:', window.AccessControl?.getCurrentRole?.());
-            console.log('AccessControl.isInitialized:', window.AccessControl?.isInitialized);
+            console.log('═══════════════════════════════════════════════════════');
+            console.log('🔄 [MSS] PERMISSION DEBUG');
+            console.log('═══════════════════════════════════════════════════════');
+            console.log('STATE.myDivisions:', JSON.stringify(STATE.myDivisions));
+            console.log('STATE.blockedMap.stats.blockedDivisions:', 
+                JSON.stringify([...(STATE.blockedMap?.stats?.blockedDivisions || [])]));
+            console.log('STATE.blockedMap.stats.totalBlocked:', STATE.blockedMap?.stats?.totalBlocked);
+            console.log('');
+            console.log('=== AccessControl ===');
+            console.log('isInitialized:', window.AccessControl?.isInitialized);
+            console.log('getCurrentRole():', window.AccessControl?.getCurrentRole?.());
+            console.log('getEditableDivisions():', JSON.stringify(window.AccessControl?.getEditableDivisions?.()));
+            console.log('getUserManagedDivisions():', JSON.stringify(window.AccessControl?.getUserManagedDivisions?.()));
+            console.log('_userSubdivisionIds:', JSON.stringify(window.AccessControl?._userSubdivisionIds));
+            console.log('_userSubdivisionDetails:', JSON.stringify(window.AccessControl?._userSubdivisionDetails));
+            console.log('_directDivisionAssignments:', JSON.stringify(window.AccessControl?._directDivisionAssignments));
+            console.log('_editableDivisions:', JSON.stringify(window.AccessControl?._editableDivisions));
+            console.log('');
+            console.log('=== SubdivisionScheduleManager ===');
+            console.log('getDivisionsToSchedule():', JSON.stringify(window.SubdivisionScheduleManager?.getDivisionsToSchedule?.()));
+            console.log('getUserSubdivisions():', JSON.stringify(window.SubdivisionScheduleManager?.getUserSubdivisions?.()));
+            console.log('');
+            console.log('=== Other Sources ===');
+            console.log('window._campistryMembership:', JSON.stringify(window._campistryMembership));
+            console.log('window.divisions keys:', JSON.stringify(Object.keys(window.divisions || {})));
+            console.log('═══════════════════════════════════════════════════════');
+            
+            // Return summary object for easier inspection
+            return {
+                myDivisions: STATE.myDivisions,
+                blockedDivisions: [...(STATE.blockedMap?.stats?.blockedDivisions || [])],
+                role: window.AccessControl?.getCurrentRole?.(),
+                editableDivisions: window.AccessControl?.getEditableDivisions?.(),
+                subdivisionDetails: window.AccessControl?._userSubdivisionDetails
+            };
         }
     };
     
