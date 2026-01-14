@@ -1,19 +1,19 @@
 // =============================================================================
-// realtime_schedule_sync.js v1.0 — CAMPISTRY REALTIME COLLABORATION
+// realtime_schedule_sync.js v1.1 — CAMPISTRY REALTIME COLLABORATION
 // =============================================================================
 //
 // PURPOSE: Enable Google Sheets-like real-time collaboration
-// - Instant save to cloud after generation
 // - Supabase Realtime subscriptions for live updates
-// - Visual sync indicators
+// - Visual sync indicators (defers to cloud_storage_bridge for saves)
 // - Automatic refresh when other schedulers make changes
+// - v1.1: Fixes save loop by deferring to cloud_storage_bridge
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('🔄 Realtime Schedule Sync v1.0 loading...');
+    console.log('🔄 Realtime Schedule Sync v1.1 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -194,8 +194,12 @@
     document.head.appendChild(style);
 
     // =========================================================================
-    // SAVE TO CLOUD - Immediate with debounce
+    // SAVE TO CLOUD - Immediate with debounce and loop prevention
     // =========================================================================
+
+    let _isSaving = false;
+    let _lastSaveAttempt = 0;
+    const MIN_SAVE_INTERVAL = 2000; // Minimum 2 seconds between saves
 
     async function saveToCloud(immediate = false) {
         const campId = getCampId();
@@ -206,6 +210,19 @@
             return { success: false, error: 'No camp ID' };
         }
         
+        // GUARD: Prevent re-entrant saves
+        if (_isSaving) {
+            if (DEBUG) console.log('[RealtimeSync] Save already in progress - skipping');
+            return { success: false, reason: 'already_saving' };
+        }
+        
+        // GUARD: Prevent rapid consecutive saves
+        const now = Date.now();
+        if (now - _lastSaveAttempt < MIN_SAVE_INTERVAL) {
+            if (DEBUG) console.log('[RealtimeSync] Save throttled - too soon');
+            return { success: false, reason: 'throttled' };
+        }
+        
         // Debounce unless immediate
         if (!immediate) {
             if (_pendingSave) clearTimeout(_pendingSave);
@@ -213,9 +230,41 @@
             return { success: true, pending: true };
         }
         
+        // Set guards
+        _isSaving = true;
+        _lastSaveAttempt = now;
         updateSyncStatus('syncing', 'Saving...');
         
         try {
+            // Use the existing cloud bridge if available - it handles everything
+            if (window.forceSyncToCloud) {
+                // Mark that we're the one triggering the save
+                window._realtimeSyncTriggeredSave = true;
+                await window.forceSyncToCloud();
+                window._realtimeSyncTriggeredSave = false;
+                
+                _lastSyncTime = Date.now();
+                updateSyncStatus('synced', 'Saved');
+                
+                console.log('[RealtimeSync] ✅ Saved via cloud bridge');
+                return { success: true };
+            }
+            
+            // Direct Supabase save as fallback (only if bridge not available)
+            console.warn('[RealtimeSync] No cloud bridge - using direct save');
+            
+            const response = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_NAME}?camp_id=eq.${campId}`, {
+                method: 'GET',
+                headers: {
+                    'apikey': SUPABASE_ANON_KEY,
+                    'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Load failed: ${response.status}`);
+            }
+            
             // Get current schedule data
             const scheduleAssignments = window.scheduleAssignments || {};
             const leagueAssignments = window.leagueAssignments || {};
@@ -240,25 +289,6 @@
                 lastModifiedAt: new Date().toISOString(),
                 slotCount: unifiedTimes.length
             };
-            
-            // Use the existing cloud bridge if available
-            if (window.forceSyncToCloud) {
-                await window.forceSyncToCloud();
-                _lastSyncTime = Date.now();
-                updateSyncStatus('synced', 'Saved');
-                
-                if (DEBUG) console.log('[RealtimeSync] ✅ Saved via cloud bridge');
-                return { success: true };
-            }
-            
-            // Direct Supabase save as fallback
-            const response = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_NAME}?camp_id=eq.${campId}`, {
-                method: 'GET',
-                headers: {
-                    'apikey': SUPABASE_ANON_KEY,
-                    'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
-                }
-            });
             
             const existing = await response.json();
             let cloudData = existing?.[0]?.daily_data || {};
@@ -307,6 +337,8 @@
             console.error('[RealtimeSync] Save error:', err);
             updateSyncStatus('error', 'Save failed');
             return { success: false, error: err.message };
+        } finally {
+            _isSaving = false;
         }
     }
 
@@ -547,16 +579,25 @@
     // =========================================================================
 
     function installEventHooks() {
-        // Save after generation completes
+        // Save after generation completes - but only if bridge hasn't handled it
         window.addEventListener('campistry-generation-complete', () => {
-            console.log('[RealtimeSync] Generation complete - saving immediately');
-            saveToCloud(true);
+            // Give the bridge time to save first
+            setTimeout(() => {
+                if (!window._realtimeSyncTriggeredSave) {
+                    console.log('[RealtimeSync] Generation complete - triggering save');
+                    saveToCloud(true);
+                }
+            }, 500);
         });
         
-        // Save after manual edits
-        window.addEventListener('campistry-daily-data-updated', () => {
-            // Debounced save
-            saveToCloud(false);
+        // NOTE: We do NOT hook saveCurrentDailyData here
+        // The cloud_storage_bridge already handles saves to the cloud
+        // We only need to handle the UI sync indicator
+        
+        // Watch for cloud saves from the bridge to update our indicator
+        window.addEventListener('campistry-cloud-save-complete', () => {
+            _lastSyncTime = Date.now();
+            updateSyncStatus('synced', 'Saved');
         });
         
         // Reload on date change
@@ -577,15 +618,23 @@
             updateSyncStatus('offline', 'Offline');
         });
         
-        // Hook into saveCurrentDailyData if not already hooked
+        // Hook into saveCurrentDailyData ONLY to update the sync indicator
+        // Do NOT trigger additional saves - the bridge handles that
         const originalSave = window.saveCurrentDailyData;
         if (originalSave && !originalSave._realtimeHooked) {
             window.saveCurrentDailyData = function(key, data) {
                 const result = originalSave.call(this, key, data);
                 
-                // Trigger cloud save on schedule changes
+                // Just update indicator to show we're syncing
+                // The bridge will handle the actual save
                 if (key === 'scheduleAssignments' || key === 'leagueAssignments') {
-                    saveToCloud(false);
+                    updateSyncStatus('syncing', 'Saving...');
+                    // Assume bridge will save within 3 seconds
+                    setTimeout(() => {
+                        if (_syncIndicator?.querySelector('.sync-status')?.textContent === 'Saving...') {
+                            updateSyncStatus('synced', 'Saved');
+                        }
+                    }, 3000);
                 }
                 
                 return result;
@@ -691,7 +740,7 @@
     // =========================================================================
 
     window.RealtimeScheduleSync = {
-        version: '1.0',
+        version: '1.1',
         
         // Manual controls
         save: () => saveToCloud(true),
@@ -727,9 +776,9 @@
         setTimeout(initialize, 1000);
     }
 
-    console.log('🔄 Realtime Schedule Sync v1.0 loaded');
-    console.log('   Auto-saves on changes');
-    console.log('   Listens for updates from other users');
+    console.log('🔄 Realtime Schedule Sync v1.1 loaded');
+    console.log('   Visual sync indicator - saves handled by cloud_storage_bridge');
+    console.log('   Listens for updates from other users via Supabase Realtime');
     console.log('   Use: window.RealtimeScheduleSync.save() to force save');
     console.log('   Use: window.RealtimeScheduleSync.load() to force load');
 
