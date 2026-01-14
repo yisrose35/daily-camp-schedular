@@ -329,11 +329,24 @@
         if (!entry) return "";
         if (entry._isDismissal) return "Dismissal";
         if (entry._isSnack) return "Snacks";
-        const label = entry._activity || entry.field || "";
-        if (entry._h2h) return entry.sport || "League Game";
-        if (entry._fixed) return label;
-        if (entry.sport) return `${entry.field} – ${entry.sport}`;
-        return label;
+        
+        const activity = entry._activity || entry.field || "";
+        const field = entry.field || "";
+        const sport = entry.sport || "";
+        
+        // League game - show sport or game label
+        if (entry._h2h) return sport || entry._gameLabel || "League Game";
+        
+        // Fixed activities (Lunch, Swim, etc.) - show just the activity name
+        if (entry._fixed) return activity;
+        
+        // Regular activity with field assignment - show "Field – Sport" format
+        if (field && sport && field !== sport) {
+            return `${field} – ${sport}`;
+        }
+        
+        // Just activity name
+        return activity || field;
     }
 
     function findFirstSlotForTime(startMin) {
@@ -510,8 +523,9 @@
                         td.textContent = titleHtml;
                     } else {
                         // Show title on one line, matchups as list below
-                        td.innerHTML = `<div style="margin-bottom:4px;">${titleHtml}</div>` +
-                            `<div style="font-size:11px;font-weight:normal;line-height:1.4;">${allMatchups.join('<br>')}</div>`;
+                        // INCREASED FONT SIZE for better readability
+                        td.innerHTML = `<div style="margin-bottom:6px;font-size:15px;">${titleHtml}</div>` +
+                            `<div style="font-size:13px;font-weight:normal;line-height:1.5;">${allMatchups.join('<br>')}</div>`;
                     }
                     td.style.cursor = "pointer";
                     td.onclick = () => editCell(bunks[0], block.startMin, block.endMin, block.event);
@@ -580,19 +594,41 @@
                     }
                     
                     // ═══════════════════════════════════════════════════════════
-                    // Original display logic
+                    // Original display logic - FIXED to always check actual entry first
                     // ═══════════════════════════════════════════════════════════
-                    if (isDismissal) {
+                    
+                    // ALWAYS try to get the actual scheduled activity from scheduleAssignments first
+                    if (entry && !entry.continuation) {
+                        // We have actual schedule data for this slot
+                        label = formatEntry(entry);
+                        
+                        // Apply appropriate background based on activity type
+                        if (entry._isDismissal || (entry._activity || '').toLowerCase().includes('dismiss')) {
+                            td.style.background = "#ffdddd";
+                        } else if (entry._isSnack || (entry._activity || '').toLowerCase().includes('snack')) {
+                            td.style.background = "#e7ffe7";
+                        } else if (entry._fixed) {
+                            td.style.background = "#fff7cc"; // Fixed activities like Lunch, Swim
+                        } else {
+                            td.style.background = ""; // Regular activities
+                        }
+                    } else if (entry && entry.continuation) {
+                        // Continuation slot - show same as parent
+                        label = formatEntry(entry);
+                        td.style.color = "#888";
+                    } else if (isDismissal) {
                         label = "Dismissal";
                         td.style.background = "#ffdddd";
                     } else if (isSnack) {
                         label = "Snacks";
                         td.style.background = "#e7ffe7";
                     } else if (!isGeneratedSlot) {
+                        // Fixed skeleton event (Lunch, etc.) but no actual entry
                         td.style.background = "#fff7cc";
                         label = block.event;
                     } else {
-                        label = formatEntry(entry);
+                        // Generated slot with no data
+                        label = "";
                     }
 
                     td.textContent = label;
