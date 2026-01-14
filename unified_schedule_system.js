@@ -1,5 +1,5 @@
 // =============================================================================
-// unified_schedule_system.js v3.0 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
+// unified_schedule_system.js v3.1 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
 // =============================================================================
 //
 // This file REPLACES ALL of the following:
@@ -10,10 +10,10 @@
 // ❌ schedule_version_ui.js
 //
 // CRITICAL FIXES:
-// ✅ Uses skeleton blocks DIRECTLY (not 30-min grid) for proper alignment
+// ✅ Uses findSlotsForRange() to map skeleton blocks to 30-min slot indices
+// ✅ Properly handles variable-length skeleton blocks (60min, 20min, etc.)
 // ✅ Proper cloud hydration timing
-// ✅ Correct slot index mapping for variable-length time blocks
-// ✅ League matchup display
+// ✅ League matchup display from all slots in range
 // ✅ Version save/load/merge integrated
 // ✅ Toolbar hidden by default
 // ✅ RBAC and multi-scheduler support
@@ -23,7 +23,7 @@
 (function() {
     'use strict';
 
-    console.log('📅 Unified Schedule System v3.0 loading...');
+    console.log('📅 Unified Schedule System v3.1 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -234,44 +234,64 @@
     }
 
     /**
-     * Build unifiedTimes directly from skeleton blocks.
-     * Each unique (startTime, endTime) pair becomes a slot.
-     * This handles variable-length blocks correctly.
+     * Build unifiedTimes from skeleton using 30-minute intervals.
+     * This matches how scheduler_core_main.js generates the time grid.
+     * The scheduler uses INCREMENT_MINS = 30 to create slots.
      */
     function buildUnifiedTimesFromSkeleton(skeleton) {
-        const timeSlots = [];
-        const seen = new Set();
+        const INCREMENT_MINS = 30;
+        
+        if (!skeleton || skeleton.length === 0) return [];
+        
+        // Find the earliest start and latest end across ALL divisions
+        let minTime = 540; // Default 9 AM
+        let maxTime = 960; // Default 4 PM
+        let found = false;
         
         skeleton.forEach(block => {
             const startMin = parseTimeToMinutes(block.startTime);
             const endMin = parseTimeToMinutes(block.endTime);
             
-            if (startMin === null || endMin === null) return;
-            
-            const key = `${startMin}-${endMin}`;
-            if (seen.has(key)) return;
-            seen.add(key);
-            
-            const baseDate = new Date();
-            baseDate.setHours(0, 0, 0, 0);
-            
+            if (startMin !== null) {
+                minTime = Math.min(minTime, startMin);
+                found = true;
+            }
+            if (endMin !== null) {
+                maxTime = Math.max(maxTime, endMin);
+                found = true;
+            }
+        });
+        
+        if (!found) return [];
+        
+        // Round down minTime to nearest 30-min
+        minTime = Math.floor(minTime / INCREMENT_MINS) * INCREMENT_MINS;
+        
+        // Round up maxTime to nearest 30-min
+        maxTime = Math.ceil(maxTime / INCREMENT_MINS) * INCREMENT_MINS;
+        
+        // Generate 30-minute slots from min to max
+        const timeSlots = [];
+        const baseDate = new Date();
+        baseDate.setHours(0, 0, 0, 0);
+        
+        for (let mins = minTime; mins < maxTime; mins += INCREMENT_MINS) {
             const startDate = new Date(baseDate);
-            startDate.setMinutes(startMin);
+            startDate.setMinutes(mins);
             
             const endDate = new Date(baseDate);
-            endDate.setMinutes(endMin);
+            endDate.setMinutes(mins + INCREMENT_MINS);
             
             timeSlots.push({
                 start: startDate,
                 end: endDate,
-                startMin,
-                endMin,
-                label: `${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}`
+                startMin: mins,
+                endMin: mins + INCREMENT_MINS,
+                label: `${minutesToTimeLabel(mins)} - ${minutesToTimeLabel(mins + INCREMENT_MINS)}`
             });
-        });
+        }
         
-        // Sort by start time
-        timeSlots.sort((a, b) => a.startMin - b.startMin);
+        if (DEBUG) console.log(`[UnifiedSchedule] Generated ${timeSlots.length} slots (${minutesToTimeLabel(minTime)} - ${minutesToTimeLabel(maxTime)})`);
         
         return timeSlots;
     }
@@ -281,67 +301,28 @@
     // =========================================================================
     
     /**
-     * Find the slot index in unifiedTimes that matches a time in minutes.
-     * Handles variable-length blocks by checking if time falls within any slot.
+     * Get the start time in minutes from a unifiedTimes slot
      */
-    function findSlotIndexForTime(targetMin, unifiedTimes) {
-        if (!unifiedTimes || unifiedTimes.length === 0 || targetMin === null) {
-            return -1;
+    function getSlotStartMin(slot) {
+        if (!slot) return null;
+        if (slot.startMin !== undefined) return slot.startMin;
+        if (slot.start instanceof Date) {
+            return slot.start.getHours() * 60 + slot.start.getMinutes();
         }
-        
-        // Build slot info with start/end in minutes
-        const slots = unifiedTimes.map((t, idx) => {
-            let startMin, endMin;
-            
-            if (t.startMin !== undefined) {
-                startMin = t.startMin;
-                endMin = t.endMin;
-            } else if (t.start instanceof Date) {
-                startMin = t.start.getHours() * 60 + t.start.getMinutes();
-                endMin = t.end ? (t.end.getHours() * 60 + t.end.getMinutes()) : startMin + 30;
-            } else if (t.start) {
-                const sd = new Date(t.start);
-                const ed = t.end ? new Date(t.end) : null;
-                startMin = sd.getHours() * 60 + sd.getMinutes();
-                endMin = ed ? (ed.getHours() * 60 + ed.getMinutes()) : startMin + 30;
-            } else {
-                return null;
-            }
-            
-            return { idx, startMin, endMin };
-        }).filter(Boolean);
-        
-        // Exact match on start time
-        for (const slot of slots) {
-            if (slot.startMin === targetMin) {
-                return slot.idx;
-            }
+        if (slot.start) {
+            const d = new Date(slot.start);
+            return d.getHours() * 60 + d.getMinutes();
         }
-        
-        // Within slot range
-        for (const slot of slots) {
-            if (targetMin >= slot.startMin && targetMin < slot.endMin) {
-                return slot.idx;
-            }
-        }
-        
-        // Closest match (fallback)
-        let closest = -1;
-        let minDiff = Infinity;
-        
-        for (const slot of slots) {
-            const diff = Math.abs(slot.startMin - targetMin);
-            if (diff < minDiff) {
-                minDiff = diff;
-                closest = slot.idx;
-            }
-        }
-        
-        return closest;
+        return null;
     }
 
     /**
-     * Find all slot indices that fall within a time range
+     * Find ALL slot indices in unifiedTimes that fall within a skeleton block's time range.
+     * This is the KEY FIX - skeleton blocks can span multiple 30-min slots.
+     * 
+     * Example: Skeleton block 11:00 AM - 12:00 PM (60 min) 
+     *          unifiedTimes has 30-min slots: [0]=11:00, [1]=11:30, [2]=12:00...
+     *          This returns [0, 1] - both slots that fall within the block
      */
     function findSlotsForRange(startMin, endMin, unifiedTimes) {
         if (!unifiedTimes || unifiedTimes.length === 0) return [];
@@ -350,22 +331,77 @@
         const slots = [];
         
         unifiedTimes.forEach((t, idx) => {
-            let slotStart;
-            
-            if (t.startMin !== undefined) {
-                slotStart = t.startMin;
-            } else if (t.start instanceof Date) {
-                slotStart = t.start.getHours() * 60 + t.start.getMinutes();
-            } else if (t.start) {
-                slotStart = new Date(t.start).getHours() * 60 + new Date(t.start).getMinutes();
-            } else return;
-            
-            if (slotStart >= startMin && slotStart < endMin) {
+            const slotStart = getSlotStartMin(t);
+            if (slotStart !== null && slotStart >= startMin && slotStart < endMin) {
                 slots.push(idx);
             }
         });
         
         return slots;
+    }
+    
+    /**
+     * Find the FIRST slot index for a time. Uses findSlotsForRange internally.
+     */
+    function findSlotIndexForTime(targetMin, unifiedTimes) {
+        if (!unifiedTimes || unifiedTimes.length === 0 || targetMin === null) {
+            return -1;
+        }
+        
+        // First try exact match
+        for (let i = 0; i < unifiedTimes.length; i++) {
+            const slotStart = getSlotStartMin(unifiedTimes[i]);
+            if (slotStart === targetMin) {
+                return i;
+            }
+        }
+        
+        // Try finding slots within a 30-min window
+        const slots = findSlotsForRange(targetMin, targetMin + 30, unifiedTimes);
+        if (slots.length > 0) return slots[0];
+        
+        // Closest match (fallback)
+        let closest = -1;
+        let minDiff = Infinity;
+        
+        for (let i = 0; i < unifiedTimes.length; i++) {
+            const slotStart = getSlotStartMin(unifiedTimes[i]);
+            if (slotStart !== null) {
+                const diff = Math.abs(slotStart - targetMin);
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    closest = i;
+                }
+            }
+        }
+        
+        return closest;
+    }
+    
+    /**
+     * Get entry for a skeleton block - checks ALL slots within the block's time range
+     * and returns the first non-empty, non-continuation entry found.
+     */
+    function getEntryForBlock(bunk, startMin, endMin, unifiedTimes) {
+        const slots = findSlotsForRange(startMin, endMin, unifiedTimes);
+        const assignments = window.scheduleAssignments || {};
+        
+        if (!assignments[bunk]) return { entry: null, slotIdx: slots[0] || -1 };
+        
+        // Find first non-continuation entry in any of these slots
+        for (const slotIdx of slots) {
+            const entry = assignments[bunk][slotIdx];
+            if (entry && !entry.continuation) {
+                return { entry, slotIdx };
+            }
+        }
+        
+        // If all are continuations, return the first entry
+        if (slots.length > 0 && assignments[bunk][slots[0]]) {
+            return { entry: assignments[bunk][slots[0]], slotIdx: slots[0] };
+        }
+        
+        return { entry: null, slotIdx: slots[0] || -1 };
     }
 
     // =========================================================================
@@ -660,9 +696,6 @@
         divBlocks.forEach((block, blockIdx) => {
             const timeLabel = `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(block.endMin)}`;
             
-            // Find the slot index that corresponds to this block's start time
-            const slotIdx = findSlotIndexForTime(block.startMin, unifiedTimes);
-            
             const tr = document.createElement('tr');
             tr.style.background = blockIdx % 2 === 0 ? '#fff' : '#fafafa';
             
@@ -674,7 +707,7 @@
             
             // League block - merged cell with matchups
             if (isLeagueBlockType(block.event)) {
-                const td = renderLeagueCell(block, bunks, divName, slotIdx, isEditable);
+                const td = renderLeagueCell(block, bunks, divName, unifiedTimes, isEditable);
                 tr.appendChild(td);
                 tbody.appendChild(tr);
                 return;
@@ -682,7 +715,7 @@
             
             // Regular cells - one per bunk
             bunks.forEach(bunk => {
-                const td = renderBunkCell(block, bunk, divName, slotIdx, isEditable);
+                const td = renderBunkCell(block, bunk, divName, unifiedTimes, isEditable);
                 tr.appendChild(td);
             });
             
@@ -693,7 +726,7 @@
         return table;
     }
 
-    function renderLeagueCell(block, bunks, divName, slotIdx, isEditable) {
+    function renderLeagueCell(block, bunks, divName, unifiedTimes, isEditable) {
         const td = document.createElement('td');
         td.colSpan = bunks.length;
         td.style.cssText = `
@@ -703,7 +736,19 @@
             vertical-align: top;
         `;
         
-        const leagueInfo = getLeagueMatchups(divName, slotIdx);
+        // Find ALL slot indices for this block's time range
+        const slots = findSlotsForRange(block.startMin, block.endMin, unifiedTimes);
+        const slotIdx = slots.length > 0 ? slots[0] : -1;
+        
+        // Try to get league info from all slots in the range
+        let leagueInfo = { matchups: [], gameLabel: '', sport: '' };
+        for (const idx of slots) {
+            const info = getLeagueMatchups(divName, idx);
+            if (info.matchups.length > 0 || info.gameLabel) {
+                leagueInfo = info;
+                break;
+            }
+        }
         
         let title = leagueInfo.gameLabel || block.event;
         if (leagueInfo.sport && !title.toLowerCase().includes(leagueInfo.sport.toLowerCase())) {
@@ -747,11 +792,12 @@
         return td;
     }
 
-    function renderBunkCell(block, bunk, divName, slotIdx, isEditable) {
+    function renderBunkCell(block, bunk, divName, unifiedTimes, isEditable) {
         const td = document.createElement('td');
         td.style.cssText = 'padding: 8px 10px; text-align: center; border: 1px solid #e5e7eb;';
         
-        const entry = getEntry(bunk, slotIdx);
+        // Get entry using the new multi-slot lookup
+        const { entry, slotIdx } = getEntryForBlock(bunk, block.startMin, block.endMin, unifiedTimes);
         
         // Check multi-scheduler blocking
         let isBlocked = false;
@@ -1242,12 +1288,13 @@
     
     // Debug namespace
     window.UnifiedScheduleSystem = {
-        version: '3.0',
+        version: '3.1',
         loadScheduleForDate,
         renderStaggeredView,
         findSlotIndexForTime,
         findSlotsForRange,
         getLeagueMatchups,
+        getEntryForBlock,
         buildUnifiedTimesFromSkeleton,
         VersionManager,
         DEBUG_ON: () => { DEBUG = true; console.log('[UnifiedSchedule] Debug enabled'); },
@@ -1262,8 +1309,25 @@
             console.log(`Bunk ${bunk}:`, data.length, 'slots');
             data.forEach((e, i) => {
                 if (e && !e.continuation) {
-                    console.log(`  [${i}]`, formatEntry(e));
+                    const startMin = window.unifiedTimes?.[i]?.startMin || (window.unifiedTimes?.[i]?.start ? 
+                        new Date(window.unifiedTimes[i].start).getHours() * 60 + new Date(window.unifiedTimes[i].start).getMinutes() : '?');
+                    console.log(`  [${i}] ${minutesToTimeLabel(startMin)}: ${formatEntry(e)}`);
                 }
+            });
+        },
+        dumpSlotMapping: (divName) => {
+            const skeleton = getSkeleton();
+            const divBlocks = skeleton.filter(b => b.division === divName);
+            const ut = window.unifiedTimes || [];
+            
+            console.log(`Slot mapping for Division ${divName}:`);
+            console.log(`  unifiedTimes has ${ut.length} slots`);
+            
+            divBlocks.forEach(block => {
+                const startMin = parseTimeToMinutes(block.startTime);
+                const endMin = parseTimeToMinutes(block.endTime);
+                const slots = findSlotsForRange(startMin, endMin, ut);
+                console.log(`  ${block.event}: ${block.startTime}-${block.endTime} → slots [${slots.join(',')}]`);
             });
         },
         getState: () => ({
@@ -1277,8 +1341,9 @@
         })
     };
 
-    console.log('📅 Unified Schedule System v3.0 loaded successfully');
+    console.log('📅 Unified Schedule System v3.1 loaded successfully');
     console.log('   Replaces: scheduler_ui.js, render_sync_fix.js, view_schedule_loader_fix.js');
     console.log('   Replaces: schedule_version_merger.js, schedule_version_ui.js');
+    console.log('   FIX: Uses findSlotsForRange for variable-length skeleton blocks');
 
 })();
