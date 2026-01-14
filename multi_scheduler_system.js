@@ -411,29 +411,68 @@
     }
     
     function getMyDivisions() {
-        // Try AccessControl first (most reliable)
-        if (window.AccessControl?.getEditableDivisions) {
-            return window.AccessControl.getEditableDivisions().map(String);
+        // PRIORITY 1: AccessControl.getEditableDivisions (most reliable for schedulers)
+        if (window.AccessControl?.isInitialized && window.AccessControl?.getEditableDivisions) {
+            const divs = window.AccessControl.getEditableDivisions();
+            if (divs && divs.length > 0) {
+                console.log('🔄 [MSS] My divisions (from AccessControl.getEditableDivisions):', divs);
+                return divs.map(String);
+            }
         }
+        
+        // PRIORITY 2: AccessControl.getUserManagedDivisions
         if (window.AccessControl?.getUserManagedDivisions) {
-            return window.AccessControl.getUserManagedDivisions().map(String);
+            const divs = window.AccessControl.getUserManagedDivisions();
+            // null means "all divisions" for owners/admins
+            if (divs === null) {
+                const allDivs = Object.keys(window.divisions || {}).map(String);
+                console.log('🔄 [MSS] My divisions (owner/admin - all):', allDivs);
+                return allDivs;
+            }
+            if (divs && divs.length > 0) {
+                console.log('🔄 [MSS] My divisions (from getUserManagedDivisions):', divs);
+                return divs.map(String);
+            }
         }
         
-        // Check role
-        const role = window.AccessControl?.getCurrentRole?.() || window.getCampistryUserRole?.() || 'owner';
+        // PRIORITY 3: SubdivisionScheduleManager
+        if (window.SubdivisionScheduleManager?.getDivisionsToSchedule) {
+            const divs = window.SubdivisionScheduleManager.getDivisionsToSchedule();
+            if (divs && divs.length > 0) {
+                console.log('🔄 [MSS] My divisions (from SubdivisionScheduleManager):', divs);
+                return divs.map(String);
+            }
+        }
         
-        // Owners/admins get all divisions
+        // PRIORITY 4: Check role - owners/admins get all
+        const role = window.AccessControl?.getCurrentRole?.() || 
+                    window.getCampistryUserRole?.() || 
+                    'owner';
+        
         if (role === 'owner' || role === 'admin') {
-            return Object.keys(window.divisions || {}).map(String);
+            const allDivs = Object.keys(window.divisions || {}).map(String);
+            console.log('🔄 [MSS] My divisions (role-based, all):', allDivs);
+            return allDivs;
         }
         
-        // Schedulers - try to find their assigned divisions
-        if (window.AccessControl?.getCurrentUserInfo) {
-            const info = window.AccessControl.getCurrentUserInfo();
-            if (info?.divisions) return info.divisions.map(String);
+        // PRIORITY 5: Check team membership data
+        if (window._campistryMembership?.assigned_divisions) {
+            const divs = window._campistryMembership.assigned_divisions;
+            console.log('🔄 [MSS] My divisions (from membership):', divs);
+            return divs.map(String);
         }
         
-        // Fallback: empty (will block everything)
+        // PRIORITY 6: Check for direct division assignments
+        if (window.AccessControl?._directDivisionAssignments) {
+            const divs = window.AccessControl._directDivisionAssignments;
+            if (divs && divs.length > 0) {
+                console.log('🔄 [MSS] My divisions (from direct assignments):', divs);
+                return divs.map(String);
+            }
+        }
+        
+        // FALLBACK: Return empty (will block everything - safest for unknown users)
+        console.warn('🔄 [MSS] Could not determine divisions - returning empty');
         return [];
     }
 
@@ -715,9 +754,6 @@
                 STATE.cloudData = null;
                 STATE.lastFetchDate = null;
                 log('Save complete - cache cleared');
-                
-                // Update merge UI
-                setTimeout(updateMergeStatusUI, 500);
             }
             return result;
         };
@@ -730,390 +766,40 @@
     }
 
     // =========================================================================
-    // PART 7: MERGE UI FOR DAILY SCHEDULING VIEW
+    // PART 7: HIDE UNWANTED UI ELEMENTS
     // =========================================================================
     
     /**
-     * Inject merge status panel into daily scheduling view
+     * Hide the version toolbar buttons (Save Version, Load Version, Merge & Sync)
+     * and suppress the "grades skipped" toast
      */
-    function injectMergeUI() {
-        if (STATE.mergeUIInjected) return;
-        
-        const scheduleTable = document.getElementById('scheduleTable');
-        if (!scheduleTable) {
-            setTimeout(injectMergeUI, 500);
-            return;
+    function hideUnwantedUI() {
+        // Hide version toolbar container
+        const versionToolbar = document.getElementById('version-toolbar-container');
+        if (versionToolbar) {
+            versionToolbar.style.display = 'none';
+            log('Hidden version toolbar');
         }
         
-        // Check if already exists
-        if (document.getElementById('mss-merge-panel')) {
-            STATE.mergeUIInjected = true;
-            return;
+        // Also hide parent wrapper if it only contains the toolbar
+        const toolbarWrapper = versionToolbar?.parentElement;
+        if (toolbarWrapper && toolbarWrapper.children.length === 1) {
+            toolbarWrapper.style.display = 'none';
         }
         
-        // Create merge status panel
-        const panel = document.createElement('div');
-        panel.id = 'mss-merge-panel';
-        panel.innerHTML = `
-            <style>
-                #mss-merge-panel {
-                    display: flex;
-                    align-items: center;
-                    gap: 12px;
-                    padding: 10px 16px;
-                    background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-                    border-radius: 8px;
-                    margin-bottom: 12px;
-                    color: white;
-                    font-size: 13px;
+        // Suppress "grades skipped" toast by overriding showToast temporarily
+        const originalShowToast = window.showToast;
+        if (originalShowToast && !window._mssToastPatched) {
+            window.showToast = function(message, type) {
+                // Suppress the "grades skipped" message
+                if (message && message.includes('grades skipped')) {
+                    log('Suppressed "grades skipped" toast');
+                    return;
                 }
-                #mss-merge-panel .mss-status-indicator {
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                }
-                #mss-merge-panel .mss-dot {
-                    width: 10px;
-                    height: 10px;
-                    border-radius: 50%;
-                    background: #22c55e;
-                    animation: mss-pulse 2s infinite;
-                }
-                #mss-merge-panel .mss-dot.warning { background: #f59e0b; }
-                #mss-merge-panel .mss-dot.error { background: #ef4444; animation: none; }
-                @keyframes mss-pulse {
-                    0%, 100% { opacity: 1; }
-                    50% { opacity: 0.5; }
-                }
-                #mss-merge-panel .mss-actions {
-                    margin-left: auto;
-                    display: flex;
-                    gap: 8px;
-                }
-                #mss-merge-panel button {
-                    padding: 6px 12px;
-                    border: none;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    font-size: 12px;
-                    font-weight: 500;
-                    transition: all 0.2s;
-                }
-                #mss-merge-panel .mss-btn-primary {
-                    background: #3b82f6;
-                    color: white;
-                }
-                #mss-merge-panel .mss-btn-primary:hover {
-                    background: #2563eb;
-                }
-                #mss-merge-panel .mss-btn-secondary {
-                    background: rgba(255,255,255,0.1);
-                    color: white;
-                }
-                #mss-merge-panel .mss-btn-secondary:hover {
-                    background: rgba(255,255,255,0.2);
-                }
-                #mss-merge-panel .mss-stats {
-                    display: flex;
-                    gap: 16px;
-                    font-size: 11px;
-                    opacity: 0.8;
-                }
-                #mss-unified-modal {
-                    position: fixed;
-                    top: 0;
-                    left: 0;
-                    right: 0;
-                    bottom: 0;
-                    background: rgba(0,0,0,0.7);
-                    z-index: 10000;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                }
-                #mss-unified-modal .modal-content {
-                    background: white;
-                    border-radius: 12px;
-                    width: 90%;
-                    max-width: 1200px;
-                    max-height: 85vh;
-                    overflow: auto;
-                    box-shadow: 0 25px 50px rgba(0,0,0,0.3);
-                }
-                #mss-unified-modal .modal-header {
-                    padding: 16px 24px;
-                    border-bottom: 1px solid #e5e7eb;
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    position: sticky;
-                    top: 0;
-                    background: white;
-                    z-index: 1;
-                }
-                #mss-unified-modal .modal-body {
-                    padding: 24px;
-                }
-                #mss-unified-modal .close-btn {
-                    background: none;
-                    border: none;
-                    font-size: 24px;
-                    cursor: pointer;
-                    opacity: 0.5;
-                }
-                #mss-unified-modal .close-btn:hover { opacity: 1; }
-            </style>
-            <div class="mss-status-indicator">
-                <span class="mss-dot" id="mss-status-dot"></span>
-                <span id="mss-status-text">Multi-Scheduler Active</span>
-            </div>
-            <div class="mss-stats" id="mss-stats">
-                <span id="mss-stat-blocked">0 blocked</span>
-                <span id="mss-stat-schedulers">1 scheduler</span>
-            </div>
-            <div class="mss-actions">
-                <button class="mss-btn-secondary" id="mss-btn-refresh" title="Refresh from cloud">
-                    🔄 Refresh
-                </button>
-                <button class="mss-btn-primary" id="mss-btn-unified" title="View unified schedule">
-                    📊 Unified View
-                </button>
-            </div>
-        `;
-        
-        // Insert before schedule table
-        scheduleTable.parentNode.insertBefore(panel, scheduleTable);
-        
-        // Bind events
-        document.getElementById('mss-btn-refresh').addEventListener('click', async () => {
-            const btn = document.getElementById('mss-btn-refresh');
-            btn.innerHTML = '⏳ Loading...';
-            btn.disabled = true;
-            
-            try {
-                STATE.cloudData = null;
-                STATE.lastFetchDate = null;
-                const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-                await initializeView(dateKey);
-                applyBlockingToGrid();
-                updateMergeStatusUI();
-                showToast('✅ Refreshed from cloud', 'success');
-            } finally {
-                btn.innerHTML = '🔄 Refresh';
-                btn.disabled = false;
-            }
-        });
-        
-        document.getElementById('mss-btn-unified').addEventListener('click', showUnifiedScheduleModal);
-        
-        STATE.mergeUIInjected = true;
-        log('Merge UI injected');
-        
-        // Initial update
-        setTimeout(updateMergeStatusUI, 100);
-    }
-    
-    /**
-     * Update merge status UI
-     */
-    function updateMergeStatusUI() {
-        const dot = document.getElementById('mss-status-dot');
-        const text = document.getElementById('mss-status-text');
-        const statBlocked = document.getElementById('mss-stat-blocked');
-        const statSchedulers = document.getElementById('mss-stat-schedulers');
-        
-        if (!dot || !text) return;
-        
-        const blockedCount = STATE.blockedMap?.stats?.totalBlocked || 0;
-        const cloudBunks = Object.keys(STATE.cloudData?.scheduleAssignments || {}).length;
-        const myDivs = STATE.myDivisions?.length || 0;
-        
-        // Update stats
-        if (statBlocked) statBlocked.textContent = `${blockedCount} blocked`;
-        if (statSchedulers) {
-            const schedulerCount = STATE.blockedMap?.stats?.blockedDivisions?.size || 0;
-            statSchedulers.textContent = schedulerCount > 0 
-                ? `${schedulerCount + 1} schedulers` 
-                : 'Solo mode';
+                return originalShowToast.call(this, message, type);
+            };
+            window._mssToastPatched = true;
         }
-        
-        // Update status indicator
-        if (blockedCount > 0) {
-            dot.className = 'mss-dot warning';
-            text.textContent = `${blockedCount} slots claimed by others`;
-        } else if (cloudBunks > 0) {
-            dot.className = 'mss-dot';
-            text.textContent = 'Synced with cloud';
-        } else {
-            dot.className = 'mss-dot';
-            text.textContent = 'Multi-Scheduler Active';
-        }
-    }
-    
-    /**
-     * Show unified schedule modal
-     */
-    function showUnifiedScheduleModal() {
-        // Remove existing modal
-        const existing = document.getElementById('mss-unified-modal');
-        if (existing) existing.remove();
-        
-        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        
-        // Build unified data
-        const localData = window.loadCurrentDailyData?.() || {};
-        const cloudData = STATE.cloudData || {};
-        
-        // Merge local + cloud
-        const unified = mergeScheduleData(localData, cloudData);
-        
-        // Create modal
-        const modal = document.createElement('div');
-        modal.id = 'mss-unified-modal';
-        modal.innerHTML = `
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h2>📊 Unified Schedule View - ${dateKey}</h2>
-                    <button class="close-btn">&times;</button>
-                </div>
-                <div class="modal-body">
-                    <div id="mss-unified-content">Loading...</div>
-                </div>
-            </div>
-        `;
-        
-        document.body.appendChild(modal);
-        
-        // Close handlers
-        modal.querySelector('.close-btn').onclick = () => modal.remove();
-        modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
-        
-        // Render unified content
-        renderUnifiedSchedule(unified, document.getElementById('mss-unified-content'));
-    }
-    
-    /**
-     * Merge local and cloud schedule data
-     */
-    function mergeScheduleData(localData, cloudData) {
-        const merged = {
-            scheduleAssignments: {},
-            leagueAssignments: {},
-            skeleton: localData.manualSkeleton || localData.skeleton || cloudData.skeleton || [],
-            unifiedTimes: localData.unifiedTimes || window.unifiedTimes || cloudData.unifiedTimes || [],
-            _sources: []
-        };
-        
-        // Add cloud data first (lower priority)
-        if (cloudData.scheduleAssignments) {
-            for (const [bunkId, slots] of Object.entries(cloudData.scheduleAssignments)) {
-                merged.scheduleAssignments[bunkId] = [...(slots || [])];
-            }
-            merged._sources.push('cloud');
-        }
-        
-        // Overlay local data (higher priority for user's divisions)
-        const localAssignments = localData.scheduleAssignments || window.scheduleAssignments || {};
-        for (const [bunkId, slots] of Object.entries(localAssignments)) {
-            const bunkDiv = getBunkDivision(bunkId);
-            
-            // Only override if this is my bunk OR cloud doesn't have it
-            if (STATE.myDivisions.includes(bunkDiv) || !merged.scheduleAssignments[bunkId]) {
-                merged.scheduleAssignments[bunkId] = [...(slots || [])];
-            }
-        }
-        
-        if (Object.keys(localAssignments).length > 0) {
-            merged._sources.push('local');
-        }
-        
-        // Merge league assignments
-        merged.leagueAssignments = {
-            ...(cloudData.leagueAssignments || {}),
-            ...(localData.leagueAssignments || window.leagueAssignments || {})
-        };
-        
-        return merged;
-    }
-    
-    /**
-     * Render unified schedule in modal
-     */
-    function renderUnifiedSchedule(unified, container) {
-        if (!container) return;
-        
-        const assignments = unified.scheduleAssignments || {};
-        const bunks = Object.keys(assignments).sort();
-        const times = unified.unifiedTimes || window.unifiedTimes || [];
-        
-        if (bunks.length === 0) {
-            container.innerHTML = '<p style="text-align:center;color:#666;">No schedule data found. Generate a schedule first.</p>';
-            return;
-        }
-        
-        // Group by division
-        const byDivision = {};
-        bunks.forEach(bunk => {
-            const div = getBunkDivision(bunk) || 'Unknown';
-            if (!byDivision[div]) byDivision[div] = [];
-            byDivision[div].push(bunk);
-        });
-        
-        let html = `
-            <div style="margin-bottom:16px;padding:12px;background:#f0f9ff;border-radius:8px;font-size:13px;">
-                <strong>📊 Summary:</strong> 
-                ${bunks.length} bunks across ${Object.keys(byDivision).length} divisions, 
-                ${times.length} time slots
-                ${unified._sources?.length > 1 ? ' • <span style="color:#059669;">✓ Merged from multiple sources</span>' : ''}
-            </div>
-        `;
-        
-        // Render each division
-        for (const [divName, divBunks] of Object.entries(byDivision)) {
-            const isMyDiv = STATE.myDivisions.includes(divName);
-            
-            html += `
-                <div style="margin-bottom:24px;">
-                    <h3 style="margin:0 0 12px;padding:8px 12px;background:${isMyDiv ? '#dcfce7' : '#f1f5f9'};border-radius:6px;font-size:14px;">
-                        ${isMyDiv ? '✏️' : '🔒'} Division ${divName} 
-                        <span style="font-weight:normal;opacity:0.7;">(${divBunks.length} bunks)</span>
-                    </h3>
-                    <table style="width:100%;border-collapse:collapse;font-size:12px;">
-                        <thead>
-                            <tr style="background:#f8fafc;">
-                                <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Bunk</th>
-                                ${times.slice(0, 12).map((t, i) => 
-                                    `<th style="padding:8px;border:1px solid #e2e8f0;text-align:center;font-size:10px;">
-                                        ${typeof t === 'object' ? (t.label || `Slot ${i}`) : t}
-                                    </th>`
-                                ).join('')}
-                            </tr>
-                        </thead>
-                        <tbody>
-            `;
-            
-            divBunks.sort().forEach(bunk => {
-                const slots = assignments[bunk] || [];
-                html += `<tr>
-                    <td style="padding:6px 8px;border:1px solid #e2e8f0;font-weight:500;">${bunk}</td>
-                    ${times.slice(0, 12).map((_, i) => {
-                        const slot = slots[i];
-                        if (!slot || slot.continuation) {
-                            return `<td style="padding:4px;border:1px solid #e2e8f0;background:#fafafa;"></td>`;
-                        }
-                        const label = slot._activity || slot.field || slot.sport || '';
-                        const bg = slot._fromOtherScheduler ? '#fef3c7' : '#fff';
-                        return `<td style="padding:4px;border:1px solid #e2e8f0;background:${bg};font-size:10px;text-align:center;" title="${JSON.stringify(slot).substring(0, 100)}">
-                            ${label}
-                        </td>`;
-                    }).join('')}
-                </tr>`;
-            });
-            
-            html += '</tbody></table></div>';
-        }
-        
-        container.innerHTML = html;
     }
 
     // =========================================================================
@@ -1125,8 +811,9 @@
         
         console.log(`🔄 [MSS] Initializing for ${dateKey}...`);
         
+        // Get divisions (with detailed logging)
         STATE.myDivisions = getMyDivisions();
-        log('My divisions:', STATE.myDivisions);
+        console.log('🔄 [MSS] My editable divisions:', STATE.myDivisions);
         
         const cloudData = await fetchCloudSchedule(dateKey);
         if (cloudData) {
@@ -1135,15 +822,17 @@
             // Store globally for scheduler_ui.js
             window._cloudBlockedResources = STATE.blockedMap;
             window._cloudScheduleData = cloudData;
+            
+            // Log what's being blocked for debugging
+            console.log('🔄 [MSS] Blocked divisions:', [...(STATE.blockedMap?.stats?.blockedDivisions || [])]);
+        } else {
+            console.log('🔄 [MSS] No cloud data found');
         }
         
         STATE.initialized = true;
         
-        // Update merge UI
-        updateMergeStatusUI();
-        
         window.dispatchEvent(new CustomEvent('campistry-blocking-ready', {
-            detail: { dateKey, blockedMap: STATE.blockedMap }
+            detail: { dateKey, blockedMap: STATE.blockedMap, myDivisions: STATE.myDivisions }
         }));
         
         return { cloudData, blockedMap: STATE.blockedMap, myDivisions: STATE.myDivisions };
@@ -1154,6 +843,11 @@
         
         injectStyles();
         setupDragDropInterception();
+        
+        // Hide unwanted UI elements (version toolbar, etc.)
+        hideUnwantedUI();
+        setTimeout(hideUnwantedUI, 1000);
+        setTimeout(hideUnwantedUI, 3000);
         
         // Set up hooks (with retries for late-loading modules)
         const setupHooks = () => {
@@ -1167,53 +861,61 @@
         setTimeout(setupHooks, 500);
         setTimeout(setupHooks, 1500);
         
-        // Inject merge UI when schedule tab is visible
-        const injectMergeUIWhenReady = () => {
-            const scheduleTab = document.getElementById('schedule');
-            if (scheduleTab && scheduleTab.classList.contains('tab-content')) {
-                injectMergeUI();
-            } else {
-                setTimeout(injectMergeUIWhenReady, 500);
+        // Initialize when BOTH cloud is ready AND access control is loaded
+        const initWhenReady = async () => {
+            // Wait for AccessControl to be initialized
+            if (!window.AccessControl?.isInitialized) {
+                console.log('🔄 [MSS] Waiting for AccessControl...');
+                return;
             }
-        };
-        setTimeout(injectMergeUIWhenReady, 1000);
-        
-        // Also inject when tab changes
-        document.addEventListener('click', (e) => {
-            const tab = e.target.closest('[data-tab="schedule"]');
-            if (tab) setTimeout(injectMergeUI, 100);
-        });
-        
-        // Initialize when cloud is ready
-        window.addEventListener('campistry-cloud-hydrated', async () => {
+            
             const dateKey = window.currentScheduleDate || 
                            document.getElementById('calendar-date-picker')?.value ||
                            new Date().toISOString().split('T')[0];
             await initializeView(dateKey);
             applyBlockingToGrid();
-            injectMergeUI();
+        };
+        
+        // Listen for cloud ready
+        window.addEventListener('campistry-cloud-hydrated', async () => {
+            await initWhenReady();
+        });
+        
+        // Listen for access control ready (re-initialize with correct permissions)
+        window.addEventListener('campistry-access-loaded', async () => {
+            console.log('🔄 [MSS] Access control loaded, re-initializing with correct permissions...');
+            STATE.cloudData = null;  // Force re-fetch
+            STATE.lastFetchDate = null;
+            await initWhenReady();
+        });
+        
+        // Also listen for RBAC ready event
+        window.addEventListener('campistry-rbac-ready', async () => {
+            console.log('🔄 [MSS] RBAC ready, refreshing blocked map...');
+            STATE.myDivisions = getMyDivisions();
+            if (STATE.cloudData) {
+                STATE.blockedMap = buildBlockedMap(STATE.cloudData, STATE.myDivisions);
+                window._cloudBlockedResources = STATE.blockedMap;
+                applyBlockingToGrid();
+            }
         });
         
         // Re-apply blocking on data updates
         window.addEventListener('campistry-daily-data-updated', () => {
             setTimeout(applyBlockingToGrid, 100);
-            setTimeout(updateMergeStatusUI, 150);
         });
         
         window.addEventListener('campistry-schedule-rendered', () => {
             setTimeout(applyBlockingToGrid, 50);
         });
         
-        // Initialize immediately if cloud already ready
-        if (window.__CAMPISTRY_CLOUD_READY__) {
-            const dateKey = window.currentScheduleDate || 
-                           document.getElementById('calendar-date-picker')?.value ||
-                           new Date().toISOString().split('T')[0];
-            setTimeout(async () => {
-                await initializeView(dateKey);
-                applyBlockingToGrid();
-                injectMergeUI();
-            }, 300);
+        // Initialize immediately if both cloud and access are already ready
+        if (window.__CAMPISTRY_CLOUD_READY__ && window.AccessControl?.isInitialized) {
+            setTimeout(initWhenReady, 300);
+        } else if (window.__CAMPISTRY_CLOUD_READY__) {
+            // Cloud is ready but AccessControl might not be - wait a bit
+            setTimeout(initWhenReady, 1000);
+            setTimeout(initWhenReady, 2000);
         }
         
         console.log('🔄 [MSS] Initialization complete');
@@ -1229,6 +931,12 @@
     // =========================================================================
     // EXPORTS
     // =========================================================================
+    
+    // Stub function for compatibility (merge UI removed)
+    function updateMergeStatusUI() { }
+    function showUnifiedScheduleModal() {
+        alert('Unified View has been removed. Use the regular schedule view instead.');
+    }
     
     window.MultiSchedulerSystem = {
         // State
@@ -1248,17 +956,17 @@
         initializeView,
         applyBlockingToGrid,
         fetchCloudSchedule,
-        showUnifiedScheduleModal,
+        hideUnwantedUI,
         
         // Refresh
         refresh: async () => {
             STATE.cloudData = null;
             STATE.lastFetchDate = null;
             STATE.blockedMap = null;
+            STATE.myDivisions = getMyDivisions();
             const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
             await initializeView(dateKey);
             applyBlockingToGrid();
-            updateMergeStatusUI();
         },
         
         // Clear cache (for testing)
@@ -1268,6 +976,16 @@
             STATE.blockedMap = null;
             window._cloudBlockedResources = null;
             window._cloudScheduleData = null;
+        },
+        
+        // Debug helper
+        debugPermissions: () => {
+            console.log('=== MSS Debug ===');
+            console.log('My divisions:', STATE.myDivisions);
+            console.log('Blocked divisions:', [...(STATE.blockedMap?.stats?.blockedDivisions || [])]);
+            console.log('AccessControl.getEditableDivisions:', window.AccessControl?.getEditableDivisions?.());
+            console.log('AccessControl.getCurrentRole:', window.AccessControl?.getCurrentRole?.());
+            console.log('AccessControl.isInitialized:', window.AccessControl?.isInitialized);
         }
     };
     
