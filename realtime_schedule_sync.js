@@ -1,5 +1,5 @@
 // =============================================================================
-// realtime_schedule_sync.js v1.1 — CAMPISTRY REALTIME COLLABORATION
+// realtime_schedule_sync.js v1.2 — CAMPISTRY REALTIME COLLABORATION
 // =============================================================================
 //
 // PURPOSE: Enable Google Sheets-like real-time collaboration
@@ -7,20 +7,22 @@
 // - Visual sync indicators (defers to cloud_storage_bridge for saves)
 // - Automatic refresh when other schedulers make changes
 // - v1.1: Fixes save loop by deferring to cloud_storage_bridge
+// - v1.2: Fixes _syncIndicator undefined error
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('🔄 Realtime Schedule Sync v1.1 loading...');
+    console.log('🔄 Realtime Schedule Sync v1.2 loading...');
 
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
 
     const SUPABASE_URL = 'https://bzqmhcumuarrbueqttfh.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI';
+    
     // Use the existing camp_daily_data table
     const TABLE_NAME = 'camp_daily_data';
     
@@ -60,13 +62,25 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
             return stored;
         }
         
-        // PRIORITY 5: Extract from Supabase session
+        // PRIORITY 5: Get from getCampId if available (from cloud_storage_bridge)
+        if (window.getCampId && typeof window.getCampId === 'function') {
+            try {
+                const id = window.getCampId();
+                if (id && id !== 'demo_camp_001') return id;
+            } catch (e) {}
+        }
+        
+        // PRIORITY 6: Extract from Supabase session
         try {
-            const session = localStorage.getItem('sb-jxadnhevclwltyugijkw-auth-token');
-            if (session) {
-                const parsed = JSON.parse(session);
-                const campId = parsed?.user?.user_metadata?.camp_id;
-                if (campId) return campId;
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
+                    const storedSession = localStorage.getItem(key);
+                    if (storedSession) {
+                        const parsed = JSON.parse(storedSession);
+                        if (parsed?.user?.id) return parsed.user.id;
+                    }
+                }
             }
         } catch (e) {}
         
@@ -642,7 +656,9 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
                     updateSyncStatus('syncing', 'Saving...');
                     // Assume bridge will save within 3 seconds
                     setTimeout(() => {
-                        if (_syncIndicator?.querySelector('.sync-status')?.textContent === 'Saving...') {
+                        // ★★★ FIX: Use getElementById instead of undefined _syncIndicator ★★★
+                        const indicator = document.getElementById('realtime-sync-indicator');
+                        if (indicator?.querySelector('.sync-text')?.textContent === 'Saving...') {
                             updateSyncStatus('synced', 'Saved');
                         }
                     }, 3000);
@@ -759,7 +775,7 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     // =========================================================================
 
     window.RealtimeScheduleSync = {
-        version: '1.1',
+        version: '1.2',
         
         // Manual controls
         save: () => saveToCloud(true),
@@ -795,7 +811,7 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
         setTimeout(initialize, 1000);
     }
 
-    console.log('🔄 Realtime Schedule Sync v1.1 loaded');
+    console.log('🔄 Realtime Schedule Sync v1.2 loaded');
     console.log('   Visual sync indicator - saves handled by cloud_storage_bridge');
     console.log('   Listens for updates from other users via Supabase Realtime');
     console.log('   Use: window.RealtimeScheduleSync.save() to force save');
