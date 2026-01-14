@@ -89,6 +89,11 @@
             const text = await response.text();
             return text ? JSON.parse(text) : null;
         } catch (err) {
+            // Don't log network errors loudly - they're expected when bridge handles everything
+            if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
+                if (DEBUG) console.log('[CloudSchedule] Network unavailable - deferring to cloud_storage_bridge');
+                return { _networkError: true };
+            }
             console.error('[CloudSchedule] Supabase query failed:', err);
             throw err;
         }
@@ -100,13 +105,21 @@
     async function checkNewTableExists() {
         try {
             const result = await supabaseQuery(`${UNIFIED_SCHEDULES_TABLE}?limit=1`);
+            
+            // Handle network errors - just use fallback silently
+            if (result && result._networkError) {
+                if (DEBUG) console.log('[CloudSchedule] Skipping table check - using bridge');
+                _useNewTable = false;
+                return false;
+            }
+            
             if (result && !result._tableNotFound) {
                 _useNewTable = true;
                 if (DEBUG) console.log('[CloudSchedule] ✅ Using new unified_scheduler_data table');
                 return true;
             }
         } catch (e) {
-            // Table doesn't exist
+            // Table doesn't exist or network error
         }
         
         if (DEBUG) console.log('[CloudSchedule] ⚠️ New table not found, using schedule_versions fallback');
@@ -535,6 +548,11 @@
             };
             
         } catch (err) {
+            // Network errors are expected - cloud_storage_bridge handles data
+            if (err.message?.includes('Failed to fetch') || err._networkError) {
+                if (DEBUG) console.log('[CloudSchedule] Network unavailable - data handled by bridge');
+                return { success: false, reason: 'network', handledByBridge: true };
+            }
             console.error('[CloudSchedule] Load failed:', err);
             return { success: false, error: err.message };
         }
@@ -546,7 +564,7 @@
     async function loadFromNewTable(campId, dateKey) {
         const query = `${UNIFIED_SCHEDULES_TABLE}?camp_id=eq.${campId}&date_key=eq.${dateKey}`;
         const result = await supabaseQuery(query);
-        if (result && result._tableNotFound) return [];
+        if (result && (result._tableNotFound || result._networkError)) return [];
         return result || [];
     }
 
@@ -556,7 +574,7 @@
     async function loadFromVersionsTable(campId, dateKey) {
         const query = `${FALLBACK_TABLE}?camp_id=eq.${campId}&date_key=eq.${dateKey}`;
         const result = await supabaseQuery(query);
-        if (result && result._tableNotFound) return [];
+        if (result && (result._tableNotFound || result._networkError)) return [];
         return result || [];
     }
 
@@ -679,10 +697,12 @@
     async function completeInitialization() {
         if (DEBUG) console.log('[CloudSchedule] Camp ID:', getCampId());
         
-        // Check which table to use
-        await checkNewTableExists();
+        // Check which table to use (but don't fail if network is down)
+        await checkNewTableExists().catch(() => {
+            console.log('[CloudSchedule] Table check skipped - network unavailable');
+        });
         
-        // Install auto-save hook
+        // Install event listener for generation complete
         installAutoSaveHook();
         
         // Listen for cloud schedule loaded event
@@ -692,14 +712,9 @@
             }
         });
         
-        // Auto-load from cloud on startup
-        const dateKey = getDateKey();
-        if (dateKey) {
-            const result = await loadAndMergeSchedules(dateKey);
-            if (result.merged) {
-                console.log('[CloudSchedule] ✅ Auto-loaded and merged from cloud');
-            }
-        }
+        // NOTE: We do NOT auto-load from schedule_versions here
+        // The cloud_storage_bridge already handles loading from camp_daily_data
+        // This system is only for explicit multi-scheduler merging when needed
         
         if (DEBUG) console.log('[CloudSchedule] ✅ Initialization complete');
     }
