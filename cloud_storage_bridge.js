@@ -1,6 +1,6 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// VERSION: v4.9.1 (FULL RESTORATION + RACE PROTECTION)
+// VERSION: v4.9.2 (UPSERT FIX + RACE PROTECTION)
 // =================================================================
 // 
 // FEATURES:
@@ -11,12 +11,13 @@
 // - RBAC Race Condition Fix: Optimistic load during boot
 // - Write Conflict Protection: Smart-weight check to rescue new local work from stale saves
 // - Granular Rescue: Protects individual bunk schedules from being wiped by partial cloud saves
+// - ★ v4.9.2: UPSERT FIX - Creates camp_state row if missing (fixes silent PATCH failures)
 //
 // =================================================================
 (function () {
   'use strict';
 
-  console.log("☁️ Campistry Cloud Bridge v4.9.1 (FULL RESTORATION + RACE PROTECTION)");
+  console.log("☁️ Campistry Cloud Bridge v4.9.2 (UPSERT FIX + RACE PROTECTION)");
 
   // CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
@@ -288,7 +289,7 @@
   }
 
   // ============================================================================
-  // ★★★ SAVE TO CLOUD - WITH PERMISSION ENFORCEMENT ★★★
+  // ★★★ SAVE TO CLOUD - WITH PERMISSION ENFORCEMENT + UPSERT FIX ★★★
   // ============================================================================
 
   async function saveToCloud(state) {
@@ -444,12 +445,12 @@
       }
 
       // =====================================================================
-      // STEP 6: SAVE TO CLOUD
+      // STEP 6: SAVE TO CLOUD (WITH UPSERT LOGIC)
       // =====================================================================
       console.log('☁️ [SAVE] Step 5: Saving to cloud...');
       
       const patchUrl = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}`;
-      const patchResponse = await fetch(patchUrl, {
+      let patchResponse = await fetch(patchUrl, {
         method: 'PATCH',
         headers: {
           'apikey': SUPABASE_KEY,
@@ -460,82 +461,110 @@
         body: JSON.stringify({ state: stateToSave, owner_id: campId })
       });
 
+      let patchedData = [];
       if (patchResponse.ok) {
-          const patchedData = await patchResponse.json();
-          if (patchedData && patchedData.length > 0) {
-              console.log("☁️ [SAVE] ✅ Success");
-              
-              // ★★★ AUTO-SYNC BACK: SAFE UPDATE LOCAL STORAGE ★★★
-              try {
-                  console.log("☁️ [SYNC] Updating local storage with merged state...");
-                  
-                  const freshLocal = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
-                  const mergedBack = { ...finalSchedule };
-                  
-                  // ★★★ FIX 2: GRANULAR RESCUE ★★★
-                  Object.keys(freshLocal).forEach(dateKey => {
-                      const localDate = freshLocal[dateKey];
-                      if (!localDate) return;
-                      
-                      if (!mergedBack[dateKey]) {
-                          mergedBack[dateKey] = localDate;
-                      } else {
-                           // Deep merge check: if local has bunks that cloud returned empty, keep local
-                           const localAssigns = localDate.scheduleAssignments || {};
-                           const cloudAssigns = mergedBack[dateKey].scheduleAssignments || {};
-                           
-                           for (const [bunk, data] of Object.entries(localAssigns)) {
-                               if (!cloudAssigns[bunk] || Object.keys(cloudAssigns[bunk]).length === 0) {
-                                   if (data && Object.keys(data).length > 0) {
-                                       console.log(`☁️ [SYNC] 🛡️ Rescuing LOCAL data for ${bunk} (Sync safety)`);
-                                       if (!mergedBack[dateKey].scheduleAssignments) mergedBack[dateKey].scheduleAssignments = {};
-                                       mergedBack[dateKey].scheduleAssignments[bunk] = data;
-                                   }
-                               }
-                           }
-                      }
-                  });
-
-                  // Write back the safe merge
-                  localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(mergedBack));
-                  if (_memoryCache) _memoryCache.daily_schedules = mergedBack;
-                  
-                  // Trigger UI refresh
-                  setTimeout(() => {
-                      window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
-                      if (window.updateTable) window.updateTable();
-                  }, 50);
-              } catch(e) {
-                  console.error("☁️ Error auto-syncing back to local:", e);
-              }
-
-              showToast("✅ Schedule Saved & Synced!", "success");
-              _dailyDataDirty = false;
-              window.dispatchEvent(new CustomEvent('campistry-cloud-saved'));
-              return true;
-          }
+          patchedData = await patchResponse.json();
       }
-
-      // POST for new records (owners only)
-      if (!_isTeamMember) {
-          const postUrl = `${SUPABASE_URL}/rest/v1/${TABLE}`;
-          const postResponse = await fetch(postUrl, {
+      
+      // ★★★ UPSERT FIX: If PATCH returned empty (row doesn't exist), INSERT it ★★★
+      if (!patchedData || patchedData.length === 0) {
+          console.log('☁️ [SAVE] Row not found, creating new camp_state record...');
+          
+          const insertUrl = `${SUPABASE_URL}/rest/v1/${TABLE}`;
+          const insertResponse = await fetch(insertUrl, {
             method: 'POST',
             headers: {
               'apikey': SUPABASE_KEY,
               'Authorization': `Bearer ${token}`,
               'Content-Type': 'application/json',
-              'Prefer': 'resolution=merge-duplicates'
+              'Prefer': 'return=representation'
             },
-            body: JSON.stringify({ camp_id: campId, owner_id: campId, state: stateToSave })
+            body: JSON.stringify({ 
+              camp_id: campId,
+              owner_id: campId,
+              state: stateToSave 
+            })
           });
-
-          if (postResponse.ok) {
-            console.log("☁️ [SAVE] ✅ Created new record");
-            showToast("✅ Schedule Saved!", "success");
-            _dailyDataDirty = false;
-            return true;
+          
+          if (insertResponse.ok) {
+              patchedData = await insertResponse.json();
+              console.log('☁️ [SAVE] ✅ Created new camp_state row');
+          } else {
+              const errorText = await insertResponse.text();
+              // Check if it's a duplicate key error (race condition - row was just created)
+              if (errorText.includes('duplicate') || errorText.includes('unique')) {
+                  console.log('☁️ [SAVE] Row was just created by another process, retrying PATCH...');
+                  // Retry the PATCH
+                  patchResponse = await fetch(patchUrl, {
+                    method: 'PATCH',
+                    headers: {
+                      'apikey': SUPABASE_KEY,
+                      'Authorization': `Bearer ${token}`,
+                      'Content-Type': 'application/json',
+                      'Prefer': 'return=representation'
+                    },
+                    body: JSON.stringify({ state: stateToSave, owner_id: campId })
+                  });
+                  if (patchResponse.ok) {
+                      patchedData = await patchResponse.json();
+                  }
+              } else {
+                  console.error('☁️ [SAVE] INSERT failed:', insertResponse.status, errorText);
+              }
           }
+      }
+      
+      if (patchedData && patchedData.length > 0) {
+          console.log("☁️ [SAVE] ✅ Success");
+              
+          // ★★★ AUTO-SYNC BACK: SAFE UPDATE LOCAL STORAGE ★★★
+          try {
+              console.log("☁️ [SYNC] Updating local storage with merged state...");
+              
+              const freshLocal = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
+              const mergedBack = { ...finalSchedule };
+              
+              // ★★★ FIX 2: GRANULAR RESCUE ★★★
+              Object.keys(freshLocal).forEach(dateKey => {
+                  const localDate = freshLocal[dateKey];
+                  if (!localDate) return;
+                  
+                  if (!mergedBack[dateKey]) {
+                      mergedBack[dateKey] = localDate;
+                  } else {
+                       // Deep merge check: if local has bunks that cloud returned empty, keep local
+                       const localAssigns = localDate.scheduleAssignments || {};
+                       const cloudAssigns = mergedBack[dateKey].scheduleAssignments || {};
+                       
+                       for (const [bunk, data] of Object.entries(localAssigns)) {
+                           if (!cloudAssigns[bunk] || Object.keys(cloudAssigns[bunk]).length === 0) {
+                               if (data && Object.keys(data).length > 0) {
+                                   console.log(`☁️ [SYNC] 🛡️ Rescuing LOCAL data for ${bunk} (Sync safety)`);
+                                   if (!mergedBack[dateKey].scheduleAssignments) mergedBack[dateKey].scheduleAssignments = {};
+                                   mergedBack[dateKey].scheduleAssignments[bunk] = data;
+                               }
+                           }
+                       }
+                  }
+              });
+
+              // Write back the safe merge
+              localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(mergedBack));
+              if (_memoryCache) _memoryCache.daily_schedules = mergedBack;
+              
+              // Trigger UI refresh
+              setTimeout(() => {
+                  window.dispatchEvent(new CustomEvent('campistry-daily-data-updated'));
+                  if (window.updateTable) window.updateTable();
+              }, 50);
+          } catch(e) {
+              console.error("☁️ Error auto-syncing back to local:", e);
+          }
+
+          showToast("✅ Schedule Saved & Synced!", "success");
+          _dailyDataDirty = false;
+          window.dispatchEvent(new CustomEvent('campistry-cloud-saved'));
+          return true;
       }
       
       console.error("☁️ Save Failed:", patchResponse.status, patchResponse.statusText);
