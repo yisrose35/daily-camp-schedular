@@ -466,71 +466,56 @@
                 tdTime.textContent = block.label;
                 tr.appendChild(tdTime);
 
-                // --- LEAGUE BLOCK RENDERER (INDIVIDUAL CELLS PER BUNK) ---
+                // --- LEAGUE BLOCK RENDERER (UNIFIED CELL WITH MATCHUPS) ---
                 if (block.event.startsWith("League Game") || block.event.startsWith("Specialty League")) {
+                    const td = document.createElement("td");
+                    td.colSpan = bunks.length;
+                    td.style.background = "#eef7f8";
+                    td.style.fontWeight = "bold";
+
                     const slotIdx = findFirstSlotForTime(block.startMin);
-                    
-                    // Get league data for this division/slot
+                    let allMatchups = [];
+                    let gameLabel = "";
+                    let titleHtml = block.event;
+
+                    // 1. CHECK THE MASTER SOURCE (window.leagueAssignments)
                     const leagueData = window.leagueAssignments?.[div]?.[slotIdx];
-                    const gameLabel = leagueData?.gameLabel || block.event;
-                    
-                    // Build matchup lookup: bunk -> matchup info
-                    const bunkMatchups = {};
-                    if (leagueData?.matchups) {
-                        leagueData.matchups.forEach(m => {
-                            const teamA = String(m.teamA);
-                            const teamB = String(m.teamB);
-                            bunkMatchups[teamA] = { opponent: teamB, sport: m.sport, field: m.field || 'TBD', isHome: true };
-                            bunkMatchups[teamB] = { opponent: teamA, sport: m.sport, field: m.field || 'TBD', isHome: false };
-                        });
-                    }
-                    
-                    // If no bunks, show merged cell
-                    if (bunks.length === 0) {
-                        const td = document.createElement("td");
-                        td.colSpan = 1;
-                        td.textContent = gameLabel;
-                        td.style.background = "#eef7f8";
-                        tr.appendChild(td);
-                        tbody.appendChild(tr);
-                        return;
-                    }
-                    
-                    // Render individual cell for each bunk
-                    bunks.forEach((bunk) => {
-                        const td = document.createElement("td");
-                        td.className = "schedule-cell league-cell";
-                        td.style.background = "#eef7f8";
-                        td.dataset.slot = slotIdx;
-                        td.dataset.bunk = bunk;
-                        td.dataset.division = div;
-                        
-                        const entry = getEntry(bunk, slotIdx);
-                        const matchup = bunkMatchups[bunk];
-                        
-                        // Build cell content
-                        let label = gameLabel;
-                        let title = '';
-                        
-                        if (matchup) {
-                            // Show: "vs 5 @ Field A (Soccer)"
-                            label = `vs ${matchup.opponent}`;
-                            title = `${matchup.sport} @ ${matchup.field}`;
-                            td.innerHTML = `<div style="font-weight:bold;font-size:12px;">${label}</div><div style="font-size:10px;color:#666;">${matchup.field}</div>`;
-                        } else if (entry) {
-                            // Use entry data
-                            label = formatEntry(entry);
-                            td.textContent = label;
-                        } else {
-                            td.textContent = gameLabel;
+
+                    if (leagueData && leagueData.matchups) {
+                        allMatchups = leagueData.matchups.map(m =>
+                            `${m.teamA} vs ${m.teamB} @ ${m.field || 'TBD'} (${m.sport})`
+                        );
+                        gameLabel = leagueData.gameLabel;
+                    } else {
+                        // Fallback: Scan bunks (legacy support)
+                        for (const b of bunks) {
+                            const entry = getEntry(b, slotIdx);
+                            if (entry && entry._allMatchups && entry._allMatchups.length > 0) {
+                                allMatchups = entry._allMatchups;
+                                gameLabel = entry._gameLabel;
+                                break;
+                            }
                         }
-                        
-                        td.title = title || `${bunk}: ${label}`;
-                        td.style.cursor = "pointer";
-                        td.onclick = () => editCell(bunk, block.startMin, block.endMin, block.event);
-                        tr.appendChild(td);
-                    });
-                    
+                    }
+
+                    if (gameLabel) {
+                        if (block.event.trim() === "League Game") {
+                            titleHtml = `League Game ${gameLabel.replace(/^Game\s+/i, '')}`;
+                        } else {
+                            titleHtml = `${block.event} (${gameLabel})`;
+                        }
+                    }
+
+                    if (allMatchups.length === 0) {
+                        td.textContent = titleHtml;
+                    } else {
+                        // Show title on one line, matchups as list below
+                        td.innerHTML = `<div style="margin-bottom:4px;">${titleHtml}</div>` +
+                            `<div style="font-size:11px;font-weight:normal;line-height:1.4;">${allMatchups.join('<br>')}</div>`;
+                    }
+                    td.style.cursor = "pointer";
+                    td.onclick = () => editCell(bunks[0], block.startMin, block.endMin, block.event);
+                    tr.appendChild(td);
                     tbody.appendChild(tr);
                     return;
                 }
