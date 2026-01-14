@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_ui.js (v2.5 - BUNKS FALLBACK FIX)
+// scheduler_ui.js (v2.6 - MULTI-SCHEDULER AUTONOMOUS)
 // ============================================================================
 // CRITICAL FIX: Migrates ROOT-level skeleton to date-specific
 // CRITICAL FIX: Cleans ROOT-level user data (prevents ghost schedules)
@@ -7,6 +7,7 @@
 // UPDATE: Disables button permanently on success (waiting for reload)
 // UPDATE: Forces display of ALL divisions (Read-Only for non-owners)
 // FIX: Fallback bunk discovery if window.divisions is filtered by RBAC
+// NEW v2.6: Multi-scheduler autonomous blocking support
 // ============================================================================
 
 // Wait for Campistry cloud system
@@ -20,7 +21,7 @@
 (function () {
     "use strict";
 
-    console.log("📅 scheduler_ui.js v2.5 (BUNKS FALLBACK) loading...");
+    console.log("📅 scheduler_ui.js v2.6 (MULTI-SCHEDULER) loading...");
 
     const INCREMENT_MINS = 30;
     const DAILY_DATA_KEY = 'campDailyData_v1';
@@ -178,6 +179,22 @@
     function editCell(bunk, startMin, endMin, current) {
         if (!bunk) return;
         
+        // ═══════════════════════════════════════════════════════════════════════
+        // MULTI-SCHEDULER: Check if blocked by another scheduler
+        // ═══════════════════════════════════════════════════════════════════════
+        const slotIdx = findFirstSlotForTime(startMin);
+        if (window.MultiSchedulerAutonomous?.isBunkSlotBlocked) {
+            const blockCheck = window.MultiSchedulerAutonomous.isBunkSlotBlocked(bunk, slotIdx);
+            if (blockCheck.blocked) {
+                if (window.showToast) {
+                    window.showToast(`🔒 Cannot edit: ${blockCheck.reason}`, 'error');
+                } else {
+                    alert(`🔒 Cannot edit: ${blockCheck.reason}`);
+                }
+                return;
+            }
+        }
+        
         // CHECK PERMISSIONS FOR EDITING THIS BUNK
         if (window.AccessControl && !window.AccessControl.canEditBunk(bunk)) {
             alert("You do not have permission to edit this schedule.\n\n(You are viewing the Unified Schedule, but can only edit your assigned divisions.)");
@@ -334,7 +351,10 @@
         renderStaggeredView(container);
     }
 
-    // --- DYNAMIC GRID (RENDERER) ---
+    // =========================================================================
+    // DYNAMIC GRID (RENDERER) - MULTI-SCHEDULER ENHANCED
+    // =========================================================================
+    
     function renderStaggeredView(container) {
         container.innerHTML = "";
         
@@ -351,27 +371,12 @@
 
         const daily = window.loadCurrentDailyData?.() || {};
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        const dateData = daily[dateKey] || {};
-        const manualSkeleton = dateData.manualSkeleton || dateData.skeleton || window.manualSkeleton || window.skeleton || [];
-        
-        if (!Array.isArray(manualSkeleton) || manualSkeleton.length === 0) {
-            const isScheduler = role === 'scheduler' || role === 'viewer';
-            if (isScheduler) {
-                container.innerHTML = `
-                    <div style="padding: 20px; text-align: center; color: #666;">
-                        <h3 style="color: #333;">⏳ No Day Structure Yet</h3>
-                        <p>The camp owner hasn't created a schedule structure for this date yet.</p>
-                        <p style="font-size: 0.9em;">Once they build the day (time slots, activity blocks, etc.), you'll be able to generate schedules for your divisions.</p>
-                    </div>
-                `;
-            } else {
-                container.innerHTML = `
-                    <div style="padding: 20px; text-align: center; color: #666;">
-                        <h3 style="color: #333;">📋 No Schedule for This Date</h3>
-                        <p>Use the <strong>Build Day</strong> button to create the day structure first.</p>
-                    </div>
-                `;
-            }
+        const dateData = daily[dateKey] || daily;
+        const manualSkeleton = dateData.manualSkeleton || window.manualSkeleton || window.skeleton || [];
+        const divisions = window.divisions || {};
+
+        if (!manualSkeleton || manualSkeleton.length === 0) {
+            container.innerHTML = `<p style="padding: 20px; color: #666;">No daily schedule generated for this date. Use "Build Day" to create a schedule structure.</p>`;
             return;
         }
 
@@ -380,21 +385,18 @@
         container.appendChild(wrapper);
 
         divisionsToShow.forEach((div) => {
-            const divisions = window.divisions || {};
-            
-            // ★★★ FALLBACK BUNK DISCOVERY ★★★
-            // If window.divisions is filtered by RBAC (e.g. empty bunks list), try to recover from bunkMetaData or scheduleAssignments
+            if (!divisions[div]) return;
+
+            // Get bunks (with fallback for RBAC filtering)
             let bunks = divisions[div]?.bunks || [];
             
             if (bunks.length === 0) {
-                // Try finding bunks from schedule assignments that match this division (via bunkMetaData)
+                // Try finding bunks from schedule assignments that match this division
                 if (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0) {
                     const allBunks = Object.keys(window.scheduleAssignments);
-                    // We need to know which division a bunk belongs to. Check bunkMetaData if available.
                     if (window.bunkMetaData) {
                         bunks = allBunks.filter(b => window.bunkMetaData[b]?.division === div);
                     } 
-                    // Fallback: If no metadata, we might be stuck, but usually metadata is global.
                 }
             }
 
@@ -516,34 +518,14 @@
                     return;
                 }
 
-                // --- ELECTIVE BLOCK RENDERER ---
-                if (block.type === "elective" || block.event.toLowerCase().startsWith("elective")) {
+                // --- REGULAR CELL RENDERER (MULTI-SCHEDULER ENHANCED) ---
+                if (bunks.length === 0) {
                     const td = document.createElement("td");
-                    td.colSpan = bunks.length;
-                    td.style.background = "#f3e5f5"; // Light purple
-                    td.style.fontWeight = "bold";
-
-                    const activities = block.electiveActivities || block.reservedFields || [];
-
-                    let contentHtml = `<div style="color:#6a1b9a;">🎯 Elective</div>`;
-                    if (activities.length > 0) {
-                        contentHtml += `<div style="font-size:0.9em;font-weight:normal;margin-top:4px;">`;
-                        contentHtml += `<strong>Reserved for ${div}:</strong> ${activities.join(', ')}`;
-                        contentHtml += `</div>`;
-                        contentHtml += `<div style="font-size:0.8em;color:#666;margin-top:2px;">`;
-                        contentHtml += `Other divisions cannot use these activities during this time.`;
-                        contentHtml += `</div>`;
-                    } else {
-                        contentHtml += `<div style="font-size:0.85em;color:#666;">No activities specified</div>`;
-                    }
-
-                    td.innerHTML = contentHtml;
-                    td.style.cursor = "pointer";
+                    td.colSpan = 1;
+                    td.textContent = "No bunks configured for this time.";
+                    td.style.color = "#999";
                     td.onclick = () => {
-                        const msg = `Elective Block for ${div}\n\n` +
-                            `Time: ${block.label}\n` +
-                            `Reserved Activities: ${activities.join(', ') || 'None'}\n\n` +
-                            `These activities are locked for other divisions during this time.`;
+                        const msg = `Division "${div}" has no bunks assigned.\n\nGo to Divisions tab to add bunks for this time.`;
                         alert(msg);
                     };
                     tr.appendChild(td);
@@ -557,9 +539,47 @@
 
                 bunks.forEach((bunk) => {
                     const td = document.createElement("td");
-                    let label = block.event;
+                    td.className = "schedule-cell";
+                    
                     const slotIdx = findFirstSlotForTime(block.startMin);
-
+                    let label = block.event;
+                    
+                    // ═══════════════════════════════════════════════════════════
+                    // MULTI-SCHEDULER: Add data attributes for blocking system
+                    // ═══════════════════════════════════════════════════════════
+                    td.dataset.slot = slotIdx;
+                    td.dataset.slotIndex = slotIdx;
+                    td.dataset.bunk = bunk;
+                    td.dataset.division = div;
+                    td.dataset.startMin = block.startMin;
+                    td.dataset.endMin = block.endMin;
+                    
+                    // Get entry and set field attribute
+                    const entry = getEntry(bunk, slotIdx);
+                    if (entry) {
+                        td.dataset.field = entry.field || entry._activity || '';
+                        td.dataset.activity = entry.field || entry._activity || '';
+                    }
+                    
+                    // ═══════════════════════════════════════════════════════════
+                    // MULTI-SCHEDULER: Check if blocked by another scheduler
+                    // ═══════════════════════════════════════════════════════════
+                    let isBlockedByOther = false;
+                    let blockedReason = '';
+                    
+                    if (window.MultiSchedulerAutonomous?.isBunkSlotBlocked) {
+                        const blockCheck = window.MultiSchedulerAutonomous.isBunkSlotBlocked(bunk, slotIdx);
+                        if (blockCheck.blocked) {
+                            isBlockedByOther = true;
+                            blockedReason = blockCheck.reason || 'Owned by another scheduler';
+                            td.classList.add('blocked-by-other');
+                            td.dataset.blockedReason = `🔒 ${blockedReason}`;
+                        }
+                    }
+                    
+                    // ═══════════════════════════════════════════════════════════
+                    // Original display logic
+                    // ═══════════════════════════════════════════════════════════
                     if (isDismissal) {
                         label = "Dismissal";
                         td.style.background = "#ffdddd";
@@ -570,13 +590,28 @@
                         td.style.background = "#fff7cc";
                         label = block.event;
                     } else {
-                        const entry = getEntry(bunk, slotIdx);
                         label = formatEntry(entry);
                     }
 
                     td.textContent = label;
-                    td.style.cursor = "pointer";
-                    td.onclick = () => editCell(bunk, block.startMin, block.endMin, label);
+                    
+                    // ═══════════════════════════════════════════════════════════
+                    // MULTI-SCHEDULER: Handle click based on blocking
+                    // ═══════════════════════════════════════════════════════════
+                    if (isBlockedByOther) {
+                        td.style.cursor = "not-allowed";
+                        td.onclick = () => {
+                            if (window.showToast) {
+                                window.showToast(`🔒 Cannot edit: ${blockedReason}`, 'error');
+                            } else {
+                                alert(`🔒 Cannot edit: ${blockedReason}`);
+                            }
+                        };
+                    } else {
+                        td.style.cursor = "pointer";
+                        td.onclick = () => editCell(bunk, block.startMin, block.endMin, label);
+                    }
+                    
                     tr.appendChild(td);
                 });
 
@@ -586,6 +621,18 @@
             table.appendChild(tbody);
             wrapper.appendChild(table);
         });
+        
+        // ═══════════════════════════════════════════════════════════════════════
+        // MULTI-SCHEDULER: Apply blocking after render
+        // ═══════════════════════════════════════════════════════════════════════
+        if (window.MultiSchedulerAutonomous?.applyBlockingToGrid) {
+            setTimeout(() => window.MultiSchedulerAutonomous.applyBlockingToGrid(), 50);
+        }
+        
+        // Dispatch event for other modules
+        window.dispatchEvent(new CustomEvent('campistry-schedule-rendered', {
+            detail: { dateKey: window.currentScheduleDate }
+        }));
     }
 
     function saveSchedule() {
@@ -595,95 +642,24 @@
     }
 
     // =========================================================================
-    // ★★★ CRITICAL FIX: NO ROOT FALLBACK - DATE-SPECIFIC ONLY ★★★
+    // RECONCILE DATA
     // =========================================================================
-    
-    // =========================================================================
-    // ★★★ MIGRATE LEGACY ROOT DATA - Preserve skeleton (shared structure) ★★★
-    // =========================================================================
-    
-    function migrateLegacyRootData(allDailyData, dateKey) {
-        if (!allDailyData) return allDailyData;
-        
-        // Keys that are SHARED STRUCTURE - migrate to date-specific
-        const sharedStructureKeys = ['unifiedTimes', 'manualSkeleton', 'skeleton'];
-        
-        // Keys that are USER-SPECIFIC - clean from ROOT
-        const userDataKeys = ['scheduleAssignments', 'leagueAssignments'];
-        
-        let changed = false;
-        
-        // Initialize date key if needed
-        if (!allDailyData[dateKey]) {
-            allDailyData[dateKey] = {};
-        }
-        
-        // MIGRATE shared structure
-        for (const key of sharedStructureKeys) {
-            if (allDailyData[key] !== undefined && allDailyData[key] !== null) {
-                if (!allDailyData[dateKey][key] || (Array.isArray(allDailyData[dateKey][key]) && allDailyData[dateKey][key].length === 0)) {
-                    console.log(`📅 [scheduler_ui] 📦 Migrating ROOT "${key}" to date ${dateKey}`);
-                    allDailyData[dateKey][key] = allDailyData[key];
-                }
-                delete allDailyData[key];
-                changed = true;
-            }
-        }
-        
-        // CLEAN user-specific data
-        for (const key of userDataKeys) {
-            if (allDailyData[key] !== undefined) {
-                console.log(`📅 [scheduler_ui] 🧹 Cleaning ROOT "${key}"`);
-                delete allDailyData[key];
-                changed = true;
-            }
-        }
-        
-        if (changed) {
-            try {
-                localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allDailyData));
-            } catch (e) {
-                console.error('📅 [scheduler_ui] Failed to save migrated data:', e);
-            }
-        }
-        
-        return allDailyData;
-    }
 
     function reconcileOrRenderSaved() {
-        console.log("📅 [scheduler_ui] reconcileOrRenderSaved() called");
+        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        console.log(`📅 [scheduler_ui] Loading schedule for date: ${dateKey}`);
         
         try {
-            // Get current date
-            const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-            
-            // Load raw data from localStorage
-            let allDailyData = {};
-            try {
-                const raw = localStorage.getItem(DAILY_DATA_KEY);
-                if (raw) allDailyData = JSON.parse(raw);
-            } catch (e) {
-                console.error("📅 [scheduler_ui] Failed to parse daily data:", e);
-            }
-            
-            // ★★★ MIGRATE legacy ROOT data (preserve skeleton) ★★★
-            allDailyData = migrateLegacyRootData(allDailyData, dateKey);
-            
-            // ★★★ Get DATE-SPECIFIC data ONLY ★★★
-            const dateData = allDailyData[dateKey] || {};
-            
-            console.log("📅 [scheduler_ui] Loading for date:", dateKey);
+            const daily = window.loadCurrentDailyData?.() || {};
+            const dateData = daily[dateKey] || {};
             
             // =================================================================
             // 1. SCHEDULE ASSIGNMENTS (Date-specific ONLY)
             // =================================================================
             if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
                 window.scheduleAssignments = dateData.scheduleAssignments;
-                console.log("📅 [scheduler_ui] ✅ Loaded " + Object.keys(window.scheduleAssignments).length + " bunks from DATE folder");
             } else {
-                // ★★★ NO ROOT FALLBACK - If no date-specific data, it's empty ★★★
                 window.scheduleAssignments = {};
-                console.log("📅 [scheduler_ui] No schedule assignments for this date");
             }
             
             // =================================================================
@@ -806,8 +782,6 @@
                             snapshot,
                             currentUnifiedTimes // <--- NEW 5th ARGUMENT
                         );
-                        // ALERT REMOVED - Page will reload
-                        // alert("Schedule Generated Successfully!");
                     } else {
                         alert("Error: Scheduler Core not loaded.");
                         genBtn.disabled = false;
@@ -819,8 +793,6 @@
                     genBtn.disabled = false;
                     genBtn.textContent = "Generate Schedule";
                 } 
-                // REMOVED 'finally' block that re-enables button
-                // The page is about to reload, so we want it to stay disabled to prevent double-submit
             };
         }
     }
@@ -830,5 +802,5 @@
     window.saveSchedule = saveSchedule;
     window.reconcileOrRenderSaved = reconcileOrRenderSaved;
     
-    console.log("📅 scheduler_ui.js v2.5 loaded successfully");
+    console.log("📅 scheduler_ui.js v2.6 (MULTI-SCHEDULER) loaded successfully");
 })();
