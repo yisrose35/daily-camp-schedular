@@ -75,33 +75,32 @@
     // =========================================================================
 
     function initClient() {
+        // Already initialized
         if (_client) return _client;
 
         // Check if supabase-js is loaded
-        if (typeof supabase === 'undefined' || !supabase.createClient) {
-            // Try window.supabase (might be loaded differently)
-            if (window.supabase) {
-                _client = window.supabase;
-                log('Using existing window.supabase client');
-                return _client;
-            }
-            logError('Supabase JS library not loaded. Include supabase-js before this script.');
-            return null;
+        if (typeof supabase !== 'undefined' && supabase.createClient) {
+            _client = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
+                auth: {
+                    persistSession: true,
+                    autoRefreshToken: true,
+                    detectSessionInUrl: true
+                }
+            });
+            window.supabase = _client;
+            log('Supabase client initialized');
+            return _client;
         }
-
-        _client = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
-            auth: {
-                persistSession: true,
-                autoRefreshToken: true,
-                detectSessionInUrl: true
-            }
-        });
-
-        // Also set on window for backward compatibility
-        window.supabase = _client;
-
-        log('Supabase client initialized');
-        return _client;
+        
+        // Try window.supabase (might be loaded differently)
+        if (window.supabase) {
+            _client = window.supabase;
+            log('Using existing window.supabase client');
+            return _client;
+        }
+        
+        logError('Supabase JS library not loaded. Include supabase-js before this script.');
+        return null;
     }
 
     // =========================================================================
@@ -462,10 +461,31 @@
     });
 
     // =========================================================================
-    // AUTO-INITIALIZE
+    // AUTO-INITIALIZE (SYNCHRONOUS CLIENT CREATION)
     // =========================================================================
 
-    // Wait for DOM and supabase-js to be ready
+    // Create client IMMEDIATELY so window.supabase is available right away
+    (function initClientNow() {
+        // Check if supabase-js library is loaded
+        if (typeof supabase !== 'undefined' && supabase.createClient) {
+            _client = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
+                auth: {
+                    persistSession: true,
+                    autoRefreshToken: true,
+                    detectSessionInUrl: true
+                }
+            });
+            window.supabase = _client;
+            log('Supabase client created immediately');
+        } else if (window.supabase) {
+            _client = window.supabase;
+            log('Using existing window.supabase');
+        } else {
+            console.warn('🔌 Supabase JS library not loaded yet - will retry');
+        }
+    })();
+
+    // Full initialization (auth, camp detection) happens async
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
             setTimeout(initialize, 100);
