@@ -1,33 +1,20 @@
 // =============================================================================
-// CAMPISTRY MULTI-SCHEDULER SYNC MASTER PATCH v1.0
+// CAMPISTRY MULTI-SCHEDULER SYNC MASTER PATCH v2.0
 // =============================================================================
+//
+// v2.0 CHANGES:
+// - FORCE overwrite window.scheduleAssignments after cloud hydration
+// - Don't check if window is empty - always use localStorage after merge
+// - Add more aggressive timing to ensure we run AFTER cloud bridge
 //
 // FIXES THREE CRITICAL ISSUES:
 //
-// ISSUE 1: Scheduler 2 doesn't see Scheduler 1's schedule until generating their own
-//   → Root Cause: Cloud merge saves to localStorage but window.scheduleAssignments
-//     isn't hydrated, so the render shows empty/stale data
-//   → Fix: Force hydrate window globals after cloud merge
-//
-// ISSUE 2: Scheduler 1 can't see Scheduler 2's updates without regenerating
-//   → Root Cause: Realtime updates load data but don't refresh MultiSchedulerSystem
-//     blocking or trigger proper re-render
-//   → Fix: Hook realtime events to trigger full refresh including MSS
-//
+// ISSUE 1: Scheduler 2 doesn't see Scheduler 1's schedule until generating
+// ISSUE 2: Scheduler 1 can't see Scheduler 2's updates without regenerating  
 // ISSUE 3: Divisions without schedules show random data instead of empty
-//   → Root Cause: No explicit empty state handling
-//   → Fix: Initialize empty arrays for divisions without schedule data
 //
 // INSTALLATION:
-// 1. Add this file to your project
-// 2. Load it AFTER these scripts (order matters):
-//    - cloud_storage_bridge.js
-//    - unified_schedule_system.js
-//    - multi_scheduler_system.js
-//    - realtime_schedule_sync.js
-//
-// In your HTML:
-//   <script src="/multi_scheduler_sync_master_patch.js"></script>
+// Add this file AFTER all scheduling scripts (especially cloud_storage_bridge.js)
 //
 // =============================================================================
 
@@ -35,11 +22,14 @@
     'use strict';
 
     console.log('═══════════════════════════════════════════════════════════════');
-    console.log('🔧 CAMPISTRY MULTI-SCHEDULER SYNC MASTER PATCH v1.0');
+    console.log('🔧 CAMPISTRY MULTI-SCHEDULER SYNC MASTER PATCH v2.0');
     console.log('═══════════════════════════════════════════════════════════════');
 
     const DEBUG = true;
     const DAILY_DATA_KEY = 'campDailyData_v1';
+    
+    // Track if we've done initial hydration after cloud merge
+    let _initialHydrationDone = false;
 
     function log(...args) {
         if (DEBUG) console.log('[SyncPatch]', ...args);
@@ -69,20 +59,22 @@
     }
 
     // =========================================================================
-    // FIX 1: FORCE HYDRATION AFTER CLOUD MERGE
+    // FIX 1: FORCE HYDRATION - ALWAYS OVERWRITE FROM LOCALSTORAGE
     // =========================================================================
+    // The key insight: After cloud merge, localStorage has correct data but
+    // window.scheduleAssignments has OLD data. We must FORCE overwrite.
 
-    function forceHydrateFromLocalStorage(dateKey) {
+    function forceHydrateFromLocalStorage(dateKey, forceOverwrite = false) {
         if (!dateKey) dateKey = getCurrentDateKey();
         
-        log('Force hydrating window globals for date:', dateKey);
+        log(`Force hydrating for date: ${dateKey}, forceOverwrite: ${forceOverwrite}`);
         
         try {
             const raw = localStorage.getItem(DAILY_DATA_KEY);
             if (!raw) {
-                log('No data in localStorage');
-                window.scheduleAssignments = window.scheduleAssignments || {};
-                window.leagueAssignments = window.leagueAssignments || {};
+                log('No data in localStorage - clearing window globals');
+                window.scheduleAssignments = {};
+                window.leagueAssignments = {};
                 return false;
             }
             
@@ -90,33 +82,55 @@
             const dateData = dailyData[dateKey];
             
             if (!dateData) {
-                log('No data for date:', dateKey, '- setting empty state');
+                log('No data for date:', dateKey, '- clearing window globals');
                 window.scheduleAssignments = {};
                 window.leagueAssignments = {};
                 return false;
             }
             
+            // ═══════════════════════════════════════════════════════════════
+            // CRITICAL CHANGE v2.0: ALWAYS overwrite if forceOverwrite is true
+            // This ensures we use the cloud-merged data, not stale window data
+            // ═══════════════════════════════════════════════════════════════
+            
             let hydrated = false;
             
-            // Hydrate scheduleAssignments (always, to ensure we have latest)
-            if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
-                // Only hydrate if window is empty OR if this is a fresh load (not after generation)
-                if (!window.scheduleAssignments || Object.keys(window.scheduleAssignments).length === 0) {
-                    window.scheduleAssignments = dateData.scheduleAssignments;
-                    hydrated = true;
-                    log('✅ Hydrated scheduleAssignments:', Object.keys(window.scheduleAssignments).length, 'bunks');
+            // Hydrate scheduleAssignments
+            if (dateData.scheduleAssignments) {
+                const localBunkCount = Object.keys(dateData.scheduleAssignments).length;
+                const windowBunkCount = Object.keys(window.scheduleAssignments || {}).length;
+                
+                if (forceOverwrite || localBunkCount > 0) {
+                    // Check if data is actually different
+                    const localFirst = Object.keys(dateData.scheduleAssignments)[0];
+                    const windowFirst = Object.keys(window.scheduleAssignments || {})[0];
+                    
+                    if (forceOverwrite) {
+                        log(`FORCE overwriting window.scheduleAssignments`);
+                        log(`  localStorage has ${localBunkCount} bunks`);
+                        log(`  window had ${windowBunkCount} bunks`);
+                        window.scheduleAssignments = JSON.parse(JSON.stringify(dateData.scheduleAssignments));
+                        hydrated = true;
+                        log('✅ FORCE hydrated scheduleAssignments:', localBunkCount, 'bunks');
+                    } else if (!window.scheduleAssignments || windowBunkCount === 0) {
+                        window.scheduleAssignments = JSON.parse(JSON.stringify(dateData.scheduleAssignments));
+                        hydrated = true;
+                        log('✅ Hydrated scheduleAssignments:', localBunkCount, 'bunks');
+                    } else {
+                        log('ℹ️ window.scheduleAssignments already has data, use forceOverwrite to replace');
+                    }
                 }
             } else {
-                // Ensure we have at least an empty object
-                window.scheduleAssignments = window.scheduleAssignments || {};
+                window.scheduleAssignments = {};
+                log('⚠️ No scheduleAssignments in localStorage for this date');
             }
             
-            // Hydrate leagueAssignments
-            if (dateData.leagueAssignments && Object.keys(dateData.leagueAssignments).length > 0) {
-                if (!window.leagueAssignments || Object.keys(window.leagueAssignments).length === 0) {
-                    window.leagueAssignments = dateData.leagueAssignments;
-                    hydrated = true;
+            // Hydrate leagueAssignments  
+            if (dateData.leagueAssignments) {
+                if (forceOverwrite || !window.leagueAssignments || Object.keys(window.leagueAssignments).length === 0) {
+                    window.leagueAssignments = JSON.parse(JSON.stringify(dateData.leagueAssignments));
                     log('✅ Hydrated leagueAssignments');
+                    hydrated = true;
                 }
             } else {
                 window.leagueAssignments = window.leagueAssignments || {};
@@ -124,11 +138,11 @@
             
             // Hydrate unifiedTimes
             if (dateData.unifiedTimes && dateData.unifiedTimes.length > 0) {
-                if (!window.unifiedTimes || window.unifiedTimes.length === 0) {
+                if (forceOverwrite || !window.unifiedTimes || window.unifiedTimes.length === 0) {
                     window.unifiedTimes = normalizeUnifiedTimes(dateData.unifiedTimes);
                     window._unifiedTimesFromCloud = true;
-                    hydrated = true;
                     log('✅ Hydrated unifiedTimes:', window.unifiedTimes.length, 'slots');
+                    hydrated = true;
                 }
             }
             
@@ -141,16 +155,16 @@
     }
 
     // =========================================================================
-    // FIX 2: REFRESH MULTI-SCHEDULER SYSTEM AFTER UPDATES
+    // FIX 2: REFRESH MULTI-SCHEDULER VIEW
     // =========================================================================
 
-    async function refreshMultiSchedulerView(dateKey) {
+    async function refreshMultiSchedulerView(dateKey, forceOverwrite = false) {
         if (!dateKey) dateKey = getCurrentDateKey();
         
         log('Refreshing Multi-Scheduler view for:', dateKey);
         
         // Step 1: Force hydrate from localStorage
-        forceHydrateFromLocalStorage(dateKey);
+        forceHydrateFromLocalStorage(dateKey, forceOverwrite);
         
         // Step 2: Ensure empty state for unscheduled divisions
         ensureEmptyStateForUnscheduledDivisions();
@@ -175,10 +189,8 @@
         
         // Step 4: Update the table
         if (window.updateTable) {
-            setTimeout(() => {
-                window.updateTable();
-                log('✅ Table updated');
-            }, 100);
+            window.updateTable();
+            log('✅ Table updated');
         }
     }
 
@@ -194,19 +206,15 @@
         const divisions = window.divisions || {};
         const slotCount = (window.unifiedTimes || []).length || 22;
         
-        // For each division
         for (const [divName, divData] of Object.entries(divisions)) {
             const bunks = divData.bunks || [];
             
-            // Check if ANY bunk in this division has meaningful data
             const hasData = bunks.some(bunk => {
                 const bunkData = window.scheduleAssignments[bunk];
                 if (!bunkData || !Array.isArray(bunkData)) return false;
                 return bunkData.some(slot => slot && (slot.field || slot._activity));
             });
             
-            // If no data, ensure bunks are initialized with empty arrays
-            // This ensures they show as empty rather than undefined
             if (!hasData) {
                 bunks.forEach(bunk => {
                     if (!window.scheduleAssignments[bunk]) {
@@ -218,53 +226,60 @@
     }
 
     // =========================================================================
-    // EVENT LISTENERS
+    // EVENT LISTENERS - WITH FORCE OVERWRITE
     // =========================================================================
 
-    // 1. After cloud hydration, force hydrate window globals
+    // After cloud hydration, FORCE hydrate window globals
+    // This is the key fix - we MUST overwrite stale window data
     window.addEventListener('campistry-cloud-hydrated', (e) => {
-        log('Cloud hydration event received');
+        log('Cloud hydration event received - will FORCE hydrate');
         
+        // Use longer timeout to ensure cloud bridge merge is 100% complete
         setTimeout(() => {
             const dateKey = getCurrentDateKey();
-            const hydrated = forceHydrateFromLocalStorage(dateKey);
+            
+            // ═══════════════════════════════════════════════════════════════
+            // v2.0: FORCE overwrite window.scheduleAssignments
+            // Don't check if empty - always use localStorage after cloud merge
+            // ═══════════════════════════════════════════════════════════════
+            log('FORCE hydrating window globals from localStorage...');
+            const hydrated = forceHydrateFromLocalStorage(dateKey, true); // true = force overwrite
             
             if (hydrated) {
+                log('✅ Window globals updated from cloud-merged localStorage');
                 ensureEmptyStateForUnscheduledDivisions();
                 
-                // Update table
+                // Update table immediately
                 if (window.updateTable) {
                     window.updateTable();
                 }
             }
-        }, 200);
+            
+            _initialHydrationDone = true;
+        }, 300); // 300ms should be after the 100ms in unified_schedule_system
     });
 
-    // 2. After date change, ensure proper hydration
+    // After date change, ensure proper hydration
     window.addEventListener('campistry-date-changed', (e) => {
         const dateKey = e.detail?.dateKey || getCurrentDateKey();
         log('Date changed to:', dateKey);
         
-        // Clear old data
-        window.scheduleAssignments = {};
-        window.leagueAssignments = {};
-        window._unifiedTimesFromCloud = false;
-        
+        // Clear and re-hydrate
         setTimeout(() => {
-            forceHydrateFromLocalStorage(dateKey);
+            forceHydrateFromLocalStorage(dateKey, true);
             ensureEmptyStateForUnscheduledDivisions();
-            refreshMultiSchedulerView(dateKey);
+            refreshMultiSchedulerView(dateKey, true);
         }, 100);
     });
 
-    // 3. Listen for realtime updates and dispatch refresh
+    // Listen for realtime updates
     window.addEventListener('campistry-realtime-update', (e) => {
         log('Realtime update event received');
-        refreshMultiSchedulerView();
+        refreshMultiSchedulerView(getCurrentDateKey(), true);
     });
 
     // =========================================================================
-    // PATCH: Intercept loadScheduleForDate
+    // PATCH: loadScheduleForDate - After initial hydration, prefer localStorage
     // =========================================================================
     
     const originalLoadScheduleForDate = window.loadScheduleForDate;
@@ -274,22 +289,25 @@
         
         log('loadScheduleForDate called for:', dateKey);
         
-        // FIX: If window globals are empty, try localStorage first
-        if (!window.scheduleAssignments || Object.keys(window.scheduleAssignments).length === 0) {
-            log('Window empty, checking localStorage...');
-            forceHydrateFromLocalStorage(dateKey);
+        // After initial cloud hydration, we should trust localStorage
+        // because it contains the merged cloud data
+        if (_initialHydrationDone) {
+            log('Post-hydration: checking localStorage for updates...');
+            // Don't force overwrite here - just fill if empty
+            forceHydrateFromLocalStorage(dateKey, false);
         }
         
         // Call original
         if (originalLoadScheduleForDate && typeof originalLoadScheduleForDate === 'function') {
-            return originalLoadScheduleForDate.call(this, dateKey);
+            const result = originalLoadScheduleForDate.call(this, dateKey);
+            return result;
         }
         
         ensureEmptyStateForUnscheduledDivisions();
     };
 
     // =========================================================================
-    // PATCH: Intercept RealtimeScheduleSync.load to dispatch event
+    // PATCH: RealtimeScheduleSync.load to dispatch event
     // =========================================================================
     
     if (window.RealtimeScheduleSync) {
@@ -300,8 +318,12 @@
             
             const result = await originalLoad?.call(this);
             
-            // Dispatch event for our refresh logic
             if (result?.success || result?.hasData) {
+                // FORCE hydrate after realtime load
+                const dateKey = getCurrentDateKey();
+                log('Realtime load success, FORCE hydrating...');
+                forceHydrateFromLocalStorage(dateKey, true);
+                
                 window.dispatchEvent(new CustomEvent('campistry-realtime-update', {
                     detail: { success: result?.success, hasData: result?.hasData }
                 }));
@@ -314,7 +336,7 @@
     }
 
     // =========================================================================
-    // PATCH: Hook into Supabase realtime channel
+    // PATCH: Supabase realtime channel
     // =========================================================================
     
     if (window.supabase?.channel) {
@@ -328,10 +350,8 @@
                 const wrappedCallback = (payload) => {
                     log('Supabase realtime event:', event);
                     
-                    // Call original
                     if (callback) callback(payload);
                     
-                    // Dispatch our event after a delay
                     setTimeout(() => {
                         window.dispatchEvent(new CustomEvent('campistry-realtime-update', {
                             detail: { event, timestamp: Date.now() }
@@ -356,60 +376,49 @@
         if (!window.AccessControl?.isInitialized) return;
         
         clearInterval(waitForRBAC);
-        log('RBAC ready, performing initial hydration check');
+        log('RBAC ready, performing FORCE hydration');
         
         const dateKey = getCurrentDateKey();
         
-        // Check if we need to hydrate
-        if (!window.scheduleAssignments || Object.keys(window.scheduleAssignments).length === 0) {
-            log('Window globals empty after RBAC, hydrating...');
-            forceHydrateFromLocalStorage(dateKey);
-            ensureEmptyStateForUnscheduledDivisions();
-            
-            // Initialize MSS
-            if (window.MultiSchedulerSystem?.initializeView) {
-                window.MultiSchedulerSystem.initializeView(dateKey).then(() => {
-                    window.MultiSchedulerSystem.applyBlockingToGrid?.();
-                    if (window.updateTable) window.updateTable();
-                });
-            } else if (window.updateTable) {
-                window.updateTable();
-            }
+        // ALWAYS force hydrate after RBAC init
+        // This ensures we have the correct cloud data
+        log('FORCE hydrating after RBAC init...');
+        forceHydrateFromLocalStorage(dateKey, true);
+        ensureEmptyStateForUnscheduledDivisions();
+        
+        // Initialize MSS
+        if (window.MultiSchedulerSystem?.initializeView) {
+            window.MultiSchedulerSystem.initializeView(dateKey).then(() => {
+                window.MultiSchedulerSystem.applyBlockingToGrid?.();
+                if (window.updateTable) window.updateTable();
+                log('✅ Post-RBAC refresh complete');
+            });
+        } else if (window.updateTable) {
+            window.updateTable();
         }
+        
+        _initialHydrationDone = true;
         
     }, 100);
     
-    // Timeout after 15 seconds
     setTimeout(() => clearInterval(waitForRBAC), 15000);
 
-    // Also check if cloud is already ready
-    if (window.__CAMPISTRY_CLOUD_READY__) {
-        log('Cloud already ready, running initial setup');
-        setTimeout(() => {
-            const dateKey = getCurrentDateKey();
-            forceHydrateFromLocalStorage(dateKey);
-            ensureEmptyStateForUnscheduledDivisions();
-            if (window.updateTable) window.updateTable();
-        }, 500);
-    }
-
     // =========================================================================
-    // DIAGNOSTIC & MANUAL FUNCTIONS
+    // MANUAL FUNCTIONS
     // =========================================================================
     
     window.forceScheduleRefresh = function(dateKey) {
         dateKey = dateKey || getCurrentDateKey();
-        log('Manual refresh triggered for:', dateKey);
+        log('Manual FORCE refresh for:', dateKey);
         
-        // Clear current state
+        // FORCE clear and reload
         window.scheduleAssignments = {};
         window.leagueAssignments = {};
         window._unifiedTimesFromCloud = false;
         
-        // Hydrate and refresh
-        forceHydrateFromLocalStorage(dateKey);
+        forceHydrateFromLocalStorage(dateKey, true);
         ensureEmptyStateForUnscheduledDivisions();
-        refreshMultiSchedulerView(dateKey);
+        refreshMultiSchedulerView(dateKey, true);
         
         log('✅ Manual refresh complete');
     };
@@ -418,16 +427,24 @@
         const dateKey = getCurrentDateKey();
         
         console.log('═══════════════════════════════════════════════════════');
-        console.log('🔍 SCHEDULE SYNC DIAGNOSIS');
+        console.log('🔍 SCHEDULE SYNC DIAGNOSIS v2.0');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Date:', dateKey);
+        console.log('Initial hydration done:', _initialHydrationDone);
         console.log('');
         
         console.log('=== Window Globals ===');
-        console.log('scheduleAssignments bunks:', Object.keys(window.scheduleAssignments || {}).length);
-        console.log('leagueAssignments divisions:', Object.keys(window.leagueAssignments || {}).length);
-        console.log('unifiedTimes slots:', (window.unifiedTimes || []).length);
-        console.log('_unifiedTimesFromCloud:', window._unifiedTimesFromCloud);
+        const windowBunks = Object.keys(window.scheduleAssignments || {});
+        console.log('scheduleAssignments bunks:', windowBunks.length);
+        if (windowBunks.length > 0) {
+            const firstBunk = windowBunks[0];
+            const firstData = window.scheduleAssignments[firstBunk];
+            console.log(`  First bunk "${firstBunk}": ${firstData?.length || 0} slots`);
+            if (firstData) {
+                const sample = firstData.find(s => s && s.field);
+                if (sample) console.log(`  Sample slot: ${JSON.stringify(sample).substring(0, 100)}`);
+            }
+        }
         console.log('');
         
         console.log('=== LocalStorage ===');
@@ -435,41 +452,102 @@
             const raw = localStorage.getItem(DAILY_DATA_KEY);
             const daily = raw ? JSON.parse(raw) : {};
             const dateData = daily[dateKey] || {};
-            console.log('Has dateData:', !!Object.keys(dateData).length);
-            console.log('scheduleAssignments bunks:', Object.keys(dateData.scheduleAssignments || {}).length);
-            console.log('leagueAssignments divisions:', Object.keys(dateData.leagueAssignments || {}).length);
-            console.log('unifiedTimes slots:', (dateData.unifiedTimes || []).length);
+            const localBunks = Object.keys(dateData.scheduleAssignments || {});
+            console.log('scheduleAssignments bunks:', localBunks.length);
+            if (localBunks.length > 0) {
+                const firstBunk = localBunks[0];
+                const firstData = dateData.scheduleAssignments[firstBunk];
+                console.log(`  First bunk "${firstBunk}": ${firstData?.length || 0} slots`);
+                if (firstData) {
+                    const sample = firstData.find(s => s && s.field);
+                    if (sample) console.log(`  Sample slot: ${JSON.stringify(sample).substring(0, 100)}`);
+                }
+            }
         } catch (e) {
-            console.log('Error reading localStorage:', e);
+            console.log('Error:', e);
         }
         console.log('');
         
-        console.log('=== Multi-Scheduler System ===');
-        console.log('isInitialized:', window.MultiSchedulerSystem?.isInitialized?.());
-        console.log('myDivisions:', JSON.stringify(window.MultiSchedulerSystem?.getMyDivisions?.()));
-        const mssState = window.MultiSchedulerSystem?.getState?.();
-        console.log('blockedMap divisions:', JSON.stringify([...(mssState?.blockedMap?.stats?.blockedDivisions || [])]));
-        console.log('');
-        
-        console.log('=== Access Control ===');
-        console.log('isInitialized:', window.AccessControl?.isInitialized);
-        console.log('role:', window.AccessControl?.getCurrentRole?.());
-        console.log('editableDivisions:', JSON.stringify(window.AccessControl?.getEditableDivisions?.()));
-        console.log('');
-        
-        console.log('=== System State ===');
-        console.log('__CAMPISTRY_CLOUD_READY__:', window.__CAMPISTRY_CLOUD_READY__);
+        console.log('=== Comparison ===');
+        try {
+            const raw = localStorage.getItem(DAILY_DATA_KEY);
+            const daily = raw ? JSON.parse(raw) : {};
+            const dateData = daily[dateKey] || {};
+            
+            const windowFirst = Object.keys(window.scheduleAssignments || {})[0];
+            const localFirst = Object.keys(dateData.scheduleAssignments || {})[0];
+            
+            if (windowFirst && localFirst) {
+                const windowSlot = window.scheduleAssignments[windowFirst]?.[1];
+                const localSlot = dateData.scheduleAssignments[localFirst]?.[1];
+                console.log('Window bunk 1 slot 1:', windowSlot?.field || windowSlot?._activity || 'empty');
+                console.log('Local bunk 1 slot 1:', localSlot?.field || localSlot?._activity || 'empty');
+                console.log('Match:', JSON.stringify(windowSlot) === JSON.stringify(localSlot) ? '✅ YES' : '❌ NO');
+            }
+        } catch(e) {
+            console.log('Comparison error:', e);
+        }
         console.log('');
         
         console.log('═══════════════════════════════════════════════════════');
         console.log('💡 Commands:');
         console.log('   forceScheduleRefresh() - Force full refresh');
-        console.log('   window.MultiSchedulerSystem.refresh() - Refresh MSS');
         console.log('═══════════════════════════════════════════════════════');
     };
 
+    // =========================================================================
+    // AGGRESSIVE FINAL CHECK
+    // =========================================================================
+    // As a last resort, check 2 seconds after load if data matches
+    
+    setTimeout(() => {
+        log('Final data consistency check...');
+        const dateKey = getCurrentDateKey();
+        
+        try {
+            const raw = localStorage.getItem(DAILY_DATA_KEY);
+            if (!raw) return;
+            
+            const daily = JSON.parse(raw);
+            const dateData = daily[dateKey] || {};
+            
+            if (!dateData.scheduleAssignments) return;
+            
+            const localBunks = Object.keys(dateData.scheduleAssignments);
+            const windowBunks = Object.keys(window.scheduleAssignments || {});
+            
+            // Check if first bunk's data matches
+            if (localBunks.length > 0) {
+                const firstBunk = localBunks[0];
+                const localSlot1 = dateData.scheduleAssignments[firstBunk]?.[1];
+                const windowSlot1 = window.scheduleAssignments?.[firstBunk]?.[1];
+                
+                const localField = localSlot1?.field || localSlot1?._activity;
+                const windowField = windowSlot1?.field || windowSlot1?._activity;
+                
+                if (localField && localField !== windowField) {
+                    log('⚠️ DATA MISMATCH DETECTED!');
+                    log(`  Local: ${localField}`);
+                    log(`  Window: ${windowField}`);
+                    log('  Auto-correcting...');
+                    
+                    forceHydrateFromLocalStorage(dateKey, true);
+                    if (window.updateTable) window.updateTable();
+                    
+                    log('✅ Auto-correction complete');
+                } else {
+                    log('✅ Data consistency verified');
+                }
+            }
+        } catch (e) {
+            console.error('[SyncPatch] Final check error:', e);
+        }
+    }, 2000);
+
     console.log('═══════════════════════════════════════════════════════════════');
-    console.log('✅ MASTER PATCH LOADED');
+    console.log('✅ MASTER PATCH v2.0 LOADED');
+    console.log('   - FORCE hydration enabled');
+    console.log('   - Auto-correction at 2 seconds');
     console.log('   Run diagnoseScheduleSync() to check state');
     console.log('   Run forceScheduleRefresh() to manually refresh');
     console.log('═══════════════════════════════════════════════════════════════');
