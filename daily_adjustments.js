@@ -1,5 +1,5 @@
 // =================================================================
-// daily_adjustments.js  (v3.8 - Updated: RBAC Security)
+// daily_adjustments.js  (v3.9 - Updated: Split Tile Fix)
 // - Grid/tiles EXACTLY match master_schedule_builder.js
 // - Professional Rainy Day Mode toggle with animations
 // - ★ NEW: Mid-day rainy mode (preserve morning schedule)
@@ -14,6 +14,7 @@
 // - Integration with getPinnedTileDefaultLocation for Pinned Events
 // - ★ UPDATED: Mobile Touch Support for Drag & Drop
 // - ★ SEC: Added RBAC checks for Editing & Optimizer
+// - ★ FIX: Split Tile subEvents structure
 // =================================================================
 (function() {
 'use strict';
@@ -160,7 +161,7 @@ function getRainyDayStats() {
   const g = window.loadGlobalSettings?.() || {};
   const fields = g.app1?.fields || [];
   const specials = g.app1?.specialActivities || [];
-    
+     
   return {
     indoorFields: fields.filter(f => f.rainyDayAvailable === true).length,
     outdoorFields: fields.filter(f => f.rainyDayAvailable !== true).length,
@@ -178,7 +179,7 @@ function renderRainyDayToggle() {
   const autoSwitch = isAutoSkeletonSwitchEnabled();
   const rainySkeletonName = getRainyDaySkeletonName();
   const availableSkeletons = getAvailableSkeletons();
-    
+     
   // Generate rain drops for animation
   let rainDrops = '';
   for (let i = 0; i < 18; i++) {
@@ -188,12 +189,12 @@ function renderRainyDayToggle() {
     const height = 12 + Math.random() * 18;
     rainDrops += `<div class="rain-drop" style="left: ${left}%; animation-delay: ${delay}s; animation-duration: ${duration}s; height: ${height}px;"></div>`;
   }
-    
+     
   // Skeleton options
   const skeletonOptions = availableSkeletons.map(name => 
     `<option value="${name}" ${name === rainySkeletonName ? 'selected' : ''}>${name}</option>`
   ).join('');
-    
+     
   // Mid-day info
   const midDayInfo = isMidDay ? `
     <div class="rainy-midday-info" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding: 0 20px 12px;">
@@ -205,7 +206,7 @@ function renderRainyDayToggle() {
       </span>
     </div>
   ` : '';
-    
+     
   return `
     <div class="rainy-day-card ${isActive ? 'active' : 'inactive'}" id="rainy-day-card">
       <div class="rain-animation-container">${rainDrops}</div>
@@ -308,7 +309,7 @@ function bindRainyDayToggle() {
   const midDayBtn = document.getElementById('rainy-midday-btn');
   const settingsBtn = document.getElementById('rainy-settings-btn');
   const settingsPanel = document.getElementById('rainy-settings-panel');
-    
+     
   // Settings button toggle
   if (settingsBtn && settingsPanel) {
     settingsBtn.addEventListener('click', function() {
@@ -317,7 +318,7 @@ function bindRainyDayToggle() {
       settingsBtn.innerHTML = isOpen ? '⚙️ Settings' : '⚙️ Close Settings';
     });
   }
-    
+     
   // Main toggle
   if (toggle) {
     toggle.addEventListener('change', function() {
@@ -337,7 +338,7 @@ function bindRainyDayToggle() {
       if (gridEl) renderGrid(gridEl);
     });
   }
-    
+     
   // Auto-skeleton toggle
   if (autoSkeletonToggle) {
     autoSkeletonToggle.addEventListener('change', function() {
@@ -345,14 +346,14 @@ function bindRainyDayToggle() {
       rerenderRainyDayUI();
     });
   }
-    
+     
   // Skeleton select
   if (skeletonSelect) {
     skeletonSelect.addEventListener('change', function() {
       setRainyDaySkeletonName(this.value || null);
     });
   }
-    
+     
   // Mid-day button
   if (midDayBtn && !midDayBtn.disabled) {
     midDayBtn.addEventListener('click', function() {
@@ -1328,14 +1329,20 @@ function addDropListeners(gridEl) {
         };
       }
       // Handle SPLIT TILE
+      // BEHAVIOR: Group 1 gets main 1 first half, main 2 second half
+      //           Group 2 gets main 2 first half, main 1 second half
       else if (tileData.type === 'split') {
         let startTime, endTime, startMinVal, endMinVal;
+        
+        // Get start time with validation
         while (true) {
           startTime = prompt("Enter Start Time for the *full* block:", startStr);
           if (!startTime) return;
           startMinVal = validateTime(startTime, true);
           if (startMinVal !== null) break;
         }
+        
+        // Get end time with validation
         while (true) {
           endTime = prompt("Enter End Time for the *full* block:");
           if (!endTime) return;
@@ -1345,17 +1352,56 @@ function addDropListeners(gridEl) {
             else break;
           }
         }
-        const eventName1 = prompt("Enter name for FIRST activity (e.g., Swim, Sports):");
+        
+        // Get activity names with clear instructions
+        const eventName1 = prompt(
+          "Enter name for FIRST activity (Main 1):\n\n" +
+          "• Group 1 does this FIRST half\n" +
+          "• Group 2 does this SECOND half\n\n" +
+          "Examples: Swim, Sports, Art"
+        );
         if (!eventName1) return;
-        const eventName2 = prompt("Enter name for SECOND activity (e.g., Activity, Sports):");
+        
+        const eventName2 = prompt(
+          "Enter name for SECOND activity (Main 2):\n\n" +
+          "• Group 2 does this FIRST half\n" +
+          "• Group 1 does this SECOND half\n\n" +
+          "Examples: Swim, Sports, Art"
+        );
         if (!eventName2) return;
+        
+        // Map the event names for the optimizer
         const event1 = mapEventNameForOptimizer(eventName1);
         const event2 = mapEventNameForOptimizer(eventName2);
+        
         newEvent = {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
-          type: 'split', event: eventName1 + " / " + eventName2, division: divName,
-          startTime, endTime, subEvents: [event1, event2]
+          type: 'split',
+          event: eventName1 + " / " + eventName2,
+          division: divName,
+          startTime,
+          endTime,
+          // CRITICAL: Ensure .event property is always present in subEvents
+          // This fixes the issue where scheduler_core_main.js couldn't read the activity names
+          subEvents: [
+            { 
+              ...event1, 
+              event: event1.event || eventName1  // Ensure .event exists
+            },
+            { 
+              ...event2, 
+              event: event2.event || eventName2  // Ensure .event exists
+            }
+          ]
         };
+        
+        // Log for debugging
+        console.log(`[SPLIT TILE] Created split tile for ${divName}:`);
+        console.log(`  Main 1: "${eventName1}", Main 2: "${eventName2}"`);
+        console.log(`  Time: ${startTime} - ${endTime}`);
+        console.log(`  First half:   Group 1 → ${eventName1}, Group 2 → ${eventName2}`);
+        console.log(`  Second half: Group 1 → ${eventName2}, Group 2 → ${eventName1}`);
+        console.log(`  subEvents:`, newEvent.subEvents);
       }
       // Handle PINNED tiles (lunch, snacks, custom, dismissal, swim)
       else if (['lunch', 'snacks', 'custom', 'dismissal', 'swim'].includes(tileData.type)) {
