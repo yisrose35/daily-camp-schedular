@@ -1,7 +1,7 @@
 // ============================================================================
-// access_control.js — Campistry Role-Based Access Control (Multi-Tenant) v3.4
+// access_control.js — Campistry Role-Based Access Control (Multi-Tenant) v3.5
 // ============================================================================
-// UPDATED VERSION v3.4 - Added scheduler enforcement for division-specific deletion
+// UPDATED VERSION v3.5 - FIXED: Check team membership BEFORE camp ownership
 // 
 // Permission model:
 // - OWNER: Full access to everything
@@ -22,7 +22,7 @@
 (function() {
     'use strict';
 
-    console.log("🔐 Access Control v3.4 loading...");
+    console.log("🔐 Access Control v3.5 loading...");
 
     // =========================================================================
     // STATE
@@ -160,9 +160,113 @@
         }, 1000);
     }
 
+    // =========================================================================
+    // ⭐ FIXED: Check team membership FIRST, then camp ownership
+    // =========================================================================
     async function determineUserContext() {
         console.log("🔐 Determining user context...");
         
+        // =====================================================================
+        // ⭐ STEP 1: Check if user is a TEAM MEMBER first (HIGHEST PRIORITY)
+        // This ensures invited users get their correct assigned role
+        // =====================================================================
+        try {
+            const { data: memberData, error } = await window.supabase
+                .from('camp_users')
+                .select('*')
+                .eq('user_id', _currentUser.id)
+                .not('accepted_at', 'is', null)
+                .maybeSingle();
+            
+            console.log("🔐 Team member check result:", { 
+                found: !!memberData, 
+                role: memberData?.role,
+                subdivision_ids: memberData?.subdivision_ids,
+                assigned_divisions: memberData?.assigned_divisions,
+                error: error?.message 
+            });
+            
+            if (memberData) {
+                console.log("🔐 ✅ User IS a team member:", memberData.role);
+                
+                _currentRole = memberData.role || ROLES.VIEWER;
+                _isTeamMember = true;
+                _campId = memberData.camp_id;
+                _userName = memberData.name || _currentUser.email.split('@')[0];
+                _userSubdivisionIds = memberData.subdivision_ids || [];
+                _directDivisionAssignments = memberData.assigned_divisions || [];
+                
+                if (!Array.isArray(_userSubdivisionIds)) {
+                    console.warn("🔐 subdivision_ids is not an array:", _userSubdivisionIds);
+                    _userSubdivisionIds = [];
+                }
+                
+                if (!Array.isArray(_directDivisionAssignments)) {
+                    _directDivisionAssignments = [];
+                }
+                
+                _membership = memberData;
+                
+                // Get camp name
+                const { data: campData } = await window.supabase
+                    .from('camps')
+                    .select('name')
+                    .eq('owner', memberData.camp_id)
+                    .maybeSingle();
+                
+                _campName = campData?.name || 'Your Camp';
+                
+                localStorage.setItem('campistry_user_id', _campId);
+                localStorage.setItem('campistry_auth_user_id', _currentUser.id);
+                
+                // Log warning if scheduler has no assignments
+                if (_currentRole === ROLES.SCHEDULER && 
+                    _userSubdivisionIds.length === 0 && 
+                    _directDivisionAssignments.length === 0) {
+                    console.warn("🔐 ⚠️ SCHEDULER HAS NO SUBDIVISION OR DIVISION ASSIGNMENTS!");
+                }
+                
+                return; // ⭐ IMPORTANT: Exit here - don't check camp ownership
+            }
+        } catch (e) {
+            console.warn("🔐 Error checking team membership:", e);
+        }
+
+        // =====================================================================
+        // ⭐ STEP 2: Check for PENDING INVITE (auto-accept if found)
+        // =====================================================================
+        try {
+            const { data: pendingInvite } = await window.supabase
+                .from('camp_users')
+                .select('*')
+                .eq('email', _currentUser.email.toLowerCase())
+                .is('user_id', null)
+                .maybeSingle();
+            
+            if (pendingInvite) {
+                console.log("🔐 Found pending invite - auto-accepting:", pendingInvite.role);
+                
+                const { error: acceptError } = await window.supabase
+                    .from('camp_users')
+                    .update({
+                        user_id: _currentUser.id,
+                        accepted_at: new Date().toISOString()
+                    })
+                    .eq('id', pendingInvite.id);
+                
+                if (!acceptError) {
+                    console.log("🔐 ✅ Invite auto-accepted!");
+                    // Recursively call to set up role properly
+                    return await determineUserContext();
+                }
+            }
+        } catch (e) {
+            console.warn("🔐 Error checking pending invite:", e);
+        }
+        
+        // =====================================================================
+        // ⭐ STEP 3: Check if user is a CAMP OWNER (only if not a team member)
+        // =====================================================================
         try {
             const { data: ownedCamp } = await window.supabase
                 .from('camps')
@@ -188,74 +292,9 @@
             console.warn("🔐 Error checking camp ownership:", e);
         }
         
-        try {
-            const { data: memberData, error } = await window.supabase
-                .from('camp_users')
-                .select('*')
-                .eq('user_id', _currentUser.id)
-                .not('accepted_at', 'is', null)
-                .maybeSingle();
-            
-            // ⭐ Enhanced debug logging
-            console.log("🔐 Team member query result:", { 
-                found: !!memberData, 
-                role: memberData?.role,
-                subdivision_ids: memberData?.subdivision_ids,
-                assigned_divisions: memberData?.assigned_divisions,
-                error: error?.message 
-            });
-            
-            if (memberData) {
-                console.log("🔐 User is a team member:", memberData.role);
-                
-                _currentRole = memberData.role || ROLES.VIEWER;
-                _isTeamMember = true;
-                _campId = memberData.camp_id;
-                _userName = memberData.name || _currentUser.email.split('@')[0];
-                _userSubdivisionIds = memberData.subdivision_ids || [];
-                
-                // ⭐ NEW: Also check for direct division assignments (fallback)
-                _directDivisionAssignments = memberData.assigned_divisions || [];
-                
-                if (!Array.isArray(_userSubdivisionIds)) {
-                    console.warn("🔐 subdivision_ids is not an array:", _userSubdivisionIds);
-                    _userSubdivisionIds = [];
-                }
-                
-                if (!Array.isArray(_directDivisionAssignments)) {
-                    _directDivisionAssignments = [];
-                }
-                
-                _membership = memberData;
-                
-                const { data: campData } = await window.supabase
-                    .from('camps')
-                    .select('name')
-                    .eq('owner', memberData.camp_id)
-                    .maybeSingle();
-                
-                _campName = campData?.name || 'Your Camp';
-                
-                localStorage.setItem('campistry_user_id', _campId);
-                localStorage.setItem('campistry_auth_user_id', _currentUser.id);
-                
-                // ⭐ Log warning if scheduler has no assignments
-                if (_currentRole === ROLES.SCHEDULER && 
-                    _userSubdivisionIds.length === 0 && 
-                    _directDivisionAssignments.length === 0) {
-                    console.warn("🔐 ⚠️ SCHEDULER HAS NO SUBDIVISION OR DIVISION ASSIGNMENTS!");
-                    console.warn("🔐 The camp owner needs to:");
-                    console.warn("🔐    1. Create subdivisions in Dashboard → Team & Access");
-                    console.warn("🔐    2. Assign this scheduler to subdivisions");
-                    console.warn("🔐    OR add 'assigned_divisions' directly to this user's camp_users record");
-                }
-                
-                return;
-            }
-        } catch (e) {
-            console.warn("🔐 Error checking team membership:", e);
-        }
-        
+        // =====================================================================
+        // ⭐ STEP 4: Fallback - New camp owner (first time user)
+        // =====================================================================
         console.log("🔐 User is a new camp owner (first time)");
         _currentRole = ROLES.OWNER;
         _isTeamMember = false;
@@ -1715,6 +1754,6 @@ function getEditableBunkIds() {
         });
     }
 
-    console.log("🔐 Access Control v3.4 loaded");
+    console.log("🔐 Access Control v3.5 loaded");
 
 })();
