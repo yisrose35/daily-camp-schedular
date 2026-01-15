@@ -1455,51 +1455,113 @@
     // SCHEDULER ENFORCEMENT - Delete own divisions only
     // =========================================================================
     
-    async function deleteMyDivisionsOnly(dateKey) {
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
-            return null;
-        }
-        
-        const myDivisions = getEditableDivisions();
-        if (myDivisions.length === 0) {
-            return { error: "No divisions assigned" };
-        }
-        
-        try {
-            const allData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
-            const dayData = allData[dateKey];
-            if (!dayData) return { success: true };
-            
-            if (dayData.scheduleAssignments) {
-                Object.keys(dayData.scheduleAssignments).forEach(bunkName => {
-                    const division = getDivisionForBunk(bunkName);
-                    if (division && myDivisions.includes(division)) {
-                        delete dayData.scheduleAssignments[bunkName];
-                    }
-                });
-            }
-            
-            if (dayData.leagueAssignments) {
-                Object.keys(dayData.leagueAssignments).forEach(bunkName => {
-                    const division = getDivisionForBunk(bunkName);
-                    if (division && myDivisions.includes(division)) {
-                        delete dayData.leagueAssignments[bunkName];
-                    }
-                });
-            }
-            
-            allData[dateKey] = dayData;
-            localStorage.setItem('campDailyData_v1', JSON.stringify(allData));
-            
-            if (typeof window.forceSyncToCloud === 'function') {
-                await window.forceSyncToCloud();
-            }
-            
-            return { success: true, deletedDivisions: myDivisions };
-        } catch (e) {
-            return { error: e.message };
-        }
+   async function deleteMyDivisionsOnly(dateKey) {
+    console.log('🗑️ [AccessControl] deleteMyDivisionsOnly called for:', dateKey);
+    
+    if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
+        // Owners/admins should use full delete
+        console.log('🗑️ [AccessControl] Owner/Admin - use full delete instead');
+        return null;
     }
+    
+    const myDivisions = getEditableDivisions();
+    if (myDivisions.length === 0) {
+        return { error: "No divisions assigned" };
+    }
+    
+    console.log('🗑️ [AccessControl] Deleting divisions:', myDivisions);
+    
+    try {
+        // ★★★ CRITICAL FIX: Delete from cloud FIRST using ScheduleDB ★★★
+        if (window.ScheduleDB?.deleteMyScheduleOnly) {
+            console.log('🗑️ [AccessControl] Calling ScheduleDB.deleteMyScheduleOnly...');
+            const cloudResult = await window.ScheduleDB.deleteMyScheduleOnly(dateKey);
+            console.log('🗑️ [AccessControl] Cloud delete result:', cloudResult);
+            
+            if (!cloudResult?.success) {
+                console.error('🗑️ [AccessControl] Cloud delete failed:', cloudResult?.error);
+                // Continue anyway to clear local state
+            }
+        } else {
+            console.warn('🗑️ [AccessControl] ScheduleDB.deleteMyScheduleOnly not available!');
+            // Fallback: try direct Supabase delete
+            const client = window.CampistryDB?.getClient?.() || window.supabase;
+            const campId = window.CampistryDB?.getCampId?.() || (typeof getCampId === 'function' ? getCampId() : _campId);
+            const userId = window.CampistryDB?.getUserId?.();
+            
+            if (client && campId && userId) {
+                console.log('🗑️ [AccessControl] Fallback: direct Supabase delete...');
+                const { error } = await client
+                    .from('daily_schedules')
+                    .delete()
+                    .eq('camp_id', campId)
+                    .eq('date_key', dateKey)
+                    .eq('scheduler_id', userId);
+                    
+                if (error) {
+                    console.error('🗑️ [AccessControl] Fallback delete error:', error);
+                } else {
+                    console.log('🗑️ [AccessControl] Fallback delete successful');
+                }
+            }
+        }
+        
+        // ★★★ Now clear window globals for my divisions ★★★
+        const divisions = window.divisions || {};
+        const bunksToRemove = new Set();
+        
+        for (const divName of myDivisions) {
+            const divInfo = divisions[divName];
+            if (divInfo?.bunks) {
+                divInfo.bunks.forEach(b => bunksToRemove.add(b));
+            }
+        }
+        
+        // Clear from window.scheduleAssignments
+        if (window.scheduleAssignments) {
+            bunksToRemove.forEach(bunk => {
+                delete window.scheduleAssignments[bunk];
+            });
+            console.log('🗑️ [AccessControl] Cleared', bunksToRemove.size, 'bunks from window.scheduleAssignments');
+        }
+        
+        // Clear from window.leagueAssignments
+        if (window.leagueAssignments) {
+            bunksToRemove.forEach(bunk => {
+                delete window.leagueAssignments[bunk];
+            });
+        }
+        
+        // ★★★ Reload remaining schedules from cloud ★★★
+        if (window.ScheduleDB?.loadSchedule) {
+            console.log('🗑️ [AccessControl] Reloading remaining schedules from cloud...');
+            const remaining = await window.ScheduleDB.loadSchedule(dateKey);
+            
+            if (remaining?.success && remaining.data) {
+                // Merge remaining data (from other schedulers) into window globals
+                if (remaining.data.scheduleAssignments) {
+                    window.scheduleAssignments = remaining.data.scheduleAssignments;
+                }
+                if (remaining.data.leagueAssignments) {
+                    window.leagueAssignments = remaining.data.leagueAssignments;
+                }
+                console.log('🗑️ [AccessControl] Reloaded', Object.keys(remaining.data.scheduleAssignments || {}).length, 'bunks from other schedulers');
+            }
+        }
+        
+        // Dispatch deletion event for UI refresh
+        window.dispatchEvent(new CustomEvent('campistry-schedule-deleted', {
+            detail: { dateKey, divisions: myDivisions }
+        }));
+        
+        console.log('🗑️ [AccessControl] ✅ Delete complete');
+        return { success: true, deletedDivisions: myDivisions };
+        
+    } catch (e) {
+        console.error('🗑️ [AccessControl] Delete error:', e);
+        return { error: e.message };
+    }
+}
     
     function filterDivisionsForGeneration(requestedDivisions) {
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return requestedDivisions;
