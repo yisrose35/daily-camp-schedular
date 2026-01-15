@@ -1290,6 +1290,21 @@
     // UI HELPERS
     // =========================================================================
 
+    // Helper to get all bunk IDs for the current user's editable divisions
+function getEditableBunkIds() {
+    const myDivisions = getEditableDivisions();
+    const divisions = window.divisions || {};
+    const bunks = [];
+
+    for (const divName of myDivisions) {
+        const divInfo = divisions[divName];
+        if (divInfo?.bunks) {
+            bunks.push(...divInfo.bunks);
+        }
+    }
+
+    return bunks;
+}
     function getRoleDisplayName(role) {
         const names = {
             owner: 'Owner',
