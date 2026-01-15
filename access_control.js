@@ -1,7 +1,7 @@
 // ============================================================================
-// access_control.js — Campistry Role-Based Access Control (Multi-Tenant) v3.3
+// access_control.js — Campistry Role-Based Access Control (Multi-Tenant) v3.4
 // ============================================================================
-// UPDATED VERSION v3.3 - Added fallback for direct division assignments
+// UPDATED VERSION v3.4 - Added scheduler enforcement for division-specific deletion
 // 
 // Permission model:
 // - OWNER: Full access to everything
@@ -22,7 +22,7 @@
 (function() {
     'use strict';
 
-    console.log("🔐 Access Control v3.3 loading...");
+    console.log("🔐 Access Control v3.4 loading...");
 
     // =========================================================================
     // STATE
@@ -1452,6 +1452,65 @@
     }
 
     // =========================================================================
+    // SCHEDULER ENFORCEMENT - Delete own divisions only
+    // =========================================================================
+    
+    async function deleteMyDivisionsOnly(dateKey) {
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
+            return null;
+        }
+        
+        const myDivisions = getEditableDivisions();
+        if (myDivisions.length === 0) {
+            return { error: "No divisions assigned" };
+        }
+        
+        try {
+            const allData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+            const dayData = allData[dateKey];
+            if (!dayData) return { success: true };
+            
+            if (dayData.scheduleAssignments) {
+                Object.keys(dayData.scheduleAssignments).forEach(bunkName => {
+                    const division = getDivisionForBunk(bunkName);
+                    if (division && myDivisions.includes(division)) {
+                        delete dayData.scheduleAssignments[bunkName];
+                    }
+                });
+            }
+            
+            if (dayData.leagueAssignments) {
+                Object.keys(dayData.leagueAssignments).forEach(bunkName => {
+                    const division = getDivisionForBunk(bunkName);
+                    if (division && myDivisions.includes(division)) {
+                        delete dayData.leagueAssignments[bunkName];
+                    }
+                });
+            }
+            
+            allData[dateKey] = dayData;
+            localStorage.setItem('campDailyData_v1', JSON.stringify(allData));
+            
+            if (typeof window.forceSyncToCloud === 'function') {
+                await window.forceSyncToCloud();
+            }
+            
+            return { success: true, deletedDivisions: myDivisions };
+        } catch (e) {
+            return { error: e.message };
+        }
+    }
+    
+    function filterDivisionsForGeneration(requestedDivisions) {
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return requestedDivisions;
+        if (_currentRole === ROLES.VIEWER) return [];
+        
+        const myDivisions = getEditableDivisions();
+        if (!requestedDivisions || requestedDivisions.length === 0) return myDivisions;
+        return requestedDivisions.filter(d => myDivisions.includes(d));
+    }
+
+    // =========================================================================
     // EXPORTS
     // =========================================================================
 
@@ -1501,7 +1560,7 @@
         isTeamMember,
         
         getEditableDivisions,
-        getUserManagedDivisions, // Added export
+        getUserManagedDivisions,
         getGeneratableDivisions,
         getCurrentRole,
         getCurrentUserInfo,
@@ -1547,6 +1606,10 @@
         
         debugPrintState,
         
+        // ★ NEW SCHEDULER ENFORCEMENT EXPORTS ★
+        deleteMyDivisionsOnly,
+        filterDivisionsForGeneration,
+        
         ROLES,
         ROLE_HIERARCHY
     };
@@ -1575,6 +1638,6 @@
         });
     }
 
-    console.log("🔐 Access Control v3.3 loaded");
+    console.log("🔐 Access Control v3.4 loaded");
 
 })();
