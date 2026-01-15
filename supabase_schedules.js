@@ -470,41 +470,171 @@
      * Delete only MY schedule data for a date.
      * Preserves other schedulers' work.
      */
-    async function deleteMyScheduleOnly(dateKey) {
-        const client = getClient();
-        const campId = getCampId();
-        const userId = getUserId();
+    /**
+ * Delete MY bunks from ALL schedule records for a date.
+ * This is necessary because another scheduler (like the owner) may have
+ * saved records that include my bunks. Simply deleting my own record
+ * won't remove my bunks from their records.
+ */
+async function deleteMyScheduleOnly(dateKey) {
+    const client = getClient();
+    const campId = getCampId();
+    const userId = getUserId();
 
-        try {
-            const { error } = await client
-                .from(CONFIG.TABLE_NAME)
-                .delete()
-                .eq('camp_id', campId)
-                .eq('date_key', dateKey)
-                .eq('scheduler_id', userId);
+    log('deleteMyScheduleOnly called for', dateKey);
 
-            if (error) {
-                logError('Delete my schedule failed:', error);
-                return { success: false, error: error.message };
+    try {
+        // Step 1: Get my editable bunks
+        const myBunks = getMyBunks();
+        log('My bunks to delete:', myBunks);
+
+        if (myBunks.length === 0) {
+            log('No bunks to delete');
+            return { success: true, message: 'No bunks assigned' };
+        }
+
+        // Step 2: Load ALL records for this date
+        const allRecords = await loadAllSchedulersForDate(dateKey);
+        log('Found', allRecords.length, 'records for', dateKey);
+
+        if (!allRecords || allRecords.length === 0) {
+            // No records in cloud, just clear local
+            deleteLocalSchedule(dateKey);
+            return { success: true, message: 'No cloud records' };
+        }
+
+        // Step 3: For EACH record, remove my bunks and update
+        const myBunkSet = new Set(myBunks);
+        let recordsModified = 0;
+        let recordsDeleted = 0;
+
+        for (const record of allRecords) {
+            const scheduleData = record.schedule_data || {};
+            const assignments = scheduleData.scheduleAssignments || {};
+            const leagues = scheduleData.leagueAssignments || {};
+
+            // Count bunks before
+            const bunksBefore = Object.keys(assignments).length;
+
+            // Remove my bunks from this record
+            let modified = false;
+            for (const bunk of myBunks) {
+                if (assignments[bunk] !== undefined) {
+                    delete assignments[bunk];
+                    modified = true;
+                }
+                if (leagues[bunk] !== undefined) {
+                    delete leagues[bunk];
+                }
             }
 
-            // Update local storage - reload merged data
-            const remaining = await loadAllSchedulersForDate(dateKey);
-            if (remaining.length > 0) {
-                const merged = mergeSchedules(remaining);
-                setLocalSchedule(dateKey, merged);
+            const bunksAfter = Object.keys(assignments).length;
+            log(`Record ${record.scheduler_name}: ${bunksBefore} → ${bunksAfter} bunks`);
+
+            if (!modified) {
+                log(`  Skipping - no changes needed`);
+                continue;
+            }
+
+            // If record is now empty, delete it entirely
+            if (bunksAfter === 0) {
+                log(`  Record now empty, deleting...`);
+                const { error } = await client
+                    .from(CONFIG.TABLE_NAME)
+                    .delete()
+                    .eq('id', record.id);
+
+                if (error) {
+                    logError(`  Delete record ${record.id} failed:`, error);
+                } else {
+                    recordsDeleted++;
+                    log(`  ✅ Deleted empty record`);
+                }
             } else {
-                deleteLocalSchedule(dateKey);
+                // Update the record with bunks removed
+                log(`  Updating record with ${bunksAfter} remaining bunks...`);
+                
+                const updatedData = {
+                    ...scheduleData,
+                    scheduleAssignments: assignments,
+                    leagueAssignments: leagues
+                };
+
+                const { error } = await client
+                    .from(CONFIG.TABLE_NAME)
+                    .update({
+                        schedule_data: updatedData,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('id', record.id);
+
+                if (error) {
+                    logError(`  Update record ${record.id} failed:`, error);
+                } else {
+                    recordsModified++;
+                    log(`  ✅ Updated record`);
+                }
             }
+        }
 
-            log('Deleted my schedule for', dateKey);
-            return { success: true };
+        log(`Delete complete: ${recordsModified} modified, ${recordsDeleted} deleted`);
 
-        } catch (e) {
-            logError('Delete my schedule exception:', e);
-            return { success: false, error: e.message };
+        // Step 4: Reload remaining data and update local storage
+        const remaining = await loadAllSchedulersForDate(dateKey);
+        if (remaining.length > 0) {
+            const merged = mergeSchedules(remaining);
+            setLocalSchedule(dateKey, merged);
+            log('Updated local storage with remaining data:', Object.keys(merged.scheduleAssignments || {}).length, 'bunks');
+        } else {
+            deleteLocalSchedule(dateKey);
+            log('Cleared local storage - no remaining data');
+        }
+
+        return { 
+            success: true, 
+            recordsModified,
+            recordsDeleted,
+            bunksRemoved: myBunks.length
+        };
+
+    } catch (e) {
+        logError('deleteMyScheduleOnly exception:', e);
+        return { success: false, error: e.message };
+    }
+}
+
+/**
+ * Helper: Get list of bunk IDs that the current user can edit
+ */
+function getMyBunks() {
+    // Try to get from AccessControl/PermissionsDB
+    const editableDivisions = window.AccessControl?.getEditableDivisions?.() || 
+                              window.PermissionsDB?.getEditableDivisions?.() || [];
+    
+    const divisions = window.divisions || {};
+    const bunks = [];
+
+    for (const divName of editableDivisions) {
+        const divInfo = divisions[divName];
+        if (divInfo?.bunks) {
+            bunks.push(...divInfo.bunks);
         }
     }
+
+    // Fallback: if AccessControl not ready, try to get from bunks metadata
+    if (bunks.length === 0) {
+        const allBunks = window.bunks || [];
+        const userSubdivisions = window.AccessControl?.getUserSubdivisionIds?.() || [];
+        
+        if (userSubdivisions.length > 0 && allBunks.length > 0) {
+            // Filter bunks by subdivision
+            // This is a fallback - ideally AccessControl should be ready
+            log('Warning: Using fallback bunk detection');
+        }
+    }
+
+    return bunks;
+}
 
     // =========================================================================
     // VERSIONING
