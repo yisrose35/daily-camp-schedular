@@ -1,13 +1,11 @@
 // ============================================================================
-// campistry_auth.js — FINAL SaaS AUTH ENGINE (FIXED)
+// campistry_auth.js — FINAL SaaS AUTH ENGINE (FIXED v2.0)
 // FIXED VERSION: Better error handling, timeout protection, no hanging
+// v2.0: Added pending invite check to prevent team members becoming owners
 // ============================================================================
-
 (function() {
     'use strict';
-
     let authMode = "login";
-
     const emailEl = document.getElementById("auth-email");
     const passEl = document.getElementById("auth-password");
     const campEl = document.getElementById("camp-name-input");
@@ -15,17 +13,14 @@
     const beginBtn = document.getElementById("begin-btn");
     const loginBtn = document.getElementById("mode-login");
     const signupBtn = document.getElementById("mode-signup");
-
     // Safety check
     if (!emailEl || !passEl || !beginBtn) {
         console.warn("Auth elements not found - skipping auth init");
         return;
     }
-
     // Toggle modes
     if (loginBtn) loginBtn.onclick = () => setMode("login");
     if (signupBtn) signupBtn.onclick = () => setMode("signup");
-
     function setMode(mode) {
         authMode = mode;
         if (loginBtn) loginBtn.classList.toggle("active", mode === "login");
@@ -33,9 +28,7 @@
         if (campEl) campEl.style.display = mode === "signup" ? "block" : "none";
         if (beginBtn) beginBtn.innerText = mode === "signup" ? "Create Campistry Account" : "Sign In";
     }
-
     setMode("login");
-
     function showStatus(message, isError = false) {
         if (statusEl) {
             statusEl.innerText = message;
@@ -50,40 +43,83 @@
         }
     }
 
+    // =========================================================================
+    // ⭐ NEW: Check for pending invite before creating camp
+    // =========================================================================
+    async function checkAndAcceptPendingInvite(email, userId) {
+        try {
+            const { data: pendingInvite } = await supabase
+                .from('camp_users')
+                .select('id, role, camp_id')
+                .eq('email', email.toLowerCase())
+                .is('user_id', null)  // Not yet accepted
+                .maybeSingle();
+            
+            if (pendingInvite) {
+                console.log("🔐 ✅ Found pending invite:", pendingInvite.role);
+                
+                // Auto-accept the invite
+                const { error: acceptError } = await supabase
+                    .from('camp_users')
+                    .update({
+                        user_id: userId,
+                        accepted_at: new Date().toISOString()
+                    })
+                    .eq('id', pendingInvite.id);
+                
+                if (acceptError) {
+                    console.error("🔐 Failed to auto-accept invite:", acceptError);
+                    return false;
+                }
+                
+                console.log("🔐 ✅ Invite auto-accepted! User is now:", pendingInvite.role);
+                return true; // User has an invite - don't create camp
+            }
+            
+            return false; // No invite found
+        } catch (e) {
+            console.error("🔐 Error checking pending invite:", e);
+            return false;
+        }
+    }
+
     // Main submit
     if (beginBtn) {
         beginBtn.onclick = async () => {
             const email = emailEl.value.trim();
             const password = passEl.value.trim();
             const campName = campEl ? campEl.value.trim() : "";
-
             if (!email || !password) {
                 showStatus("Please enter email and password.", true);
                 return;
             }
-
             if (authMode === "signup" && !campName) {
                 showStatus("Please enter your camp name.", true);
                 return;
             }
-
             beginBtn.disabled = true;
             beginBtn.innerText = "Please wait...";
             showStatus("");
-
             try {
                 let user = null;
                 let error = null;
-
                 if (authMode === "signup") {
                     console.log("🔐 Attempting signup...");
                     const { data, error: signupError } = await supabase.auth.signUp({ email, password });
                     user = data?.user;
                     error = signupError;
-
                     if (user && !error) {
-                        console.log("🔐 Signup successful, creating camp...");
-                        await supabase.from("camps").insert([{ name: campName, owner: user.id }]);
+                        // ⭐ FIX: Check for pending invite BEFORE creating camp
+                        console.log("🔐 Signup successful, checking for pending invite...");
+                        const hasInvite = await checkAndAcceptPendingInvite(email, user.id);
+                        
+                        if (!hasInvite) {
+                            // No pending invite - create new camp as usual
+                            console.log("🔐 No pending invite, creating new camp...");
+                            await supabase.from("camps").insert([{ name: campName, owner: user.id }]);
+                        } else {
+                            console.log("🔐 User joined via invite - NOT creating new camp");
+                        }
                     }
                 } else {
                     console.log("🔐 Attempting login for:", email);
@@ -91,22 +127,24 @@
                     console.log("🔐 Login response:", { hasData: !!data, hasUser: !!data?.user, hasError: !!loginError });
                     user = data?.user;
                     error = loginError;
+                    
+                    // ⭐ FIX: Also check for pending invite on login
+                    if (user && !error) {
+                        await checkAndAcceptPendingInvite(email, user.id);
+                    }
                 }
-
                 if (error) {
                     console.error("🔐 Auth error:", error.message);
                     showStatus(error.message || "Authentication failed.", true);
                     resetButton();
                     return;
                 }
-
                 if (!user) {
                     console.error("🔐 No user in response");
                     showStatus("Authentication failed. Please try again.", true);
                     resetButton();
                     return;
                 }
-
                 console.log("🔐 Auth successful for:", user.email);
                 showStatus("Success! Loading Campistry...");
                 
@@ -117,7 +155,6 @@
                 console.log("🔐 Switching screens...");
                 if (welcomeScreen) welcomeScreen.style.display = "none";
                 if (mainAppContainer) mainAppContainer.style.display = "block";
-
                 // Boot the app
                 console.log("🔐 Calling bootCampistryApp...");
                 try {
@@ -129,7 +166,6 @@
                 
                 // Reset button in case user logs out and back in
                 resetButton();
-
             } catch (e) {
                 console.error("🔐 Unexpected auth error:", e);
                 showStatus(e.message || "An unexpected error occurred.", true);
@@ -137,7 +173,6 @@
             }
         };
     }
-
     async function bootCampistryApp() {
         console.log("🚀 Booting Campistry...");
         
@@ -192,7 +227,5 @@
         
         console.log("✅ Campistry loaded");
     }
-
     window.bootCampistryApp = bootCampistryApp;
-
 })();
