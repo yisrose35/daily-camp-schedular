@@ -428,30 +428,66 @@
     // ==========================================================
     // 6. ERASE CURRENT DAY - ★ SCHEDULER ENFORCEMENT ★
     // ==========================================================
-    window.eraseCurrentDailyData = async function() {
-        const date = window.currentScheduleDate;
-        const role = window.AccessControl?.getCurrentRole();
+   window.eraseCurrentDailyData = async function() {
+    const dateKey = window.currentScheduleDate;
+    const role = window.AccessControl?.getCurrentRole();
+    
+    console.log('🗑️ eraseCurrentDailyData called for:', dateKey, 'role:', role);
+    
+    if (role === 'scheduler') {
+        const myDivisions = window.AccessControl?.getEditableDivisions() || [];
+        if (myDivisions.length === 0) {
+            alert("You don't have any divisions assigned.");
+            return;
+        }
+        if (!confirm(`Delete YOUR schedule for divisions: ${myDivisions.join(', ')}?\n\nOther schedulers' data will be preserved.`)) return;
         
-        if (role === 'scheduler') {
-            const myDivisions = window.AccessControl?.getEditableDivisions() || [];
-            if (myDivisions.length === 0) {
-                alert("You don't have any divisions assigned.");
-                return;
-            }
-            if (!confirm(`Delete YOUR data for: ${myDivisions.join(', ')}?\n\nOther schedulers' data preserved.`)) return;
-            await window.AccessControl?.deleteMyDivisionsOnly(date);
-        } else {
-            const all = window.loadAllDailyData();
-            if (all[date]) {
-                delete all[date];
-                safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(all));
-            }
+        // Use the patched deleteMyDivisionsOnly which now properly deletes from cloud
+        const result = await window.AccessControl?.deleteMyDivisionsOnly(dateKey);
+        
+        if (result?.error) {
+            alert('Error deleting schedule: ' + result.error);
+            return;
         }
         
-        if (typeof window.forceSyncToCloud === 'function') await window.forceSyncToCloud();
-        window.loadCurrentDailyData();
-        window.initScheduleSystem?.();
-    };
+        console.log('🗑️ Scheduler delete result:', result);
+        
+    } else {
+        // Owner/Admin - full delete
+        if (!confirm(`Delete ALL schedule data for ${dateKey}?\n\nThis will delete data from ALL schedulers and cannot be undone.`)) return;
+        
+        // Delete from cloud using ScheduleDB
+        if (window.ScheduleDB?.deleteSchedule) {
+            console.log('🗑️ Owner/Admin: Calling ScheduleDB.deleteSchedule...');
+            const result = await window.ScheduleDB.deleteSchedule(dateKey);
+            console.log('🗑️ Full delete result:', result);
+        }
+        
+        // Clear localStorage
+        const all = window.loadAllDailyData();
+        if (all[dateKey]) {
+            delete all[dateKey];
+            safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(all));
+        }
+        
+        // Clear ALL window globals
+        window.scheduleAssignments = {};
+        window.leagueAssignments = {};
+    }
+    
+    // ★★★ CRITICAL: Refresh UI immediately ★★★
+    if (window.updateTable) {
+        console.log('🗑️ Refreshing table...');
+        window.updateTable();
+    }
+    
+    // Reinitialize schedule system
+    if (window.initScheduleSystem) {
+        window.initScheduleSystem();
+    }
+    
+    console.log('🗑️ ✅ Erase complete');
+};
     
     // ==========================================================
     // 7. ERASE ALL SCHEDULE DAYS - ★ FIXED to sync deletion to cloud ★
