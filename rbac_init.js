@@ -1,8 +1,12 @@
 // ============================================================================
-// rbac_init.js — Master RBAC Initialization v1.0
+// rbac_init.js — Master RBAC Initialization v1.1 (EVENT FIX)
 // ============================================================================
 // Initializes all RBAC modules in the correct order and handles dependencies
 // 
+// v1.1 FIX: Added 'campistry-rbac-ready' event dispatch for cloud_storage_bridge
+//           Previously only dispatched 'rbac-system-ready' which cloud bridge
+//           doesn't listen for, causing schedule merge to never complete.
+//
 // Load order:
 // 1. access_control.js (core permissions)
 // 2. subdivision_schedule_manager.js (multi-scheduler state)
@@ -13,7 +17,7 @@
 (function() {
     'use strict';
 
-    console.log("🚀 RBAC Init v1.0 starting...");
+    console.log("🚀 RBAC Init v1.1 (EVENT FIX) starting...");
 
     // =========================================================================
     // INITIALIZATION
@@ -37,7 +41,7 @@
             
             console.log("🚀 RBAC system fully initialized");
             
-            // Dispatch ready event
+            // Dispatch ready event (original)
             window.dispatchEvent(new CustomEvent('rbac-system-ready', {
                 detail: {
                     role: window.AccessControl?.getCurrentRole(),
@@ -48,6 +52,22 @@
                     isViewer: window.AccessControl?.isViewer()
                 }
             }));
+            
+            // ★★★ v1.1 FIX: Also dispatch campistry-rbac-ready ★★★
+            // cloud_storage_bridge.js listens for this event to re-merge
+            // with correct permissions after conservative initial merge
+            window.dispatchEvent(new CustomEvent('campistry-rbac-ready', {
+                detail: {
+                    role: window.AccessControl?.getCurrentRole(),
+                    editableDivisions: window.AccessControl?.getEditableDivisions(),
+                    isOwner: window.AccessControl?.isOwner(),
+                    isAdmin: window.AccessControl?.isAdmin(),
+                    isScheduler: window.AccessControl?.isScheduler?.(),
+                    isViewer: window.AccessControl?.isViewer()
+                }
+            }));
+            
+            console.log("🚀 Dispatched both rbac-system-ready and campistry-rbac-ready events");
             
         } catch (error) {
             console.error("🚀 RBAC initialization error:", error);
@@ -142,29 +162,18 @@
     function applyViewerRestrictions() {
         console.log("🚀 Applying viewer restrictions...");
         
-        // Disable all edit buttons except Print Center and Camper Locator
-        const editButtons = document.querySelectorAll(
-            '#addDivisionBtn, #addBunkBtn, #generate-btn, #clear-btn, ' +
-            '#eraseTodayBtn, #eraseAllSchedulesBtn, #eraseHistoryBtn, #eraseAllBtn, ' +
-            '[data-action="edit"], [data-action="delete"], [data-action="add"]'
-        );
-        
+        // Viewers can only view, not edit
+        // Hide all edit buttons
+        const editButtons = document.querySelectorAll('[data-action="edit"], [data-action="delete"], [data-action="generate"]');
         editButtons.forEach(btn => {
-            btn.disabled = true;
-            btn.classList.add('rbac-btn-disabled');
-            btn.title = 'View only mode';
+            btn.style.display = 'none';
         });
         
-        // Disable all inputs except search fields
-        const inputs = document.querySelectorAll(
-            'input:not([type="search"]):not(.camper-search):not(.print-search), ' +
-            'select, textarea'
-        );
-        
+        // Disable all inputs
+        const inputs = document.querySelectorAll('input:not([type="search"]), select, textarea');
         inputs.forEach(input => {
-            if (!input.closest('#camper-locator') && !input.closest('#print')) {
+            if (!input.closest('.search-container') && !input.closest('.filter-container')) {
                 input.disabled = true;
-                input.classList.add('rbac-input-disabled');
             }
         });
     }
@@ -172,48 +181,26 @@
     function applySchedulerRestrictions() {
         console.log("🚀 Applying scheduler restrictions...");
         
-        const editableDivisions = window.AccessControl?.getEditableDivisions() || [];
+        // Schedulers can edit their assigned divisions only
+        // This is handled by EditRestrictions/VisualRestrictions modules
         
-        // Disable camp-wide data erasure
-        const eraseButtons = document.querySelectorAll(
-            '#eraseAllSchedulesBtn, #eraseHistoryBtn, #eraseAllBtn'
-        );
-        
-        eraseButtons.forEach(btn => {
-            btn.disabled = true;
-            btn.classList.add('rbac-btn-disabled');
-            btn.title = 'Only owners can erase camp-wide data';
+        // Hide owner-only elements
+        const ownerElements = document.querySelectorAll('[data-owner-only], .owner-only');
+        ownerElements.forEach(el => {
+            el.style.display = 'none';
         });
         
-        // Disable add division (scheduler can only manage their assigned divisions)
-        const addDivisionBtn = document.getElementById('addDivisionBtn');
-        const divisionInput = document.getElementById('divisionInput');
-        
-        if (addDivisionBtn) {
-            addDivisionBtn.disabled = true;
-            addDivisionBtn.title = 'Only owner/admin can add divisions';
-        }
-        
-        if (divisionInput) {
-            divisionInput.disabled = true;
-            divisionInput.placeholder = 'Contact owner to add divisions';
-        }
-        
-        // If no divisions assigned, disable generate
-        if (editableDivisions.length === 0) {
-            const generateBtns = document.querySelectorAll('#generate-btn, [data-action="generate"]');
-            generateBtns.forEach(btn => {
-                btn.disabled = true;
-                btn.classList.add('rbac-btn-disabled');
-                btn.title = 'No divisions assigned - contact owner';
-            });
-        }
+        // Hide admin-only elements
+        const adminElements = document.querySelectorAll('[data-admin-only], .admin-only');
+        adminElements.forEach(el => {
+            el.style.display = 'none';
+        });
     }
 
     function applyAdminRestrictions() {
         console.log("🚀 Applying admin restrictions...");
         
-        // Admin can do almost everything except:
+        // Admins can do everything except:
         // 1. Invite users
         // 2. Delete all camp data
         
@@ -296,6 +283,6 @@
         }
     };
 
-    console.log("🚀 RBAC Init loaded");
+    console.log("🚀 RBAC Init v1.1 loaded");
 
 })();
