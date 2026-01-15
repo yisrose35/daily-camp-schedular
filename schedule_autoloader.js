@@ -1,426 +1,319 @@
 // =============================================================================
-// schedule_autoloader.js — Ensures Daily Schedules Load on Page Navigation
+// SCHEDULE CLOUD SYNC FIX v1.1
 // =============================================================================
 //
-// FIXES: "No daily schedule structure found for this date" after generation
+// FIXES TWO CRITICAL ISSUES:
 //
-// PROBLEM: The schedule is saved to `daily_schedules` table but not auto-loaded
-//          when navigating to view it. The date picker hook only fires on CHANGE,
-//          not on initial page load.
+// ISSUE 1: AutoLoader skips cloud fetch if localStorage has ANY data, even if
+//          that data is stale or from a different session.
 //
-// SOLUTION: This file auto-loads the schedule for the current date on:
-//           1. Page load (if a date is already set)
-//           2. Tab navigation (Scheduler tab, Daily Adjustments, etc.)
-//           3. Cloud hydration completion
+// ISSUE 2: ScheduleDB.saveSchedule() has DEBUG=false so we can't see if saves
+//          are succeeding or failing.
 //
-// INCLUDE: After integration_hooks.js and supabase_schedules.js
+// FIX: 
+// - After cloud hydration, ALWAYS force a cloud fetch
+// - Add verbose logging to track save operations
+// - Patch ScheduleDB.saveSchedule to log results
+//
+// INSTALLATION: Add this file AFTER schedule_autoloader.js and supabase_schedules.js
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('📅 Schedule Auto-Loader v1.0 loading...');
+    console.log('📅 Schedule AutoLoader Cloud Fix v1.0 loading...');
 
-    // =========================================================================
-    // CONFIGURATION
-    // =========================================================================
-
-    const CONFIG = {
-        DEBUG: true,
-        RETRY_DELAY_MS: 500,
-        MAX_RETRIES: 10,
-        LOCAL_STORAGE_KEY: 'campDailyData_v1'
-    };
-
-    // =========================================================================
-    // STATE
-    // =========================================================================
-
-    let _isLoading = false;
-    let _lastLoadedDate = null;
-    let _retryCount = 0;
-
-    // =========================================================================
-    // LOGGING
-    // =========================================================================
+    const DEBUG = true;
+    const DAILY_DATA_KEY = 'campDailyData_v1';
 
     function log(...args) {
-        if (CONFIG.DEBUG) {
-            console.log('📅 [AutoLoader]', ...args);
-        }
+        if (DEBUG) console.log('[AutoLoaderFix]', ...args);
     }
 
-    // =========================================================================
-    // HELPERS
-    // =========================================================================
-
     function getCurrentDateKey() {
-        // Try multiple sources for the current date
         return window.currentScheduleDate || 
                document.getElementById('schedule-date-input')?.value ||
                document.getElementById('datepicker')?.value ||
                new Date().toISOString().split('T')[0];
     }
 
-    function isSchedulerTabActive() {
-        // Check if we're on the Scheduler or Daily Adjustments tab
-        const schedulerTab = document.getElementById('scheduler-tab');
-        const dailyTab = document.getElementById('daily-adjustments-tab');
-        const viewTab = document.getElementById('view-schedule-tab');
-        
-        return (schedulerTab && schedulerTab.classList.contains('active')) ||
-               (dailyTab && dailyTab.classList.contains('active')) ||
-               (viewTab && viewTab.classList.contains('active')) ||
-               document.querySelector('.schedule-grid') !== null ||
-               document.querySelector('#schedule-table') !== null;
-    }
-
     // =========================================================================
-    // LOAD FROM LOCALSTORAGE (IMMEDIATE)
+    // CORE FIX: Force cloud load and merge with local
     // =========================================================================
 
-    function loadFromLocalStorage(dateKey) {
-        try {
-            const raw = localStorage.getItem(CONFIG.LOCAL_STORAGE_KEY);
-            if (!raw) return null;
-            
-            const allData = JSON.parse(raw);
-            return allData[dateKey] || null;
-        } catch (e) {
-            log('Failed to load from localStorage:', e);
-            return null;
-        }
-    }
-
-    function hydrateWindowFromLocal(dateKey) {
-        const data = loadFromLocalStorage(dateKey);
+    async function forceCloudLoadAndMerge(dateKey) {
+        if (!dateKey) dateKey = getCurrentDateKey();
         
-        if (!data) {
-            log('No local data for', dateKey);
+        log(`Force loading from cloud for: ${dateKey}`);
+
+        // Check if ScheduleDB is available
+        if (!window.ScheduleDB?.loadSchedule) {
+            log('ScheduleDB not available, waiting...');
             return false;
         }
 
-        log('Hydrating from localStorage for', dateKey);
-
-        // Hydrate window globals
-        if (data.scheduleAssignments && Object.keys(data.scheduleAssignments).length > 0) {
-            window.scheduleAssignments = data.scheduleAssignments;
-            log('  ✓ scheduleAssignments:', Object.keys(data.scheduleAssignments).length, 'bunks');
-        }
-
-        if (data.leagueAssignments) {
-            window.leagueAssignments = data.leagueAssignments;
-            log('  ✓ leagueAssignments');
-        }
-
-        if (data.unifiedTimes && Array.isArray(data.unifiedTimes) && data.unifiedTimes.length > 0) {
-            // Normalize unifiedTimes
-            window.unifiedTimes = data.unifiedTimes.map(t => {
-                const startDate = t.start instanceof Date ? t.start : new Date(t.start);
-                const endDate = t.end instanceof Date ? t.end : new Date(t.end);
-                return {
-                    start: startDate,
-                    end: endDate,
-                    startMin: t.startMin ?? (startDate.getHours() * 60 + startDate.getMinutes()),
-                    endMin: t.endMin ?? (endDate.getHours() * 60 + endDate.getMinutes()),
-                    label: t.label || ''
-                };
-            });
-            log('  ✓ unifiedTimes:', window.unifiedTimes.length, 'slots');
-        }
-
-        return true;
-    }
-
-    // =========================================================================
-    // LOAD FROM CLOUD (ASYNC)
-    // =========================================================================
-
-    async function loadFromCloud(dateKey) {
-        if (!window.ScheduleDB?.loadSchedule) {
-            log('ScheduleDB not available');
-            return null;
-        }
-
         try {
-            log('Loading from cloud for', dateKey);
+            // Call ScheduleDB.loadSchedule which queries daily_schedules table
+            // and merges all scheduler records
             const result = await window.ScheduleDB.loadSchedule(dateKey);
             
-            if (result?.success && result.data) {
-                log('Cloud load successful:', {
-                    source: result.source,
-                    bunks: Object.keys(result.data.scheduleAssignments || {}).length,
-                    slots: result.data.unifiedTimes?.length || 0
-                });
-                return result.data;
-            }
-            
-            log('No cloud data for', dateKey);
-            return null;
-        } catch (e) {
-            log('Cloud load failed:', e);
-            return null;
-        }
-    }
-
-    async function hydrateWindowFromCloud(dateKey) {
-        const data = await loadFromCloud(dateKey);
-        
-        if (!data) {
-            return false;
-        }
-
-        // Hydrate window globals
-        if (data.scheduleAssignments && Object.keys(data.scheduleAssignments).length > 0) {
-            window.scheduleAssignments = data.scheduleAssignments;
-        }
-
-        if (data.leagueAssignments) {
-            window.leagueAssignments = data.leagueAssignments;
-        }
-
-        if (data.unifiedTimes && data.unifiedTimes.length > 0) {
-            window.unifiedTimes = data.unifiedTimes;
-        }
-
-        // Also save to localStorage for future local loads
-        try {
-            const allData = JSON.parse(localStorage.getItem(CONFIG.LOCAL_STORAGE_KEY) || '{}');
-            allData[dateKey] = data;
-            localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(allData));
-        } catch (e) {
-            // Ignore localStorage errors
-        }
-
-        return true;
-    }
-
-    // =========================================================================
-    // MAIN LOAD FUNCTION
-    // =========================================================================
-
-    async function loadScheduleForDate(dateKey, forceCloud = false) {
-        if (_isLoading) {
-            log('Already loading, skipping');
-            return;
-        }
-
-        if (!dateKey) {
-            log('No date key provided');
-            return;
-        }
-
-        if (dateKey === _lastLoadedDate && !forceCloud) {
-            log('Already loaded', dateKey);
-            return;
-        }
-
-        _isLoading = true;
-
-        try {
-            log('Loading schedule for', dateKey);
-
-            // Step 1: Try localStorage first (fast)
-            let loaded = hydrateWindowFromLocal(dateKey);
-
-            // Step 2: If no local data or forced, try cloud
-            if (!loaded || forceCloud) {
-                loaded = await hydrateWindowFromCloud(dateKey);
-            }
-
-            // Step 3: Refresh UI
-            if (loaded) {
-                _lastLoadedDate = dateKey;
-                
-                // Trigger table update
-                if (window.updateTable) {
-                    log('Triggering table update');
-                    window.updateTable();
-                }
-
-                // Dispatch event for other modules
-                window.dispatchEvent(new CustomEvent('campistry-schedule-loaded', {
-                    detail: { dateKey }
-                }));
-
-                console.log('📅 Schedule loaded for', dateKey, {
-                    bunks: Object.keys(window.scheduleAssignments || {}).length,
-                    slots: (window.unifiedTimes || []).length
-                });
-            } else {
-                log('No schedule data found for', dateKey);
-            }
-
-        } finally {
-            _isLoading = false;
-        }
-    }
-
-    // =========================================================================
-    // AUTO-LOAD TRIGGERS
-    // =========================================================================
-
-    function tryAutoLoad() {
-        const dateKey = getCurrentDateKey();
-        
-        if (!dateKey) {
-            log('No current date set');
-            return;
-        }
-
-        // Check if we already have data
-        const hasData = window.scheduleAssignments && 
-                       Object.keys(window.scheduleAssignments).length > 0;
-
-        if (hasData && _lastLoadedDate === dateKey) {
-            log('Data already present for', dateKey);
-            return;
-        }
-
-        loadScheduleForDate(dateKey);
-    }
-
-    function scheduleRetry() {
-        if (_retryCount >= CONFIG.MAX_RETRIES) {
-            log('Max retries reached');
-            return;
-        }
-
-        _retryCount++;
-        setTimeout(tryAutoLoad, CONFIG.RETRY_DELAY_MS);
-    }
-
-    // =========================================================================
-    // EVENT LISTENERS
-    // =========================================================================
-
-    // On cloud hydration complete
-    window.addEventListener('campistry-cloud-hydrated', () => {
-        log('Cloud hydrated, checking for schedule data...');
-        setTimeout(tryAutoLoad, 100);
-    });
-
-    // On integration ready
-    window.addEventListener('campistry-integration-ready', () => {
-        log('Integration ready, checking for schedule data...');
-        setTimeout(tryAutoLoad, 100);
-    });
-
-    // On RBAC ready
-    window.addEventListener('campistry-rbac-ready', () => {
-        log('RBAC ready, checking for schedule data...');
-        setTimeout(tryAutoLoad, 200);
-    });
-
-    // On tab change (if using tab navigation)
-    document.addEventListener('click', (e) => {
-        const tab = e.target.closest('[data-tab], .tab-button, .nav-tab');
-        if (tab) {
-            setTimeout(() => {
-                if (isSchedulerTabActive()) {
-                    log('Scheduler tab activated');
-                    tryAutoLoad();
-                }
-            }, 100);
-        }
-    });
-
-    // Watch for date changes
-    const observeDateInput = () => {
-        const dateInput = document.getElementById('schedule-date-input') ||
-                         document.getElementById('datepicker');
-        
-        if (dateInput) {
-            // Initial load
-            if (dateInput.value) {
-                window.currentScheduleDate = dateInput.value;
-                tryAutoLoad();
-            }
-
-            // Watch for changes
-            dateInput.addEventListener('change', (e) => {
-                const newDate = e.target.value;
-                if (newDate && newDate !== _lastLoadedDate) {
-                    window.currentScheduleDate = newDate;
-                    loadScheduleForDate(newDate, true); // Force cloud for date changes
-                }
+            log('Cloud load result:', {
+                success: result?.success,
+                source: result?.source,
+                recordCount: result?.recordCount,
+                bunks: result?.data ? Object.keys(result.data.scheduleAssignments || {}).length : 0
             });
 
-            log('Watching date input');
-            return true;
+            if (result?.success && result.data) {
+                const cloudData = result.data;
+                
+                // Hydrate window globals from cloud data
+                if (cloudData.scheduleAssignments && Object.keys(cloudData.scheduleAssignments).length > 0) {
+                    window.scheduleAssignments = cloudData.scheduleAssignments;
+                    log(`✅ Hydrated scheduleAssignments: ${Object.keys(cloudData.scheduleAssignments).length} bunks`);
+                }
+
+                if (cloudData.leagueAssignments) {
+                    window.leagueAssignments = cloudData.leagueAssignments;
+                    log('✅ Hydrated leagueAssignments');
+                }
+
+                if (cloudData.unifiedTimes && cloudData.unifiedTimes.length > 0) {
+                    // Normalize the times
+                    window.unifiedTimes = cloudData.unifiedTimes.map(t => {
+                        const startDate = t.start instanceof Date ? t.start : new Date(t.start);
+                        const endDate = t.end instanceof Date ? t.end : new Date(t.end);
+                        return {
+                            start: startDate,
+                            end: endDate,
+                            startMin: t.startMin ?? (startDate.getHours() * 60 + startDate.getMinutes()),
+                            endMin: t.endMin ?? (endDate.getHours() * 60 + endDate.getMinutes()),
+                            label: t.label || ''
+                        };
+                    });
+                    log(`✅ Hydrated unifiedTimes: ${window.unifiedTimes.length} slots`);
+                }
+
+                // Update localStorage to match cloud
+                try {
+                    const allData = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
+                    allData[dateKey] = {
+                        scheduleAssignments: window.scheduleAssignments,
+                        leagueAssignments: window.leagueAssignments,
+                        unifiedTimes: cloudData.unifiedTimes // Keep serialized form
+                    };
+                    localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allData));
+                    log('✅ Updated localStorage with cloud data');
+                } catch (e) {
+                    log('Warning: Could not update localStorage:', e.message);
+                }
+
+                // Refresh the UI
+                if (window.updateTable) {
+                    window.updateTable();
+                    log('✅ Table updated');
+                }
+
+                // Dispatch event
+                window.dispatchEvent(new CustomEvent('campistry-cloud-schedule-loaded', {
+                    detail: { dateKey, source: 'cloud-fix', recordCount: result.recordCount }
+                }));
+
+                return true;
+            } else {
+                log('No cloud data returned or load failed');
+                return false;
+            }
+
+        } catch (e) {
+            log('Error loading from cloud:', e);
+            return false;
         }
-        return false;
+    }
+
+    // =========================================================================
+    // HOOK: After cloud hydration, force schedule load
+    // =========================================================================
+
+    let _hasLoadedAfterHydration = false;
+
+    window.addEventListener('campistry-cloud-hydrated', () => {
+        if (_hasLoadedAfterHydration) return;
+        _hasLoadedAfterHydration = true;
+
+        log('Cloud hydration detected, forcing schedule load...');
+        
+        // Wait a bit for other systems to initialize
+        setTimeout(async () => {
+            const dateKey = getCurrentDateKey();
+            await forceCloudLoadAndMerge(dateKey);
+        }, 500);
+    });
+
+    // Also hook into integration ready
+    window.addEventListener('campistry-integration-ready', () => {
+        if (_hasLoadedAfterHydration) return;
+        
+        log('Integration ready, checking for cloud schedule...');
+        
+        setTimeout(async () => {
+            const dateKey = getCurrentDateKey();
+            const hasLocalData = window.scheduleAssignments && 
+                                Object.keys(window.scheduleAssignments).length > 0;
+            
+            // Always try cloud to get latest merged data
+            log(`Has local data: ${hasLocalData}, forcing cloud check anyway...`);
+            await forceCloudLoadAndMerge(dateKey);
+            
+            _hasLoadedAfterHydration = true;
+        }, 300);
+    });
+
+    // =========================================================================
+    // MANUAL TRIGGER
+    // =========================================================================
+
+    window.forceLoadCloudSchedule = async function(dateKey) {
+        return await forceCloudLoadAndMerge(dateKey || getCurrentDateKey());
     };
 
     // =========================================================================
-    // INITIALIZATION
+    // DIAGNOSTIC
     // =========================================================================
 
-    function initialize() {
-        log('Initializing...');
+    window.diagnoseScheduleCloudSync = async function() {
+        const client = window.CampistryDB?.getClient?.() || window.supabase;
+        const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
+        const dateKey = getCurrentDateKey();
 
-        // Try to find and watch date input
-        if (!observeDateInput()) {
-            // Retry a few times
-            let attempts = 0;
-            const tryObserve = setInterval(() => {
-                if (observeDateInput() || attempts++ > 10) {
-                    clearInterval(tryObserve);
-                }
-            }, 500);
+        console.log('='.repeat(60));
+        console.log('SCHEDULE CLOUD SYNC DIAGNOSTIC');
+        console.log('='.repeat(60));
+        console.log('Camp ID:', campId);
+        console.log('Date Key:', dateKey);
+        console.log('');
+
+        if (!client || !campId) {
+            console.error('No Supabase client or camp ID');
+            return;
         }
 
-        // Initial load attempt
-        setTimeout(tryAutoLoad, 300);
+        try {
+            // Query daily_schedules table
+            const { data, error } = await client
+                .from('daily_schedules')
+                .select('*')
+                .eq('camp_id', campId)
+                .eq('date_key', dateKey);
 
-        // Fallback: periodic check for first 10 seconds
-        let checkCount = 0;
-        const periodicCheck = setInterval(() => {
-            if (checkCount++ > 20) {
-                clearInterval(periodicCheck);
+            if (error) {
+                console.error('Query error:', error);
                 return;
             }
 
-            const hasData = window.scheduleAssignments && 
-                           Object.keys(window.scheduleAssignments).length > 0;
-            
-            if (!hasData) {
-                tryAutoLoad();
+            console.log('RECORDS IN daily_schedules TABLE:', data?.length || 0);
+
+            if (data && data.length > 0) {
+                data.forEach((record, i) => {
+                    console.log(`\nRecord ${i + 1}:`);
+                    console.log('  Scheduler ID:', record.scheduler_id);
+                    console.log('  Scheduler Name:', record.scheduler_name);
+                    console.log('  Divisions:', record.divisions);
+                    console.log('  Updated:', record.updated_at);
+                    console.log('  Bunks:', Object.keys(record.schedule_data?.scheduleAssignments || {}).length);
+                });
             } else {
-                clearInterval(periodicCheck);
+                console.log('\n⚠️ NO DATA IN daily_schedules TABLE!');
+                console.log('The schedule was NOT saved to the cloud.');
             }
-        }, 500);
-    }
 
-    // =========================================================================
-    // EXPOSE GLOBAL API
-    // =========================================================================
+            console.log('\n--- Current Window State ---');
+            console.log('window.scheduleAssignments:', Object.keys(window.scheduleAssignments || {}).length, 'bunks');
+            console.log('window.unifiedTimes:', (window.unifiedTimes || []).length, 'slots');
 
-    window.ScheduleAutoLoader = {
-        load: loadScheduleForDate,
-        reload: () => loadScheduleForDate(getCurrentDateKey(), true),
-        getStatus: () => ({
-            lastLoadedDate: _lastLoadedDate,
-            isLoading: _isLoading,
-            currentDate: getCurrentDateKey(),
-            hasBunks: Object.keys(window.scheduleAssignments || {}).length,
-            hasSlots: (window.unifiedTimes || []).length
-        })
+            console.log('\n--- LocalStorage State ---');
+            try {
+                const raw = localStorage.getItem(DAILY_DATA_KEY);
+                const allData = raw ? JSON.parse(raw) : {};
+                const dateData = allData[dateKey];
+                console.log(`localStorage[${dateKey}]:`, dateData ? 
+                    `${Object.keys(dateData.scheduleAssignments || {}).length} bunks` : 
+                    'NO DATA');
+            } catch (e) {
+                console.log('localStorage error:', e.message);
+            }
+
+        } catch (e) {
+            console.error('Exception:', e);
+        }
     };
 
+    console.log('📅 Schedule Cloud Sync Fix v1.1 loaded');
+    console.log('   Commands:');
+    console.log('   - forceLoadCloudSchedule()      → Force load from cloud');
+    console.log('   - diagnoseScheduleCloudSync()   → Check cloud/local state');
+
     // =========================================================================
-    // START
+    // PATCH: Add verbose logging to ScheduleDB.saveSchedule
     // =========================================================================
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initialize);
+    const originalSaveSchedule = window.ScheduleDB?.saveSchedule;
+    
+    if (originalSaveSchedule && window.ScheduleDB) {
+        window.ScheduleDB.saveSchedule = async function(dateKey, data, options = {}) {
+            console.log('📅 [SaveTracker] saveSchedule called:', {
+                dateKey,
+                bunks: Object.keys(data?.scheduleAssignments || {}).length,
+                slots: (data?.unifiedTimes || window.unifiedTimes || []).length
+            });
+
+            try {
+                const result = await originalSaveSchedule.call(window.ScheduleDB, dateKey, data, options);
+                
+                console.log('📅 [SaveTracker] saveSchedule result:', {
+                    success: result?.success,
+                    target: result?.target,
+                    error: result?.error,
+                    bunks: result?.bunks
+                });
+
+                if (result?.success && result?.target === 'cloud') {
+                    console.log('📅 [SaveTracker] ✅ Schedule saved to cloud successfully!');
+                } else if (result?.target === 'local' || result?.target === 'local-fallback') {
+                    console.warn('📅 [SaveTracker] ⚠️ Schedule saved to LOCAL only, not cloud');
+                    console.warn('   Reason:', result?.error || 'No client/campId or cloud save failed');
+                }
+
+                return result;
+            } catch (e) {
+                console.error('📅 [SaveTracker] ❌ saveSchedule exception:', e);
+                throw e;
+            }
+        };
+        
+        log('✅ Patched ScheduleDB.saveSchedule with verbose logging');
     } else {
-        setTimeout(initialize, 100);
+        log('⚠️ ScheduleDB.saveSchedule not found yet, will retry...');
+        
+        // Retry after ScheduleDB initializes
+        window.addEventListener('campistry-scheduledb-ready', () => {
+            const saveSchedule = window.ScheduleDB?.saveSchedule;
+            if (saveSchedule && !saveSchedule._patched) {
+                const original = saveSchedule;
+                window.ScheduleDB.saveSchedule = async function(dateKey, data, options = {}) {
+                    console.log('📅 [SaveTracker] saveSchedule called:', {
+                        dateKey,
+                        bunks: Object.keys(data?.scheduleAssignments || {}).length
+                    });
+                    const result = await original.call(window.ScheduleDB, dateKey, data, options);
+                    console.log('📅 [SaveTracker] saveSchedule result:', result);
+                    return result;
+                };
+                window.ScheduleDB.saveSchedule._patched = true;
+                console.log('📅 [SaveTracker] ✅ Late-patched ScheduleDB.saveSchedule');
+            }
+        });
     }
-
-    console.log('📅 Schedule Auto-Loader v1.0 ready');
-    console.log('   Use ScheduleAutoLoader.reload() to force reload');
-    console.log('   Use ScheduleAutoLoader.getStatus() to check state');
 
 })();
