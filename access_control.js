@@ -1612,7 +1612,7 @@ function getEditableBunkIds() {
         canEditAnything,
         canSave,
         canRunGenerator,
-        
+        getEditableBunkIds,
         canPrint,
         canUseCamperLocator,
         canViewDailySchedule,
