@@ -1,8 +1,12 @@
 // =============================================================================
-// supabase_client.js v5.1 — CAMPISTRY UNIFIED SUPABASE CLIENT
+// supabase_client.js v5.2 — CAMPISTRY UNIFIED SUPABASE CLIENT
 // =============================================================================
 //
 // THE SINGLE SOURCE OF TRUTH for Supabase connection in Campistry.
+//
+// v5.2: CRITICAL FIX - Invitees no longer get owner permissions
+//       - Changed STEP 4 fallback from 'owner' to 'viewer'
+//       - Don't cache uncertain role state
 //
 // v5.1: FIXED - Check team membership BEFORE camp ownership
 //
@@ -20,7 +24,7 @@
 (function() {
     'use strict';
 
-    console.log('🔌 Campistry Supabase Client v5.1 loading...');
+    console.log('🔌 Campistry Supabase Client v5.2 loading...');
 
     // =========================================================================
     // CONFIGURATION - SINGLE SOURCE OF TRUTH
@@ -73,35 +77,41 @@
     }
 
     // =========================================================================
-    // INITIALIZE SUPABASE CLIENT
+    // CLIENT INITIALIZATION
     // =========================================================================
 
     function initClient() {
-        // Already initialized
         if (_client) return _client;
 
-        // Check if supabase-js is loaded
-        if (typeof supabase !== 'undefined' && supabase.createClient) {
-            _client = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
-                auth: {
-                    persistSession: true,
-                    autoRefreshToken: true,
-                    detectSessionInUrl: true
+        try {
+            if (typeof supabase !== 'undefined' && typeof supabase.createClient === 'function') {
+                log('Creating Supabase client...');
+                _client = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
+                    auth: {
+                        persistSession: true,
+                        autoRefreshToken: true,
+                        detectSessionInUrl: true
+                    }
+                });
+                
+                if (_client && _client.auth) {
+                    window.supabase = _client;
+                    log('✅ Supabase client created successfully');
+                    return _client;
+                } else {
+                    logError('Client created but auth is missing!', _client);
                 }
-            });
-            window.supabase = _client;
-            log('Supabase client initialized');
-            return _client;
+            } else if (window.supabase && window.supabase.auth) {
+                _client = window.supabase;
+                log('Using existing window.supabase client');
+                return _client;
+            } else {
+                logError('Supabase JS library not loaded. Include supabase-js before this script.');
+            }
+        } catch (e) {
+            logError('Failed to create client:', e);
         }
         
-        // Try window.supabase (might be loaded differently)
-        if (window.supabase) {
-            _client = window.supabase;
-            log('Using existing window.supabase client');
-            return _client;
-        }
-        
-        logError('Supabase JS library not loaded. Include supabase-js before this script.');
         return null;
     }
 
@@ -160,7 +170,7 @@
     }
 
     // =========================================================================
-    // ⭐ FIXED: Check team membership FIRST, then camp ownership
+    // ⭐ FIXED v5.2: Check team membership FIRST, then camp ownership
     // =========================================================================
 
     async function detectCampAndRole() {
@@ -214,7 +224,7 @@
             if (userEmail) {
                 const { data: pendingInvite } = await _client
                     .from('camp_users')
-                    .select('id, camp_id, role')
+                    .select('id, camp_id, role, subdivision_ids, assigned_divisions')
                     .eq('email', userEmail.toLowerCase())
                     .is('user_id', null)
                     .maybeSingle();
@@ -236,8 +246,14 @@
                         _role = pendingInvite.role || 'viewer';
                         _isTeamMember = true;
                         cacheValues();
+                        
+                        // Store membership for permissions
+                        window._campistryMembership = pendingInvite;
+                        
                         log('✅ Invite auto-accepted, user is now:', _role);
                         return;
+                    } else {
+                        logError('Failed to accept invite:', acceptError);
                     }
                 }
             }
@@ -261,13 +277,17 @@
             }
 
             // =================================================================
-            // ⭐ STEP 4: No camp association - treat as new owner
+            // ⭐ STEP 4: No camp association found
+            // ★★★ CRITICAL FIX v5.2: Default to VIEWER for safety, not OWNER ★★★
+            // New users will be redirected to create a camp in the auth flow
+            // Invited users who fell through should NOT get owner access
             // =================================================================
-            log('No camp association found - user may be setting up new camp');
-            _campId = _userId; // Use user ID as camp ID for new owners
-            _role = 'owner';
+            log('⚠️ No camp association found - defaulting to VIEWER for safety');
+            _campId = _userId;
+            _role = 'viewer';  // ★★★ SAFE DEFAULT - NOT OWNER! ★★★
             _isTeamMember = false;
-            cacheValues();
+            // Don't cache uncertain state - let next page load verify
+            // cacheValues();
 
         } catch (e) {
             logError('Camp/role detection failed:', e);
@@ -511,7 +531,6 @@
     // Create client IMMEDIATELY so window.supabase is available right away
     (function initClientNow() {
         try {
-            // The CDN exposes 'supabase' as the library with createClient method
             if (typeof supabase !== 'undefined' && typeof supabase.createClient === 'function') {
                 log('Creating Supabase client...');
                 _client = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
@@ -522,26 +541,23 @@
                     }
                 });
                 
-                // Verify client was created properly
                 if (_client && _client.auth) {
                     window.supabase = _client;
                     log('✅ Supabase client created successfully');
                 } else {
-                    console.error('🔌 Client created but auth is missing!', _client);
+                    logError('Client created but auth is missing!', _client);
                 }
             } else if (window.supabase && window.supabase.auth) {
-                // Already a valid client
                 _client = window.supabase;
                 log('Using existing window.supabase client');
             } else {
-                console.error('🔌 Supabase JS library not loaded. Expected supabase.createClient to be a function.');
-                console.error('🔌 typeof supabase:', typeof supabase);
+                logError('Supabase JS library not loaded. Expected supabase.createClient to be a function.');
                 if (typeof supabase !== 'undefined') {
-                    console.error('🔌 supabase keys:', Object.keys(supabase));
+                    logError('supabase keys:', Object.keys(supabase));
                 }
             }
         } catch (e) {
-            console.error('🔌 Failed to create Supabase client:', e);
+            logError('Failed to create Supabase client:', e);
         }
     })();
 
