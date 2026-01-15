@@ -479,11 +479,19 @@
     // HOOK: AUTO-SUBSCRIBE ON DATE CHANGE
     // =========================================================================
 
+    let _datePickerRetries = 0;
+    const MAX_DATE_PICKER_RETRIES = 5;
+
     function hookDatePicker() {
         const datePicker = document.getElementById('schedule-date-input');
         if (!datePicker) {
-            console.log('🔗 Date picker not found, will retry...');
-            setTimeout(hookDatePicker, 1000);
+            _datePickerRetries++;
+            if (_datePickerRetries < MAX_DATE_PICKER_RETRIES) {
+                // Silent retry - don't spam console
+                setTimeout(hookDatePicker, 2000);
+            } else if (_datePickerRetries === MAX_DATE_PICKER_RETRIES) {
+                console.log('🔗 Date picker not found on this page (normal for Setup tab)');
+            }
             return;
         }
 
