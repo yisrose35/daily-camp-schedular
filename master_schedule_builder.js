@@ -789,11 +789,20 @@ function addDropListeners(selector){
                 };
             }
             // 2. Split Tile
+            // BEHAVIOR: Group 1 gets main 1 first half, main 2 second half
+            //           Group 2 gets main 2 first half, main 1 second half
             else if(tileData.type==='split'){
-                let st=prompt("Start Time:", startStr); if(!st) return;
-                let et=prompt("End Time:", endStr); if(!et) return;
-                let a1=prompt("Activity 1 (First Half):"); if(!a1) return;
-                let a2=prompt("Activity 2 (Second Half):"); if(!a2) return;
+                let st=prompt("Start Time:", startStr); 
+                if(!st) return;
+                
+                let et=prompt("End Time:", endStr); 
+                if(!et) return;
+                
+                let a1=prompt("Activity 1 (Main 1):\n\nGroup 1 does this FIRST, Group 2 does this SECOND"); 
+                if(!a1) return;
+                
+                let a2=prompt("Activity 2 (Main 2):\n\nGroup 2 does this FIRST, Group 1 does this SECOND"); 
+                if(!a2) return;
                 
                 newEvent = {
                     id: Date.now().toString(),
@@ -802,8 +811,19 @@ function addDropListeners(selector){
                     division: divName,
                     startTime: st,
                     endTime: et,
-                    subEvents: [{event:a1}, {event:a2}]
+                    // Consistent structure - always use {event: name} format
+                    subEvents: [
+                        { event: a1 },
+                        { event: a2 }
+                    ]
                 };
+                
+                // Log for debugging
+                console.log(`[SPLIT TILE] Created split tile for ${divName}:`);
+                console.log(`  Main 1: "${a1}", Main 2: "${a2}"`);
+                console.log(`  Time: ${st} - ${et}`);
+                console.log(`  First half:  Group 1 → ${a1}, Group 2 → ${a2}`);
+                console.log(`  Second half: Group 1 → ${a2}, Group 2 → ${a1}`);
             }
             // 3. ELECTIVE TILE - Reserve multiple activities for this division
             else if (tileData.type === 'elective') {
