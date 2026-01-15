@@ -1,9 +1,9 @@
 // =================================================================
-// calendar.js (FIXED v2.8 - Delete Cloud Sync Fix)
+// calendar.js (FIXED v2.9 - Quota Handling + Syntax Fix)
 // =================================================================
 (function() {
     'use strict';
-    console.log("🗓️ calendar.js v2.8 (DELETE CLOUD SYNC FIX) loaded");
+    console.log("🗓️ calendar.js v2.9 (QUOTA HANDLING FIX) loaded");
     
     // ==========================================================
     // 1. STORAGE KEYS - UNIFIED
@@ -29,6 +29,53 @@
         const month = String(date.getMonth() + 1).padStart(2, '0');
         const day = String(date.getDate()).padStart(2, '0');
         return `${year}-${month}-${day}`;
+    }
+    
+    // ==========================================================
+    // Helper — Check localStorage quota
+    // ==========================================================
+    function getLocalStorageUsage() {
+        let total = 0;
+        try {
+            for (let key in localStorage) {
+                if (localStorage.hasOwnProperty(key)) {
+                    total += (localStorage[key].length * 2); // UTF-16 = 2 bytes per char
+                }
+            }
+        } catch (e) {
+            console.warn("Could not calculate localStorage usage:", e);
+        }
+        return total;
+    }
+    
+    function isLocalStorageNearQuota() {
+        const usage = getLocalStorageUsage();
+        const estimatedQuota = 5 * 1024 * 1024; // 5MB typical limit
+        return usage > (estimatedQuota * 0.9); // 90% full
+    }
+    
+    function safeLocalStorageSet(key, value) {
+        try {
+            localStorage.setItem(key, value);
+            return true;
+        } catch (e) {
+            if (e.name === 'QuotaExceededError') {
+                console.warn(`⚠️ localStorage quota exceeded for key: ${key}`);
+                // Try to free up space by removing auto-save cache
+                if (key !== AUTO_SAVE_KEY) {
+                    try {
+                        localStorage.removeItem(AUTO_SAVE_KEY);
+                        console.log("🗑️ Cleared auto-save cache to free space");
+                        localStorage.setItem(key, value);
+                        return true;
+                    } catch (e2) {
+                        console.error("Still cannot save after clearing auto-save:", e2);
+                    }
+                }
+                return false;
+            }
+            throw e;
+        }
     }
     
     // ==========================================================
@@ -111,7 +158,6 @@
             
             // Update UI reference immediately
             window.currentDailyData = all[date];
-
             // 🟢 UNIFIED SAVING: Delegate to Bridge (Same way as Divisions)
             // 'daily_schedules' is the special key the bridge uses to bundle/unbundle this data
             if (typeof window.saveGlobalSettings === 'function') {
@@ -120,9 +166,8 @@
             } else {
                 // Fallback if bridge is missing
                 console.warn("⚠️ Bridge not found, falling back to local save");
-                localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(all));
+                safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(all));
             }
-
         } catch (e) {
             console.error("Failed to save daily data:", e);
         }
@@ -146,13 +191,11 @@
     window.saveRotationHistory = function(hist) {
         try {
             if (!hist || !hist.bunks || !hist.leagues) return;
-            localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify(hist));
-
+            safeLocalStorageSet(ROTATION_HISTORY_KEY, JSON.stringify(hist));
             // 🟢 TRIGGER CLOUD SYNC
             if (typeof window.scheduleCloudSync === 'function') {
                 window.scheduleCloudSync();
             }
-
         } catch (e) {
             console.error("Failed to save rotation history:", e);
         }
@@ -357,10 +400,10 @@
                     };
                     
                     const emptyJSON = JSON.stringify(emptyState);
-                    localStorage.setItem(UNIFIED_CACHE_KEY, emptyJSON);
-                    localStorage.setItem(LEGACY_GLOBAL_SETTINGS_KEY, emptyJSON);
-                    localStorage.setItem("CAMPISTRY_LOCAL_CACHE", emptyJSON);
-                    localStorage.setItem(LEGACY_GLOBAL_REGISTRY_KEY, JSON.stringify({
+                    safeLocalStorageSet(UNIFIED_CACHE_KEY, emptyJSON);
+                    safeLocalStorageSet(LEGACY_GLOBAL_SETTINGS_KEY, emptyJSON);
+                    safeLocalStorageSet("CAMPISTRY_LOCAL_CACHE", emptyJSON);
+                    safeLocalStorageSet(LEGACY_GLOBAL_REGISTRY_KEY, JSON.stringify({
                         divisions: {},
                         bunks: []
                     }));
@@ -391,7 +434,7 @@
         
         if (all[date]) {
             delete all[date];
-            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(all));
+            safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(all));
             console.log(`🗑️ Erased schedule for ${date}`);
             
             // ★★★ FIX: Force sync the deletion to cloud ★★★
@@ -666,10 +709,9 @@
                     // Inject into unifiedState so setCloudState sees it and syncs it
                     unifiedState.daily_schedules = backup.dailyData;
                     // Also save locally just in case
-                    localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(backup.dailyData));
+                    safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(backup.dailyData));
                     console.log("  ↳ Restored daily data (injected for sync)");
                 }
-
                 // ⭐ Use setCloudState to properly update memory cache + cloud
                 if (typeof window.setCloudState === 'function') {
                     console.log("☁️ Using setCloudState for import...");
@@ -683,29 +725,29 @@
                     // Fallback: Direct localStorage writes
                     console.log("⚠️ setCloudState not available, using fallback...");
                     const unifiedJSON = JSON.stringify(unifiedState);
-                    localStorage.setItem(UNIFIED_CACHE_KEY, unifiedJSON);
-                    localStorage.setItem(LEGACY_GLOBAL_SETTINGS_KEY, unifiedJSON);
-                    localStorage.setItem(LEGACY_GLOBAL_REGISTRY_KEY, JSON.stringify({
+                    safeLocalStorageSet(UNIFIED_CACHE_KEY, unifiedJSON);
+                    safeLocalStorageSet(LEGACY_GLOBAL_SETTINGS_KEY, unifiedJSON);
+                    safeLocalStorageSet(LEGACY_GLOBAL_REGISTRY_KEY, JSON.stringify({
                         divisions: unifiedState.divisions || {},
                         bunks: unifiedState.bunks || []
                     }));
-                    localStorage.setItem("CAMPISTRY_LOCAL_CACHE", unifiedJSON);
+                    safeLocalStorageSet("CAMPISTRY_LOCAL_CACHE", unifiedJSON);
                 }
                 
                 if (backup.rotationHistory) {
-                    localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify(backup.rotationHistory));
+                    safeLocalStorageSet(ROTATION_HISTORY_KEY, JSON.stringify(backup.rotationHistory));
                 }
                 if (backup.smartTileHistory) {
-                    localStorage.setItem(SMART_TILE_HISTORY_KEY, JSON.stringify(backup.smartTileHistory));
+                    safeLocalStorageSet(SMART_TILE_HISTORY_KEY, JSON.stringify(backup.smartTileHistory));
                 }
                 if (backup.smartTileSpecialHistory) {
-                    localStorage.setItem(SMART_TILE_SPECIAL_HISTORY_KEY, JSON.stringify(backup.smartTileSpecialHistory));
+                    safeLocalStorageSet(SMART_TILE_SPECIAL_HISTORY_KEY, JSON.stringify(backup.smartTileSpecialHistory));
                 }
                 if (backup.leagueHistory) {
-                    localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(backup.leagueHistory));
+                    safeLocalStorageSet(LEAGUE_HISTORY_KEY, JSON.stringify(backup.leagueHistory));
                 }
                 if (backup.specialtyLeagueHistory) {
-                    localStorage.setItem(SPECIALTY_LEAGUE_HISTORY_KEY, JSON.stringify(backup.specialtyLeagueHistory));
+                    safeLocalStorageSet(SPECIALTY_LEAGUE_HISTORY_KEY, JSON.stringify(backup.specialtyLeagueHistory));
                 }
                 
                 console.log("✅ Import to storage complete:", {
@@ -749,10 +791,18 @@
     window.__campistry_handleFileSelect = handleFileSelect;
     
     // ==========================================================
-    // 9. AUTO-SAVE SYSTEM
+    // 9. AUTO-SAVE SYSTEM - ★★★ FIXED with quota handling ★★★
     // ==========================================================
     function performAutoSave(silent = true) {
         try {
+            // ★★★ FIX: Check if localStorage is near quota ★★★
+            if (isLocalStorageNearQuota()) {
+                console.warn("⚠️ localStorage near quota, skipping auto-save (data is in cloud)");
+                // Try to clear old auto-save to free space
+                localStorage.removeItem(AUTO_SAVE_KEY);
+                return;
+            }
+            
             const currentState = window.loadGlobalSettings?.() || {};
             
             const snapshot = {
@@ -765,11 +815,32 @@
                 [SMART_TILE_HISTORY_KEY]: localStorage.getItem(SMART_TILE_HISTORY_KEY),
                 [SMART_TILE_SPECIAL_HISTORY_KEY]: localStorage.getItem(SMART_TILE_SPECIAL_HISTORY_KEY)
             };
-            localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(snapshot));
+            
+            // ★★★ FIX: Use safe setter with quota handling ★★★
+            const saved = safeLocalStorageSet(AUTO_SAVE_KEY, JSON.stringify(snapshot));
+            
+            if (!saved) {
+                console.warn("⚠️ Auto-save skipped due to quota. Data is saved to cloud.");
+                if (!silent) {
+                    alert("Auto-save skipped (storage full). Your data is safely stored in the cloud.");
+                }
+                return;
+            }
+            
             if (!silent) alert("Work saved!");
         } catch (e) {
-            console.error("Auto-save failed:", e);
-            if (!silent) alert("Save failed.");
+            // ★★★ FIX: Handle quota error gracefully ★★★
+            if (e.name === 'QuotaExceededError') {
+                console.warn("⚠️ Auto-save failed: localStorage quota exceeded. Data is in cloud.");
+                // Clear auto-save to free space for critical data
+                localStorage.removeItem(AUTO_SAVE_KEY);
+                if (!silent) {
+                    alert("Auto-save skipped (storage full). Your data is safely stored in the cloud.");
+                }
+            } else {
+                console.error("Auto-save failed:", e);
+                if (!silent) alert("Save failed: " + e.message);
+            }
         }
     }
     
@@ -788,13 +859,13 @@
             Object.keys(snap).forEach(key => {
                 if (key === 'timestamp') return;
                 if (snap[key]) {
-                    localStorage.setItem(key, snap[key]);
+                    safeLocalStorageSet(key, snap[key]);
                 }
             });
             
             if (snap[UNIFIED_CACHE_KEY]) {
-                localStorage.setItem(LEGACY_GLOBAL_SETTINGS_KEY, snap[UNIFIED_CACHE_KEY]);
-                localStorage.setItem("CAMPISTRY_LOCAL_CACHE", snap[UNIFIED_CACHE_KEY]);
+                safeLocalStorageSet(LEGACY_GLOBAL_SETTINGS_KEY, snap[UNIFIED_CACHE_KEY]);
+                safeLocalStorageSet("CAMPISTRY_LOCAL_CACHE", snap[UNIFIED_CACHE_KEY]);
                 
                 // Update memory cache via setCloudState
                 if (typeof window.setCloudState === 'function') {
@@ -804,7 +875,6 @@
                     if (snap[DAILY_DATA_KEY]) {
                         state.daily_schedules = JSON.parse(snap[DAILY_DATA_KEY]);
                     }
-
                     await window.setCloudState(state, true);
                 }
             }
@@ -815,6 +885,49 @@
             console.error("Restore error:", e);
             alert("Failed to restore backup.");
         }
+    };
+    
+    // ★★★ NEW: Utility to clear localStorage space ★★★
+    window.clearLocalStorageCache = function() {
+        const keysToRemove = [AUTO_SAVE_KEY, 'CAMPISTRY_LOCAL_CACHE'];
+        let freed = 0;
+        
+        keysToRemove.forEach(key => {
+            const item = localStorage.getItem(key);
+            if (item) {
+                freed += item.length * 2;
+                localStorage.removeItem(key);
+                console.log(`🗑️ Removed ${key}`);
+            }
+        });
+        
+        console.log(`✅ Freed approximately ${(freed / 1024).toFixed(1)} KB`);
+        return freed;
+    };
+    
+    // ★★★ NEW: Diagnostic function for localStorage ★★★
+    window.diagnoseLocalStorage = function() {
+        let total = 0;
+        const items = [];
+        
+        for (let key in localStorage) {
+            if (localStorage.hasOwnProperty(key)) {
+                const size = (localStorage[key].length * 2) / 1024;
+                total += size;
+                items.push({ key, size: size.toFixed(1) + ' KB' });
+            }
+        }
+        
+        items.sort((a, b) => parseFloat(b.size) - parseFloat(a.size));
+        
+        console.log("=== localStorage Usage ===");
+        items.slice(0, 10).forEach(item => {
+            console.log(`  ${item.key}: ${item.size}`);
+        });
+        console.log(`Total: ${(total / 1024).toFixed(2)} MB`);
+        console.log(`Near quota: ${isLocalStorageNearQuota()}`);
+        
+        return { total: (total / 1024).toFixed(2) + ' MB', items };
     };
     
     function startAutoSaveTimer() {
@@ -834,7 +947,7 @@
         setupEraseAll();
         startAutoSaveTimer();
         
-        console.log("🗓️ Calendar initialized (FIXED v2.8)");
+        console.log("🗓️ Calendar initialized (FIXED v2.9)");
     }
     
     window.initCalendar = initCalendar;
@@ -849,7 +962,6 @@
         initCalendar();
     }
 })();
-
 // ==========================================================
 // LATE-BIND BACKUP / IMPORT WIRING
 // ==========================================================
@@ -899,7 +1011,6 @@
         _bound = true;
         console.log("✅ Backup / Import buttons wired successfully");
     }
-
     setTimeout(wire, 100);
     setTimeout(wire, 300);
     setTimeout(wire, 600);
