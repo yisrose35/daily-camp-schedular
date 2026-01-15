@@ -157,10 +157,23 @@
     function setupDivisionChangeObserver() {
         setInterval(() => {
             const currentHash = JSON.stringify(Object.keys(window.divisions || {}).sort());
-            if (currentHash !== _lastDivisionsHash && _lastDivisionsHash !== null) {
+            
+            // ★★★ FIX: Recalculate when divisions first become available ★★★
+            if (_lastDivisionsHash === '[]' && currentHash !== '[]') {
+                debugLog("window.divisions populated, recalculating editable divisions");
+                calculateEditableDivisions();
+                
+                // Dispatch event so UI can update
+                window.dispatchEvent(new CustomEvent('campistry-divisions-updated', {
+                    detail: { editableDivisions: _editableDivisions }
+                }));
+            }
+            // Also recalculate if divisions changed
+            else if (currentHash !== _lastDivisionsHash && _lastDivisionsHash !== null) {
                 debugLog("window.divisions changed, recalculating editable divisions");
                 calculateEditableDivisions();
             }
+            
             _lastDivisionsHash = currentHash;
         }, 1000);
     }
@@ -375,9 +388,10 @@
         const allDivisions = Object.keys(window.divisions || {});
         
         debugLog("Calculating editable divisions...");
-        debugLog("All divisions:", allDivisions);
+        debugLog("All divisions from window.divisions:", allDivisions);
         debugLog("Current role:", _currentRole);
         debugLog("User subdivision IDs:", _userSubdivisionIds);
+        debugLog("User subdivision details:", _userSubdivisionDetails);
         debugLog("Direct division assignments:", _directDivisionAssignments);
         
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
@@ -418,10 +432,18 @@
                 _directDivisionAssignments.forEach(d => editableDivs.add(d));
             }
             
-            _editableDivisions = allDivisions.filter(d => editableDivs.has(d));
-            console.log("🔐 Scheduler edit access:", _editableDivisions.length, "divisions", _editableDivisions);
+            // ★★★ FIX: If window.divisions is empty (e.g., on dashboard), 
+            // use the divisions from subdivisions directly without filtering ★★★
+            if (allDivisions.length === 0 && editableDivs.size > 0) {
+                _editableDivisions = [...editableDivs];
+                console.log("🔐 Scheduler edit access (from subdivisions):", _editableDivisions.length, "divisions", _editableDivisions);
+            } else {
+                // Filter against window.divisions if it's populated
+                _editableDivisions = allDivisions.filter(d => editableDivs.has(d));
+                console.log("🔐 Scheduler edit access:", _editableDivisions.length, "divisions", _editableDivisions);
+            }
             
-            if (_editableDivisions.length === 0) {
+            if (_editableDivisions.length === 0 && editableDivs.size === 0) {
                 console.warn("🔐 ⚠️ Scheduler has NO editable divisions!");
             }
         }
