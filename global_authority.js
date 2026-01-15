@@ -1,12 +1,17 @@
 // =================================================================
-// global_authority.js — Campistry Global Authority Spine (FIXED)
-// SYNCHRONOUS API • Works with cloud_storage_bridge_FIXED.js
-// FIXED: Waits for cloud hydration before returning empty data
+// global_authority.js — Campistry Global Authority Spine v2.2
+// =================================================================
+// SYNCHRONOUS API • Works with integration_hooks.js v6.0
+// 
+// FIXES IN v2.2:
+// - ★ Properly triggers batched cloud sync after saves
+// - ★ Uses forceSyncToCloud for immediate persistence when needed
+// - ★ Better logging for sync status
 // =================================================================
 (function () {
   'use strict';
   
-  console.log("🧠 Global Authority v2.1 (FIXED) loading...");
+  console.log("🧠 Global Authority v2.2 loading...");
 
   // In-memory cache
   let _divisionCache = null;
@@ -17,7 +22,6 @@
   // SAFE BUNK COLLECTOR (prevents zero-bunk wipes)
   // --------------------------------------------------------------
   function collectBunksFromRuntime() {
-    // Check various runtime sources
     if (Array.isArray(window.globalBunks) && window.globalBunks.length) {
       return structuredClone(window.globalBunks);
     }
@@ -28,7 +32,7 @@
   }
 
   // --------------------------------------------------------------
-  // LOAD (Synchronous - but checks if cloud has hydrated)
+  // LOAD (Synchronous - returns cached/local data)
   // --------------------------------------------------------------
   function loadRegistry() {
     // Return cached if available
@@ -39,7 +43,7 @@
       };
     }
 
-    // ⭐ Synchronous call
+    // Synchronous call to loadGlobalSettings
     const settings = window.loadGlobalSettings?.() || {};
     
     _divisionCache = structuredClone(settings.divisions || {});
@@ -95,9 +99,11 @@
   // --------------------------------------------------------------
   // SAVE (Synchronous with background cloud sync)
   // --------------------------------------------------------------
-  function saveRegistry() {
-    // ⭐ Synchronous calls - no await needed!
+  function saveRegistry(immediate = false) {
+    // Save divisions
     window.saveGlobalSettings?.("divisions", _divisionCache);
+    
+    // Save bunks
     window.saveGlobalSettings?.("bunks", _bunkCache);
 
     // Update window references
@@ -107,8 +113,17 @@
 
     console.log("🧠 Registry saved:", {
       divisions: Object.keys(_divisionCache).length,
-      bunks: _bunkCache.length
+      bunks: _bunkCache.length,
+      syncMode: immediate ? 'immediate' : 'batched'
     });
+
+    // ★ If immediate sync requested, force it now
+    if (immediate && typeof window.forceSyncToCloud === 'function') {
+      console.log("🧠 Triggering immediate cloud sync...");
+      window.forceSyncToCloud().catch(err => {
+        console.warn("🧠 Immediate sync failed:", err);
+      });
+    }
   }
 
   // --------------------------------------------------------------
@@ -125,12 +140,12 @@
     return _bunkCache || [];
   };
 
-  window.setGlobalDivisions = function(divs) {
+  window.setGlobalDivisions = function(divs, immediate = false) {
     _divisionCache = structuredClone(divs || {});
-    saveRegistry();
+    saveRegistry(immediate);
   };
 
-  window.setGlobalBunks = function(bunks) {
+  window.setGlobalBunks = function(bunks, immediate = false) {
     // Prevent accidental wipe - check runtime sources first
     const runtimeBunks = collectBunksFromRuntime();
     if ((!bunks || bunks.length === 0) && runtimeBunks && runtimeBunks.length > 0) {
@@ -139,7 +154,7 @@
     }
     
     _bunkCache = structuredClone(bunks || []);
-    saveRegistry();
+    saveRegistry(immediate);
   };
 
   // Force refresh from storage (call after cloud hydration)
@@ -147,18 +162,32 @@
     return reloadFromStorage();
   };
 
-  // ⭐ Listen for cloud hydration event
+  // ★ NEW: Force immediate sync to cloud
+  window.syncGlobalRegistryToCloud = async function() {
+    console.log("🧠 Force syncing registry to cloud...");
+    saveRegistry(true);
+    if (typeof window.forceSyncToCloud === 'function') {
+      return await window.forceSyncToCloud();
+    }
+    return true;
+  };
+
+  // Listen for cloud hydration event
   window.addEventListener('campistry-cloud-hydrated', function() {
     console.log("🧠 Cloud hydration event received, reloading registry...");
     reloadFromStorage();
   });
 
-  // Don't load immediately - wait for cloud bridge to signal it's ready
-  // The initial load will happen when welcome.js calls refreshGlobalRegistry()
-  // or when getGlobalDivisions/getGlobalBunks is first called
-  
+  // Listen for settings sync completion
+  window.addEventListener('campistry-settings-synced', function(e) {
+    const keys = e.detail?.keys || [];
+    if (keys.includes('divisions') || keys.includes('bunks')) {
+      console.log("🧠 Registry synced to cloud successfully");
+    }
+  });
+
   window.__CAMPISTRY_CLOUD_READY__ = window.__CAMPISTRY_CLOUD_READY__ || false;
   
-  console.log("🧠 Global Authority ready (synchronous API)");
+  console.log("🧠 Global Authority v2.2 ready");
 
 })();
