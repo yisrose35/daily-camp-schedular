@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v15 - STRICT RBAC & TIME MAPPING RESTORATION)
+// scheduler_core_main.js (FIXED v16 - SCHEDULER RESTRICTION + STRICT RBAC)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
@@ -538,7 +538,18 @@
      */
     window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v15 - STRICT RBAC & TIME MAPPING) ★★★");
+        console.log("★★★ OPTIMIZER STARTED (v16 - SCHEDULER RESTRICTION + STRICT RBAC) ★★★");
+
+        // ★★★ SCHEDULER RESTRICTION ★★★
+        // This must be the FIRST thing we do - filter divisions based on user permissions
+        if (window.AccessControl?.filterDivisionsForGeneration) {
+            allowedDivisions = window.AccessControl.filterDivisionsForGeneration(allowedDivisions);
+            if (allowedDivisions.length === 0) {
+                alert("No divisions assigned. Contact camp owner.");
+                return;
+            }
+            console.log(`[RBAC] ★ SCHEDULER RESTRICTION APPLIED: Generating for [${allowedDivisions.join(', ')}] only`);
+        }
 
         // ★★★ 1. AUTO-DETECT ALLOWED DIVISIONS ★★★
         // If not explicitly provided, check what the current user is allowed to schedule.
@@ -1786,6 +1797,11 @@
 
         return true;
     };
+
+    // =========================================================================
+    // LEGACY ALIAS: runOptimizer → runSkeletonOptimizer
+    // =========================================================================
+    window.runOptimizer = window.runSkeletonOptimizer;
 
     function registerSingleSlotUsage(slotIndex, fieldName, divName, bunkName, activityName, fieldUsageBySlot, activityProperties) {
         if (slotIndex == null || !fieldName) return;
