@@ -1,51 +1,38 @@
 // =============================================================================
-// CAMPISTRY UNIFIED TIMES MASTER FIX v1.0
+// CAMPISTRY UNIFIED TIMES PERSISTENCE FIX v2.0
 // =============================================================================
 //
-// PROBLEM SUMMARY:
-// ----------------
-// On initial load, the schedule appears at wrong times because:
-// 1. The scheduler generates scheduleAssignments using slot indices based on its unifiedTimes
-//    (e.g., slot 2 = 11:00 AM based on skeleton block times)
-// 2. On reload, unifiedTimes is rebuilt from skeleton using buildUnifiedTimesFromSkeleton()
-//    which creates a generic 30-min grid (e.g., slot 2 = 9:30 AM)
-// 3. The slot indices in scheduleAssignments no longer match the times → data appears wrong
+// ROOT CAUSE IDENTIFIED:
+// The scheduler creates window.unifiedTimes during generation, but NO CODE
+// ever saves it to localStorage! The saveToLocalStorage functions only save
+// scheduleAssignments and leagueAssignments.
 //
-// SOLUTION:
-// ---------
-// 1. Ensure unifiedTimes is ALWAYS saved to localStorage when schedule is saved
-// 2. Ensure unifiedTimes is ALWAYS loaded from localStorage on initial load
-// 3. Prevent buildUnifiedTimesFromSkeleton() from overwriting scheduler-generated times
-//
-// INSTALLATION:
-// -------------
-// Load this file AFTER all other Campistry scheduler modules.
-// Add to your HTML: <script src="unified_times_master_fix.js"></script>
+// THIS FIX:
+// 1. Uses a DEDICATED localStorage key for unifiedTimes (not campDailyData_v1)
+// 2. Hooks into EVERY possible save trigger to capture unifiedTimes
+// 3. Loads unifiedTimes IMMEDIATELY on startup, before ANY render
+// 4. Prevents buildUnifiedTimesFromSkeleton from overwriting valid data
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('═════════════════════════════════════════════════════════════════════');
-    console.log('🔧 UNIFIED TIMES MASTER FIX v1.0');
-    console.log('═════════════════════════════════════════════════════════════════════');
+    console.log('═══════════════════════════════════════════════════════════════════════');
+    console.log('⏰ UNIFIED TIMES PERSISTENCE FIX v2.0');
+    console.log('═══════════════════════════════════════════════════════════════════════');
 
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
     
+    // Dedicated storage key - separate from campDailyData_v1 to avoid conflicts
+    const UNIFIED_TIMES_KEY = 'campistry_unifiedTimes_v1';
     const DAILY_DATA_KEY = 'campDailyData_v1';
-    const GLOBAL_SETTINGS_KEY = 'campGlobalSettings_v1';
-    const DEBUG = true;
-
+    
     // =========================================================================
     // UTILITIES
     // =========================================================================
-
-    function log(msg, ...args) {
-        if (DEBUG) console.log(`[UnifiedTimesFix] ${msg}`, ...args);
-    }
 
     function getDateKey() {
         return window.currentScheduleDate || 
@@ -55,11 +42,10 @@
     }
 
     function serializeUnifiedTimes(times) {
-        if (!times || !Array.isArray(times)) return [];
+        if (!times || !Array.isArray(times) || times.length === 0) return null;
         return times.map(t => {
             const startDate = t.start instanceof Date ? t.start : new Date(t.start);
             const endDate = t.end instanceof Date ? t.end : new Date(t.end);
-            
             return {
                 start: startDate.toISOString(),
                 end: endDate.toISOString(),
@@ -71,362 +57,440 @@
     }
 
     function deserializeUnifiedTimes(times) {
-        if (!times || !Array.isArray(times)) return [];
+        if (!times || !Array.isArray(times) || times.length === 0) return null;
         return times.map(t => {
             const startDate = t.start instanceof Date ? t.start : new Date(t.start);
             const endDate = t.end instanceof Date ? t.end : new Date(t.end);
-            
-            let startMin = t.startMin;
-            let endMin = t.endMin;
-            
-            if (startMin === undefined || startMin === null) {
-                startMin = startDate.getHours() * 60 + startDate.getMinutes();
-            }
-            if (endMin === undefined || endMin === null) {
-                endMin = endDate.getHours() * 60 + endDate.getMinutes();
-            }
-            
             return {
                 start: startDate,
                 end: endDate,
-                startMin,
-                endMin,
+                startMin: t.startMin ?? (startDate.getHours() * 60 + startDate.getMinutes()),
+                endMin: t.endMin ?? (endDate.getHours() * 60 + endDate.getMinutes()),
                 label: t.label || ''
             };
         });
     }
 
-    // Check if time grid is the generic 30-min grid vs scheduler-generated
+    // Check if this is the generic 30-min grid (bad) vs scheduler-generated (good)
     function isGeneric30MinGrid(times) {
-        if (!times || times.length < 3) return false;
-        
+        if (!times || times.length < 3) return true; // Empty/small = treat as generic
         for (let i = 1; i < times.length; i++) {
-            const prevMin = times[i-1].startMin ?? 0;
-            const currMin = times[i].startMin ?? 0;
-            if ((currMin - prevMin) !== 30) return false;
+            const prev = times[i-1].startMin ?? 0;
+            const curr = times[i].startMin ?? 0;
+            if ((curr - prev) !== 30) return false; // Has non-30-min gap = scheduler-generated
         }
-        return true;
+        return true; // All 30-min gaps = generic grid
     }
 
     // =========================================================================
-    // FIX 1: ENSURE UNIFIEDTIMES IS SAVED TO LOCALSTORAGE
+    // CORE: SAVE UNIFIEDTIMES
     // =========================================================================
 
-    function saveUnifiedTimesToStorage(dateKey) {
-        if (!window.unifiedTimes || window.unifiedTimes.length === 0) {
+    function saveUnifiedTimes(dateKey, times) {
+        if (!times || times.length === 0) {
+            console.log('[UTFix] Nothing to save - unifiedTimes is empty');
             return false;
         }
 
+        dateKey = dateKey || getDateKey();
+        
         try {
-            const raw = localStorage.getItem(DAILY_DATA_KEY);
-            const dailyData = raw ? JSON.parse(raw) : {};
+            // Load existing storage
+            const raw = localStorage.getItem(UNIFIED_TIMES_KEY);
+            const storage = raw ? JSON.parse(raw) : {};
             
-            if (!dailyData[dateKey]) dailyData[dateKey] = {};
+            // Serialize and save
+            const serialized = serializeUnifiedTimes(times);
+            if (!serialized) {
+                console.log('[UTFix] Serialization failed');
+                return false;
+            }
             
-            dailyData[dateKey].unifiedTimes = serializeUnifiedTimes(window.unifiedTimes);
-            dailyData[dateKey].slotCount = window.unifiedTimes.length;
-            dailyData[dateKey]._unifiedTimesUpdatedAt = new Date().toISOString();
+            storage[dateKey] = {
+                times: serialized,
+                slotCount: times.length,
+                savedAt: new Date().toISOString(),
+                isGeneric: isGeneric30MinGrid(times)
+            };
             
-            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(dailyData));
+            localStorage.setItem(UNIFIED_TIMES_KEY, JSON.stringify(storage));
             
-            log(`Saved unifiedTimes: ${window.unifiedTimes.length} slots for ${dateKey}`);
+            console.log(`[UTFix] ✅ SAVED unifiedTimes for ${dateKey}: ${times.length} slots, generic=${storage[dateKey].isGeneric}`);
+            
+            // ALSO save to campDailyData_v1 for redundancy
+            try {
+                const dailyRaw = localStorage.getItem(DAILY_DATA_KEY);
+                const dailyData = dailyRaw ? JSON.parse(dailyRaw) : {};
+                if (!dailyData[dateKey]) dailyData[dateKey] = {};
+                dailyData[dateKey].unifiedTimes = serialized;
+                dailyData[dateKey].slotCount = times.length;
+                localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(dailyData));
+                console.log(`[UTFix] ✅ Also saved to campDailyData_v1`);
+            } catch (e) {
+                console.warn('[UTFix] Failed to save to campDailyData_v1:', e);
+            }
+            
             return true;
         } catch (err) {
-            console.error('[UnifiedTimesFix] Error saving unifiedTimes:', err);
+            console.error('[UTFix] Save error:', err);
             return false;
         }
     }
 
     // =========================================================================
-    // FIX 2: LOAD UNIFIEDTIMES FROM LOCALSTORAGE
+    // CORE: LOAD UNIFIEDTIMES
     // =========================================================================
 
-    function loadUnifiedTimesFromStorage(dateKey, forceOverwrite = false) {
+    function loadUnifiedTimes(dateKey) {
+        dateKey = dateKey || getDateKey();
+        
         try {
-            const raw = localStorage.getItem(DAILY_DATA_KEY);
-            if (!raw) {
-                log('No localStorage data found');
-                return false;
-            }
-            
-            const dailyData = JSON.parse(raw);
-            const dateData = dailyData[dateKey];
-            
-            if (!dateData) {
-                log(`No data for date ${dateKey}`);
-                return false;
-            }
-            
-            if (!dateData.unifiedTimes || dateData.unifiedTimes.length === 0) {
-                log(`No unifiedTimes stored for ${dateKey}`);
-                return false;
-            }
-            
-            const storedTimes = deserializeUnifiedTimes(dateData.unifiedTimes);
-            const currentTimes = window.unifiedTimes || [];
-            
-            // Determine if we should replace current times
-            const currentIsGeneric = isGeneric30MinGrid(currentTimes);
-            const storedIsGeneric = isGeneric30MinGrid(storedTimes);
-            
-            const shouldReplace = forceOverwrite || 
-                                  currentTimes.length === 0 ||
-                                  (currentIsGeneric && !storedIsGeneric) ||
-                                  currentTimes.length !== storedTimes.length;
-            
-            if (shouldReplace) {
-                log(`Replacing unifiedTimes: ${currentTimes.length} → ${storedTimes.length} slots`);
-                log(`  Current is generic: ${currentIsGeneric}, Stored is generic: ${storedIsGeneric}`);
+            // Try dedicated storage first
+            const raw = localStorage.getItem(UNIFIED_TIMES_KEY);
+            if (raw) {
+                const storage = JSON.parse(raw);
+                const dateData = storage[dateKey];
                 
-                window.unifiedTimes = storedTimes;
-                window._unifiedTimesFromCloud = true;
-                window._unifiedTimesLoadedAt = Date.now();
-                
-                return true;
-            } else {
-                log(`Keeping existing unifiedTimes: ${currentTimes.length} slots`);
-                return false;
+                if (dateData?.times && dateData.times.length > 0 && !dateData.isGeneric) {
+                    const times = deserializeUnifiedTimes(dateData.times);
+                    if (times && times.length > 0) {
+                        console.log(`[UTFix] ✅ LOADED unifiedTimes for ${dateKey}: ${times.length} slots from dedicated storage`);
+                        return times;
+                    }
+                }
             }
+            
+            // Fallback: try campDailyData_v1
+            const dailyRaw = localStorage.getItem(DAILY_DATA_KEY);
+            if (dailyRaw) {
+                const dailyData = JSON.parse(dailyRaw);
+                const dateData = dailyData[dateKey];
+                
+                if (dateData?.unifiedTimes && dateData.unifiedTimes.length > 0) {
+                    const times = deserializeUnifiedTimes(dateData.unifiedTimes);
+                    if (times && times.length > 0 && !isGeneric30MinGrid(times)) {
+                        console.log(`[UTFix] ✅ LOADED unifiedTimes for ${dateKey}: ${times.length} slots from campDailyData`);
+                        return times;
+                    }
+                }
+            }
+            
+            console.log(`[UTFix] No valid unifiedTimes found for ${dateKey}`);
+            return null;
         } catch (err) {
-            console.error('[UnifiedTimesFix] Error loading unifiedTimes:', err);
-            return false;
+            console.error('[UTFix] Load error:', err);
+            return null;
         }
     }
 
     // =========================================================================
-    // FIX 3: PATCH saveCurrentDailyData TO SAVE UNIFIEDTIMES
+    // CORE: APPLY UNIFIEDTIMES TO WINDOW
     // =========================================================================
 
-    function patchSaveCurrentDailyData() {
-        const original = window.saveCurrentDailyData;
-        if (!original) {
-            log('saveCurrentDailyData not found yet');
-            return false;
-        }
+    function applyUnifiedTimes(times) {
+        if (!times || times.length === 0) return false;
         
-        if (original._unifiedTimesMasterPatched) {
-            log('saveCurrentDailyData already patched');
+        const current = window.unifiedTimes || [];
+        const currentIsGeneric = isGeneric30MinGrid(current);
+        const newIsGeneric = isGeneric30MinGrid(times);
+        
+        // Only apply if: current is empty, current is generic, or new has more slots
+        if (current.length === 0 || currentIsGeneric || times.length > current.length) {
+            console.log(`[UTFix] Applying unifiedTimes: ${current.length} (generic=${currentIsGeneric}) → ${times.length} (generic=${newIsGeneric})`);
+            window.unifiedTimes = times;
+            window._unifiedTimesFromStorage = true;
+            window._unifiedTimesLoadedAt = Date.now();
             return true;
         }
         
-        window.saveCurrentDailyData = function(...args) {
-            const dateKey = getDateKey();
-            
-            // Save unifiedTimes BEFORE calling original
-            // (ensures it's in localStorage for the save)
-            saveUnifiedTimesToStorage(dateKey);
-            
-            // Call original
-            return original.apply(this, args);
-        };
-        
-        window.saveCurrentDailyData._unifiedTimesMasterPatched = true;
-        log('✅ Patched saveCurrentDailyData');
-        return true;
+        console.log(`[UTFix] Keeping current unifiedTimes: ${current.length} slots`);
+        return false;
     }
 
     // =========================================================================
-    // FIX 4: PATCH forceHydrateFromLocalStorage (SYNCPATCH)
-    // =========================================================================
-
-    function patchSyncPatch() {
-        const existing = window.forceHydrateFromLocalStorage;
-        
-        if (!existing) {
-            log('forceHydrateFromLocalStorage not found yet');
-            return false;
-        }
-        
-        if (existing._unifiedTimesMasterPatched) {
-            log('forceHydrateFromLocalStorage already patched');
-            return true;
-        }
-        
-        const original = existing;
-        
-        window.forceHydrateFromLocalStorage = function(dateKey, forceOverwrite = false) {
-            const date = dateKey || getDateKey();
-            
-            log(`Intercepting SyncPatch hydration for ${date}`);
-            
-            // Call original first (hydrates scheduleAssignments & leagueAssignments)
-            const result = original.apply(this, arguments);
-            
-            // NOW also hydrate unifiedTimes
-            loadUnifiedTimesFromStorage(date, forceOverwrite);
-            
-            return result;
-        };
-        
-        window.forceHydrateFromLocalStorage._unifiedTimesMasterPatched = true;
-        log('✅ Patched forceHydrateFromLocalStorage');
-        return true;
-    }
-
-    // =========================================================================
-    // FIX 5: HOOK INTO SCHEDULER GENERATION COMPLETE
+    // HOOK: GENERATION COMPLETE
     // =========================================================================
 
     function hookGenerationComplete() {
+        // Listen for generation complete event
         window.addEventListener('campistry-generation-complete', () => {
-            log('Generation complete, saving unifiedTimes...');
-            const dateKey = getDateKey();
-            saveUnifiedTimesToStorage(dateKey);
+            console.log('[UTFix] Generation complete - saving unifiedTimes...');
+            setTimeout(() => {
+                const times = window.unifiedTimes;
+                if (times && times.length > 0 && !isGeneric30MinGrid(times)) {
+                    saveUnifiedTimes(getDateKey(), times);
+                } else {
+                    console.log('[UTFix] unifiedTimes is empty or generic after generation');
+                }
+            }, 100);
         });
         
-        log('✅ Hooked generation complete event');
+        console.log('[UTFix] ✅ Hooked generation complete event');
     }
 
     // =========================================================================
-    // FIX 6: VERIFY AND FIX ON CLOUD HYDRATION
+    // HOOK: SAVE TRIGGERS
     // =========================================================================
 
-    function verifyAndFixOnCloudHydration() {
+    function hookSaveTriggers() {
+        // Hook saveCurrentDailyData
+        const hookSaveCurrentDailyData = () => {
+            const original = window.saveCurrentDailyData;
+            if (original && !original._utfixHooked) {
+                window.saveCurrentDailyData = function(...args) {
+                    // Save unifiedTimes whenever any data is saved
+                    const times = window.unifiedTimes;
+                    if (times && times.length > 0 && !isGeneric30MinGrid(times)) {
+                        saveUnifiedTimes(getDateKey(), times);
+                    }
+                    return original.apply(this, args);
+                };
+                window.saveCurrentDailyData._utfixHooked = true;
+                console.log('[UTFix] ✅ Hooked saveCurrentDailyData');
+            }
+        };
+        
+        // Hook forceSyncToCloud
+        const hookForceSyncToCloud = () => {
+            const original = window.forceSyncToCloud;
+            if (original && !original._utfixHooked) {
+                window.forceSyncToCloud = async function(...args) {
+                    // Save unifiedTimes before cloud sync
+                    const times = window.unifiedTimes;
+                    if (times && times.length > 0 && !isGeneric30MinGrid(times)) {
+                        saveUnifiedTimes(getDateKey(), times);
+                    }
+                    return original.apply(this, args);
+                };
+                window.forceSyncToCloud._utfixHooked = true;
+                console.log('[UTFix] ✅ Hooked forceSyncToCloud');
+            }
+        };
+        
+        // Try immediately and with delays
+        hookSaveCurrentDailyData();
+        hookForceSyncToCloud();
+        
+        setTimeout(() => { hookSaveCurrentDailyData(); hookForceSyncToCloud(); }, 100);
+        setTimeout(() => { hookSaveCurrentDailyData(); hookForceSyncToCloud(); }, 500);
+        setTimeout(() => { hookSaveCurrentDailyData(); hookForceSyncToCloud(); }, 1000);
+        setTimeout(() => { hookSaveCurrentDailyData(); hookForceSyncToCloud(); }, 2000);
+    }
+
+    // =========================================================================
+    // HOOK: PREVENT OVERWRITE BY GENERIC GRID
+    // =========================================================================
+
+    function preventGenericOverwrite() {
+        // Watch for window.unifiedTimes changes and prevent generic overwrites
+        let lastValidTimes = null;
+        
+        const checkAndProtect = () => {
+            const current = window.unifiedTimes;
+            
+            // If we have valid stored times and current is generic, restore
+            if (lastValidTimes && current && isGeneric30MinGrid(current) && !isGeneric30MinGrid(lastValidTimes)) {
+                console.log('[UTFix] Detected generic overwrite, restoring...');
+                window.unifiedTimes = lastValidTimes;
+                window._unifiedTimesProtected = true;
+                return;
+            }
+            
+            // Save valid times for protection
+            if (current && current.length > 0 && !isGeneric30MinGrid(current)) {
+                lastValidTimes = [...current];
+            }
+        };
+        
+        // Check periodically
+        setInterval(checkAndProtect, 500);
+    }
+
+    // =========================================================================
+    // HOOK: CLOUD HYDRATION
+    // =========================================================================
+
+    function hookCloudHydration() {
         window.addEventListener('campistry-cloud-hydrated', () => {
-            log('Cloud hydration complete, verifying unifiedTimes...');
+            console.log('[UTFix] Cloud hydration detected - loading stored unifiedTimes...');
             
             setTimeout(() => {
                 const dateKey = getDateKey();
-                const fixed = loadUnifiedTimesFromStorage(dateKey, true);
+                const times = loadUnifiedTimes(dateKey);
                 
-                if (fixed && window.updateTable) {
-                    log('Triggering re-render after unifiedTimes fix...');
-                    window.updateTable();
+                if (times) {
+                    applyUnifiedTimes(times);
+                    
+                    // Trigger re-render
+                    if (window.updateTable) {
+                        setTimeout(() => window.updateTable(), 100);
+                    }
                 }
-            }, 200);
+            }, 300);
         });
         
-        log('✅ Hooked cloud hydration event');
+        console.log('[UTFix] ✅ Hooked cloud hydration event');
     }
 
     // =========================================================================
-    // FIX 7: PERIODIC VERIFICATION
+    // IMMEDIATE LOAD ON STARTUP
     // =========================================================================
 
-    function schedulePeriodicVerification() {
-        // After initial load, verify unifiedTimes is correct
-        const checks = [500, 1500, 3000];
+    function immediateLoad() {
+        const dateKey = getDateKey();
+        console.log(`[UTFix] Immediate load for ${dateKey}...`);
         
-        checks.forEach(delay => {
-            setTimeout(() => {
-                const currentTimes = window.unifiedTimes || [];
-                const currentIsGeneric = isGeneric30MinGrid(currentTimes);
-                
-                if (currentIsGeneric) {
-                    log(`Periodic check at ${delay}ms: Found generic grid, attempting fix...`);
-                    const dateKey = getDateKey();
-                    const fixed = loadUnifiedTimesFromStorage(dateKey, true);
+        const times = loadUnifiedTimes(dateKey);
+        if (times) {
+            // Set immediately before any other code runs
+            window.unifiedTimes = times;
+            window._unifiedTimesFromStorage = true;
+            console.log(`[UTFix] ✅ Pre-loaded ${times.length} slots`);
+        } else {
+            console.log('[UTFix] No stored unifiedTimes to pre-load');
+        }
+    }
+
+    // =========================================================================
+    // PERIODIC CHECK & FIX
+    // =========================================================================
+
+    function startPeriodicFix() {
+        const checkAndFix = () => {
+            const current = window.unifiedTimes || [];
+            
+            // If current is generic (30-min grid), try to load from storage
+            if (isGeneric30MinGrid(current)) {
+                const stored = loadUnifiedTimes(getDateKey());
+                if (stored && stored.length > 0 && !isGeneric30MinGrid(stored)) {
+                    console.log('[UTFix] Periodic fix: Replacing generic grid with stored times');
+                    window.unifiedTimes = stored;
+                    window._unifiedTimesFromStorage = true;
                     
-                    if (fixed && window.updateTable) {
+                    if (window.updateTable) {
                         window.updateTable();
                     }
                 }
-            }, delay);
-        });
+            }
+        };
+        
+        // Check at specific intervals
+        setTimeout(checkAndFix, 500);
+        setTimeout(checkAndFix, 1500);
+        setTimeout(checkAndFix, 3000);
+        setTimeout(checkAndFix, 5000);
     }
 
     // =========================================================================
-    // DIAGNOSTIC FUNCTION
+    // DIAGNOSTIC
     // =========================================================================
 
     function diagnose() {
         const dateKey = getDateKey();
         
-        console.log('\n═════════════════════════════════════════════════════════════════════');
-        console.log('🔍 UNIFIED TIMES DIAGNOSTIC REPORT');
-        console.log('═════════════════════════════════════════════════════════════════════');
+        console.log('\n═══════════════════════════════════════════════════════════════════════');
+        console.log('⏰ UNIFIED TIMES DIAGNOSTIC');
+        console.log('═══════════════════════════════════════════════════════════════════════');
         console.log(`Date: ${dateKey}`);
-        console.log(`Time: ${new Date().toISOString()}`);
         
         // Window state
-        const windowTimes = window.unifiedTimes || [];
-        const windowIsGeneric = isGeneric30MinGrid(windowTimes);
+        const current = window.unifiedTimes || [];
+        console.log(`\nWindow unifiedTimes: ${current.length} slots`);
+        console.log(`Is Generic 30-min Grid: ${isGeneric30MinGrid(current)}`);
         
-        console.log(`\n📌 WINDOW STATE:`);
-        console.log(`   Slots: ${windowTimes.length}`);
-        console.log(`   Is Generic 30-min Grid: ${windowIsGeneric}`);
-        console.log(`   From Cloud Flag: ${window._unifiedTimesFromCloud || false}`);
-        
-        if (windowTimes.length > 0) {
-            console.log(`   First 5 slots:`);
-            windowTimes.slice(0, 5).forEach((slot, i) => {
+        if (current.length > 0) {
+            console.log('First 5 slots:');
+            current.slice(0, 5).forEach((slot, i) => {
                 const mins = slot.startMin ?? '?';
-                const hr = Math.floor(mins / 60);
-                const mn = mins % 60;
-                console.log(`      [${i}] ${mins} min = ${hr}:${String(mn).padStart(2,'0')}`);
+                console.log(`  [${i}] ${mins} min`);
             });
         }
         
-        // LocalStorage state
+        // Dedicated storage
+        try {
+            const raw = localStorage.getItem(UNIFIED_TIMES_KEY);
+            if (raw) {
+                const storage = JSON.parse(raw);
+                const dateData = storage[dateKey];
+                console.log(`\nDedicated Storage (${UNIFIED_TIMES_KEY}):`);
+                if (dateData) {
+                    console.log(`  Slots: ${dateData.slotCount || dateData.times?.length || 0}`);
+                    console.log(`  Is Generic: ${dateData.isGeneric}`);
+                    console.log(`  Saved At: ${dateData.savedAt}`);
+                } else {
+                    console.log(`  No data for ${dateKey}`);
+                }
+            } else {
+                console.log(`\nDedicated Storage: Empty`);
+            }
+        } catch (e) {
+            console.log(`\nDedicated Storage: Error - ${e.message}`);
+        }
+        
+        // Daily data storage
         try {
             const raw = localStorage.getItem(DAILY_DATA_KEY);
             if (raw) {
-                const dailyData = JSON.parse(raw);
-                const dateData = dailyData[dateKey] || {};
-                const storedTimes = dateData.unifiedTimes || [];
-                const storedIsGeneric = isGeneric30MinGrid(deserializeUnifiedTimes(storedTimes));
-                
-                console.log(`\n💾 LOCALSTORAGE STATE:`);
-                console.log(`   Slots: ${storedTimes.length}`);
-                console.log(`   Is Generic 30-min Grid: ${storedIsGeneric}`);
-                console.log(`   Updated At: ${dateData._unifiedTimesUpdatedAt || 'unknown'}`);
-                
-                if (storedTimes.length > 0) {
-                    console.log(`   First 5 slots:`);
-                    storedTimes.slice(0, 5).forEach((slot, i) => {
-                        const mins = slot.startMin ?? '?';
-                        console.log(`      [${i}] ${mins} min`);
-                    });
-                }
-                
-                // Compare
-                console.log(`\n🔄 COMPARISON:`);
-                if (windowTimes.length === storedTimes.length) {
-                    console.log(`   ✅ Slot counts match`);
+                const daily = JSON.parse(raw);
+                const dateData = daily[dateKey];
+                console.log(`\nDaily Data Storage (${DAILY_DATA_KEY}):`);
+                if (dateData?.unifiedTimes) {
+                    console.log(`  Slots: ${dateData.unifiedTimes.length}`);
                 } else {
-                    console.log(`   ⚠️ MISMATCH: Window=${windowTimes.length}, Storage=${storedTimes.length}`);
+                    console.log(`  No unifiedTimes for ${dateKey}`);
                 }
-                
-                if (windowIsGeneric && !storedIsGeneric) {
-                    console.log(`   ⚠️ Window has generic grid but storage has scheduler grid!`);
-                    console.log(`   🔧 Run: UnifiedTimesMasterFix.forceFix() to repair`);
-                } else if (!windowIsGeneric && storedIsGeneric) {
-                    console.log(`   ℹ️ Window has scheduler grid, storage has generic (may need save)`);
-                } else {
-                    console.log(`   ✅ Grid types match`);
-                }
-            } else {
-                console.log(`\n💾 LOCALSTORAGE: No daily data found`);
             }
-        } catch (err) {
-            console.error('Error reading localStorage:', err);
+        } catch (e) {
+            console.log(`\nDaily Data Storage: Error - ${e.message}`);
         }
         
-        console.log('\n═════════════════════════════════════════════════════════════════════');
+        console.log('\n═══════════════════════════════════════════════════════════════════════');
         
-        return { dateKey, windowSlots: windowTimes.length, windowIsGeneric };
+        return {
+            dateKey,
+            windowSlots: current.length,
+            isGeneric: isGeneric30MinGrid(current)
+        };
     }
 
     // =========================================================================
-    // FORCE FIX FUNCTION
+    // FORCE FIX
     // =========================================================================
 
     function forceFix() {
         const dateKey = getDateKey();
-        log(`Force fixing unifiedTimes for ${dateKey}...`);
+        console.log(`[UTFix] Force fix for ${dateKey}...`);
         
-        const fixed = loadUnifiedTimesFromStorage(dateKey, true);
-        
-        if (fixed) {
+        const times = loadUnifiedTimes(dateKey);
+        if (times && times.length > 0) {
+            window.unifiedTimes = times;
+            window._unifiedTimesFromStorage = true;
+            
             if (window.updateTable) {
                 window.updateTable();
             }
-            console.log('✅ Force fix applied successfully');
+            
+            console.log(`[UTFix] ✅ Force fix applied: ${times.length} slots`);
             return true;
         } else {
-            console.log('⚠️ No valid stored unifiedTimes to restore');
+            console.log('[UTFix] ⚠️ No stored times to restore');
             return false;
         }
+    }
+
+    // =========================================================================
+    // FORCE SAVE (for manual use after generation)
+    // =========================================================================
+
+    function forceSave() {
+        const times = window.unifiedTimes;
+        if (!times || times.length === 0) {
+            console.log('[UTFix] Nothing to save');
+            return false;
+        }
+        
+        const dateKey = getDateKey();
+        return saveUnifiedTimes(dateKey, times);
     }
 
     // =========================================================================
@@ -434,74 +498,71 @@
     // =========================================================================
 
     function initialize() {
-        log('Initializing...');
+        console.log('[UTFix] Initializing...');
         
-        // Patch functions
-        const patchAll = () => {
-            patchSaveCurrentDailyData();
-            patchSyncPatch();
-        };
+        // 1. Immediate load BEFORE anything else
+        immediateLoad();
         
-        patchAll();
-        setTimeout(patchAll, 100);
-        setTimeout(patchAll, 500);
-        setTimeout(patchAll, 1000);
-        setTimeout(patchAll, 2000);
-        
-        // Hook events
+        // 2. Hook all events
         hookGenerationComplete();
-        verifyAndFixOnCloudHydration();
+        hookSaveTriggers();
+        hookCloudHydration();
         
-        // Schedule verification
-        schedulePeriodicVerification();
+        // 3. Start periodic fix
+        startPeriodicFix();
         
-        log('✅ Initialization complete');
+        // 4. Optional: prevent generic overwrite
+        // preventGenericOverwrite();
+        
+        console.log('[UTFix] ✅ Initialization complete');
     }
 
     // =========================================================================
     // EXPORTS
     // =========================================================================
 
-    window.UnifiedTimesMasterFix = {
-        version: '1.0',
+    window.UnifiedTimesFix = {
+        version: '2.0',
         
         // Manual operations
-        save: () => saveUnifiedTimesToStorage(getDateKey()),
-        load: () => loadUnifiedTimesFromStorage(getDateKey(), true),
+        save: forceSave,
+        load: () => loadUnifiedTimes(getDateKey()),
         forceFix: forceFix,
         diagnose: diagnose,
         
-        // Utilities
-        getDateKey: getDateKey,
-        isGenericGrid: isGeneric30MinGrid,
-        
-        // State inspection
+        // State
         getState: () => ({
             dateKey: getDateKey(),
             windowSlots: (window.unifiedTimes || []).length,
-            fromCloud: window._unifiedTimesFromCloud || false,
-            isGeneric: isGeneric30MinGrid(window.unifiedTimes || [])
-        })
+            isGeneric: isGeneric30MinGrid(window.unifiedTimes || []),
+            fromStorage: window._unifiedTimesFromStorage || false
+        }),
+        
+        // Debug
+        isGenericGrid: isGeneric30MinGrid,
+        saveUnifiedTimes: saveUnifiedTimes,
+        loadUnifiedTimes: loadUnifiedTimes
     };
 
     // =========================================================================
     // STARTUP
     // =========================================================================
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initialize);
-    } else {
-        setTimeout(initialize, 50);
-    }
+    // Run IMMEDIATELY - don't wait for DOM
+    initialize();
 
-    console.log('═════════════════════════════════════════════════════════════════════');
-    console.log('🔧 UNIFIED TIMES MASTER FIX v1.0 LOADED');
+    console.log('═══════════════════════════════════════════════════════════════════════');
+    console.log('⏰ UNIFIED TIMES PERSISTENCE FIX v2.0 LOADED');
     console.log('');
     console.log('   Commands:');
-    console.log('   - UnifiedTimesMasterFix.diagnose()  → Check current state');
-    console.log('   - UnifiedTimesMasterFix.forceFix()  → Force reload from storage');
-    console.log('   - UnifiedTimesMasterFix.getState()  → Quick state summary');
+    console.log('   - UnifiedTimesFix.diagnose()  → Check current state');
+    console.log('   - UnifiedTimesFix.forceFix()  → Force reload from storage');
+    console.log('   - UnifiedTimesFix.save()      → Force save current times');
+    console.log('   - UnifiedTimesFix.getState()  → Quick state summary');
     console.log('');
-    console.log('═════════════════════════════════════════════════════════════════════');
+    console.log('   ⚠️  After generating, run: UnifiedTimesFix.save()');
+    console.log('       This saves the scheduler-generated unifiedTimes');
+    console.log('');
+    console.log('═══════════════════════════════════════════════════════════════════════');
 
 })();
