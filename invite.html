@@ -3,29 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Accept Invite - Campistry</title>
-    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+    <title>Join Camp - Campistry</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛺</text></svg>">
     
     <style>
         :root {
-            --slate-50: #f8fafc;
-            --slate-100: #f1f5f9;
-            --slate-200: #e2e8f0;
-            --slate-300: #cbd5e1;
-            --slate-400: #94a3b8;
-            --slate-500: #64748b;
+            --primary: #6366F1;
+            --primary-hover: #5457E5;
+            --success: #10B981;
+            --slate-50: #F8FAFC;
+            --slate-100: #F1F5F9;
+            --slate-200: #E2E8F0;
+            --slate-500: #64748B;
             --slate-600: #475569;
             --slate-700: #334155;
-            --slate-800: #1e293b;
-            --slate-900: #0f172a;
-            --primary: #6366F1;
-            --primary-dark: #4F46E5;
+            --slate-900: #0F172A;
         }
         
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        * { box-sizing: border-box; }
         
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
@@ -36,16 +35,46 @@
         
         .invite-card {
             background: white;
-            border-radius: 20px;
+            border-radius: 16px;
             padding: 40px;
-            max-width: 450px;
+            max-width: 440px;
             width: 100%;
-            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.25);
+            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25);
             text-align: center;
         }
         
-        h1 { color: var(--slate-900); font-size: 1.5rem; margin-bottom: 8px; }
-        .subtitle { color: var(--slate-500); margin-bottom: 32px; }
+        h1 { color: var(--slate-900); font-size: 1.75rem; margin: 0 0 8px 0; }
+        .subtitle { color: var(--slate-500); margin: 0 0 24px 0; }
+        
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 14px 28px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            transition: background 0.2s;
+        }
+        .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+        .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+        
+        .btn-secondary {
+            background: transparent;
+            color: var(--slate-600);
+            border: 2px solid var(--slate-200);
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 500;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 12px;
+            transition: all 0.2s;
+        }
+        .btn-secondary:hover { background: var(--slate-50); border-color: var(--slate-300); }
         
         .invite-details {
             background: var(--slate-50);
@@ -60,51 +89,21 @@
             justify-content: space-between;
             align-items: center;
             padding: 8px 0;
-            border-bottom: 1px solid var(--slate-200);
         }
-        .invite-detail:last-child { border-bottom: none; }
+        .invite-detail:not(:last-child) { border-bottom: 1px solid var(--slate-200); }
         .invite-detail-label { color: var(--slate-500); font-size: 0.9rem; }
-        .invite-detail-value { color: var(--slate-800); font-weight: 600; }
+        .invite-detail-value { color: var(--slate-900); font-weight: 600; }
         
         .role-badge {
-            display: inline-block;
             padding: 4px 12px;
-            border-radius: 999px;
-            font-size: 0.8rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
             font-weight: 600;
         }
-        
-        .btn-primary {
-            width: 100%;
-            padding: 14px 24px;
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            margin-bottom: 12px;
-        }
-        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(99, 102, 241, 0.4); }
-        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
-        
-        .btn-secondary {
-            width: 100%;
-            padding: 14px 24px;
-            background: var(--slate-100);
-            color: var(--slate-700);
-            border: none;
-            border-radius: 10px;
-            font-size: 1rem;
-            font-weight: 500;
-            cursor: pointer;
-        }
-        .btn-secondary:hover { background: var(--slate-200); }
         
         .error-message {
-            background: #FEE2E2;
+            background: #FEF2F2;
+            border: 1px solid #FECACA;
             color: #DC2626;
             padding: 12px 16px;
             border-radius: 8px;
@@ -114,22 +113,33 @@
         }
         
         .success-message {
-            background: #D1FAE5;
+            background: #ECFDF5;
+            border: 1px solid #A7F3D0;
             color: #059669;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+        }
+        
+        .info-message {
+            background: #EFF6FF;
+            border: 1px solid #93C5FD;
+            color: #1D4ED8;
             padding: 12px 16px;
             border-radius: 8px;
             margin-bottom: 16px;
             font-size: 0.9rem;
+            text-align: left;
         }
         
-        .loading { display: flex; flex-direction: column; align-items: center; gap: 16px; }
-        
+        .loading { text-align: center; padding: 40px; }
         .spinner {
             width: 40px; height: 40px;
             border: 3px solid var(--slate-200);
             border-top-color: var(--primary);
             border-radius: 50%;
-            animation: spin 1s linear infinite;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 16px;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
         
@@ -149,11 +159,7 @@
         .form-group input:focus { outline: none; border-color: var(--primary); }
         .form-group input:disabled { background: var(--slate-100); color: var(--slate-600); }
         
-        .form-hint {
-            font-size: 0.8rem;
-            color: var(--slate-500);
-            margin-top: 4px;
-        }
+        .form-hint { font-size: 0.8rem; color: var(--slate-500); margin-top: 4px; }
         
         .auth-toggle { text-align: center; margin-top: 16px; color: var(--slate-500); font-size: 0.9rem; }
         .auth-toggle a { color: var(--primary); text-decoration: none; font-weight: 600; }
@@ -170,24 +176,9 @@
             text-align: left;
         }
         
-        .assigned-divisions {
-            margin-top: 12px;
-            padding-top: 12px;
-            border-top: 1px dashed var(--slate-300);
-        }
-        
-        .assigned-divisions-label {
-            font-size: 0.8rem;
-            color: var(--slate-500);
-            margin-bottom: 8px;
-        }
-        
-        .division-tags {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-        }
-        
+        .assigned-divisions { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--slate-300); }
+        .assigned-divisions-label { font-size: 0.8rem; color: var(--slate-500); margin-bottom: 8px; }
+        .division-tags { display: flex; flex-wrap: wrap; gap: 6px; }
         .division-tag {
             background: #6366f120;
             color: #6366f1;
@@ -212,6 +203,35 @@
             <h1>Invalid Invite</h1>
             <p class="subtitle" id="error-message">This invite link is invalid or has expired.</p>
             <button class="btn-secondary" onclick="window.location.href='/'">Go to Homepage</button>
+        </div>
+        
+        <!-- Already Member State (NEW - for already accepted invites) -->
+        <div id="already-member-state" class="hidden">
+            <div style="font-size: 3rem; margin-bottom: 16px;">✅</div>
+            <h1>Already a Member!</h1>
+            <p class="subtitle">You've already joined this camp.</p>
+            
+            <div class="invite-details">
+                <div class="invite-detail">
+                    <span class="invite-detail-label">Camp</span>
+                    <span class="invite-detail-value" id="already-camp-name">-</span>
+                </div>
+                <div class="invite-detail">
+                    <span class="invite-detail-label">Your Role</span>
+                    <span id="already-role-badge" class="role-badge">-</span>
+                </div>
+            </div>
+            
+            <div class="info-message">
+                📧 Sign in with <strong id="already-email">-</strong> to access your camp.
+            </div>
+            
+            <button class="btn-primary" onclick="window.location.href='/landing.html'">
+                Sign In
+            </button>
+            <button class="btn-secondary" onclick="window.location.href='/dashboard.html'">
+                Go to Dashboard
+            </button>
         </div>
         
         <!-- Invite Details (need to create account or sign in) -->
@@ -248,47 +268,50 @@
                 </div>
                 <div class="form-group">
                     <label for="signup-name">Your Name</label>
-                    <input type="text" id="signup-name" placeholder="How should we call you?">
-                    <div class="form-hint">This will be displayed to your team</div>
+                    <input type="text" id="signup-name" placeholder="How should we call you?" required>
                 </div>
                 <div class="form-group">
-                    <label>Email (from invite)</label>
-                    <input type="email" id="signup-email" readonly disabled>
+                    <label for="signup-email">Email</label>
+                    <input type="email" id="signup-email" disabled>
+                    <div class="form-hint">This is the email you were invited with</div>
                 </div>
                 <div class="form-group">
-                    <label for="signup-password">Create Password</label>
-                    <input type="password" id="signup-password" placeholder="At least 6 characters">
+                    <label for="signup-password">Password</label>
+                    <input type="password" id="signup-password" placeholder="At least 6 characters" required>
                 </div>
                 <div class="form-group">
                     <label for="signup-password-confirm">Confirm Password</label>
-                    <input type="password" id="signup-password-confirm" placeholder="Confirm your password">
+                    <input type="password" id="signup-password-confirm" placeholder="Type password again" required>
                 </div>
-                <button class="btn-primary" id="signup-btn" onclick="handleSignUp()">
-                    Create Account & Join Camp
+                <button type="button" class="btn-primary" id="signup-btn" onclick="handleSignUp()">
+                    Create Account & Join
                 </button>
                 <p class="auth-toggle">
-                    Already have a Campistry account? <a href="#" onclick="toggleAuthMode(event)">Sign In</a>
+                    Already have an account? 
+                    <a href="#" onclick="toggleAuthMode(event)">Sign In</a>
                 </p>
             </div>
             
-            <!-- Sign In Form (for existing users) -->
+            <!-- Sign In Form -->
             <div id="signin-form" class="auth-form hidden">
                 <div class="email-notice">
-                    🔑 Sign in with your existing Campistry account to join this camp.
+                    📧 Sign in with your existing Campistry account.
                 </div>
                 <div class="form-group">
-                    <label>Email (from invite)</label>
-                    <input type="email" id="email" readonly disabled>
+                    <label for="email">Email</label>
+                    <input type="email" id="email" disabled>
+                    <div class="form-hint">You must sign in with this email</div>
                 </div>
                 <div class="form-group">
                     <label for="password">Password</label>
-                    <input type="password" id="password" placeholder="Enter your password">
+                    <input type="password" id="password" placeholder="Your password" required>
                 </div>
-                <button class="btn-primary" id="signin-btn" onclick="handleSignIn()">
-                    Sign In & Join Camp
+                <button type="button" class="btn-primary" id="signin-btn" onclick="handleSignIn()">
+                    Sign In & Join
                 </button>
                 <p class="auth-toggle">
-                    Need an account? <a href="#" onclick="toggleAuthMode(event)">Create Account</a>
+                    Need an account? 
+                    <a href="#" onclick="toggleAuthMode(event)">Create Account</a>
                 </p>
             </div>
         </div>
@@ -400,27 +423,32 @@
                 }
                 
                 if (!data) {
-                    showError('This invite link is invalid or has already been used.');
-                    return;
-                }
-                
-                if (data.accepted_at) {
-                    showError('This invite has already been accepted. Please sign in normally to access the camp.');
+                    showError('This invite link is invalid.');
                     return;
                 }
                 
                 inviteData = data;
-                console.log('🎟️ Invite loaded:', { email: data.email, role: data.role, camp_id: data.camp_id });
+                console.log('🎟️ Invite loaded:', { email: data.email, role: data.role, camp_id: data.camp_id, accepted: !!data.accepted_at });
                 
                 // Fetch camp name
                 await fetchCampName(data.camp_id);
                 
-                // Fetch subdivision names if assigned (column is subdivision_ids)
+                // Fetch subdivision names if assigned
                 if (data.subdivision_ids && data.subdivision_ids.length > 0) {
                     await fetchSubdivisionNames(data.subdivision_ids);
                 }
                 
-                // Show appropriate state
+                // =====================================================================
+                // KEY CHANGE: Handle already-accepted invites gracefully
+                // Instead of showing error, show a friendly "already member" state
+                // =====================================================================
+                if (data.accepted_at) {
+                    console.log('🎟️ Invite already accepted, showing member state');
+                    showAlreadyMemberState();
+                    return;
+                }
+                
+                // Show appropriate state for pending invite
                 if (currentUser) {
                     showAcceptState();
                 } else {
@@ -475,6 +503,7 @@
         function hideAll() {
             document.getElementById('loading-state').classList.add('hidden');
             document.getElementById('error-state').classList.add('hidden');
+            document.getElementById('already-member-state').classList.add('hidden');
             document.getElementById('invite-state').classList.add('hidden');
             document.getElementById('accept-state').classList.add('hidden');
             document.getElementById('success-state').classList.add('hidden');
@@ -486,10 +515,26 @@
             document.getElementById('error-state').classList.remove('hidden');
         }
         
+        // =====================================================================
+        // NEW: Show friendly state for already-accepted invites
+        // =====================================================================
+        function showAlreadyMemberState() {
+            hideAll();
+            
+            document.getElementById('already-camp-name').textContent = campName;
+            document.getElementById('already-email').textContent = inviteData.email;
+            
+            const roleBadge = document.getElementById('already-role-badge');
+            roleBadge.textContent = getRoleDisplayName(inviteData.role);
+            roleBadge.style.background = getRoleColor(inviteData.role) + '20';
+            roleBadge.style.color = getRoleColor(inviteData.role);
+            
+            document.getElementById('already-member-state').classList.remove('hidden');
+        }
+        
         function showInviteState() {
             hideAll();
             
-            // Update subtitle with camp name
             document.getElementById('invite-subtitle').textContent = `Join the team at ${campName}`;
             document.getElementById('invite-camp-name').textContent = campName;
             document.getElementById('invite-email').textContent = inviteData.email;
@@ -582,7 +627,6 @@
             
             document.getElementById('auth-error').classList.add('hidden');
             
-            // Validation
             if (!name) {
                 showAuthError('Please enter your name.');
                 return;
@@ -607,54 +651,36 @@
             btn.textContent = 'Creating account...';
             
             try {
-                console.log('🎟️ Creating account for:', inviteData.email);
-                
                 const { data, error } = await supabaseClient.auth.signUp({
                     email: inviteData.email,
-                    password: password
+                    password: password,
+                    options: {
+                        data: { name: name }
+                    }
                 });
                 
-                console.log('🎟️ SignUp result:', { user: data?.user?.id, session: !!data?.session, error });
+                if (error) throw error;
                 
-                if (error) {
-                    throw error;
+                console.log('🎟️ Account created, checking confirmation...');
+                
+                // Check if email confirmation is required
+                if (data.user && !data.session) {
+                    showAuthError('Please check your email to confirm your account, then return to this page and sign in.');
+                    btn.textContent = 'Check Email';
+                    return;
                 }
                 
-                if (!data.user) {
-                    throw new Error('Account creation failed. Please try again.');
-                }
+                currentUser = data.user;
+                console.log('🎟️ User logged in:', currentUser.email);
                 
-                // If no session, try signing in (email confirmation might be disabled)
-                if (!data.session) {
-                    console.log('🎟️ No session, trying auto sign-in...');
-                    const signIn = await supabaseClient.auth.signInWithPassword({
-                        email: inviteData.email,
-                        password: password
-                    });
-                    
-                    if (signIn.error) {
-                        // Email confirmation might be required
-                        showAuthError('Account created! Please check your email to confirm, then return here.');
-                        btn.disabled = false;
-                        btn.textContent = 'Create Account & Join Camp';
-                        return;
-                    }
-                    
-                    currentUser = signIn.data.user;
-                } else {
-                    currentUser = data.user;
-                }
-                
-                btn.textContent = 'Joining camp...';
-                
-                // Accept the invite with the name
-                await acceptInvite(name);
+                // Now accept the invite
+                await acceptInviteAndRedirect(name);
                 
             } catch (e) {
-                console.error('🎟️ SignUp error:', e);
-                showAuthError(e.message || 'Failed to create account.');
+                console.error('🎟️ Signup error:', e);
+                showAuthError(e.message || 'Failed to create account. Please try again.');
                 btn.disabled = false;
-                btn.textContent = 'Create Account & Join Camp';
+                btn.textContent = 'Create Account & Join';
             }
         }
         
@@ -673,34 +699,24 @@
             btn.textContent = 'Signing in...';
             
             try {
-                console.log('🎟️ Signing in:', inviteData.email);
-                
                 const { data, error } = await supabaseClient.auth.signInWithPassword({
                     email: inviteData.email,
                     password: password
                 });
                 
-                console.log('🎟️ SignIn result:', { user: data?.user?.id, error });
-                
-                if (error) {
-                    throw error;
-                }
-                
-                if (!data.user) {
-                    throw new Error('Sign in failed. Please try again.');
-                }
+                if (error) throw error;
                 
                 currentUser = data.user;
-                btn.textContent = 'Joining camp...';
+                console.log('🎟️ Signed in:', currentUser.email);
                 
-                // For existing users, use email as fallback name
-                await acceptInvite(currentUser.email.split('@')[0]);
+                // Accept the invite
+                await acceptInviteAndRedirect();
                 
             } catch (e) {
-                console.error('🎟️ SignIn error:', e);
-                showAuthError(e.message || 'Failed to sign in. Check your password.');
+                console.error('🎟️ Signin error:', e);
+                showAuthError(e.message || 'Failed to sign in. Please check your password.');
                 btn.disabled = false;
-                btn.textContent = 'Sign In & Join Camp';
+                btn.textContent = 'Sign In & Join';
             }
         }
         
@@ -709,15 +725,18 @@
             btn.disabled = true;
             btn.textContent = 'Joining...';
             
-            await acceptInvite(currentUser.email.split('@')[0]);
+            document.getElementById('accept-error').classList.add('hidden');
+            
+            await acceptInviteAndRedirect();
         }
         
-        async function acceptInvite(userName) {
+        // =====================================================================
+        // ACCEPT INVITE - KEY CHANGE: Keep invite_token active!
+        // =====================================================================
+        async function acceptInviteAndRedirect(userName = null) {
             try {
-                console.log('🎟️ Accepting invite with name:', userName);
-                
                 if (!currentUser) {
-                    throw new Error('Not signed in. Please refresh and try again.');
+                    throw new Error('Not logged in. Please refresh and try again.');
                 }
                 
                 if (currentUser.email.toLowerCase() !== inviteData.email.toLowerCase()) {
@@ -726,15 +745,24 @@
                 
                 console.log('🎟️ Updating invite record:', inviteData.id);
                 
-                // Update the invite record with user_id AND name
+                // =====================================================================
+                // KEY CHANGE: Do NOT set invite_token to null!
+                // This keeps the link always active for re-use/sharing
+                // =====================================================================
+                const updateData = {
+                    user_id: currentUser.id,
+                    accepted_at: new Date().toISOString()
+                    // NOTE: invite_token is NOT cleared - link stays active!
+                };
+                
+                // Add name if provided (from signup)
+                if (userName) {
+                    updateData.name = userName;
+                }
+                
                 const { data, error } = await supabaseClient
                     .from('camp_users')
-                    .update({
-                        user_id: currentUser.id,
-                        name: userName,
-                        accepted_at: new Date().toISOString(),
-                        invite_token: null
-                    })
+                    .update(updateData)
                     .eq('id', inviteData.id)
                     .select();
                 
@@ -746,29 +774,28 @@
                 }
                 
                 console.log('🎟️ Invite accepted successfully!');
-                
-                // Store the camp ID for the app to use
-                localStorage.setItem('campistry_user_id', inviteData.camp_id);
-                localStorage.setItem('campistry_auth_user_id', currentUser.id);
-                
                 showSuccess();
                 
             } catch (e) {
                 console.error('🎟️ Accept error:', e);
                 
-                const errorEl = document.getElementById('accept-error') || document.getElementById('auth-error');
-                if (errorEl) {
-                    errorEl.textContent = e.message;
-                    errorEl.classList.remove('hidden');
-                }
+                // Show error in appropriate place
+                const acceptError = document.getElementById('accept-error');
+                const authError = document.getElementById('auth-error');
                 
-                // Re-enable buttons
-                document.getElementById('signup-btn').disabled = false;
-                document.getElementById('signup-btn').textContent = 'Create Account & Join Camp';
-                document.getElementById('signin-btn').disabled = false;
-                document.getElementById('signin-btn').textContent = 'Sign In & Join Camp';
-                document.getElementById('accept-btn').disabled = false;
-                document.getElementById('accept-btn').textContent = 'Accept Invitation';
+                if (!document.getElementById('accept-state').classList.contains('hidden')) {
+                    acceptError.textContent = e.message;
+                    acceptError.classList.remove('hidden');
+                    document.getElementById('accept-btn').disabled = false;
+                    document.getElementById('accept-btn').textContent = 'Accept Invitation';
+                } else {
+                    showAuthError(e.message);
+                    // Re-enable buttons
+                    const signupBtn = document.getElementById('signup-btn');
+                    const signinBtn = document.getElementById('signin-btn');
+                    if (signupBtn) { signupBtn.disabled = false; signupBtn.textContent = 'Create Account & Join'; }
+                    if (signinBtn) { signinBtn.disabled = false; signinBtn.textContent = 'Sign In & Join'; }
+                }
             }
         }
         
@@ -791,13 +818,13 @@
                 owner: '#7C3AED',
                 admin: '#2563EB',
                 scheduler: '#059669',
-                viewer: '#6B7280'
+                viewer: '#64748B'
             };
-            return colors[role] || '#6B7280';
+            return colors[role] || '#64748B';
         }
         
-        // Initialize on load
-        init();
+        // Init on load
+        window.addEventListener('load', init);
     </script>
 </body>
 </html>
