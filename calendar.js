@@ -213,7 +213,11 @@
     // RESET ALL ACTIVITY / SPECIAL ROTATION
     // ==========================================================
     window.eraseRotationHistory = async function() {
-        if (!window.AccessControl?.canEraseData?.()) {
+        // Check permission - Owner and Admin can erase history
+        const role = window.AccessControl?.getCurrentRole?.();
+        const canErase = role === 'owner' || role === 'admin';
+        
+        if (!canErase) {
             window.AccessControl?.showPermissionDenied?.('erase rotation history');
             return;
         }
@@ -256,7 +260,11 @@
     // START NEW HALF
     // ==========================================================
     window.startNewHalf = async function() {
-        if (!window.AccessControl?.canEraseData?.()) {
+        // Check permission - Owner and Admin can start new half
+        const role = window.AccessControl?.getCurrentRole?.();
+        const canErase = role === 'owner' || role === 'admin';
+        
+        if (!canErase) {
             window.AccessControl?.showPermissionDenied?.('start new half');
             return;
         }
@@ -343,8 +351,10 @@
         if (!btn) return;
         
         btn.onclick = async function() {
-            if (!window.AccessControl?.canEraseData?.()) {
-                window.AccessControl?.showPermissionDenied?.('erase all data');
+            // OWNER ONLY - This is the nuclear option
+            const role = window.AccessControl?.getCurrentRole?.();
+            if (role !== 'owner') {
+                window.AccessControl?.showPermissionDenied?.('erase all camp data');
                 return;
             }
             if (!confirm("Erase ALL settings, schedules, and rotation histories?\nThis cannot be undone.")) return;
@@ -818,7 +828,11 @@
     // 8. ERASE ALL SCHEDULE DAYS - ★ FIXED to sync deletion to cloud ★
     // ==========================================================
     window.eraseAllDailyData = async function() {
-        if (!window.AccessControl?.canEraseData?.()) {
+        // Check permission - Owner and Admin can erase all schedules
+        const role = window.AccessControl?.getCurrentRole?.();
+        const canErase = role === 'owner' || role === 'admin';
+        
+        if (!canErase) {
             window.AccessControl?.showPermissionDenied?.('erase all daily data');
             return;
         }
