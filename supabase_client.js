@@ -37,8 +37,8 @@
             IS_TEAM_MEMBER: 'campistry_is_team_member'
         },
         
-        // Debug mode
-        DEBUG: false
+        // Debug mode - set to true to see detailed logs
+        DEBUG: true
     };
 
     // =========================================================================
@@ -466,22 +466,38 @@
 
     // Create client IMMEDIATELY so window.supabase is available right away
     (function initClientNow() {
-        // Check if supabase-js library is loaded
-        if (typeof supabase !== 'undefined' && supabase.createClient) {
-            _client = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
-                auth: {
-                    persistSession: true,
-                    autoRefreshToken: true,
-                    detectSessionInUrl: true
+        try {
+            // The CDN exposes 'supabase' as the library with createClient method
+            if (typeof supabase !== 'undefined' && typeof supabase.createClient === 'function') {
+                log('Creating Supabase client...');
+                _client = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
+                    auth: {
+                        persistSession: true,
+                        autoRefreshToken: true,
+                        detectSessionInUrl: true
+                    }
+                });
+                
+                // Verify client was created properly
+                if (_client && _client.auth) {
+                    window.supabase = _client;
+                    log('✅ Supabase client created successfully');
+                } else {
+                    console.error('🔌 Client created but auth is missing!', _client);
                 }
-            });
-            window.supabase = _client;
-            log('Supabase client created immediately');
-        } else if (window.supabase) {
-            _client = window.supabase;
-            log('Using existing window.supabase');
-        } else {
-            console.warn('🔌 Supabase JS library not loaded yet - will retry');
+            } else if (window.supabase && window.supabase.auth) {
+                // Already a valid client
+                _client = window.supabase;
+                log('Using existing window.supabase client');
+            } else {
+                console.error('🔌 Supabase JS library not loaded. Expected supabase.createClient to be a function.');
+                console.error('🔌 typeof supabase:', typeof supabase);
+                if (typeof supabase !== 'undefined') {
+                    console.error('🔌 supabase keys:', Object.keys(supabase));
+                }
+            }
+        } catch (e) {
+            console.error('🔌 Failed to create Supabase client:', e);
         }
     })();
 
