@@ -241,11 +241,12 @@
     }
 
     function getSkeleton(dateKey) {
-        const dailyData = loadDailyData();
-        const dateData = dailyData[dateKey || getDateKey()] || {};
-        return dateData.manualSkeleton || dateData.skeleton || 
-               window.manualSkeleton || window.skeleton || [];
-    }
+    const dailyData = loadDailyData();
+    const dateData = dailyData[dateKey || getDateKey()] || {};
+    return dateData.manualSkeleton || dateData.skeleton || 
+           window.dailyOverrideSkeleton ||  // ← ADD THIS LINE
+           window.manualSkeleton || window.skeleton || [];
+}
 
     function normalizeUnifiedTimes(times) {
         if (!times || !Array.isArray(times)) return [];
