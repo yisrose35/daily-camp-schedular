@@ -1,6 +1,9 @@
 // ============================================================================
-// dashboard.js — Campistry Dashboard Logic (Multi-Tenant) v2.2
+// dashboard.js — Campistry Dashboard Logic (Multi-Tenant) v2.3
 // 
+// v2.3: CRITICAL FIX - Invitees no longer get owner permissions
+//       - Changed STEP 4 fallback from 'owner' to 'viewer'
+//
 // v2.2: FIXED - Check team membership BEFORE camp ownership
 //       FIXED - Prevent team members from creating camps
 //
@@ -110,7 +113,7 @@
     }
 
     // ========================================
-    // ⭐ FIXED: Check team membership FIRST, then camp ownership
+    // ⭐ FIXED v2.3: Check team membership FIRST, then camp ownership
     // ========================================
     
     async function determineUserRole() {
@@ -220,14 +223,17 @@
         }
         
         // =====================================================================
-        // ⭐ STEP 4: Fallback - New owner (first time user)
+        // ⭐ STEP 4: Fallback - No camp association found
+        // ★★★ CRITICAL FIX v2.3: Default to VIEWER for safety ★★★
+        // Invited users who fell through should NOT get owner access
         // =====================================================================
-        console.log('📊 User has no camp association - treating as new owner');
-        userRole = 'owner';
+        console.log('📊 ⚠️ No camp association found - defaulting to VIEWER for safety');
+        userRole = 'viewer';  // ★★★ SAFE DEFAULT - NOT OWNER! ★★★
         isTeamMember = false;
         userName = null;
         campName = null;
-        localStorage.setItem('campistry_user_id', currentUser.id);
+        // Don't cache uncertain state
+        // localStorage.setItem('campistry_user_id', currentUser.id);
     }
 
     // ========================================
@@ -324,16 +330,11 @@
         
         // For schedulers, update with subdivision names
         if (userRole === 'scheduler' && membership?.subdivision_ids?.length > 0) {
-            updateRoleBadgeWithSubdivisions();
+            loadSubdivisionNamesForBadge(roleBadge);
         }
     }
     
-    /**
-     * Update the role badge with actual subdivision names for schedulers
-     */
-    async function updateRoleBadgeWithSubdivisions() {
-        if (userRole !== 'scheduler' || !membership?.subdivision_ids?.length) return;
-        
+    async function loadSubdivisionNamesForBadge(badgeElement) {
         try {
             const { data: subdivisions } = await window.supabase
                 .from('subdivisions')
@@ -341,26 +342,14 @@
                 .in('id', membership.subdivision_ids);
             
             if (subdivisions && subdivisions.length > 0) {
-                const names = subdivisions.map(s => s.name);
-                let text = '';
-                
-                if (names.length === 1) {
-                    text = `Scheduler for ${names[0]}`;
-                } else if (names.length === 2) {
-                    text = `Scheduler for ${names[0]} and ${names[1]}`;
-                } else {
-                    const last = names.pop();
-                    text = `Scheduler for ${names.join(', ')}, and ${last}`;
-                }
-                
-                // Update the badge
-                const badge = document.querySelector('.role-badge-large .role-text');
-                if (badge) {
-                    badge.textContent = text;
-                }
+                const names = subdivisions.map(s => s.name).join(', ');
+                badgeElement.innerHTML = `
+                    <span class="role-icon">${getRoleIcon(userRole)}</span>
+                    <span class="role-text">Scheduler for ${names}</span>
+                `;
             }
         } catch (e) {
-            console.warn('Could not load subdivision names for badge:', e);
+            console.warn('Could not load subdivision names:', e);
         }
     }
     
@@ -368,10 +357,9 @@
         const dashboardGrid = document.querySelector('.dashboard-grid');
         if (!dashboardGrid) return;
         
-        // Check if already exists
+        // Check if already added
         if (document.querySelector('.permissions-card')) return;
         
-        // Create permissions card
         const permissionsCard = document.createElement('section');
         permissionsCard.className = 'dashboard-card permissions-card';
         
@@ -407,21 +395,23 @@
                 </div>
                 <div class="permission-row">
                     <span class="permission-label">Can Print</span>
-                    <span class="permission-value">${userRole === 'viewer' ? '❌ No' : '✅ Yes'}</span>
+                    <span class="permission-value">✅ Yes</span>
                 </div>
                 <div class="permission-row">
-                    <span class="permission-label">Can View All</span>
+                    <span class="permission-label">Can Use Camper Locator</span>
                     <span class="permission-value">✅ Yes</span>
                 </div>
                 <div class="permission-divider"></div>
-                <div class="permission-section">
-                    <h4 style="margin: 0 0 8px; color: var(--slate-700);">Assigned Divisions</h4>
-                    <div id="assigned-divisions">${divisionsHtml}</div>
+                <div class="permission-row">
+                    <span class="permission-label">Assigned Divisions</span>
+                </div>
+                <div id="assigned-divisions" style="margin-top: 8px;">
+                    ${divisionsHtml}
                 </div>
             </div>
         `;
         
-        // Add custom styles
+        // Add styles if not present
         if (!document.getElementById('permissions-styles')) {
             const style = document.createElement('style');
             style.id = 'permissions-styles';
@@ -430,15 +420,14 @@
                     display: flex;
                     justify-content: space-between;
                     align-items: center;
-                    padding: 10px 0;
-                    border-bottom: 1px solid var(--slate-100);
+                    padding: 8px 0;
                 }
                 .permission-label {
                     color: var(--slate-600);
                     font-weight: 500;
                 }
                 .permission-value {
-                    font-weight: 600;
+                    color: var(--slate-800);
                 }
                 .permission-divider {
                     height: 1px;
@@ -746,222 +735,173 @@
         const editBtn = document.getElementById('editProfileBtn');
         if (editBtn) {
             editBtn.innerHTML = isEditMode 
-                ? 'Cancel'
-                : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                   </svg> Edit`;
+                ? '<span class="icon">✕</span> Cancel'
+                : '<span class="icon">✎</span> Edit';
         }
-        
-        if (profileError) profileError.textContent = '';
-        if (profileSuccess) profileSuccess.textContent = '';
     };
     
-    window.cancelEdit = function() {
-        isEditMode = false;
-        
-        if (profileView) profileView.style.display = 'block';
-        if (profileEditForm) profileEditForm.style.display = 'none';
-        
-        const editBtn = document.getElementById('editProfileBtn');
-        if (editBtn) {
-            editBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-               </svg> Edit`;
+    window.saveProfile = async function() {
+        // Double-check only owners can save
+        if (isTeamMember) {
+            if (profileError) {
+                profileError.textContent = 'Only camp owners can edit the camp profile. Contact your camp owner.';
+            }
+            return;
         }
         
-        if (editCampName) editCampName.value = profileCampName?.textContent || '';
-        if (editAddress) editAddress.value = profileAddress?.textContent === 'Not set' ? '' : profileAddress?.textContent || '';
+        const newCampName = editCampName?.value.trim();
+        const newAddress = editAddress?.value.trim();
+        
+        if (!newCampName) {
+            if (profileError) profileError.textContent = 'Camp name is required.';
+            return;
+        }
         
         if (profileError) profileError.textContent = '';
         if (profileSuccess) profileSuccess.textContent = '';
-    };
-
-    // Profile form submission
-    if (profileEditForm) {
-        profileEditForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            // ⭐ FIX: Prevent team members from creating camps
-            if (isTeamMember) {
-                if (profileError) {
-                    profileError.textContent = 'As a team member, you cannot edit camp settings. Contact your camp owner.';
-                }
-                return;
-            }
-            
-            const newCampName = editCampName?.value.trim();
-            const newAddress = editAddress?.value.trim();
-            
-            if (!newCampName) {
-                if (profileError) profileError.textContent = 'Camp name is required.';
-                return;
-            }
-            
-            if (profileError) profileError.textContent = '';
-            if (profileSuccess) profileSuccess.textContent = '';
-            
-            try {
-                if (campData?.id) {
-                    const { error } = await window.supabase
-                        .from('camps')
-                        .update({ name: newCampName, address: newAddress })
-                        .eq('id', campData.id);
-                    
-                    if (error) throw error;
-                } else {
-                    // ⭐ FIX: Double-check this user is NOT a team member before creating
-                    // Check if they have a pending invite
-                    const { data: pendingInvite } = await window.supabase
-                        .from('camp_users')
-                        .select('id')
-                        .eq('email', currentUser.email.toLowerCase())
-                        .maybeSingle();
-                    
-                    if (pendingInvite) {
-                        if (profileError) {
-                            profileError.textContent = 'You have a pending camp invitation. Please accept it first.';
-                        }
-                        return;
+        
+        try {
+            if (campData?.id) {
+                const { error } = await window.supabase
+                    .from('camps')
+                    .update({ name: newCampName, address: newAddress })
+                    .eq('id', campData.id);
+                
+                if (error) throw error;
+            } else {
+                // ⭐ FIX: Double-check this user is NOT a team member before creating
+                // Check if they have a pending invite
+                const { data: pendingInvite } = await window.supabase
+                    .from('camp_users')
+                    .select('id')
+                    .eq('email', currentUser.email.toLowerCase())
+                    .maybeSingle();
+                
+                if (pendingInvite) {
+                    if (profileError) {
+                        profileError.textContent = 'You have a pending camp invitation. Please accept it first.';
                     }
-                    
-                    // Safe to create new camp
-                    const { data, error } = await window.supabase
-                        .from('camps')
-                        .insert([{ 
-                            name: newCampName, 
-                            address: newAddress,
-                            owner: currentUser.id 
-                        }])
-                        .select()
-                        .single();
-                    
-                    if (error) throw error;
-                    campData = data;
+                    return;
                 }
                 
-                const { error: metaError } = await window.supabase.auth.updateUser({
-                    data: { camp_name: newCampName }
-                });
-                if (metaError) {
-                    console.error('Failed to update camp name metadata:', metaError);
+                // Also check if they're already a team member
+                const { data: existingMember } = await window.supabase
+                    .from('camp_users')
+                    .select('id')
+                    .eq('user_id', currentUser.id)
+                    .maybeSingle();
+                
+                if (existingMember) {
+                    if (profileError) {
+                        profileError.textContent = 'You are already a member of another camp.';
+                    }
+                    return;
                 }
                 
-                // Update local state
-                campName = newCampName;
+                // Create new camp
+                const { data: newCamp, error } = await window.supabase
+                    .from('camps')
+                    .insert([{ 
+                        owner: currentUser.id, 
+                        name: newCampName, 
+                        address: newAddress 
+                    }])
+                    .select()
+                    .single();
                 
-                // Update displays
-                if (campNameDisplay) campNameDisplay.textContent = newCampName;
-                if (profileCampName) profileCampName.textContent = newCampName;
-                if (profileAddress) profileAddress.textContent = newAddress || 'Not set';
-                
-                // Update welcome message
-                updateWelcomeMessage();
-                
-                if (profileSuccess) profileSuccess.textContent = 'Profile updated successfully!';
-                
-                setTimeout(() => {
-                    cancelEdit();
-                }, 1500);
-                
-            } catch (err) {
-                console.error('Profile update error:', err);
-                if (profileError) profileError.textContent = err.message || 'Failed to update profile.';
+                if (error) throw error;
+                campData = newCamp;
             }
-        });
-    }
+            
+            // Update local state
+            campName = newCampName;
+            
+            // Update displays
+            if (profileCampName) profileCampName.textContent = newCampName;
+            if (profileAddress) profileAddress.textContent = newAddress || 'Not set';
+            if (campNameDisplay) campNameDisplay.textContent = newCampName;
+            
+            updateWelcomeMessage();
+            
+            if (profileSuccess) profileSuccess.textContent = 'Profile updated successfully!';
+            
+            // Exit edit mode after short delay
+            setTimeout(() => {
+                window.toggleEditMode();
+                if (profileSuccess) profileSuccess.textContent = '';
+            }, 1500);
+            
+        } catch (e) {
+            console.error('Error saving profile:', e);
+            if (profileError) profileError.textContent = 'Error saving profile. Please try again.';
+        }
+    };
 
     // ========================================
     // CHANGE PASSWORD
     // ========================================
     
-    if (passwordForm) {
-        passwordForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
+    window.changePassword = async function() {
+        const pw = newPassword?.value;
+        const confirm = confirmPassword?.value;
+        
+        if (passwordError) passwordError.textContent = '';
+        if (passwordSuccess) passwordSuccess.textContent = '';
+        
+        if (!pw || pw.length < 6) {
+            if (passwordError) passwordError.textContent = 'Password must be at least 6 characters.';
+            return;
+        }
+        
+        if (pw !== confirm) {
+            if (passwordError) passwordError.textContent = 'Passwords do not match.';
+            return;
+        }
+        
+        try {
+            const { error } = await window.supabase.auth.updateUser({ password: pw });
             
-            const password = newPassword?.value;
-            const confirm = confirmPassword?.value;
+            if (error) throw error;
             
-            if (passwordError) passwordError.textContent = '';
-            if (passwordSuccess) passwordSuccess.textContent = '';
+            if (passwordSuccess) passwordSuccess.textContent = 'Password changed successfully!';
+            if (newPassword) newPassword.value = '';
+            if (confirmPassword) confirmPassword.value = '';
             
-            if (!password || password.length < 6) {
-                if (passwordError) passwordError.textContent = 'Password must be at least 6 characters.';
-                return;
-            }
-            
-            if (password !== confirm) {
-                if (passwordError) passwordError.textContent = 'Passwords do not match.';
-                return;
-            }
-            
-            try {
-                const { error } = await window.supabase.auth.updateUser({
-                    password: password
-                });
-                
-                if (error) throw error;
-                
-                if (passwordSuccess) passwordSuccess.textContent = 'Password updated successfully!';
-                
-                if (newPassword) newPassword.value = '';
-                if (confirmPassword) confirmPassword.value = '';
-                
-            } catch (err) {
-                console.error('Password update error:', err);
-                if (passwordError) passwordError.textContent = err.message || 'Failed to update password.';
-            }
-        });
-    }
+        } catch (e) {
+            console.error('Error changing password:', e);
+            if (passwordError) passwordError.textContent = 'Error changing password. Please try again.';
+        }
+    };
 
     // ========================================
     // LOGOUT
     // ========================================
     
-    window.handleLogout = async function() {
+    window.logout = async function() {
         try {
-            // Clear camp ID cache
+            // Clear local storage
             localStorage.removeItem('campistry_user_id');
             localStorage.removeItem('campistry_auth_user_id');
-            localStorage.removeItem('campistry_user_context');
+            localStorage.removeItem('campistry_role');
+            localStorage.removeItem('campistry_is_team_member');
+            localStorage.removeItem('campistry_camp_id');
             
             await window.supabase.auth.signOut();
             window.location.href = 'landing.html';
         } catch (e) {
-            console.error('Logout error:', e);
+            console.error('Error logging out:', e);
             window.location.href = 'landing.html';
         }
     };
 
     // ========================================
-    // AUTH STATE LISTENER
+    // INITIALIZE
     // ========================================
     
-    function setupAuthListener() {
-        if (!window.supabase?.auth) {
-            setTimeout(setupAuthListener, 200);
-            return;
-        }
-        
-        window.supabase.auth.onAuthStateChange((event, session) => {
-            console.log('Auth state changed:', event);
-            
-            if (event === 'SIGNED_OUT') {
-                localStorage.removeItem('campistry_user_id');
-                localStorage.removeItem('campistry_auth_user_id');
-                localStorage.removeItem('campistry_user_context');
-                window.location.href = 'landing.html';
-            }
-        });
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', checkAuth);
+    } else {
+        checkAuth();
     }
-
-    // ========================================
-    // INIT
-    // ========================================
     
-    checkAuth();
-    setupAuthListener();
-    
-    console.log('📊 Campistry Dashboard v2.2 loaded (multi-tenant)');
 })();
