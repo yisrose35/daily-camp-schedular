@@ -95,7 +95,7 @@
       const { data: camps } = await window.supabase
         .from('camps')
         .select('id')
-        .eq('owner_id', userId)
+        .eq('owner', userId)
         .limit(1);
       
       if (camps?.length) {
@@ -110,7 +110,7 @@
     // Check team_members table (for team members)
     try {
       const { data: members } = await window.supabase
-        .from('team_members')
+        .from('camp_users')
         .select('camp_id, role')
         .eq('user_id', userId)
         .limit(1);
