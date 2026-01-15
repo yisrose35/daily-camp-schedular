@@ -1,6 +1,9 @@
 // ============================================================================
-// dashboard.js — Campistry Dashboard Logic (Multi-Tenant) v2.1
+// dashboard.js — Campistry Dashboard Logic (Multi-Tenant) v2.2
 // 
+// v2.2: FIXED - Check team membership BEFORE camp ownership
+//       FIXED - Prevent team members from creating camps
+//
 // Handles:
 // - Auth check (redirect to landing if not logged in)
 // - Load/display camp profile (for owners AND team members)
@@ -107,13 +110,90 @@
     }
 
     // ========================================
-    // DETERMINE USER ROLE
+    // ⭐ FIXED: Check team membership FIRST, then camp ownership
     // ========================================
     
     async function determineUserRole() {
         console.log('📊 Determining user role...');
         
-        // First check if user owns any camps
+        // =====================================================================
+        // ⭐ STEP 1: Check if user is a TEAM MEMBER first (HIGHEST PRIORITY)
+        // This ensures invited users get their correct assigned role
+        // =====================================================================
+        try {
+            const { data: memberData, error: memberError } = await window.supabase
+                .from('camp_users')
+                .select('*')
+                .eq('user_id', currentUser.id)
+                .not('accepted_at', 'is', null)
+                .maybeSingle();
+            
+            console.log('📊 Team member check result:', { memberData, memberError });
+            
+            if (memberData && !memberError) {
+                console.log('📊 ✅ User IS a team member:', memberData.role);
+                userRole = memberData.role;
+                isTeamMember = true;
+                membership = memberData;
+                userName = memberData.name || null;
+                
+                // Fetch the camp details
+                const { data: campInfo, error: campInfoError } = await window.supabase
+                    .from('camps')
+                    .select('name, address')
+                    .eq('owner', memberData.camp_id)
+                    .maybeSingle();
+                
+                console.log('📊 Camp info for team member:', { campInfo, campInfoError });
+                
+                if (campInfo && !campInfoError) {
+                    campData = campInfo;
+                    campName = campInfo.name || null;
+                }
+                
+                // Store camp ID for cloud storage
+                localStorage.setItem('campistry_user_id', memberData.camp_id);
+                return; // ⭐ IMPORTANT: Exit here - don't check camp ownership
+            }
+        } catch (e) {
+            console.warn('Error checking team membership:', e);
+        }
+
+        // =====================================================================
+        // ⭐ STEP 2: Check for PENDING INVITE (auto-accept if found)
+        // =====================================================================
+        try {
+            const { data: pendingInvite } = await window.supabase
+                .from('camp_users')
+                .select('*')
+                .eq('email', currentUser.email.toLowerCase())
+                .is('user_id', null)
+                .maybeSingle();
+            
+            if (pendingInvite) {
+                console.log('📊 Found pending invite - auto-accepting:', pendingInvite.role);
+                
+                const { error: acceptError } = await window.supabase
+                    .from('camp_users')
+                    .update({
+                        user_id: currentUser.id,
+                        accepted_at: new Date().toISOString()
+                    })
+                    .eq('id', pendingInvite.id);
+                
+                if (!acceptError) {
+                    console.log('📊 ✅ Invite auto-accepted!');
+                    // Recursively call to properly set up role
+                    return await determineUserRole();
+                }
+            }
+        } catch (e) {
+            console.warn('Error checking pending invite:', e);
+        }
+        
+        // =====================================================================
+        // ⭐ STEP 3: Check if user is a CAMP OWNER (only if not a team member)
+        // =====================================================================
         try {
             const { data: ownedCamp, error: campError } = await window.supabase
                 .from('camps')
@@ -121,7 +201,7 @@
                 .eq('owner', currentUser.id)
                 .maybeSingle();
             
-            console.log('📊 Camp query result:', { ownedCamp, campError });
+            console.log('📊 Camp ownership check result:', { ownedCamp, campError });
             
             if (ownedCamp && !campError) {
                 console.log('📊 User is a camp owner, camp:', ownedCamp.name);
@@ -139,47 +219,9 @@
             console.warn('Error checking camp ownership:', e);
         }
         
-        // Not an owner - check if they're a team member
-        try {
-            const { data: memberData, error: memberError } = await window.supabase
-                .from('camp_users')
-                .select('*')
-                .eq('user_id', currentUser.id)
-                .not('accepted_at', 'is', null)
-                .maybeSingle();
-            
-            console.log('📊 Member query result:', { memberData, memberError });
-            
-            if (memberData && !memberError) {
-                console.log('📊 User is a team member:', memberData.role);
-                userRole = memberData.role;
-                isTeamMember = true;
-                membership = memberData;
-                userName = memberData.name || null;
-                
-                // Now fetch the camp details separately
-                const { data: campInfo, error: campInfoError } = await window.supabase
-                    .from('camps')
-                    .select('name, address')
-                    .eq('owner', memberData.camp_id)
-                    .maybeSingle();
-                
-                console.log('📊 Camp info for team member:', { campInfo, campInfoError });
-                
-                if (campInfo && !campInfoError) {
-                    campData = campInfo;
-                    campName = campInfo.name || null;
-                }
-                
-                // Store camp ID for cloud storage
-                localStorage.setItem('campistry_user_id', memberData.camp_id);
-                return;
-            }
-        } catch (e) {
-            console.warn('Error checking team membership:', e);
-        }
-        
-        // User is neither - they're a new owner (first time)
+        // =====================================================================
+        // ⭐ STEP 4: Fallback - New owner (first time user)
+        // =====================================================================
         console.log('📊 User has no camp association - treating as new owner');
         userRole = 'owner';
         isTeamMember = false;
@@ -741,8 +783,13 @@
         profileEditForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             
-            // Only owners can submit
-            if (isTeamMember) return;
+            // ⭐ FIX: Prevent team members from creating camps
+            if (isTeamMember) {
+                if (profileError) {
+                    profileError.textContent = 'As a team member, you cannot edit camp settings. Contact your camp owner.';
+                }
+                return;
+            }
             
             const newCampName = editCampName?.value.trim();
             const newAddress = editAddress?.value.trim();
@@ -764,6 +811,22 @@
                     
                     if (error) throw error;
                 } else {
+                    // ⭐ FIX: Double-check this user is NOT a team member before creating
+                    // Check if they have a pending invite
+                    const { data: pendingInvite } = await window.supabase
+                        .from('camp_users')
+                        .select('id')
+                        .eq('email', currentUser.email.toLowerCase())
+                        .maybeSingle();
+                    
+                    if (pendingInvite) {
+                        if (profileError) {
+                            profileError.textContent = 'You have a pending camp invitation. Please accept it first.';
+                        }
+                        return;
+                    }
+                    
+                    // Safe to create new camp
                     const { data, error } = await window.supabase
                         .from('camps')
                         .insert([{ 
@@ -900,5 +963,5 @@
     checkAuth();
     setupAuthListener();
     
-    console.log('📊 Campistry Dashboard v2.1 loaded (multi-tenant)');
+    console.log('📊 Campistry Dashboard v2.2 loaded (multi-tenant)');
 })();
