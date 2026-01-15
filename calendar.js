@@ -1,9 +1,9 @@
 // =================================================================
-// calendar.js (FIXED v2.9 - Quota Handling + Syntax Fix)
+// calendar.js (FIXED v3.0 - SCHEDULER ENFORCEMENT + Quota Handling)
 // =================================================================
 (function() {
     'use strict';
-    console.log("🗓️ calendar.js v2.9 (QUOTA HANDLING FIX) loaded");
+    console.log("🗓️ calendar.js v3.0 (SCHEDULER ENFORCEMENT) loaded");
     
     // ==========================================================
     // 1. STORAGE KEYS - UNIFIED
@@ -426,27 +426,29 @@
     }
     
     // ==========================================================
-    // 6. ERASE CURRENT DAY - ★ FIXED to sync deletion to cloud ★
+    // 6. ERASE CURRENT DAY - ★ SCHEDULER ENFORCEMENT ★
     // ==========================================================
     window.eraseCurrentDailyData = async function() {
-        const all = window.loadAllDailyData();
         const date = window.currentScheduleDate;
+        const role = window.AccessControl?.getCurrentRole();
         
-        if (all[date]) {
-            delete all[date];
-            safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(all));
-            console.log(`🗑️ Erased schedule for ${date}`);
-            
-            // ★★★ FIX: Force sync the deletion to cloud ★★★
-            // We need to explicitly tell the cloud about the deletion
-            if (typeof window.forceSyncToCloud === 'function') {
-                console.log("☁️ Syncing deletion to cloud...");
-                await window.forceSyncToCloud();
-            } else if (typeof window.scheduleCloudSync === 'function') {
-                window.scheduleCloudSync();
+        if (role === 'scheduler') {
+            const myDivisions = window.AccessControl?.getEditableDivisions() || [];
+            if (myDivisions.length === 0) {
+                alert("You don't have any divisions assigned.");
+                return;
+            }
+            if (!confirm(`Delete YOUR data for: ${myDivisions.join(', ')}?\n\nOther schedulers' data preserved.`)) return;
+            await window.AccessControl?.deleteMyDivisionsOnly(date);
+        } else {
+            const all = window.loadAllDailyData();
+            if (all[date]) {
+                delete all[date];
+                safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(all));
             }
         }
         
+        if (typeof window.forceSyncToCloud === 'function') await window.forceSyncToCloud();
         window.loadCurrentDailyData();
         window.initScheduleSystem?.();
     };
@@ -947,7 +949,7 @@
         setupEraseAll();
         startAutoSaveTimer();
         
-        console.log("🗓️ Calendar initialized (FIXED v2.9)");
+        console.log("🗓️ Calendar initialized (FIXED v3.0)");
     }
     
     window.initCalendar = initCalendar;
