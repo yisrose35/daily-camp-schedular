@@ -854,8 +854,8 @@
                 });
 
                 console.log(`[Step1.5] Mapping existing data to ${window.unifiedTimes.length} slots...`);
-                console.log(`[Step1.5]   Snapshot bunks: ${Object.keys(snapshot).length}`);
-                console.log(`[Step1.5]   Allowed divisions (will skip): ${allowedDivisions?.join(', ') || 'NONE'}`);
+                console.log(`[Step1.5]    Snapshot bunks: ${Object.keys(snapshot).length}`);
+                console.log(`[Step1.5]    Allowed divisions (will skip): ${allowedDivisions?.join(', ') || 'NONE'}`);
 
                 for (const [bunkName, slots] of Object.entries(snapshot)) {
                     if (!slots || !Array.isArray(slots)) continue;
@@ -908,7 +908,7 @@
                     }
 
                     restoredBunks++;
-                    console.log(`[Step1.5]   ✓ Restored ${bunkName} (${divName})`);
+                    console.log(`[Step1.5]    ✓ Restored ${bunkName} (${divName})`);
                 }
 
                 console.log(`[Step1.5] ✅ Restored ${restoredBunks} bunks, ${restoredSlots} total slots mapped`);
@@ -1013,7 +1013,7 @@
                         // Also register location usage
                         if (window.registerLocationUsage) {
                             const location = activityProperties?.[fieldName]?.location || 
-                                           window.getLocationForActivity?.(activityName);
+                                             window.getLocationForActivity?.(activityName);
                             if (location) {
                                 window.registerLocationUsage(targetIndex, location, activityName, divName);
                             }
@@ -1394,32 +1394,83 @@
                 }
             }
 
-            // Split Tile Logic
+            // =========================================================================
+            // SPLIT TILE LOGIC - Groups swap activities at midpoint
+            // =========================================================================
+            // BEHAVIOR:
+            // - First half: Group 1 gets main 1, Group 2 gets main 2
+            // - Second half: Group 1 gets main 2, Group 2 gets main 1 (SWITCH)
+            // =========================================================================
             if (item.type === 'split') {
+                console.log(`[SPLIT] ═══════════════════════════════════════════════════════`);
+                console.log(`[SPLIT] Processing split tile for ${divName}: ${item.event}`);
+                console.log(`[SPLIT] ═══════════════════════════════════════════════════════`);
+                
+                // Calculate midpoint of the time block
                 const midMin = Math.floor(sMin + (eMin - sMin) / 2);
+                
+                // Divide bunks into two groups (first half and second half of the division)
                 const half = Math.ceil(bunkList.length / 2);
-                const groupA = bunkList.slice(0, half);
-                const groupB = bunkList.slice(half);
+                const groupA = bunkList.slice(0, half);   // First half of bunks (Group 1)
+                const groupB = bunkList.slice(half);        // Second half of bunks (Group 2)
 
-                const act1Name = item.subEvents?.[0]?.event || "Activity 1";
-                const act2Name = item.subEvents?.[1]?.event || "Activity 2";
+                // Get activity names from subEvents - handle multiple data formats
+                let act1Name, act2Name;
+                
+                if (item.subEvents && item.subEvents.length >= 2) {
+                    // Handle multiple formats:
+                    // Format 1: [{event: 'Swim'}, {event: 'Art'}]
+                    // Format 2: [{type: 'pinned', event: 'Swim'}, ...]
+                    // Format 3: ['Swim', 'Art'] (string array)
+                    const sub0 = item.subEvents[0];
+                    const sub1 = item.subEvents[1];
+                    
+                    act1Name = typeof sub0 === 'string' ? sub0 : (sub0?.event || "Activity 1");
+                    act2Name = typeof sub1 === 'string' ? sub1 : (sub1?.event || "Activity 2");
+                } else {
+                    // Fallback: parse from event name "Swim / Art"
+                    const parts = (item.event || "").split('/').map(s => s.trim());
+                    act1Name = parts[0] || "Activity 1";
+                    act2Name = parts[1] || "Activity 2";
+                }
 
-                const routeSplitActivity = (bunks, actName, start, end) => {
+                console.log(`[SPLIT] Main 1 (act1Name): "${act1Name}"`);
+                console.log(`[SPLIT] Main 2 (act2Name): "${act2Name}"`);
+                console.log(`[SPLIT] Time block: ${sMin} to ${eMin} (midpoint: ${midMin})`);
+                console.log(`[SPLIT] Group 1 (${groupA.length} bunks): ${groupA.join(', ')}`);
+                console.log(`[SPLIT] Group 2 (${groupB.length} bunks): ${groupB.join(', ')}`);
+                console.log(`[SPLIT] ---------------------------------------------------`);
+                console.log(`[SPLIT] FIRST HALF (${sMin}-${midMin}):`);
+                console.log(`[SPLIT]    Group 1 → ${act1Name} (main 1)`);
+                console.log(`[SPLIT]    Group 2 → ${act2Name} (main 2)`);
+                console.log(`[SPLIT] SECOND HALF (${midMin}-${eMin}):`);
+                console.log(`[SPLIT]    Group 1 → ${act2Name} (main 2) ← SWITCHED`);
+                console.log(`[SPLIT]    Group 2 → ${act1Name} (main 1) ← SWITCHED`);
+                console.log(`[SPLIT] ---------------------------------------------------`);
+
+                // Helper function to route activities to bunks
+                const routeSplitActivity = (bunks, actName, start, end, groupLabel, actLabel) => {
                     const slots = Utils.findSlotsForRange(start, end);
-                    if (slots.length === 0) return;
+                    if (slots.length === 0) {
+                        console.warn(`[SPLIT] WARNING: No slots found for range ${start}-${end}`);
+                        return;
+                    }
 
                     const normName = normalizeGA(actName) || actName;
                     const isGen = isGeneratedType(normName);
 
+                    console.log(`[SPLIT] Routing ${groupLabel} to "${actName}" (${actLabel}) for time ${start}-${end}`);
+
                     bunks.forEach(b => {
-                        // ★★★ SKIP BUNKS WITH OVERRIDES ★★★
+                        // Skip bunks with manual overrides
                         const existing = window.scheduleAssignments[b]?.[slots[0]];
                         if (existing && existing._bunkOverride) {
-                            console.log(`[SPLIT] Skipping ${b} - has bunk override`);
+                            console.log(`[SPLIT]    ⏭️ ${b} - skipping (has bunk override)`);
                             return;
                         }
 
                         if (isGen) {
+                            // Queue for scheduler to fill (for generic types like "Sports", "Activity")
                             schedulableSlotBlocks.push({
                                 divName,
                                 bunk: b,
@@ -1427,9 +1478,12 @@
                                 type: 'slot',
                                 startTime: start,
                                 endTime: end,
-                                slots
+                                slots,
+                                fromSplitTile: true
                             });
+                            console.log(`[SPLIT]    📋 ${b} → QUEUED for "${normName}"`);
                         } else {
+                            // Direct fill for specific activities (Swim, Art, etc.)
                             fillBlock({
                                 divName,
                                 bunk: b,
@@ -1440,17 +1494,39 @@
                                 field: actName,
                                 sport: null,
                                 _fixed: true,
-                                _activity: actName
+                                _activity: actName,
+                                _fromSplitTile: true
                             }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                            console.log(`[SPLIT]    ✅ ${b} → FILLED with "${actName}"`);
                         }
                     });
                 };
 
-                routeSplitActivity(groupA, act1Name, sMin, midMin);
-                routeSplitActivity(groupB, act2Name, sMin, midMin);
-                routeSplitActivity(groupA, act2Name, midMin, eMin);
-                routeSplitActivity(groupB, act1Name, midMin, eMin);
-                return;
+                // =====================================================================
+                // THE KEY FIX: Correct assignment order for split tiles
+                // =====================================================================
+                // FIRST HALF (sMin to midMin):
+                //    - Group 1 (first half of bunks) → main 1 (act1Name)
+                //    - Group 2 (second half of bunks) → main 2 (act2Name)
+                // SECOND HALF (midMin to eMin):
+                //    - Group 1 (first half of bunks) → main 2 (act2Name) - SWITCHED!
+                //    - Group 2 (second half of bunks) → main 1 (act1Name) - SWITCHED!
+                // =====================================================================
+                
+                console.log(`[SPLIT] \n>>> EXECUTING FIRST HALF (${sMin}-${midMin}) <<<`);
+                // First half of time block
+                routeSplitActivity(groupA, act1Name, sMin, midMin, "Group 1", "main 1");
+                routeSplitActivity(groupB, act2Name, sMin, midMin, "Group 2", "main 2");
+                
+                console.log(`[SPLIT] \n>>> EXECUTING SECOND HALF (${midMin}-${eMin}) - SWITCH <<<`);
+                // Second half of time block - GROUPS SWITCH
+                routeSplitActivity(groupA, act2Name, midMin, eMin, "Group 1", "main 2 (switched)");
+                routeSplitActivity(groupB, act1Name, midMin, eMin, "Group 2", "main 1 (switched)");
+
+                console.log(`[SPLIT] ═══════════════════════════════════════════════════════`);
+                console.log(`[SPLIT] ✅ Completed split tile for ${divName}`);
+                console.log(`[SPLIT] ═══════════════════════════════════════════════════════\n`);
+                return;  // Don't continue with regular slot processing
             }
 
             const slots = Utils.findSlotsForRange(sMin, eMin);
