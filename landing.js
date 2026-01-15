@@ -1,8 +1,9 @@
 // ============================================================================
-// landing.js — Campistry Landing Page (FIXED)
+// landing.js — Campistry Landing Page (FIXED v2)
 // 
 // FIXES:
 // - Better Supabase initialization checking
+// - Defensive checks for supabase.auth
 // - Retry logic for auth service
 // - Improved error messages
 // ============================================================================
@@ -16,6 +17,16 @@ const GLOBAL_ACCESS_CODE = 'jUsTCAmPit2026';
 // GLOBAL STATE
 // ========================================
 let authMode = 'login';
+
+// ========================================
+// SUPABASE HELPER
+// ========================================
+function getSupabase() {
+    if (window.supabase && window.supabase.auth) {
+        return window.supabase;
+    }
+    return null;
+}
 
 // ========================================
 // AUTH MODAL FUNCTIONS (Global - for onclick handlers)
@@ -93,8 +104,9 @@ function closeResetModal() {
 
 async function handleLogout() {
     try {
-        if (window.supabase) {
-            await window.supabase.auth.signOut();
+        const supabase = getSupabase();
+        if (supabase) {
+            await supabase.auth.signOut();
         }
         updateUIForLoggedOutState();
         console.log('🔐 Logged out successfully');
@@ -194,8 +206,10 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('🚀 Landing page initializing...');
     
     // Verify Supabase is available
-    if (!window.supabase) {
-        console.error('⚠️ Supabase not loaded - check that supabase_client.js is included');
+    const supabase = getSupabase();
+    if (!supabase) {
+        console.error('⚠️ Supabase client not ready - window.supabase:', window.supabase);
+        console.error('⚠️ window.supabase.auth:', window.supabase?.auth);
     } else {
         console.log('✅ Supabase client available');
     }
@@ -250,21 +264,22 @@ document.addEventListener('DOMContentLoaded', function() {
 
             try {
                 // Check if Supabase is available
-                if (!window.supabase) {
+                const supabase = getSupabase();
+                if (!supabase) {
                     throw new Error('Authentication service is not available. Please refresh the page.');
                 }
 
                 let result;
                 if (authMode === 'signup') {
                     showAuthLoading(true, 'Creating your account...');
-                    result = await window.supabase.auth.signUp({
+                    result = await supabase.auth.signUp({
                         email,
                         password,
                         options: { data: { camp_name: campName } }
                     });
                 } else {
                     showAuthLoading(true, 'Verifying credentials...');
-                    result = await window.supabase.auth.signInWithPassword({ email, password });
+                    result = await supabase.auth.signInWithPassword({ email, password });
                 }
 
                 const { data, error } = result;
@@ -349,11 +364,12 @@ document.addEventListener('DOMContentLoaded', function() {
             if (resetSuccess) resetSuccess.style.display = 'none';
             
             try {
-                if (!window.supabase) {
+                const supabase = getSupabase();
+                if (!supabase) {
                     throw new Error('Authentication service not available. Please refresh the page.');
                 }
                 
-                const { error } = await window.supabase.auth.resetPasswordForEmail(email, {
+                const { error } = await supabase.auth.resetPasswordForEmail(email, {
                     redirectTo: window.location.origin + '/landing.html#reset-password'
                 });
                 
@@ -412,9 +428,10 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             
             try {
-                if (!window.supabase) throw new Error('Authentication service not available');
+                const supabase = getSupabase();
+                if (!supabase) throw new Error('Authentication service not available');
                 
-                const { error } = await window.supabase.auth.updateUser({ password: newPassword });
+                const { error } = await supabase.auth.updateUser({ password: newPassword });
                 if (error) throw error;
                 
                 if (updateSuccess) {
@@ -459,14 +476,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Session Check
     async function checkSession() {
-        if (!window.supabase) {
+        const supabase = getSupabase();
+        if (!supabase) {
             console.log('Supabase not available for session check');
             updateUIForLoggedOutState();
             return;
         }
 
         try {
-            const { data: { session } } = await window.supabase.auth.getSession();
+            const { data: { session } } = await supabase.auth.getSession();
             if (session?.user) {
                 console.log('🔐 User logged in:', session.user.email);
                 updateUIForLoggedInState(session.user);
@@ -479,9 +497,17 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Auth State Listener
-    if (window.supabase) {
-        window.supabase.auth.onAuthStateChange((event, session) => {
+    // Auth State Listener - with defensive check
+    function setupAuthListener() {
+        const supabase = getSupabase();
+        if (!supabase) {
+            console.warn('⚠️ Cannot setup auth listener - Supabase not ready');
+            // Retry after a short delay
+            setTimeout(setupAuthListener, 500);
+            return;
+        }
+        
+        supabase.auth.onAuthStateChange((event, session) => {
             console.log('🔐 Auth state:', event);
             
             if (event === 'SIGNED_IN' && session?.user) {
@@ -500,11 +526,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
         });
+        
+        console.log('✅ Auth listener setup complete');
     }
 
     // Initialize
     checkSession();
     checkForPasswordResetToken();
+    setupAuthListener();
     
     console.log('✅ Landing page initialized');
 });
