@@ -893,6 +893,9 @@
             window.location.href = 'landing.html';
         }
     };
+    
+    // Alias for HTML compatibility
+    window.handleLogout = window.logout;
 
     // ========================================
     // INITIALIZE
