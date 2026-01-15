@@ -1,9 +1,17 @@
 // =================================================================
-// calendar.js (FIXED v3.0 - SCHEDULER ENFORCEMENT + Quota Handling)
+// calendar.js (FIXED v4.0 - CRITICAL DELETION FIX INTEGRATED)
+// =================================================================
+// 
+// v4.0 CHANGES:
+// - CRITICAL FIX: Scheduler deletion now removes bunks from ALL records
+// - Integrated deleteMyBunksFromAllRecords() directly into this file
+// - No external patches required
+// - Full cloud + localStorage + window globals cleanup
+//
 // =================================================================
 (function() {
     'use strict';
-    console.log("🗓️ calendar.js v3.0 (SCHEDULER ENFORCEMENT) loaded");
+    console.log("🗓️ calendar.js v4.0 (DELETION FIX INTEGRATED) loaded");
     
     // ==========================================================
     // 1. STORAGE KEYS - UNIFIED
@@ -426,71 +434,388 @@
     }
     
     // ==========================================================
-    // 6. ERASE CURRENT DAY - ★ SCHEDULER ENFORCEMENT ★
+    // 6. ★★★ CRITICAL FIX: HELPER FUNCTIONS FOR SCHEDULER DELETE ★★★
     // ==========================================================
-   window.eraseCurrentDailyData = async function() {
-    const dateKey = window.currentScheduleDate;
-    const role = window.AccessControl?.getCurrentRole();
     
-    console.log('🗑️ eraseCurrentDailyData called for:', dateKey, 'role:', role);
+    /**
+     * Get the list of bunk IDs that the current user can edit
+     * based on their assigned divisions.
+     */
+    function getMyEditableBunks() {
+        const editableDivisions = window.AccessControl?.getEditableDivisions?.() || 
+                                 window.PermissionsDB?.getEditableDivisions?.() || [];
+        
+        const divisions = window.divisions || {};
+        const bunks = [];
+        
+        for (const divName of editableDivisions) {
+            const divInfo = divisions[divName];
+            if (divInfo?.bunks) {
+                bunks.push(...divInfo.bunks);
+            }
+        }
+        
+        return bunks;
+    }
     
-    if (role === 'scheduler') {
-        const myDivisions = window.AccessControl?.getEditableDivisions() || [];
-        if (myDivisions.length === 0) {
-            alert("You don't have any divisions assigned.");
-            return;
-        }
-        if (!confirm(`Delete YOUR schedule for divisions: ${myDivisions.join(', ')}?\n\nOther schedulers' data will be preserved.`)) return;
+    /**
+     * ★★★ THE CRITICAL FIX ★★★
+     * 
+     * Delete the current user's bunks from ALL schedule records for a date.
+     * 
+     * WHY THIS IS NECESSARY:
+     * - The owner might save a record containing ALL bunks (including scheduler's)
+     * - Simply deleting the scheduler's own record doesn't remove their bunks
+     *   from the owner's record
+     * - On reload, the owner's record loads → scheduler's bunks reappear!
+     * 
+     * THE FIX:
+     * - Load ALL records for the date
+     * - Remove the scheduler's bunks from EVERY record
+     * - Update or delete each modified record
+     */
+    async function deleteMyBunksFromAllRecords(dateKey) {
+        console.log('🗑️ [CRITICAL FIX] deleteMyBunksFromAllRecords called for:', dateKey);
         
-        // Use the patched deleteMyDivisionsOnly which now properly deletes from cloud
-        const result = await window.AccessControl?.deleteMyDivisionsOnly(dateKey);
+        const client = window.CampistryDB?.getClient?.() || window.supabase;
+        const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
         
-        if (result?.error) {
-            alert('Error deleting schedule: ' + result.error);
-            return;
-        }
-        
-        console.log('🗑️ Scheduler delete result:', result);
-        
-    } else {
-        // Owner/Admin - full delete
-        if (!confirm(`Delete ALL schedule data for ${dateKey}?\n\nThis will delete data from ALL schedulers and cannot be undone.`)) return;
-        
-        // Delete from cloud using ScheduleDB
-        if (window.ScheduleDB?.deleteSchedule) {
-            console.log('🗑️ Owner/Admin: Calling ScheduleDB.deleteSchedule...');
-            const result = await window.ScheduleDB.deleteSchedule(dateKey);
-            console.log('🗑️ Full delete result:', result);
+        if (!client || !campId) {
+            console.error('🗑️ Cannot delete: missing client or campId');
+            return { success: false, error: 'Database not available' };
         }
         
-        // Clear localStorage
-        const all = window.loadAllDailyData();
-        if (all[dateKey]) {
-            delete all[dateKey];
+        // Step 1: Get my editable bunks
+        const myBunks = getMyEditableBunks();
+        console.log('🗑️ My bunks to delete:', myBunks);
+        
+        if (myBunks.length === 0) {
+            console.log('🗑️ No bunks assigned to delete');
+            return { success: true, message: 'No bunks assigned' };
+        }
+        
+        try {
+            // Step 2: Load ALL records for this date
+            const { data: allRecords, error: loadError } = await client
+                .from('daily_schedules')
+                .select('*')
+                .eq('camp_id', campId)
+                .eq('date_key', dateKey);
+            
+            if (loadError) {
+                console.error('🗑️ Failed to load records:', loadError);
+                return { success: false, error: loadError.message };
+            }
+            
+            if (!allRecords || allRecords.length === 0) {
+                console.log('🗑️ No records found in cloud');
+                return { success: true, message: 'No cloud records' };
+            }
+            
+            console.log('🗑️ Found', allRecords.length, 'records to process');
+            
+            // Step 3: For EACH record, remove my bunks
+            const myBunkSet = new Set(myBunks);
+            let recordsModified = 0;
+            let recordsDeleted = 0;
+            let bunksRemoved = 0;
+            
+            for (const record of allRecords) {
+                const scheduleData = record.schedule_data || {};
+                const assignments = { ...(scheduleData.scheduleAssignments || {}) };
+                const leagues = { ...(scheduleData.leagueAssignments || {}) };
+                
+                const bunksBefore = Object.keys(assignments).length;
+                
+                // Remove my bunks from this record
+                let modified = false;
+                for (const bunk of myBunks) {
+                    if (assignments[bunk] !== undefined) {
+                        delete assignments[bunk];
+                        modified = true;
+                        bunksRemoved++;
+                    }
+                    if (leagues[bunk] !== undefined) {
+                        delete leagues[bunk];
+                    }
+                }
+                
+                const bunksAfter = Object.keys(assignments).length;
+                console.log(`🗑️ Record ${record.scheduler_name || record.scheduler_id?.substring(0, 8)}: ${bunksBefore} → ${bunksAfter} bunks`);
+                
+                if (!modified) {
+                    console.log('🗑️   Skipping - no changes needed');
+                    continue;
+                }
+                
+                // If record is now empty, delete it entirely
+                if (bunksAfter === 0) {
+                    console.log('🗑️   Record now empty, deleting...');
+                    const { error: deleteError } = await client
+                        .from('daily_schedules')
+                        .delete()
+                        .eq('id', record.id);
+                    
+                    if (deleteError) {
+                        console.error('🗑️   Delete failed:', deleteError);
+                    } else {
+                        recordsDeleted++;
+                        console.log('🗑️   ✅ Deleted empty record');
+                    }
+                } else {
+                    // Update the record with bunks removed
+                    console.log('🗑️   Updating record with', bunksAfter, 'remaining bunks...');
+                    
+                    const updatedData = {
+                        ...scheduleData,
+                        scheduleAssignments: assignments,
+                        leagueAssignments: leagues
+                    };
+                    
+                    const { error: updateError } = await client
+                        .from('daily_schedules')
+                        .update({
+                            schedule_data: updatedData,
+                            updated_at: new Date().toISOString()
+                        })
+                        .eq('id', record.id);
+                    
+                    if (updateError) {
+                        console.error('🗑️   Update failed:', updateError);
+                    } else {
+                        recordsModified++;
+                        console.log('🗑️   ✅ Updated record');
+                    }
+                }
+            }
+            
+            console.log(`🗑️ Delete complete: ${recordsModified} modified, ${recordsDeleted} deleted, ${bunksRemoved} bunks removed`);
+            
+            return {
+                success: true,
+                recordsModified,
+                recordsDeleted,
+                bunksRemoved
+            };
+            
+        } catch (e) {
+            console.error('🗑️ deleteMyBunksFromAllRecords exception:', e);
+            return { success: false, error: e.message };
+        }
+    }
+    
+    /**
+     * Clear the current user's bunks from window globals
+     */
+    function clearMyBunksFromGlobals() {
+        const myBunks = new Set(getMyEditableBunks());
+        
+        if (window.scheduleAssignments) {
+            myBunks.forEach(bunk => {
+                delete window.scheduleAssignments[bunk];
+            });
+        }
+        
+        if (window.leagueAssignments) {
+            myBunks.forEach(bunk => {
+                delete window.leagueAssignments[bunk];
+            });
+        }
+        
+        console.log('🗑️ Cleared', myBunks.size, 'bunks from window globals');
+    }
+    
+    /**
+     * Clear the current user's bunks from localStorage
+     */
+    function clearMyBunksFromLocalStorage(dateKey) {
+        try {
+            const all = window.loadAllDailyData();
+            const dateData = all[dateKey];
+            
+            if (!dateData) return;
+            
+            const myBunks = new Set(getMyEditableBunks());
+            
+            if (dateData.scheduleAssignments) {
+                myBunks.forEach(bunk => {
+                    delete dateData.scheduleAssignments[bunk];
+                });
+            }
+            
+            if (dateData.leagueAssignments) {
+                myBunks.forEach(bunk => {
+                    delete dateData.leagueAssignments[bunk];
+                });
+            }
+            
             safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(all));
+            console.log('🗑️ Cleared my bunks from localStorage');
+        } catch (e) {
+            console.error('🗑️ Failed to clear localStorage:', e);
+        }
+    }
+    
+    /**
+     * Reload remaining schedule data from cloud after deletion
+     */
+    async function reloadRemainingData(dateKey) {
+        if (!window.ScheduleDB?.loadSchedule) {
+            console.log('🗑️ ScheduleDB not available for reload');
+            return;
         }
         
-        // Clear ALL window globals
-        window.scheduleAssignments = {};
-        window.leagueAssignments = {};
+        try {
+            const result = await window.ScheduleDB.loadSchedule(dateKey);
+            
+            if (result?.success && result.data) {
+                // Merge remaining data into window globals
+                window.scheduleAssignments = result.data.scheduleAssignments || {};
+                window.leagueAssignments = result.data.leagueAssignments || {};
+                
+                // Update localStorage
+                const all = window.loadAllDailyData();
+                all[dateKey] = {
+                    ...all[dateKey],
+                    scheduleAssignments: result.data.scheduleAssignments || {},
+                    leagueAssignments: result.data.leagueAssignments || {}
+                };
+                safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(all));
+                
+                console.log('🗑️ Reloaded', Object.keys(result.data.scheduleAssignments || {}).length, 'bunks from remaining data');
+            } else {
+                console.log('🗑️ No remaining data after delete');
+            }
+        } catch (e) {
+            console.error('🗑️ Failed to reload remaining data:', e);
+        }
     }
-    
-    // ★★★ CRITICAL: Refresh UI immediately ★★★
-    if (window.updateTable) {
-        console.log('🗑️ Refreshing table...');
-        window.updateTable();
-    }
-    
-    // Reinitialize schedule system
-    if (window.initScheduleSystem) {
-        window.initScheduleSystem();
-    }
-    
-    console.log('🗑️ ✅ Erase complete');
-};
     
     // ==========================================================
-    // 7. ERASE ALL SCHEDULE DAYS - ★ FIXED to sync deletion to cloud ★
+    // 7. ERASE CURRENT DAY - ★★★ CRITICAL FIX INTEGRATED ★★★
+    // ==========================================================
+    window.eraseCurrentDailyData = async function() {
+        const dateKey = window.currentScheduleDate;
+        const role = window.AccessControl?.getCurrentRole?.() || 
+                    window.CampistryDB?.getRole?.() || 'viewer';
+        
+        console.log('🗑️ eraseCurrentDailyData called for:', dateKey, 'role:', role);
+        
+        // ═══════════════════════════════════════════════════════════════
+        // SCHEDULER: Delete only their divisions from ALL records
+        // ═══════════════════════════════════════════════════════════════
+        if (role === 'scheduler') {
+            const myDivisions = window.AccessControl?.getEditableDivisions?.() || [];
+            
+            if (myDivisions.length === 0) {
+                alert("You don't have any divisions assigned.");
+                return;
+            }
+            
+            const confirmMsg = `Delete YOUR schedule for divisions: ${myDivisions.join(', ')}?\n\n` +
+                             `Other schedulers' data will be preserved.`;
+            
+            if (!confirm(confirmMsg)) return;
+            
+            console.log('🗑️ Scheduler deleting divisions:', myDivisions);
+            
+            // ★★★ THE CRITICAL FIX: Remove bunks from ALL records ★★★
+            const cloudResult = await deleteMyBunksFromAllRecords(dateKey);
+            
+            if (!cloudResult?.success) {
+                console.error('🗑️ Cloud delete failed:', cloudResult?.error);
+                alert('Error deleting schedule: ' + (cloudResult?.error || 'Unknown error'));
+                return;
+            }
+            
+            console.log('🗑️ Cloud delete result:', cloudResult);
+            
+            // Clear from localStorage
+            clearMyBunksFromLocalStorage(dateKey);
+            
+            // Clear from window globals
+            clearMyBunksFromGlobals();
+            
+            // Reload remaining data from other schedulers
+            await reloadRemainingData(dateKey);
+        }
+        // ═══════════════════════════════════════════════════════════════
+        // OWNER/ADMIN: Delete everything
+        // ═══════════════════════════════════════════════════════════════
+        else if (role === 'owner' || role === 'admin') {
+            const confirmMsg = `Delete ALL schedule data for ${dateKey}?\n\n` +
+                             `This will delete data from ALL schedulers and cannot be undone.`;
+            
+            if (!confirm(confirmMsg)) return;
+            
+            console.log('🗑️ Owner/Admin: Full delete');
+            
+            // Delete from cloud using ScheduleDB
+            if (window.ScheduleDB?.deleteSchedule) {
+                console.log('🗑️ Calling ScheduleDB.deleteSchedule...');
+                const result = await window.ScheduleDB.deleteSchedule(dateKey);
+                console.log('🗑️ Full delete result:', result);
+            } else {
+                // Fallback: Direct delete
+                const client = window.CampistryDB?.getClient?.() || window.supabase;
+                const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
+                
+                if (client && campId) {
+                    const { error } = await client
+                        .from('daily_schedules')
+                        .delete()
+                        .eq('camp_id', campId)
+                        .eq('date_key', dateKey);
+                    
+                    if (error) {
+                        console.error('🗑️ Direct delete error:', error);
+                    }
+                }
+            }
+            
+            // Clear localStorage
+            const all = window.loadAllDailyData();
+            if (all[dateKey]) {
+                delete all[dateKey];
+                safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(all));
+            }
+            
+            // Clear ALL window globals
+            window.scheduleAssignments = {};
+            window.leagueAssignments = {};
+        }
+        // ═══════════════════════════════════════════════════════════════
+        // VIEWER: No permission
+        // ═══════════════════════════════════════════════════════════════
+        else {
+            alert('You do not have permission to delete schedules.');
+            return;
+        }
+        
+        // ═══════════════════════════════════════════════════════════════
+        // REFRESH UI
+        // ═══════════════════════════════════════════════════════════════
+        
+        console.log('🗑️ Refreshing UI...');
+        
+        if (window.updateTable) {
+            window.updateTable();
+        }
+        
+        if (window.initScheduleSystem) {
+            window.initScheduleSystem();
+        }
+        
+        // Dispatch event for other modules
+        window.dispatchEvent(new CustomEvent('campistry-schedule-deleted', {
+            detail: { dateKey, role }
+        }));
+        
+        console.log('🗑️ ✅ Erase complete');
+    };
+    
+    // ==========================================================
+    // 8. ERASE ALL SCHEDULE DAYS - ★ FIXED to sync deletion to cloud ★
     // ==========================================================
     window.eraseAllDailyData = async function() {
         if (!window.AccessControl?.canEraseData?.()) {
@@ -498,25 +823,60 @@
             return;
         }
         
+        const confirmMsg = 'Delete ALL schedule data for ALL dates?\n\n' +
+                          '⚠️ This will permanently delete schedules from all schedulers for all dates.\n\n' +
+                          'This action cannot be undone!';
+        
+        if (!confirm(confirmMsg)) return;
+        
         console.log("🗑️ Erasing all daily data...");
         
-        // Clear localStorage first
-        localStorage.removeItem(DAILY_DATA_KEY);
-        
-        // ★★★ FIX: Explicitly clear daily_schedules in cloud ★★★
-        if (typeof window.clearCloudKeys === 'function') {
-            console.log("☁️ Clearing daily_schedules from cloud...");
-            await window.clearCloudKeys(['daily_schedules']);
-        } else {
-            // Fallback: Set to empty and force sync
-            window.saveGlobalSettings?.('daily_schedules', {});
-            if (typeof window.forceSyncToCloud === 'function') {
-                await window.forceSyncToCloud();
+        try {
+            // Delete all records from cloud
+            const client = window.CampistryDB?.getClient?.() || window.supabase;
+            const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
+            
+            if (client && campId) {
+                console.log('🗑️ Deleting all records from daily_schedules...');
+                const { error } = await client
+                    .from('daily_schedules')
+                    .delete()
+                    .eq('camp_id', campId);
+                
+                if (error) {
+                    console.error('🗑️ Cloud delete error:', error);
+                } else {
+                    console.log('🗑️ Cloud delete successful');
+                }
             }
+            
+            // Clear localStorage
+            localStorage.removeItem(DAILY_DATA_KEY);
+            
+            // Also clear via bridge if available
+            if (typeof window.clearCloudKeys === 'function') {
+                console.log("☁️ Clearing daily_schedules from cloud bridge...");
+                await window.clearCloudKeys(['daily_schedules']);
+            } else if (typeof window.saveGlobalSettings === 'function') {
+                window.saveGlobalSettings('daily_schedules', {});
+                if (typeof window.forceSyncToCloud === 'function') {
+                    await window.forceSyncToCloud();
+                }
+            }
+            
+            // Clear window globals
+            window.scheduleAssignments = {};
+            window.leagueAssignments = {};
+            
+            console.log("✅ All daily data erased");
+            
+            alert('All schedule data has been deleted.');
+            window.location.reload();
+            
+        } catch (e) {
+            console.error('🗑️ Erase all failed:', e);
+            alert('Error erasing data: ' + e.message);
         }
-        
-        console.log("✅ All daily data erased");
-        window.location.reload();
     };
     
     // ==========================================================
@@ -600,7 +960,7 @@
     }
     
     // ==========================================================
-    // 8. BACKUP / RESTORE
+    // 9. BACKUP / RESTORE
     // ==========================================================
     function exportAllData() {
         try {
@@ -829,7 +1189,7 @@
     window.__campistry_handleFileSelect = handleFileSelect;
     
     // ==========================================================
-    // 9. AUTO-SAVE SYSTEM - ★★★ FIXED with quota handling ★★★
+    // 10. AUTO-SAVE SYSTEM - ★★★ FIXED with quota handling ★★★
     // ==========================================================
     function performAutoSave(silent = true) {
         try {
@@ -974,7 +1334,7 @@
     }
     
     // ==========================================================
-    // 10. INIT CALENDAR
+    // 11. INIT CALENDAR
     // ==========================================================
     function initCalendar() {
         datePicker = document.getElementById("calendar-date-picker");
@@ -985,7 +1345,7 @@
         setupEraseAll();
         startAutoSaveTimer();
         
-        console.log("🗓️ Calendar initialized (FIXED v3.0)");
+        console.log("🗓️ Calendar initialized (FIXED v4.0 - DELETION FIX INTEGRATED)");
     }
     
     window.initCalendar = initCalendar;
@@ -1000,6 +1360,7 @@
         initCalendar();
     }
 })();
+
 // ==========================================================
 // LATE-BIND BACKUP / IMPORT WIRING
 // ==========================================================
