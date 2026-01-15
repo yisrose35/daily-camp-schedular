@@ -1,6 +1,6 @@
 // =================================================================
 // cloud_storage_bridge.js — Campistry Unified Cloud Storage Engine
-// VERSION: v4.9.2 (UPSERT FIX + RACE PROTECTION)
+// VERSION: v4.9.3 (CONSERVATIVE MERGE FIX)
 // =================================================================
 // 
 // FEATURES:
@@ -12,13 +12,12 @@
 // - Write Conflict Protection: Smart-weight check to rescue new local work from stale saves
 // - Granular Rescue: Protects individual bunk schedules from being wiped by partial cloud saves
 // - ★ v4.9.2: UPSERT FIX - Creates camp_state row if missing (fixes silent PATCH failures)
+// - ★ v4.9.3: CONSERVATIVE MERGE - Preserves cloud data when RBAC not ready (fixes cross-scheduler overwrites)
 //
 // =================================================================
 (function () {
   'use strict';
-
-  console.log("☁️ Campistry Cloud Bridge v4.9.2 (UPSERT FIX + RACE PROTECTION)");
-
+  console.log("☁️ Campistry Cloud Bridge v4.9.3 (CONSERVATIVE MERGE FIX)");
   // CONFIGURATION
   const SUPABASE_URL = "https://bzqmhcumuarrbueqttfh.supabase.co";
   const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI";
@@ -26,13 +25,11 @@
   const TABLE = "camp_state";
   const UNIFIED_CACHE_KEY = "CAMPISTRY_UNIFIED_STATE";
   const DAILY_DATA_KEY = "campDailyData_v1"; 
-
   const LEGACY_KEYS = {
     globalSettings: "campGlobalSettings_v1",
     localCache: "CAMPISTRY_LOCAL_CACHE", 
     globalRegistry: "campistry_global_registry"
   };
-
   // ============================================================================
   // STATE
   // ============================================================================
@@ -46,7 +43,6 @@
   let _dailyDataDirty = false;
   let _initialized = false;
   const SCHEMA_VERSION = 3; 
-
   // ============================================================================
   // UI FEEDBACK
   // ============================================================================
@@ -68,14 +64,12 @@
       else if (type === 'error') toast.style.backgroundColor = '#EF4444';
       else if (type === 'warning') toast.style.backgroundColor = '#F59E0B';
       else toast.style.backgroundColor = '#3B82F6';
-
       toast.textContent = message;
       toast.style.opacity = '1';
       
       if (window._toastTimer) clearTimeout(window._toastTimer);
       window._toastTimer = setTimeout(() => { toast.style.opacity = '0'; }, 3000);
   }
-
   // ============================================================================
   // CAMP ID & USER MANAGEMENT
   // ============================================================================
@@ -103,7 +97,6 @@
     
     return "demo_camp_001";
   }
-
   async function determineUserCampId(userId) {
     if (!userId) return null;
     
@@ -138,7 +131,6 @@
     _userRole = 'owner';
     return userId;
   }
-
   async function updateCampIdCache(userId) {
     if (!userId) return;
     const campId = await determineUserCampId(userId);
@@ -148,7 +140,6 @@
       localStorage.setItem('campistry_auth_user_id', userId);
     }
   }
-
   function clearCampIdCache() {
     _cachedCampId = null;
     _userRole = null;
@@ -157,10 +148,8 @@
     localStorage.removeItem('campistry_auth_user_id');
     delete window._campistryMembership;
   }
-
   function getUserRole() { return _userRole; }
   function isTeamMember() { return _isTeamMember; }
-
   // ============================================================================
   // PERMISSION HELPERS
   // ============================================================================
@@ -168,7 +157,6 @@
   function hasFullAccess() {
     return _userRole === 'owner' || _userRole === 'admin';
   }
-
   function getUserEditableDivisions() {
     if (window.PermissionsGuard?.getUserDivisions) {
       return window.PermissionsGuard.getUserDivisions();
@@ -181,7 +169,6 @@
     }
     return [];
   }
-
   function getUserEditableGrades() {
     if (window.PermissionsGuard?.getEditableGrades) {
       return new Set(window.PermissionsGuard.getEditableGrades());
@@ -200,13 +187,11 @@
     
     return grades;
   }
-
   function canEditGrade(gradeId) {
     if (hasFullAccess()) return true;
     if (_userRole === 'viewer') return false;
     return getUserEditableGrades().has(String(gradeId));
   }
-
   // ============================================================================
   // LOCAL CACHE
   // ============================================================================
@@ -233,14 +218,12 @@
         }
         delete state.daily_schedules; 
     }
-
     _memoryCache = state;
     try {
       localStorage.setItem(UNIFIED_CACHE_KEY, JSON.stringify(state));
       localStorage.setItem(LEGACY_KEYS.globalSettings, JSON.stringify(state));
     } catch (e) { console.error("Failed to save local cache:", e); }
   }
-
   // ============================================================================
   // REST API OPERATIONS
   // ============================================================================
@@ -250,20 +233,16 @@
         return data.session?.access_token || null;
     } catch (e) { return null; }
   }
-
   async function getUser() {
     const { data } = await window.supabase.auth.getUser();
     return data?.user;
   }
-
   async function loadFromCloud() {
     try {
       const token = await getSessionToken();
       if (!token) return null;
       const campId = getCampId();
-
       console.log("☁️ Loading from cloud for camp:", campId);
-
       const url = `${SUPABASE_URL}/rest/v1/${TABLE}?camp_id=eq.${campId}&select=state`;
       
       const response = await fetch(url, {
@@ -275,7 +254,6 @@
           'Cache-Control': 'no-cache'
         }
       });
-
       if (!response.ok) {
           console.error("☁️ Load failed:", response.status);
           return null;
@@ -287,11 +265,9 @@
         return null; 
     }
   }
-
   // ============================================================================
   // ★★★ SAVE TO CLOUD - WITH PERMISSION ENFORCEMENT + UPSERT FIX ★★★
   // ============================================================================
-
   async function saveToCloud(state) {
     try {
       showToast("☁️ Saving Schedule...", "info");
@@ -306,25 +282,21 @@
       const campId = getCampId();
       
       if (campId === "demo_camp_001") return false;
-
       if (_userRole === 'viewer') {
           showToast("❌ View-only access", "error");
           return false;
       }
-
       // =====================================================================
       // STEP 1: FETCH CLOUD STATE
       // =====================================================================
       console.log('☁️ [SAVE] Step 1: Fetching current cloud state...');
       const cloudState = await loadFromCloud();
       const cloudSchedules = cloudState?.daily_schedules || {};
-
       // =====================================================================
       // STEP 2: BASE = CLOUD DATA
       // =====================================================================
       // CRITICAL: Start with the cloud state so anything NOT in local is preserved automatically
       const finalSchedule = JSON.parse(JSON.stringify(cloudSchedules));
-
       // =====================================================================
       // STEP 3: GET LOCAL DATA
       // =====================================================================
@@ -334,7 +306,6 @@
           const schedulesRaw = localStorage.getItem(DAILY_DATA_KEY);
           if (schedulesRaw) localSchedules = JSON.parse(schedulesRaw);
       } catch (e) { console.error('☁️ [SAVE] Error reading local:', e); }
-
       // =====================================================================
       // STEP 4: PERMISSION-ENFORCED MERGE
       // =====================================================================
@@ -371,7 +342,6 @@
                   // Fallback: Check our own cache or assume true if owner
                   canEdit = hasFullAccess() || editableGrades.has(String(gradeId));
               }
-
               // ★★★ FIX 1: OPTIMISTIC OWNERSHIP ★★★
               // If the data is NOT in the cloud, but IS locally, and we are logged in,
               // assume we just created it and have the right to save it (fixes delay in AccessControl)
@@ -379,7 +349,6 @@
               if (!inCloud && !canEdit) {
                  canEdit = true; 
               }
-
               if (canEdit) {
                   // User has permission: Apply local changes
                   finalSchedule[dateKey].scheduleAssignments[gradeId] = schedule;
@@ -428,9 +397,7 @@
               Object.assign(finalSchedule[dateKey].subdivisionSchedules, localDateData.subdivisionSchedules);
           }
       }
-
       console.log(`☁️ [SAVE] Stats: Saved=${savedCount}, Preserved=${preservedCount}, Blocked=${blockedCount}`);
-
       // =====================================================================
       // STEP 5: BUILD FINAL STATE
       // =====================================================================
@@ -443,7 +410,6 @@
           const versionData = window.ScheduleVersioning.prepareForCloudSync();
           stateToSave.schedule_versions = versionData.schedule_versions;
       }
-
       // =====================================================================
       // STEP 6: SAVE TO CLOUD (WITH UPSERT LOGIC)
       // =====================================================================
@@ -460,7 +426,6 @@
         },
         body: JSON.stringify({ state: stateToSave, owner_id: campId })
       });
-
       let patchedData = [];
       if (patchResponse.ok) {
           patchedData = await patchResponse.json();
@@ -547,7 +512,6 @@
                        }
                   }
               });
-
               // Write back the safe merge
               localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(mergedBack));
               if (_memoryCache) _memoryCache.daily_schedules = mergedBack;
@@ -560,7 +524,6 @@
           } catch(e) {
               console.error("☁️ Error auto-syncing back to local:", e);
           }
-
           showToast("✅ Schedule Saved & Synced!", "success");
           _dailyDataDirty = false;
           window.dispatchEvent(new CustomEvent('campistry-cloud-saved'));
@@ -570,18 +533,15 @@
       console.error("☁️ Save Failed:", patchResponse.status, patchResponse.statusText);
       showToast("❌ Save Failed: " + patchResponse.status, "error");
       return false;
-
     } catch (e) {
       console.error("Save Error:", e);
       showToast("❌ Network Error", "error");
       return false;
     }
   }
-
   // ============================================================================
   // ★★★ CREATE SCHEDULE VERSION ("BASE ON" FEATURE) ★★★
   // ============================================================================
-
   /**
    * Create a new schedule based on an existing one
    * CRITICAL: This preserves the original and creates a NEW copy
@@ -644,7 +604,6 @@
       return { success: false, error: e.message };
     }
   }
-
   // ============================================================================
   // SYNC & INIT
   // ============================================================================
@@ -668,16 +627,13 @@
     _syncInProgress = false;
     return result;
   }
-
   async function initialize() {
     console.log("☁️ [INIT] Starting Read-Side Merge initialization...");
-
     const user = await getUser();
     if (user) await updateCampIdCache(user.id);
     
     // 1. Fetch Cloud Data
     const cloudState = await loadFromCloud();
-
     // 2. Fetch Local Data
     const localState = getLocalCache();
     let localDaily = {};
@@ -685,7 +641,6 @@
         const raw = localStorage.getItem(DAILY_DATA_KEY);
         if (raw) localDaily = JSON.parse(raw);
     } catch(e) { console.error("Error reading local daily:", e); }
-
     // 3. Merge Strategy
     if (cloudState) {
         console.log("☁️ [INIT] Cloud data found. Merging...");
@@ -711,12 +666,10 @@
         const rbacReady = window.AccessControl && window.AccessControl.isInitialized;
         
         console.log(`☁️ [INIT] Merge Permissions: RBACReady=${rbacReady}, Full=${hasFull}, Grades=${editableGrades.size}, Divs=${editableDivisions.length}`);
-
         // Overlay Local Data ONLY for editable fields
         let mergedCount = 0;
         let preservedCount = 0;
         let pendingCount = 0;
-
         for (const [dateKey, localDay] of Object.entries(localDaily)) {
             if (!mergedDaily[dateKey]) mergedDaily[dateKey] = {};
             
@@ -731,15 +684,25 @@
                 
                 for (const [gradeId, schedule] of Object.entries(localAssignments)) {
                     if (['unifiedTimes', 'skeleton', 'leagueAssignments', 'subdivisionSchedules'].includes(gradeId)) continue;
-
                     let canEdit = hasFull || editableGrades.has(String(gradeId));
                     
-                    // ★★★ RBAC RACE CONDITION FIX ★★★
+                    // ★★★ v4.9.3 FIX: CONSERVATIVE MERGE WHEN RBAC NOT READY ★★★
+                    // When RBAC isn't ready, PRESERVE cloud data instead of overwriting
+                    // This prevents User B from overwriting User A's schedule on load
                     if (!rbacReady && !hasFull) {
-                        canEdit = true; // Temporary Optimistic Permission
-                        pendingCount++;
+                        // Check if cloud already has data for this bunk
+                        const cloudHasData = cloudDaily[dateKey]?.scheduleAssignments?.[gradeId];
+                        
+                        if (cloudHasData) {
+                            // Cloud has data - PRESERVE IT (don't overwrite until we know permissions)
+                            canEdit = false;
+                            pendingCount++;
+                        } else {
+                            // Cloud is empty for this bunk - safe to apply local
+                            canEdit = true;
+                        }
                     }
-
+                    
                     if (canEdit) {
                         mergedDaily[dateKey].scheduleAssignments[gradeId] = schedule;
                         mergedCount++;
@@ -756,8 +719,18 @@
                 }
                 for (const [divId, leagueData] of Object.entries(localDay.leagueAssignments)) {
                     let canEdit = hasFull || editableDivisions.includes(String(divId));
-                    if (!rbacReady && !hasFull) canEdit = true;
-
+                    
+                    // ★★★ v4.9.3 FIX: CONSERVATIVE FOR LEAGUES TOO ★★★
+                    if (!rbacReady && !hasFull) {
+                        const cloudHasLeague = cloudDaily[dateKey]?.leagueAssignments?.[divId];
+                        if (cloudHasLeague) {
+                            canEdit = false;
+                            pendingCount++;
+                        } else {
+                            canEdit = true;
+                        }
+                    }
+                    
                     if (canEdit) {
                         mergedDaily[dateKey].leagueAssignments[divId] = leagueData;
                     }
@@ -766,21 +739,18 @@
         }
         
         console.log(`☁️ [INIT] Merge Stats: Applied Local=${mergedCount}, Preserved Cloud=${preservedCount}, Pending Validation=${pendingCount}`);
-
         // 4. Save Result to Storage
         mergedState.daily_schedules = mergedDaily;
         setLocalCache(mergedState); 
         
         if (_memoryCache) _memoryCache.daily_schedules = mergedDaily;
-
         console.log("☁️ [INIT] Merge complete.");
         finishInit(true);
         if (pendingCount > 0) {
-            console.log("☁️ [INIT] Performed optimistic merge. Waiting for RBAC...");
+            console.log("☁️ [INIT] Performed conservative merge. Waiting for RBAC to re-merge with correct permissions...");
         } else {
             showToast("☁️ Schedule Synced with Cloud", "success");
         }
-
     } else {
         // Fallback: No cloud data found
         console.log("☁️ [INIT] No cloud data found. Using local.");
@@ -788,7 +758,6 @@
         finishInit(hasData);
     }
   }
-
   function finishInit(hasData) {
     _initialized = true;
     window.__CAMPISTRY_CLOUD_READY__ = true;
@@ -796,7 +765,6 @@
       detail: { hydrated: true, hasData, isTeamMember: _isTeamMember, userRole: _userRole }
     }));
   }
-
   // ============================================================================
   // CLEAR / RESET
   // ============================================================================
@@ -833,7 +801,6 @@
     
     return response.ok;
   };
-
   window.resetCloudState = async function() {
     if (_isTeamMember) {
         showToast("❌ Only owners can reset data", "error");
@@ -862,7 +829,6 @@
     
     return response.ok;
   };
-
   // ============================================================================
   // PUBLIC API
   // ============================================================================
@@ -877,13 +843,11 @@
     scheduleCloudSync();
     return state;
   };
-
   window.loadCurrentDailyData = function() {
     try {
         return JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
     } catch(e) { return {}; }
   };
-
   window.saveCurrentDailyData = function(key, value) {
     if (_userRole === 'viewer') return;
     try {
@@ -895,7 +859,6 @@
         scheduleCloudSync();
     } catch(e) { console.error("Daily Save Error:", e); }
   };
-
   // Permission-aware save for schedule assignments
   window.saveScheduleAssignments = function(dateKey, assignments) {
     if (_userRole === 'viewer') {
@@ -932,7 +895,6 @@
     
     return true;
   };
-
   window.syncNow = syncNow;
   window.forceSyncToCloud = syncNow;
   window.loadFromCloud = loadFromCloud;
@@ -943,7 +905,6 @@
   window.getCampId = getCampId;
   window.canEditGrade = canEditGrade;
   window.hasFullAccess = hasFullAccess;
-
   // Auth state listener
   setTimeout(() => {
     if(window.supabase) {
@@ -959,12 +920,10 @@
         });
     }
   }, 500);
-
   // ★★★ RBAC LISTENER - Re-run sync when permissions are ready ★★★
   window.addEventListener('campistry-rbac-ready', async () => {
      console.log("☁️ RBAC Ready - Re-running Cloud Merge with correct permissions...");
      await initialize();
   });
-
   initialize();
 })();
