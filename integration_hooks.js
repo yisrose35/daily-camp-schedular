@@ -481,18 +481,32 @@
 
     let _datePickerRetries = 0;
     const MAX_DATE_PICKER_RETRIES = 5;
+    let _datePickerHooked = false;
 
     function hookDatePicker() {
-        const datePicker = document.getElementById('schedule-date-input');
+        if (_datePickerHooked) return;
+        
+        const datePicker = document.getElementById('schedule-date-input') ||
+                          document.getElementById('datepicker');
+        
         if (!datePicker) {
             _datePickerRetries++;
             if (_datePickerRetries < MAX_DATE_PICKER_RETRIES) {
-                // Silent retry - don't spam console
+                // Silent retry
                 setTimeout(hookDatePicker, 2000);
             } else if (_datePickerRetries === MAX_DATE_PICKER_RETRIES) {
-                console.log('🔗 Date picker not found on this page (normal for Setup tab)');
+                log('Date picker not found on this page (normal for Setup tab)');
             }
             return;
+        }
+        
+        _datePickerHooked = true;
+        log('Date picker found, hooking...');
+        
+        // Handle initial value if present
+        if (datePicker.value && !window.currentScheduleDate) {
+            window.currentScheduleDate = datePicker.value;
+            log('Initial date set:', datePicker.value);
         }
 
         datePicker.addEventListener('change', async (e) => {
