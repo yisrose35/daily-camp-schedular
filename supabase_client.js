@@ -1,8 +1,10 @@
 // =============================================================================
-// supabase_client.js v5.0 — CAMPISTRY UNIFIED SUPABASE CLIENT
+// supabase_client.js v5.1 — CAMPISTRY UNIFIED SUPABASE CLIENT
 // =============================================================================
 //
 // THE SINGLE SOURCE OF TRUTH for Supabase connection in Campistry.
+//
+// v5.1: FIXED - Check team membership BEFORE camp ownership
 //
 // REPLACES: All scattered Supabase URL/key definitions across files
 //
@@ -18,7 +20,7 @@
 (function() {
     'use strict';
 
-    console.log('🔌 Campistry Supabase Client v5.0 loading...');
+    console.log('🔌 Campistry Supabase Client v5.1 loading...');
 
     // =========================================================================
     // CONFIGURATION - SINGLE SOURCE OF TRUTH
@@ -158,7 +160,7 @@
     }
 
     // =========================================================================
-    // CAMP & ROLE DETECTION
+    // ⭐ FIXED: Check team membership FIRST, then camp ownership
     // =========================================================================
 
     async function detectCampAndRole() {
@@ -181,23 +183,10 @@
 
         // Always verify from database (cached values might be stale)
         try {
-            // Check 1: Is user a camp owner?
-            const { data: ownedCamp, error: ownerError } = await _client
-                .from('camps')
-                .select('id, name')
-                .eq('owner', _userId)
-                .maybeSingle();
-
-            if (!ownerError && ownedCamp) {
-                _campId = ownedCamp.id;
-                _role = 'owner';
-                _isTeamMember = false;
-                cacheValues();
-                log('User is camp owner:', _campId);
-                return;
-            }
-
-            // Check 2: Is user a team member?
+            // =================================================================
+            // ⭐ STEP 1: Check if user is a TEAM MEMBER first (HIGHEST PRIORITY)
+            // This ensures invited users get their correct assigned role
+            // =================================================================
             const { data: membership, error: memberError } = await _client
                 .from('camp_users')
                 .select('camp_id, role, name, subdivision_ids, assigned_divisions')
@@ -214,11 +203,66 @@
                 // Store membership details for permissions module
                 window._campistryMembership = membership;
                 
-                log('User is team member:', { campId: _campId, role: _role });
+                log('✅ User IS a team member:', { campId: _campId, role: _role });
+                return; // ⭐ IMPORTANT: Exit here - don't check camp ownership
+            }
+
+            // =================================================================
+            // ⭐ STEP 2: Check for PENDING INVITE (auto-accept if found)
+            // =================================================================
+            const userEmail = _session?.user?.email;
+            if (userEmail) {
+                const { data: pendingInvite } = await _client
+                    .from('camp_users')
+                    .select('id, camp_id, role')
+                    .eq('email', userEmail.toLowerCase())
+                    .is('user_id', null)
+                    .maybeSingle();
+                
+                if (pendingInvite) {
+                    log('Found pending invite - auto-accepting:', pendingInvite.role);
+                    
+                    // Auto-accept the invite
+                    const { error: acceptError } = await _client
+                        .from('camp_users')
+                        .update({
+                            user_id: _userId,
+                            accepted_at: new Date().toISOString()
+                        })
+                        .eq('id', pendingInvite.id);
+                    
+                    if (!acceptError) {
+                        _campId = pendingInvite.camp_id;
+                        _role = pendingInvite.role || 'viewer';
+                        _isTeamMember = true;
+                        cacheValues();
+                        log('✅ Invite auto-accepted, user is now:', _role);
+                        return;
+                    }
+                }
+            }
+
+            // =================================================================
+            // ⭐ STEP 3: Check if user is a CAMP OWNER (only if not a team member)
+            // =================================================================
+            const { data: ownedCamp, error: ownerError } = await _client
+                .from('camps')
+                .select('id, name')
+                .eq('owner', _userId)
+                .maybeSingle();
+
+            if (!ownerError && ownedCamp) {
+                _campId = ownedCamp.id;
+                _role = 'owner';
+                _isTeamMember = false;
+                cacheValues();
+                log('User is camp owner:', _campId);
                 return;
             }
 
-            // Check 3: No camp association - treat as new owner
+            // =================================================================
+            // ⭐ STEP 4: No camp association - treat as new owner
+            // =================================================================
             log('No camp association found - user may be setting up new camp');
             _campId = _userId; // Use user ID as camp ID for new owners
             _role = 'owner';
