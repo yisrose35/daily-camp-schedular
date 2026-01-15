@@ -100,7 +100,7 @@
                 const { data: ownerCamps, error } = await window.supabase
                     .from('camps')
                     .select('id')
-                    .eq('owner_id', session.user.id)
+                    .eq('owner', session.user.id)
                     .limit(1);
                 if (error) {
                     console.log(`🗑️ [getAuthInfo] camps query error:`, error.message);
@@ -120,7 +120,7 @@
             try {
                 console.log(`🗑️ [getAuthInfo] Check 5 - Querying team_members for user ${session.user.id}...`);
                 const { data, error } = await window.supabase
-                    .from('team_members')
+                    .from('camp_users')
                     .select('camp_id')
                     .eq('user_id', session.user.id)
                     .limit(1);
