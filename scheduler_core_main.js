@@ -235,6 +235,23 @@
 
     function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill = false, activityProperties) {
         const Utils = window.SchedulerCoreUtils;
+        
+        // ★★★ SAFETY: Validate block has required properties ★★★
+        if (!block || !block.bunk) {
+            console.error('[fillBlock] Invalid block - missing bunk');
+            return;
+        }
+        if (!block.slots || block.slots.length === 0) {
+            // Try to compute slots from time range
+            if (block.startTime !== undefined && block.endTime !== undefined) {
+                block.slots = Utils.findSlotsForRange(block.startTime, block.endTime);
+            }
+            if (!block.slots || block.slots.length === 0) {
+                console.error(`[fillBlock] No slots for ${block.bunk}`);
+                return;
+            }
+        }
+        
         const fName = Utils.fieldLabel(pick.field);
         const trans = Utils.getTransitionRules(fName, activityProperties);
         const {
@@ -245,6 +262,12 @@
         } = Utils.getEffectiveTimeRange(block, trans);
         const bunk = block.bunk;
         const zone = trans.zone;
+
+        // ★★★ CRITICAL: Initialize bunk array if not exists (MUST be done FIRST) ★★★
+        if (!window.scheduleAssignments[bunk]) {
+            window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
+            console.log(`[fillBlock] Initialized missing bunk array for: ${bunk}`);
+        }
 
         let writePre = trans.preMin > 0;
         let writePost = trans.postMin > 0;
