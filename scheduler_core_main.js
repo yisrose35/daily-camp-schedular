@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v16 - SCHEDULER RESTRICTION + STRICT RBAC)
+// scheduler_core_main.js (FIXED v17 - FOREACH CLOSURE FIX)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
@@ -11,6 +11,9 @@
 // 7. ★ REGULAR LEAGUES SECOND ★
 // 8. Process Smart Tiles
 // 9. Run Total Solver
+//
+// v17 FIX: Fixed forEach loop that wasn't properly closed, causing Steps 4-8
+//          to be nested inside the loop instead of after it.
 // ============================================================================
 
 (function() {
@@ -33,12 +36,10 @@
         const g = window.loadGlobalSettings?.() || {};
         const fields = g.app1?.fields || [];
 
-        // Get all fields that are NOT rainy-day-available (outdoor fields)
         const outdoorFields = fields
             .filter(f => f.rainyDayAvailable !== true)
             .map(f => f.name);
 
-        // Get indoor fields for logging
         const indoorFields = fields
             .filter(f => f.rainyDayAvailable === true)
             .map(f => f.name);
@@ -62,12 +63,10 @@
         const g = window.loadGlobalSettings?.() || {};
         const specials = g.app1?.specialActivities || [];
 
-        // Rainy day only activities - these ONLY appear on rainy days
         const rainyDayOnly = specials
             .filter(s => s.rainyDayOnly === true)
             .map(s => s.name);
 
-        // Activities available on rainy days (most specials by default)
         const regularAvailable = specials
             .filter(s => s.availableOnRainyDay !== false && s.rainyDayOnly !== true)
             .map(s => s.name);
@@ -82,25 +81,18 @@
     }
 
     // -------------------------------------------------------------------------
-    // LOCATION CONFLICT HELPERS (Internal & Exported API)
+    // LOCATION CONFLICT HELPERS
     // -------------------------------------------------------------------------
 
-    /**
-     * Check if a location-based activity can be scheduled at the given slots
-     */
     function canScheduleAtLocation(activityName, locationName, slots) {
-        if (!locationName) return true; // No location constraint
+        if (!locationName) return true;
 
         const usage = window.locationUsageBySlot || {};
 
         for (const slotIdx of slots) {
             const slotUsage = usage[slotIdx]?.[locationName];
             if (slotUsage) {
-                // Location is in use - check if it's the SAME activity
-                // (Multiple bunks doing "Lunch" at Lunchroom is OK)
-                // (One bunk doing "Skits" while another does "Lunch" is NOT OK)
                 if (slotUsage.activity.toLowerCase() !== activityName.toLowerCase()) {
-                    // console.log(`[LOCATION_CONFLICT] ${activityName} blocked at ${locationName} - ${slotUsage.activity} already scheduled`);
                     return false;
                 }
             }
@@ -109,9 +101,6 @@
         return true;
     }
 
-    /**
-     * Register that an activity is using a location at specific time slots
-     */
     function registerActivityAtLocation(activityName, locationName, slots, divisionName) {
         if (!locationName) return;
 
@@ -122,22 +111,16 @@
                 window.locationUsageBySlot[slotIdx] = {};
             }
 
-            // Only register if not already registered (first activity wins/claims the type)
-            // Or if existing registration matches activity (reinforce)
             if (!window.locationUsageBySlot[slotIdx][locationName]) {
                 window.locationUsageBySlot[slotIdx][locationName] = {
                     activity: activityName,
                     division: divisionName,
                     timestamp: Date.now()
                 };
-                // console.log(`[LOCATION] Registered ${activityName} at ${locationName} for slot ${slotIdx}`);
             }
         }
     }
 
-    /**
-     * Get the location for a special activity by name
-     */
     function getLocationForActivity(activityName) {
         if (!activityName) return null;
         const globalSettings = window.loadGlobalSettings?.() || {};
@@ -150,39 +133,29 @@
         return special?.location || null;
     }
 
-    /**
-     * Get the location for a pinned event from skeleton
-     */
     function getLocationForPinnedEvent(skeletonEvent) {
-        // Check if the event has a location assigned directly
         if (skeletonEvent.location) {
             return skeletonEvent.location;
         }
-
-        // Check if it's a special activity with a location
         return getLocationForActivity(skeletonEvent.event);
     }
 
-    // --- PART 6: SCHEDULER API EXPORTS ---
+    // --- SCHEDULER API EXPORTS ---
 
-    // 1. Reset Location Usage
     window.resetLocationUsage = function() {
         window.locationUsageBySlot = {};
         console.log("[LOCATION] Usage tracking reset.");
     };
 
-    // 2. Check Location Availability (Adapter for External Scheduler)
     window.isLocationAvailable = function(locationName, slots, activityName) {
         return canScheduleAtLocation(activityName, locationName, slots);
     };
 
-    // 3. Register Location Usage (Adapter for External Scheduler)
     window.registerLocationUsage = function(slotIdxOrArray, locationName, activityName, divisionName) {
         const slots = Array.isArray(slotIdxOrArray) ? slotIdxOrArray : [slotIdxOrArray];
         registerActivityAtLocation(activityName, locationName, slots, divisionName);
     };
 
-    // 4. Standard Exports
     window.canScheduleAtLocation = canScheduleAtLocation;
     window.registerActivityAtLocation = registerActivityAtLocation;
     window.getLocationForActivity = getLocationForActivity;
@@ -201,7 +174,6 @@
     }
 
     function getCanonicalPoolName(activityProperties) {
-        // Find the actual pool/swim field name in activity properties
         const poolNames = ['Pool', 'pool', 'Swimming Pool', 'swimming pool', 'Swim', 'swim'];
         for (const pn of poolNames) {
             if (activityProperties?.[pn]) return pn;
@@ -391,7 +363,6 @@
             masterSpecials
         ) || [];
 
-        // ★★★ FILTER JOBS BY ALLOWED DIVISIONS ★★★
         const filteredJobs = allowedDivisions 
             ? smartJobs.filter(job => {
                 if (allowedDivisions instanceof Set) {
@@ -462,14 +433,12 @@
                     return;
                 }
 
-                // ★★★ CHECK IF BUNK HAS AN OVERRIDE FOR THIS TIME ★★★
                 const existing = window.scheduleAssignments[bunk]?.[slots[0]];
                 if (existing && existing._bunkOverride) {
                     console.log(`[SmartTile] ${bunk} has bunk override, skipping`);
                     return;
                 }
 
-                // ★★★ CHECK GLOBAL LOCKS - Pass division context for elective support ★★★
                 if (window.GlobalFieldLocks?.isFieldLocked(activityLabel, slots, divName)) {
                     console.log(`[SmartTile] ${bunk} - ${activityLabel} is LOCKED for ${divName}, skipping`);
                     return;
@@ -529,44 +498,32 @@
     // ★★★ MAIN ENTRY POINT ★★★
     // =========================================================================
 
-    /**
-     * @param {Array} manualSkeleton - The base schedule structure
-     * @param {Object} externalOverrides - Manual overrides
-     * @param {Array<string>|null} allowedDivisions - [OPTIONAL] If provided, only generates for these divisions.
-     * @param {Object|null} existingScheduleSnapshot - [OPTIONAL] Snapshot of existing assignments to preserve for locked divisions.
-     * @param {Array|null} existingUnifiedTimes - [OPTIONAL] Time grid corresponding to the snapshot (for mapping)
-     */
     window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v16 - SCHEDULER RESTRICTION + STRICT RBAC) ★★★");
+        console.log("★★★ OPTIMIZER STARTED (v17 - FOREACH CLOSURE FIX) ★★★");
 
         // ★★★ SCHEDULER RESTRICTION ★★★
-        // This must be the FIRST thing we do - filter divisions based on user permissions
         if (window.AccessControl?.filterDivisionsForGeneration) {
             allowedDivisions = window.AccessControl.filterDivisionsForGeneration(allowedDivisions);
             if (allowedDivisions.length === 0) {
                 alert("No divisions assigned. Contact camp owner.");
-                return;
+                return false;
             }
             console.log(`[RBAC] ★ SCHEDULER RESTRICTION APPLIED: Generating for [${allowedDivisions.join(', ')}] only`);
         }
 
         // ★★★ 1. AUTO-DETECT ALLOWED DIVISIONS ★★★
-        // If not explicitly provided, check what the current user is allowed to schedule.
         if (!allowedDivisions) {
-            // Priority 1: MultiSchedulerCore (Advanced Logic)
             if (window.MultiSchedulerCore && typeof window.MultiSchedulerCore.getUserDivisions === 'function') {
                 const userDivs = window.MultiSchedulerCore.getUserDivisions();
                 if (userDivs && userDivs.length > 0) {
                     const allDivs = Object.keys(window.divisions || {});
-                    // If userDivs is smaller than allDivs, treat as partial generation
                     if (userDivs.length < allDivs.length) {
                         allowedDivisions = userDivs;
                         console.log(`[RBAC] Auto-detected restricted divisions via MultiScheduler: ${allowedDivisions.join(', ')}`);
                     }
                 }
             } 
-            // Priority 2: AccessControl (Basic Role)
             else if (window.AccessControl && typeof window.AccessControl.getUserManagedDivisions === 'function') {
                 const userDivs = window.AccessControl.getUserManagedDivisions();
                 if (userDivs && userDivs.length > 0) {
@@ -580,25 +537,18 @@
         }
 
         // ★★★ 2. AUTO-SNAPSHOT FOR PRESERVATION ★★★
-        // If we are doing a partial generation (subset of divisions) and no snapshot was provided,
-        // we MUST fetch the current state from memory/storage before we wipe it.
-        // This ensures "Background" schedules are not deleted.
         if (allowedDivisions && (!existingScheduleSnapshot || Object.keys(existingScheduleSnapshot).length === 0)) {
             console.log("[OPTIMIZER] Partial generation detected without snapshot. Attempting to preserve existing data...");
             
-            // Try memory first
             let snapshotSource = window.scheduleAssignments;
             
-            // If memory is empty, try loading from daily data (persistence)
             if (!snapshotSource || Object.keys(snapshotSource).length === 0) {
                  const currentData = window.loadCurrentDailyData?.() || {};
                  snapshotSource = currentData.scheduleAssignments;
             }
 
             if (snapshotSource && Object.keys(snapshotSource).length > 0) {
-                // Deep copy to prevent reference issues during reset
                 existingScheduleSnapshot = JSON.parse(JSON.stringify(snapshotSource));
-                // Try to grab times if not passed
                 if (!existingUnifiedTimes) existingUnifiedTimes = window.unifiedTimes;
                 console.log(`[OPTIMIZER] ✅ Preserved snapshot of ${Object.keys(existingScheduleSnapshot).length} bunks for background restoration.`);
             } else {
@@ -607,8 +557,6 @@
         }
         
         // ★★★ SECURITY: NORMALIZE ALLOWED DIVISIONS ★★★
-        // Create a strict set for checking access. This prevents type coercion errors (string vs int)
-        // and provides O(1) lookups for the "Hard Rule" enforcement.
         let allowedDivisionsSet = null;
         if (allowedDivisions && Array.isArray(allowedDivisions)) {
             allowedDivisionsSet = new Set(allowedDivisions.map(String));
@@ -616,10 +564,9 @@
         }
         console.log("=".repeat(70));
 
-        // ★★★ RESET disabled fields & Location Usage at start of each run ★★★
+        // ★★★ RESET disabled fields & Location Usage ★★★
         window.currentDisabledFields = [];
 
-        // Use the API method if available, otherwise manual reset
         if (window.resetLocationUsage) {
             window.resetLocationUsage();
         } else {
@@ -632,8 +579,7 @@
         window.unifiedTimes = [];
 
         // =====================================================================
-        // CRITICAL UPDATE v11: MERGE DAILY FIELD AVAILABILITY INTO PROPERTIES
-        // This ensures the solver respects "Unavailable" times set in Daily Adjustments
+        // MERGE DAILY FIELD AVAILABILITY INTO PROPERTIES
         // =====================================================================
         let { dailyFieldAvailability } = config;
         
@@ -645,15 +591,12 @@
                     if (!window.activityProperties[fieldName]) {
                         window.activityProperties[fieldName] = {};
                     }
-                    // OVERWRITE or APPEND? Daily adjustments imply strict override.
-                    // We'll set it as the primary timeRules for today.
                     window.activityProperties[fieldName].timeRules = rules;
                     console.log(`   -> Applied ${rules.length} rule(s) to ${fieldName}`);
                 }
             });
         }
 
-        // Change 'const' to 'let' for disabledFields to allow updates
         let {
             divisions,
             activityProperties,
@@ -669,13 +612,12 @@
             historicalCounts,
             specialActivityNames,
             bunkMetaData,
-            dailyFieldAvailability: _unusedDFA, // Already extracted above
+            dailyFieldAvailability: _unusedDFA,
             fieldsBySport
         } = config;
 
         // =========================================================================
-        // CRITICAL FIX v11: NUMERIC BUNK SORTING
-        // Ensure Bunk 9 comes before Bunk 18
+        // NUMERIC BUNK SORTING
         // =========================================================================
         Object.keys(divisions).forEach(divName => {
             if (divisions[divName].bunks) {
@@ -709,7 +651,6 @@
             console.error("[INIT] ❌ GlobalFieldLocks not loaded! Field locking will not work!");
         }
 
-        // Scan skeleton for field reservations
         window.fieldReservations = Utils.getFieldReservationsFromSkeleton(manualSkeleton);
         console.log("[INIT] Scanned skeleton for field reservations");
 
@@ -725,27 +666,21 @@
             console.log("★★★ RAINY DAY MODE ACTIVE ★★★");
             console.log("☔".repeat(35));
 
-            // Add outdoor fields to disabled list
             const existingDisabled = disabledFields || [];
             disabledFields = [...new Set([...existingDisabled, ...rainyDayFilter.disabledFields])];
 
-            // Update config object so downstream solvers see the disabled fields
             config.disabledFields = disabledFields;
-
-            // ★★★ CRITICAL: Expose disabled fields globally so canBlockFit can check them ★★★
             window.currentDisabledFields = disabledFields;
 
             console.log(`[RainyDay] Total disabled fields: ${disabledFields.length}`);
             console.log(`[RainyDay] Disabled: ${disabledFields.join(', ')}`);
         } else {
-            // Even when not rainy day, expose disabled fields (from manual overrides)
             window.currentDisabledFields = disabledFields || [];
         }
 
         // =========================================================================
-        // ★★★ FIX: Filter Specials based on Rainy Day Mode (STRICT) ★★★
+        // ★★★ FIX: Filter Specials based on Rainy Day Mode ★★★
         // =========================================================================
-        // This ensures the optimizer ONLY sees appropriate activities for the current weather mode.
 
         const isRainyMode = isRainyDayModeActive();
 
@@ -753,26 +688,19 @@
             const originalCount = masterSpecials.length;
 
             masterSpecials = masterSpecials.filter(s => {
-                // 1. If Sunny Day (Mode OFF): Remove Rainy Day Exclusives
-                //    These are activities marked "Rainy Day Only"
                 if (!isRainyMode) {
                     if (s.rainyDayOnly === true || s.rainyDayExclusive === true) return false;
                 }
 
-                // 2. If Rainy Day (Mode ON): Remove "Sunny Day Only" items
-                //    These are activities where "Available on Rainy Day" is unchecked
                 if (isRainyMode) {
-                    // Check both property variations for safety
                     if (s.rainyDayAvailable === false || s.availableOnRainyDay === false) return false;
                 }
 
                 return true;
             });
 
-            // Sync changes to config references so all downstream logic (Smart Tiles, Solver) obeys the filter
             config.masterSpecials = masterSpecials;
 
-            // Also sync the name list (used for candidate generation)
             if (config.specialActivityNames) {
                 const validNames = new Set(masterSpecials.map(s => s.name));
                 config.specialActivityNames = config.specialActivityNames.filter(n => validNames.has(n));
@@ -819,7 +747,6 @@
         // =========================================================================
         // ★★★ STEP 1.5: RESTORE EXISTING SCHEDULE FOR LOCKED DIVISIONS ★★★
         // =========================================================================
-        // This is the key fix for the "Multi-Scheduler" requirement.
         (function() {
             'use strict';
 
@@ -831,22 +758,10 @@
                 if (!t) return null;
                 if (t instanceof Date) return t.toISOString();
                 if (t.start instanceof Date) return t.start.toISOString();
-                if (typeof t.start === 'string') return t.start; // ISO string
+                if (typeof t.start === 'string') return t.start;
                 return String(t);
             }
 
-            // =========================================================================
-            // RESTORE BACKGROUND SCHEDULES INTO scheduleAssignments
-            // =========================================================================
-            
-            /**
-             * Restore schedules from the snapshot into window.scheduleAssignments
-             * @param {Object} snapshot - { bunkName: [slotAssignments...] }
-             * @param {Object} divisions - window.divisions
-             * @param {Array} allowedDivisions - divisions we ARE generating (to skip)
-             * @param {Array} existingUnifiedTimes - time grid from snapshot
-             * @returns {number} - count of bunks restored
-             */
             function restoreBackgroundSchedules(snapshot, divisions, allowedDivisions, existingUnifiedTimes) {
                 if (!snapshot || Object.keys(snapshot).length === 0) {
                     console.log('[Step1.5] No snapshot to restore');
@@ -857,7 +772,6 @@
                 let restoredBunks = 0;
                 let restoredSlots = 0;
 
-                // Build TIME MAP for new grid (New Time -> New Index)
                 const newTimeMap = new Map();
                 window.unifiedTimes.forEach((t, i) => {
                     const sig = getTimeSig(t);
@@ -871,39 +785,31 @@
                 for (const [bunkName, slots] of Object.entries(snapshot)) {
                     if (!slots || !Array.isArray(slots)) continue;
 
-                    // Find which division this bunk belongs to
                     const divName = Object.keys(divisions).find(d => 
                         divisions[d].bunks?.includes(bunkName)
                     );
 
-                    // Skip if this is a division we're generating
                     if (divName && allowedSet.has(divName)) {
                         continue;
                     }
 
-                    // Initialize bunk array if needed
                     if (!window.scheduleAssignments[bunkName]) {
                         window.scheduleAssignments[bunkName] = new Array(window.unifiedTimes.length);
                     }
 
-                    // Restore each slot using Time Mapping if possible
                     for (let i = 0; i < slots.length; i++) {
                         if (slots[i]) {
                             let targetIndex = i;
 
-                            // IF we have time mapping info
                             if (existingUnifiedTimes && existingUnifiedTimes[i]) {
                                 const oldSig = getTimeSig(existingUnifiedTimes[i]);
                                 if (newTimeMap.has(oldSig)) {
                                     targetIndex = newTimeMap.get(oldSig);
                                 } else {
-                                    // Old slot time doesn't exist in new grid -> SKIP
                                     continue;
                                 }
                             } else if (window.unifiedTimes.length !== slots.length) {
-                                // Fallback: Length mismatch and no map.
-                                // If array expanded, indexes align? 
-                                // Risk of misalignment, but we have no choice.
+                                // Length mismatch, proceed with caution
                             }
 
                             if (targetIndex < window.scheduleAssignments[bunkName].length) {
@@ -926,14 +832,6 @@
                 return restoredBunks;
             }
 
-            // =========================================================================
-            // REGISTER FIELD USAGE FROM RESTORED SCHEDULES
-            // =========================================================================
-            
-            /**
-             * Register field usage for all restored schedules
-             * This ensures the solver won't double-book fields
-             */
             function registerFieldUsageFromRestoredSchedules(snapshot, divisions, allowedDivisions, fieldUsageBySlot, activityProperties, existingUnifiedTimes) {
                 if (!snapshot || Object.keys(snapshot).length === 0) {
                     return 0;
@@ -942,7 +840,6 @@
                 const allowedSet = new Set(allowedDivisions || []);
                 let registrations = 0;
 
-                // Build TIME MAP
                 const newTimeMap = new Map();
                 window.unifiedTimes.forEach((t, i) => {
                     const sig = getTimeSig(t);
@@ -954,19 +851,16 @@
                 for (const [bunkName, slots] of Object.entries(snapshot)) {
                     if (!slots || !Array.isArray(slots)) continue;
 
-                    // Find division
                     const divName = Object.keys(divisions).find(d => 
                         divisions[d].bunks?.includes(bunkName)
                     );
 
-                    // Skip if this is a division we're generating
                     if (divName && allowedSet.has(divName)) continue;
 
                     for (let i = 0; i < slots.length; i++) {
                         const slotData = slots[i];
                         if (!slotData || !slotData.field) continue;
 
-                        // MAP TARGET INDEX
                         let targetIndex = i;
                         if (existingUnifiedTimes && existingUnifiedTimes[i]) {
                             const oldSig = getTimeSig(existingUnifiedTimes[i]);
@@ -977,15 +871,12 @@
                         const fieldName = slotData.field;
                         const activityName = slotData._activity || fieldName;
 
-                        // Skip transitions
                         if (fieldName === TRANSITION_TYPE || slotData._isTransition) continue;
 
-                        // Initialize slot in fieldUsageBySlot
                         if (!fieldUsageBySlot[targetIndex]) {
                             fieldUsageBySlot[targetIndex] = {};
                         }
 
-                        // Get field properties for capacity
                         const props = activityProperties?.[fieldName] || {};
                         let maxCapacity = 1;
                         if (props.sharableWith?.capacity) {
@@ -994,7 +885,6 @@
                             maxCapacity = 2;
                         }
 
-                        // Register usage
                         if (!fieldUsageBySlot[targetIndex][fieldName]) {
                             fieldUsageBySlot[targetIndex][fieldName] = {
                                 count: 0,
@@ -1012,7 +902,6 @@
                             usage.divisions.push(divName);
                         }
 
-                        // If at capacity, lock in GlobalFieldLocks
                         if (window.GlobalFieldLocks && usage.count >= maxCapacity) {
                             window.GlobalFieldLocks.lockField(fieldName, [targetIndex], {
                                 lockedBy: 'background_schedule',
@@ -1021,7 +910,6 @@
                             });
                         }
 
-                        // Also register location usage
                         if (window.registerLocationUsage) {
                             const location = activityProperties?.[fieldName]?.location || 
                                              window.getLocationForActivity?.(activityName);
@@ -1038,20 +926,9 @@
                 return registrations;
             }
 
-            // =========================================================================
-            // EXPORT FUNCTIONS FOR USE IN scheduler_core_main.js
-            // =========================================================================
-            
             window.restoreBackgroundSchedules = restoreBackgroundSchedules;
             window.registerFieldUsageFromRestoredSchedules = registerFieldUsageFromRestoredSchedules;
 
-            // =========================================================================
-            // COMBINED HELPER
-            // =========================================================================
-            
-            /**
-             * Complete Step 1.5: Restore and register background schedules
-             */
             window.executeStep1_5 = function(snapshot, divisions, allowedDivisions, fieldUsageBySlot, activityProperties, existingUnifiedTimes) {
                 console.log('\n[STEP 1.5] ═══════════════════════════════════════════════════');
                 console.log('[STEP 1.5] RESTORING BACKGROUND SCHEDULES WITH TIME MAPPING');
@@ -1062,7 +939,6 @@
                     return { bunksRestored: 0, fieldsRegistered: 0 };
                 }
 
-                // Restore schedules
                 const bunksRestored = restoreBackgroundSchedules(
                     snapshot, 
                     divisions, 
@@ -1070,7 +946,6 @@
                     existingUnifiedTimes
                 );
 
-                // Register field usage
                 const fieldsRegistered = registerFieldUsageFromRestoredSchedules(
                     snapshot,
                     divisions,
@@ -1091,7 +966,7 @@
 
         })();
 
-        // ★★★ ACTUALLY EXECUTE STEP 1.5 WITH TIME MAPPING ★★★
+        // ★★★ EXECUTE STEP 1.5 WITH TIME MAPPING ★★★
         if (existingScheduleSnapshot && Object.keys(existingScheduleSnapshot).length > 0) {
             window.executeStep1_5(
                 existingScheduleSnapshot,
@@ -1099,7 +974,7 @@
                 allowedDivisions,
                 fieldUsageBySlot,
                 activityProperties,
-                existingUnifiedTimes // <--- PASSING THE OLD GRID
+                existingUnifiedTimes
             );
         } else if (allowedDivisions) {
             console.log('[STEP 1.5] No snapshot provided - generating fresh for allowed divisions only');
@@ -1114,7 +989,7 @@
 
         bunkOverrides.forEach(override => {
             const activityName = override.activity;
-            const overrideType = override.type; // 'trip', 'sport', or 'special'
+            const overrideType = override.type;
             const startMin = Utils.parseTimeToMinutes(override.startTime);
             const endMin = Utils.parseTimeToMinutes(override.endTime);
             const slots = Utils.findSlotsForRange(startMin, endMin);
@@ -1126,20 +1001,13 @@
                 return;
             }
 
-            // ★★★ PARTIAL GEN CHECK (HARD RULE) ★★★
-            // If strict mode is on, we MUST skip overrides for divisions we don't own.
             if (allowedDivisionsSet && !allowedDivisionsSet.has(String(divName))) {
-                // Skip processing override for locked division (it's already restored in step 1.5)
                 return; 
             }
 
             console.log(`[BunkOverride] ${bunk}: ${activityName} (${overrideType}) @ ${override.startTime}-${override.endTime}`);
 
             if (overrideType === 'trip') {
-                // =====================================================
-                // PERSONAL TRIP - Pinned tile, no field usage
-                // =====================================================
-                // Just fill the bunk's schedule - trips don't use camp fields
                 slots.forEach((slotIndex, i) => {
                     window.scheduleAssignments[bunk][slotIndex] = {
                         field: activityName,
@@ -1155,25 +1023,17 @@
                 console.log(`   → Trip pinned for ${bunk}, no field usage registered`);
 
             } else if (overrideType === 'sport') {
-                // =====================================================
-                // SPORT - Find field, register usage, fill schedule
-                // =====================================================
-                // Find which field this sport is played on
-                let fieldName = activityName; // Default: use activity name as field
+                let fieldName = activityName;
                 const fieldsBySportData = fieldsBySport || {};
 
-                // Check if there's a specific field for this sport
                 const fieldsForSport = fieldsBySportData[activityName] || [];
 
                 if (fieldsForSport.length > 0) {
-                    // Find the first available field for this sport
                     for (const candidateField of fieldsForSport) {
-                        // Check if field is locked (pass division context for elective support)
                         if (window.GlobalFieldLocks?.isFieldLocked(candidateField, slots, divName)) {
                             continue;
                         }
 
-                        // Check capacity
                         const props = activityProperties[candidateField] || {};
                         let maxCapacity = 1;
                         if (props.sharableWith?.capacity) {
@@ -1182,7 +1042,6 @@
                             maxCapacity = 2;
                         }
 
-                        // Check current usage
                         let canUse = true;
                         for (const slotIdx of slots) {
                             const usage = fieldUsageBySlot[slotIdx]?.[candidateField];
@@ -1199,7 +1058,6 @@
                     }
                 }
 
-                // Fill the schedule AND register field usage
                 fillBlock({
                     divName,
                     bunk,
@@ -1216,23 +1074,17 @@
                 console.log(`   → Sport ${activityName} assigned to ${bunk} on field ${fieldName}`);
 
             } else if (overrideType === 'special') {
-                // =====================================================
-                // SPECIAL ACTIVITY - Register usage, fill schedule
-                // =====================================================
-                // Check if the special activity is available (not locked) - pass division context
                 if (window.GlobalFieldLocks?.isFieldLocked(activityName, slots, divName)) {
                     console.warn(`   → Special ${activityName} is LOCKED for ${divName}, cannot assign to ${bunk}`);
                     return;
                 }
 
-                // ★★★ LOCATION CONFLICT CHECK ★★★
                 const locName = getLocationForActivity(activityName);
                 if (locName && !canScheduleAtLocation(activityName, locName, slots)) {
                     console.warn(`[BunkOverride] ${activityName} blocked for ${bunk} - location ${locName} in use`);
                     return;
                 }
 
-                // Check capacity
                 const props = activityProperties[activityName] || {};
                 let maxCapacity = 1;
                 if (props.sharableWith?.capacity) {
@@ -1241,7 +1093,6 @@
                     maxCapacity = 2;
                 }
 
-                // Check if there's room
                 let hasRoom = true;
                 for (const slotIdx of slots) {
                     const usage = fieldUsageBySlot[slotIdx]?.[activityName];
@@ -1256,7 +1107,6 @@
                     return;
                 }
 
-                // Fill the schedule AND register field usage
                 fillBlock({
                     divName,
                     bunk,
@@ -1271,12 +1121,10 @@
                     _bunkOverride: true
                 }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
 
-                // ★★★ REGISTER LOCATION USAGE ★★★
                 registerActivityAtLocation(activityName, locName, slots, divName);
                 console.log(`   → Special ${activityName} assigned to ${bunk}`);
 
             } else {
-                // Unknown type - treat as pinned
                 console.warn(`   → Unknown override type "${overrideType}", treating as pinned`);
                 fillBlock({
                     divName,
@@ -1297,7 +1145,7 @@
         console.log(`[BunkOverride] Processed ${bunkOverrides.length} overrides`);
 
         // =========================================================================
-        // STEP 2.5: Process Elective Tiles - Lock activities for other divisions
+        // STEP 2.5: Process Elective Tiles
         // =========================================================================
 
         console.log("\n[STEP 2.5] Processing elective tiles...");
@@ -1306,9 +1154,6 @@
         electiveTiles.forEach(elective => {
             const electiveDivision = elective.division;
             
-            // ★★★ PARTIAL GEN CHECK (HARD RULE) ★★★
-            // If we are in partial generation mode, SKIP electives for locked divisions.
-            // This prevents Scheduler A from processing Scheduler B's electives.
             if (allowedDivisionsSet && !allowedDivisionsSet.has(String(electiveDivision))) {
                 return;
             }
@@ -1325,9 +1170,7 @@
 
             console.log(`[Elective] ${electiveDivision}: Reserving ${activities.join(', ')} @ ${elective.startTime}-${elective.endTime}`);
 
-            // Lock each activity for OTHER divisions (not the elective division)
             activities.forEach(activityName => {
-                // ★★★ SWIM/POOL ALIAS RESOLUTION ★★★
                 let resolvedName = activityName;
                 if (isSwimOrPool(activityName)) {
                     resolvedName = resolveSwimPoolName(activityName, activityProperties);
@@ -1337,7 +1180,6 @@
                 }
 
                 if (window.GlobalFieldLocks) {
-                    // Use a special lock that allows the elective division but blocks others
                     window.GlobalFieldLocks.lockFieldForDivision(
                         resolvedName,
                         slots,
@@ -1346,7 +1188,6 @@
                     );
                     console.log(`   → Locked "${resolvedName}" for ${electiveDivision} only`);
 
-                    // Also lock swim/pool aliases if this is a pool activity
                     if (isSwimOrPool(resolvedName)) {
                         SWIM_POOL_ALIASES.forEach(alias => {
                             if (alias.toLowerCase() !== resolvedName.toLowerCase()) {
@@ -1380,9 +1221,7 @@
             const bunkList = divisions[divName]?.bunks || [];
             if (bunkList.length === 0) return;
 
-            // ★★★ PARTIAL GEN CHECK (HARD RULE) ★★★
-            // If we are in partial generation mode, SKIP items for locked divisions.
-            // This enforces that Scheduler A (1,2,3) cannot schedule 4,5,6.
+            // ★★★ PARTIAL GEN CHECK ★★★
             if (allowedDivisionsSet && !allowedDivisionsSet.has(String(divName))) {
                 return;
             }
@@ -1405,38 +1244,26 @@
                 }
             }
 
-           // =========================================================================
-            // SPLIT TILE LOGIC - Groups swap activities at midpoint
             // =========================================================================
-            // BEHAVIOR (Example: 8 bunks, time 1:00-3:00, main1/main2):
-            //   First half of time (1:00-2:00):
-            //     - Lower bunks (1-4) → main 1
-            //     - Higher bunks (5-8) → main 2
-            //   Second half of time (2:00-3:00) - SWITCH:
-            //     - Lower bunks (1-4) → main 2
-            //     - Higher bunks (5-8) → main 1
+            // SPLIT TILE LOGIC
             // =========================================================================
             if (item.type === 'split') {
                 console.log(`[SPLIT] ═══════════════════════════════════════════════════════`);
                 console.log(`[SPLIT] Processing split tile for ${divName}: ${item.event}`);
                 console.log(`[SPLIT] ═══════════════════════════════════════════════════════`);
                 
-                // ★★★ CRITICAL: Sort bunks numerically BEFORE splitting ★★★
                 const sortedBunks = [...bunkList].sort((a, b) => {
                     const numA = parseInt(a.match(/\d+/)?.[0] || 0);
                     const numB = parseInt(b.match(/\d+/)?.[0] || 0);
                     return numA - numB || a.localeCompare(b);
                 });
                 
-                // Calculate midpoint of the time block
                 const midMin = Math.floor(sMin + (eMin - sMin) / 2);
                 
-                // Divide bunks into two groups (lower half and upper half)
                 const half = Math.ceil(sortedBunks.length / 2);
-                const groupA = sortedBunks.slice(0, half);   // Lower numbered bunks
-                const groupB = sortedBunks.slice(half);      // Higher numbered bunks
+                const groupA = sortedBunks.slice(0, half);
+                const groupB = sortedBunks.slice(half);
 
-                // Get activity names from subEvents
                 let act1Name, act2Name;
                 
                 if (item.subEvents && item.subEvents.length >= 2) {
@@ -1450,7 +1277,6 @@
                     act2Name = parts[1] || "Activity 2";
                 }
 
-                // ★★★ Resolve swim/pool aliases ★★★
                 if (isSwimOrPool(act1Name)) {
                     act1Name = resolveSwimPoolName(act1Name, activityProperties);
                 }
@@ -1458,13 +1284,20 @@
                     act2Name = resolveSwimPoolName(act2Name, activityProperties);
                 }
 
-                console.log(`[SPLIT] Main 1: "${act1Name}"`);
-                console.log(`[SPLIT] Main 2: "${act2Name}"`);
-                console.log(`[SPLIT] Time: ${sMin} to ${eMin} (midpoint: ${midMin})`);
-                console.log(`[SPLIT] Group 1 (lower): ${groupA.join(', ')}`);
-                console.log(`[SPLIT] Group 2 (higher): ${groupB.join(', ')}`);
+                console.log(`[SPLIT] Main 1 (act1Name): "${act1Name}"`);
+                console.log(`[SPLIT] Main 2 (act2Name): "${act2Name}"`);
+                console.log(`[SPLIT] Time block: ${sMin} to ${eMin} (midpoint: ${midMin})`);
+                console.log(`[SPLIT] Group 1 (${groupA.length} bunks): ${groupA.join(', ')}`);
+                console.log(`[SPLIT] Group 2 (${groupB.length} bunks): ${groupB.join(', ')}`);
+                console.log(`[SPLIT] ---------------------------------------------------`);
+                console.log(`[SPLIT] FIRST HALF (${sMin}-${midMin}):`);
+                console.log(`[SPLIT]    Group 1 → ${act1Name} (main 1)`);
+                console.log(`[SPLIT]    Group 2 → ${act2Name} (main 2)`);
+                console.log(`[SPLIT] SECOND HALF (${midMin}-${eMin}):`);
+                console.log(`[SPLIT]    Group 1 → ${act2Name} (main 2) ← SWITCHED`);
+                console.log(`[SPLIT]    Group 2 → ${act1Name} (main 1) ← SWITCHED`);
+                console.log(`[SPLIT] ---------------------------------------------------`);
 
-                // Helper function to route activities to bunks
                 const routeSplitActivity = (bunks, actName, start, end, groupLabel, actLabel) => {
                     const slots = Utils.findSlotsForRange(start, end);
                     if (slots.length === 0) {
@@ -1513,19 +1346,112 @@
                     });
                 };
 
-                // FIRST HALF: groupA → main1, groupB → main2
-                console.log(`[SPLIT] >>> FIRST HALF (${sMin}-${midMin}) <<<`);
+                console.log(`[SPLIT] \n>>> EXECUTING FIRST HALF (${sMin}-${midMin}) <<<`);
+                console.log(`[SPLIT] Routing Group 1 to "${act1Name}" (main 1) for time ${sMin}-${midMin}`);
                 routeSplitActivity(groupA, act1Name, sMin, midMin, "Group 1", "main 1");
+                console.log(`[SPLIT] Routing Group 2 to "${act2Name}" (main 2) for time ${sMin}-${midMin}`);
                 routeSplitActivity(groupB, act2Name, sMin, midMin, "Group 2", "main 2");
                 
-                // SECOND HALF (SWITCH): groupA → main2, groupB → main1
-                console.log(`[SPLIT] >>> SECOND HALF (${midMin}-${eMin}) - SWITCH <<<`);
+                console.log(`[SPLIT] \n>>> EXECUTING SECOND HALF (${midMin}-${eMin}) - SWITCH <<<`);
+                console.log(`[SPLIT] Routing Group 1 to "${act2Name}" (main 2 (switched)) for time ${midMin}-${eMin}`);
                 routeSplitActivity(groupA, act2Name, midMin, eMin, "Group 1", "main 2");
+                console.log(`[SPLIT] Routing Group 2 to "${act1Name}" (main 1 (switched)) for time ${midMin}-${eMin}`);
                 routeSplitActivity(groupB, act1Name, midMin, eMin, "Group 2", "main 1");
 
-                console.log(`[SPLIT] ✅ Completed split tile for ${divName}\n`);
+                console.log(`[SPLIT] ═══════════════════════════════════════════════════════`);
+                console.log(`[SPLIT] ✅ Completed split tile for ${divName}`);
+                console.log(`[SPLIT] ═══════════════════════════════════════════════════════\n`);
+                return; // Done with this skeleton item
+            }
+
+            // =========================================================================
+            // NON-SPLIT BLOCKS: Categorize into league/specialty/schedulable
+            // =========================================================================
+            
+            const slots = Utils.findSlotsForRange(sMin, eMin);
+            if (slots.length === 0) return;
+
+            const eventName = item.event || '';
+            const normalizedLeague = normalizeLeague(eventName);
+            const normalizedSpecialty = normalizeSpecialtyLeague(eventName);
+            const normalizedGA = normalizeGA(eventName);
+
+            // Check if it's a specialty league block
+            if (normalizedSpecialty || item.type === 'specialty_league') {
+                specialtyLeagueBlocks.push({
+                    divName,
+                    event: eventName,
+                    startTime: sMin,
+                    endTime: eMin,
+                    slots,
+                    bunks: bunkList,
+                    type: 'specialty_league'
+                });
                 return;
             }
+
+            // Check if it's a regular league block
+            if (normalizedLeague || item.type === 'league') {
+                leagueBlocks.push({
+                    divName,
+                    event: eventName,
+                    startTime: sMin,
+                    endTime: eMin,
+                    slots,
+                    bunks: bunkList,
+                    type: 'league'
+                });
+                return;
+            }
+
+            // Check if it's a pinned event
+            if (item.type === 'pinned' || item.pinned) {
+                bunkList.forEach(bunk => {
+                    const existing = window.scheduleAssignments[bunk]?.[slots[0]];
+                    if (existing && existing._bunkOverride) return;
+
+                    fillBlock({
+                        divName,
+                        bunk,
+                        startTime: sMin,
+                        endTime: eMin,
+                        slots
+                    }, {
+                        field: eventName,
+                        sport: null,
+                        _fixed: true,
+                        _activity: eventName
+                    }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                });
+                return;
+            }
+
+            // Check if it's a smart tile (handled separately)
+            if (item.type === 'smart' || item.smartActivities) {
+                return; // Smart tiles are processed in processSmartTiles
+            }
+
+            // General activity slot or other schedulable block
+            if (normalizedGA || item.type === 'slot' || GENERATOR_TYPES.includes(item.type)) {
+                bunkList.forEach(bunk => {
+                    const existing = window.scheduleAssignments[bunk]?.[slots[0]];
+                    if (existing && existing._bunkOverride) return;
+
+                    schedulableSlotBlocks.push({
+                        divName,
+                        bunk,
+                        event: normalizedGA || eventName,
+                        type: 'slot',
+                        startTime: sMin,
+                        endTime: eMin,
+                        slots
+                    });
+                });
+            }
+        }); // ★★★ END OF manualSkeleton.forEach ★★★
+
+        console.log(`[SKELETON] Categorized: ${specialtyLeagueBlocks.length} specialty league, ${leagueBlocks.length} regular league, ${schedulableSlotBlocks.length} general blocks`);
+
         // =========================================================================
         // ★★★ STEP 4: PROCESS SPECIALTY LEAGUES FIRST ★★★
         // =========================================================================
@@ -1582,7 +1508,7 @@
             specialActivityNames,
             yesterdayHistory,
             fieldUsageBySlot
-        }, allowedDivisionsSet || allowedDivisions); // Pass strict set if available, or legacy array
+        }, allowedDivisionsSet || allowedDivisions);
 
         schedulableSlotBlocks.push(...smartTileBlocks);
         console.log(`[SmartTile] Added ${smartTileBlocks.length} blocks to scheduler`);
@@ -1602,18 +1528,14 @@
                 const s = block.slots;
                 if (!s || s.length === 0) return false;
                 const existing = window.scheduleAssignments[block.bunk]?.[s[0]];
-                // ★★★ SKIP BUNKS WITH OVERRIDES ★★★
                 if (existing && existing._bunkOverride) return false;
                 return !existing || existing._activity === TRANSITION_TYPE;
             })
-            .map(b => ({ ...b,
-                _isLeague: false
-            }));
+            .map(b => ({ ...b, _isLeague: false }));
 
         console.log(`[SOLVER] Processing ${remainingActivityBlocks.length} activity blocks.`);
 
         if (window.totalSolverEngine && remainingActivityBlocks.length > 0) {
-            // Pass the updated config with modified disabledFields
             window.totalSolverEngine.solveSchedule(remainingActivityBlocks, config);
         }
 
@@ -1622,8 +1544,7 @@
         // =========================================================================
 
         try {
-            const newHistory = { ...rotationHistory
-            };
+            const newHistory = { ...rotationHistory };
             const timestamp = Date.now();
             Object.keys(divisions).forEach(divName => {
                 divisions[divName].bunks.forEach(b => {
@@ -1651,7 +1572,6 @@
         console.log("★★★ OPTIMIZER FINISHED SUCCESSFULLY ★★★");
         console.log("=".repeat(70));
 
-        // Final lock debug
         if (window.GlobalFieldLocks) {
             window.GlobalFieldLocks.debugPrintLocks();
         }
@@ -1660,7 +1580,7 @@
     };
 
     // =========================================================================
-    // LEGACY ALIAS: runOptimizer → runSkeletonOptimizer
+    // LEGACY ALIAS
     // =========================================================================
     window.runOptimizer = window.runSkeletonOptimizer;
 
@@ -1692,4 +1612,7 @@
     }
 
     window.registerSingleSlotUsage = registerSingleSlotUsage;
+
+    console.log('⚙️ Scheduler Core Main v17 loaded (FOREACH CLOSURE FIX)');
+
 })();
