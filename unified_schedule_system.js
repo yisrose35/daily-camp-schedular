@@ -1,5 +1,5 @@
 // =============================================================================
-// unified_schedule_system.js v3.5 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
+// unified_schedule_system.js v3.5.1 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
 // =============================================================================
 //
 // This file REPLACES ALL of the following:
