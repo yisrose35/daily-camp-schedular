@@ -1,5 +1,5 @@
 // =============================================================================
-// unified_schedule_system.js v3.4 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
+// unified_schedule_system.js v3.5 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
 // =============================================================================
 //
 // This file REPLACES ALL of the following:
@@ -18,6 +18,7 @@
 // ✅ Version save/load/merge integrated
 // ✅ Toolbar hidden by default
 // ✅ RBAC and multi-scheduler support
+// ✅ v3.5: SPLIT TILE VISUAL FIX - renders split tiles as two rows
 //
 // REQUIRES: unified_cloud_schedule_system.js for proper cloud sync
 //
@@ -26,7 +27,7 @@
 (function() {
     'use strict';
 
-    console.log('📅 Unified Schedule System v3.4 loading...');
+    console.log('📅 Unified Schedule System v3.5 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -477,6 +478,98 @@
     }
 
     // =========================================================================
+    // SPLIT TILE DETECTION - v3.5 FIX
+    // =========================================================================
+    
+    /**
+     * Detect if a skeleton block is a split tile.
+     * Split tiles have "/" in the name (e.g., "Swim / Activity") and
+     * different bunks switch activities at the midpoint.
+     */
+    function isSplitTileBlock(block, bunks, unifiedTimes) {
+        if (!block || !block.event) return false;
+        
+        // Must contain "/" to be a split candidate
+        if (!block.event.includes('/')) return false;
+        
+        // "Special" blocks are smart tiles, not split tiles
+        if (block.event.toLowerCase().includes('special')) return false;
+        
+        // Block must be at least 60 minutes to be split
+        const duration = block.endMin - block.startMin;
+        if (duration < 60) return false;
+        
+        // Check actual data: do bunks have different activities in first vs second half?
+        const midpoint = Math.floor((block.startMin + block.endMin) / 2);
+        const firstHalfSlots = findSlotsForRange(block.startMin, midpoint, unifiedTimes);
+        const secondHalfSlots = findSlotsForRange(midpoint, block.endMin, unifiedTimes);
+        
+        if (firstHalfSlots.length === 0 || secondHalfSlots.length === 0) return false;
+        
+        const assignments = window.scheduleAssignments || {};
+        
+        // Check if ANY bunk has different activities in the two halves
+        for (const bunk of bunks) {
+            const bunkData = assignments[bunk];
+            if (!bunkData) continue;
+            
+            const firstEntry = bunkData[firstHalfSlots[0]];
+            const secondEntry = bunkData[secondHalfSlots[0]];
+            
+            if (firstEntry && secondEntry && !firstEntry.continuation && !secondEntry.continuation) {
+                const firstAct = formatEntry(firstEntry);
+                const secondAct = formatEntry(secondEntry);
+                
+                // If activities differ, this is a split tile
+                if (firstAct && secondAct && firstAct !== secondAct) {
+                    if (DEBUG) console.log(`[UnifiedSchedule] Detected split tile: ${block.event} (${firstAct} → ${secondAct})`);
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Expand skeleton blocks, splitting split-tiles into two rows.
+     */
+    function expandBlocksForSplitTiles(divBlocks, bunks, unifiedTimes) {
+        const expandedBlocks = [];
+        
+        divBlocks.forEach(block => {
+            if (isSplitTileBlock(block, bunks, unifiedTimes)) {
+                // Split into two halves
+                const midpoint = Math.floor((block.startMin + block.endMin) / 2);
+                
+                // First half
+                expandedBlocks.push({
+                    ...block,
+                    endMin: midpoint,
+                    _splitHalf: 1,
+                    _originalEvent: block.event,
+                    _isSplitTile: true
+                });
+                
+                // Second half
+                expandedBlocks.push({
+                    ...block,
+                    startMin: midpoint,
+                    _splitHalf: 2,
+                    _originalEvent: block.event,
+                    _isSplitTile: true
+                });
+                
+                if (DEBUG) console.log(`[UnifiedSchedule] Expanded split tile: ${block.event} into 2 rows (${block.startMin}-${midpoint}, ${midpoint}-${block.endMin})`);
+            } else {
+                expandedBlocks.push(block);
+            }
+        });
+        
+        return expandedBlocks;
+    }
+
+    // =========================================================================
     // ENTRY ACCESS & FORMATTING
     // =========================================================================
 
@@ -722,7 +815,7 @@
 
     function renderDivisionTable(divName, divInfo, bunks, skeleton, unifiedTimes, isEditable) {
         // Filter skeleton blocks for this division
-        const divBlocks = skeleton
+        let divBlocks = skeleton
             .filter(b => b.division === divName)
             .map(b => ({
                 ...b,
@@ -736,6 +829,11 @@
             console.log(`[UnifiedSchedule] No skeleton blocks for division: ${divName}`);
             return null;
         }
+        
+        // =====================================================================
+        // v3.5 FIX: Expand split tiles into two rows
+        // =====================================================================
+        divBlocks = expandBlocksForSplitTiles(divBlocks, bunks, unifiedTimes);
         
         // DEBUG: Show first block lookup for first bunk
         if (divBlocks.length > 0 && bunks.length > 0) {
@@ -810,10 +908,24 @@
             const tr = document.createElement('tr');
             tr.style.background = blockIdx % 2 === 0 ? '#fff' : '#fafafa';
             
+            // Add visual indicator for split tile rows
+            if (block._isSplitTile) {
+                tr.style.background = block._splitHalf === 1 
+                    ? (blockIdx % 2 === 0 ? '#f0fdf4' : '#ecfdf5')  // Light green tint for first half
+                    : (blockIdx % 2 === 0 ? '#fef3c7' : '#fef9c3'); // Light yellow tint for second half
+            }
+            
             // Time cell
             const tdTime = document.createElement('td');
             tdTime.textContent = timeLabel;
             tdTime.style.cssText = 'padding: 10px 12px; font-weight: 500; color: #4b5563; border-right: 1px solid #e5e7eb; white-space: nowrap;';
+            
+            // Add split indicator to time cell
+            if (block._isSplitTile) {
+                const halfLabel = block._splitHalf === 1 ? '①' : '②';
+                tdTime.innerHTML = `${escapeHtml(timeLabel)} <span style="color: #6b7280; font-size: 0.8rem;">${halfLabel}</span>`;
+            }
+            
             tr.appendChild(tdTime);
             
             // League block - merged cell with matchups
@@ -1439,7 +1551,7 @@
     
     // Debug namespace
     window.UnifiedScheduleSystem = {
-        version: '3.4',
+        version: '3.5',
         loadScheduleForDate,
         renderStaggeredView,
         findSlotIndexForTime,
@@ -1447,6 +1559,8 @@
         getLeagueMatchups,
         getEntryForBlock,
         buildUnifiedTimesFromSkeleton,
+        isSplitTileBlock,
+        expandBlocksForSplitTiles,
         VersionManager,
         DEBUG_ON: () => { DEBUG = true; console.log('[UnifiedSchedule] Debug enabled'); },
         DEBUG_OFF: () => { DEBUG = false; console.log('[UnifiedSchedule] Debug disabled'); },
@@ -1576,9 +1690,10 @@
         })
     };
 
-    console.log('📅 Unified Schedule System v3.4 loaded successfully');
+    console.log('📅 Unified Schedule System v3.5 loaded successfully');
     console.log('   Replaces: scheduler_ui.js, render_sync_fix.js, view_schedule_loader_fix.js');
     console.log('   Replaces: schedule_version_merger.js, schedule_version_ui.js');
     console.log('   REQUIRES: unified_cloud_schedule_system.js for proper cloud sync');
+    console.log('   ✅ v3.5: Split tile visual fix - renders split tiles as two rows');
 
 })();
