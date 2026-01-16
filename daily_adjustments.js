@@ -1655,17 +1655,32 @@ function addRemoveListeners(gridEl) {
 // =================================================================
 function loadDailySkeleton() {
   const dailyData = window.loadCurrentDailyData?.() || {};
+  
+  // Debug: What's in the daily data?
+  console.log('[DailyAdj] loadDailySkeleton called');
+  console.log('[DailyAdj] dailyData.manualSkeleton exists:', !!dailyData.manualSkeleton);
+  console.log('[DailyAdj] dailyData.manualSkeleton length:', dailyData.manualSkeleton?.length || 0);
+  
   if (dailyData.manualSkeleton && dailyData.manualSkeleton.length > 0) {
+    // Debug: Check for night activities in the loaded data
+    const nightInData = dailyData.manualSkeleton.filter(ev => ev.isNightActivity);
+    console.log('[DailyAdj] Night activities in manualSkeleton:', nightInData.length);
+    if (nightInData.length > 0) {
+      console.log('[DailyAdj] Night activity details:', nightInData.map(e => ({id: e.id, event: e.event, isNightActivity: e.isNightActivity})));
+    }
+    
     dailyOverrideSkeleton = JSON.parse(JSON.stringify(dailyData.manualSkeleton));
     window.dailyOverrideSkeleton = dailyOverrideSkeleton;
     
-    // Debug: Log night activities being loaded
+    // Debug: Verify after JSON parse
     const nightEvents = dailyOverrideSkeleton.filter(ev => ev.isNightActivity);
     if (nightEvents.length > 0) {
-      console.log(`[DailyAdj] Loaded ${nightEvents.length} night activity tile(s):`, nightEvents.map(e => ({id: e.id, event: e.event, start: e.startTime, end: e.endTime})));
+      console.log(`[DailyAdj] ✅ Loaded ${nightEvents.length} night activity tile(s):`, nightEvents.map(e => ({id: e.id, event: e.event, start: e.startTime, end: e.endTime})));
     }
     return;
   }
+  
+  console.log('[DailyAdj] No manualSkeleton found, loading from template...');
   const assignments = masterSettings.app1.skeletonAssignments || {};
   const skeletons = masterSettings.app1.savedSkeletons || {};
   const dateStr = window.currentScheduleDate || "";
@@ -1674,6 +1689,7 @@ function loadDailySkeleton() {
   if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
   const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   let tmpl = assignments[dayNames[dow]] || assignments["Default"];
+  console.log('[DailyAdj] Loading template:', tmpl || '(none)');
   dailyOverrideSkeleton = (tmpl && skeletons[tmpl]) ? JSON.parse(JSON.stringify(skeletons[tmpl])) : [];
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
 }
@@ -1683,14 +1699,22 @@ function saveDailySkeleton() {
       return;
   }
   
-  // Debug: Log night activities being saved
+  // Debug: Log what we're saving
   const nightEvents = dailyOverrideSkeleton.filter(ev => ev.isNightActivity);
+  console.log(`[DailyAdj] saveDailySkeleton called with ${dailyOverrideSkeleton.length} total events`);
   if (nightEvents.length > 0) {
-    console.log(`[DailyAdj] Saving ${nightEvents.length} night activity tile(s):`, nightEvents.map(e => ({id: e.id, event: e.event, start: e.startTime, end: e.endTime})));
+    console.log(`[DailyAdj] Saving ${nightEvents.length} night activity tile(s):`, nightEvents.map(e => ({id: e.id, event: e.event, start: e.startTime, end: e.endTime, isNightActivity: e.isNightActivity})));
   }
   
+  // Save to daily data
   window.saveCurrentDailyData?.("manualSkeleton", dailyOverrideSkeleton);
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+  
+  // Verify the save worked by immediately reading it back
+  const verifyData = window.loadCurrentDailyData?.() || {};
+  const savedSkeleton = verifyData.manualSkeleton || [];
+  const savedNight = savedSkeleton.filter(ev => ev.isNightActivity);
+  console.log(`[DailyAdj] VERIFY: After save, manualSkeleton has ${savedSkeleton.length} events, ${savedNight.length} night activities`);
   
   // Force sync to cloud if available
   window.forceSyncToCloud?.();
