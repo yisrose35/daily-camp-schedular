@@ -794,5 +794,211 @@ function getMyBunks() {
             setTimeout(initialize, 100);
         });
     }
+// =============================================================================
+// APPEND THIS TO THE END OF supabase_schedules.js (BEFORE the closing })(); )
+// =============================================================================
+// SCHEDULE DB DEBUG & AUTO-LOAD PATCH v1.0
+// Fixes: Better error logging, auto-load on new device
+// =============================================================================
 
+    // =========================================================================
+    // PATCH: ENABLE DEBUG LOGGING
+    // =========================================================================
+    
+    // Override CONFIG.DEBUG to enable logging
+    CONFIG.DEBUG = true;
+
+    // =========================================================================
+    // PATCH: ENHANCED SAVE WITH DETAILED LOGGING
+    // =========================================================================
+
+    const _originalSaveSchedule = window.ScheduleDB?.saveSchedule;
+
+    if (_originalSaveSchedule) {
+        window.ScheduleDB.saveSchedule = async function(dateKey, data, options = {}) {
+            const bunkCount = Object.keys(data?.scheduleAssignments || {}).length;
+            const slotCount = (data?.unifiedTimes || window.unifiedTimes || []).length;
+            
+            console.log('📅 [ScheduleDB] saveSchedule called:', {
+                dateKey,
+                bunks: bunkCount,
+                slots: slotCount,
+                options
+            });
+
+            // Validate inputs
+            if (!dateKey) {
+                console.error('📅 [ScheduleDB] ERROR: No dateKey provided!');
+                return { success: false, error: 'No dateKey', target: 'none' };
+            }
+
+            if (bunkCount === 0) {
+                console.warn('📅 [ScheduleDB] Warning: Saving empty schedule');
+            }
+
+            // Check dependencies
+            const client = getClient();
+            const campId = getCampId();
+            const userId = getUserId();
+
+            console.log('📅 [ScheduleDB] Dependencies:', {
+                hasClient: !!client,
+                campId: campId || 'MISSING',
+                userId: userId || 'MISSING'
+            });
+
+            if (!client || !campId) {
+                console.warn('📅 [ScheduleDB] No client/campId - saving to LOCAL only');
+            }
+
+            try {
+                const result = await _originalSaveSchedule.call(this, dateKey, data, options);
+                
+                console.log('📅 [ScheduleDB] Save result:', {
+                    success: result?.success,
+                    target: result?.target,
+                    error: result?.error,
+                    bunks: result?.bunks
+                });
+
+                if (result?.success && result?.target === 'cloud') {
+                    console.log('📅 [ScheduleDB] ✅ Successfully saved to cloud!');
+                } else if (result?.target === 'local' || result?.target === 'local-fallback') {
+                    console.warn('📅 [ScheduleDB] ⚠️ Saved to LOCAL only - cloud save failed');
+                    console.warn('   Reason:', result?.error || 'No client/campId');
+                }
+
+                return result;
+            } catch (e) {
+                console.error('📅 [ScheduleDB] ❌ Save exception:', e);
+                throw e;
+            }
+        };
+        
+        console.log('📅 [ScheduleDB] Save logging patch installed');
+    }
+
+    // =========================================================================
+    // PATCH: ENHANCED LOAD WITH AUTO-RETRY
+    // =========================================================================
+
+    const _originalLoadSchedule = window.ScheduleDB?.loadSchedule;
+
+    if (_originalLoadSchedule) {
+        window.ScheduleDB.loadSchedule = async function(dateKey, options = {}) {
+            console.log('📅 [ScheduleDB] loadSchedule called:', dateKey);
+
+            try {
+                const result = await _originalLoadSchedule.call(this, dateKey, options);
+                
+                const bunkCount = result?.data ? Object.keys(result.data.scheduleAssignments || {}).length : 0;
+                
+                console.log('📅 [ScheduleDB] Load result:', {
+                    success: result?.success,
+                    source: result?.source,
+                    bunks: bunkCount,
+                    recordCount: result?.recordCount
+                });
+
+                return result;
+            } catch (e) {
+                console.error('📅 [ScheduleDB] ❌ Load exception:', e);
+                throw e;
+            }
+        };
+        
+        console.log('📅 [ScheduleDB] Load logging patch installed');
+    }
+
+    // =========================================================================
+    // PATCH: DIAGNOSTIC HELPER
+    // =========================================================================
+
+    window.ScheduleDB.diagnose = async function(dateKey) {
+        if (!dateKey) {
+            dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        }
+
+        const client = getClient();
+        const campId = getCampId();
+        const userId = getUserId();
+
+        console.log('═══════════════════════════════════════════════════════');
+        console.log('📅 SCHEDULE DB DIAGNOSTIC');
+        console.log('═══════════════════════════════════════════════════════');
+        console.log('Date Key:', dateKey);
+        console.log('');
+        console.log('Dependencies:');
+        console.log('  Supabase Client:', client ? '✅' : '❌');
+        console.log('  Camp ID:', campId || '❌ MISSING');
+        console.log('  User ID:', userId || '❌ MISSING');
+        console.log('');
+
+        if (!client || !campId) {
+            console.log('⚠️ Cannot query cloud without client/campId');
+            return;
+        }
+
+        try {
+            const { data, error } = await client
+                .from('daily_schedules')
+                .select('*')
+                .eq('camp_id', campId)
+                .eq('date_key', dateKey);
+
+            if (error) {
+                console.error('Query error:', error);
+                return;
+            }
+
+            console.log('Cloud Records:', data?.length || 0);
+            
+            if (data && data.length > 0) {
+                data.forEach((record, i) => {
+                    const bunks = Object.keys(record.schedule_data?.scheduleAssignments || {}).length;
+                    console.log(`\nRecord ${i + 1}:`);
+                    console.log('  ID:', record.id);
+                    console.log('  Scheduler:', record.scheduler_name || 'Unknown');
+                    console.log('  Scheduler ID:', record.scheduler_id);
+                    console.log('  Divisions:', JSON.stringify(record.divisions));
+                    console.log('  Bunks:', bunks);
+                    console.log('  Updated:', record.updated_at);
+                });
+            } else {
+                console.log('\n⚠️ NO RECORDS FOUND IN CLOUD!');
+                console.log('The schedule has NOT been saved to cloud.');
+            }
+
+            console.log('\n--- LocalStorage ---');
+            try {
+                const raw = localStorage.getItem('campDailyData_v1');
+                const allData = raw ? JSON.parse(raw) : {};
+                const localData = allData[dateKey];
+                
+                if (localData) {
+                    console.log('Local bunks:', Object.keys(localData.scheduleAssignments || {}).length);
+                } else {
+                    console.log('No local data for this date');
+                }
+            } catch (e) {
+                console.log('LocalStorage error:', e.message);
+            }
+
+            console.log('\n--- Window Globals ---');
+            console.log('window.scheduleAssignments:', Object.keys(window.scheduleAssignments || {}).length, 'bunks');
+            console.log('window.unifiedTimes:', (window.unifiedTimes || []).length, 'slots');
+
+        } catch (e) {
+            console.error('Diagnostic error:', e);
+        }
+
+        console.log('═══════════════════════════════════════════════════════');
+    };
+
+    console.log('📅 [ScheduleDB] Debug & auto-load patch installed');
+    console.log('   Run: ScheduleDB.diagnose() to check sync status');
+
+// =============================================================================
+// END OF PATCH - Make sure this is BEFORE the closing })(); of supabase_schedules.js
+// =============================================================================
 })();
