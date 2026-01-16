@@ -821,11 +821,13 @@ function renderGrid(gridEl) {
   if (latestMin === null) latestMin = 960;
   
   // Check for night activities and extend grid if needed
-  const nightEvents = dailyOverrideSkeleton.filter(ev => ev.isNightActivity === true);
+  const nightEvents = dailyOverrideSkeleton.filter(ev => ev.isNightActivity);
   if (nightEvents.length > 0) {
+    console.log(`[DailyAdj] Rendering ${nightEvents.length} night activity tile(s)`);
     const latestNightEnd = Math.max(...nightEvents.map(ev => parseTimeToMinutes(ev.endTime) || 0));
     if (latestNightEnd > latestMin) {
       latestMin = latestNightEnd + 30; // Add buffer
+      console.log(`[DailyAdj] Extended grid to ${minutesToTime(latestMin)} for night activities`);
     }
   }
   
@@ -893,7 +895,7 @@ function renderEventTile(ev, top, height) {
   const adjustedHeight = Math.max(height - 2, 10);
   
   // 🌙 NIGHT ACTIVITY STYLING
-  const isNight = ev.isNightActivity === true;
+  const isNight = !!ev.isNightActivity;
   if (isNight) {
     style = 'background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); ' +
             'border: 2px solid #e94560; color: #fff; ' +
@@ -1656,6 +1658,12 @@ function loadDailySkeleton() {
   if (dailyData.manualSkeleton && dailyData.manualSkeleton.length > 0) {
     dailyOverrideSkeleton = JSON.parse(JSON.stringify(dailyData.manualSkeleton));
     window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+    
+    // Debug: Log night activities being loaded
+    const nightEvents = dailyOverrideSkeleton.filter(ev => ev.isNightActivity);
+    if (nightEvents.length > 0) {
+      console.log(`[DailyAdj] Loaded ${nightEvents.length} night activity tile(s):`, nightEvents.map(e => ({id: e.id, event: e.event, start: e.startTime, end: e.endTime})));
+    }
     return;
   }
   const assignments = masterSettings.app1.skeletonAssignments || {};
@@ -1674,8 +1682,18 @@ function saveDailySkeleton() {
       console.warn('[DailyAdj] Save blocked - insufficient permissions');
       return;
   }
+  
+  // Debug: Log night activities being saved
+  const nightEvents = dailyOverrideSkeleton.filter(ev => ev.isNightActivity);
+  if (nightEvents.length > 0) {
+    console.log(`[DailyAdj] Saving ${nightEvents.length} night activity tile(s):`, nightEvents.map(e => ({id: e.id, event: e.event, start: e.startTime, end: e.endTime})));
+  }
+  
   window.saveCurrentDailyData?.("manualSkeleton", dailyOverrideSkeleton);
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+  
+  // Force sync to cloud if available
+  window.forceSyncToCloud?.();
 }
 function parseTimeToMinutes(str) {
   if (!str || typeof str !== "string") return null;
