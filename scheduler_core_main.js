@@ -341,6 +341,29 @@
             }
         });
 
+        // ★★★ CRITICAL: Store league matchups in leagueAssignments by DIVISION ★★★
+        // League teams are SEPARATE from bunks - matchups must be stored by division/slot
+        // This allows the UI to retrieve team matchups without scanning bunks
+        if ((pick._h2h || pick._allMatchups) && block.divName) {
+            if (!window.leagueAssignments) window.leagueAssignments = {};
+            if (!window.leagueAssignments[block.divName]) {
+                window.leagueAssignments[block.divName] = {};
+            }
+            
+            mainSlots.forEach(slotIndex => {
+                // Only set if not already set (first write wins for this slot)
+                if (!window.leagueAssignments[block.divName][slotIndex]) {
+                    window.leagueAssignments[block.divName][slotIndex] = {
+                        matchups: pick._allMatchups || [],
+                        gameLabel: pick._gameLabel || '',
+                        sport: pick.sport || '',
+                        leagueName: pick._leagueName || ''
+                    };
+                    console.log(`[fillBlock] ✅ Stored league matchups for ${block.divName} at slot ${slotIndex}: ${(pick._allMatchups || []).length} matchups`);
+                }
+            });
+        }
+
         if (writePost) {
             const postSlots = Utils.findSlotsForRange(effectiveEnd, blockEndMin);
             postSlots.forEach((slotIndex, i) => {
@@ -1510,7 +1533,25 @@
             fieldsBySport,
             dailyLeagueSportsUsage: {},
             fillBlock,
-            fields: config.masterFields || []
+            fields: config.masterFields || [],
+            // ★★★ NEW: Provide direct access to leagueAssignments for league cores ★★★
+            leagueAssignments: window.leagueAssignments,
+            storeLeagueMatchups: function(divName, slots, matchups, gameLabel, sport, leagueName) {
+                if (!window.leagueAssignments[divName]) {
+                    window.leagueAssignments[divName] = {};
+                }
+                for (const slotIdx of slots) {
+                    if (!window.leagueAssignments[divName][slotIdx]) {
+                        window.leagueAssignments[divName][slotIdx] = {
+                            matchups: matchups || [],
+                            gameLabel: gameLabel || '',
+                            sport: sport || '',
+                            leagueName: leagueName || ''
+                        };
+                        console.log(`[storeLeagueMatchups] ✅ Stored ${(matchups || []).length} matchups for ${divName} at slot ${slotIdx}`);
+                    }
+                }
+            }
         };
 
         if (window.SchedulerCoreSpecialtyLeagues?.processSpecialtyLeagues) {
@@ -1529,6 +1570,132 @@
         if (window.SchedulerCoreLeagues?.processRegularLeagues) {
             window.SchedulerCoreLeagues.processRegularLeagues(leagueContext);
         }
+
+        // =========================================================================
+        // ★★★ STEP 5.5: CONSOLIDATE LEAGUE ASSIGNMENTS ★★★
+        // =========================================================================
+        // League teams are SEPARATE from bunks - they're defined in leagues.js
+        // This step ensures window.leagueAssignments is properly populated with
+        // team-based matchups at the division level for UI rendering
+        // =========================================================================
+
+        console.log("\n[STEP 5.5] Consolidating league assignments...");
+        
+        // Get all active leagues and their team-based matchups
+        const activeLeagues = masterLeagues?.filter(l => !disabledLeagues?.includes(l.name)) || [];
+        const activeSpecialtyLeagues = masterSpecialtyLeagues?.filter(l => !disabledSpecialtyLeagues?.includes(l.id)) || [];
+        
+        // Process regular league blocks - store team matchups at division level
+        leagueBlocks.forEach(block => {
+            const divName = block.divName;
+            const slots = block.slots || [];
+            if (slots.length === 0) return;
+            
+            // Find leagues that apply to this division
+            const applicableLeagues = activeLeagues.filter(league => {
+                return league.divisions?.includes(divName);
+            });
+            
+            applicableLeagues.forEach(league => {
+                const leagueTeams = league.teams || [];
+                if (leagueTeams.length < 2) return;
+                
+                // Initialize division in leagueAssignments
+                if (!window.leagueAssignments[divName]) {
+                    window.leagueAssignments[divName] = {};
+                }
+                
+                // Store at first slot of the block
+                const slotIdx = slots[0];
+                if (!window.leagueAssignments[divName][slotIdx]) {
+                    // Check if league core already stored matchups
+                    const existingMatchups = window.leagueAssignments[divName][slotIdx]?.matchups || [];
+                    
+                    if (existingMatchups.length === 0) {
+                        // Try to get matchups from the league core's output
+                        // The league cores store _allMatchups in bunk entries, but we need team names
+                        let foundMatchups = [];
+                        let foundGameLabel = '';
+                        let foundSport = '';
+                        
+                        // Scan any bunk entry at this slot for the _allMatchups data
+                        const bunks = divisions[divName]?.bunks || [];
+                        for (const bunk of bunks) {
+                            const entry = window.scheduleAssignments[bunk]?.[slotIdx];
+                            if (entry && entry._allMatchups && entry._allMatchups.length > 0) {
+                                foundMatchups = entry._allMatchups;
+                                foundGameLabel = entry._gameLabel || '';
+                                foundSport = entry.sport || '';
+                                break;
+                            }
+                        }
+                        
+                        if (foundMatchups.length > 0) {
+                            window.leagueAssignments[divName][slotIdx] = {
+                                matchups: foundMatchups,
+                                gameLabel: foundGameLabel,
+                                sport: foundSport,
+                                leagueName: league.name,
+                                teams: leagueTeams // Store team names for reference
+                            };
+                            console.log(`   ✅ League "${league.name}" for ${divName} @ slot ${slotIdx}: ${foundMatchups.length} matchups`);
+                        }
+                    }
+                }
+            });
+        });
+        
+        // Process specialty league blocks similarly
+        specialtyLeagueBlocks.forEach(block => {
+            const divName = block.divName;
+            const slots = block.slots || [];
+            if (slots.length === 0) return;
+            
+            const applicableLeagues = activeSpecialtyLeagues.filter(league => {
+                return league.divisions?.includes(divName);
+            });
+            
+            applicableLeagues.forEach(league => {
+                const leagueTeams = league.teams || [];
+                if (leagueTeams.length < 2) return;
+                
+                if (!window.leagueAssignments[divName]) {
+                    window.leagueAssignments[divName] = {};
+                }
+                
+                const slotIdx = slots[0];
+                if (!window.leagueAssignments[divName][slotIdx]) {
+                    let foundMatchups = [];
+                    let foundGameLabel = '';
+                    let foundSport = league.sport || '';
+                    
+                    const bunks = divisions[divName]?.bunks || [];
+                    for (const bunk of bunks) {
+                        const entry = window.scheduleAssignments[bunk]?.[slotIdx];
+                        if (entry && entry._allMatchups && entry._allMatchups.length > 0) {
+                            foundMatchups = entry._allMatchups;
+                            foundGameLabel = entry._gameLabel || '';
+                            if (entry.sport) foundSport = entry.sport;
+                            break;
+                        }
+                    }
+                    
+                    if (foundMatchups.length > 0) {
+                        window.leagueAssignments[divName][slotIdx] = {
+                            matchups: foundMatchups,
+                            gameLabel: foundGameLabel,
+                            sport: foundSport,
+                            leagueName: league.name || league.id,
+                            teams: leagueTeams,
+                            isSpecialtyLeague: true
+                        };
+                        console.log(`   ✅ Specialty League "${league.name || league.id}" for ${divName} @ slot ${slotIdx}: ${foundMatchups.length} matchups`);
+                    }
+                }
+            });
+        });
+        
+        console.log(`[STEP 5.5] League assignments consolidated for ${Object.keys(window.leagueAssignments).length} divisions`);
 
         // =========================================================================
         // STEP 6: PROCESS SMART TILES
@@ -1649,6 +1816,6 @@
 
     window.registerSingleSlotUsage = registerSingleSlotUsage;
 
-    console.log('⚙️ Scheduler Core Main v17 loaded (FOREACH CLOSURE FIX)');
+    console.log('⚙️ Scheduler Core Main v17.1 loaded (LEAGUE MATCHUPS FIX - bunks ≠ teams)');
 
 })();
