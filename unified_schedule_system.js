@@ -1,5 +1,5 @@
 // =============================================================================
-// unified_schedule_system.js v3.5.1 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
+// unified_schedule_system.js v3.5.2 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
 // =============================================================================
 //
 // This file REPLACES ALL of the following:
@@ -19,6 +19,7 @@
 // ✅ Toolbar hidden by default
 // ✅ RBAC and multi-scheduler support
 // ✅ v3.5: SPLIT TILE VISUAL FIX - renders split tiles as two rows
+// ✅ v3.5.2: LEAGUE MATCHUPS FIX - bunks ≠ league teams, proper retrieval
 //
 // REQUIRES: unified_cloud_schedule_system.js for proper cloud sync
 //
@@ -27,7 +28,7 @@
 (function() {
     'use strict';
 
-    console.log('📅 Unified Schedule System v3.5 loading...');
+    console.log('📅 Unified Schedule System v3.5.2 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -634,51 +635,115 @@
     }
 
     // =========================================================================
-    // LEAGUE MATCHUPS RETRIEVAL
+    // LEAGUE MATCHUPS RETRIEVAL - v3.5.2 FIX
     // =========================================================================
+    // ★★★ CRITICAL: League teams are NOT bunks ★★★
+    // League teams are separate entities created in leagues.js
+    // They consist of people from different bunks combined into teams
+    // We must NOT scan bunks to find league data - use leagueAssignments only
 
     function getLeagueMatchups(divName, slotIdx) {
+        // =====================================================================
+        // PRIORITY 1: Direct leagueAssignments lookup (AUTHORITATIVE SOURCE)
+        // This is where scheduler_core_main.js stores league team matchups
+        // =====================================================================
         const leagues = window.leagueAssignments || {};
         
-        // Priority 1: Direct leagueAssignments lookup
         if (leagues[divName] && leagues[divName][slotIdx]) {
             const data = leagues[divName][slotIdx];
+            console.log(`[getLeagueMatchups] ✅ Found matchups for ${divName} at slot ${slotIdx}:`, data);
             return {
                 matchups: data.matchups || [],
                 gameLabel: data.gameLabel || '',
-                sport: data.sport || ''
+                sport: data.sport || '',
+                leagueName: data.leagueName || ''
             };
         }
         
-        // Priority 2: Scan scheduleAssignments for _allMatchups
-        const divisions = window.divisions || {};
-        const bunks = divisions[divName]?.bunks || [];
-        const assignments = window.scheduleAssignments || {};
+        // =====================================================================
+        // PRIORITY 2: Check all slots in leagueAssignments for this division
+        // Sometimes slot indices don't align perfectly
+        // =====================================================================
+        if (leagues[divName]) {
+            const divSlots = Object.keys(leagues[divName]).map(Number).sort((a, b) => a - b);
+            // Find closest slot
+            for (const storedSlot of divSlots) {
+                if (Math.abs(storedSlot - slotIdx) <= 2) { // Allow small variance
+                    const data = leagues[divName][storedSlot];
+                    if (data && (data.matchups?.length > 0 || data.gameLabel)) {
+                        console.log(`[getLeagueMatchups] ✅ Found matchups for ${divName} at nearby slot ${storedSlot} (requested ${slotIdx}):`, data);
+                        return {
+                            matchups: data.matchups || [],
+                            gameLabel: data.gameLabel || '',
+                            sport: data.sport || '',
+                            leagueName: data.leagueName || ''
+                        };
+                    }
+                }
+            }
+        }
         
-        for (const bunk of bunks) {
-            const entry = assignments[bunk]?.[slotIdx];
-            if (entry && entry._allMatchups && entry._allMatchups.length > 0) {
+        // =====================================================================
+        // PRIORITY 3: Look up league configuration for this division
+        // If leagueAssignments wasn't populated, try to get league info
+        // from the master leagues configuration
+        // =====================================================================
+        const masterLeagues = window.masterLeagues || 
+                             window.loadGlobalSettings?.()?.app1?.leagues || 
+                             [];
+        
+        // Find leagues that include this division
+        const applicableLeagues = masterLeagues.filter(league => {
+            if (!league || !league.name || !league.divisions) return false;
+            return league.divisions.includes(divName);
+        });
+        
+        if (applicableLeagues.length > 0) {
+            // Get the first applicable league's teams for display
+            const league = applicableLeagues[0];
+            const teams = league.teams || [];
+            
+            if (teams.length >= 2) {
+                console.log(`[getLeagueMatchups] 📋 Found league "${league.name}" for ${divName} with ${teams.length} teams`);
+                
+                // Generate display matchups from teams
+                // Note: This is a fallback - actual matchup order is determined by scheduler
+                const displayMatchups = [];
+                for (let i = 0; i < teams.length - 1; i += 2) {
+                    if (teams[i + 1]) {
+                        displayMatchups.push({
+                            teamA: teams[i],
+                            teamB: teams[i + 1],
+                            display: `${teams[i]} vs ${teams[i + 1]}`
+                        });
+                    }
+                }
+                // If odd number of teams, last team gets a bye
+                if (teams.length % 2 === 1) {
+                    displayMatchups.push({
+                        teamA: teams[teams.length - 1],
+                        teamB: 'BYE',
+                        display: `${teams[teams.length - 1]} (BYE)`
+                    });
+                }
+                
                 return {
-                    matchups: entry._allMatchups,
-                    gameLabel: entry._gameLabel || '',
-                    sport: entry.sport || ''
+                    matchups: displayMatchups,
+                    gameLabel: `${league.name} Game`,
+                    sport: league.sports?.[0] || 'League',
+                    leagueName: league.name
                 };
             }
         }
         
-        // Priority 3: Check if ANY bunk has _h2h at this slot
-        for (const bunk of bunks) {
-            const entry = assignments[bunk]?.[slotIdx];
-            if (entry && entry._h2h) {
-                return {
-                    matchups: [],
-                    gameLabel: entry._gameLabel || 'Game',
-                    sport: entry.sport || ''
-                };
-            }
-        }
+        // =====================================================================
+        // NO DATA FOUND - Return empty
+        // =====================================================================
+        // ★★★ DO NOT scan bunks for league data ★★★
+        // Bunks are NOT league teams - they are separate entities
         
-        return { matchups: [], gameLabel: '', sport: '' };
+        console.log(`[getLeagueMatchups] ⚠️ No league data found for ${divName} at slot ${slotIdx}`);
+        return { matchups: [], gameLabel: '', sport: '', leagueName: '' };
     }
 
     // =========================================================================
@@ -707,8 +772,25 @@
             skeletonBlocks: skeleton.length,
             unifiedTimesSlots: unifiedTimes.length,
             scheduleAssignmentsBunks: Object.keys(window.scheduleAssignments || {}).length,
+            leagueAssignmentsDivs: Object.keys(window.leagueAssignments || {}).length,
             divisionsCount: Object.keys(divisions).length
         });
+        
+        // Log league assignments state
+        const leagueAssigns = window.leagueAssignments || {};
+        if (Object.keys(leagueAssigns).length > 0) {
+            console.log('[UnifiedSchedule] League Assignments:');
+            Object.keys(leagueAssigns).forEach(div => {
+                const slots = Object.keys(leagueAssigns[div]);
+                console.log(`   ${div}: slots [${slots.join(', ')}]`);
+                slots.forEach(slot => {
+                    const data = leagueAssigns[div][slot];
+                    console.log(`      slot ${slot}: ${data.matchups?.length || 0} matchups, "${data.gameLabel}"`);
+                });
+            });
+        } else {
+            console.log('[UnifiedSchedule] ⚠️ No league assignments found');
+        }
         
         // Show first few unifiedTimes slots
         if (unifiedTimes.length > 0) {
@@ -963,8 +1045,10 @@
         const slots = findSlotsForRange(block.startMin, block.endMin, unifiedTimes);
         const slotIdx = slots.length > 0 ? slots[0] : -1;
         
+        console.log(`[renderLeagueCell] ${divName} block "${block.event}" @ ${block.startMin}-${block.endMin}, slots: [${slots.join(',')}]`);
+        
         // Try to get league info from all slots in the range
-        let leagueInfo = { matchups: [], gameLabel: '', sport: '' };
+        let leagueInfo = { matchups: [], gameLabel: '', sport: '', leagueName: '' };
         for (const idx of slots) {
             const info = getLeagueMatchups(divName, idx);
             if (info.matchups.length > 0 || info.gameLabel) {
@@ -993,6 +1077,15 @@
                     matchText = `${m.teamA} vs ${m.teamB}`;
                     if (m.field) matchText += ` @ ${m.field}`;
                     if (m.sport) matchText += ` (${m.sport})`;
+                } else if (m.team1 && m.team2) {
+                    // Handle alternate format from scheduler core
+                    matchText = `${m.team1} vs ${m.team2}`;
+                    if (m.field) matchText += ` @ ${m.field}`;
+                    if (m.sport) matchText += ` (${m.sport})`;
+                } else if (m.matchup) {
+                    // Handle matchup string format
+                    matchText = m.matchup;
+                    if (m.field) matchText += ` @ ${m.field}`;
                 } else {
                     matchText = JSON.stringify(m);
                 }
@@ -1002,7 +1095,7 @@
             
             html += '</div>';
         } else {
-            html += '<div style="color: #64748b; font-size: 0.875rem; font-style: italic; font-weight: normal;">No matchups scheduled</div>';
+            html += '<div style="color: #64748b; font-size: 0.875rem; font-style: italic; font-weight: normal;">No matchups scheduled yet - run schedule generation</div>';
         }
         
         td.innerHTML = html;
@@ -1551,7 +1644,7 @@
     
     // Debug namespace
     window.UnifiedScheduleSystem = {
-        version: '3.5',
+        version: '3.5.2',
         loadScheduleForDate,
         renderStaggeredView,
         findSlotIndexForTime,
@@ -1564,6 +1657,35 @@
         VersionManager,
         DEBUG_ON: () => { DEBUG = true; console.log('[UnifiedSchedule] Debug enabled'); },
         DEBUG_OFF: () => { DEBUG = false; console.log('[UnifiedSchedule] Debug disabled'); },
+        
+        // Dump league assignments
+        dumpLeagueAssignments: () => {
+            const leagues = window.leagueAssignments || {};
+            console.log('=== LEAGUE ASSIGNMENTS ===');
+            if (Object.keys(leagues).length === 0) {
+                console.log('  (empty)');
+                return;
+            }
+            Object.keys(leagues).forEach(div => {
+                console.log(`Division: ${div}`);
+                Object.keys(leagues[div]).forEach(slot => {
+                    const data = leagues[div][slot];
+                    console.log(`  Slot ${slot}:`);
+                    console.log(`    gameLabel: "${data.gameLabel}"`);
+                    console.log(`    sport: "${data.sport}"`);
+                    console.log(`    matchups: ${data.matchups?.length || 0}`);
+                    (data.matchups || []).forEach((m, i) => {
+                        if (m.teamA && m.teamB) {
+                            console.log(`      ${i + 1}. ${m.teamA} vs ${m.teamB}`);
+                        } else if (m.team1 && m.team2) {
+                            console.log(`      ${i + 1}. ${m.team1} vs ${m.team2}`);
+                        } else {
+                            console.log(`      ${i + 1}. ${JSON.stringify(m)}`);
+                        }
+                    });
+                });
+            });
+        },
         
         // Dump all data for a bunk
         dumpBunkData: (bunk) => {
@@ -1648,6 +1770,16 @@
             console.log(`Skeleton: ${getSkeleton().length} blocks`);
             console.log(`Divisions: ${Object.keys(window.divisions || {}).join(', ')}`);
             
+            // Show league assignments summary
+            const leagues = window.leagueAssignments || {};
+            if (Object.keys(leagues).length > 0) {
+                console.log('\nLeague Assignments:');
+                Object.keys(leagues).forEach(div => {
+                    const slots = Object.keys(leagues[div]);
+                    console.log(`  ${div}: ${slots.length} slots with data`);
+                });
+            }
+            
             // Show first few slots of unifiedTimes
             const ut = window.unifiedTimes || [];
             if (ut.length > 0) {
@@ -1690,10 +1822,11 @@
         })
     };
 
-    console.log('📅 Unified Schedule System v3.5 loaded successfully');
+    console.log('📅 Unified Schedule System v3.5.2 loaded successfully');
     console.log('   Replaces: scheduler_ui.js, render_sync_fix.js, view_schedule_loader_fix.js');
     console.log('   Replaces: schedule_version_merger.js, schedule_version_ui.js');
     console.log('   REQUIRES: unified_cloud_schedule_system.js for proper cloud sync');
     console.log('   ✅ v3.5: Split tile visual fix - renders split tiles as two rows');
+    console.log('   ✅ v3.5.2: LEAGUE MATCHUPS FIX - bunks ≠ teams, proper retrieval');
 
 })();
