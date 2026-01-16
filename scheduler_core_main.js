@@ -236,10 +236,41 @@
     function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill = false, activityProperties) {
         const Utils = window.SchedulerCoreUtils;
         
-        // ★★★ SAFETY: Handle missing bunk gracefully ★★★
+        // ★★★ SAFETY: Handle missing block gracefully ★★★
         if (!block) {
             console.error('[fillBlock] Block is null/undefined');
             return;
+        }
+        
+        // ★★★ SPECIAL CASE: League blocks with bunks array (teams ≠ bunks) ★★★
+        // When league cores call fillBlock with a league block, the block has a `bunks` array
+        // (all bunks in division) but NO specific `bunk` property because:
+        // - League TEAMS are separate entities defined in leagues.js
+        // - Teams consist of people from MULTIPLE bunks
+        // - We should NOT write to individual bunk schedules for league games
+        // - Instead, store the matchup data at the DIVISION level
+        if (block.type === 'league' && block.bunks && !block.bunk && !block.team) {
+            console.log(`[fillBlock] League block for ${block.divName} - storing matchups only (teams ≠ bunks)`);
+            
+            // Store league matchups at division level
+            if (pick && (pick._allMatchups || pick._h2h) && block.divName && block.slots?.length > 0) {
+                if (!window.leagueAssignments) window.leagueAssignments = {};
+                if (!window.leagueAssignments[block.divName]) {
+                    window.leagueAssignments[block.divName] = {};
+                }
+                
+                const slotIdx = block.slots[0];
+                if (!window.leagueAssignments[block.divName][slotIdx]) {
+                    window.leagueAssignments[block.divName][slotIdx] = {
+                        matchups: pick._allMatchups || [],
+                        gameLabel: pick._gameLabel || block.event || 'League Game',
+                        sport: pick.sport || '',
+                        leagueName: pick._leagueName || ''
+                    };
+                    console.log(`[fillBlock] ✅ Stored league matchups for ${block.divName} at slot ${slotIdx}: ${(pick._allMatchups || []).length} matchups`);
+                }
+            }
+            return; // Don't try to write to individual bunks for league blocks
         }
         
         // If bunk is missing, try to get it from alternative properties (leagues use different format)
@@ -1581,9 +1612,23 @@
 
         console.log("\n[STEP 5.5] Consolidating league assignments...");
         
-        // Get all active leagues and their team-based matchups
-        const activeLeagues = masterLeagues?.filter(l => !disabledLeagues?.includes(l.name)) || [];
-        const activeSpecialtyLeagues = masterSpecialtyLeagues?.filter(l => !disabledSpecialtyLeagues?.includes(l.id)) || [];
+        // Get all active leagues - handle both array and object formats
+        let activeLeagues = [];
+        if (Array.isArray(masterLeagues)) {
+            activeLeagues = masterLeagues.filter(l => !disabledLeagues?.includes(l.name));
+        } else if (masterLeagues && typeof masterLeagues === 'object') {
+            // masterLeagues might be an object keyed by league name
+            activeLeagues = Object.values(masterLeagues).filter(l => l && !disabledLeagues?.includes(l.name));
+        }
+        
+        let activeSpecialtyLeagues = [];
+        if (Array.isArray(masterSpecialtyLeagues)) {
+            activeSpecialtyLeagues = masterSpecialtyLeagues.filter(l => !disabledSpecialtyLeagues?.includes(l.id));
+        } else if (masterSpecialtyLeagues && typeof masterSpecialtyLeagues === 'object') {
+            activeSpecialtyLeagues = Object.values(masterSpecialtyLeagues).filter(l => l && !disabledSpecialtyLeagues?.includes(l.id));
+        }
+        
+        console.log(`[STEP 5.5] Active leagues: ${activeLeagues.length}, Specialty: ${activeSpecialtyLeagues.length}`);
         
         // Process regular league blocks - store team matchups at division level
         leagueBlocks.forEach(block => {
@@ -1607,40 +1652,74 @@
                 
                 // Store at first slot of the block
                 const slotIdx = slots[0];
-                if (!window.leagueAssignments[divName][slotIdx]) {
-                    // Check if league core already stored matchups
-                    const existingMatchups = window.leagueAssignments[divName][slotIdx]?.matchups || [];
+                
+                // Check if already populated (by fillBlock or earlier)
+                if (window.leagueAssignments[divName][slotIdx]?.matchups?.length > 0) {
+                    console.log(`   ✓ ${divName} slot ${slotIdx}: Already has ${window.leagueAssignments[divName][slotIdx].matchups.length} matchups`);
+                    return;
+                }
+                
+                // Try to get matchups from multiple sources:
+                let foundMatchups = [];
+                let foundGameLabel = league.name + ' Game';
+                let foundSport = league.sports?.[0] || '';
+                
+                // Source 1: Check bunk entries for _allMatchups
+                const bunks = divisions[divName]?.bunks || [];
+                for (const bunk of bunks) {
+                    const entry = window.scheduleAssignments[bunk]?.[slotIdx];
+                    if (entry && entry._allMatchups && entry._allMatchups.length > 0) {
+                        foundMatchups = entry._allMatchups;
+                        foundGameLabel = entry._gameLabel || foundGameLabel;
+                        foundSport = entry.sport || foundSport;
+                        break;
+                    }
+                }
+                
+                // Source 2: Check window.lastLeagueMatchups (if set by league core)
+                if (foundMatchups.length === 0 && window.lastLeagueMatchups?.[divName]) {
+                    const lastData = window.lastLeagueMatchups[divName];
+                    foundMatchups = lastData.matchups || [];
+                    foundGameLabel = lastData.gameLabel || foundGameLabel;
+                    foundSport = lastData.sport || foundSport;
+                }
+                
+                // Source 3: Generate round-robin matchups from team configuration
+                // This is a fallback when the league core didn't store matchups
+                if (foundMatchups.length === 0 && leagueTeams.length >= 2) {
+                    console.log(`   ⚠️ No stored matchups for ${league.name} in ${divName}, generating from team config`);
                     
-                    if (existingMatchups.length === 0) {
-                        // Try to get matchups from the league core's output
-                        // The league cores store _allMatchups in bunk entries, but we need team names
-                        let foundMatchups = [];
-                        let foundGameLabel = '';
-                        let foundSport = '';
-                        
-                        // Scan any bunk entry at this slot for the _allMatchups data
-                        const bunks = divisions[divName]?.bunks || [];
-                        for (const bunk of bunks) {
-                            const entry = window.scheduleAssignments[bunk]?.[slotIdx];
-                            if (entry && entry._allMatchups && entry._allMatchups.length > 0) {
-                                foundMatchups = entry._allMatchups;
-                                foundGameLabel = entry._gameLabel || '';
-                                foundSport = entry.sport || '';
-                                break;
-                            }
-                        }
-                        
-                        if (foundMatchups.length > 0) {
-                            window.leagueAssignments[divName][slotIdx] = {
-                                matchups: foundMatchups,
-                                gameLabel: foundGameLabel,
-                                sport: foundSport,
-                                leagueName: league.name,
-                                teams: leagueTeams // Store team names for reference
-                            };
-                            console.log(`   ✅ League "${league.name}" for ${divName} @ slot ${slotIdx}: ${foundMatchups.length} matchups`);
+                    // Generate round-robin matchups
+                    for (let i = 0; i < leagueTeams.length - 1; i += 2) {
+                        const teamA = leagueTeams[i];
+                        const teamB = leagueTeams[i + 1];
+                        if (teamA && teamB) {
+                            foundMatchups.push({
+                                teamA: teamA,
+                                teamB: teamB,
+                                display: `${teamA} vs ${teamB}`
+                            });
                         }
                     }
+                    // Handle odd number of teams
+                    if (leagueTeams.length % 2 === 1) {
+                        foundMatchups.push({
+                            teamA: leagueTeams[leagueTeams.length - 1],
+                            teamB: 'BYE',
+                            display: `${leagueTeams[leagueTeams.length - 1]} (BYE)`
+                        });
+                    }
+                }
+                
+                if (foundMatchups.length > 0) {
+                    window.leagueAssignments[divName][slotIdx] = {
+                        matchups: foundMatchups,
+                        gameLabel: foundGameLabel,
+                        sport: foundSport,
+                        leagueName: league.name,
+                        teams: leagueTeams
+                    };
+                    console.log(`   ✅ League "${league.name}" for ${divName} @ slot ${slotIdx}: ${foundMatchups.length} matchups`);
                 }
             });
         });
@@ -1664,33 +1743,52 @@
                 }
                 
                 const slotIdx = slots[0];
-                if (!window.leagueAssignments[divName][slotIdx]) {
-                    let foundMatchups = [];
-                    let foundGameLabel = '';
-                    let foundSport = league.sport || '';
-                    
-                    const bunks = divisions[divName]?.bunks || [];
-                    for (const bunk of bunks) {
-                        const entry = window.scheduleAssignments[bunk]?.[slotIdx];
-                        if (entry && entry._allMatchups && entry._allMatchups.length > 0) {
-                            foundMatchups = entry._allMatchups;
-                            foundGameLabel = entry._gameLabel || '';
-                            if (entry.sport) foundSport = entry.sport;
-                            break;
+                
+                // Check if already populated
+                if (window.leagueAssignments[divName][slotIdx]?.matchups?.length > 0) {
+                    return;
+                }
+                
+                let foundMatchups = [];
+                let foundGameLabel = (league.name || league.id) + ' Game';
+                let foundSport = league.sport || '';
+                
+                const bunks = divisions[divName]?.bunks || [];
+                for (const bunk of bunks) {
+                    const entry = window.scheduleAssignments[bunk]?.[slotIdx];
+                    if (entry && entry._allMatchups && entry._allMatchups.length > 0) {
+                        foundMatchups = entry._allMatchups;
+                        foundGameLabel = entry._gameLabel || foundGameLabel;
+                        if (entry.sport) foundSport = entry.sport;
+                        break;
+                    }
+                }
+                
+                // Fallback: Generate from team config
+                if (foundMatchups.length === 0 && leagueTeams.length >= 2) {
+                    for (let i = 0; i < leagueTeams.length - 1; i += 2) {
+                        const teamA = leagueTeams[i];
+                        const teamB = leagueTeams[i + 1];
+                        if (teamA && teamB) {
+                            foundMatchups.push({
+                                teamA: teamA,
+                                teamB: teamB,
+                                display: `${teamA} vs ${teamB}`
+                            });
                         }
                     }
-                    
-                    if (foundMatchups.length > 0) {
-                        window.leagueAssignments[divName][slotIdx] = {
-                            matchups: foundMatchups,
-                            gameLabel: foundGameLabel,
-                            sport: foundSport,
-                            leagueName: league.name || league.id,
-                            teams: leagueTeams,
-                            isSpecialtyLeague: true
-                        };
-                        console.log(`   ✅ Specialty League "${league.name || league.id}" for ${divName} @ slot ${slotIdx}: ${foundMatchups.length} matchups`);
-                    }
+                }
+                
+                if (foundMatchups.length > 0) {
+                    window.leagueAssignments[divName][slotIdx] = {
+                        matchups: foundMatchups,
+                        gameLabel: foundGameLabel,
+                        sport: foundSport,
+                        leagueName: league.name || league.id,
+                        teams: leagueTeams,
+                        isSpecialtyLeague: true
+                    };
+                    console.log(`   ✅ Specialty League "${league.name || league.id}" for ${divName} @ slot ${slotIdx}: ${foundMatchups.length} matchups`);
                 }
             });
         });
@@ -1816,6 +1914,6 @@
 
     window.registerSingleSlotUsage = registerSingleSlotUsage;
 
-    console.log('⚙️ Scheduler Core Main v17.1 loaded (LEAGUE MATCHUPS FIX - bunks ≠ teams)');
+    console.log('⚙️ Scheduler Core Main v17.2 loaded (LEAGUE MATCHUPS FIX - bunks ≠ teams, with fallback)');
 
 })();
