@@ -1,6 +1,6 @@
 // ============================================================================
-// campistry_auth.js — FINAL SaaS AUTH ENGINE (FIXED v2.0)
-// FIXED VERSION: Better error handling, timeout protection, no hanging
+// campistry_auth.js — FINAL SaaS AUTH ENGINE (FIXED v3.0)
+// v3.0: Fixed camp creation with error handling and proper ID setting
 // v2.0: Added pending invite check to prevent team members becoming owners
 // ============================================================================
 (function() {
@@ -13,14 +13,17 @@
     const beginBtn = document.getElementById("begin-btn");
     const loginBtn = document.getElementById("mode-login");
     const signupBtn = document.getElementById("mode-signup");
+    
     // Safety check
     if (!emailEl || !passEl || !beginBtn) {
         console.warn("Auth elements not found - skipping auth init");
         return;
     }
+    
     // Toggle modes
     if (loginBtn) loginBtn.onclick = () => setMode("login");
     if (signupBtn) signupBtn.onclick = () => setMode("signup");
+    
     function setMode(mode) {
         authMode = mode;
         if (loginBtn) loginBtn.classList.toggle("active", mode === "login");
@@ -29,6 +32,7 @@
         if (beginBtn) beginBtn.innerText = mode === "signup" ? "Create Campistry Account" : "Sign In";
     }
     setMode("login");
+    
     function showStatus(message, isError = false) {
         if (statusEl) {
             statusEl.innerText = message;
@@ -44,16 +48,23 @@
     }
 
     // =========================================================================
-    // ⭐ NEW: Check for pending invite before creating camp
+    // ⭐ Check for pending invite before creating camp
     // =========================================================================
     async function checkAndAcceptPendingInvite(email, userId) {
         try {
-            const { data: pendingInvite } = await supabase
+            console.log("🔐 Checking for pending invite for:", email);
+            
+            const { data: pendingInvite, error: queryError } = await supabase
                 .from('camp_users')
-                .select('id, role, camp_id')
+                .select('id, role, camp_id, subdivision_ids')
                 .eq('email', email.toLowerCase())
                 .is('user_id', null)  // Not yet accepted
                 .maybeSingle();
+            
+            if (queryError) {
+                console.error("🔐 Error querying pending invite:", queryError);
+                return false;
+            }
             
             if (pendingInvite) {
                 console.log("🔐 ✅ Found pending invite:", pendingInvite.role);
@@ -69,13 +80,20 @@
                 
                 if (acceptError) {
                     console.error("🔐 Failed to auto-accept invite:", acceptError);
-                    return false;
+                    // Still return true - they have an invite, just couldn't accept it now
+                    // The login flow will retry
                 }
                 
-                console.log("🔐 ✅ Invite auto-accepted! User is now:", pendingInvite.role);
+                // Cache the role from invite
+                localStorage.setItem('campistry_user_id', pendingInvite.camp_id);
+                localStorage.setItem('campistry_role', pendingInvite.role);
+                localStorage.setItem('campistry_is_team_member', 'true');
+                
+                console.log("🔐 ✅ Invite processed! User is now:", pendingInvite.role);
                 return true; // User has an invite - don't create camp
             }
             
+            console.log("🔐 No pending invite found");
             return false; // No invite found
         } catch (e) {
             console.error("🔐 Error checking pending invite:", e);
@@ -83,12 +101,59 @@
         }
     }
 
-    // Main submit
+    // =========================================================================
+    // ⭐ Create camp for new owner with proper error handling
+    // =========================================================================
+    async function createCampForOwner(userId, campName) {
+        console.log("🔐 Creating camp for new owner...");
+        
+        try {
+            const { data: campData, error: campError } = await supabase
+                .from("camps")
+                .insert([{ 
+                    id: userId,      // ⭐ Camp ID = User ID for owners
+                    owner: userId,
+                    name: campName,
+                    address: ''
+                }])
+                .select()
+                .single();
+            
+            if (campError) {
+                console.error("🔐 ❌ Failed to create camp:", campError);
+                
+                // Check if it's a duplicate key error (camp already exists)
+                if (campError.code === '23505') {
+                    console.log("🔐 Camp already exists, that's OK");
+                    return true;
+                }
+                
+                return false;
+            }
+            
+            console.log("🔐 ✅ Camp created successfully:", campData);
+            
+            // Cache owner role
+            localStorage.setItem('campistry_user_id', userId);
+            localStorage.setItem('campistry_role', 'owner');
+            localStorage.setItem('campistry_is_team_member', 'false');
+            
+            return true;
+        } catch (e) {
+            console.error("🔐 Exception creating camp:", e);
+            return false;
+        }
+    }
+
+    // =========================================================================
+    // Main submit handler
+    // =========================================================================
     if (beginBtn) {
         beginBtn.onclick = async () => {
             const email = emailEl.value.trim();
             const password = passEl.value.trim();
             const campName = campEl ? campEl.value.trim() : "";
+            
             if (!email || !password) {
                 showStatus("Please enter email and password.", true);
                 return;
@@ -97,54 +162,92 @@
                 showStatus("Please enter your camp name.", true);
                 return;
             }
+            
             beginBtn.disabled = true;
             beginBtn.innerText = "Please wait...";
             showStatus("");
+            
             try {
                 let user = null;
                 let error = null;
+                
                 if (authMode === "signup") {
+                    // =============================================================
+                    // SIGNUP FLOW
+                    // =============================================================
                     console.log("🔐 Attempting signup...");
                     const { data, error: signupError } = await supabase.auth.signUp({ email, password });
                     user = data?.user;
                     error = signupError;
+                    
                     if (user && !error) {
-                        // ⭐ FIX: Check for pending invite BEFORE creating camp
+                        // ⭐ Check for pending invite BEFORE creating camp
                         console.log("🔐 Signup successful, checking for pending invite...");
                         const hasInvite = await checkAndAcceptPendingInvite(email, user.id);
                         
                         if (!hasInvite) {
-                            // No pending invite - create new camp as usual
-                            console.log("🔐 No pending invite, creating new camp...");
-                            await supabase.from("camps").insert([{ name: campName, owner: user.id }]);
+                            // No pending invite - create new camp
+                            const campCreated = await createCampForOwner(user.id, campName);
+                            
+                            if (!campCreated) {
+                                showStatus("Account created but camp setup failed. Please try logging in or contact support.", true);
+                                // Don't return - let them continue to dashboard which might help
+                            }
                         } else {
                             console.log("🔐 User joined via invite - NOT creating new camp");
                         }
                     }
                 } else {
+                    // =============================================================
+                    // LOGIN FLOW
+                    // =============================================================
                     console.log("🔐 Attempting login for:", email);
                     const { data, error: loginError } = await supabase.auth.signInWithPassword({ email, password });
                     console.log("🔐 Login response:", { hasData: !!data, hasUser: !!data?.user, hasError: !!loginError });
                     user = data?.user;
                     error = loginError;
                     
-                    // ⭐ FIX: Also check for pending invite on login
+                    // ⭐ Check for pending invite on login too
                     if (user && !error) {
-                        await checkAndAcceptPendingInvite(email, user.id);
+                        const hasInvite = await checkAndAcceptPendingInvite(email, user.id);
+                        
+                        // If no invite, check if they own a camp
+                        if (!hasInvite) {
+                            const { data: existingCamp } = await supabase
+                                .from('camps')
+                                .select('id, name')
+                                .eq('owner', user.id)
+                                .maybeSingle();
+                            
+                            if (existingCamp) {
+                                console.log("🔐 User owns camp:", existingCamp.name);
+                                localStorage.setItem('campistry_user_id', existingCamp.id);
+                                localStorage.setItem('campistry_role', 'owner');
+                                localStorage.setItem('campistry_is_team_member', 'false');
+                            } else {
+                                console.warn("🔐 ⚠️ User has no camp and no invite!");
+                                // Clear any stale cache
+                                localStorage.removeItem('campistry_role');
+                                localStorage.removeItem('campistry_is_team_member');
+                            }
+                        }
                     }
                 }
+                
                 if (error) {
                     console.error("🔐 Auth error:", error.message);
                     showStatus(error.message || "Authentication failed.", true);
                     resetButton();
                     return;
                 }
+                
                 if (!user) {
                     console.error("🔐 No user in response");
                     showStatus("Authentication failed. Please try again.", true);
                     resetButton();
                     return;
                 }
+                
                 console.log("🔐 Auth successful for:", user.email);
                 showStatus("Success! Loading Campistry...");
                 
@@ -155,6 +258,7 @@
                 console.log("🔐 Switching screens...");
                 if (welcomeScreen) welcomeScreen.style.display = "none";
                 if (mainAppContainer) mainAppContainer.style.display = "block";
+                
                 // Boot the app
                 console.log("🔐 Calling bootCampistryApp...");
                 try {
@@ -166,6 +270,7 @@
                 
                 // Reset button in case user logs out and back in
                 resetButton();
+                
             } catch (e) {
                 console.error("🔐 Unexpected auth error:", e);
                 showStatus(e.message || "An unexpected error occurred.", true);
@@ -173,6 +278,10 @@
             }
         };
     }
+    
+    // =========================================================================
+    // Boot the main app
+    // =========================================================================
     async function bootCampistryApp() {
         console.log("🚀 Booting Campistry...");
         
@@ -227,5 +336,6 @@
         
         console.log("✅ Campistry loaded");
     }
+    
     window.bootCampistryApp = bootCampistryApp;
 })();
