@@ -18,7 +18,6 @@
 // =================================================================
 (function() {
 'use strict';
-
 let container = null;
 let masterSettings = {};
 let currentOverrides = {
@@ -30,11 +29,9 @@ let currentOverrides = {
   disabledSpecials: [],
   bunkActivityOverrides: []
 };
-
 let displacedTiles = [];
 let smartTileHistory = null;
 const SMART_TILE_HISTORY_KEY = "smartTileHistory_v1";
-
 function loadSmartTileHistory() {
   try {
     // ⭐ Try cloud-synced version first
@@ -53,7 +50,6 @@ function loadSmartTileHistory() {
     return { byBunk: {} }; 
   }
 }
-
 function saveSmartTileHistory(history) {
   try {
     // Save to localStorage for immediate access
@@ -67,13 +63,11 @@ function saveSmartTileHistory(history) {
     console.error("Failed to save smart tile history:", e);
   }
 }
-
 let skeletonContainer = null;
 let tripsFormContainer = null;
 let bunkOverridesContainer = null;
 let resourceOverridesContainer = null;
 let activeSubTab = 'skeleton';
-
 // =================================================================
 // SKELETON EDITOR - EXACT COPY FROM master_schedule_builder.js
 // =================================================================
@@ -81,7 +75,6 @@ let dailyOverrideSkeleton = [];
 const PIXELS_PER_MINUTE = 2;
 const INCREMENT_MINS = 30;
 const SNAP_MINS = 5;
-
 // TILES - EXACT copy from master_schedule_builder.js
 const TILES = [
   { type: 'activity', name: 'Activity', style: 'background:#e0f7fa;border:1px solid #007bff;', description: 'Flexible slot (Sport or Special).' },
@@ -98,7 +91,6 @@ const TILES = [
   { type: 'dismissal', name: 'Dismissal', style: 'background:#f44336;color:white;border:1px solid #b71c1c;', description: 'Pinned.' },
   { type: 'custom', name: 'Custom Pinned Event', style: 'background:#eee;border:1px solid #616161;', description: 'Pinned custom (e.g., Regroup).' }
 ];
-
 // =================================================================
 // RAINY DAY MODE - UI Components (Enhanced with Mid-Day & Auto-Skeleton)
 // =================================================================
@@ -106,17 +98,14 @@ function isRainyDayActive() {
   const dailyData = window.loadCurrentDailyData?.() || {};
   return dailyData.rainyDayMode === true;
 }
-
 function isMidDayModeActive() {
   const dailyData = window.loadCurrentDailyData?.() || {};
   return dailyData.rainyDayStartTime !== null && dailyData.rainyDayStartTime !== undefined;
 }
-
 function getMidDayStartTime() {
   const dailyData = window.loadCurrentDailyData?.() || {};
   return dailyData.rainyDayStartTime || null;
 }
-
 function getPreservedSlotCount() {
   const startTime = getMidDayStartTime();
   if (startTime === null) return 0;
@@ -131,32 +120,26 @@ function getPreservedSlotCount() {
   }
   return count;
 }
-
 function isAutoSkeletonSwitchEnabled() {
   const g = window.loadGlobalSettings?.() || {};
   return g.rainyDayAutoSkeletonSwitch === true;
 }
-
 function setAutoSkeletonSwitch(enabled) {
   window.saveGlobalSettings?.("rainyDayAutoSkeletonSwitch", enabled);
 }
-
 function getRainyDaySkeletonName() {
   const g = window.loadGlobalSettings?.() || {};
   return g.rainyDaySkeletonName || null;
 }
-
 function setRainyDaySkeletonName(name) {
   window.saveGlobalSettings?.("rainyDaySkeletonName", name);
   window.forceSyncToCloud?.();
 }
-
 function getAvailableSkeletons() {
   const g = window.loadGlobalSettings?.() || {};
   const savedSkeletons = g.app1?.savedSkeletons || {};
   return Object.keys(savedSkeletons).sort();
 }
-
 function getRainyDayStats() {
   const g = window.loadGlobalSettings?.() || {};
   const fields = g.app1?.fields || [];
@@ -169,7 +152,6 @@ function getRainyDayStats() {
     outdoorFieldNames: fields.filter(f => f.rainyDayAvailable !== true).map(f => f.name)
   };
 }
-
 function renderRainyDayToggle() {
   const isActive = isRainyDayActive();
   const isMidDay = isMidDayModeActive();
@@ -301,7 +283,6 @@ function renderRainyDayToggle() {
     </div>
   `;
 }
-
 function bindRainyDayToggle() {
   const toggle = document.getElementById('rainy-day-toggle-input');
   const autoSkeletonToggle = document.getElementById('rainy-auto-skeleton-toggle');
@@ -369,7 +350,6 @@ function bindRainyDayToggle() {
     });
   }
 }
-
 function rerenderRainyDayUI() {
   const rainyContainer = document.getElementById('rainy-day-container');
   if (rainyContainer) {
@@ -377,11 +357,9 @@ function rerenderRainyDayUI() {
     bindRainyDayToggle();
   }
 }
-
 function activateFullDayRainyMode() {
   // ✅ RBAC Check
   if (!window.AccessControl?.checkEditAccess?.('activate rainy day mode')) return;
-
   const dailyData = window.loadCurrentDailyData?.() || {};
   const overrides = dailyData.overrides || {};
   const stats = getRainyDayStats();
@@ -409,7 +387,6 @@ function activateFullDayRainyMode() {
   
   showRainyDayNotification(true, stats.outdoorFieldNames.length, false, skeletonSwitched);
 }
-
 function activateMidDayRainyMode() {
   const dailyData = window.loadCurrentDailyData?.() || {};
   const overrides = dailyData.overrides || {};
@@ -446,7 +423,6 @@ function activateMidDayRainyMode() {
   const preservedCount = getPreservedSlotCount();
   showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched, preservedCount);
 }
-
 function backupPreservedSchedule(startTimeMin) {
   const times = window.unifiedTimes || [];
   const schedules = window.scheduleAssignments || {};
@@ -479,7 +455,6 @@ function backupPreservedSchedule(startTimeMin) {
   console.log(`[RainyDay] Backed up ${preserved.length} preserved slots`);
   return backup;
 }
-
 function switchToRainySkeleton() {
   const skeletonName = getRainyDaySkeletonName();
   if (!skeletonName) {
@@ -515,7 +490,6 @@ function switchToRainySkeleton() {
   console.log(`[RainyDay] Loaded rainy day skeleton "${skeletonName}"`);
   return true;
 }
-
 function deactivateRainyDayMode() {
   const dailyData = window.loadCurrentDailyData?.() || {};
   const preRainyDisabled = dailyData.preRainyDayDisabledFields || [];
@@ -537,7 +511,6 @@ function deactivateRainyDayMode() {
   
   showRainyDayNotification(false);
 }
-
 function restorePreRainySkeleton() {
   const dailyData = window.loadCurrentDailyData?.() || {};
   const backup = dailyData.preRainyDayManualSkeleton;
@@ -557,7 +530,6 @@ function restorePreRainySkeleton() {
   }
   return false;
 }
-
 function showRainyDayNotification(activated, disabledCount = 0, isMidDay = false, skeletonSwitched = false, preservedCount = 0) {
   const notif = document.createElement('div');
   notif.id = 'rainy-notification';
@@ -619,7 +591,6 @@ function showRainyDayNotification(activated, disabledCount = 0, isMidDay = false
     setTimeout(() => notif.remove(), 300);
   }, 3500);
 }
-
 // =================================================================
 // FIELD RESERVATION HELPERS
 // =================================================================
@@ -648,7 +619,6 @@ function promptForReservedFields(eventName) {
   if (invalid.length > 0) alert("Warning: These fields were not found and will be ignored:\n" + invalid.join(', '));
   return validated;
 }
-
 // =================================================================
 // DISPLACED TILES
 // =================================================================
@@ -660,12 +630,10 @@ function addDisplacedTile(event, reason) {
   });
   renderDisplacedTilesPanel();
 }
-
 function clearDisplacedTiles() {
   displacedTiles = [];
   renderDisplacedTilesPanel();
 }
-
 function renderDisplacedTilesPanel() {
   const panel = document.getElementById('displaced-tiles-panel');
   if (!panel) return;
@@ -689,7 +657,6 @@ function renderDisplacedTilesPanel() {
   `;
   document.getElementById('clear-displaced-btn').onclick = clearDisplacedTiles;
 }
-
 // =================================================================
 // OVERLAP HANDLING
 // =================================================================
@@ -709,7 +676,6 @@ function eraseOverlappingTiles(newEvent, divName) {
     return !overlaps;
   });
 }
-
 function bumpOverlappingTiles(newEvent, divName) {
   const newStartMin = parseTimeToMinutes(newEvent.startTime);
   const newEndMin = parseTimeToMinutes(newEvent.endTime);
@@ -745,7 +711,6 @@ function bumpOverlappingTiles(newEvent, divName) {
     }
   });
 }
-
 // =================================================================
 // TILE INFO DESCRIPTIONS
 // =================================================================
@@ -764,12 +729,10 @@ const TILE_DESCRIPTIONS = {
   'dismissal': 'DISMISSAL: End of day marker. Schedule generation stops at this point.',
   'custom': 'CUSTOM PINNED: Create any fixed event (e.g., "Assembly", "Special Program"). You can optionally reserve specific fields.'
 };
-
 function showTileInfo(tile) {
   const desc = TILE_DESCRIPTIONS[tile.type] || tile.description || 'No description available.';
   alert(tile.name.toUpperCase() + "\n\n" + desc);
 }
-
 function mapEventNameForOptimizer(name) {
   if (!name) name = "Free";
   const lower = name.toLowerCase().trim();
@@ -781,7 +744,6 @@ function mapEventNameForOptimizer(name) {
   if (['swim','lunch','snacks','dismissal'].includes(lower)) return { type: 'pinned', event: name };
   return { type: 'pinned', event: name };
 }
-
 function renderPalette(paletteEl) {
   if (!paletteEl) {
     console.error("Palette element not found!");
@@ -817,7 +779,6 @@ function renderPalette(paletteEl) {
       e.dataTransfer.effectAllowed = 'copy';
     };
     el.ondragend = () => { el.dragging = false; };
-
     // MOBILE TOUCH SUPPORT
     let touchStartY = 0;
     el.addEventListener('touchstart', (e) => {
@@ -839,7 +800,6 @@ function renderPalette(paletteEl) {
     paletteEl.appendChild(el);
   });
 }
-
 // =================================================================
 // RENDER GRID
 // =================================================================
@@ -859,6 +819,16 @@ function renderGrid(gridEl) {
   });
   if (earliestMin === null) earliestMin = 540;
   if (latestMin === null) latestMin = 960;
+  
+  // Check for night activities and extend grid if needed
+  const nightEvents = dailyOverrideSkeleton.filter(ev => ev.isNightActivity === true);
+  if (nightEvents.length > 0) {
+    const latestNightEnd = Math.max(...nightEvents.map(ev => parseTimeToMinutes(ev.endTime) || 0));
+    if (latestNightEnd > latestMin) {
+      latestMin = latestNightEnd + 30; // Add buffer
+    }
+  }
+  
   const latestPinned = Math.max(-Infinity, ...dailyOverrideSkeleton.map(e => parseTimeToMinutes(e.endTime) || -Infinity));
   if (latestPinned > -Infinity) latestMin = Math.max(latestMin, latestPinned);
   if (latestMin <= earliestMin) latestMin = earliestMin + 60;
@@ -888,7 +858,7 @@ function renderGrid(gridEl) {
       html += `<div class="grid-disabled" style="top:0; height:${(s - earliestMin) * PIXELS_PER_MINUTE}px;"></div>`;
     }
     if (e !== null && e < latestMin) {
-      html += `<div class="grid-disabled" style="top:${(e - earliestMin) * PIXELS_PER_MINUTE}px; height:${(latestMin - e) * PIXELS_PER_MINUTE}px;"></div>`;
+      html += `<div class="grid-disabled grid-night-zone" style="top:${(e - earliestMin) * PIXELS_PER_MINUTE}px; height:${(latestMin - e) * PIXELS_PER_MINUTE}px;"></div>`;
     }
     dailyOverrideSkeleton.filter(ev => ev.division === divName).forEach(ev => {
       const start = parseTimeToMinutes(ev.startTime);
@@ -910,7 +880,6 @@ function renderGrid(gridEl) {
   addRemoveListeners(gridEl);
   applyConflictHighlighting(gridEl);
 }
-
 function renderEventTile(ev, top, height) {
   let tile = TILES.find(t => t.name === ev.event);
   if (!tile && ev.type) tile = TILES.find(t => t.type === ev.type);
@@ -920,8 +889,16 @@ function renderEventTile(ev, top, height) {
     else if (ev.event === 'Special Activity') tile = TILES.find(t => t.type === 'special');
     else tile = TILES.find(t => t.type === 'custom');
   }
-  const style = tile ? tile.style : 'background:#eee;border:1px solid #666;';
+  let style = tile ? tile.style : 'background:#eee;border:1px solid #666;';
   const adjustedHeight = Math.max(height - 2, 10);
+  
+  // 🌙 NIGHT ACTIVITY STYLING
+  const isNight = ev.isNightActivity === true;
+  if (isNight) {
+    style = 'background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); ' +
+            'border: 2px solid #e94560; color: #fff; ' +
+            'box-shadow: 0 0 12px rgba(233, 69, 96, 0.4), inset 0 0 20px rgba(255,255,255,0.05);';
+  }
   
   let fontSize, timeSize, layout;
   if (adjustedHeight < 30) {
@@ -932,23 +909,26 @@ function renderEventTile(ev, top, height) {
     fontSize = '0.85rem'; timeSize = '0.75rem'; layout = 'normal';
   }
   
+  // 🌙 Night activity badge
+  const nightBadge = isNight ? `<span style="background:#e94560;color:#fff;padding:2px 6px;border-radius:10px;font-size:0.65rem;margin-left:4px;vertical-align:middle;">🌙 NIGHT</span>` : '';
+  
   let content;
   const eventName = ev.event || 'Event';
   const timeStr = `${ev.startTime}-${ev.endTime}`;
   
   if (layout === 'compact') {
-    content = `<span style="font-weight:600;">${eventName}</span> <span style="opacity:0.8;font-size:${timeSize};">${timeStr}</span>`;
+    content = `<span style="font-weight:600;">${eventName}</span>${isNight ? ' 🌙' : ''} <span style="opacity:0.8;font-size:${timeSize};">${timeStr}</span>`;
   } else if (layout === 'small') {
-    content = `<div style="font-weight:600;line-height:1.2;">${eventName}</div><div style="font-size:${timeSize};opacity:0.85;line-height:1.2;">${timeStr}</div>`;
+    content = `<div style="font-weight:600;line-height:1.2;">${eventName}${nightBadge}</div><div style="font-size:${timeSize};opacity:0.85;line-height:1.2;">${timeStr}</div>`;
   } else {
-    content = `<div style="font-weight:600;line-height:1.3;">${eventName}</div><div style="font-size:${timeSize};opacity:0.85;">${timeStr}</div>`;
+    content = `<div style="font-weight:600;line-height:1.3;">${eventName}${nightBadge}</div><div style="font-size:${timeSize};opacity:0.85;">${timeStr}</div>`;
     
     // UPDATED: Location rendering with location badge
     const locationDisplay = ev.location || (ev.reservedFields && ev.reservedFields.length > 0 ? ev.reservedFields.join(', ') : null);
     
     if (locationDisplay && adjustedHeight > 60 && ev.type !== 'elective') {
       content += `
-        <div class="tile-location-badge" style="font-size:0.7rem;color:#c62828;margin-top:2px;display:flex;align-items:center;gap:3px;">
+        <div class="tile-location-badge" style="font-size:0.7rem;color:${isNight ? '#7dd3fc' : '#c62828'};margin-top:2px;display:flex;align-items:center;gap:3px;">
           <span>📍</span>
           <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${locationDisplay}</span>
         </div>
@@ -965,7 +945,7 @@ function renderEventTile(ev, top, height) {
       content += `<div style="font-size:0.7rem;opacity:0.8;margin-top:2px;">F: ${ev.smartData.fallbackActivity}</div>`;
     }
   }
-  return `<div class="grid-event" data-id="${ev.id}" draggable="true" title="${eventName} (${timeStr}) - Double-click to remove" 
+  return `<div class="grid-event ${isNight ? 'night-activity' : ''}" data-id="${ev.id}" draggable="true" title="${eventName} (${timeStr})${isNight ? ' - Night Activity' : ''} - Double-click to remove" 
           style="${style} position:absolute; top:${top}px; height:${adjustedHeight}px; width:96%; left:2%; 
           padding:4px 6px; font-size:${fontSize}; overflow:hidden; border-radius:3px; cursor:pointer; 
           box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; 
@@ -975,7 +955,6 @@ function renderEventTile(ev, top, height) {
           <div class="resize-handle resize-handle-bottom"></div>
           </div>`;
 }
-
 // =================================================================
 // CONFLICT HIGHLIGHTING
 // =================================================================
@@ -1016,12 +995,10 @@ function applyConflictHighlighting(gridEl) {
     }
   });
 }
-
 window.refreshSkeletonConflicts = function() {
   const grid = document.getElementById('daily-skeleton-grid');
   if (grid) renderGrid(grid);
 };
-
 // =================================================================
 // EVENT LISTENERS - RESIZE
 // =================================================================
@@ -1110,8 +1087,14 @@ function addResizeListeners(gridEl) {
         const divStartMin = parseTimeToMinutes(div.startTime) || 540;
         const divEndMin = parseTimeToMinutes(div.endTime) || 960;
         
-        event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
-        event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
+        // Allow night activities to extend past division end
+        if (event.isNightActivity) {
+          event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
+          event.endTime = minutesToTime(Math.round(newEndMin / SNAP_MINS) * SNAP_MINS);
+        } else {
+          event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
+          event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
+        }
         
         saveDailySkeleton();
         renderGrid(gridEl);
@@ -1121,7 +1104,6 @@ function addResizeListeners(gridEl) {
     });
   });
 }
-
 // =================================================================
 // EVENT LISTENERS - DRAG TO REPOSITION
 // =================================================================
@@ -1239,7 +1221,6 @@ function addDragToRepositionListeners(gridEl) {
     });
   });
 }
-
 // =================================================================
 // EVENT LISTENERS - DROP NEW TILES
 // =================================================================
@@ -1273,40 +1254,65 @@ function addDropListeners(gridEl) {
       const startStr = minutesToTime(startMin);
       const endStr = minutesToTime(endMin);
       let newEvent = null;
-
-      const validateTime = (timeStr, isStartTime) => {
+      let isNightActivity = false; // Track if this is a night activity
+      
+      const validateTime = (timeStr, isStartTime, allowNightActivity = false) => {
         const timeMin = parseTimeToMinutes(timeStr);
         if (timeMin === null) {
           alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
-          return null;
+          return { valid: false, minutes: null, isNight: false };
         }
+        
+        // Before division start - always invalid
         if (divStartMin !== null && timeMin < divStartMin) {
           alert("Error: " + timeStr + " is before this division's start time of " + div.startTime + ".");
-          return null;
+          return { valid: false, minutes: null, isNight: false };
         }
+        
+        // After division end - ask about night activity
         if (divEndMin !== null && (isStartTime ? timeMin >= divEndMin : timeMin > divEndMin)) {
-          alert("Error: " + timeStr + " is after this division's end time of " + div.endTime + ".");
-          return null;
+          if (allowNightActivity) {
+            // Already confirmed as night activity
+            return { valid: true, minutes: timeMin, isNight: true };
+          }
+          
+          const isNight = confirm(
+            `⏰ "${timeStr}" is after this division's end time (${div.endTime}).\n\n` +
+            `Is this a NIGHT ACTIVITY / LATE NIGHT event?\n\n` +
+            `Click OK for Night Activity, Cancel to re-enter time.`
+          );
+          
+          if (isNight) {
+            return { valid: true, minutes: timeMin, isNight: true };
+          } else {
+            return { valid: false, minutes: null, isNight: false };
+          }
         }
-        return timeMin;
+        
+        return { valid: true, minutes: timeMin, isNight: false };
       };
-
       // Handle SMART TILE
       if (tileData.type === 'smart') {
-        let startTime, endTime, startMinVal, endMinVal;
+        let startTime, endTime, startResult, endResult;
         while (true) {
           startTime = prompt("Smart Tile for " + divName + ".\n\nEnter Start Time:", startStr);
           if (!startTime) return;
-          startMinVal = validateTime(startTime, true);
-          if (startMinVal !== null) break;
+          startResult = validateTime(startTime, true);
+          if (startResult.valid) {
+            isNightActivity = startResult.isNight;
+            break;
+          }
         }
         while (true) {
           endTime = prompt("Enter End Time:");
           if (!endTime) return;
-          endMinVal = validateTime(endTime, false);
-          if (endMinVal !== null) {
-            if (endMinVal <= startMinVal) alert("End time must be after start time.");
-            else break;
+          endResult = validateTime(endTime, false, isNightActivity);
+          if (endResult.valid) {
+            if (endResult.minutes <= startResult.minutes) alert("End time must be after start time.");
+            else {
+              if (endResult.isNight) isNightActivity = true;
+              break;
+            }
           }
         }
         const rawMains = prompt("Enter the TWO MAIN activities (e.g., Swim / Special):");
@@ -1325,31 +1331,38 @@ function addDropListeners(gridEl) {
         newEvent = {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
           type: "smart", event: main1 + " / " + main2, division: divName,
-          startTime, endTime, smartData: { main1, main2, fallbackFor, fallbackActivity }
+          startTime, endTime, smartData: { main1, main2, fallbackFor, fallbackActivity },
+          isNightActivity: isNightActivity
         };
       }
       // Handle SPLIT TILE
       // BEHAVIOR: Group 1 gets main 1 first half, main 2 second half
       //           Group 2 gets main 2 first half, main 1 second half
       else if (tileData.type === 'split') {
-        let startTime, endTime, startMinVal, endMinVal;
+        let startTime, endTime, startResult, endResult;
         
         // Get start time with validation
         while (true) {
           startTime = prompt("Enter Start Time for the *full* block:", startStr);
           if (!startTime) return;
-          startMinVal = validateTime(startTime, true);
-          if (startMinVal !== null) break;
+          startResult = validateTime(startTime, true);
+          if (startResult.valid) {
+            isNightActivity = startResult.isNight;
+            break;
+          }
         }
         
         // Get end time with validation
         while (true) {
           endTime = prompt("Enter End Time for the *full* block:");
           if (!endTime) return;
-          endMinVal = validateTime(endTime, false);
-          if (endMinVal !== null) {
-            if (endMinVal <= startMinVal) alert("End time must be after start time.");
-            else break;
+          endResult = validateTime(endTime, false, isNightActivity);
+          if (endResult.valid) {
+            if (endResult.minutes <= startResult.minutes) alert("End time must be after start time.");
+            else {
+              if (endResult.isNight) isNightActivity = true;
+              break;
+            }
           }
         }
         
@@ -1392,7 +1405,8 @@ function addDropListeners(gridEl) {
               ...event2, 
               event: event2.event || eventName2  // Ensure .event exists
             }
-          ]
+          ],
+          isNightActivity: isNightActivity
         };
         
         // Log for debugging
@@ -1402,13 +1416,13 @@ function addDropListeners(gridEl) {
         console.log(`  First half:   Group 1 → ${eventName1}, Group 2 → ${eventName2}`);
         console.log(`  Second half: Group 1 → ${eventName2}, Group 2 → ${eventName1}`);
         console.log(`  subEvents:`, newEvent.subEvents);
+        if (isNightActivity) console.log(`  🌙 Night Activity: YES`);
       }
       // Handle PINNED tiles (lunch, snacks, custom, dismissal, swim)
       else if (['lunch', 'snacks', 'custom', 'dismissal', 'swim'].includes(tileData.type)) {
         let name = tileData.name;
         let reservedFields = [];
         let defaultLocation = null;
-
         // NEW: Check global default location logic first
         if (window.getPinnedTileDefaultLocation) {
             defaultLocation = window.getPinnedTileDefaultLocation(tileData.type);
@@ -1416,7 +1430,6 @@ function addDropListeners(gridEl) {
                 reservedFields = [defaultLocation];
             }
         }
-
         if (tileData.type === 'custom') {
           name = prompt("Event Name:", "Regroup"); if (!name) return;
           // Custom prompt overrides default if user enters something, but we respect the default if they leave it blank?
@@ -1434,8 +1447,28 @@ function addDropListeners(gridEl) {
           }
         }
         
-        let st = prompt(name + " Start:", startStr); if (!st) return;
-        let et = prompt(name + " End:", endStr); if (!et) return;
+        let st, et, stResult, etResult;
+        while (true) {
+          st = prompt(name + " Start:", startStr);
+          if (!st) return;
+          stResult = validateTime(st, true);
+          if (stResult.valid) {
+            isNightActivity = stResult.isNight;
+            break;
+          }
+        }
+        while (true) {
+          et = prompt(name + " End:", endStr);
+          if (!et) return;
+          etResult = validateTime(et, false, isNightActivity);
+          if (etResult.valid) {
+            if (etResult.minutes <= stResult.minutes) alert("End time must be after start time.");
+            else {
+              if (etResult.isNight) isNightActivity = true;
+              break;
+            }
+          }
+        }
         
         newEvent = { 
             id: Date.now().toString(), 
@@ -1445,19 +1478,60 @@ function addDropListeners(gridEl) {
             startTime: st, 
             endTime: et, 
             reservedFields,
-            location: defaultLocation || (reservedFields.length > 0 ? reservedFields[0] : null) // Add location property
+            location: defaultLocation || (reservedFields.length > 0 ? reservedFields[0] : null),
+            isNightActivity: isNightActivity
         };
       }
       // Handle LEAGUE tiles
       else if (tileData.type === 'league') {
-        let startTime = prompt("League Game start time:", startStr); if (!startTime) return;
-        let endTime = prompt("League Game end time:"); if (!endTime) return;
-        newEvent = { id: 'evt_' + Math.random().toString(36).slice(2, 9), type: 'league', event: 'League Game', division: divName, startTime, endTime };
+        let startTime, endTime, startResult, endResult;
+        while (true) {
+          startTime = prompt("League Game start time:", startStr);
+          if (!startTime) return;
+          startResult = validateTime(startTime, true);
+          if (startResult.valid) {
+            isNightActivity = startResult.isNight;
+            break;
+          }
+        }
+        while (true) {
+          endTime = prompt("League Game end time:");
+          if (!endTime) return;
+          endResult = validateTime(endTime, false, isNightActivity);
+          if (endResult.valid) {
+            if (endResult.minutes <= startResult.minutes) alert("End time must be after start time.");
+            else {
+              if (endResult.isNight) isNightActivity = true;
+              break;
+            }
+          }
+        }
+        newEvent = { id: 'evt_' + Math.random().toString(36).slice(2, 9), type: 'league', event: 'League Game', division: divName, startTime, endTime, isNightActivity: isNightActivity };
       }
       else if (tileData.type === 'specialty_league') {
-        let startTime = prompt("Specialty League start time:", startStr); if (!startTime) return;
-        let endTime = prompt("Specialty League end time:"); if (!endTime) return;
-        newEvent = { id: 'evt_' + Math.random().toString(36).slice(2, 9), type: 'specialty_league', event: 'Specialty League', division: divName, startTime, endTime };
+        let startTime, endTime, startResult, endResult;
+        while (true) {
+          startTime = prompt("Specialty League start time:", startStr);
+          if (!startTime) return;
+          startResult = validateTime(startTime, true);
+          if (startResult.valid) {
+            isNightActivity = startResult.isNight;
+            break;
+          }
+        }
+        while (true) {
+          endTime = prompt("Specialty League end time:");
+          if (!endTime) return;
+          endResult = validateTime(endTime, false, isNightActivity);
+          if (endResult.valid) {
+            if (endResult.minutes <= startResult.minutes) alert("End time must be after start time.");
+            else {
+              if (endResult.isNight) isNightActivity = true;
+              break;
+            }
+          }
+        }
+        newEvent = { id: 'evt_' + Math.random().toString(36).slice(2, 9), type: 'specialty_league', event: 'Specialty League', division: divName, startTime, endTime, isNightActivity: isNightActivity };
       }
       // Handle standard slots (Activity, Sports, Special)
       else {
@@ -1467,9 +1541,30 @@ function addDropListeners(gridEl) {
         else if (tileData.type === 'sports') { name = "Sports Slot"; finalType = 'slot'; }
         else if (tileData.type === 'special') { name = "Special Activity"; finalType = 'slot'; }
         if (!name) return;
-        let st = prompt(name + " Start:", startStr); if (!st) return;
-        let et = prompt(name + " End:", endStr); if (!et) return;
-        newEvent = { id: Date.now().toString(), type: finalType, event: name, division: divName, startTime: st, endTime: et };
+        
+        let st, et, stResult, etResult;
+        while (true) {
+          st = prompt(name + " Start:", startStr);
+          if (!st) return;
+          stResult = validateTime(st, true);
+          if (stResult.valid) {
+            isNightActivity = stResult.isNight;
+            break;
+          }
+        }
+        while (true) {
+          et = prompt(name + " End:", endStr);
+          if (!et) return;
+          etResult = validateTime(et, false, isNightActivity);
+          if (etResult.valid) {
+            if (etResult.minutes <= stResult.minutes) alert("End time must be after start time.");
+            else {
+              if (etResult.isNight) isNightActivity = true;
+              break;
+            }
+          }
+        }
+        newEvent = { id: Date.now().toString(), type: finalType, event: name, division: divName, startTime: st, endTime: et, isNightActivity: isNightActivity };
       }
       
       if (newEvent) {
@@ -1488,7 +1583,6 @@ function addDropListeners(gridEl) {
         renderGrid(gridEl);
       }
     };
-
     // MOBILE TOUCH DROP SUPPORT
     cell.addEventListener('touchend', (e) => {
       // In daily_adjustments.js, the palette ID is 'daily-skeleton-palette'
@@ -1536,7 +1630,6 @@ function addDropListeners(gridEl) {
     });
   });
 }
-
 // =================================================================
 // EVENT LISTENERS - REMOVE
 // =================================================================
@@ -1555,7 +1648,6 @@ function addRemoveListeners(gridEl) {
     };
   });
 }
-
 // =================================================================
 // LOAD/SAVE
 // =================================================================
@@ -1577,7 +1669,6 @@ function loadDailySkeleton() {
   dailyOverrideSkeleton = (tmpl && skeletons[tmpl]) ? JSON.parse(JSON.stringify(skeletons[tmpl])) : [];
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
 }
-
 function saveDailySkeleton() {
   if (!window.AccessControl?.canEdit?.()) {
       console.warn('[DailyAdj] Save blocked - insufficient permissions');
@@ -1586,7 +1677,6 @@ function saveDailySkeleton() {
   window.saveCurrentDailyData?.("manualSkeleton", dailyOverrideSkeleton);
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
 }
-
 function parseTimeToMinutes(str) {
   if (!str || typeof str !== "string") return null;
   let s = str.trim().toLowerCase();
@@ -1608,23 +1698,19 @@ function parseTimeToMinutes(str) {
   }
   return hh * 60 + mm;
 }
-
 function minutesToTime(min) {
   let h = Math.floor(min / 60), m = min % 60, ap = h >= 12 ? 'pm' : 'am';
   h = h % 12 || 12;
   return h + ':' + m.toString().padStart(2, '0') + ap;
 }
-
 function uid() {
   return 'id_' + Math.random().toString(36).slice(2, 9);
 }
-
 // =================================================================
 // RUN OPTIMIZER
 // =================================================================
 function runOptimizer() {
   if (!window.AccessControl?.checkEditAccess?.('run optimizer')) return;
-
   if (!window.runSkeletonOptimizer) { alert("Error: 'runSkeletonOptimizer' not found."); return; }
   if (dailyOverrideSkeleton.length === 0) { alert("Skeleton is empty."); return; }
   saveDailySkeleton();
@@ -1632,7 +1718,6 @@ function runOptimizer() {
   if (success) { alert("Schedule Generated!"); window.showTab?.('schedule'); }
   else { alert("Error. Check console."); }
 }
-
 // =================================================================
 // MAIN INIT
 // =================================================================
@@ -1655,7 +1740,6 @@ function init() {
   currentOverrides.disabledFields = dailyOverrides.disabledFields || [];
   currentOverrides.disabledSpecials = dailyOverrides.disabledSpecials || [];
   currentOverrides.bunkActivityOverrides = dailyData.bunkActivityOverrides || [];
-
   container.innerHTML = `
     <style>
       /* GRID STYLES - EXACT MATCH master_schedule_builder.js */
@@ -1680,6 +1764,26 @@ function init() {
       
       .conflict-warn, .conflict-critical { border:2px solid #dc2626 !important; background:#fef2f2 !important; box-shadow:0 0 0 2px rgba(220,38,38,0.2), 0 2px 8px rgba(220,38,38,0.15) !important; }
       .conflict-notice, .conflict-warning { border:2px solid #f59e0b !important; background:#fffbeb !important; box-shadow:0 0 0 2px rgba(245,158,11,0.2), 0 2px 8px rgba(245,158,11,0.15) !important; }
+      
+      /* 🌙 NIGHT ACTIVITY STYLING */
+      .night-activity {
+        animation: nightGlow 2s ease-in-out infinite alternate;
+      }
+      @keyframes nightGlow {
+        from {
+          box-shadow: 0 0 8px rgba(233, 69, 96, 0.4), inset 0 0 20px rgba(255,255,255,0.05);
+        }
+        to {
+          box-shadow: 0 0 16px rgba(233, 69, 96, 0.7), 0 0 30px rgba(233, 69, 96, 0.3), inset 0 0 20px rgba(255,255,255,0.08);
+        }
+      }
+      .grid-event.night-activity:hover {
+        box-shadow: 0 0 20px rgba(233, 69, 96, 0.8), 0 0 40px rgba(233, 69, 96, 0.4) !important;
+      }
+      .grid-night-zone {
+        background-color: rgba(26, 26, 46, 0.15) !important;
+        background-image: linear-gradient(-45deg, rgba(233, 69, 96, 0.05) 25%, transparent 25%, transparent 50%, rgba(233, 69, 96, 0.05) 50%, rgba(233, 69, 96, 0.05) 75%, transparent 75%, transparent) !important;
+      }
       
       /* RAINY DAY MODE STYLES */
       .rainy-day-card { border-radius: 16px; overflow: hidden; margin-bottom: 20px; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); position: relative; }
@@ -1777,17 +1881,14 @@ function init() {
       .sport-override-list { margin-top:15px; padding-top:15px; border-top:1px solid #eee; }
       .sport-override-list label { display:block; margin:5px 0 5px 10px; font-size:1.0em; }
       .sport-override-list label input { margin-right:8px; vertical-align:middle; }
-
       /* NEW CSS ADDITIONS */
       .rainy-settings-btn:hover {
         background: rgba(255,255,255,0.15) !important;
         border-color: rgba(255,255,255,0.3) !important;
       }
-
       .rainy-day-card.active .rainy-settings-btn {
         color: #e0f2fe;
       }
-
       .rainy-midday-btn:hover:not(:disabled) {
         transform: translateY(-1px);
         box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
@@ -1816,7 +1917,6 @@ function init() {
     <div id="da-pane-bunk-specific" class="da-tab-pane league-content-pane"></div>
     <div id="da-pane-resources" class="da-tab-pane league-content-pane"></div>
   `;
-
   document.getElementById("run-optimizer-btn").onclick = runOptimizer;
   bindRainyDayToggle();
   
@@ -1863,7 +1963,6 @@ function init() {
   renderBunkOverridesUI();
   renderResourceOverridesUI();
 }
-
 function initDailySkeletonUI() {
   if (!skeletonContainer) return;
   loadDailySkeleton();
@@ -1912,7 +2011,6 @@ function initDailySkeletonUI() {
   renderGrid(document.getElementById("daily-skeleton-grid"));
   renderDisplacedTilesPanel();
 }
-
 function renderTripsForm() {
   if (!tripsFormContainer) return;
   const divisions = window.availableDivisions || [];
@@ -1959,7 +2057,6 @@ function renderTripsForm() {
     document.getElementById("trip-end-input").value = "";
   };
 }
-
 // =================================================================
 // BUNK OVERRIDES UI - UPDATED FOR CUSTOM ACTIVITIES (v3.7)
 // =================================================================
@@ -2016,7 +2113,6 @@ function renderBunkOverridesUI() {
             <input id="bunk-override-end" placeholder="e.g., 10:00am" style="padding:6px;border-radius:4px;border:1px solid #ccc;">
         </div>
     </div>
-
     <p style="margin-top:15px;font-weight:600;margin-bottom:5px;">Select Bunks:</p>
   `;
   
@@ -2127,7 +2223,6 @@ function renderBunkOverridesUI() {
   }
   bunkOverridesContainer.appendChild(listContainer);
 }
-
 function createChip(name, color) {
   const el = document.createElement('span');
   el.className = 'bunk-button';
@@ -2141,12 +2236,10 @@ function createChip(name, color) {
   });
   return el;
 }
-
 // =================================================================
 // RESOURCE OVERRIDES UI - WITH RAINY DAY INTEGRATION & GREEN TOGGLES
 // =================================================================
 let selectedOverrideId = null;
-
 function renderResourceOverridesUI() {
   if (!resourceOverridesContainer) return;
   
@@ -2246,7 +2339,6 @@ function renderResourceOverridesUI() {
   
   renderOverrideDetailPane();
 }
-
 function createOverrideMasterListItem(type, name, isEnabled, onToggle, isOutdoor = false, isRainyDisabled = false, isRainyOnly = false) {
   const el = document.createElement('div');
   el.className = 'list-item' + (selectedOverrideId === type + '-' + name ? ' selected' : '');
@@ -2299,7 +2391,6 @@ function createOverrideMasterListItem(type, name, isEnabled, onToggle, isOutdoor
   cb.addEventListener('change', function() {
       sl.style.backgroundColor = this.checked ? '#4caf50' : '#ccc';
   });
-
   const knob = document.createElement("span");
   knob.style.cssText = `
       position:absolute; content:""; height:14px; width:14px; left:3px; bottom:3px; 
@@ -2311,7 +2402,6 @@ function createOverrideMasterListItem(type, name, isEnabled, onToggle, isOutdoor
   cb.addEventListener('change', function() {
        knob.style.transform = this.checked ? 'translateX(20px)' : 'translateX(0)';
   });
-
   tog.appendChild(cb);
   tog.appendChild(sl);
   sl.appendChild(knob); // Add knob inside slider for simpler DOM
@@ -2319,7 +2409,6 @@ function createOverrideMasterListItem(type, name, isEnabled, onToggle, isOutdoor
   
   return el;
 }
-
 function renderOverrideDetailPane() {
   const overrideDetailPaneEl = document.getElementById("override-detail-pane");
   if (!overrideDetailPaneEl) return;
@@ -2384,7 +2473,6 @@ function renderOverrideDetailPane() {
     overrideDetailPaneEl.innerHTML = '<p class="muted">Enable or disable this league for today using the toggle in the list on the left.</p>';
   }
 }
-
 function renderTimeRulesUI(itemName, globalRules, dailyRules, onSave) {
   const container = document.createElement("div");
   
@@ -2447,7 +2535,6 @@ function renderTimeRulesUI(itemName, globalRules, dailyRules, onSave) {
   
   return container;
 }
-
 function createCheckbox(name, isChecked) {
   const w = document.createElement('label');
   w.style.display = 'block';
@@ -2462,15 +2549,12 @@ function createCheckbox(name, isChecked) {
   w.appendChild(t);
   return { wrapper: w, checkbox: c };
 }
-
 // Expose globals
 window.initDailyAdjustments = init;
 window.parseTimeToMinutes = parseTimeToMinutes;
 window.minutesToTime = minutesToTime;
-
 // Expose rainy day functions for external use
 window.isRainyDayActive = isRainyDayActive;
 window.isMidDayModeActive = isMidDayModeActive;
 window.getMidDayStartTime = getMidDayStartTime;
-
 })();
