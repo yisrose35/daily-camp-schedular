@@ -236,18 +236,32 @@
     function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill = false, activityProperties) {
         const Utils = window.SchedulerCoreUtils;
         
-        // ★★★ SAFETY: Validate block has required properties ★★★
-        if (!block || !block.bunk) {
-            console.error('[fillBlock] Invalid block - missing bunk');
+        // ★★★ SAFETY: Handle missing bunk gracefully ★★★
+        if (!block) {
+            console.error('[fillBlock] Block is null/undefined');
             return;
         }
+        
+        // If bunk is missing, try to get it from alternative properties (leagues use different format)
+        let bunk = block.bunk;
+        if (!bunk && block.team) bunk = block.team;
+        if (!bunk && block.bunkName) bunk = block.bunkName;
+        
+        if (!bunk) {
+            console.warn('[fillBlock] No bunk found in block:', JSON.stringify(block).substring(0, 200));
+            return;
+        }
+        
+        // Normalize bunk to the block object
+        block.bunk = bunk;
+        
+        // ★★★ SAFETY: Compute slots if missing ★★★
         if (!block.slots || block.slots.length === 0) {
-            // Try to compute slots from time range
             if (block.startTime !== undefined && block.endTime !== undefined) {
                 block.slots = Utils.findSlotsForRange(block.startTime, block.endTime);
             }
             if (!block.slots || block.slots.length === 0) {
-                console.error(`[fillBlock] No slots for ${block.bunk}`);
+                console.warn(`[fillBlock] No slots for ${bunk}, times: ${block.startTime}-${block.endTime}`);
                 return;
             }
         }
@@ -260,13 +274,12 @@
             effectiveStart,
             effectiveEnd
         } = Utils.getEffectiveTimeRange(block, trans);
-        const bunk = block.bunk;
+        // bunk already extracted above
         const zone = trans.zone;
 
         // ★★★ CRITICAL: Initialize bunk array if not exists (MUST be done FIRST) ★★★
         if (!window.scheduleAssignments[bunk]) {
             window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
-            console.log(`[fillBlock] Initialized missing bunk array for: ${bunk}`);
         }
 
         let writePre = trans.preMin > 0;
