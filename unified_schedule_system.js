@@ -1,5 +1,5 @@
 // =============================================================================
-// unified_schedule_system.js v3.5.2 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
+// unified_schedule_system.js v3.5.3 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
 // =============================================================================
 //
 // This file REPLACES ALL of the following:
@@ -19,7 +19,7 @@
 // ✅ Toolbar hidden by default
 // ✅ RBAC and multi-scheduler support
 // ✅ v3.5: SPLIT TILE VISUAL FIX - renders split tiles as two rows
-// ✅ v3.5.2: LEAGUE MATCHUPS FIX - bunks ≠ league teams, proper retrieval
+// ✅ v3.5.3: LEAGUE MATCHUPS FIX - bunks ≠ league teams, handles array/object formats
 //
 // REQUIRES: unified_cloud_schedule_system.js for proper cloud sync
 //
@@ -28,7 +28,7 @@
 (function() {
     'use strict';
 
-    console.log('📅 Unified Schedule System v3.5.2 loading...');
+    console.log('📅 Unified Schedule System v3.5.3 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -688,12 +688,20 @@
         // If leagueAssignments wasn't populated, try to get league info
         // from the master leagues configuration
         // =====================================================================
-        const masterLeagues = window.masterLeagues || 
+        const rawMasterLeagues = window.masterLeagues || 
                              window.loadGlobalSettings?.()?.app1?.leagues || 
                              [];
         
+        // Handle both array and object formats
+        let masterLeaguesList = [];
+        if (Array.isArray(rawMasterLeagues)) {
+            masterLeaguesList = rawMasterLeagues;
+        } else if (rawMasterLeagues && typeof rawMasterLeagues === 'object') {
+            masterLeaguesList = Object.values(rawMasterLeagues);
+        }
+        
         // Find leagues that include this division
-        const applicableLeagues = masterLeagues.filter(league => {
+        const applicableLeagues = masterLeaguesList.filter(league => {
             if (!league || !league.name || !league.divisions) return false;
             return league.divisions.includes(divName);
         });
@@ -1644,7 +1652,7 @@
     
     // Debug namespace
     window.UnifiedScheduleSystem = {
-        version: '3.5.2',
+        version: '3.5.3',
         loadScheduleForDate,
         renderStaggeredView,
         findSlotIndexForTime,
@@ -1822,11 +1830,11 @@
         })
     };
 
-    console.log('📅 Unified Schedule System v3.5.2 loaded successfully');
+    console.log('📅 Unified Schedule System v3.5.3 loaded successfully');
     console.log('   Replaces: scheduler_ui.js, render_sync_fix.js, view_schedule_loader_fix.js');
     console.log('   Replaces: schedule_version_merger.js, schedule_version_ui.js');
     console.log('   REQUIRES: unified_cloud_schedule_system.js for proper cloud sync');
     console.log('   ✅ v3.5: Split tile visual fix - renders split tiles as two rows');
-    console.log('   ✅ v3.5.2: LEAGUE MATCHUPS FIX - bunks ≠ teams, proper retrieval');
+    console.log('   ✅ v3.5.3: LEAGUE MATCHUPS FIX - bunks ≠ teams, handles array/object formats');
 
 })();
