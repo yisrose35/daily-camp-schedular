@@ -1405,59 +1405,64 @@
                 }
             }
 
-            // =========================================================================
+           // =========================================================================
             // SPLIT TILE LOGIC - Groups swap activities at midpoint
             // =========================================================================
-            // BEHAVIOR:
-            // - First half: Group 1 gets main 1, Group 2 gets main 2
-            // - Second half: Group 1 gets main 2, Group 2 gets main 1 (SWITCH)
+            // BEHAVIOR (Example: 8 bunks, time 1:00-3:00, main1/main2):
+            //   First half of time (1:00-2:00):
+            //     - Lower bunks (1-4) → main 1
+            //     - Higher bunks (5-8) → main 2
+            //   Second half of time (2:00-3:00) - SWITCH:
+            //     - Lower bunks (1-4) → main 2
+            //     - Higher bunks (5-8) → main 1
             // =========================================================================
             if (item.type === 'split') {
                 console.log(`[SPLIT] ═══════════════════════════════════════════════════════`);
                 console.log(`[SPLIT] Processing split tile for ${divName}: ${item.event}`);
                 console.log(`[SPLIT] ═══════════════════════════════════════════════════════`);
                 
+                // ★★★ CRITICAL: Sort bunks numerically BEFORE splitting ★★★
+                const sortedBunks = [...bunkList].sort((a, b) => {
+                    const numA = parseInt(a.match(/\d+/)?.[0] || 0);
+                    const numB = parseInt(b.match(/\d+/)?.[0] || 0);
+                    return numA - numB || a.localeCompare(b);
+                });
+                
                 // Calculate midpoint of the time block
                 const midMin = Math.floor(sMin + (eMin - sMin) / 2);
                 
-                // Divide bunks into two groups (first half and second half of the division)
-                const half = Math.ceil(bunkList.length / 2);
-                const groupA = bunkList.slice(0, half);   // First half of bunks (Group 1)
-                const groupB = bunkList.slice(half);        // Second half of bunks (Group 2)
+                // Divide bunks into two groups (lower half and upper half)
+                const half = Math.ceil(sortedBunks.length / 2);
+                const groupA = sortedBunks.slice(0, half);   // Lower numbered bunks
+                const groupB = sortedBunks.slice(half);      // Higher numbered bunks
 
-                // Get activity names from subEvents - handle multiple data formats
+                // Get activity names from subEvents
                 let act1Name, act2Name;
                 
                 if (item.subEvents && item.subEvents.length >= 2) {
-                    // Handle multiple formats:
-                    // Format 1: [{event: 'Swim'}, {event: 'Art'}]
-                    // Format 2: [{type: 'pinned', event: 'Swim'}, ...]
-                    // Format 3: ['Swim', 'Art'] (string array)
                     const sub0 = item.subEvents[0];
                     const sub1 = item.subEvents[1];
-                    
                     act1Name = typeof sub0 === 'string' ? sub0 : (sub0?.event || "Activity 1");
                     act2Name = typeof sub1 === 'string' ? sub1 : (sub1?.event || "Activity 2");
                 } else {
-                    // Fallback: parse from event name "Swim / Art"
                     const parts = (item.event || "").split('/').map(s => s.trim());
                     act1Name = parts[0] || "Activity 1";
                     act2Name = parts[1] || "Activity 2";
                 }
 
-                console.log(`[SPLIT] Main 1 (act1Name): "${act1Name}"`);
-                console.log(`[SPLIT] Main 2 (act2Name): "${act2Name}"`);
-                console.log(`[SPLIT] Time block: ${sMin} to ${eMin} (midpoint: ${midMin})`);
-                console.log(`[SPLIT] Group 1 (${groupA.length} bunks): ${groupA.join(', ')}`);
-                console.log(`[SPLIT] Group 2 (${groupB.length} bunks): ${groupB.join(', ')}`);
-                console.log(`[SPLIT] ---------------------------------------------------`);
-                console.log(`[SPLIT] FIRST HALF (${sMin}-${midMin}):`);
-                console.log(`[SPLIT]    Group 1 → ${act1Name} (main 1)`);
-                console.log(`[SPLIT]    Group 2 → ${act2Name} (main 2)`);
-                console.log(`[SPLIT] SECOND HALF (${midMin}-${eMin}):`);
-                console.log(`[SPLIT]    Group 1 → ${act2Name} (main 2) ← SWITCHED`);
-                console.log(`[SPLIT]    Group 2 → ${act1Name} (main 1) ← SWITCHED`);
-                console.log(`[SPLIT] ---------------------------------------------------`);
+                // ★★★ Resolve swim/pool aliases ★★★
+                if (isSwimOrPool(act1Name)) {
+                    act1Name = resolveSwimPoolName(act1Name, activityProperties);
+                }
+                if (isSwimOrPool(act2Name)) {
+                    act2Name = resolveSwimPoolName(act2Name, activityProperties);
+                }
+
+                console.log(`[SPLIT] Main 1: "${act1Name}"`);
+                console.log(`[SPLIT] Main 2: "${act2Name}"`);
+                console.log(`[SPLIT] Time: ${sMin} to ${eMin} (midpoint: ${midMin})`);
+                console.log(`[SPLIT] Group 1 (lower): ${groupA.join(', ')}`);
+                console.log(`[SPLIT] Group 2 (higher): ${groupB.join(', ')}`);
 
                 // Helper function to route activities to bunks
                 const routeSplitActivity = (bunks, actName, start, end, groupLabel, actLabel) => {
@@ -1470,10 +1475,7 @@
                     const normName = normalizeGA(actName) || actName;
                     const isGen = isGeneratedType(normName);
 
-                    console.log(`[SPLIT] Routing ${groupLabel} to "${actName}" (${actLabel}) for time ${start}-${end}`);
-
                     bunks.forEach(b => {
-                        // Skip bunks with manual overrides
                         const existing = window.scheduleAssignments[b]?.[slots[0]];
                         if (existing && existing._bunkOverride) {
                             console.log(`[SPLIT]    ⏭️ ${b} - skipping (has bunk override)`);
@@ -1481,7 +1483,6 @@
                         }
 
                         if (isGen) {
-                            // Queue for scheduler to fill (for generic types like "Sports", "Activity")
                             schedulableSlotBlocks.push({
                                 divName,
                                 bunk: b,
@@ -1494,7 +1495,6 @@
                             });
                             console.log(`[SPLIT]    📋 ${b} → QUEUED for "${normName}"`);
                         } else {
-                            // Direct fill for specific activities (Swim, Art, etc.)
                             fillBlock({
                                 divName,
                                 bunk: b,
@@ -1513,158 +1513,19 @@
                     });
                 };
 
-                // =====================================================================
-                // THE KEY FIX: Correct assignment order for split tiles
-                // =====================================================================
-                // FIRST HALF (sMin to midMin):
-                //    - Group 1 (first half of bunks) → main 1 (act1Name)
-                //    - Group 2 (second half of bunks) → main 2 (act2Name)
-                // SECOND HALF (midMin to eMin):
-                //    - Group 1 (first half of bunks) → main 2 (act2Name) - SWITCHED!
-                //    - Group 2 (second half of bunks) → main 1 (act1Name) - SWITCHED!
-                // =====================================================================
-                
-                console.log(`[SPLIT] \n>>> EXECUTING FIRST HALF (${sMin}-${midMin}) <<<`);
-                // First half of time block
+                // FIRST HALF: groupA → main1, groupB → main2
+                console.log(`[SPLIT] >>> FIRST HALF (${sMin}-${midMin}) <<<`);
                 routeSplitActivity(groupA, act1Name, sMin, midMin, "Group 1", "main 1");
                 routeSplitActivity(groupB, act2Name, sMin, midMin, "Group 2", "main 2");
                 
-                console.log(`[SPLIT] \n>>> EXECUTING SECOND HALF (${midMin}-${eMin}) - SWITCH <<<`);
-                // Second half of time block - GROUPS SWITCH
-                routeSplitActivity(groupA, act2Name, midMin, eMin, "Group 1", "main 2 (switched)");
-                routeSplitActivity(groupB, act1Name, midMin, eMin, "Group 2", "main 1 (switched)");
+                // SECOND HALF (SWITCH): groupA → main2, groupB → main1
+                console.log(`[SPLIT] >>> SECOND HALF (${midMin}-${eMin}) - SWITCH <<<`);
+                routeSplitActivity(groupA, act2Name, midMin, eMin, "Group 1", "main 2");
+                routeSplitActivity(groupB, act1Name, midMin, eMin, "Group 2", "main 1");
 
-                console.log(`[SPLIT] ═══════════════════════════════════════════════════════`);
-                console.log(`[SPLIT] ✅ Completed split tile for ${divName}`);
-                console.log(`[SPLIT] ═══════════════════════════════════════════════════════\n`);
-                return;  // Don't continue with regular slot processing
+                console.log(`[SPLIT] ✅ Completed split tile for ${divName}\n`);
+                return;
             }
-
-            const slots = Utils.findSlotsForRange(sMin, eMin);
-            if (slots.length === 0) return;
-
-            const normGA = normalizeGA(item.event);
-            const normLg = normalizeLeague(item.event);
-            const normSL = normalizeSpecialtyLeague(item.event);
-            let finalName = normGA || normLg || normSL || item.event;
-
-            // ★★★ SWIM/POOL ALIAS RESOLUTION ★★★
-            // If the event is Swim, resolve to the actual pool/swim field name
-            if (isSwimOrPool(finalName)) {
-                const resolvedName = resolveSwimPoolName(finalName, activityProperties);
-                if (resolvedName !== finalName) {
-                    console.log(`[SKELETON] Resolved "${finalName}" → "${resolvedName}"`);
-                    finalName = resolvedName;
-                }
-            }
-
-            const isLeague = /league/i.test(finalName) || /league/i.test(item.event);
-            const isSpecialtyLeague = item.type === 'specialty_league' || /specialty\s*league/i.test(item.event);
-            const isRegularLeague = isLeague && !isSpecialtyLeague;
-
-            // Categorize blocks
-            if (isSpecialtyLeague) {
-                bunkList.forEach(b => {
-                    // ★★★ SKIP BUNKS WITH OVERRIDES ★★★
-                    const existing = window.scheduleAssignments[b]?.[slots[0]];
-                    if (existing && existing._bunkOverride) {
-                        console.log(`[SPEC_LEAGUE] Skipping ${b} - has bunk override`);
-                        return;
-                    }
-
-                    specialtyLeagueBlocks.push({
-                        divName,
-                        bunk: b,
-                        event: finalName,
-                        type: 'specialty_league',
-                        startTime: sMin,
-                        endTime: eMin,
-                        slots
-                    });
-                });
-            } else if (isRegularLeague) {
-                bunkList.forEach(b => {
-                    // ★★★ SKIP BUNKS WITH OVERRIDES ★★★
-                    const existing = window.scheduleAssignments[b]?.[slots[0]];
-                    if (existing && existing._bunkOverride) {
-                        console.log(`[LEAGUE] Skipping ${b} - has bunk override`);
-                        return;
-                    }
-
-                    leagueBlocks.push({
-                        divName,
-                        bunk: b,
-                        event: finalName,
-                        type: 'league',
-                        startTime: sMin,
-                        endTime: eMin,
-                        slots
-                    });
-                });
-            } else {
-                const isGenerated = /general|sport|special/i.test(finalName);
-                const trans = Utils.getTransitionRules(finalName, activityProperties);
-                const hasBuffer = (trans.preMin + trans.postMin) > 0;
-                const isSchedulable = GENERATOR_TYPES.includes(item.type);
-
-                if ((item.type === "pinned" || !isGenerated) && !isSchedulable && item.type !== "smart" && !hasBuffer) {
-                    if (disabledFields.includes(finalName) || disabledSpecials.includes(finalName)) return;
-
-                    // ★★★ REGISTER LOCATION USAGE FOR PINNED EVENTS ★★★
-                    const locName = getLocationForPinnedEvent(item);
-                    if (locName) {
-                        registerActivityAtLocation(item.event, locName, slots, divName);
-                    }
-
-                    bunkList.forEach(b => {
-                        // ★★★ SKIP BUNKS WITH OVERRIDES ★★★
-                        const existing = window.scheduleAssignments[b]?.[slots[0]];
-                        if (existing && existing._bunkOverride) {
-                            console.log(`[PINNED] Skipping ${b} - has bunk override`);
-                            return;
-                        }
-
-                        fillBlock({
-                            divName,
-                            bunk: b,
-                            startTime: sMin,
-                            endTime: eMin,
-                            slots
-                        }, {
-                            field: finalName,
-                            sport: null,
-                            _fixed: true,
-                            _activity: finalName
-                        }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                    });
-                    return;
-                }
-
-                if ((isSchedulable && isGenerated) || hasBuffer) {
-                    bunkList.forEach(b => {
-                        // ★★★ SKIP BUNKS WITH OVERRIDES ★★★
-                        const existing = window.scheduleAssignments[b]?.[slots[0]];
-                        if (existing && existing._bunkOverride) {
-                            console.log(`[SLOT] Skipping ${b} - has bunk override`);
-                            return;
-                        }
-
-                        schedulableSlotBlocks.push({
-                            divName,
-                            bunk: b,
-                            event: finalName,
-                            type: item.type,
-                            startTime: sMin,
-                            endTime: eMin,
-                            slots
-                        });
-                    });
-                }
-            }
-        });
-
-        console.log(`[SKELETON] Categorized: ${specialtyLeagueBlocks.length} specialty league, ${leagueBlocks.length} regular league, ${schedulableSlotBlocks.length} general blocks`);
-
         // =========================================================================
         // ★★★ STEP 4: PROCESS SPECIALTY LEAGUES FIRST ★★★
         // =========================================================================
