@@ -17,7 +17,7 @@
 (function() {
     'use strict';
 
-    console.log('📝 Post-Generation Edit System v2.0 (RBAC + BYPASS) loading...');
+    console.log('📝 Post-Generation Edit System v2.1 (RBAC + BYPASS + DIRECT SAVE) loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -836,6 +836,11 @@
                     reassignBunkActivity(conflictBunk, uniqueSlots, location);
                 }
                 
+                // CRITICAL: For bypass mode, we need to save ALL bunks, not just ours
+                // The regular saveSchedule filters to only editable bunks
+                console.log('[PostEdit] 🔓 Bypass mode - saving ALL modified bunks to cloud');
+                bypassSaveAllBunks(nonEditableConflicts.map(c => c.bunk));
+                
                 if (window.showToast) {
                     window.showToast(`🔓 Bypassed permissions - reassigned ${nonEditableBunks.length} bunk(s)`, 'info');
                 }
@@ -853,6 +858,88 @@
                 
                 sendSchedulerNotification(nonEditableBunks, location, activity, 'conflict');
             }
+        }
+    }
+    
+    // Bypass save - saves specific bunks directly to cloud without RBAC filtering
+    async function bypassSaveAllBunks(bypassBunks) {
+        const currentDate = window.currentDate || new Date().toISOString().split('T')[0];
+        const assignments = window.scheduleAssignments || {};
+        
+        // Build a payload with just the bypassed bunks
+        const bypassPayload = {};
+        const uniqueBunks = [...new Set(bypassBunks)];
+        
+        uniqueBunks.forEach(bunk => {
+            if (assignments[bunk]) {
+                bypassPayload[bunk] = assignments[bunk];
+            }
+        });
+        
+        console.log('[PostEdit] Bypass save payload:', { 
+            bunks: Object.keys(bypassPayload).length,
+            date: currentDate 
+        });
+        
+        // Try direct Supabase save if available
+        if (window.SupabaseClient?.supabase) {
+            try {
+                const campId = window.SupabaseClient.campId;
+                const currentUser = window.SupabaseClient.currentUser?.email || 'bypass_override';
+                
+                // Get existing record to update
+                const { data: existing, error: fetchError } = await window.SupabaseClient.supabase
+                    .from('daily_schedules')
+                    .select('*')
+                    .eq('camp_id', campId)
+                    .eq('schedule_date', currentDate)
+                    .not('created_by', 'eq', currentUser);
+                
+                if (fetchError) {
+                    console.error('[PostEdit] Error fetching existing schedules:', fetchError);
+                }
+                
+                // For each other scheduler's record, merge our bypass changes
+                if (existing && existing.length > 0) {
+                    for (const record of existing) {
+                        const existingAssignments = record.schedule_data?.scheduleAssignments || {};
+                        
+                        // Merge bypass bunks into their data
+                        const mergedAssignments = {
+                            ...existingAssignments,
+                            ...bypassPayload
+                        };
+                        
+                        const updatedData = {
+                            ...record.schedule_data,
+                            scheduleAssignments: mergedAssignments,
+                            _bypassedAt: Date.now(),
+                            _bypassedBy: window.SupabaseClient.currentUser?.email
+                        };
+                        
+                        const { error: updateError } = await window.SupabaseClient.supabase
+                            .from('daily_schedules')
+                            .update({ 
+                                schedule_data: updatedData,
+                                updated_at: new Date().toISOString()
+                            })
+                            .eq('id', record.id);
+                        
+                        if (updateError) {
+                            console.error('[PostEdit] Error updating other scheduler record:', updateError);
+                        } else {
+                            console.log(`[PostEdit] ✅ Bypass saved to record: ${record.created_by}`);
+                        }
+                    }
+                }
+                
+                console.log('[PostEdit] ✅ Bypass save complete');
+                
+            } catch (e) {
+                console.error('[PostEdit] Bypass save error:', e);
+            }
+        } else {
+            console.warn('[PostEdit] SupabaseClient not available for bypass save');
         }
     }
     
@@ -1027,96 +1114,149 @@
     // =========================================================================
 
     function setupClickInterceptor() {
-        // Strategy: Override window.editCell so any call to it goes through us
-        // But we need to do this AFTER unified_schedule_system loads
-        
-        // Retry override periodically to catch late-loading scripts
-        function overrideEditCell() {
-            if (window.editCell && window.editCell !== enhancedEditCell) {
-                console.log('[PostEdit] Re-overriding window.editCell');
+        // Strategy 1: Override window.editCell (works if unified_schedule_system uses window.editCell)
+        const overrideWindowEditCell = () => {
+            if (window.editCell && window.editCell !== enhancedEditCell && !window.editCell._isEnhanced) {
+                console.log('[PostEdit] Overriding window.editCell');
+                window._originalEditCell = window.editCell;
                 window.editCell = enhancedEditCell;
+                window.editCell._isEnhanced = true;
             }
-        }
+        };
         
-        // Override immediately and retry
-        overrideEditCell();
-        setTimeout(overrideEditCell, 500);
-        setTimeout(overrideEditCell, 1500);
-        setTimeout(overrideEditCell, 3000);
+        overrideWindowEditCell();
+        setTimeout(overrideWindowEditCell, 500);
+        setTimeout(overrideWindowEditCell, 1500);
+        setTimeout(overrideWindowEditCell, 3000);
         
-        // Also patch cells after render
-        function patchScheduleCells() {
-            // Find schedule table
-            const table = document.querySelector('#schedule-table, .schedule-table, [data-schedule-table]');
+        // Strategy 2: Capture phase click listener on schedule table
+        // This catches clicks on td elements before their onclick fires
+        document.addEventListener('click', (e) => {
+            // Find if we clicked on a schedule cell (td in schedule table)
+            const td = e.target.closest('td');
+            if (!td) return;
+            
+            // Check if this td is in a schedule table
+            const table = td.closest('#scheduleTable, .schedule-table, [data-schedule]');
             if (!table) return;
             
-            // Find all clickable cells
-            const cells = table.querySelectorAll('td[style*="cursor: pointer"], td.schedule-cell');
+            // Check if this td has an onclick handler
+            const onclickStr = td.getAttribute('onclick') || (td.onclick ? td.onclick.toString() : '');
             
+            // Also check if td has cursor:pointer (indicates clickable)
+            const isClickable = td.style.cursor === 'pointer' || 
+                               getComputedStyle(td).cursor === 'pointer';
+            
+            if (!isClickable && !onclickStr.includes('editCell')) return;
+            
+            // Try to extract editCell parameters from onclick
+            // Pattern: editCell("29", 660, 720, "text") or editCell(bunk, startMin, endMin, text)
+            let bunk, startMin, endMin, currentText;
+            
+            // Try parsing from onclick string
+            const match = onclickStr.match(/editCell\s*\(\s*["']?([^"',]+)["']?\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*["']?([^"']*)["']?\s*\)/);
+            if (match) {
+                bunk = match[1];
+                startMin = parseInt(match[2], 10);
+                endMin = parseInt(match[3], 10);
+                currentText = match[4] || '';
+            }
+            
+            // If we couldn't parse, try to get from row context
+            if (!bunk) {
+                // Look for bunk name in the row
+                const row = td.closest('tr');
+                if (row) {
+                    // First cell might be bunk name
+                    const firstCell = row.querySelector('td:first-child, th:first-child');
+                    if (firstCell) {
+                        bunk = firstCell.textContent?.trim();
+                    }
+                }
+                currentText = td.textContent?.trim() || '';
+            }
+            
+            // If we still don't have required data, let original handler run
+            if (!bunk || isNaN(startMin) || isNaN(endMin)) {
+                // Fallback: extract from td position in table
+                const headerRow = table.querySelector('thead tr, tr:first-child');
+                const cellIndex = Array.from(td.parentNode.children).indexOf(td);
+                
+                // Can't determine parameters, let original click happen
+                return;
+            }
+            
+            // We have the data - intercept!
+            e.stopPropagation();
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            
+            console.log('[PostEdit] Intercepted cell click:', { bunk, startMin, endMin, currentText });
+            enhancedEditCell(bunk, startMin, endMin, currentText);
+            
+        }, true); // Capture phase - runs before onclick handlers
+        
+        // Strategy 3: Patch cells after each render
+        const patchAfterRender = () => {
+            const table = document.getElementById('scheduleTable');
+            if (!table) return;
+            
+            const cells = table.querySelectorAll('td');
             cells.forEach(td => {
                 if (td._postEditPatched) return;
-                td._postEditPatched = true;
+                if (!td.onclick) return;
                 
-                // Store the original onclick
+                td._postEditPatched = true;
                 const originalOnclick = td.onclick;
                 
-                if (originalOnclick) {
-                    // Replace with our enhanced version
-                    td.onclick = (e) => {
-                        // Try to extract bunk/time from original onclick string
-                        const fnStr = originalOnclick.toString();
+                td.onclick = function(e) {
+                    // Try to extract params from original onclick
+                    const fnStr = originalOnclick.toString();
+                    const match = fnStr.match(/editCell\s*\(\s*["']?([^"',]+)["']?\s*,\s*(\d+)\s*,\s*(\d+)/);
+                    
+                    if (match) {
+                        const bunk = match[1];
+                        const startMin = parseInt(match[2], 10);
+                        const endMin = parseInt(match[3], 10);
+                        const currentText = td.textContent?.trim() || '';
                         
-                        // Pattern: editCell("29", 660, 720, "Hockey")
-                        // Or: editCell(bunk, block.startMin, block.endMin, displayText)
-                        const match = fnStr.match(/editCell\s*\(\s*["']?(\w+)["']?\s*,\s*(\d+)\s*,\s*(\d+)/);
-                        
-                        if (match) {
-                            const bunk = match[1];
-                            const startMin = parseInt(match[2], 10);
-                            const endMin = parseInt(match[3], 10);
-                            const currentText = td.textContent?.trim() || '';
-                            
-                            e.stopPropagation();
-                            e.preventDefault();
-                            
-                            console.log('[PostEdit] Intercepted cell click:', { bunk, startMin, endMin, currentText });
-                            enhancedEditCell(bunk, startMin, endMin, currentText);
-                            return;
-                        }
-                        
-                        // If we can't parse, call original
-                        originalOnclick.call(td, e);
-                    };
-                }
+                        console.log('[PostEdit] Patched cell clicked:', { bunk, startMin, endMin });
+                        enhancedEditCell(bunk, startMin, endMin, currentText);
+                        return;
+                    }
+                    
+                    // Couldn't parse, call original
+                    originalOnclick.call(this, e);
+                };
             });
-        }
+        };
         
         // Patch after renders
-        setTimeout(patchScheduleCells, 1000);
-        setTimeout(patchScheduleCells, 2000);
-        setTimeout(patchScheduleCells, 5000);
+        setTimeout(patchAfterRender, 1000);
+        setTimeout(patchAfterRender, 2000);
+        setTimeout(patchAfterRender, 5000);
         
-        // Also patch when table updates
-        const scheduleContainer = document.getElementById('schedule-table') || 
-                                   document.getElementById('unified-schedule') ||
-                                   document.querySelector('.schedule-container');
-        
-        if (scheduleContainer) {
-            const observer = new MutationObserver(() => {
-                setTimeout(patchScheduleCells, 100);
-            });
-            observer.observe(scheduleContainer, { childList: true, subtree: true });
-        }
-        
-        // Also listen for updateTable calls
+        // Hook into updateTable to patch after each render
         if (window.updateTable && !window.updateTable._postEditHooked) {
             const originalUpdate = window.updateTable;
             window.updateTable = function(...args) {
                 const result = originalUpdate.apply(this, args);
-                setTimeout(patchScheduleCells, 200);
+                setTimeout(patchAfterRender, 100);
                 return result;
             };
             window.updateTable._postEditHooked = true;
+            console.log('[PostEdit] Hooked updateTable for cell patching');
+        }
+        
+        // Also observe DOM changes
+        const observer = new MutationObserver(() => {
+            setTimeout(patchAfterRender, 50);
+        });
+        
+        const scheduleContainer = document.getElementById('scheduleTable') || 
+                                   document.getElementById('unified-schedule');
+        if (scheduleContainer) {
+            observer.observe(scheduleContainer, { childList: true, subtree: true });
         }
         
         console.log('[PostEdit] Click interceptor installed');
@@ -1161,11 +1301,11 @@
             document.head.appendChild(style);
         }
         
-        console.log('📝 Post-Generation Edit System v2.0 initialized');
+        console.log('📝 Post-Generation Edit System v2.1 initialized');
         console.log('   - Enhanced editCell with modal UI');
-        console.log('   - Click interceptor active');
+        console.log('   - Click interceptor active (3 strategies)');
         console.log('   - Conflict detection with RBAC awareness');
-        console.log('   - Bypass/Notify options for cross-scheduler conflicts');
+        console.log('   - Bypass mode with direct Supabase save');
         console.log('   - Field format: "Location – Activity"');
     }
 
@@ -1179,6 +1319,7 @@
     window.getAllLocations = getAllLocations;
     window.getEditableBunks = getEditableBunks;
     window.sendSchedulerNotification = sendSchedulerNotification;
+    window.bypassSaveAllBunks = bypassSaveAllBunks;
     
     // Diagnostic function
     window.diagnosePostEdit = function(bunk) {
