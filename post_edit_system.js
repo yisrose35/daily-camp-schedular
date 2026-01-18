@@ -562,31 +562,36 @@
         // Initial check
         checkAndShowConflicts();
         
-        // Save handler
-        document.getElementById('post-edit-save').onclick = () => {
-            const activity = document.getElementById('post-edit-activity').value.trim();
-            const location = locationSelect.value;
-            const times = getEffectiveTimes();
-            
-            if (!activity) {
-                alert('Please enter an activity name.');
-                return;
-            }
-            
-            if (times.endMin <= times.startMin) {
-                alert('End time must be after start time.');
-                return;
-            }
-            
-            const conflictCheck = location ? checkAndShowConflicts() : null;
-            
-            if (conflictCheck?.hasConflict) {
-                // Get resolution choice for non-editable conflicts
-                let resolutionChoice = 'notify'; // default
-                const resolutionRadio = document.querySelector('input[name="conflict-resolution"]:checked');
-                if (resolutionRadio) {
-                    resolutionChoice = resolutionRadio.value;
-                }
+       // Save handler
+document.getElementById('post-edit-save').onclick = () => {
+    const activity = document.getElementById('post-edit-activity').value.trim();
+    const location = locationSelect.value;
+    const times = getEffectiveTimes();
+    
+    if (!activity) {
+        alert('Please enter an activity name.');
+        return;
+    }
+    
+    if (times.endMin <= times.startMin) {
+        alert('End time must be after start time.');
+        return;
+    }
+    
+    // CRITICAL: Capture radio selection BEFORE checkAndShowConflicts() re-renders the HTML
+    let resolutionChoice = 'notify'; // default
+    const resolutionRadio = document.querySelector('input[name="conflict-resolution"]:checked');
+    if (resolutionRadio) {
+        resolutionChoice = resolutionRadio.value;
+        console.log('[PostEdit] Captured resolution choice BEFORE re-render:', resolutionChoice);
+    }
+    
+    // Now check conflicts (this may re-render but we already captured the choice)
+    const conflictCheck = location ? checkLocationConflict(location, findSlotsForRange(times.startMin, times.endMin, unifiedTimes), bunk) : null;
+    
+    if (conflictCheck?.hasConflict) {
+        // Use the pre-captured resolutionChoice
+        console.log('[PostEdit] Using captured resolution:', resolutionChoice);
                 
                 onSave({
                     activity,
