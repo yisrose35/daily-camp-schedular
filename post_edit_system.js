@@ -159,6 +159,9 @@
         const locationInfo = locations.find(l => l.name.toLowerCase() === locationName.toLowerCase());
         const maxCapacity = locationInfo?.capacity || 1;
         
+        // Get editable bunks for permission check
+        const editableBunks = getEditableBunks();
+        
         const conflicts = [];
         const usageBySlot = {};
         
@@ -179,7 +182,8 @@
                     usageBySlot[slotIdx].push({
                         bunk: bunkName,
                         activity: entryActivity || entryField,
-                        field: entryField
+                        field: entryField,
+                        canEdit: editableBunks.has(bunkName)
                     });
                 }
             }
@@ -202,13 +206,42 @@
             }
         }
         
+        // Separate editable vs non-editable conflicts
+        const editableConflicts = conflicts.filter(c => c.canEdit);
+        const nonEditableConflicts = conflicts.filter(c => !c.canEdit);
+        
         return {
             hasConflict,
             conflicts,
+            editableConflicts,
+            nonEditableConflicts,
             canShare: maxCapacity > 1 && currentUsage < maxCapacity,
             currentUsage,
             maxCapacity
         };
+    }
+    
+    // Get set of bunks the current user can edit
+    function getEditableBunks() {
+        const editableBunks = new Set();
+        
+        // Try AccessControl first
+        const editableDivisions = window.AccessControl?.getEditableDivisions?.() || [];
+        const divisions = window.divisions || {};
+        
+        for (const divName of editableDivisions) {
+            const divInfo = divisions[divName];
+            if (divInfo?.bunks) {
+                divInfo.bunks.forEach(b => editableBunks.add(String(b)));
+            }
+        }
+        
+        // If no RBAC, assume all bunks are editable
+        if (editableBunks.size === 0 && !window.AccessControl) {
+            Object.keys(window.scheduleAssignments || {}).forEach(b => editableBunks.add(b));
+        }
+        
+        return editableBunks;
     }
 
     // =========================================================================
@@ -459,25 +492,62 @@
             const conflictCheck = checkLocationConflict(location, targetSlots, bunk);
             
             if (conflictCheck.hasConflict) {
-                const conflictBunks = [...new Set(conflictCheck.conflicts.map(c => c.bunk))];
+                const editableBunks = [...new Set(conflictCheck.editableConflicts.map(c => c.bunk))];
+                const nonEditableBunks = [...new Set(conflictCheck.nonEditableConflicts.map(c => c.bunk))];
+                
                 conflictArea.style.display = 'block';
-                conflictArea.innerHTML = `
-                    <div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;">
-                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-                            <span style="font-size: 1.25rem;">⚠️</span>
-                            <strong style="color: #92400e;">Location Conflict Detected</strong>
-                        </div>
-                        <p style="margin: 0 0 8px 0; color: #78350f; font-size: 0.875rem;">
-                            <strong>${location}</strong> is already in use by:
-                        </p>
-                        <ul style="margin: 0; padding-left: 20px; color: #78350f; font-size: 0.875rem;">
-                            ${conflictBunks.map(b => `<li>${b}</li>`).join('')}
-                        </ul>
-                        <p style="margin: 8px 0 0 0; color: #78350f; font-size: 0.875rem;">
-                            If you proceed, the system will attempt to reassign the conflicting activities.
-                        </p>
+                
+                let html = `<div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                        <span style="font-size: 1.25rem;">⚠️</span>
+                        <strong style="color: #92400e;">Location Conflict Detected</strong>
                     </div>
-                `;
+                    <p style="margin: 0 0 8px 0; color: #78350f; font-size: 0.875rem;">
+                        <strong>${location}</strong> is already in use:
+                    </p>`;
+                
+                if (editableBunks.length > 0) {
+                    html += `<div style="margin-bottom: 8px;">
+                        <div style="font-size: 0.75rem; color: #059669; font-weight: 600; margin-bottom: 4px;">✓ YOUR DIVISIONS (will be reassigned):</div>
+                        <ul style="margin: 0; padding-left: 20px; color: #78350f; font-size: 0.875rem;">
+                            ${editableBunks.map(b => `<li>${b}</li>`).join('')}
+                        </ul>
+                    </div>`;
+                }
+                
+                if (nonEditableBunks.length > 0) {
+                    html += `<div style="margin-bottom: 8px;">
+                        <div style="font-size: 0.75rem; color: #dc2626; font-weight: 600; margin-bottom: 4px;">✗ OTHER SCHEDULER'S DIVISIONS:</div>
+                        <ul style="margin: 0; padding-left: 20px; color: #78350f; font-size: 0.875rem;">
+                            ${nonEditableBunks.map(b => `<li>${b}</li>`).join('')}
+                        </ul>
+                    </div>
+                    
+                    <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #f59e0b;">
+                        <div style="font-size: 0.875rem; font-weight: 600; color: #78350f; margin-bottom: 8px;">
+                            How should we handle the other scheduler's bunks?
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;">
+                                <input type="radio" name="conflict-resolution" value="notify" checked style="margin-top: 2px;">
+                                <div>
+                                    <div style="font-weight: 500; color: #374151;">📧 Notify other scheduler</div>
+                                    <div style="font-size: 0.75rem; color: #6b7280;">Create double-booking & send them a warning to resolve</div>
+                                </div>
+                            </label>
+                            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;">
+                                <input type="radio" name="conflict-resolution" value="bypass" style="margin-top: 2px;">
+                                <div>
+                                    <div style="font-weight: 500; color: #374151;">🔓 Bypass & reassign their bunks</div>
+                                    <div style="font-size: 0.75rem; color: #6b7280;">Override permissions and move their activities</div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>`;
+                }
+                
+                html += `</div>`;
+                conflictArea.innerHTML = html;
                 return conflictCheck;
             } else {
                 conflictArea.style.display = 'none';
@@ -511,16 +581,12 @@
             const conflictCheck = location ? checkAndShowConflicts() : null;
             
             if (conflictCheck?.hasConflict) {
-                const proceed = confirm(
-                    `⚠️ CONFLICT WARNING\n\n` +
-                    `"${location}" is already in use during this time.\n\n` +
-                    `If you proceed:\n` +
-                    `• Your activity will be PINNED to this location\n` +
-                    `• Conflicting activities will be moved to other available locations\n\n` +
-                    `Do you want to proceed?`
-                );
-                
-                if (!proceed) return;
+                // Get resolution choice for non-editable conflicts
+                let resolutionChoice = 'notify'; // default
+                const resolutionRadio = document.querySelector('input[name="conflict-resolution"]:checked');
+                if (resolutionRadio) {
+                    resolutionChoice = resolutionRadio.value;
+                }
                 
                 onSave({
                     activity,
@@ -528,7 +594,10 @@
                     startMin: times.startMin,
                     endMin: times.endMin,
                     hasConflict: true,
-                    conflicts: conflictCheck.conflicts
+                    conflicts: conflictCheck.conflicts,
+                    editableConflicts: conflictCheck.editableConflicts || [],
+                    nonEditableConflicts: conflictCheck.nonEditableConflicts || [],
+                    resolutionChoice: resolutionChoice
                 });
             } else {
                 onSave({
@@ -554,7 +623,7 @@
     // =========================================================================
 
     function applyEdit(bunk, editData) {
-        const { activity, location, startMin, endMin, hasConflict, conflicts } = editData;
+        const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
         const unifiedTimes = window.unifiedTimes || [];
         
         const isClear = activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
@@ -565,7 +634,7 @@
             return;
         }
         
-        console.log(`[PostEdit] Applying edit for ${bunk}:`, { activity, location, startMin, endMin, slots, hasConflict });
+        console.log(`[PostEdit] Applying edit for ${bunk}:`, { activity, location, startMin, endMin, slots, hasConflict, resolutionChoice });
         
         if (!window.scheduleAssignments) {
             window.scheduleAssignments = {};
@@ -574,8 +643,8 @@
             window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
         }
         
-        if (hasConflict && conflicts.length > 0) {
-            resolveConflictsAndApply(bunk, slots, activity, location, conflicts);
+        if (hasConflict) {
+            resolveConflictsAndApply(bunk, slots, activity, location, editData);
         } else {
             applyDirectEdit(bunk, slots, activity, location, isClear);
         }
@@ -612,11 +681,21 @@
         }
     }
 
-    function resolveConflictsAndApply(bunk, slots, activity, location, conflicts) {
-        console.log('[PostEdit] Resolving conflicts...', conflicts);
+    function resolveConflictsAndApply(bunk, slots, activity, location, editData) {
+        const editableConflicts = editData.editableConflicts || [];
+        const nonEditableConflicts = editData.nonEditableConflicts || [];
+        const resolutionChoice = editData.resolutionChoice || 'notify';
         
+        console.log('[PostEdit] Resolving conflicts...', {
+            editable: editableConflicts.length,
+            nonEditable: nonEditableConflicts.length,
+            resolution: resolutionChoice
+        });
+        
+        // First, apply the pinned edit
         applyDirectEdit(bunk, slots, activity, location, false);
         
+        // Lock this field for these slots
         if (window.GlobalFieldLocks) {
             const divName = Object.keys(window.divisions || {}).find(d => 
                 window.divisions[d]?.bunks?.includes(bunk)
@@ -628,18 +707,101 @@
             });
         }
         
-        const conflictsByBunk = {};
-        conflicts.forEach(c => {
-            if (!conflictsByBunk[c.bunk]) {
-                conflictsByBunk[c.bunk] = [];
+        // Reassign bunks we CAN edit (always)
+        if (editableConflicts.length > 0) {
+            const conflictsByBunk = {};
+            editableConflicts.forEach(c => {
+                if (!conflictsByBunk[c.bunk]) {
+                    conflictsByBunk[c.bunk] = [];
+                }
+                conflictsByBunk[c.bunk].push(c.slot);
+            });
+            
+            for (const [conflictBunk, conflictSlots] of Object.entries(conflictsByBunk)) {
+                const uniqueSlots = [...new Set(conflictSlots)];
+                reassignBunkActivity(conflictBunk, uniqueSlots, location);
             }
-            conflictsByBunk[c.bunk].push(c.slot);
-        });
-        
-        for (const [conflictBunk, conflictSlots] of Object.entries(conflictsByBunk)) {
-            const uniqueSlots = [...new Set(conflictSlots)];
-            reassignBunkActivity(conflictBunk, uniqueSlots, location);
         }
+        
+        // Handle non-editable conflicts based on choice
+        if (nonEditableConflicts.length > 0) {
+            const nonEditableBunks = [...new Set(nonEditableConflicts.map(c => c.bunk))];
+            
+            if (resolutionChoice === 'bypass') {
+                // BYPASS: Override permissions and reassign their bunks too
+                console.log('[PostEdit] 🔓 BYPASSING permissions to reassign other scheduler bunks:', nonEditableBunks);
+                
+                const conflictsByBunk = {};
+                nonEditableConflicts.forEach(c => {
+                    if (!conflictsByBunk[c.bunk]) {
+                        conflictsByBunk[c.bunk] = [];
+                    }
+                    conflictsByBunk[c.bunk].push(c.slot);
+                });
+                
+                for (const [conflictBunk, conflictSlots] of Object.entries(conflictsByBunk)) {
+                    const uniqueSlots = [...new Set(conflictSlots)];
+                    reassignBunkActivity(conflictBunk, uniqueSlots, location);
+                }
+                
+                if (window.showToast) {
+                    window.showToast(`🔓 Bypassed permissions - reassigned ${nonEditableBunks.length} bunk(s)`, 'info');
+                }
+                
+                // Still send a notification that you made changes to their bunks
+                sendSchedulerNotification(nonEditableBunks, location, activity, 'bypassed');
+                
+            } else {
+                // NOTIFY: Just create double-booking and notify them
+                console.warn(`[PostEdit] 📧 Double-booking created with bunks from other schedulers: ${nonEditableBunks.join(', ')}`);
+                
+                if (window.showToast) {
+                    window.showToast(`📧 Notification sent to other scheduler about conflict`, 'warning');
+                }
+                
+                sendSchedulerNotification(nonEditableBunks, location, activity, 'conflict');
+            }
+        }
+    }
+    
+    // Send notification to other schedulers about conflict
+    function sendSchedulerNotification(bunks, location, activity, type) {
+        const currentUser = window.SupabaseClient?.currentUser?.email || 'Unknown scheduler';
+        const currentDate = window.currentDate || new Date().toISOString().split('T')[0];
+        
+        const notification = {
+            type: type === 'bypassed' ? 'schedule_override' : 'schedule_conflict',
+            message: type === 'bypassed' 
+                ? `${currentUser} has overridden permissions and reassigned your bunks (${bunks.join(', ')}) away from ${location} for ${activity}`
+                : `${currentUser} has scheduled ${activity} at ${location}, conflicting with your bunks: ${bunks.join(', ')}. Please resolve the double-booking.`,
+            bunks: bunks,
+            location: location,
+            activity: activity,
+            date: currentDate,
+            from: currentUser,
+            timestamp: Date.now()
+        };
+        
+        console.log('[PostEdit] 📧 Scheduler notification:', notification);
+        
+        // Store notification in localStorage for now (can be enhanced to use Supabase later)
+        const notificationKey = `campistry_notifications_${currentDate}`;
+        const existing = JSON.parse(localStorage.getItem(notificationKey) || '[]');
+        existing.push(notification);
+        localStorage.setItem(notificationKey, JSON.stringify(existing));
+        
+        // Also try to store in cloud if available
+        if (window.CloudSyncHelpers?.queueForSync) {
+            window.CloudSyncHelpers.queueForSync('notifications', { 
+                key: notificationKey, 
+                data: existing 
+            });
+        }
+        
+        // Dispatch event for real-time notification systems
+        window.dispatchEvent(new CustomEvent('campistry-scheduler-notification', { 
+            detail: notification 
+        }));
     }
 
     function reassignBunkActivity(bunk, slots, avoidLocation) {
@@ -847,6 +1009,8 @@
     window.enhancedEditCell = enhancedEditCell;
     window.checkLocationConflict = checkLocationConflict;
     window.getAllLocations = getAllLocations;
+    window.getEditableBunks = getEditableBunks;
+    window.sendSchedulerNotification = sendSchedulerNotification;
 
     // Auto-initialize
     if (document.readyState === 'loading') {
