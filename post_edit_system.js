@@ -9,15 +9,21 @@
 // - Scans current schedule for field conflicts
 // - If conflict detected: warns user, offers Accept (pin + regenerate) or Decline
 // - Pinned activities are preserved during regeneration
+// - Smart reassignment using rotation-aware logic from scheduler_logic_fillers
 //
 // INTEGRATION: Add this file AFTER unified_schedule_system.js
+//
+// v2.2 FIXES:
+// - Fixed Supabase client access pattern (uses CampistryDB.getClient())
+// - Smart rotation-aware reassignment when bypassing
+// - Proper date_key column name
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('📝 Post-Generation Edit System v2.1 (RBAC + BYPASS + DIRECT SAVE) loading...');
+    console.log('📝 Post-Generation Edit System v2.2 (SMART BYPASS + FIXED SUPABASE) loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -105,6 +111,14 @@
         }
         return slots;
     }
+    
+    // Helper to get field label (mirrors scheduler_core_utils)
+    function fieldLabel(f) {
+        if (window.SchedulerCoreUtils?.fieldLabel) {
+            return window.SchedulerCoreUtils.fieldLabel(f);
+        }
+        return (f && f.name) ? f.name : (typeof f === 'string' ? f : '');
+    }
 
     // =========================================================================
     // GET ALL AVAILABLE LOCATIONS
@@ -125,7 +139,8 @@
                     name: f.name,
                     type: 'field',
                     capacity: f.sharableWith?.capacity || (f.sharableWith?.type === 'all' ? 2 : 1),
-                    available: f.available !== false
+                    available: f.available !== false,
+                    activities: f.activities || []
                 });
                 seen.add(f.name);
             }
@@ -147,6 +162,37 @@
         });
         
         return locations.sort((a, b) => a.name.localeCompare(b.name));
+    }
+    
+    // Get activity properties map (mirrors scheduler setup)
+    function getActivityProperties() {
+        const settings = window.loadGlobalSettings?.() || {};
+        const app1 = settings.app1 || {};
+        const props = {};
+        
+        // Fields
+        (app1.fields || []).forEach(f => {
+            if (f.name) {
+                props[f.name] = {
+                    ...f,
+                    type: 'field',
+                    capacity: f.sharableWith?.capacity || (f.sharableWith?.type === 'all' ? 2 : 1)
+                };
+            }
+        });
+        
+        // Specials
+        (app1.specialActivities || []).forEach(s => {
+            if (s.name) {
+                props[s.name] = {
+                    ...s,
+                    type: 'special',
+                    capacity: s.sharableWith?.capacity || 1
+                };
+            }
+        });
+        
+        return props;
     }
 
     // =========================================================================
@@ -242,6 +288,94 @@
         }
         
         return editableBunks;
+    }
+    
+    // =========================================================================
+    // SMART ROTATION HELPERS (borrowed from scheduler_logic_fillers)
+    // =========================================================================
+    
+    /**
+     * Get activities this bunk has already done today (before the given slot)
+     */
+    function getActivitiesDoneToday(bunk, beforeSlot) {
+        const done = new Set();
+        const bunkData = window.scheduleAssignments?.[bunk];
+        if (!bunkData) return done;
+        
+        for (let i = 0; i < beforeSlot; i++) {
+            const entry = bunkData[i];
+            if (entry) {
+                const actName = entry._activity || entry.sport || fieldLabel(entry.field);
+                if (actName && actName.toLowerCase() !== 'free' && actName.toLowerCase() !== 'transition') {
+                    done.add(actName.toLowerCase().trim());
+                }
+            }
+        }
+        return done;
+    }
+    
+    /**
+     * Calculate rotation score for an activity (lower = better)
+     * Mirrors the logic from scheduler_logic_fillers.js
+     */
+    function calculateRotationScore(bunk, activityName, slots) {
+        const firstSlot = slots[0];
+        const doneToday = getActivitiesDoneToday(bunk, firstSlot);
+        const actLower = activityName.toLowerCase().trim();
+        
+        // HARD BLOCK: Already done today
+        if (doneToday.has(actLower)) {
+            return Infinity;
+        }
+        
+        // Check yesterday's history if available
+        let score = 0;
+        const rotationHistory = window.loadRotationHistory?.() || { bunks: {} };
+        const bunkHistory = rotationHistory.bunks?.[bunk] || [];
+        
+        // Find when this activity was last done
+        const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const yesterday = new Date(currentDate);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStr = yesterday.toISOString().split('T')[0];
+        
+        // Check if done yesterday
+        const recentEntry = bunkHistory.find(h => 
+            h.activity?.toLowerCase() === actLower && 
+            h.date === yesterdayStr
+        );
+        
+        if (recentEntry) {
+            score += 5000; // Heavy penalty for yesterday
+        }
+        
+        // Count how often this activity appears in history
+        const activityCount = bunkHistory.filter(h => 
+            h.activity?.toLowerCase() === actLower
+        ).length;
+        
+        // Bonus for never-done activities
+        if (activityCount === 0) {
+            score -= 1500;
+        } else if (activityCount < 3) {
+            score -= 800; // Under-utilized bonus
+        } else if (activityCount > 5) {
+            score += 1500; // High frequency penalty
+        }
+        
+        return score;
+    }
+    
+    /**
+     * Check if a field has capacity for this bunk at these slots
+     */
+    function checkFieldCapacity(fieldName, slots, excludeBunk) {
+        const activityProperties = getActivityProperties();
+        const props = activityProperties[fieldName] || {};
+        const maxCapacity = props.capacity || 1;
+        
+        const conflictCheck = checkLocationConflict(fieldName, slots, excludeBunk);
+        return conflictCheck.currentUsage < maxCapacity;
     }
 
     // =========================================================================
@@ -539,7 +673,7 @@
                                 <input type="radio" name="conflict-resolution" value="bypass" style="margin-top: 2px;">
                                 <div>
                                     <div style="font-weight: 500; color: #374151;">🔓 Bypass & reassign their bunks</div>
-                                    <div style="font-size: 0.75rem; color: #6b7280;">Override permissions and move their activities</div>
+                                    <div style="font-size: 0.75rem; color: #6b7280;">Override permissions and move their activities (uses smart rotation)</div>
                                 </div>
                             </label>
                         </div>
@@ -562,36 +696,37 @@
         // Initial check
         checkAndShowConflicts();
         
-       // Save handler
-document.getElementById('post-edit-save').onclick = () => {
-    const activity = document.getElementById('post-edit-activity').value.trim();
-    const location = locationSelect.value;
-    const times = getEffectiveTimes();
-    
-    if (!activity) {
-        alert('Please enter an activity name.');
-        return;
-    }
-    
-    if (times.endMin <= times.startMin) {
-        alert('End time must be after start time.');
-        return;
-    }
-    
-    // CRITICAL: Capture radio selection BEFORE checkAndShowConflicts() re-renders the HTML
-    let resolutionChoice = 'notify'; // default
-    const resolutionRadio = document.querySelector('input[name="conflict-resolution"]:checked');
-    if (resolutionRadio) {
-        resolutionChoice = resolutionRadio.value;
-        console.log('[PostEdit] Captured resolution choice BEFORE re-render:', resolutionChoice);
-    }
-    
-    // Now check conflicts (this may re-render but we already captured the choice)
-    const conflictCheck = location ? checkLocationConflict(location, findSlotsForRange(times.startMin, times.endMin, unifiedTimes), bunk) : null;
-    
-    if (conflictCheck?.hasConflict) {
-        // Use the pre-captured resolutionChoice
-        console.log('[PostEdit] Using captured resolution:', resolutionChoice);
+        // Save handler
+        document.getElementById('post-edit-save').onclick = () => {
+            const activity = document.getElementById('post-edit-activity').value.trim();
+            const location = locationSelect.value;
+            const times = getEffectiveTimes();
+            
+            if (!activity) {
+                alert('Please enter an activity name.');
+                return;
+            }
+            
+            if (times.endMin <= times.startMin) {
+                alert('End time must be after start time.');
+                return;
+            }
+            
+            // CRITICAL: Capture radio selection BEFORE checkAndShowConflicts() re-renders the HTML
+            let resolutionChoice = 'notify'; // default
+            const resolutionRadio = document.querySelector('input[name="conflict-resolution"]:checked');
+            if (resolutionRadio) {
+                resolutionChoice = resolutionRadio.value;
+                console.log('[PostEdit] Captured resolution choice BEFORE re-render:', resolutionChoice);
+            }
+            
+            // Now check conflicts (using direct function, not the UI renderer)
+            const targetSlots = findSlotsForRange(times.startMin, times.endMin, unifiedTimes);
+            const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
+            
+            if (conflictCheck?.hasConflict) {
+                // Use the pre-captured resolutionChoice
+                console.log('[PostEdit] Using captured resolution:', resolutionChoice);
                 
                 onSave({
                     activity,
@@ -816,7 +951,7 @@ document.getElementById('post-edit-save').onclick = () => {
             
             for (const [conflictBunk, conflictSlots] of Object.entries(conflictsByBunk)) {
                 const uniqueSlots = [...new Set(conflictSlots)];
-                reassignBunkActivity(conflictBunk, uniqueSlots, location);
+                smartReassignBunkActivity(conflictBunk, uniqueSlots, location);
             }
         }
         
@@ -838,7 +973,7 @@ document.getElementById('post-edit-save').onclick = () => {
                 
                 for (const [conflictBunk, conflictSlots] of Object.entries(conflictsByBunk)) {
                     const uniqueSlots = [...new Set(conflictSlots)];
-                    reassignBunkActivity(conflictBunk, uniqueSlots, location);
+                    smartReassignBunkActivity(conflictBunk, uniqueSlots, location);
                 }
                 
                 // CRITICAL: For bypass mode, we need to save ALL bunks, not just ours
@@ -866,7 +1001,158 @@ document.getElementById('post-edit-save').onclick = () => {
         }
     }
     
-    // Bypass save - saves specific bunks directly to cloud without RBAC filtering
+    // =========================================================================
+    // SMART REASSIGNMENT (uses rotation-aware logic)
+    // =========================================================================
+    
+    /**
+     * Smart reassignment that uses the same rotation logic as the main scheduler.
+     * Finds the best alternative location considering:
+     * - Field availability and capacity
+     * - Rotation history (avoid same-day repeats)
+     * - Activity compatibility
+     * - Division preferences
+     */
+    function smartReassignBunkActivity(bunk, slots, avoidLocation) {
+        console.log(`[PostEdit] 🧠 Smart reassigning ${bunk} away from ${avoidLocation}`);
+        
+        const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
+        if (!entry) {
+            console.warn(`[PostEdit] No existing entry for ${bunk} at slot ${slots[0]}`);
+            return;
+        }
+        
+        const originalActivity = entry._activity || entry.sport || fieldLabel(entry.field);
+        const divName = Object.keys(window.divisions || {}).find(d => 
+            window.divisions[d]?.bunks?.includes(bunk)
+        );
+        
+        console.log(`[PostEdit] Original activity: ${originalActivity}, Division: ${divName}`);
+        
+        // Get all available alternatives with rotation scores
+        const alternative = findSmartAlternative(bunk, originalActivity, slots, avoidLocation, divName);
+        
+        if (alternative) {
+            console.log(`[PostEdit] ✅ Smart alternative for ${bunk}: ${alternative.field} (score: ${alternative.score})`);
+            
+            // Format the field value correctly: "Location – Activity"
+            const fieldValue = `${alternative.field} – ${originalActivity}`;
+            
+            slots.forEach((idx, i) => {
+                window.scheduleAssignments[bunk][idx] = {
+                    ...entry,
+                    field: fieldValue,
+                    _location: alternative.field,
+                    _activity: originalActivity,
+                    continuation: i > 0,
+                    _reassigned: true,
+                    _smartReassigned: true,
+                    _originalField: avoidLocation,
+                    _reassignedAt: Date.now(),
+                    _rotationScore: alternative.score
+                };
+            });
+            
+            if (window.showToast) {
+                window.showToast(`↪️ Smart-moved ${bunk} to ${alternative.field}`, 'info');
+            }
+        } else {
+            console.warn(`[PostEdit] ⚠️ No smart alternative found for ${bunk}, marking as Free`);
+            
+            slots.forEach((idx, i) => {
+                window.scheduleAssignments[bunk][idx] = {
+                    field: 'Free',
+                    sport: null,
+                    continuation: i > 0,
+                    _fixed: false,
+                    _activity: 'Free',
+                    _noAlternative: true,
+                    _originalActivity: originalActivity,
+                    _originalField: avoidLocation
+                };
+            });
+            
+            if (window.showToast) {
+                window.showToast(`⚠️ ${bunk}: No alternative found, set to Free`, 'warning');
+            }
+        }
+    }
+    
+    /**
+     * Find the best alternative location using rotation-aware scoring.
+     * Returns { field: string, score: number } or null
+     */
+    function findSmartAlternative(bunk, activityName, slots, avoidLocation, divName) {
+        const settings = window.loadGlobalSettings?.() || {};
+        const app1 = settings.app1 || {};
+        const fields = app1.fields || [];
+        const activityProperties = getActivityProperties();
+        
+        const activityLower = activityName.toLowerCase();
+        const candidates = [];
+        
+        // Build list of candidate fields
+        for (const field of fields) {
+            if (field.name.toLowerCase() === avoidLocation.toLowerCase()) continue;
+            if (field.available === false) continue;
+            
+            const activities = field.activities || [];
+            const supportsActivity = activities.some(a => 
+                a.toLowerCase() === activityLower ||
+                activityLower.includes(a.toLowerCase()) ||
+                a.toLowerCase().includes(activityLower)
+            );
+            
+            const isGeneral = activities.length === 0 || 
+                activities.some(a => a.toLowerCase().includes('general'));
+            
+            if (supportsActivity || isGeneral) {
+                // Check capacity
+                if (checkFieldCapacity(field.name, slots, bunk)) {
+                    // Calculate rotation score
+                    const rotationScore = calculateRotationScore(bunk, field.name, slots);
+                    
+                    // Skip if blocked by rotation (Infinity score)
+                    if (rotationScore === Infinity) {
+                        console.log(`[PostEdit] Skipping ${field.name} - rotation blocked`);
+                        continue;
+                    }
+                    
+                    // Add division preference bonus
+                    let preferenceScore = 0;
+                    const fieldProps = activityProperties[field.name] || {};
+                    if (fieldProps.preferences?.enabled && fieldProps.preferences?.list) {
+                        const prefList = fieldProps.preferences.list;
+                        const prefIdx = prefList.indexOf(divName);
+                        if (prefIdx !== -1) {
+                            preferenceScore = -100 * (prefList.length - prefIdx); // Negative = good
+                        }
+                    }
+                    
+                    candidates.push({
+                        field: field.name,
+                        score: rotationScore + preferenceScore,
+                        rotationScore,
+                        preferenceScore
+                    });
+                }
+            }
+        }
+        
+        // Sort by score (lower is better)
+        candidates.sort((a, b) => a.score - b.score);
+        
+        console.log(`[PostEdit] Smart alternatives for ${bunk}:`, 
+            candidates.slice(0, 5).map(c => `${c.field}(${c.score})`).join(', ')
+        );
+        
+        return candidates[0] || null;
+    }
+    
+    // =========================================================================
+    // BYPASS SAVE - Direct Supabase access for other scheduler's bunks
+    // =========================================================================
+    
     async function bypassSaveAllBunks(bypassBunks) {
         const currentDate = window.currentDate || new Date().toISOString().split('T')[0];
         const assignments = window.scheduleAssignments || {};
@@ -886,23 +1172,31 @@ document.getElementById('post-edit-save').onclick = () => {
             date: currentDate 
         });
         
-        // Try direct Supabase save if available
-        if (window.SupabaseClient?.supabase) {
+        // Get Supabase client using the correct Campistry access pattern
+        const client = window.CampistryDB?.getClient?.() || window.supabase;
+        const campId = window.CampistryDB?.getCampId?.();
+        const currentUserId = window.CampistryDB?.getUserId?.();
+        const currentUserEmail = window.CampistryDB?.getCurrentUser?.()?.email || 
+                                window.SupabaseClient?.currentUser?.email || 
+                                'bypass_override';
+        
+        if (client && campId) {
             try {
-                const campId = window.SupabaseClient.campId;
-                const currentUser = window.SupabaseClient.currentUser?.email || 'bypass_override';
+                console.log('[PostEdit] Fetching other scheduler records...', { campId, currentUserId, date: currentDate });
                 
-                // Get existing record to update
-                const { data: existing, error: fetchError } = await window.SupabaseClient.supabase
+                // Get existing records from OTHER schedulers (not the current user)
+                const { data: existing, error: fetchError } = await client
                     .from('daily_schedules')
                     .select('*')
                     .eq('camp_id', campId)
-                    .eq('schedule_date', currentDate)
-                    .not('created_by', 'eq', currentUser);
+                    .eq('date_key', currentDate)
+                    .neq('scheduler_id', currentUserId);
                 
                 if (fetchError) {
                     console.error('[PostEdit] Error fetching existing schedules:', fetchError);
                 }
+                
+                console.log('[PostEdit] Found', existing?.length || 0, 'other scheduler records');
                 
                 // For each other scheduler's record, merge our bypass changes
                 if (existing && existing.length > 0) {
@@ -919,10 +1213,10 @@ document.getElementById('post-edit-save').onclick = () => {
                             ...record.schedule_data,
                             scheduleAssignments: mergedAssignments,
                             _bypassedAt: Date.now(),
-                            _bypassedBy: window.SupabaseClient.currentUser?.email
+                            _bypassedBy: currentUserEmail
                         };
                         
-                        const { error: updateError } = await window.SupabaseClient.supabase
+                        const { error: updateError } = await client
                             .from('daily_schedules')
                             .update({ 
                                 schedule_data: updatedData,
@@ -933,9 +1227,11 @@ document.getElementById('post-edit-save').onclick = () => {
                         if (updateError) {
                             console.error('[PostEdit] Error updating other scheduler record:', updateError);
                         } else {
-                            console.log(`[PostEdit] ✅ Bypass saved to record: ${record.created_by}`);
+                            console.log(`[PostEdit] ✅ Bypass saved to record: ${record.created_by || record.scheduler_id}`);
                         }
                     }
+                } else {
+                    console.log('[PostEdit] No other scheduler records found to update');
                 }
                 
                 console.log('[PostEdit] ✅ Bypass save complete');
@@ -944,25 +1240,34 @@ document.getElementById('post-edit-save').onclick = () => {
                 console.error('[PostEdit] Bypass save error:', e);
             }
         } else {
-            console.warn('[PostEdit] SupabaseClient not available for bypass save');
+            console.warn('[PostEdit] Supabase client or campId not available for bypass save', {
+                hasClient: !!client,
+                hasCampId: !!campId,
+                hasUserId: !!currentUserId
+            });
         }
     }
     
-    // Send notification to other schedulers about conflict
+    // =========================================================================
+    // NOTIFICATIONS
+    // =========================================================================
+    
     function sendSchedulerNotification(bunks, location, activity, type) {
-        const currentUser = window.SupabaseClient?.currentUser?.email || 'Unknown scheduler';
+        const currentUserEmail = window.CampistryDB?.getCurrentUser?.()?.email || 
+                                window.SupabaseClient?.currentUser?.email || 
+                                'Unknown scheduler';
         const currentDate = window.currentDate || new Date().toISOString().split('T')[0];
         
         const notification = {
             type: type === 'bypassed' ? 'schedule_override' : 'schedule_conflict',
             message: type === 'bypassed' 
-                ? `${currentUser} has overridden permissions and reassigned your bunks (${bunks.join(', ')}) away from ${location} for ${activity}`
-                : `${currentUser} has scheduled ${activity} at ${location}, conflicting with your bunks: ${bunks.join(', ')}. Please resolve the double-booking.`,
+                ? `${currentUserEmail} has overridden permissions and reassigned your bunks (${bunks.join(', ')}) away from ${location} for ${activity}`
+                : `${currentUserEmail} has scheduled ${activity} at ${location}, conflicting with your bunks: ${bunks.join(', ')}. Please resolve the double-booking.`,
             bunks: bunks,
             location: location,
             activity: activity,
             date: currentDate,
-            from: currentUser,
+            from: currentUserEmail,
             timestamp: Date.now()
         };
         
@@ -986,97 +1291,6 @@ document.getElementById('post-edit-save').onclick = () => {
         window.dispatchEvent(new CustomEvent('campistry-scheduler-notification', { 
             detail: notification 
         }));
-    }
-
-    function reassignBunkActivity(bunk, slots, avoidLocation) {
-        console.log(`[PostEdit] Reassigning ${bunk} away from ${avoidLocation}`);
-        
-        const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
-        if (!entry) return;
-        
-        const originalActivity = entry._activity || entry.sport || 'Activity';
-        const alternative = findAlternativeLocation(originalActivity, slots, avoidLocation);
-        
-        if (alternative) {
-            console.log(`[PostEdit] Found alternative for ${bunk}: ${alternative}`);
-            
-            // Format the field value correctly: "Location – Activity"
-            const fieldValue = `${alternative} – ${originalActivity}`;
-            
-            slots.forEach((idx, i) => {
-                window.scheduleAssignments[bunk][idx] = {
-                    ...entry,
-                    field: fieldValue,
-                    _location: alternative,
-                    _activity: originalActivity,
-                    continuation: i > 0,
-                    _reassigned: true,
-                    _originalField: avoidLocation,
-                    _reassignedAt: Date.now()
-                };
-            });
-            
-            if (window.showToast) {
-                window.showToast(`↪️ Moved ${bunk} to ${alternative}`, 'info');
-            }
-        } else {
-            console.warn(`[PostEdit] No alternative found for ${bunk}, marking as Free`);
-            
-            slots.forEach((idx, i) => {
-                window.scheduleAssignments[bunk][idx] = {
-                    field: 'Free',
-                    sport: null,
-                    continuation: i > 0,
-                    _fixed: false,
-                    _activity: 'Free',
-                    _noAlternative: true,
-                    _originalActivity: originalActivity,
-                    _originalField: avoidLocation
-                };
-            });
-            
-            if (window.showToast) {
-                window.showToast(`⚠️ ${bunk}: No alternative found, set to Free`, 'warning');
-            }
-        }
-    }
-
-    function findAlternativeLocation(activityName, slots, avoidLocation) {
-        const settings = window.loadGlobalSettings?.() || {};
-        const app1 = settings.app1 || {};
-        const fields = app1.fields || [];
-        
-        const activityLower = activityName.toLowerCase();
-        const candidateFields = [];
-        
-        for (const field of fields) {
-            if (field.name.toLowerCase() === avoidLocation.toLowerCase()) continue;
-            if (field.available === false) continue;
-            
-            const activities = field.activities || [];
-            const supportsActivity = activities.some(a => 
-                a.toLowerCase() === activityLower ||
-                activityLower.includes(a.toLowerCase()) ||
-                a.toLowerCase().includes(activityLower)
-            );
-            
-            const isGeneral = activities.length === 0 || 
-                activities.some(a => a.toLowerCase().includes('general'));
-            
-            if (supportsActivity || isGeneral) {
-                candidateFields.push(field);
-            }
-        }
-        
-        for (const field of candidateFields) {
-            const conflictCheck = checkLocationConflict(field.name, slots, null);
-            
-            if (!conflictCheck.hasConflict || conflictCheck.canShare) {
-                return field.name;
-            }
-        }
-        
-        return null;
     }
 
     // =========================================================================
@@ -1119,7 +1333,7 @@ document.getElementById('post-edit-save').onclick = () => {
     // =========================================================================
 
     function setupClickInterceptor() {
-        // Strategy 1: Override window.editCell (works if unified_schedule_system uses window.editCell)
+        // Strategy 1: Override window.editCell
         const overrideWindowEditCell = () => {
             if (window.editCell && window.editCell !== enhancedEditCell && !window.editCell._isEnhanced) {
                 console.log('[PostEdit] Overriding window.editCell');
@@ -1134,31 +1348,22 @@ document.getElementById('post-edit-save').onclick = () => {
         setTimeout(overrideWindowEditCell, 1500);
         setTimeout(overrideWindowEditCell, 3000);
         
-        // Strategy 2: Capture phase click listener on schedule table
-        // This catches clicks on td elements before their onclick fires
+        // Strategy 2: Capture phase click listener
         document.addEventListener('click', (e) => {
-            // Find if we clicked on a schedule cell (td in schedule table)
             const td = e.target.closest('td');
             if (!td) return;
             
-            // Check if this td is in a schedule table
             const table = td.closest('#scheduleTable, .schedule-table, [data-schedule]');
             if (!table) return;
             
-            // Check if this td has an onclick handler
             const onclickStr = td.getAttribute('onclick') || (td.onclick ? td.onclick.toString() : '');
-            
-            // Also check if td has cursor:pointer (indicates clickable)
             const isClickable = td.style.cursor === 'pointer' || 
                                getComputedStyle(td).cursor === 'pointer';
             
             if (!isClickable && !onclickStr.includes('editCell')) return;
             
-            // Try to extract editCell parameters from onclick
-            // Pattern: editCell("29", 660, 720, "text") or editCell(bunk, startMin, endMin, text)
             let bunk, startMin, endMin, currentText;
             
-            // Try parsing from onclick string
             const match = onclickStr.match(/editCell\s*\(\s*["']?([^"',]+)["']?\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*["']?([^"']*)["']?\s*\)/);
             if (match) {
                 bunk = match[1];
@@ -1167,12 +1372,9 @@ document.getElementById('post-edit-save').onclick = () => {
                 currentText = match[4] || '';
             }
             
-            // If we couldn't parse, try to get from row context
             if (!bunk) {
-                // Look for bunk name in the row
                 const row = td.closest('tr');
                 if (row) {
-                    // First cell might be bunk name
                     const firstCell = row.querySelector('td:first-child, th:first-child');
                     if (firstCell) {
                         bunk = firstCell.textContent?.trim();
@@ -1181,17 +1383,10 @@ document.getElementById('post-edit-save').onclick = () => {
                 currentText = td.textContent?.trim() || '';
             }
             
-            // If we still don't have required data, let original handler run
             if (!bunk || isNaN(startMin) || isNaN(endMin)) {
-                // Fallback: extract from td position in table
-                const headerRow = table.querySelector('thead tr, tr:first-child');
-                const cellIndex = Array.from(td.parentNode.children).indexOf(td);
-                
-                // Can't determine parameters, let original click happen
                 return;
             }
             
-            // We have the data - intercept!
             e.stopPropagation();
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -1199,7 +1394,7 @@ document.getElementById('post-edit-save').onclick = () => {
             console.log('[PostEdit] Intercepted cell click:', { bunk, startMin, endMin, currentText });
             enhancedEditCell(bunk, startMin, endMin, currentText);
             
-        }, true); // Capture phase - runs before onclick handlers
+        }, true);
         
         // Strategy 3: Patch cells after each render
         const patchAfterRender = () => {
@@ -1215,7 +1410,6 @@ document.getElementById('post-edit-save').onclick = () => {
                 const originalOnclick = td.onclick;
                 
                 td.onclick = function(e) {
-                    // Try to extract params from original onclick
                     const fnStr = originalOnclick.toString();
                     const match = fnStr.match(/editCell\s*\(\s*["']?([^"',]+)["']?\s*,\s*(\d+)\s*,\s*(\d+)/);
                     
@@ -1230,18 +1424,15 @@ document.getElementById('post-edit-save').onclick = () => {
                         return;
                     }
                     
-                    // Couldn't parse, call original
                     originalOnclick.call(this, e);
                 };
             });
         };
         
-        // Patch after renders
         setTimeout(patchAfterRender, 1000);
         setTimeout(patchAfterRender, 2000);
         setTimeout(patchAfterRender, 5000);
         
-        // Hook into updateTable to patch after each render
         if (window.updateTable && !window.updateTable._postEditHooked) {
             const originalUpdate = window.updateTable;
             window.updateTable = function(...args) {
@@ -1253,7 +1444,6 @@ document.getElementById('post-edit-save').onclick = () => {
             console.log('[PostEdit] Hooked updateTable for cell patching');
         }
         
-        // Also observe DOM changes
         const observer = new MutationObserver(() => {
             setTimeout(patchAfterRender, 50);
         });
@@ -1272,13 +1462,9 @@ document.getElementById('post-edit-save').onclick = () => {
     // =========================================================================
 
     function initPostEditSystem() {
-        // Override window.editCell
         window.editCell = enhancedEditCell;
-        
-        // Also set up click interceptor as backup
         setupClickInterceptor();
         
-        // Add CSS
         if (!document.getElementById('post-edit-styles')) {
             const style = document.createElement('style');
             style.id = 'post-edit-styles';
@@ -1306,11 +1492,12 @@ document.getElementById('post-edit-save').onclick = () => {
             document.head.appendChild(style);
         }
         
-        console.log('📝 Post-Generation Edit System v2.1 initialized');
+        console.log('📝 Post-Generation Edit System v2.2 initialized');
         console.log('   - Enhanced editCell with modal UI');
         console.log('   - Click interceptor active (3 strategies)');
         console.log('   - Conflict detection with RBAC awareness');
-        console.log('   - Bypass mode with direct Supabase save');
+        console.log('   - Smart rotation-aware bypass reassignment');
+        console.log('   - Fixed Supabase client access (CampistryDB)');
         console.log('   - Field format: "Location – Activity"');
     }
 
@@ -1325,6 +1512,8 @@ document.getElementById('post-edit-save').onclick = () => {
     window.getEditableBunks = getEditableBunks;
     window.sendSchedulerNotification = sendSchedulerNotification;
     window.bypassSaveAllBunks = bypassSaveAllBunks;
+    window.smartReassignBunkActivity = smartReassignBunkActivity;
+    window.findSmartAlternative = findSmartAlternative;
     
     // Diagnostic function
     window.diagnosePostEdit = function(bunk) {
@@ -1334,34 +1523,37 @@ document.getElementById('post-edit-save').onclick = () => {
         console.log('window.scheduleAssignments exists:', !!window.scheduleAssignments);
         console.log('Total bunks in memory:', Object.keys(window.scheduleAssignments || {}).length);
         
+        // Supabase access check
+        console.log('\n--- Supabase Access ---');
+        console.log('CampistryDB available:', !!window.CampistryDB);
+        console.log('CampistryDB.getClient():', !!window.CampistryDB?.getClient?.());
+        console.log('CampistryDB.getCampId():', window.CampistryDB?.getCampId?.());
+        console.log('CampistryDB.getUserId():', window.CampistryDB?.getUserId?.());
+        console.log('Fallback window.supabase:', !!window.supabase);
+        
         if (bunk) {
-            console.log(`Bunk ${bunk} data:`, window.scheduleAssignments?.[bunk]);
+            console.log(`\n--- Bunk ${bunk} ---`);
+            console.log(`Bunk data:`, window.scheduleAssignments?.[bunk]);
+            
+            // Check rotation score
+            const slots = [0, 1, 2];
+            const rotationScore = calculateRotationScore(bunk, 'Baseball', slots);
+            console.log(`Sample rotation score (Baseball):`, rotationScore);
         }
         
         // Check localStorage
         const storageKey = `scheduleAssignments_${dateKey}`;
         const stored = localStorage.getItem(storageKey);
-        console.log('localStorage key:', storageKey);
-        console.log('localStorage exists:', !!stored);
+        console.log('\n--- localStorage ---');
+        console.log('Key:', storageKey);
+        console.log('Exists:', !!stored);
         
         if (stored && bunk) {
             const parsed = JSON.parse(stored);
-            console.log(`localStorage bunk ${bunk}:`, parsed?.[bunk]);
+            console.log(`Bunk ${bunk}:`, parsed?.[bunk]);
         }
         
-        // Check unified storage
-        const unifiedKey = `campDailyData_v1_${dateKey}`;
-        const unified = localStorage.getItem(unifiedKey);
-        console.log('Unified storage key:', unifiedKey);
-        console.log('Unified storage exists:', !!unified);
-        
-        if (unified && bunk) {
-            const parsed = JSON.parse(unified);
-            console.log(`Unified bunk ${bunk}:`, parsed?.scheduleAssignments?.[bunk]);
-            console.log('Last post edit at:', parsed?._postEditAt ? new Date(parsed._postEditAt).toISOString() : 'never');
-        }
-        
-        console.log('Post-edit protection active:', !!window._postEditInProgress);
+        console.log('\nPost-edit protection active:', !!window._postEditInProgress);
         console.log('=== END DIAGNOSTIC ===');
     };
 
