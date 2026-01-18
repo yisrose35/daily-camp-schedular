@@ -18,12 +18,15 @@
 // - Smart rotation-aware reassignment when bypassing
 // - Proper date_key column name
 //
+// v2.3 FIXES:
+// - Fixed bunkHistory data structure (object with timestamps, not array)
+//
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('📝 Post-Generation Edit System v2.2 (SMART BYPASS + FIXED SUPABASE) loading...');
+    console.log('📝 Post-Generation Edit System v2.3 (FIXED ROTATION HISTORY) loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -317,6 +320,9 @@
     /**
      * Calculate rotation score for an activity (lower = better)
      * Mirrors the logic from scheduler_logic_fillers.js
+     * 
+     * NOTE: rotationHistory.bunks[bunk] is an OBJECT with activity names as keys
+     * and timestamps as values, NOT an array.
      */
     function calculateRotationScore(bunk, activityName, slots) {
         const firstSlot = slots[0];
@@ -328,35 +334,36 @@
             return Infinity;
         }
         
-        // Check yesterday's history if available
+        // Check rotation history (object with activity names as keys, timestamps as values)
         let score = 0;
         const rotationHistory = window.loadRotationHistory?.() || { bunks: {} };
-        const bunkHistory = rotationHistory.bunks?.[bunk] || [];
+        const bunkHistory = rotationHistory.bunks?.[bunk] || {};
+        const lastTimestamp = bunkHistory[activityName];
         
-        // Find when this activity was last done
-        const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        const yesterday = new Date(currentDate);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayStr = yesterday.toISOString().split('T')[0];
-        
-        // Check if done yesterday
-        const recentEntry = bunkHistory.find(h => 
-            h.activity?.toLowerCase() === actLower && 
-            h.date === yesterdayStr
-        );
-        
-        if (recentEntry) {
-            score += 5000; // Heavy penalty for yesterday
+        if (lastTimestamp) {
+            // Calculate days since last done
+            const now = Date.now();
+            const daysSince = Math.floor((now - lastTimestamp) / (1000 * 60 * 60 * 24));
+            
+            if (daysSince === 0) {
+                return Infinity; // Same day - blocked
+            } else if (daysSince === 1) {
+                score += 5000; // Heavy penalty for yesterday
+            } else if (daysSince === 2) {
+                score += 2000; // Penalty for 2 days ago
+            } else if (daysSince <= 7) {
+                score += 500; // Minor penalty for this week
+            }
         }
         
-        // Count how often this activity appears in history
-        const activityCount = bunkHistory.filter(h => 
-            h.activity?.toLowerCase() === actLower
-        ).length;
+        // Check historical counts for frequency
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const historicalCounts = globalSettings.historicalCounts || {};
+        const activityCount = historicalCounts[bunk]?.[activityName] || 0;
         
-        // Bonus for never-done activities
-        if (activityCount === 0) {
-            score -= 1500;
+        // Bonus for never-done or under-utilized activities
+        if (activityCount === 0 && !lastTimestamp) {
+            score -= 1500; // Never done - big bonus
         } else if (activityCount < 3) {
             score -= 800; // Under-utilized bonus
         } else if (activityCount > 5) {
@@ -1492,12 +1499,13 @@
             document.head.appendChild(style);
         }
         
-        console.log('📝 Post-Generation Edit System v2.2 initialized');
+        console.log('📝 Post-Generation Edit System v2.3 initialized');
         console.log('   - Enhanced editCell with modal UI');
         console.log('   - Click interceptor active (3 strategies)');
         console.log('   - Conflict detection with RBAC awareness');
         console.log('   - Smart rotation-aware bypass reassignment');
         console.log('   - Fixed Supabase client access (CampistryDB)');
+        console.log('   - Fixed bunkHistory data structure (object, not array)');
         console.log('   - Field format: "Location – Activity"');
     }
 
@@ -1539,6 +1547,14 @@
             const slots = [0, 1, 2];
             const rotationScore = calculateRotationScore(bunk, 'Baseball', slots);
             console.log(`Sample rotation score (Baseball):`, rotationScore);
+            
+            // Show rotation history structure
+            const rotationHistory = window.loadRotationHistory?.() || { bunks: {} };
+            const bunkHistory = rotationHistory.bunks?.[bunk] || {};
+            console.log(`Rotation history for ${bunk}:`, bunkHistory);
+            console.log(`  Type:`, typeof bunkHistory);
+            console.log(`  Is array:`, Array.isArray(bunkHistory));
+            console.log(`  Keys:`, Object.keys(bunkHistory));
         }
         
         // Check localStorage
