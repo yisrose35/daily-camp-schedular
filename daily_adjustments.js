@@ -1658,7 +1658,7 @@ function loadDailySkeleton() {
   console.log('[DailyAdj] loadDailySkeleton called for date:', dateKey);
   
   // ═══════════════════════════════════════════════════════════════════
-  // PRIORITY 1: Load from dedicated localStorage key
+  // PRIORITY 1: Load from dedicated localStorage key (fastest)
   // ═══════════════════════════════════════════════════════════════════
   try {
     const storageKey = `campManualSkeleton_${dateKey}`;
@@ -1682,11 +1682,33 @@ function loadDailySkeleton() {
   }
   
   // ═══════════════════════════════════════════════════════════════════
-  // PRIORITY 2: Fallback to daily data (cloud-synced)
+  // PRIORITY 2: Load from cloud via masterSettings.app1.dailySkeletons
+  // ═══════════════════════════════════════════════════════════════════
+  try {
+    const cloudSkeleton = masterSettings?.app1?.dailySkeletons?.[dateKey];
+    if (cloudSkeleton && cloudSkeleton.length > 0) {
+      dailyOverrideSkeleton = JSON.parse(JSON.stringify(cloudSkeleton));
+      window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+      
+      // Also save to localStorage for faster future loads
+      const storageKey = `campManualSkeleton_${dateKey}`;
+      localStorage.setItem(storageKey, JSON.stringify(dailyOverrideSkeleton));
+      
+      const nightEvents = dailyOverrideSkeleton.filter(ev => ev.isNightActivity);
+      console.log(`[DailyAdj] ✅ Loaded ${dailyOverrideSkeleton.length} events from CLOUD (${nightEvents.length} night activities)`);
+      if (nightEvents.length > 0) {
+        console.log('[DailyAdj] Night activity details:', nightEvents.map(e => ({id: e.id, event: e.event, start: e.startTime, end: e.endTime})));
+      }
+      return;
+    }
+  } catch (e) {
+    console.warn('[DailyAdj] Failed to load from cloud:', e);
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════
+  // PRIORITY 3: Fallback to daily data (legacy)
   // ═══════════════════════════════════════════════════════════════════
   const dailyData = window.loadCurrentDailyData?.() || {};
-  console.log('[DailyAdj] dailyData.manualSkeleton exists:', !!dailyData.manualSkeleton);
-  
   if (dailyData.manualSkeleton && dailyData.manualSkeleton.length > 0) {
     dailyOverrideSkeleton = JSON.parse(JSON.stringify(dailyData.manualSkeleton));
     window.dailyOverrideSkeleton = dailyOverrideSkeleton;
@@ -1697,7 +1719,7 @@ function loadDailySkeleton() {
   }
   
   // ═══════════════════════════════════════════════════════════════════
-  // PRIORITY 3: Load from template based on day of week
+  // PRIORITY 4: Load from template based on day of week
   // ═══════════════════════════════════════════════════════════════════
   console.log('[DailyAdj] No saved skeleton found, loading from template...');
   const assignments = masterSettings.app1.skeletonAssignments || {};
@@ -1727,7 +1749,7 @@ function saveDailySkeleton() {
   }
   
   // ═══════════════════════════════════════════════════════════════════
-  // DIRECT LOCALSTORAGE SAVE (bypass cloud bridge which strips keys)
+  // SAVE 1: Direct localStorage (immediate, local only)
   // ═══════════════════════════════════════════════════════════════════
   try {
     const storageKey = `campManualSkeleton_${dateKey}`;
@@ -1737,8 +1759,28 @@ function saveDailySkeleton() {
     console.error('[DailyAdj] Failed to save to localStorage:', e);
   }
   
-  // Also save to window global and daily data (for in-memory consistency)
-  window.saveCurrentDailyData?.("manualSkeleton", dailyOverrideSkeleton);
+  // ═══════════════════════════════════════════════════════════════════
+  // SAVE 2: Cloud sync via masterSettings.app1.dailySkeletons
+  // ═══════════════════════════════════════════════════════════════════
+  try {
+    // Ensure the dailySkeletons object exists
+    if (!masterSettings.app1.dailySkeletons) {
+      masterSettings.app1.dailySkeletons = {};
+    }
+    
+    // Store skeleton for this date
+    masterSettings.app1.dailySkeletons[dateKey] = dailyOverrideSkeleton;
+    
+    // Save to cloud via global settings (this syncs to Supabase)
+    if (typeof window.saveGlobalSettings === 'function') {
+      window.saveGlobalSettings('app1', masterSettings.app1);
+      console.log(`[DailyAdj] ✅ Saved manualSkeleton to cloud via masterSettings.app1.dailySkeletons["${dateKey}"]`);
+    }
+  } catch (e) {
+    console.error('[DailyAdj] Failed to save to cloud:', e);
+  }
+  
+  // Update window global
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
   
   // Force sync to cloud if available
