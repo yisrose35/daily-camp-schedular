@@ -17,7 +17,7 @@
 (function() {
     'use strict';
 
-    console.log('📝 Post-Generation Edit System loading...');
+    console.log('📝 Post-Generation Edit System v2.0 (RBAC + BYPASS) loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -630,11 +630,21 @@
         const slots = findSlotsForRange(startMin, endMin, unifiedTimes);
         
         if (slots.length === 0) {
+            console.error('[PostEdit] ❌ No slots found for time range:', startMin, '-', endMin);
             alert('Error: Could not find time slots for the specified range.');
             return;
         }
         
-        console.log(`[PostEdit] Applying edit for ${bunk}:`, { activity, location, startMin, endMin, slots, hasConflict, resolutionChoice });
+        console.log(`[PostEdit] Applying edit for ${bunk}:`, { 
+            activity, 
+            location, 
+            startMin, 
+            endMin, 
+            slots, 
+            hasConflict, 
+            resolutionChoice,
+            isClear
+        });
         
         if (!window.scheduleAssignments) {
             window.scheduleAssignments = {};
@@ -649,26 +659,108 @@
             applyDirectEdit(bunk, slots, activity, location, isClear);
         }
         
+        // Debug: Log what we just saved
+        console.log(`[PostEdit] ✅ After edit, bunk ${bunk} slot ${slots[0]}:`, window.scheduleAssignments[bunk][slots[0]]);
+        
+        // CRITICAL: Save to localStorage FIRST (immediate persistence)
+        const currentDate = window.currentDate || new Date().toISOString().split('T')[0];
+        const storageKey = `scheduleAssignments_${currentDate}`;
+        try {
+            localStorage.setItem(storageKey, JSON.stringify(window.scheduleAssignments));
+            console.log(`[PostEdit] ✅ Saved to localStorage: ${storageKey}`);
+        } catch (e) {
+            console.error('[PostEdit] Failed to save to localStorage:', e);
+        }
+        
+        // Also save to the unified data key
+        const unifiedKey = `campDailyData_v1_${currentDate}`;
+        try {
+            const dailyData = JSON.parse(localStorage.getItem(unifiedKey) || '{}');
+            dailyData.scheduleAssignments = window.scheduleAssignments;
+            dailyData._postEditAt = Date.now();
+            localStorage.setItem(unifiedKey, JSON.stringify(dailyData));
+            console.log(`[PostEdit] ✅ Saved to unified storage: ${unifiedKey}`);
+        } catch (e) {
+            console.error('[PostEdit] Failed to save to unified storage:', e);
+        }
+        
+        // Set a flag to prevent cloud overwrites for the next few seconds
+        window._postEditInProgress = true;
+        window._postEditTimestamp = Date.now();
+        setTimeout(() => {
+            window._postEditInProgress = false;
+            console.log('[PostEdit] Post-edit protection expired');
+        }, 5000);
+        
+        // Then trigger cloud save
         window.saveSchedule?.();
-        window.updateTable?.();
+        
+        // Force UI refresh - use multiple methods to ensure it works
+        console.log('[PostEdit] Triggering UI refresh...');
+        
+        // Method 1: Direct updateTable
+        if (window.updateTable) {
+            console.log('[PostEdit] Calling window.updateTable()');
+            window.updateTable();
+        }
+        
+        // Method 2: Direct render to container (bypass throttle)
+        setTimeout(() => {
+            const container = document.getElementById('scheduleTable');
+            if (container && window.renderStaggeredView) {
+                console.log('[PostEdit] Forcing direct renderStaggeredView...');
+                window.renderStaggeredView(container);
+            }
+        }, 100);
+        
+        // Method 3: Also try UnifiedScheduleSystem if available
+        if (window.UnifiedScheduleSystem?.render) {
+            console.log('[PostEdit] Calling UnifiedScheduleSystem.render()...');
+            window.UnifiedScheduleSystem.render();
+        }
+        
+        // Method 4: Dispatch event for other systems to pick up
+        window.dispatchEvent(new CustomEvent('campistry-schedule-updated', { 
+            detail: { bunk, activity, location } 
+        }));
         
         if (window.showToast) {
             window.showToast(`✅ Updated ${bunk}: ${isClear ? 'Cleared' : activity}`, 'success');
+        } else {
+            console.log(`[PostEdit] ✅ Updated ${bunk}: ${isClear ? 'Cleared' : activity}`);
         }
     }
 
     function applyDirectEdit(bunk, slots, activity, location, isClear) {
+        console.log(`[PostEdit] applyDirectEdit called:`, { bunk, slots, activity, location, isClear });
+        
+        // Format field correctly: "Location – Activity" if both present
+        let fieldValue;
+        if (isClear) {
+            fieldValue = 'Free';
+        } else if (location && activity) {
+            fieldValue = `${location} – ${activity}`;
+        } else if (location) {
+            fieldValue = location;
+        } else {
+            fieldValue = activity;
+        }
+        
+        console.log(`[PostEdit] Setting field value: "${fieldValue}" for slots:`, slots);
+        
         slots.forEach((idx, i) => {
             window.scheduleAssignments[bunk][idx] = {
-                field: isClear ? 'Free' : (location || activity),
+                field: fieldValue,
                 sport: null,
                 continuation: i > 0,
                 _fixed: true,
                 _pinned: !isClear,
                 _activity: isClear ? 'Free' : activity,
+                _location: location,
                 _postEdit: true,
                 _editedAt: Date.now()
             };
+            console.log(`[PostEdit] Set bunk ${bunk} slot ${idx}:`, window.scheduleAssignments[bunk][idx]);
         });
         
         if (location && !isClear && window.registerLocationUsage) {
@@ -816,10 +908,15 @@
         if (alternative) {
             console.log(`[PostEdit] Found alternative for ${bunk}: ${alternative}`);
             
+            // Format the field value correctly: "Location – Activity"
+            const fieldValue = `${alternative} – ${originalActivity}`;
+            
             slots.forEach((idx, i) => {
                 window.scheduleAssignments[bunk][idx] = {
                     ...entry,
-                    field: alternative,
+                    field: fieldValue,
+                    _location: alternative,
+                    _activity: originalActivity,
                     continuation: i > 0,
                     _reassigned: true,
                     _originalField: avoidLocation,
@@ -930,27 +1027,97 @@
     // =========================================================================
 
     function setupClickInterceptor() {
-        document.addEventListener('click', (e) => {
-            // Check if click is on a schedule cell (td in schedule table)
-            const cell = e.target.closest('td[data-bunk][data-start-min]');
-            if (!cell) return;
+        // Strategy: Override window.editCell so any call to it goes through us
+        // But we need to do this AFTER unified_schedule_system loads
+        
+        // Retry override periodically to catch late-loading scripts
+        function overrideEditCell() {
+            if (window.editCell && window.editCell !== enhancedEditCell) {
+                console.log('[PostEdit] Re-overriding window.editCell');
+                window.editCell = enhancedEditCell;
+            }
+        }
+        
+        // Override immediately and retry
+        overrideEditCell();
+        setTimeout(overrideEditCell, 500);
+        setTimeout(overrideEditCell, 1500);
+        setTimeout(overrideEditCell, 3000);
+        
+        // Also patch cells after render
+        function patchScheduleCells() {
+            // Find schedule table
+            const table = document.querySelector('#schedule-table, .schedule-table, [data-schedule-table]');
+            if (!table) return;
             
-            // Get cell data
-            const bunk = cell.dataset.bunk;
-            const startMin = parseInt(cell.dataset.startMin, 10);
-            const endMin = parseInt(cell.dataset.endMin, 10);
-            const currentText = cell.textContent?.trim() || '';
+            // Find all clickable cells
+            const cells = table.querySelectorAll('td[style*="cursor: pointer"], td.schedule-cell');
             
-            if (!bunk || isNaN(startMin) || isNaN(endMin)) return;
-            
-            // Prevent original handler
-            e.stopPropagation();
-            e.preventDefault();
-            
-            // Call our enhanced edit
-            enhancedEditCell(bunk, startMin, endMin, currentText);
-            
-        }, true); // Use capture phase to intercept before other handlers
+            cells.forEach(td => {
+                if (td._postEditPatched) return;
+                td._postEditPatched = true;
+                
+                // Store the original onclick
+                const originalOnclick = td.onclick;
+                
+                if (originalOnclick) {
+                    // Replace with our enhanced version
+                    td.onclick = (e) => {
+                        // Try to extract bunk/time from original onclick string
+                        const fnStr = originalOnclick.toString();
+                        
+                        // Pattern: editCell("29", 660, 720, "Hockey")
+                        // Or: editCell(bunk, block.startMin, block.endMin, displayText)
+                        const match = fnStr.match(/editCell\s*\(\s*["']?(\w+)["']?\s*,\s*(\d+)\s*,\s*(\d+)/);
+                        
+                        if (match) {
+                            const bunk = match[1];
+                            const startMin = parseInt(match[2], 10);
+                            const endMin = parseInt(match[3], 10);
+                            const currentText = td.textContent?.trim() || '';
+                            
+                            e.stopPropagation();
+                            e.preventDefault();
+                            
+                            console.log('[PostEdit] Intercepted cell click:', { bunk, startMin, endMin, currentText });
+                            enhancedEditCell(bunk, startMin, endMin, currentText);
+                            return;
+                        }
+                        
+                        // If we can't parse, call original
+                        originalOnclick.call(td, e);
+                    };
+                }
+            });
+        }
+        
+        // Patch after renders
+        setTimeout(patchScheduleCells, 1000);
+        setTimeout(patchScheduleCells, 2000);
+        setTimeout(patchScheduleCells, 5000);
+        
+        // Also patch when table updates
+        const scheduleContainer = document.getElementById('schedule-table') || 
+                                   document.getElementById('unified-schedule') ||
+                                   document.querySelector('.schedule-container');
+        
+        if (scheduleContainer) {
+            const observer = new MutationObserver(() => {
+                setTimeout(patchScheduleCells, 100);
+            });
+            observer.observe(scheduleContainer, { childList: true, subtree: true });
+        }
+        
+        // Also listen for updateTable calls
+        if (window.updateTable && !window.updateTable._postEditHooked) {
+            const originalUpdate = window.updateTable;
+            window.updateTable = function(...args) {
+                const result = originalUpdate.apply(this, args);
+                setTimeout(patchScheduleCells, 200);
+                return result;
+            };
+            window.updateTable._postEditHooked = true;
+        }
         
         console.log('[PostEdit] Click interceptor installed');
     }
@@ -994,11 +1161,12 @@
             document.head.appendChild(style);
         }
         
-        console.log('📝 Post-Generation Edit System initialized');
+        console.log('📝 Post-Generation Edit System v2.0 initialized');
         console.log('   - Enhanced editCell with modal UI');
         console.log('   - Click interceptor active');
-        console.log('   - Conflict detection enabled');
-        console.log('   - Smart reassignment enabled');
+        console.log('   - Conflict detection with RBAC awareness');
+        console.log('   - Bypass/Notify options for cross-scheduler conflicts');
+        console.log('   - Field format: "Location – Activity"');
     }
 
     // =========================================================================
@@ -1011,6 +1179,45 @@
     window.getAllLocations = getAllLocations;
     window.getEditableBunks = getEditableBunks;
     window.sendSchedulerNotification = sendSchedulerNotification;
+    
+    // Diagnostic function
+    window.diagnosePostEdit = function(bunk) {
+        const dateKey = window.currentDate || new Date().toISOString().split('T')[0];
+        console.log('=== POST-EDIT DIAGNOSTIC ===');
+        console.log('Date:', dateKey);
+        console.log('window.scheduleAssignments exists:', !!window.scheduleAssignments);
+        console.log('Total bunks in memory:', Object.keys(window.scheduleAssignments || {}).length);
+        
+        if (bunk) {
+            console.log(`Bunk ${bunk} data:`, window.scheduleAssignments?.[bunk]);
+        }
+        
+        // Check localStorage
+        const storageKey = `scheduleAssignments_${dateKey}`;
+        const stored = localStorage.getItem(storageKey);
+        console.log('localStorage key:', storageKey);
+        console.log('localStorage exists:', !!stored);
+        
+        if (stored && bunk) {
+            const parsed = JSON.parse(stored);
+            console.log(`localStorage bunk ${bunk}:`, parsed?.[bunk]);
+        }
+        
+        // Check unified storage
+        const unifiedKey = `campDailyData_v1_${dateKey}`;
+        const unified = localStorage.getItem(unifiedKey);
+        console.log('Unified storage key:', unifiedKey);
+        console.log('Unified storage exists:', !!unified);
+        
+        if (unified && bunk) {
+            const parsed = JSON.parse(unified);
+            console.log(`Unified bunk ${bunk}:`, parsed?.scheduleAssignments?.[bunk]);
+            console.log('Last post edit at:', parsed?._postEditAt ? new Date(parsed._postEditAt).toISOString() : 'never');
+        }
+        
+        console.log('Post-edit protection active:', !!window._postEditInProgress);
+        console.log('=== END DIAGNOSTIC ===');
+    };
 
     // Auto-initialize
     if (document.readyState === 'loading') {
