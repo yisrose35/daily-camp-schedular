@@ -21,12 +21,17 @@
 // v2.3 FIXES:
 // - Fixed bunkHistory data structure (object with timestamps, not array)
 //
+// v2.4 FIXES:
+// - Made resolveConflictsAndApply async to properly await bypass save
+// - Added bypass protection to prevent remote merge from overwriting changes
+// - Force UI refresh after bypass operations complete
+//
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('📝 Post-Generation Edit System v2.3 (FIXED ROTATION HISTORY) loading...');
+    console.log('📝 Post-Generation Edit System v2.4 (ASYNC BYPASS FIX) loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -769,7 +774,7 @@
     // APPLY EDIT
     // =========================================================================
 
-    function applyEdit(bunk, editData) {
+    async function applyEdit(bunk, editData) {
         const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
         const unifiedTimes = window.unifiedTimes || [];
         
@@ -801,7 +806,7 @@
         }
         
         if (hasConflict) {
-            resolveConflictsAndApply(bunk, slots, activity, location, editData);
+            await resolveConflictsAndApply(bunk, slots, activity, location, editData);
         } else {
             applyDirectEdit(bunk, slots, activity, location, isClear);
         }
@@ -920,7 +925,7 @@
         }
     }
 
-    function resolveConflictsAndApply(bunk, slots, activity, location, editData) {
+    async function resolveConflictsAndApply(bunk, slots, activity, location, editData) {
         const editableConflicts = editData.editableConflicts || [];
         const nonEditableConflicts = editData.nonEditableConflicts || [];
         const resolutionChoice = editData.resolutionChoice || 'notify';
@@ -986,7 +991,26 @@
                 // CRITICAL: For bypass mode, we need to save ALL bunks, not just ours
                 // The regular saveSchedule filters to only editable bunks
                 console.log('[PostEdit] 🔓 Bypass mode - saving ALL modified bunks to cloud');
-                bypassSaveAllBunks(nonEditableConflicts.map(c => c.bunk));
+                
+                // Store the bypassed bunk data before saving so we can restore if needed
+                const bypassedBunkData = {};
+                nonEditableBunks.forEach(b => {
+                    if (window.scheduleAssignments[b]) {
+                        bypassedBunkData[b] = JSON.parse(JSON.stringify(window.scheduleAssignments[b]));
+                    }
+                });
+                window._bypassedBunkData = bypassedBunkData;
+                window._bypassInProgress = true;
+                
+                await bypassSaveAllBunks(nonEditableConflicts.map(c => c.bunk));
+                
+                // After bypass save, restore bypassed bunk data in case remote merge overwrote it
+                console.log('[PostEdit] 🔓 Restoring bypassed bunk data after save...');
+                Object.entries(bypassedBunkData).forEach(([bunkName, data]) => {
+                    window.scheduleAssignments[bunkName] = data;
+                });
+                
+                window._bypassInProgress = false;
                 
                 if (window.showToast) {
                     window.showToast(`🔓 Bypassed permissions - reassigned ${nonEditableBunks.length} bunk(s)`, 'info');
@@ -995,6 +1019,11 @@
                 // Still send a notification that you made changes to their bunks
                 sendSchedulerNotification(nonEditableBunks, location, activity, 'bypassed');
                 
+                // Force UI refresh after bypass is complete
+                console.log('[PostEdit] 🔓 Forcing UI refresh after bypass...');
+                if (window.updateTable) {
+                    window.updateTable();
+                }
             } else {
                 // NOTIFY: Just create double-booking and notify them
                 console.warn(`[PostEdit] 📧 Double-booking created with bunks from other schedulers: ${nonEditableBunks.join(', ')}`);
@@ -1499,13 +1528,14 @@
             document.head.appendChild(style);
         }
         
-        console.log('📝 Post-Generation Edit System v2.3 initialized');
+        console.log('📝 Post-Generation Edit System v2.4 initialized');
         console.log('   - Enhanced editCell with modal UI');
         console.log('   - Click interceptor active (3 strategies)');
         console.log('   - Conflict detection with RBAC awareness');
         console.log('   - Smart rotation-aware bypass reassignment');
         console.log('   - Fixed Supabase client access (CampistryDB)');
         console.log('   - Fixed bunkHistory data structure (object, not array)');
+        console.log('   - Async bypass save with protection against remote merge');
         console.log('   - Field format: "Location – Activity"');
     }
 
