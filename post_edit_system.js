@@ -2,17 +2,15 @@
 // POST-GENERATION EDIT SYSTEM - Enhanced Cell Editing with Conflict Resolution
 // =============================================================================
 // 
-// REPLACES: The simple prompt-based editCell in unified_schedule_system.js
-// 
 // FEATURES:
 // - Modal UI for editing cells post-generation
-// - Activity name, start/end times, and location/field selection
+// - Activity name and location/field selection
+// - Optional time change (hidden by default, shown on request)
 // - Scans current schedule for field conflicts
 // - If conflict detected: warns user, offers Accept (pin + regenerate) or Decline
 // - Pinned activities are preserved during regeneration
 //
 // INTEGRATION: Add this file AFTER unified_schedule_system.js
-// Then call: window.initPostEditSystem();
 //
 // =============================================================================
 
@@ -43,7 +41,6 @@
             s = s.replace(/am|pm/g, '').trim();
         }
         
-        // Try 24h format first
         const match24 = s.match(/^(\d{1,2}):(\d{2})$/);
         if (match24) {
             let h = parseInt(match24[1], 10);
@@ -101,7 +98,6 @@
                 (slot.end instanceof Date ? slot.end.getHours() * 60 + slot.end.getMinutes() : null);
             
             if (slotStart !== null && slotEnd !== null) {
-                // Slot overlaps with our range
                 if (slotStart < endMin && slotEnd > startMin) {
                     slots.push(i);
                 }
@@ -111,7 +107,7 @@
     }
 
     // =========================================================================
-    // GET ALL AVAILABLE LOCATIONS (Fields + Special Activities with locations)
+    // GET ALL AVAILABLE LOCATIONS
     // =========================================================================
 
     function getAllLocations() {
@@ -121,7 +117,7 @@
         const locations = [];
         const seen = new Set();
         
-        // 1. Fields
+        // Fields
         const fields = app1.fields || [];
         fields.forEach(f => {
             if (f.name && !seen.has(f.name)) {
@@ -135,7 +131,7 @@
             }
         });
         
-        // 2. Special Activities (as locations if they have a location property)
+        // Special Activities
         const specials = app1.specialActivities || [];
         specials.forEach(s => {
             if (s.name && !seen.has(s.name)) {
@@ -157,10 +153,6 @@
     // CONFLICT DETECTION
     // =========================================================================
 
-    /**
-     * Check if a location is already in use at the given slots
-     * Returns: { hasConflict: boolean, conflicts: [{bunk, activity, slot}], canShare: boolean }
-     */
     function checkLocationConflict(locationName, slots, excludeBunk) {
         const assignments = window.scheduleAssignments || {};
         const locations = getAllLocations();
@@ -170,7 +162,6 @@
         const conflicts = [];
         const usageBySlot = {};
         
-        // Count usage at each slot
         for (const slotIdx of slots) {
             usageBySlot[slotIdx] = [];
             
@@ -183,7 +174,6 @@
                 const entryField = typeof entry.field === 'object' ? entry.field?.name : entry.field;
                 const entryActivity = entry._activity || entryField;
                 
-                // Check if this entry uses our location
                 if (entryField?.toLowerCase() === locationName.toLowerCase() ||
                     entryActivity?.toLowerCase() === locationName.toLowerCase()) {
                     usageBySlot[slotIdx].push({
@@ -195,7 +185,6 @@
             }
         }
         
-        // Check if any slot exceeds capacity
         let hasConflict = false;
         let currentUsage = 0;
         
@@ -203,7 +192,6 @@
             const slotUsage = usageBySlot[slotIdx] || [];
             currentUsage = Math.max(currentUsage, slotUsage.length);
             
-            // Adding one more would exceed capacity
             if (slotUsage.length >= maxCapacity) {
                 hasConflict = true;
                 slotUsage.forEach(u => {
@@ -228,11 +216,9 @@
     // =========================================================================
 
     function createModal() {
-        // Remove existing
         document.getElementById(OVERLAY_ID)?.remove();
         document.getElementById(MODAL_ID)?.remove();
         
-        // Overlay
         const overlay = document.createElement('div');
         overlay.id = OVERLAY_ID;
         overlay.style.cssText = `
@@ -246,7 +232,6 @@
             animation: fadeIn 0.2s ease;
         `;
         
-        // Modal
         const modal = document.createElement('div');
         modal.id = MODAL_ID;
         modal.style.cssText = `
@@ -262,10 +247,18 @@
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
         
-        // Close on overlay click
         overlay.addEventListener('click', (e) => {
             if (e.target === overlay) closeModal();
         });
+        
+        // Close on Escape
+        const escHandler = (e) => {
+            if (e.key === 'Escape') {
+                closeModal();
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
         
         return modal;
     }
@@ -279,11 +272,9 @@
         const locations = getAllLocations();
         const unifiedTimes = window.unifiedTimes || [];
         
-        // Parse current value to extract field if possible
         let currentActivity = currentValue || '';
         let currentField = '';
         
-        // Try to get current entry data
         const slots = findSlotsForRange(startMin, endMin, unifiedTimes);
         if (slots.length > 0) {
             const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
@@ -301,7 +292,7 @@
             
             <div style="background: #f3f4f6; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;">
                 <div style="font-weight: 600; color: #374151;">${bunk}</div>
-                <div style="font-size: 0.875rem; color: #6b7280;">
+                <div style="font-size: 0.875rem; color: #6b7280;" id="post-edit-time-display">
                     ${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}
                 </div>
             </div>
@@ -318,26 +309,6 @@
                         style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box;">
                     <div style="font-size: 0.75rem; color: #9ca3af; margin-top: 4px;">
                         Enter CLEAR or FREE to empty this slot
-                    </div>
-                </div>
-                
-                <!-- Time Range -->
-                <div style="display: flex; gap: 12px;">
-                    <div style="flex: 1;">
-                        <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">
-                            Start Time
-                        </label>
-                        <input type="time" id="post-edit-start" 
-                            value="${minutesToTimeString(startMin)}"
-                            style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box;">
-                    </div>
-                    <div style="flex: 1;">
-                        <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">
-                            End Time
-                        </label>
-                        <input type="time" id="post-edit-end" 
-                            value="${minutesToTimeString(endMin)}"
-                            style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box;">
                     </div>
                 </div>
                 
@@ -360,6 +331,45 @@
                             ).join('')}
                         </optgroup>
                     </select>
+                </div>
+                
+                <!-- Change Time Toggle -->
+                <div>
+                    <button type="button" id="post-edit-time-toggle" style="
+                        background: none;
+                        border: none;
+                        color: #2563eb;
+                        font-size: 0.875rem;
+                        cursor: pointer;
+                        padding: 0;
+                        display: flex;
+                        align-items: center;
+                        gap: 4px;
+                    ">
+                        <span id="post-edit-time-arrow">▶</span> Change time
+                    </button>
+                    
+                    <!-- Time Range (Hidden by default) -->
+                    <div id="post-edit-time-section" style="display: none; margin-top: 12px;">
+                        <div style="display: flex; gap: 12px;">
+                            <div style="flex: 1;">
+                                <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px; font-size: 0.875rem;">
+                                    Start Time
+                                </label>
+                                <input type="time" id="post-edit-start" 
+                                    value="${minutesToTimeString(startMin)}"
+                                    style="width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.9rem; box-sizing: border-box;">
+                            </div>
+                            <div style="flex: 1;">
+                                <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px; font-size: 0.875rem;">
+                                    End Time
+                                </label>
+                                <input type="time" id="post-edit-end" 
+                                    value="${minutesToTimeString(endMin)}"
+                                    style="width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.9rem; box-sizing: border-box;">
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 
                 <!-- Conflict Warning Area -->
@@ -393,28 +403,60 @@
             </div>
         `;
         
+        // Store original times
+        let useOriginalTime = true;
+        const originalStartMin = startMin;
+        const originalEndMin = endMin;
+        
         // Event handlers
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
         
-        // Check conflicts when location changes
+        // Time toggle
+        const timeToggle = document.getElementById('post-edit-time-toggle');
+        const timeSection = document.getElementById('post-edit-time-section');
+        const timeArrow = document.getElementById('post-edit-time-arrow');
+        const timeDisplay = document.getElementById('post-edit-time-display');
+        
+        timeToggle.onclick = () => {
+            const isHidden = timeSection.style.display === 'none';
+            timeSection.style.display = isHidden ? 'block' : 'none';
+            timeArrow.textContent = isHidden ? '▼' : '▶';
+            useOriginalTime = !isHidden;
+        };
+        
+        // Conflict checking
         const locationSelect = document.getElementById('post-edit-location');
         const conflictArea = document.getElementById('post-edit-conflict');
         const startInput = document.getElementById('post-edit-start');
         const endInput = document.getElementById('post-edit-end');
         
+        function getEffectiveTimes() {
+            if (useOriginalTime) {
+                return { startMin: originalStartMin, endMin: originalEndMin };
+            }
+            return {
+                startMin: parseTimeToMinutes(startInput.value) || originalStartMin,
+                endMin: parseTimeToMinutes(endInput.value) || originalEndMin
+            };
+        }
+        
+        function updateTimeDisplay() {
+            const times = getEffectiveTimes();
+            timeDisplay.textContent = `${minutesToTimeLabel(times.startMin)} - ${minutesToTimeLabel(times.endMin)}`;
+        }
+        
         function checkAndShowConflicts() {
             const location = locationSelect.value;
-            const newStartMin = parseTimeToMinutes(startInput.value);
-            const newEndMin = parseTimeToMinutes(endInput.value);
+            const times = getEffectiveTimes();
             
-            if (!location || !newStartMin || !newEndMin) {
+            if (!location) {
                 conflictArea.style.display = 'none';
                 return null;
             }
             
-            const newSlots = findSlotsForRange(newStartMin, newEndMin, unifiedTimes);
-            const conflictCheck = checkLocationConflict(location, newSlots, bunk);
+            const targetSlots = findSlotsForRange(times.startMin, times.endMin, unifiedTimes);
+            const conflictCheck = checkLocationConflict(location, targetSlots, bunk);
             
             if (conflictCheck.hasConflict) {
                 const conflictBunks = [...new Set(conflictCheck.conflicts.map(c => c.bunk))];
@@ -432,7 +474,7 @@
                             ${conflictBunks.map(b => `<li>${b}</li>`).join('')}
                         </ul>
                         <p style="margin: 8px 0 0 0; color: #78350f; font-size: 0.875rem;">
-                            If you proceed, the system will attempt to reassign the conflicting activities to other available locations.
+                            If you proceed, the system will attempt to reassign the conflicting activities.
                         </p>
                     </div>
                 `;
@@ -444,8 +486,8 @@
         }
         
         locationSelect.addEventListener('change', checkAndShowConflicts);
-        startInput.addEventListener('change', checkAndShowConflicts);
-        endInput.addEventListener('change', checkAndShowConflicts);
+        startInput.addEventListener('change', () => { updateTimeDisplay(); checkAndShowConflicts(); });
+        endInput.addEventListener('change', () => { updateTimeDisplay(); checkAndShowConflicts(); });
         
         // Initial check
         checkAndShowConflicts();
@@ -454,51 +496,46 @@
         document.getElementById('post-edit-save').onclick = () => {
             const activity = document.getElementById('post-edit-activity').value.trim();
             const location = locationSelect.value;
-            const newStartMin = parseTimeToMinutes(startInput.value);
-            const newEndMin = parseTimeToMinutes(endInput.value);
+            const times = getEffectiveTimes();
             
             if (!activity) {
                 alert('Please enter an activity name.');
                 return;
             }
             
-            if (!newStartMin || !newEndMin || newEndMin <= newStartMin) {
-                alert('Please enter valid start and end times.');
+            if (times.endMin <= times.startMin) {
+                alert('End time must be after start time.');
                 return;
             }
             
             const conflictCheck = location ? checkAndShowConflicts() : null;
             
             if (conflictCheck?.hasConflict) {
-                // Show confirmation dialog
                 const proceed = confirm(
                     `⚠️ CONFLICT WARNING\n\n` +
                     `"${location}" is already in use during this time.\n\n` +
                     `If you proceed:\n` +
                     `• Your activity will be PINNED to this location\n` +
-                    `• Conflicting activities will be moved to other available locations\n` +
-                    `• The schedule will be partially regenerated\n\n` +
+                    `• Conflicting activities will be moved to other available locations\n\n` +
                     `Do you want to proceed?`
                 );
                 
                 if (!proceed) return;
                 
-                // User accepted - apply with regeneration
                 onSave({
                     activity,
                     location,
-                    startMin: newStartMin,
-                    endMin: newEndMin,
+                    startMin: times.startMin,
+                    endMin: times.endMin,
                     hasConflict: true,
                     conflicts: conflictCheck.conflicts
                 });
             } else {
-                // No conflict - just apply
                 onSave({
                     activity,
                     location,
-                    startMin: newStartMin,
-                    endMin: newEndMin,
+                    startMin: times.startMin,
+                    endMin: times.endMin,
                     hasConflict: false,
                     conflicts: []
                 });
@@ -509,10 +546,11 @@
         
         // Focus activity input
         document.getElementById('post-edit-activity').focus();
+        document.getElementById('post-edit-activity').select();
     }
 
     // =========================================================================
-    // APPLY EDIT WITH OPTIONAL REGENERATION
+    // APPLY EDIT
     // =========================================================================
 
     function applyEdit(bunk, editData) {
@@ -527,16 +565,8 @@
             return;
         }
         
-        console.log(`[PostEdit] Applying edit for ${bunk}:`, {
-            activity,
-            location,
-            startMin,
-            endMin,
-            slots,
-            hasConflict
-        });
+        console.log(`[PostEdit] Applying edit for ${bunk}:`, { activity, location, startMin, endMin, slots, hasConflict });
         
-        // Initialize if needed
         if (!window.scheduleAssignments) {
             window.scheduleAssignments = {};
         }
@@ -545,18 +575,14 @@
         }
         
         if (hasConflict && conflicts.length > 0) {
-            // Need to handle conflicts - move conflicting activities
             resolveConflictsAndApply(bunk, slots, activity, location, conflicts);
         } else {
-            // No conflict - just apply directly
             applyDirectEdit(bunk, slots, activity, location, isClear);
         }
         
-        // Save and refresh
         window.saveSchedule?.();
         window.updateTable?.();
         
-        // Show success toast
         if (window.showToast) {
             window.showToast(`✅ Updated ${bunk}: ${isClear ? 'Cleared' : activity}`, 'success');
         }
@@ -576,7 +602,6 @@
             };
         });
         
-        // Register location usage if specified
         if (location && !isClear && window.registerLocationUsage) {
             const divName = Object.keys(window.divisions || {}).find(d => 
                 window.divisions[d]?.bunks?.includes(bunk)
@@ -590,10 +615,8 @@
     function resolveConflictsAndApply(bunk, slots, activity, location, conflicts) {
         console.log('[PostEdit] Resolving conflicts...', conflicts);
         
-        // First, apply the pinned edit
         applyDirectEdit(bunk, slots, activity, location, false);
         
-        // Lock this field for these slots
         if (window.GlobalFieldLocks) {
             const divName = Object.keys(window.divisions || {}).find(d => 
                 window.divisions[d]?.bunks?.includes(bunk)
@@ -605,7 +628,6 @@
             });
         }
         
-        // Now handle each conflicting bunk
         const conflictsByBunk = {};
         conflicts.forEach(c => {
             if (!conflictsByBunk[c.bunk]) {
@@ -614,7 +636,6 @@
             conflictsByBunk[c.bunk].push(c.slot);
         });
         
-        // Try to reassign each conflicting bunk to a different location
         for (const [conflictBunk, conflictSlots] of Object.entries(conflictsByBunk)) {
             const uniqueSlots = [...new Set(conflictSlots)];
             reassignBunkActivity(conflictBunk, uniqueSlots, location);
@@ -622,14 +643,12 @@
     }
 
     function reassignBunkActivity(bunk, slots, avoidLocation) {
-        console.log(`[PostEdit] Reassigning ${bunk} away from ${avoidLocation} at slots:`, slots);
+        console.log(`[PostEdit] Reassigning ${bunk} away from ${avoidLocation}`);
         
         const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
         if (!entry) return;
         
         const originalActivity = entry._activity || entry.sport || 'Activity';
-        
-        // Find an alternative location
         const alternative = findAlternativeLocation(originalActivity, slots, avoidLocation);
         
         if (alternative) {
@@ -650,7 +669,6 @@
                 window.showToast(`↪️ Moved ${bunk} to ${alternative}`, 'info');
             }
         } else {
-            // No alternative found - mark as Free
             console.warn(`[PostEdit] No alternative found for ${bunk}, marking as Free`);
             
             slots.forEach((idx, i) => {
@@ -673,21 +691,17 @@
     }
 
     function findAlternativeLocation(activityName, slots, avoidLocation) {
-        const locations = getAllLocations();
         const settings = window.loadGlobalSettings?.() || {};
         const app1 = settings.app1 || {};
         const fields = app1.fields || [];
         
-        // Find fields that can host this activity type
         const activityLower = activityName.toLowerCase();
         const candidateFields = [];
         
-        // Check each field
         for (const field of fields) {
             if (field.name.toLowerCase() === avoidLocation.toLowerCase()) continue;
             if (field.available === false) continue;
             
-            // Check if field supports this activity
             const activities = field.activities || [];
             const supportsActivity = activities.some(a => 
                 a.toLowerCase() === activityLower ||
@@ -695,7 +709,6 @@
                 a.toLowerCase().includes(activityLower)
             );
             
-            // Or if it's a general field
             const isGeneral = activities.length === 0 || 
                 activities.some(a => a.toLowerCase().includes('general'));
             
@@ -704,26 +717,19 @@
             }
         }
         
-        // Check each candidate for availability
         for (const field of candidateFields) {
             const conflictCheck = checkLocationConflict(field.name, slots, null);
             
-            if (!conflictCheck.hasConflict) {
-                return field.name;
-            }
-            
-            // Can we share?
-            if (conflictCheck.canShare) {
+            if (!conflictCheck.hasConflict || conflictCheck.canShare) {
                 return field.name;
             }
         }
         
-        // No suitable alternative found
         return null;
     }
 
     // =========================================================================
-    // ENHANCED EDIT CELL - Replaces the original
+    // ENHANCED EDIT CELL
     // =========================================================================
 
     function enhancedEditCell(bunk, startMin, endMin, current) {
@@ -751,10 +757,40 @@
             return;
         }
         
-        // Show the enhanced modal
+        // Show modal
         showEditModal(bunk, startMin, endMin, current, (editData) => {
             applyEdit(bunk, editData);
         });
+    }
+
+    // =========================================================================
+    // CLICK INTERCEPTOR - Captures cell clicks before original handler
+    // =========================================================================
+
+    function setupClickInterceptor() {
+        document.addEventListener('click', (e) => {
+            // Check if click is on a schedule cell (td in schedule table)
+            const cell = e.target.closest('td[data-bunk][data-start-min]');
+            if (!cell) return;
+            
+            // Get cell data
+            const bunk = cell.dataset.bunk;
+            const startMin = parseInt(cell.dataset.startMin, 10);
+            const endMin = parseInt(cell.dataset.endMin, 10);
+            const currentText = cell.textContent?.trim() || '';
+            
+            if (!bunk || isNaN(startMin) || isNaN(endMin)) return;
+            
+            // Prevent original handler
+            e.stopPropagation();
+            e.preventDefault();
+            
+            // Call our enhanced edit
+            enhancedEditCell(bunk, startMin, endMin, currentText);
+            
+        }, true); // Use capture phase to intercept before other handlers
+        
+        console.log('[PostEdit] Click interceptor installed');
     }
 
     // =========================================================================
@@ -762,10 +798,13 @@
     // =========================================================================
 
     function initPostEditSystem() {
-        // Replace the original editCell with enhanced version
+        // Override window.editCell
         window.editCell = enhancedEditCell;
         
-        // Add CSS for animations
+        // Also set up click interceptor as backup
+        setupClickInterceptor();
+        
+        // Add CSS
         if (!document.getElementById('post-edit-styles')) {
             const style = document.createElement('style');
             style.id = 'post-edit-styles';
@@ -795,6 +834,7 @@
         
         console.log('📝 Post-Generation Edit System initialized');
         console.log('   - Enhanced editCell with modal UI');
+        console.log('   - Click interceptor active');
         console.log('   - Conflict detection enabled');
         console.log('   - Smart reassignment enabled');
     }
@@ -808,7 +848,7 @@
     window.checkLocationConflict = checkLocationConflict;
     window.getAllLocations = getAllLocations;
 
-    // Auto-initialize when DOM is ready
+    // Auto-initialize
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initPostEditSystem);
     } else {
