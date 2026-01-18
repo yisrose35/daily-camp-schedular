@@ -1110,7 +1110,7 @@
         
         if (isEditable && bunks.length > 0) {
             td.style.cursor = 'pointer';
-            td.onclick = () => editCell(bunks[0], block.startMin, block.endMin, block.event);
+            td.onclick = () => window.editCell(bunks[0], block.startMin, block.endMin, block.event);
         }
         
         return td;
@@ -1176,7 +1176,7 @@
             };
         } else if (isEditable) {
             td.style.cursor = 'pointer';
-            td.onclick = () => editCell(bunk, block.startMin, block.endMin, displayText);
+            td.onclick = () => window.editCell(bunk, block.startMin, block.endMin, displayText);
         } else {
             td.style.cursor = 'default';
         }
