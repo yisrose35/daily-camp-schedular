@@ -27,15 +27,20 @@
 // ✅ v4.0: BYPASS MODE for admin-level access
 // ✅ v4.0: Conflict detection and resolution UI
 // ✅ v4.0.1: RBAC VIEW BYPASS - temporarily show all divisions after bypass
+// ✅ v4.0.2: CROSS-DIVISION BYPASS SAVE - updates correct scheduler records directly
 //
-// REQUIRES: unified_cloud_schedule_system.js for proper cloud sync
+// CLOUD SYNC: Handled by existing files:
+//   - integration_hooks.js (save/load hooks, forceSyncToCloud)
+//   - supabase_schedules.js (ScheduleDB operations)
+//   - schedule_autoloader.js (cloud load/merge)
+//   - cloud_sync_helpers.js (sync helper functions)
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('📅 Unified Schedule System v4.0.1 loading...');
+    console.log('📅 Unified Schedule System v4.0.2 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -1160,12 +1165,14 @@
     }
 
     // =========================================================================
-    // BYPASS SAVE
+    // BYPASS SAVE - CROSS-DIVISION DIRECT UPDATE (v4.0.2)
     // =========================================================================
 
     async function bypassSaveAllBunks(modifiedBunks) {
         console.log('[UnifiedSchedule] 🔓 BYPASS SAVE for bunks:', modifiedBunks);
         const dateKey = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
+        
+        // Step 1: Save to localStorage first (immediate backup)
         try {
             localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
             const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
@@ -1175,23 +1182,246 @@
             allDailyData[dateKey].unifiedTimes = window.unifiedTimes || [];
             allDailyData[dateKey]._bypassSaveAt = Date.now();
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
-        } catch (e) { console.error('[UnifiedSchedule] Bypass localStorage save error:', e); }
+            console.log('[UnifiedSchedule] ✅ Bypass: saved to localStorage');
+        } catch (e) { 
+            console.error('[UnifiedSchedule] Bypass localStorage save error:', e); 
+        }
+        
+        // Step 2: Get Supabase client
+        const client = window.CampistryDB?.getClient?.() || window.supabase;
+        const campId = window.CampistryDB?.getCampId?.();
+        
+        if (!client || !campId) {
+            console.warn('[UnifiedSchedule] No client/campId - local save only');
+            return { success: true, target: 'local' };
+        }
+        
+        try {
+            // Step 3: Load ALL records for this date
+            console.log('[UnifiedSchedule] 🔓 Loading all scheduler records for cross-division update...');
+            const { data: allRecords, error: loadError } = await client
+                .from('daily_schedules')
+                .select('*')
+                .eq('camp_id', campId)
+                .eq('date_key', dateKey);
+            
+            if (loadError) {
+                console.error('[UnifiedSchedule] Failed to load records:', loadError);
+                // Fallback to old method
+                return await fallbackBypassSave(dateKey, modifiedBunks);
+            }
+            
+            console.log(`[UnifiedSchedule] 🔓 Found ${allRecords?.length || 0} scheduler records`);
+            
+            if (!allRecords || allRecords.length === 0) {
+                // No existing records - use standard save
+                console.log('[UnifiedSchedule] 🔓 No existing records, using standard save');
+                return await fallbackBypassSave(dateKey, modifiedBunks);
+            }
+            
+            // Step 4: Build a map of bunk -> record
+            const bunkToRecord = {};
+            (allRecords || []).forEach(record => {
+                const assignments = record.schedule_data?.scheduleAssignments || {};
+                Object.keys(assignments).forEach(bunk => {
+                    bunkToRecord[bunk] = record;
+                });
+            });
+            
+            // Step 5: Group modified bunks by their owning record
+            const recordUpdates = new Map(); // record.id -> { record, bunksToUpdate }
+            const orphanBunks = []; // Bunks not in any record (will go to current user)
+            
+            modifiedBunks.forEach(bunk => {
+                const bunkStr = String(bunk);
+                const owningRecord = bunkToRecord[bunkStr];
+                
+                if (owningRecord) {
+                    if (!recordUpdates.has(owningRecord.id)) {
+                        recordUpdates.set(owningRecord.id, { 
+                            record: owningRecord, 
+                            bunksToUpdate: [] 
+                        });
+                    }
+                    recordUpdates.get(owningRecord.id).bunksToUpdate.push(bunkStr);
+                } else {
+                    orphanBunks.push(bunkStr);
+                }
+            });
+            
+            console.log(`[UnifiedSchedule] 🔓 Updates needed:`, 
+                [...recordUpdates.entries()].map(([id, data]) => 
+                    `${data.record.scheduler_name || 'unknown'}: bunks ${data.bunksToUpdate.join(', ')}`
+                )
+            );
+            if (orphanBunks.length > 0) {
+                console.log(`[UnifiedSchedule] 🔓 Orphan bunks (will add to your record): ${orphanBunks.join(', ')}`);
+            }
+            
+            // Step 6: Update each record directly
+            let successCount = 0;
+            let failCount = 0;
+            const updatedSchedulers = [];
+            
+            for (const [recordId, { record, bunksToUpdate }] of recordUpdates) {
+                const scheduleData = record.schedule_data || {};
+                const assignments = { ...(scheduleData.scheduleAssignments || {}) };
+                const leagues = { ...(scheduleData.leagueAssignments || {}) };
+                
+                // Apply updates from window globals
+                bunksToUpdate.forEach(bunk => {
+                    if (window.scheduleAssignments[bunk]) {
+                        assignments[bunk] = window.scheduleAssignments[bunk];
+                    }
+                    if (window.leagueAssignments?.[bunk]) {
+                        leagues[bunk] = window.leagueAssignments[bunk];
+                    }
+                });
+                
+                const updatedData = {
+                    ...scheduleData,
+                    scheduleAssignments: assignments,
+                    leagueAssignments: leagues
+                };
+                
+                // Serialize unifiedTimes
+                const serializedTimes = window.ScheduleDB?.serializeUnifiedTimes?.(window.unifiedTimes) 
+                    || window.unifiedTimes?.map(t => ({
+                        start: t.start instanceof Date ? t.start.toISOString() : t.start,
+                        end: t.end instanceof Date ? t.end.toISOString() : t.end,
+                        startMin: t.startMin,
+                        endMin: t.endMin,
+                        label: t.label
+                    })) || [];
+                
+                const { error: updateError } = await client
+                    .from('daily_schedules')
+                    .update({
+                        schedule_data: updatedData,
+                        unified_times: serializedTimes,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('id', recordId);
+                
+                if (updateError) {
+                    console.error(`[UnifiedSchedule] ❌ Failed to update ${record.scheduler_name || 'unknown'}:`, updateError);
+                    failCount++;
+                } else {
+                    console.log(`[UnifiedSchedule] ✅ Updated ${record.scheduler_name || 'unknown'} with bunks: ${bunksToUpdate.join(', ')}`);
+                    successCount++;
+                    updatedSchedulers.push(record.scheduler_name || record.scheduler_id);
+                }
+            }
+            
+            // Step 7: Handle orphan bunks (add to current user's record via standard save)
+            if (orphanBunks.length > 0) {
+                console.log(`[UnifiedSchedule] 🔓 Saving orphan bunks via standard method...`);
+                if (window.ScheduleDB?.saveSchedule) {
+                    try {
+                        await window.ScheduleDB.saveSchedule(dateKey, {
+                            scheduleAssignments: window.scheduleAssignments,
+                            leagueAssignments: window.leagueAssignments || {},
+                            unifiedTimes: window.unifiedTimes
+                        }, { skipFilter: true, immediate: true });
+                        successCount++;
+                    } catch (e) {
+                        console.error('[UnifiedSchedule] Orphan save error:', e);
+                        failCount++;
+                    }
+                }
+            }
+            
+            // Step 8: Sync and dispatch events
+            try {
+                if (window.ScheduleSync?.forceSave) await window.ScheduleSync.forceSave();
+                if (window.forceSyncToCloud) await window.forceSyncToCloud();
+                window.dispatchEvent(new CustomEvent('campistry-bypass-save-complete', { 
+                    detail: { 
+                        dateKey, 
+                        modifiedBunks, 
+                        successCount, 
+                        failCount,
+                        updatedSchedulers,
+                        timestamp: Date.now() 
+                    } 
+                }));
+            } catch (e) { 
+                console.warn('[UnifiedSchedule] Bypass sync broadcast warning:', e); 
+            }
+            
+            // Step 9: Show toast
+            if (window.showToast) {
+                const divisions = window.divisions || {};
+                const divisionNames = new Set();
+                modifiedBunks.forEach(bunk => { 
+                    for (const [divName, divData] of Object.entries(divisions)) { 
+                        if (divData.bunks?.includes(bunk) || divData.bunks?.includes(String(bunk))) 
+                            divisionNames.add(divName); 
+                    } 
+                });
+                const schedulerInfo = updatedSchedulers.length > 0 ? ` (updated: ${updatedSchedulers.join(', ')})` : '';
+                window.showToast(
+                    `🔓 Cross-division bypass: ${modifiedBunks.length} bunk(s) in Div ${[...divisionNames].join(', ')}${schedulerInfo}`, 
+                    failCount === 0 ? 'success' : 'warning'
+                );
+            }
+            
+            return { 
+                success: failCount === 0, 
+                successCount, 
+                failCount, 
+                updatedSchedulers,
+                target: 'cloud-direct' 
+            };
+            
+        } catch (e) {
+            console.error('[UnifiedSchedule] Bypass save exception:', e);
+            // Fallback to old method
+            return await fallbackBypassSave(dateKey, modifiedBunks);
+        }
+    }
+    
+    // Fallback method (original behavior)
+    async function fallbackBypassSave(dateKey, modifiedBunks) {
+        console.log('[UnifiedSchedule] 🔓 Using fallback bypass save (skipFilter)');
         let cloudResult = { success: false };
         if (window.ScheduleDB?.saveSchedule) {
             try {
-                cloudResult = await window.ScheduleDB.saveSchedule(dateKey, { scheduleAssignments: window.scheduleAssignments, leagueAssignments: window.leagueAssignments || {}, unifiedTimes: window.unifiedTimes, _bypassSaveAt: Date.now(), _modifiedBunks: modifiedBunks }, { skipFilter: true, immediate: true, forceSync: true });
-            } catch (e) { console.error('[UnifiedSchedule] Bypass cloud save exception:', e); }
+                cloudResult = await window.ScheduleDB.saveSchedule(dateKey, { 
+                    scheduleAssignments: window.scheduleAssignments, 
+                    leagueAssignments: window.leagueAssignments || {}, 
+                    unifiedTimes: window.unifiedTimes, 
+                    _bypassSaveAt: Date.now(), 
+                    _modifiedBunks: modifiedBunks 
+                }, { skipFilter: true, immediate: true, forceSync: true });
+            } catch (e) { 
+                console.error('[UnifiedSchedule] Fallback bypass save exception:', e); 
+            }
         }
+        
         try {
             if (window.ScheduleSync?.forceSave) await window.ScheduleSync.forceSave();
             if (window.forceSyncToCloud) await window.forceSyncToCloud();
-            window.dispatchEvent(new CustomEvent('campistry-bypass-save-complete', { detail: { dateKey, modifiedBunks, timestamp: Date.now() } }));
-        } catch (e) { console.warn('[UnifiedSchedule] Bypass sync broadcast warning:', e); }
+            window.dispatchEvent(new CustomEvent('campistry-bypass-save-complete', { 
+                detail: { dateKey, modifiedBunks, timestamp: Date.now() } 
+            }));
+        } catch (e) { 
+            console.warn('[UnifiedSchedule] Fallback sync warning:', e); 
+        }
+        
         if (window.showToast) {
             const divisions = window.divisions || {};
             const divisionNames = new Set();
-            modifiedBunks.forEach(bunk => { for (const [divName, divData] of Object.entries(divisions)) { if (divData.bunks?.includes(bunk) || divData.bunks?.includes(String(bunk))) divisionNames.add(divName); } });
-            window.showToast(`🔓 Bypass saved: ${modifiedBunks.length} bunk(s)${[...divisionNames].length ? ` in Div ${[...divisionNames].join(', ')}` : ''} - synced`, 'success');
+            modifiedBunks.forEach(bunk => { 
+                for (const [divName, divData] of Object.entries(divisions)) { 
+                    if (divData.bunks?.includes(bunk) || divData.bunks?.includes(String(bunk))) 
+                        divisionNames.add(divName); 
+                } 
+            });
+            window.showToast(
+                `🔓 Bypass saved: ${modifiedBunks.length} bunk(s)${[...divisionNames].length ? ` in Div ${[...divisionNames].join(', ')}` : ''} - synced`, 
+                'success'
+            );
         }
         return cloudResult;
     }
@@ -1571,20 +1801,20 @@
     window.shouldHighlightBunk = shouldHighlightBunk;
     
     window.UnifiedScheduleSystem = {
-        version: '4.0.1',
+        version: '4.0.2',
         loadScheduleForDate, renderStaggeredView, findSlotIndexForTime, findSlotsForRange, getLeagueMatchups, getEntryForBlock,
         buildUnifiedTimesFromSkeleton, isSplitTileBlock, expandBlocksForSplitTiles, VersionManager,
         SmartRegenSystem: window.SmartRegenSystem, PinnedActivitySystem: window.PinnedActivitySystem, ROTATION_CONFIG,
         DEBUG_ON: () => { DEBUG = true; console.log('[UnifiedSchedule] Debug enabled'); },
         DEBUG_OFF: () => { DEBUG = false; console.log('[UnifiedSchedule] Debug disabled'); },
-        diagnose: () => { console.log('=== UNIFIED SCHEDULE SYSTEM v4.0.1 DIAGNOSTIC ==='); console.log(`Date: ${getDateKey()}`); console.log(`window.scheduleAssignments: ${Object.keys(window.scheduleAssignments || {}).length} bunks`); console.log(`window.unifiedTimes: ${(window.unifiedTimes || []).length} slots`); console.log(`Pinned activities: ${getPinnedActivities().length}`); console.log(`RBAC bypass view: ${_bypassRBACViewEnabled}`); console.log(`Highlighted bunks: ${[..._bypassHighlightBunks].join(', ') || 'none'}`); },
+        diagnose: () => { console.log('=== UNIFIED SCHEDULE SYSTEM v4.0.2 DIAGNOSTIC ==='); console.log(`Date: ${getDateKey()}`); console.log(`window.scheduleAssignments: ${Object.keys(window.scheduleAssignments || {}).length} bunks`); console.log(`window.unifiedTimes: ${(window.unifiedTimes || []).length} slots`); console.log(`Pinned activities: ${getPinnedActivities().length}`); console.log(`RBAC bypass view: ${_bypassRBACViewEnabled}`); console.log(`Highlighted bunks: ${[..._bypassHighlightBunks].join(', ') || 'none'}`); },
         getState: () => ({ dateKey: getDateKey(), assignments: Object.keys(window.scheduleAssignments || {}).length, leagues: Object.keys(window.leagueAssignments || {}).length, times: (window.unifiedTimes || []).length, cloudHydrated: _cloudHydrated, initialized: _initialized, pinnedCount: getPinnedActivities().length, postEditInProgress: !!window._postEditInProgress, bypassRBACViewEnabled: _bypassRBACViewEnabled, highlightedBunks: [..._bypassHighlightBunks] })
     };
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initScheduleSystem);
     else setTimeout(initScheduleSystem, 100);
 
-    console.log('📅 Unified Schedule System v4.0.1 loaded successfully');
-    console.log('   ✅ v4.0.1: RBAC VIEW BYPASS - temporarily show all divisions after bypass');
+    console.log('📅 Unified Schedule System v4.0.2 loaded successfully');
+    console.log('   ✅ v4.0.2: CROSS-DIVISION BYPASS SAVE - updates correct scheduler records directly');
 
 })();
