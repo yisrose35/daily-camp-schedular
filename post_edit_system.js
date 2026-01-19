@@ -1096,7 +1096,7 @@
     // RESOLVE CONFLICTS AND APPLY
     // =========================================================================
 
-    function resolveConflictsAndApply(bunk, slots, activity, location, editData) {
+    async function resolveConflictsAndApply(bunk, slots, activity, location, editData) {
         const editableConflicts = editData.editableConflicts || [];
         const nonEditableConflicts = editData.nonEditableConflicts || [];
         const resolutionChoice = editData.resolutionChoice || 'notify';
@@ -1149,9 +1149,11 @@
                     ...result.reassigned.map(r => r.bunk),
                     ...result.failed.map(f => f.bunk)
                 ];
-                bypassSaveAllBunks(modifiedBunks);
                 
-                // Notify other schedulers
+                // ★★★ FIX: Await the bypass save to prevent race conditions ★★★
+                await bypassSaveAllBunks(modifiedBunks);
+                
+                // Notify other schedulers (fire and forget - don't need to await)
                 if (nonEditableConflicts.length > 0) {
                     const affectedBunks = [...new Set(nonEditableConflicts.map(c => c.bunk))];
                     sendSchedulerNotification(affectedBunks, location, activity, 'bypassed');
@@ -1308,7 +1310,7 @@
     // APPLY EDIT (Main entry point)
     // =========================================================================
 
-    function applyEdit(bunk, editData) {
+    async function applyEdit(bunk, editData) {
         const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
         const unifiedTimes = window.unifiedTimes || [];
         
@@ -1332,8 +1334,9 @@
             window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
         }
         
+        // ★★★ FIX: Await conflict resolution to prevent race conditions ★★★
         if (hasConflict) {
-            resolveConflictsAndApply(bunk, slots, activity, location, editData);
+            await resolveConflictsAndApply(bunk, slots, activity, location, editData);
         } else {
             applyDirectEdit(bunk, slots, activity, location, isClear);
         }
@@ -1362,16 +1365,42 @@
             console.error('[PostEdit] Failed to save to unified storage:', e);
         }
         
-        // Protection flag
+        // Protection flag - prevent cloud hydration from overwriting
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
         setTimeout(() => {
             window._postEditInProgress = false;
         }, 5000);
         
-        // Cloud save
+        // ★★★ FIX: Dispatch events that unified_schedule_system listens to ★★★
+        console.log('[PostEdit] 🔄 Triggering UI refresh...');
+        
+        // Dispatch post-edit event for any listeners
+        document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+            detail: { bunk, slots, activity, location, date: currentDate }
+        }));
+        
+        // ★★★ This is the event unified_schedule_system.js listens to ★★★
+        window.dispatchEvent(new CustomEvent('campistry-daily-data-updated', {
+            detail: { source: 'post-edit', date: currentDate }
+        }));
+        
+        // Cloud save (fire and forget - don't await to keep UI responsive)
         window.saveSchedule?.();
-        window.updateTable?.();
+        
+        // ★★★ FIX: Force UI refresh with small delay to ensure state is stable ★★★
+        setTimeout(() => {
+            // Try multiple refresh methods
+            if (typeof window.updateTable === 'function') {
+                console.log('[PostEdit] 🔄 Calling updateTable()');
+                window.updateTable();
+            }
+            
+            if (typeof window.renderStaggeredView === 'function') {
+                console.log('[PostEdit] 🔄 Calling renderStaggeredView()');
+                window.renderStaggeredView();
+            }
+        }, 150);  // 150ms matches the RENDER_DEBOUNCE_MS in unified_schedule_system
     }
 
     // =========================================================================
