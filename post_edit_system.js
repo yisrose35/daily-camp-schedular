@@ -1183,7 +1183,13 @@
     async function bypassSaveAllBunks(modifiedBunks) {
         console.log('[PostEdit] 🔓 BYPASS SAVE for bunks:', modifiedBunks);
         
-        const dateKey = window.currentDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        // ★★★ FIX: Use consistent date key with all fallbacks ★★★
+        const dateKey = window.currentScheduleDate || 
+                       window.currentDate || 
+                       document.getElementById('datePicker')?.value ||
+                       new Date().toISOString().split('T')[0];
+        
+        console.log(`[PostEdit] 📅 Bypass save using date key: ${dateKey}`);
         
         // ★★★ FIX: Use ScheduleDB.saveSchedule with skipFilter instead of raw upsert ★★★
         // This properly handles the (camp_id, date_key, scheduler_id) constraint
@@ -1344,8 +1350,14 @@
         // Debug
         console.log(`[PostEdit] ✅ After edit, bunk ${bunk} slot ${slots[0]}:`, window.scheduleAssignments[bunk][slots[0]]);
         
-        // Save to localStorage
-        const currentDate = window.currentDate || new Date().toISOString().split('T')[0];
+        // ★★★ FIX: Use consistent date key - same as bypassSaveAllBunks and unified_schedule_system ★★★
+        const currentDate = window.currentScheduleDate || 
+                           window.currentDate || 
+                           document.getElementById('datePicker')?.value ||
+                           new Date().toISOString().split('T')[0];
+        
+        console.log(`[PostEdit] 📅 Using date key: ${currentDate}`);
+        
         const storageKey = `scheduleAssignments_${currentDate}`;
         try {
             localStorage.setItem(storageKey, JSON.stringify(window.scheduleAssignments));
@@ -1354,7 +1366,7 @@
             console.error('[PostEdit] Failed to save to localStorage:', e);
         }
         
-        // Save to unified data key
+        // Save to unified data key (use same date!)
         const unifiedKey = `campDailyData_v1_${currentDate}`;
         try {
             const dailyData = JSON.parse(localStorage.getItem(unifiedKey) || '{}');
@@ -1372,35 +1384,34 @@
             window._postEditInProgress = false;
         }, 5000);
         
-        // ★★★ FIX: Dispatch events that unified_schedule_system listens to ★★★
+        // ★★★ FIX: Don't dispatch campistry-daily-data-updated - it triggers a reload ★★★
+        // Our in-memory window.scheduleAssignments is already correct
+        // Just dispatch a notification event and render directly
         console.log('[PostEdit] 🔄 Triggering UI refresh...');
         
-        // Dispatch post-edit event for any listeners
+        // Dispatch post-edit event for any listeners (informational only)
         document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
             detail: { bunk, slots, activity, location, date: currentDate }
-        }));
-        
-        // ★★★ This is the event unified_schedule_system.js listens to ★★★
-        window.dispatchEvent(new CustomEvent('campistry-daily-data-updated', {
-            detail: { source: 'post-edit', date: currentDate }
         }));
         
         // Cloud save (fire and forget - don't await to keep UI responsive)
         window.saveSchedule?.();
         
-        // ★★★ FIX: Force UI refresh with small delay to ensure state is stable ★★★
+        // ★★★ FIX: Render immediately from current memory state ★★★
+        // Don't dispatch campistry-daily-data-updated as it triggers loadScheduleForDate()
+        // which would re-read from storage and might get stale data
+        console.log('[PostEdit] 🔄 Calling updateTable() immediately');
+        if (typeof window.updateTable === 'function') {
+            window.updateTable();
+        }
+        
+        // Second render after a small delay to catch any async updates
         setTimeout(() => {
-            // Try multiple refresh methods
+            console.log('[PostEdit] 🔄 Second render pass');
             if (typeof window.updateTable === 'function') {
-                console.log('[PostEdit] 🔄 Calling updateTable()');
                 window.updateTable();
             }
-            
-            if (typeof window.renderStaggeredView === 'function') {
-                console.log('[PostEdit] 🔄 Calling renderStaggeredView()');
-                window.renderStaggeredView();
-            }
-        }, 150);  // 150ms matches the RENDER_DEBOUNCE_MS in unified_schedule_system
+        }, 200);
     }
 
     // =========================================================================
