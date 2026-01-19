@@ -1,5 +1,5 @@
 // =============================================================================
-// POST-GENERATION EDIT SYSTEM - Enhanced Cell Editing with Conflict Resolution
+// POST-GENERATION EDIT SYSTEM v3.0 - INTEGRATED SMART REGENERATION
 // =============================================================================
 // 
 // FEATURES:
@@ -7,31 +7,23 @@
 // - Activity name and location/field selection
 // - Optional time change (hidden by default, shown on request)
 // - Scans current schedule for field conflicts
-// - If conflict detected: warns user, offers Accept (pin + regenerate) or Decline
-// - Pinned activities are preserved during regeneration
-// - Smart reassignment using rotation-aware logic from scheduler_logic_fillers
+// - SMART REGENERATION using full scheduler-core pipeline:
+//   * GlobalFieldLocks integration
+//   * Full candidate building (sports + specials)
+//   * Rotation penalty scoring (recency, frequency, variety)
+//   * Capacity and preference awareness
+//   * fillBlock integration
+// - BYPASS MODE: When scheduler bypasses RBAC, they become admin-like
+//   and can modify ANY bunk with full regeneration privileges
 //
-// INTEGRATION: Add this file AFTER unified_schedule_system.js
-//
-// v2.2 FIXES:
-// - Fixed Supabase client access pattern (uses CampistryDB.getClient())
-// - Smart rotation-aware reassignment when bypassing
-// - Proper date_key column name
-//
-// v2.3 FIXES:
-// - Fixed bunkHistory data structure (object with timestamps, not array)
-//
-// v2.4 FIXES:
-// - Made resolveConflictsAndApply async to properly await bypass save
-// - Added bypass protection to prevent remote merge from overwriting changes
-// - Force UI refresh after bypass operations complete
+// INTEGRATION: Add this file AFTER scheduler_core_main.js, total_solver_engine.js
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('📝 Post-Generation Edit System v2.4 (ASYNC BYPASS FIX) loading...');
+    console.log('📝 Post-Generation Edit System v3.0 (INTEGRATED SMART REGEN) loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -39,6 +31,44 @@
     
     const MODAL_ID = 'post-edit-modal';
     const OVERLAY_ID = 'post-edit-overlay';
+    const DEBUG = true;
+    const TRANSITION_TYPE = window.TRANSITION_TYPE || "Transition/Buffer";
+
+    // =========================================================================
+    // ROTATION CONFIGURATION (from scheduler_logic_fillers)
+    // =========================================================================
+    
+    const ROTATION_CONFIG = {
+        // Hard rules
+        SAME_DAY_PENALTY: Infinity,            // NEVER allow same activity twice in one day
+
+        // Recency penalties (days ago)
+        YESTERDAY_PENALTY: 5000,               // Did it yesterday
+        TWO_DAYS_AGO_PENALTY: 3000,            // Did it 2 days ago
+        THREE_DAYS_AGO_PENALTY: 2000,          // Did it 3 days ago
+        FOUR_TO_SEVEN_DAYS_PENALTY: 800,       // Did it 4-7 days ago
+        WEEK_PLUS_PENALTY: 200,                // Did it more than a week ago
+
+        // Frequency penalties
+        HIGH_FREQUENCY_PENALTY: 1500,          // Done this much more than others
+        ABOVE_AVERAGE_PENALTY: 500,            // Done this more than average
+
+        // Variety bonuses (negative = good)
+        NEVER_DONE_BONUS: -1500,               // NEVER done this activity before
+        UNDER_UTILIZED_BONUS: -800,            // Done less than average
+
+        // Sharing bonus
+        ADJACENT_BUNK_BONUS: -100,             // Adjacent bunk doing same activity
+        NEARBY_BUNK_BONUS: -30                 // Nearby bunk (within 3) doing same
+    };
+
+    // =========================================================================
+    // DEBUG LOGGING
+    // =========================================================================
+
+    function debugLog(...args) {
+        if (DEBUG) console.log('[PostEdit]', ...args);
+    }
 
     // =========================================================================
     // UTILITY FUNCTIONS
@@ -87,98 +117,62 @@
         return `${h12}:${String(m).padStart(2, '0')} ${ap}`;
     }
 
-    function findSlotIndexForTime(targetMin, unifiedTimes) {
-        if (!unifiedTimes || !Array.isArray(unifiedTimes)) return -1;
-        
-        for (let i = 0; i < unifiedTimes.length; i++) {
-            const slot = unifiedTimes[i];
-            const slotStart = slot.startMin !== undefined ? slot.startMin : 
-                (slot.start instanceof Date ? slot.start.getHours() * 60 + slot.start.getMinutes() : null);
-            
-            if (slotStart === targetMin) return i;
-        }
-        return -1;
-    }
-
-    function findSlotsForRange(startMin, endMin, unifiedTimes) {
-        if (!unifiedTimes || !Array.isArray(unifiedTimes)) return [];
-        
-        const slots = [];
-        for (let i = 0; i < unifiedTimes.length; i++) {
-            const slot = unifiedTimes[i];
-            const slotStart = slot.startMin !== undefined ? slot.startMin :
-                (slot.start instanceof Date ? slot.start.getHours() * 60 + slot.start.getMinutes() : null);
-            const slotEnd = slot.endMin !== undefined ? slot.endMin :
-                (slot.end instanceof Date ? slot.end.getHours() * 60 + slot.end.getMinutes() : null);
-            
-            if (slotStart !== null && slotEnd !== null) {
-                if (slotStart < endMin && slotEnd > startMin) {
-                    slots.push(i);
-                }
-            }
-        }
-        return slots;
-    }
-    
-    // Helper to get field label (mirrors scheduler_core_utils)
     function fieldLabel(f) {
         if (window.SchedulerCoreUtils?.fieldLabel) {
             return window.SchedulerCoreUtils.fieldLabel(f);
         }
-        return (f && f.name) ? f.name : (typeof f === 'string' ? f : '');
+        if (typeof f === "string") return f;
+        if (f && typeof f === "object" && typeof f.name === "string") return f.name;
+        return "";
+    }
+
+    function findSlotsForRange(startMin, endMin, unifiedTimes) {
+        const slots = [];
+        if (!unifiedTimes || startMin == null || endMin == null) return slots;
+        
+        for (let i = 0; i < unifiedTimes.length; i++) {
+            const slot = unifiedTimes[i];
+            const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+            if (slotStart >= startMin && slotStart < endMin) slots.push(i);
+        }
+        return slots;
+    }
+
+    function getSlotTimeRange(slotIdx) {
+        const unifiedTimes = window.unifiedTimes || [];
+        const slot = unifiedTimes[slotIdx];
+        if (!slot) return { startMin: null, endMin: null };
+        const start = new Date(slot.start);
+        const end = new Date(slot.end);
+        return {
+            startMin: start.getHours() * 60 + start.getMinutes(),
+            endMin: end.getHours() * 60 + end.getMinutes()
+        };
+    }
+
+    function getDivisionForBunk(bunkName) {
+        const divisions = window.divisions || {};
+        for (const [divName, divData] of Object.entries(divisions)) {
+            if (divData.bunks && divData.bunks.includes(bunkName)) {
+                return divName;
+            }
+        }
+        return null;
     }
 
     // =========================================================================
-    // GET ALL AVAILABLE LOCATIONS
+    // ACTIVITY PROPERTIES
     // =========================================================================
 
-    function getAllLocations() {
-        const settings = window.loadGlobalSettings?.() || {};
-        const app1 = settings.app1 || {};
-        
-        const locations = [];
-        const seen = new Set();
-        
-        // Fields
-        const fields = app1.fields || [];
-        fields.forEach(f => {
-            if (f.name && !seen.has(f.name)) {
-                locations.push({
-                    name: f.name,
-                    type: 'field',
-                    capacity: f.sharableWith?.capacity || (f.sharableWith?.type === 'all' ? 2 : 1),
-                    available: f.available !== false,
-                    activities: f.activities || []
-                });
-                seen.add(f.name);
-            }
-        });
-        
-        // Special Activities
-        const specials = app1.specialActivities || [];
-        specials.forEach(s => {
-            if (s.name && !seen.has(s.name)) {
-                locations.push({
-                    name: s.name,
-                    type: 'special',
-                    capacity: s.sharableWith?.capacity || 1,
-                    available: s.available !== false,
-                    location: s.location || null
-                });
-                seen.add(s.name);
-            }
-        });
-        
-        return locations.sort((a, b) => a.name.localeCompare(b.name));
-    }
-    
-    // Get activity properties map (mirrors scheduler setup)
     function getActivityProperties() {
+        if (window.activityProperties && Object.keys(window.activityProperties).length > 0) {
+            return window.activityProperties;
+        }
+        
         const settings = window.loadGlobalSettings?.() || {};
         const app1 = settings.app1 || {};
         const props = {};
         
-        // Fields
         (app1.fields || []).forEach(f => {
             if (f.name) {
                 props[f.name] = {
@@ -189,7 +183,6 @@
             }
         });
         
-        // Specials
         (app1.specialActivities || []).forEach(s => {
             if (s.name) {
                 props[s.name] = {
@@ -204,18 +197,140 @@
     }
 
     // =========================================================================
+    // GET ALL LOCATIONS (for dropdown)
+    // =========================================================================
+
+    function getAllLocations() {
+        const settings = window.loadGlobalSettings?.() || {};
+        const app1 = settings.app1 || {};
+        const locations = [];
+        
+        (app1.fields || []).forEach(f => {
+            if (f.name && f.available !== false) {
+                locations.push({
+                    name: f.name,
+                    type: 'field',
+                    capacity: f.sharableWith?.capacity || 1
+                });
+            }
+        });
+        
+        (app1.specialActivities || []).forEach(s => {
+            if (s.name) {
+                locations.push({
+                    name: s.name,
+                    type: 'special',
+                    capacity: s.sharableWith?.capacity || 1
+                });
+            }
+        });
+        
+        return locations;
+    }
+
+    // =========================================================================
+    // EDITABLE BUNKS (RBAC)
+    // =========================================================================
+
+    function getEditableBunks() {
+        const editableBunks = new Set();
+        
+        const editableDivisions = window.AccessControl?.getEditableDivisions?.() || [];
+        const divisions = window.divisions || {};
+        
+        for (const divName of editableDivisions) {
+            const divInfo = divisions[divName];
+            if (divInfo?.bunks) {
+                divInfo.bunks.forEach(b => editableBunks.add(String(b)));
+            }
+        }
+        
+        // If no RBAC or owner, all bunks are editable
+        if (editableBunks.size === 0) {
+            const role = window.AccessControl?.getCurrentRole?.();
+            if (!window.AccessControl || role === 'owner' || role === 'admin') {
+                Object.keys(window.scheduleAssignments || {}).forEach(b => editableBunks.add(b));
+            }
+        }
+        
+        return editableBunks;
+    }
+
+    /**
+     * Check if user can edit a specific bunk
+     */
+    function canEditBunk(bunkName) {
+        const role = window.AccessControl?.getCurrentRole?.();
+        if (role === 'owner' || role === 'admin') return true;
+        
+        const editableBunks = getEditableBunks();
+        return editableBunks.has(bunkName);
+    }
+
+    // =========================================================================
+    // FIELD USAGE TRACKING
+    // =========================================================================
+
+    function buildFieldUsageBySlot(excludeBunks = []) {
+        const fieldUsageBySlot = {};
+        const assignments = window.scheduleAssignments || {};
+        const excludeSet = new Set(excludeBunks);
+
+        for (const [bunkName, bunkSlots] of Object.entries(assignments)) {
+            if (excludeSet.has(bunkName)) continue;
+            if (!bunkSlots || !Array.isArray(bunkSlots)) continue;
+
+            for (let slotIdx = 0; slotIdx < bunkSlots.length; slotIdx++) {
+                const entry = bunkSlots[slotIdx];
+                if (!entry || !entry.field) continue;
+                if (entry._isTransition || entry.field === TRANSITION_TYPE) continue;
+
+                const fName = fieldLabel(entry.field);
+                if (!fName || fName === 'Free') continue;
+
+                if (!fieldUsageBySlot[slotIdx]) {
+                    fieldUsageBySlot[slotIdx] = {};
+                }
+
+                if (!fieldUsageBySlot[slotIdx][fName]) {
+                    fieldUsageBySlot[slotIdx][fName] = {
+                        count: 0,
+                        bunks: {},
+                        divisions: []
+                    };
+                }
+
+                const usage = fieldUsageBySlot[slotIdx][fName];
+                usage.count++;
+                usage.bunks[bunkName] = entry._activity || fName;
+
+                const divName = getDivisionForBunk(bunkName);
+                if (divName && !usage.divisions.includes(divName)) {
+                    usage.divisions.push(divName);
+                }
+            }
+        }
+
+        return fieldUsageBySlot;
+    }
+
+    // =========================================================================
     // CONFLICT DETECTION
     // =========================================================================
 
     function checkLocationConflict(locationName, slots, excludeBunk) {
         const assignments = window.scheduleAssignments || {};
-        const locations = getAllLocations();
-        const locationInfo = locations.find(l => l.name.toLowerCase() === locationName.toLowerCase());
-        const maxCapacity = locationInfo?.capacity || 1;
+        const activityProperties = getActivityProperties();
+        const locationInfo = activityProperties[locationName] || {};
         
-        // Get editable bunks for permission check
+        let maxCapacity = 1;
+        if (locationInfo.sharableWith?.capacity) {
+            maxCapacity = parseInt(locationInfo.sharableWith.capacity) || 1;
+        } else if (locationInfo.sharable) {
+            maxCapacity = 2;
+        }
+        
         const editableBunks = getEditableBunks();
-        
         const conflicts = [];
         const usageBySlot = {};
         
@@ -230,9 +345,15 @@
                 
                 const entryField = typeof entry.field === 'object' ? entry.field?.name : entry.field;
                 const entryActivity = entry._activity || entryField;
+                const entryLocation = entry._location || entryField;
                 
-                if (entryField?.toLowerCase() === locationName.toLowerCase() ||
-                    entryActivity?.toLowerCase() === locationName.toLowerCase()) {
+                // Check if this entry uses the same location
+                const matchesLocation = 
+                    entryField?.toLowerCase() === locationName.toLowerCase() ||
+                    entryLocation?.toLowerCase() === locationName.toLowerCase() ||
+                    entryActivity?.toLowerCase() === locationName.toLowerCase();
+                
+                if (matchesLocation) {
                     usageBySlot[slotIdx].push({
                         bunk: bunkName,
                         activity: entryActivity || entryField,
@@ -243,7 +364,17 @@
             }
         }
         
-        let hasConflict = false;
+        // Check GlobalFieldLocks
+        let globalLock = null;
+        if (window.GlobalFieldLocks) {
+            const divName = getDivisionForBunk(excludeBunk);
+            const lockInfo = window.GlobalFieldLocks.isFieldLocked(locationName, slots, divName);
+            if (lockInfo) {
+                globalLock = lockInfo;
+            }
+        }
+        
+        let hasConflict = !!globalLock;
         let currentUsage = 0;
         
         for (const slotIdx of slots) {
@@ -260,7 +391,6 @@
             }
         }
         
-        // Separate editable vs non-editable conflicts
         const editableConflicts = conflicts.filter(c => c.canEdit);
         const nonEditableConflicts = conflicts.filter(c => !c.canEdit);
         
@@ -269,125 +399,1003 @@
             conflicts,
             editableConflicts,
             nonEditableConflicts,
+            globalLock,
             canShare: maxCapacity > 1 && currentUsage < maxCapacity,
             currentUsage,
             maxCapacity
         };
     }
-    
-    // Get set of bunks the current user can edit
-    function getEditableBunks() {
-        const editableBunks = new Set();
-        
-        // Try AccessControl first
-        const editableDivisions = window.AccessControl?.getEditableDivisions?.() || [];
-        const divisions = window.divisions || {};
-        
-        for (const divName of editableDivisions) {
-            const divInfo = divisions[divName];
-            if (divInfo?.bunks) {
-                divInfo.bunks.forEach(b => editableBunks.add(String(b)));
-            }
-        }
-        
-        // If no RBAC, assume all bunks are editable
-        if (editableBunks.size === 0 && !window.AccessControl) {
-            Object.keys(window.scheduleAssignments || {}).forEach(b => editableBunks.add(b));
-        }
-        
-        return editableBunks;
-    }
-    
+
     // =========================================================================
-    // SMART ROTATION HELPERS (borrowed from scheduler_logic_fillers)
+    // ROTATION SCORING (from total_solver_engine)
     // =========================================================================
-    
-    /**
-     * Get activities this bunk has already done today (before the given slot)
-     */
+
     function getActivitiesDoneToday(bunk, beforeSlot) {
         const done = new Set();
         const bunkData = window.scheduleAssignments?.[bunk];
         if (!bunkData) return done;
-        
+
         for (let i = 0; i < beforeSlot; i++) {
             const entry = bunkData[i];
             if (entry) {
                 const actName = entry._activity || entry.sport || fieldLabel(entry.field);
-                if (actName && actName.toLowerCase() !== 'free' && actName.toLowerCase() !== 'transition') {
+                if (actName && actName.toLowerCase() !== 'free' && !actName.toLowerCase().includes('transition')) {
                     done.add(actName.toLowerCase().trim());
                 }
             }
         }
         return done;
     }
-    
-    /**
-     * Calculate rotation score for an activity (lower = better)
-     * Mirrors the logic from scheduler_logic_fillers.js
-     * 
-     * NOTE: rotationHistory.bunks[bunk] is an OBJECT with activity names as keys
-     * and timestamps as values, NOT an array.
-     */
-    function calculateRotationScore(bunk, activityName, slots) {
+
+    function getActivityCount(bunk, activityName) {
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const historicalCounts = globalSettings.historicalCounts || {};
+        return historicalCounts[bunk]?.[activityName] || 0;
+    }
+
+    function getDaysSinceActivity(bunk, activityName) {
+        const rotationHistory = window.loadRotationHistory?.() || {};
+        const bunkHistory = rotationHistory.bunks?.[bunk] || {};
+        const lastDone = bunkHistory[activityName];
+        
+        if (!lastDone) return null;
+        
+        const now = Date.now();
+        const daysSince = Math.floor((now - lastDone) / (24 * 60 * 60 * 1000));
+        return daysSince;
+    }
+
+    function calculateRotationPenalty(bunk, activityName, slots) {
+        if (!activityName || activityName === 'Free') return 0;
+
         const firstSlot = slots[0];
         const doneToday = getActivitiesDoneToday(bunk, firstSlot);
         const actLower = activityName.toLowerCase().trim();
-        
+
         // HARD BLOCK: Already done today
         if (doneToday.has(actLower)) {
-            return Infinity;
+            return ROTATION_CONFIG.SAME_DAY_PENALTY;
         }
+
+        // Recency penalty
+        const daysSince = getDaysSinceActivity(bunk, activityName);
+        let recencyPenalty = 0;
+
+        if (daysSince === null) {
+            recencyPenalty = ROTATION_CONFIG.NEVER_DONE_BONUS;
+        } else if (daysSince === 0) {
+            return ROTATION_CONFIG.SAME_DAY_PENALTY;
+        } else if (daysSince === 1) {
+            recencyPenalty = ROTATION_CONFIG.YESTERDAY_PENALTY;
+        } else if (daysSince === 2) {
+            recencyPenalty = ROTATION_CONFIG.TWO_DAYS_AGO_PENALTY;
+        } else if (daysSince === 3) {
+            recencyPenalty = ROTATION_CONFIG.THREE_DAYS_AGO_PENALTY;
+        } else if (daysSince <= 7) {
+            recencyPenalty = ROTATION_CONFIG.FOUR_TO_SEVEN_DAYS_PENALTY;
+        } else {
+            recencyPenalty = ROTATION_CONFIG.WEEK_PLUS_PENALTY;
+        }
+
+        // Frequency penalty
+        const count = getActivityCount(bunk, activityName);
+        let frequencyPenalty = 0;
+        if (count > 5) {
+            frequencyPenalty = ROTATION_CONFIG.HIGH_FREQUENCY_PENALTY;
+        } else if (count > 3) {
+            frequencyPenalty = ROTATION_CONFIG.ABOVE_AVERAGE_PENALTY;
+        } else if (count === 0) {
+            frequencyPenalty = ROTATION_CONFIG.UNDER_UTILIZED_BONUS;
+        }
+
+        return recencyPenalty + frequencyPenalty;
+    }
+
+    // =========================================================================
+    // FIELD AVAILABILITY CHECK
+    // =========================================================================
+
+    function isFieldAvailable(fieldName, slots, excludeBunk, fieldUsageBySlot, activityProperties) {
+        const divName = getDivisionForBunk(excludeBunk);
         
-        // Check rotation history (object with activity names as keys, timestamps as values)
-        let score = 0;
-        const rotationHistory = window.loadRotationHistory?.() || { bunks: {} };
-        const bunkHistory = rotationHistory.bunks?.[bunk] || {};
-        const lastTimestamp = bunkHistory[activityName];
-        
-        if (lastTimestamp) {
-            // Calculate days since last done
-            const now = Date.now();
-            const daysSince = Math.floor((now - lastTimestamp) / (1000 * 60 * 60 * 24));
-            
-            if (daysSince === 0) {
-                return Infinity; // Same day - blocked
-            } else if (daysSince === 1) {
-                score += 5000; // Heavy penalty for yesterday
-            } else if (daysSince === 2) {
-                score += 2000; // Penalty for 2 days ago
-            } else if (daysSince <= 7) {
-                score += 500; // Minor penalty for this week
+        // Check GlobalFieldLocks
+        if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots, divName)) {
+            return false;
+        }
+
+        // Check disabled fields
+        const disabledFields = window.currentDisabledFields || [];
+        if (disabledFields.includes(fieldName)) {
+            return false;
+        }
+
+        // Check capacity
+        const props = activityProperties[fieldName] || {};
+        let maxCapacity = 1;
+        if (props.sharableWith?.capacity) {
+            maxCapacity = parseInt(props.sharableWith.capacity) || 1;
+        } else if (props.sharable) {
+            maxCapacity = 2;
+        }
+
+        for (const slotIdx of slots) {
+            const slotUsage = fieldUsageBySlot[slotIdx]?.[fieldName];
+            if (slotUsage && slotUsage.count >= maxCapacity) {
+                return false;
             }
         }
+
+        return true;
+    }
+
+    // =========================================================================
+    // BUILD CANDIDATE OPTIONS (from total_solver_engine)
+    // =========================================================================
+
+    function buildCandidateOptions(slots, activityProperties, disabledFields = []) {
+        const options = [];
+        const seenKeys = new Set();
+        const settings = window.loadGlobalSettings?.() || {};
+        const app1 = settings.app1 || {};
+
+        // From fields (sports) - using fieldsBySport
+        const fieldsBySport = settings.fieldsBySport || {};
+        for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
+            (sportFields || []).forEach(fieldName => {
+                if (disabledFields.includes(fieldName)) return;
+
+                if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots)) {
+                    return;
+                }
+
+                const key = `${fieldName}|${sport}`;
+                if (!seenKeys.has(key)) {
+                    seenKeys.add(key);
+                    options.push({
+                        field: fieldName,
+                        sport: sport,
+                        activityName: sport,
+                        type: 'sport'
+                    });
+                }
+            });
+        }
+
+        // From special activities
+        const specials = app1.specialActivities || [];
+        for (const special of specials) {
+            if (!special.name) continue;
+            if (disabledFields.includes(special.name)) continue;
+
+            if (window.GlobalFieldLocks?.isFieldLocked(special.name, slots)) {
+                continue;
+            }
+
+            const key = `special|${special.name}`;
+            if (!seenKeys.has(key)) {
+                seenKeys.add(key);
+                options.push({
+                    field: special.name,
+                    sport: null,
+                    activityName: special.name,
+                    type: 'special'
+                });
+            }
+        }
+
+        // Also add fields directly if they support general activities
+        const fields = app1.fields || [];
+        for (const field of fields) {
+            if (!field.name || field.available === false) continue;
+            if (disabledFields.includes(field.name)) continue;
+
+            if (window.GlobalFieldLocks?.isFieldLocked(field.name, slots)) {
+                continue;
+            }
+
+            // Add field as a generic option if it has activities
+            (field.activities || []).forEach(activity => {
+                const key = `${field.name}|${activity}`;
+                if (!seenKeys.has(key)) {
+                    seenKeys.add(key);
+                    options.push({
+                        field: field.name,
+                        sport: activity,
+                        activityName: activity,
+                        type: 'sport'
+                    });
+                }
+            });
+        }
+
+        return options;
+    }
+
+    // =========================================================================
+    // CALCULATE FULL PENALTY COST
+    // =========================================================================
+
+    function calculatePenaltyCost(bunk, slots, pick, fieldUsageBySlot, activityProperties) {
+        let penalty = 0;
+        const activityName = pick.activityName || pick._activity || pick.sport;
+        const fieldName = pick.field;
+        const divName = getDivisionForBunk(bunk);
+
+        // Rotation penalty (PRIMARY FACTOR)
+        const rotationPenalty = calculateRotationPenalty(bunk, activityName, slots);
+        if (rotationPenalty === Infinity) {
+            return Infinity;
+        }
+        penalty += rotationPenalty;
+
+        // Division preference bonus
+        const props = activityProperties[fieldName] || {};
+        if (props.preferences?.enabled && props.preferences?.list) {
+            const prefList = props.preferences.list;
+            const idx = prefList.indexOf(divName);
+            if (idx !== -1) {
+                penalty -= (50 - idx * 5);
+            } else if (props.preferences.exclusive) {
+                return Infinity;
+            } else {
+                penalty += 500;
+            }
+        }
+
+        // Sharing bonus (adjacent bunks doing same activity)
+        const myNum = parseInt((bunk.match(/\d+/) || [])[0]) || 0;
         
-        // Check historical counts for frequency
-        const globalSettings = window.loadGlobalSettings?.() || {};
-        const historicalCounts = globalSettings.historicalCounts || {};
-        const activityCount = historicalCounts[bunk]?.[activityName] || 0;
+        for (const slotIdx of slots) {
+            const slotUsage = fieldUsageBySlot[slotIdx]?.[fieldName];
+            if (slotUsage && slotUsage.bunks) {
+                for (const otherBunk of Object.keys(slotUsage.bunks)) {
+                    if (otherBunk === bunk) continue;
+                    const otherNum = parseInt((otherBunk.match(/\d+/) || [])[0]) || 0;
+                    const distance = Math.abs(myNum - otherNum);
+                    if (distance === 1) {
+                        penalty += ROTATION_CONFIG.ADJACENT_BUNK_BONUS;
+                    } else if (distance <= 3) {
+                        penalty += ROTATION_CONFIG.NEARBY_BUNK_BONUS;
+                    }
+                }
+            }
+        }
+
+        // Usage limit check
+        const maxUsage = props.maxUsage || 0;
+        if (maxUsage > 0) {
+            const hist = getActivityCount(bunk, activityName);
+            if (hist >= maxUsage) {
+                return Infinity;
+            }
+            if (hist >= maxUsage - 1) {
+                penalty += 2000;
+            }
+        }
+
+        return penalty;
+    }
+
+    // =========================================================================
+    // FIND BEST ACTIVITY FOR BUNK (Mini-solver)
+    // =========================================================================
+
+    function findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProperties, avoidFields = []) {
+        const disabledFields = window.currentDisabledFields || [];
+        const avoidSet = new Set(avoidFields.map(f => f.toLowerCase()));
+
+        // Build candidate options
+        const candidates = buildCandidateOptions(slots, activityProperties, disabledFields);
         
-        // Bonus for never-done or under-utilized activities
-        if (activityCount === 0 && !lastTimestamp) {
-            score -= 1500; // Never done - big bonus
-        } else if (activityCount < 3) {
-            score -= 800; // Under-utilized bonus
-        } else if (activityCount > 5) {
-            score += 1500; // High frequency penalty
+        debugLog(`Finding best activity for ${bunk} at slots ${slots.join(',')}`);
+        debugLog(`  ${candidates.length} candidates available, avoiding: ${avoidFields.join(', ')}`);
+
+        const scoredPicks = [];
+
+        for (const cand of candidates) {
+            const fieldName = cand.field;
+            const activityName = cand.activityName;
+
+            // Skip avoided fields
+            if (avoidSet.has(fieldName.toLowerCase()) || avoidSet.has(activityName?.toLowerCase())) {
+                continue;
+            }
+
+            // Check field availability
+            if (!isFieldAvailable(fieldName, slots, bunk, fieldUsageBySlot, activityProperties)) {
+                continue;
+            }
+
+            // Calculate penalty cost
+            const cost = calculatePenaltyCost(bunk, slots, cand, fieldUsageBySlot, activityProperties);
+
+            if (cost < Infinity) {
+                scoredPicks.push({
+                    field: fieldName,
+                    sport: cand.sport,
+                    activityName: activityName,
+                    type: cand.type,
+                    cost: cost
+                });
+            }
+        }
+
+        // Sort by cost (lower is better)
+        scoredPicks.sort((a, b) => a.cost - b.cost);
+
+        debugLog(`  ${scoredPicks.length} valid picks after filtering`);
+        if (scoredPicks.length > 0) {
+            debugLog(`  Best pick: ${scoredPicks[0].activityName} on ${scoredPicks[0].field} (cost: ${scoredPicks[0].cost})`);
+        }
+
+        return scoredPicks.length > 0 ? scoredPicks[0] : null;
+    }
+
+    // =========================================================================
+    // APPLY PICK TO BUNK (uses fillBlock when available)
+    // =========================================================================
+
+    function applyPickToBunk(bunk, slots, pick, fieldUsageBySlot, activityProperties) {
+        const divName = getDivisionForBunk(bunk);
+        
+        // Get time range
+        const firstSlotTime = getSlotTimeRange(slots[0]);
+        const lastSlotTime = getSlotTimeRange(slots[slots.length - 1]);
+        
+        const block = {
+            divName: divName,
+            bunk: bunk,
+            startTime: firstSlotTime.startMin,
+            endTime: lastSlotTime.endMin,
+            slots: slots
+        };
+
+        const pickData = {
+            field: pick.field,
+            sport: pick.sport,
+            _fixed: true,
+            _activity: pick.activityName,
+            _smartRegenerated: true,
+            _regeneratedAt: Date.now()
+        };
+
+        // Use fillBlock if available
+        if (typeof window.fillBlock === 'function') {
+            debugLog(`  Using fillBlock for ${bunk}`);
+            window.fillBlock(block, pickData, fieldUsageBySlot, window.yesterdayHistory || {}, false, activityProperties);
+        } else {
+            debugLog(`  Manual assignment for ${bunk}`);
+            
+            if (!window.scheduleAssignments[bunk]) {
+                window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
+            }
+
+            slots.forEach((slotIdx, i) => {
+                window.scheduleAssignments[bunk][slotIdx] = {
+                    ...pickData,
+                    continuation: i > 0
+                };
+            });
+        }
+
+        // Register field usage
+        const fieldName = pick.field;
+        for (const slotIdx of slots) {
+            if (!fieldUsageBySlot[slotIdx]) {
+                fieldUsageBySlot[slotIdx] = {};
+            }
+            if (!fieldUsageBySlot[slotIdx][fieldName]) {
+                fieldUsageBySlot[slotIdx][fieldName] = {
+                    count: 0,
+                    bunks: {},
+                    divisions: []
+                };
+            }
+            const usage = fieldUsageBySlot[slotIdx][fieldName];
+            usage.count++;
+            usage.bunks[bunk] = pick.activityName;
+            if (divName && !usage.divisions.includes(divName)) {
+                usage.divisions.push(divName);
+            }
+        }
+
+        debugLog(`  ✅ Applied ${pick.activityName} on ${pick.field} to ${bunk}`);
+    }
+
+    // =========================================================================
+    // SMART REGENERATION FOR CONFLICTS
+    // =========================================================================
+
+    /**
+     * Smart regeneration using full scheduler-core logic.
+     * When bypassMode is true, the scheduler acts as admin/owner.
+     */
+    function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedActivity, conflicts, bypassMode = false) {
+        console.log('\n' + '='.repeat(60));
+        console.log('[SmartRegen] ★★★ SMART REGENERATION STARTED ★★★');
+        if (bypassMode) {
+            console.log('[SmartRegen] 🔓 BYPASS MODE ACTIVE - Operating with ADMIN privileges');
+        }
+        console.log('='.repeat(60));
+        
+        debugLog('Pinned:', { bunk: pinnedBunk, slots: pinnedSlots, field: pinnedField, activity: pinnedActivity });
+        debugLog('Conflicts:', conflicts.length);
+
+        const activityProperties = getActivityProperties();
+        const results = {
+            success: true,
+            reassigned: [],
+            failed: [],
+            pinnedLock: null,
+            bypassMode: bypassMode
+        };
+
+        // =====================================================================
+        // STEP 1: Lock the pinned field in GlobalFieldLocks
+        // =====================================================================
+        
+        if (window.GlobalFieldLocks) {
+            const pinnedDivName = getDivisionForBunk(pinnedBunk);
+            window.GlobalFieldLocks.lockField(pinnedField, pinnedSlots, {
+                lockedBy: 'smart_regen_pinned',
+                division: pinnedDivName,
+                activity: pinnedActivity,
+                bunk: pinnedBunk
+            });
+            results.pinnedLock = { field: pinnedField, slots: pinnedSlots };
+            debugLog('Step 1: Locked pinned field in GlobalFieldLocks');
+        }
+
+        // =====================================================================
+        // STEP 2: Group conflicts by bunk
+        // =====================================================================
+        
+        const conflictsByBunk = {};
+        for (const conflict of conflicts) {
+            if (!conflictsByBunk[conflict.bunk]) {
+                conflictsByBunk[conflict.bunk] = new Set();
+            }
+            conflictsByBunk[conflict.bunk].add(conflict.slot);
+        }
+
+        debugLog(`Step 2: ${Object.keys(conflictsByBunk).length} bunks need reassignment`);
+
+        // =====================================================================
+        // STEP 3: Build fieldUsageBySlot EXCLUDING conflicting bunks
+        // =====================================================================
+        
+        const bunksToReassign = Object.keys(conflictsByBunk);
+        const fieldUsageBySlot = buildFieldUsageBySlot(bunksToReassign);
+        
+        // Add the pinned bunk's usage
+        for (const slotIdx of pinnedSlots) {
+            if (!fieldUsageBySlot[slotIdx]) {
+                fieldUsageBySlot[slotIdx] = {};
+            }
+            if (!fieldUsageBySlot[slotIdx][pinnedField]) {
+                fieldUsageBySlot[slotIdx][pinnedField] = {
+                    count: 0,
+                    bunks: {},
+                    divisions: []
+                };
+            }
+            const usage = fieldUsageBySlot[slotIdx][pinnedField];
+            usage.count++;
+            usage.bunks[pinnedBunk] = pinnedActivity;
+        }
+
+        debugLog('Step 3: Built fieldUsageBySlot');
+
+        // =====================================================================
+        // STEP 4: Sort and process bunks
+        // =====================================================================
+        
+        bunksToReassign.sort((a, b) => {
+            const numA = parseInt((a.match(/\d+/) || [])[0]) || 0;
+            const numB = parseInt((b.match(/\d+/) || [])[0]) || 0;
+            return numA - numB;
+        });
+
+        debugLog('Step 4: Processing bunks in order:', bunksToReassign.join(', '));
+
+        for (const bunk of bunksToReassign) {
+            const slotSet = conflictsByBunk[bunk];
+            const slots = [...slotSet].sort((a, b) => a - b);
+            
+            debugLog(`\nProcessing ${bunk} for slots: ${slots.join(', ')}`);
+
+            // Get original activity
+            const originalEntry = window.scheduleAssignments?.[bunk]?.[slots[0]];
+            const originalActivity = originalEntry?._activity || originalEntry?.sport || fieldLabel(originalEntry?.field);
+            
+            debugLog(`  Original activity: ${originalActivity || 'none'}`);
+
+            // Find best pick
+            const bestPick = findBestActivityForBunk(
+                bunk, 
+                slots, 
+                fieldUsageBySlot, 
+                activityProperties, 
+                [pinnedField]
+            );
+
+            if (bestPick) {
+                applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProperties);
+                
+                results.reassigned.push({
+                    bunk: bunk,
+                    slots: slots,
+                    from: originalActivity || 'unknown',
+                    to: bestPick.activityName,
+                    field: bestPick.field,
+                    cost: bestPick.cost
+                });
+
+                if (window.showToast) {
+                    window.showToast(`↪️ ${bunk}: ${originalActivity} → ${bestPick.activityName}`, 'info');
+                }
+            } else {
+                // No valid pick found - mark as Free
+                debugLog(`  ⚠️ No valid pick found for ${bunk}, marking as Free`);
+                
+                if (!window.scheduleAssignments[bunk]) {
+                    window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
+                }
+
+                slots.forEach((slotIdx, i) => {
+                    window.scheduleAssignments[bunk][slotIdx] = {
+                        field: 'Free',
+                        sport: null,
+                        continuation: i > 0,
+                        _fixed: false,
+                        _activity: 'Free',
+                        _smartRegenFailed: true,
+                        _originalActivity: originalActivity,
+                        _failedAt: Date.now()
+                    };
+                });
+
+                results.failed.push({
+                    bunk: bunk,
+                    slots: slots,
+                    originalActivity: originalActivity,
+                    reason: 'No valid alternative found'
+                });
+
+                results.success = false;
+
+                if (window.showToast) {
+                    window.showToast(`⚠️ ${bunk}: No alternative found`, 'warning');
+                }
+            }
+        }
+
+        // =====================================================================
+        // STEP 5: Summary
+        // =====================================================================
+        
+        console.log('\n' + '='.repeat(60));
+        console.log('[SmartRegen] ★★★ REGENERATION COMPLETE ★★★');
+        console.log(`  Reassigned: ${results.reassigned.length} bunks`);
+        console.log(`  Failed: ${results.failed.length} bunks`);
+        if (bypassMode) {
+            console.log('  Mode: BYPASS (admin privileges)');
+        }
+        console.log('='.repeat(60) + '\n');
+
+        return results;
+    }
+
+    // =========================================================================
+    // SIMPLIFIED smartReassignBunkActivity (drop-in replacement)
+    // =========================================================================
+
+    function smartReassignBunkActivity(bunk, slots, avoidLocation) {
+        debugLog(`smartReassignBunkActivity called for ${bunk}`);
+        
+        const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
+        if (!entry) {
+            console.warn(`[PostEdit] No existing entry for ${bunk} at slot ${slots[0]}`);
+            return { success: false };
+        }
+
+        const originalActivity = entry._activity || entry.sport || fieldLabel(entry.field);
+        const activityProperties = getActivityProperties();
+        const fieldUsageBySlot = buildFieldUsageBySlot([bunk]);
+
+        const bestPick = findBestActivityForBunk(
+            bunk,
+            slots,
+            fieldUsageBySlot,
+            activityProperties,
+            [avoidLocation]
+        );
+
+        if (bestPick) {
+            applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProperties);
+
+            if (window.showToast) {
+                window.showToast(`↪️ ${bunk}: Moved to ${bestPick.activityName}`, 'info');
+            }
+
+            return {
+                success: true,
+                field: bestPick.field,
+                activity: bestPick.activityName,
+                cost: bestPick.cost
+            };
+        } else {
+            // Fallback to Free
+            console.warn(`[PostEdit] ⚠️ No alternative found for ${bunk}, marking as Free`);
+
+            if (!window.scheduleAssignments[bunk]) {
+                window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
+            }
+
+            slots.forEach((slotIdx, i) => {
+                window.scheduleAssignments[bunk][slotIdx] = {
+                    field: 'Free',
+                    sport: null,
+                    continuation: i > 0,
+                    _fixed: false,
+                    _activity: 'Free',
+                    _noAlternative: true,
+                    _originalActivity: originalActivity,
+                    _originalField: avoidLocation
+                };
+            });
+
+            if (window.showToast) {
+                window.showToast(`⚠️ ${bunk}: No alternative found`, 'warning');
+            }
+
+            return { success: false, reason: 'No valid alternative found' };
+        }
+    }
+
+    // =========================================================================
+    // APPLY DIRECT EDIT
+    // =========================================================================
+
+    function applyDirectEdit(bunk, slots, activity, location, isClear) {
+        const unifiedTimes = window.unifiedTimes || [];
+        
+        if (!window.scheduleAssignments) {
+            window.scheduleAssignments = {};
+        }
+        if (!window.scheduleAssignments[bunk]) {
+            window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
+        }
+
+        const fieldValue = location ? `${location} – ${activity}` : activity;
+
+        slots.forEach((idx, i) => {
+            window.scheduleAssignments[bunk][idx] = {
+                field: isClear ? 'Free' : fieldValue,
+                sport: isClear ? null : activity,
+                continuation: i > 0,
+                _fixed: !isClear,
+                _activity: isClear ? 'Free' : activity,
+                _location: location,
+                _postEdit: true,
+                _editedAt: Date.now()
+            };
+            debugLog(`Set bunk ${bunk} slot ${idx}:`, window.scheduleAssignments[bunk][idx]);
+        });
+        
+        // Register location usage
+        if (location && !isClear && window.registerLocationUsage) {
+            const divName = getDivisionForBunk(bunk);
+            slots.forEach(idx => {
+                window.registerLocationUsage(idx, location, activity, divName);
+            });
+        }
+    }
+
+    // =========================================================================
+    // RESOLVE CONFLICTS AND APPLY
+    // =========================================================================
+
+    function resolveConflictsAndApply(bunk, slots, activity, location, editData) {
+        const editableConflicts = editData.editableConflicts || [];
+        const nonEditableConflicts = editData.nonEditableConflicts || [];
+        const resolutionChoice = editData.resolutionChoice || 'notify';
+        
+        console.log('[PostEdit] Resolving conflicts...', {
+            editable: editableConflicts.length,
+            nonEditable: nonEditableConflicts.length,
+            resolution: resolutionChoice
+        });
+        
+        // Step 1: Apply the pinned edit
+        applyDirectEdit(bunk, slots, activity, location, false);
+        
+        // Step 2: Lock this field in GlobalFieldLocks
+        if (window.GlobalFieldLocks) {
+            const divName = getDivisionForBunk(bunk);
+            window.GlobalFieldLocks.lockField(location, slots, {
+                lockedBy: 'post_edit_pinned',
+                division: divName,
+                activity: activity
+            });
         }
         
-        return score;
-    }
-    
-    /**
-     * Check if a field has capacity for this bunk at these slots
-     */
-    function checkFieldCapacity(fieldName, slots, excludeBunk) {
-        const activityProperties = getActivityProperties();
-        const props = activityProperties[fieldName] || {};
-        const maxCapacity = props.capacity || 1;
+        // Step 3: Determine conflicts to resolve
+        let conflictsToResolve = [...editableConflicts];
+        const bypassMode = resolutionChoice === 'bypass';
         
-        const conflictCheck = checkLocationConflict(fieldName, slots, excludeBunk);
-        return conflictCheck.currentUsage < maxCapacity;
+        if (bypassMode && nonEditableConflicts.length > 0) {
+            // ★★★ BYPASS MODE: Scheduler becomes ADMIN-like ★★★
+            console.log('[PostEdit] 🔓 BYPASS MODE - Acting as ADMIN/OWNER');
+            console.log('[PostEdit] Including non-editable bunks:', nonEditableConflicts.map(c => c.bunk));
+            conflictsToResolve = [...conflictsToResolve, ...nonEditableConflicts];
+        }
+        
+        // Step 4: Use smart regeneration
+        if (conflictsToResolve.length > 0) {
+            const result = smartRegenerateConflicts(
+                bunk,
+                slots,
+                location,
+                activity,
+                conflictsToResolve,
+                bypassMode
+            );
+
+            // Step 5: Handle bypass mode saves
+            if (bypassMode) {
+                console.log('[PostEdit] 🔓 Bypass mode - saving ALL modified bunks to cloud');
+                const modifiedBunks = [
+                    ...result.reassigned.map(r => r.bunk),
+                    ...result.failed.map(f => f.bunk)
+                ];
+                bypassSaveAllBunks(modifiedBunks);
+                
+                // Notify other schedulers
+                if (nonEditableConflicts.length > 0) {
+                    const affectedBunks = [...new Set(nonEditableConflicts.map(c => c.bunk))];
+                    sendSchedulerNotification(affectedBunks, location, activity, 'bypassed');
+                    
+                    if (window.showToast) {
+                        window.showToast(`🔓 Bypassed permissions - reassigned ${affectedBunks.length} bunk(s)`, 'info');
+                    }
+                }
+            } else if (nonEditableConflicts.length > 0) {
+                // NOTIFY mode: Create double-booking and notify
+                const affectedBunks = [...new Set(nonEditableConflicts.map(c => c.bunk))];
+                console.warn(`[PostEdit] 📧 Double-booking created: ${affectedBunks.join(', ')}`);
+                
+                sendSchedulerNotification(affectedBunks, location, activity, 'conflict');
+                
+                if (window.showToast) {
+                    window.showToast(`📧 Notification sent about ${affectedBunks.length} conflict(s)`, 'warning');
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // BYPASS SAVE - Save ALL modified bunks (admin-level access)
+    // =========================================================================
+
+    async function bypassSaveAllBunks(modifiedBunks) {
+        console.log('[PostEdit] 🔓 BYPASS SAVE for bunks:', modifiedBunks);
+        
+        const dateKey = window.currentDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        
+        // Get Supabase client
+        const supabase = window.CampistryDB?.getClient?.() || window.supabase;
+        if (!supabase) {
+            console.error('[PostEdit] Supabase client not available for bypass save');
+            return;
+        }
+        
+        const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
+        const userId = window.CampistryDB?.getUserId?.() || null;
+        
+        if (!campId) {
+            console.error('[PostEdit] Camp ID not available');
+            return;
+        }
+        
+        try {
+            // Build the data to save
+            const scheduleData = {};
+            const leagueData = window.leagueAssignments || {};
+            
+            for (const bunkName of modifiedBunks) {
+                if (window.scheduleAssignments?.[bunkName]) {
+                    scheduleData[bunkName] = window.scheduleAssignments[bunkName];
+                }
+            }
+            
+            // Upsert to daily_schedules
+            const { error } = await supabase
+                .from('daily_schedules')
+                .upsert({
+                    camp_id: campId,
+                    date_key: dateKey,
+                    schedule_data: {
+                        scheduleAssignments: window.scheduleAssignments,
+                        leagueAssignments: leagueData,
+                        unifiedTimes: window.unifiedTimes,
+                        _bypassSaveAt: Date.now(),
+                        _bypassSaveBy: userId,
+                        _modifiedBunks: modifiedBunks
+                    },
+                    updated_at: new Date().toISOString()
+                }, {
+                    onConflict: 'camp_id,date_key'
+                });
+            
+            if (error) {
+                console.error('[PostEdit] Bypass save error:', error);
+            } else {
+                console.log('[PostEdit] ✅ Bypass save successful');
+            }
+            
+        } catch (e) {
+            console.error('[PostEdit] Bypass save exception:', e);
+        }
+    }
+
+    // =========================================================================
+    // SCHEDULER NOTIFICATION
+    // =========================================================================
+
+    async function sendSchedulerNotification(affectedBunks, location, activity, notificationType) {
+        console.log(`[PostEdit] 📧 Sending ${notificationType} notification for bunks:`, affectedBunks);
+        
+        const supabase = window.CampistryDB?.getClient?.() || window.supabase;
+        if (!supabase) {
+            console.warn('[PostEdit] Supabase not available for notifications');
+            return;
+        }
+        
+        const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
+        const userId = window.CampistryDB?.getUserId?.() || null;
+        const dateKey = window.currentDate || new Date().toISOString().split('T')[0];
+        
+        if (!campId) return;
+        
+        try {
+            // Find which schedulers own these bunks
+            const affectedDivisions = new Set();
+            const divisions = window.divisions || {};
+            
+            for (const bunk of affectedBunks) {
+                for (const [divName, divData] of Object.entries(divisions)) {
+                    if (divData.bunks?.includes(bunk)) {
+                        affectedDivisions.add(divName);
+                    }
+                }
+            }
+            
+            // Get schedulers for these divisions
+            const { data: schedulers } = await supabase
+                .from('camp_users')
+                .select('user_id, divisions')
+                .eq('camp_id', campId)
+                .neq('user_id', userId);
+            
+            if (!schedulers) return;
+            
+            // Find schedulers whose divisions include the affected ones
+            const notifyUsers = [];
+            for (const scheduler of schedulers) {
+                const theirDivisions = scheduler.divisions || [];
+                if (theirDivisions.some(d => affectedDivisions.has(d))) {
+                    notifyUsers.push(scheduler.user_id);
+                }
+            }
+            
+            if (notifyUsers.length === 0) return;
+            
+            // Create notifications
+            const notifications = notifyUsers.map(targetUserId => ({
+                camp_id: campId,
+                user_id: targetUserId,
+                type: notificationType === 'bypassed' ? 'schedule_bypassed' : 'schedule_conflict',
+                title: notificationType === 'bypassed' 
+                    ? '🔓 Your schedule was modified' 
+                    : '⚠️ Schedule conflict detected',
+                message: notificationType === 'bypassed'
+                    ? `Another scheduler reassigned bunks (${affectedBunks.join(', ')}) for ${location} - ${activity} on ${dateKey}`
+                    : `Conflict at ${location} for ${activity} on ${dateKey}. Affected bunks: ${affectedBunks.join(', ')}`,
+                metadata: {
+                    dateKey,
+                    bunks: affectedBunks,
+                    location,
+                    activity,
+                    initiatedBy: userId
+                },
+                read: false,
+                created_at: new Date().toISOString()
+            }));
+            
+            const { error } = await supabase
+                .from('notifications')
+                .insert(notifications);
+            
+            if (error) {
+                console.error('[PostEdit] Notification insert error:', error);
+            } else {
+                console.log(`[PostEdit] ✅ Sent ${notificationType} notifications to ${notifyUsers.length} user(s)`);
+            }
+            
+        } catch (e) {
+            console.error('[PostEdit] Notification error:', e);
+        }
+    }
+
+    // =========================================================================
+    // APPLY EDIT (Main entry point)
+    // =========================================================================
+
+    function applyEdit(bunk, editData) {
+        const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
+        const unifiedTimes = window.unifiedTimes || [];
+        
+        const isClear = activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
+        const slots = findSlotsForRange(startMin, endMin, unifiedTimes);
+        
+        if (slots.length === 0) {
+            console.error('[PostEdit] ❌ No slots found for time range:', startMin, '-', endMin);
+            alert('Error: Could not find time slots for the specified range.');
+            return;
+        }
+        
+        console.log(`[PostEdit] Applying edit for ${bunk}:`, { 
+            activity, location, startMin, endMin, slots, hasConflict, resolutionChoice, isClear
+        });
+        
+        if (!window.scheduleAssignments) {
+            window.scheduleAssignments = {};
+        }
+        if (!window.scheduleAssignments[bunk]) {
+            window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
+        }
+        
+        if (hasConflict) {
+            resolveConflictsAndApply(bunk, slots, activity, location, editData);
+        } else {
+            applyDirectEdit(bunk, slots, activity, location, isClear);
+        }
+        
+        // Debug
+        console.log(`[PostEdit] ✅ After edit, bunk ${bunk} slot ${slots[0]}:`, window.scheduleAssignments[bunk][slots[0]]);
+        
+        // Save to localStorage
+        const currentDate = window.currentDate || new Date().toISOString().split('T')[0];
+        const storageKey = `scheduleAssignments_${currentDate}`;
+        try {
+            localStorage.setItem(storageKey, JSON.stringify(window.scheduleAssignments));
+            console.log(`[PostEdit] ✅ Saved to localStorage: ${storageKey}`);
+        } catch (e) {
+            console.error('[PostEdit] Failed to save to localStorage:', e);
+        }
+        
+        // Save to unified data key
+        const unifiedKey = `campDailyData_v1_${currentDate}`;
+        try {
+            const dailyData = JSON.parse(localStorage.getItem(unifiedKey) || '{}');
+            dailyData.scheduleAssignments = window.scheduleAssignments;
+            dailyData._postEditAt = Date.now();
+            localStorage.setItem(unifiedKey, JSON.stringify(dailyData));
+        } catch (e) {
+            console.error('[PostEdit] Failed to save to unified storage:', e);
+        }
+        
+        // Protection flag
+        window._postEditInProgress = true;
+        window._postEditTimestamp = Date.now();
+        setTimeout(() => {
+            window._postEditInProgress = false;
+        }, 5000);
+        
+        // Cloud save
+        window.saveSchedule?.();
+        window.updateTable?.();
     }
 
     // =========================================================================
@@ -421,6 +1429,8 @@
             max-width: 500px;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-height: 90vh;
+            overflow-y: auto;
         `;
         
         overlay.appendChild(modal);
@@ -430,7 +1440,6 @@
             if (e.target === overlay) closeModal();
         });
         
-        // Close on Escape
         const escHandler = (e) => {
             if (e.key === 'Escape') {
                 closeModal();
@@ -453,6 +1462,7 @@
         
         let currentActivity = currentValue || '';
         let currentField = '';
+        let resolutionChoice = 'notify';
         
         const slots = findSlotsForRange(startMin, endMin, unifiedTimes);
         if (slots.length > 0) {
@@ -528,7 +1538,6 @@
                         <span id="post-edit-time-arrow">▶</span> Change time
                     </button>
                     
-                    <!-- Time Range (Hidden by default) -->
                     <div id="post-edit-time-section" style="display: none; margin-top: 12px;">
                         <div style="display: flex; gap: 12px;">
                             <div style="flex: 1;">
@@ -582,7 +1591,7 @@
             </div>
         `;
         
-        // Store original times
+        // State
         let useOriginalTime = true;
         const originalStartMin = startMin;
         const originalEndMin = endMin;
@@ -653,39 +1662,37 @@
                     </p>`;
                 
                 if (editableBunks.length > 0) {
-                    html += `<div style="margin-bottom: 8px;">
-                        <div style="font-size: 0.75rem; color: #059669; font-weight: 600; margin-bottom: 4px;">✓ YOUR DIVISIONS (will be reassigned):</div>
-                        <ul style="margin: 0; padding-left: 20px; color: #78350f; font-size: 0.875rem;">
-                            ${editableBunks.map(b => `<li>${b}</li>`).join('')}
-                        </ul>
+                    html += `<div style="margin-bottom: 8px; padding: 8px; background: #d1fae5; border-radius: 6px;">
+                        <div style="font-size: 0.8rem; color: #065f46;">
+                            <strong>✓ Can auto-reassign:</strong> ${editableBunks.join(', ')}
+                        </div>
                     </div>`;
                 }
                 
                 if (nonEditableBunks.length > 0) {
-                    html += `<div style="margin-bottom: 8px;">
-                        <div style="font-size: 0.75rem; color: #dc2626; font-weight: 600; margin-bottom: 4px;">✗ OTHER SCHEDULER'S DIVISIONS:</div>
-                        <ul style="margin: 0; padding-left: 20px; color: #78350f; font-size: 0.875rem;">
-                            ${nonEditableBunks.map(b => `<li>${b}</li>`).join('')}
-                        </ul>
+                    html += `<div style="margin-bottom: 8px; padding: 8px; background: #fee2e2; border-radius: 6px;">
+                        <div style="font-size: 0.8rem; color: #991b1b;">
+                            <strong>✗ Other scheduler's bunks:</strong> ${nonEditableBunks.join(', ')}
+                        </div>
                     </div>
                     
-                    <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #f59e0b;">
-                        <div style="font-size: 0.875rem; font-weight: 600; color: #78350f; margin-bottom: 8px;">
-                            How should we handle the other scheduler's bunks?
+                    <div style="margin-top: 12px;">
+                        <div style="font-weight: 500; color: #374151; margin-bottom: 8px; font-size: 0.875rem;">
+                            How to handle their bunks?
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 8px;">
                             <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;">
                                 <input type="radio" name="conflict-resolution" value="notify" checked style="margin-top: 2px;">
                                 <div>
                                     <div style="font-weight: 500; color: #374151;">📧 Notify other scheduler</div>
-                                    <div style="font-size: 0.75rem; color: #6b7280;">Create double-booking & send them a warning to resolve</div>
+                                    <div style="font-size: 0.75rem; color: #6b7280;">Create double-booking & send them a warning</div>
                                 </div>
                             </label>
                             <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;">
                                 <input type="radio" name="conflict-resolution" value="bypass" style="margin-top: 2px;">
                                 <div>
-                                    <div style="font-weight: 500; color: #374151;">🔓 Bypass & reassign their bunks</div>
-                                    <div style="font-size: 0.75rem; color: #6b7280;">Override permissions and move their activities (uses smart rotation)</div>
+                                    <div style="font-weight: 500; color: #374151;">🔓 Bypass & reassign (Admin mode)</div>
+                                    <div style="font-size: 0.75rem; color: #6b7280;">Override permissions and use smart regeneration</div>
                                 </div>
                             </label>
                         </div>
@@ -694,6 +1701,15 @@
                 
                 html += `</div>`;
                 conflictArea.innerHTML = html;
+                
+                // Bind radio buttons
+                const radioButtons = conflictArea.querySelectorAll('input[name="conflict-resolution"]');
+                radioButtons.forEach(radio => {
+                    radio.addEventListener('change', (e) => {
+                        resolutionChoice = e.target.value;
+                    });
+                });
+                
                 return conflictCheck;
             } else {
                 conflictArea.style.display = 'none';
@@ -705,7 +1721,6 @@
         startInput.addEventListener('change', () => { updateTimeDisplay(); checkAndShowConflicts(); });
         endInput.addEventListener('change', () => { updateTimeDisplay(); checkAndShowConflicts(); });
         
-        // Initial check
         checkAndShowConflicts();
         
         // Save handler
@@ -724,22 +1739,10 @@
                 return;
             }
             
-            // CRITICAL: Capture radio selection BEFORE checkAndShowConflicts() re-renders the HTML
-            let resolutionChoice = 'notify'; // default
-            const resolutionRadio = document.querySelector('input[name="conflict-resolution"]:checked');
-            if (resolutionRadio) {
-                resolutionChoice = resolutionRadio.value;
-                console.log('[PostEdit] Captured resolution choice BEFORE re-render:', resolutionChoice);
-            }
-            
-            // Now check conflicts (using direct function, not the UI renderer)
             const targetSlots = findSlotsForRange(times.startMin, times.endMin, unifiedTimes);
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
             
             if (conflictCheck?.hasConflict) {
-                // Use the pre-captured resolutionChoice
-                console.log('[PostEdit] Using captured resolution:', resolutionChoice);
-                
                 onSave({
                     activity,
                     location,
@@ -765,614 +1768,36 @@
             closeModal();
         };
         
-        // Focus activity input
         document.getElementById('post-edit-activity').focus();
         document.getElementById('post-edit-activity').select();
     }
 
     // =========================================================================
-    // APPLY EDIT
-    // =========================================================================
-
-    async function applyEdit(bunk, editData) {
-        const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
-        const unifiedTimes = window.unifiedTimes || [];
-        
-        const isClear = activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
-        const slots = findSlotsForRange(startMin, endMin, unifiedTimes);
-        
-        if (slots.length === 0) {
-            console.error('[PostEdit] ❌ No slots found for time range:', startMin, '-', endMin);
-            alert('Error: Could not find time slots for the specified range.');
-            return;
-        }
-        
-        console.log(`[PostEdit] Applying edit for ${bunk}:`, { 
-            activity, 
-            location, 
-            startMin, 
-            endMin, 
-            slots, 
-            hasConflict, 
-            resolutionChoice,
-            isClear
-        });
-        
-        if (!window.scheduleAssignments) {
-            window.scheduleAssignments = {};
-        }
-        if (!window.scheduleAssignments[bunk]) {
-            window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
-        }
-        
-        if (hasConflict) {
-            await resolveConflictsAndApply(bunk, slots, activity, location, editData);
-        } else {
-            applyDirectEdit(bunk, slots, activity, location, isClear);
-        }
-        
-        // Debug: Log what we just saved
-        console.log(`[PostEdit] ✅ After edit, bunk ${bunk} slot ${slots[0]}:`, window.scheduleAssignments[bunk][slots[0]]);
-        
-        // CRITICAL: Save to localStorage FIRST (immediate persistence)
-        const currentDate = window.currentDate || new Date().toISOString().split('T')[0];
-        const storageKey = `scheduleAssignments_${currentDate}`;
-        try {
-            localStorage.setItem(storageKey, JSON.stringify(window.scheduleAssignments));
-            console.log(`[PostEdit] ✅ Saved to localStorage: ${storageKey}`);
-        } catch (e) {
-            console.error('[PostEdit] Failed to save to localStorage:', e);
-        }
-        
-        // Also save to the unified data key
-        const unifiedKey = `campDailyData_v1_${currentDate}`;
-        try {
-            const dailyData = JSON.parse(localStorage.getItem(unifiedKey) || '{}');
-            dailyData.scheduleAssignments = window.scheduleAssignments;
-            dailyData._postEditAt = Date.now();
-            localStorage.setItem(unifiedKey, JSON.stringify(dailyData));
-            console.log(`[PostEdit] ✅ Saved to unified storage: ${unifiedKey}`);
-        } catch (e) {
-            console.error('[PostEdit] Failed to save to unified storage:', e);
-        }
-        
-        // Set a flag to prevent cloud overwrites for the next few seconds
-        window._postEditInProgress = true;
-        window._postEditTimestamp = Date.now();
-        setTimeout(() => {
-            window._postEditInProgress = false;
-            console.log('[PostEdit] Post-edit protection expired');
-        }, 5000);
-        
-        // Then trigger cloud save
-        window.saveSchedule?.();
-        
-        // Force UI refresh - use multiple methods to ensure it works
-        console.log('[PostEdit] Triggering UI refresh...');
-        
-        // Method 1: Direct updateTable
-        if (window.updateTable) {
-            console.log('[PostEdit] Calling window.updateTable()');
-            window.updateTable();
-        }
-        
-        // Method 2: Direct render to container (bypass throttle)
-        setTimeout(() => {
-            const container = document.getElementById('scheduleTable');
-            if (container && window.renderStaggeredView) {
-                console.log('[PostEdit] Forcing direct renderStaggeredView...');
-                window.renderStaggeredView(container);
-            }
-        }, 100);
-        
-        // Method 3: Also try UnifiedScheduleSystem if available
-        if (window.UnifiedScheduleSystem?.render) {
-            console.log('[PostEdit] Calling UnifiedScheduleSystem.render()...');
-            window.UnifiedScheduleSystem.render();
-        }
-        
-        // Method 4: Dispatch event for other systems to pick up
-        window.dispatchEvent(new CustomEvent('campistry-schedule-updated', { 
-            detail: { bunk, activity, location } 
-        }));
-        
-        if (window.showToast) {
-            window.showToast(`✅ Updated ${bunk}: ${isClear ? 'Cleared' : activity}`, 'success');
-        } else {
-            console.log(`[PostEdit] ✅ Updated ${bunk}: ${isClear ? 'Cleared' : activity}`);
-        }
-    }
-
-    function applyDirectEdit(bunk, slots, activity, location, isClear) {
-        console.log(`[PostEdit] applyDirectEdit called:`, { bunk, slots, activity, location, isClear });
-        
-        // Format field correctly: "Location – Activity" if both present
-        let fieldValue;
-        if (isClear) {
-            fieldValue = 'Free';
-        } else if (location && activity) {
-            fieldValue = `${location} – ${activity}`;
-        } else if (location) {
-            fieldValue = location;
-        } else {
-            fieldValue = activity;
-        }
-        
-        console.log(`[PostEdit] Setting field value: "${fieldValue}" for slots:`, slots);
-        
-        slots.forEach((idx, i) => {
-            window.scheduleAssignments[bunk][idx] = {
-                field: fieldValue,
-                sport: null,
-                continuation: i > 0,
-                _fixed: true,
-                _pinned: !isClear,
-                _activity: isClear ? 'Free' : activity,
-                _location: location,
-                _postEdit: true,
-                _editedAt: Date.now()
-            };
-            console.log(`[PostEdit] Set bunk ${bunk} slot ${idx}:`, window.scheduleAssignments[bunk][idx]);
-        });
-        
-        if (location && !isClear && window.registerLocationUsage) {
-            const divName = Object.keys(window.divisions || {}).find(d => 
-                window.divisions[d]?.bunks?.includes(bunk)
-            );
-            slots.forEach(idx => {
-                window.registerLocationUsage(idx, location, activity, divName);
-            });
-        }
-    }
-
-    async function resolveConflictsAndApply(bunk, slots, activity, location, editData) {
-        const editableConflicts = editData.editableConflicts || [];
-        const nonEditableConflicts = editData.nonEditableConflicts || [];
-        const resolutionChoice = editData.resolutionChoice || 'notify';
-        
-        console.log('[PostEdit] Resolving conflicts...', {
-            editable: editableConflicts.length,
-            nonEditable: nonEditableConflicts.length,
-            resolution: resolutionChoice
-        });
-        
-        // First, apply the pinned edit
-        applyDirectEdit(bunk, slots, activity, location, false);
-        
-        // Lock this field for these slots
-        if (window.GlobalFieldLocks) {
-            const divName = Object.keys(window.divisions || {}).find(d => 
-                window.divisions[d]?.bunks?.includes(bunk)
-            );
-            window.GlobalFieldLocks.lockField(location, slots, {
-                lockedBy: 'post_edit_pinned',
-                division: divName,
-                activity: activity
-            });
-        }
-        
-        // Reassign bunks we CAN edit (always)
-        if (editableConflicts.length > 0) {
-            const conflictsByBunk = {};
-            editableConflicts.forEach(c => {
-                if (!conflictsByBunk[c.bunk]) {
-                    conflictsByBunk[c.bunk] = [];
-                }
-                conflictsByBunk[c.bunk].push(c.slot);
-            });
-            
-            for (const [conflictBunk, conflictSlots] of Object.entries(conflictsByBunk)) {
-                const uniqueSlots = [...new Set(conflictSlots)];
-                smartReassignBunkActivity(conflictBunk, uniqueSlots, location);
-            }
-        }
-        
-        // Handle non-editable conflicts based on choice
-        if (nonEditableConflicts.length > 0) {
-            const nonEditableBunks = [...new Set(nonEditableConflicts.map(c => c.bunk))];
-            
-            if (resolutionChoice === 'bypass') {
-                // BYPASS: Override permissions and reassign their bunks too
-                console.log('[PostEdit] 🔓 BYPASSING permissions to reassign other scheduler bunks:', nonEditableBunks);
-                
-                const conflictsByBunk = {};
-                nonEditableConflicts.forEach(c => {
-                    if (!conflictsByBunk[c.bunk]) {
-                        conflictsByBunk[c.bunk] = [];
-                    }
-                    conflictsByBunk[c.bunk].push(c.slot);
-                });
-                
-                for (const [conflictBunk, conflictSlots] of Object.entries(conflictsByBunk)) {
-                    const uniqueSlots = [...new Set(conflictSlots)];
-                    smartReassignBunkActivity(conflictBunk, uniqueSlots, location);
-                }
-                
-                // CRITICAL: For bypass mode, we need to save ALL bunks, not just ours
-                // The regular saveSchedule filters to only editable bunks
-                console.log('[PostEdit] 🔓 Bypass mode - saving ALL modified bunks to cloud');
-                
-                // Store the bypassed bunk data before saving so we can restore if needed
-                const bypassedBunkData = {};
-                nonEditableBunks.forEach(b => {
-                    if (window.scheduleAssignments[b]) {
-                        bypassedBunkData[b] = JSON.parse(JSON.stringify(window.scheduleAssignments[b]));
-                    }
-                });
-                window._bypassedBunkData = bypassedBunkData;
-                window._bypassInProgress = true;
-                
-                await bypassSaveAllBunks(nonEditableConflicts.map(c => c.bunk));
-                
-                // After bypass save, restore bypassed bunk data in case remote merge overwrote it
-                console.log('[PostEdit] 🔓 Restoring bypassed bunk data after save...');
-                Object.entries(bypassedBunkData).forEach(([bunkName, data]) => {
-                    window.scheduleAssignments[bunkName] = data;
-                });
-                
-                window._bypassInProgress = false;
-                
-                if (window.showToast) {
-                    window.showToast(`🔓 Bypassed permissions - reassigned ${nonEditableBunks.length} bunk(s)`, 'info');
-                }
-                
-                // Still send a notification that you made changes to their bunks
-                sendSchedulerNotification(nonEditableBunks, location, activity, 'bypassed');
-                
-                // Force UI refresh after bypass is complete
-                console.log('[PostEdit] 🔓 Forcing UI refresh after bypass...');
-                if (window.updateTable) {
-                    window.updateTable();
-                }
-            } else {
-                // NOTIFY: Just create double-booking and notify them
-                console.warn(`[PostEdit] 📧 Double-booking created with bunks from other schedulers: ${nonEditableBunks.join(', ')}`);
-                
-                if (window.showToast) {
-                    window.showToast(`📧 Notification sent to other scheduler about conflict`, 'warning');
-                }
-                
-                sendSchedulerNotification(nonEditableBunks, location, activity, 'conflict');
-            }
-        }
-    }
-    
-    // =========================================================================
-    // SMART REASSIGNMENT (uses rotation-aware logic)
-    // =========================================================================
-    
-    /**
-     * Smart reassignment that uses the same rotation logic as the main scheduler.
-     * Finds the best alternative location considering:
-     * - Field availability and capacity
-     * - Rotation history (avoid same-day repeats)
-     * - Activity compatibility
-     * - Division preferences
-     */
-    function smartReassignBunkActivity(bunk, slots, avoidLocation) {
-        console.log(`[PostEdit] 🧠 Smart reassigning ${bunk} away from ${avoidLocation}`);
-        
-        const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
-        if (!entry) {
-            console.warn(`[PostEdit] No existing entry for ${bunk} at slot ${slots[0]}`);
-            return;
-        }
-        
-        const originalActivity = entry._activity || entry.sport || fieldLabel(entry.field);
-        const divName = Object.keys(window.divisions || {}).find(d => 
-            window.divisions[d]?.bunks?.includes(bunk)
-        );
-        
-        console.log(`[PostEdit] Original activity: ${originalActivity}, Division: ${divName}`);
-        
-        // Get all available alternatives with rotation scores
-        const alternative = findSmartAlternative(bunk, originalActivity, slots, avoidLocation, divName);
-        
-        if (alternative) {
-            console.log(`[PostEdit] ✅ Smart alternative for ${bunk}: ${alternative.field} (score: ${alternative.score})`);
-            
-            // Format the field value correctly: "Location – Activity"
-            const fieldValue = `${alternative.field} – ${originalActivity}`;
-            
-            slots.forEach((idx, i) => {
-                window.scheduleAssignments[bunk][idx] = {
-                    ...entry,
-                    field: fieldValue,
-                    _location: alternative.field,
-                    _activity: originalActivity,
-                    continuation: i > 0,
-                    _reassigned: true,
-                    _smartReassigned: true,
-                    _originalField: avoidLocation,
-                    _reassignedAt: Date.now(),
-                    _rotationScore: alternative.score
-                };
-            });
-            
-            if (window.showToast) {
-                window.showToast(`↪️ Smart-moved ${bunk} to ${alternative.field}`, 'info');
-            }
-        } else {
-            console.warn(`[PostEdit] ⚠️ No smart alternative found for ${bunk}, marking as Free`);
-            
-            slots.forEach((idx, i) => {
-                window.scheduleAssignments[bunk][idx] = {
-                    field: 'Free',
-                    sport: null,
-                    continuation: i > 0,
-                    _fixed: false,
-                    _activity: 'Free',
-                    _noAlternative: true,
-                    _originalActivity: originalActivity,
-                    _originalField: avoidLocation
-                };
-            });
-            
-            if (window.showToast) {
-                window.showToast(`⚠️ ${bunk}: No alternative found, set to Free`, 'warning');
-            }
-        }
-    }
-    
-    /**
-     * Find the best alternative location using rotation-aware scoring.
-     * Returns { field: string, score: number } or null
-     */
-    function findSmartAlternative(bunk, activityName, slots, avoidLocation, divName) {
-        const settings = window.loadGlobalSettings?.() || {};
-        const app1 = settings.app1 || {};
-        const fields = app1.fields || [];
-        const activityProperties = getActivityProperties();
-        
-        const activityLower = activityName.toLowerCase();
-        const candidates = [];
-        
-        // Build list of candidate fields
-        for (const field of fields) {
-            if (field.name.toLowerCase() === avoidLocation.toLowerCase()) continue;
-            if (field.available === false) continue;
-            
-            const activities = field.activities || [];
-            const supportsActivity = activities.some(a => 
-                a.toLowerCase() === activityLower ||
-                activityLower.includes(a.toLowerCase()) ||
-                a.toLowerCase().includes(activityLower)
-            );
-            
-            const isGeneral = activities.length === 0 || 
-                activities.some(a => a.toLowerCase().includes('general'));
-            
-            if (supportsActivity || isGeneral) {
-                // Check capacity
-                if (checkFieldCapacity(field.name, slots, bunk)) {
-                    // Calculate rotation score
-                    const rotationScore = calculateRotationScore(bunk, field.name, slots);
-                    
-                    // Skip if blocked by rotation (Infinity score)
-                    if (rotationScore === Infinity) {
-                        console.log(`[PostEdit] Skipping ${field.name} - rotation blocked`);
-                        continue;
-                    }
-                    
-                    // Add division preference bonus
-                    let preferenceScore = 0;
-                    const fieldProps = activityProperties[field.name] || {};
-                    if (fieldProps.preferences?.enabled && fieldProps.preferences?.list) {
-                        const prefList = fieldProps.preferences.list;
-                        const prefIdx = prefList.indexOf(divName);
-                        if (prefIdx !== -1) {
-                            preferenceScore = -100 * (prefList.length - prefIdx); // Negative = good
-                        }
-                    }
-                    
-                    candidates.push({
-                        field: field.name,
-                        score: rotationScore + preferenceScore,
-                        rotationScore,
-                        preferenceScore
-                    });
-                }
-            }
-        }
-        
-        // Sort by score (lower is better)
-        candidates.sort((a, b) => a.score - b.score);
-        
-        console.log(`[PostEdit] Smart alternatives for ${bunk}:`, 
-            candidates.slice(0, 5).map(c => `${c.field}(${c.score})`).join(', ')
-        );
-        
-        return candidates[0] || null;
-    }
-    
-    // =========================================================================
-    // BYPASS SAVE - Direct Supabase access for other scheduler's bunks
-    // =========================================================================
-    
-    async function bypassSaveAllBunks(bypassBunks) {
-        const currentDate = window.currentDate || new Date().toISOString().split('T')[0];
-        const assignments = window.scheduleAssignments || {};
-        
-        // Build a payload with just the bypassed bunks
-        const bypassPayload = {};
-        const uniqueBunks = [...new Set(bypassBunks)];
-        
-        uniqueBunks.forEach(bunk => {
-            if (assignments[bunk]) {
-                bypassPayload[bunk] = assignments[bunk];
-            }
-        });
-        
-        console.log('[PostEdit] Bypass save payload:', { 
-            bunks: Object.keys(bypassPayload).length,
-            date: currentDate 
-        });
-        
-        // Get Supabase client using the correct Campistry access pattern
-        const client = window.CampistryDB?.getClient?.() || window.supabase;
-        const campId = window.CampistryDB?.getCampId?.();
-        const currentUserId = window.CampistryDB?.getUserId?.();
-        const currentUserEmail = window.CampistryDB?.getCurrentUser?.()?.email || 
-                                window.SupabaseClient?.currentUser?.email || 
-                                'bypass_override';
-        
-        if (client && campId) {
-            try {
-                console.log('[PostEdit] Fetching other scheduler records...', { campId, currentUserId, date: currentDate });
-                
-                // Get existing records from OTHER schedulers (not the current user)
-                const { data: existing, error: fetchError } = await client
-                    .from('daily_schedules')
-                    .select('*')
-                    .eq('camp_id', campId)
-                    .eq('date_key', currentDate)
-                    .neq('scheduler_id', currentUserId);
-                
-                if (fetchError) {
-                    console.error('[PostEdit] Error fetching existing schedules:', fetchError);
-                }
-                
-                console.log('[PostEdit] Found', existing?.length || 0, 'other scheduler records');
-                
-                // For each other scheduler's record, merge our bypass changes
-                if (existing && existing.length > 0) {
-                    for (const record of existing) {
-                        const existingAssignments = record.schedule_data?.scheduleAssignments || {};
-                        
-                        // Merge bypass bunks into their data
-                        const mergedAssignments = {
-                            ...existingAssignments,
-                            ...bypassPayload
-                        };
-                        
-                        const updatedData = {
-                            ...record.schedule_data,
-                            scheduleAssignments: mergedAssignments,
-                            _bypassedAt: Date.now(),
-                            _bypassedBy: currentUserEmail
-                        };
-                        
-                        const { error: updateError } = await client
-                            .from('daily_schedules')
-                            .update({ 
-                                schedule_data: updatedData,
-                                updated_at: new Date().toISOString()
-                            })
-                            .eq('id', record.id);
-                        
-                        if (updateError) {
-                            console.error('[PostEdit] Error updating other scheduler record:', updateError);
-                        } else {
-                            console.log(`[PostEdit] ✅ Bypass saved to record: ${record.created_by || record.scheduler_id}`);
-                        }
-                    }
-                } else {
-                    console.log('[PostEdit] No other scheduler records found to update');
-                }
-                
-                console.log('[PostEdit] ✅ Bypass save complete');
-                
-            } catch (e) {
-                console.error('[PostEdit] Bypass save error:', e);
-            }
-        } else {
-            console.warn('[PostEdit] Supabase client or campId not available for bypass save', {
-                hasClient: !!client,
-                hasCampId: !!campId,
-                hasUserId: !!currentUserId
-            });
-        }
-    }
-    
-    // =========================================================================
-    // NOTIFICATIONS
-    // =========================================================================
-    
-    function sendSchedulerNotification(bunks, location, activity, type) {
-        const currentUserEmail = window.CampistryDB?.getCurrentUser?.()?.email || 
-                                window.SupabaseClient?.currentUser?.email || 
-                                'Unknown scheduler';
-        const currentDate = window.currentDate || new Date().toISOString().split('T')[0];
-        
-        const notification = {
-            type: type === 'bypassed' ? 'schedule_override' : 'schedule_conflict',
-            message: type === 'bypassed' 
-                ? `${currentUserEmail} has overridden permissions and reassigned your bunks (${bunks.join(', ')}) away from ${location} for ${activity}`
-                : `${currentUserEmail} has scheduled ${activity} at ${location}, conflicting with your bunks: ${bunks.join(', ')}. Please resolve the double-booking.`,
-            bunks: bunks,
-            location: location,
-            activity: activity,
-            date: currentDate,
-            from: currentUserEmail,
-            timestamp: Date.now()
-        };
-        
-        console.log('[PostEdit] 📧 Scheduler notification:', notification);
-        
-        // Store notification in localStorage for now (can be enhanced to use Supabase later)
-        const notificationKey = `campistry_notifications_${currentDate}`;
-        const existing = JSON.parse(localStorage.getItem(notificationKey) || '[]');
-        existing.push(notification);
-        localStorage.setItem(notificationKey, JSON.stringify(existing));
-        
-        // Also try to store in cloud if available
-        if (window.CloudSyncHelpers?.queueForSync) {
-            window.CloudSyncHelpers.queueForSync('notifications', { 
-                key: notificationKey, 
-                data: existing 
-            });
-        }
-        
-        // Dispatch event for real-time notification systems
-        window.dispatchEvent(new CustomEvent('campistry-scheduler-notification', { 
-            detail: notification 
-        }));
-    }
-
-    // =========================================================================
-    // ENHANCED EDIT CELL
+    // ENHANCED EDIT CELL (Main entry point)
     // =========================================================================
 
     function enhancedEditCell(bunk, startMin, endMin, current) {
-        if (!bunk) return;
+        debugLog(`enhancedEditCell called: ${bunk}, ${startMin}-${endMin}, "${current}"`);
         
-        const unifiedTimes = window.unifiedTimes || [];
-        const slotIdx = findSlotIndexForTime(startMin, unifiedTimes);
-        
-        // Check multi-scheduler blocking
-        if (window.MultiSchedulerAutonomous?.isBunkSlotBlocked) {
-            const blockCheck = window.MultiSchedulerAutonomous.isBunkSlotBlocked(bunk, slotIdx);
-            if (blockCheck.blocked) {
-                if (window.showToast) {
-                    window.showToast(`🔒 Cannot edit: ${blockCheck.reason}`, 'error');
-                } else {
-                    alert(`🔒 Cannot edit: ${blockCheck.reason}`);
-                }
-                return;
-            }
-        }
-        
-        // Check RBAC permissions
-        if (window.AccessControl && !window.AccessControl.canEditBunk?.(bunk)) {
+        // RBAC check
+        if (!canEditBunk(bunk)) {
             alert('You do not have permission to edit this schedule.\n\n(You can only edit your assigned divisions.)');
             return;
         }
         
-        // Show modal
         showEditModal(bunk, startMin, endMin, current, (editData) => {
             applyEdit(bunk, editData);
         });
     }
 
     // =========================================================================
-    // CLICK INTERCEPTOR - Captures cell clicks before original handler
+    // CLICK INTERCEPTOR
     // =========================================================================
 
     function setupClickInterceptor() {
-        // Strategy 1: Override window.editCell
         const overrideWindowEditCell = () => {
             if (window.editCell && window.editCell !== enhancedEditCell && !window.editCell._isEnhanced) {
-                console.log('[PostEdit] Overriding window.editCell');
+                debugLog('Overriding window.editCell');
                 window._originalEditCell = window.editCell;
                 window.editCell = enhancedEditCell;
                 window.editCell._isEnhanced = true;
@@ -1384,7 +1809,7 @@
         setTimeout(overrideWindowEditCell, 1500);
         setTimeout(overrideWindowEditCell, 3000);
         
-        // Strategy 2: Capture phase click listener
+        // Capture phase click listener
         document.addEventListener('click', (e) => {
             const td = e.target.closest('td');
             if (!td) return;
@@ -1393,104 +1818,42 @@
             if (!table) return;
             
             const onclickStr = td.getAttribute('onclick') || (td.onclick ? td.onclick.toString() : '');
-            const isClickable = td.style.cursor === 'pointer' || 
-                               getComputedStyle(td).cursor === 'pointer';
+            const isClickable = td.style.cursor === 'pointer' || getComputedStyle(td).cursor === 'pointer';
             
             if (!isClickable && !onclickStr.includes('editCell')) return;
             
             let bunk, startMin, endMin, currentText;
             
             const match = onclickStr.match(/editCell\s*\(\s*["']?([^"',]+)["']?\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*["']?([^"']*)["']?\s*\)/);
+            
             if (match) {
                 bunk = match[1];
                 startMin = parseInt(match[2], 10);
                 endMin = parseInt(match[3], 10);
                 currentText = match[4] || '';
+                
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                
+                td.onclick = null;
+                td.removeAttribute('onclick');
+                
+                enhancedEditCell(bunk, startMin, endMin, currentText);
             }
-            
-            if (!bunk) {
-                const row = td.closest('tr');
-                if (row) {
-                    const firstCell = row.querySelector('td:first-child, th:first-child');
-                    if (firstCell) {
-                        bunk = firstCell.textContent?.trim();
-                    }
-                }
-                currentText = td.textContent?.trim() || '';
-            }
-            
-            if (!bunk || isNaN(startMin) || isNaN(endMin)) {
-                return;
-            }
-            
-            e.stopPropagation();
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            
-            console.log('[PostEdit] Intercepted cell click:', { bunk, startMin, endMin, currentText });
-            enhancedEditCell(bunk, startMin, endMin, currentText);
-            
         }, true);
         
-        // Strategy 3: Patch cells after each render
-        const patchAfterRender = () => {
-            const table = document.getElementById('scheduleTable');
-            if (!table) return;
-            
-            const cells = table.querySelectorAll('td');
-            cells.forEach(td => {
-                if (td._postEditPatched) return;
-                if (!td.onclick) return;
-                
-                td._postEditPatched = true;
-                const originalOnclick = td.onclick;
-                
-                td.onclick = function(e) {
-                    const fnStr = originalOnclick.toString();
-                    const match = fnStr.match(/editCell\s*\(\s*["']?([^"',]+)["']?\s*,\s*(\d+)\s*,\s*(\d+)/);
-                    
-                    if (match) {
-                        const bunk = match[1];
-                        const startMin = parseInt(match[2], 10);
-                        const endMin = parseInt(match[3], 10);
-                        const currentText = td.textContent?.trim() || '';
-                        
-                        console.log('[PostEdit] Patched cell clicked:', { bunk, startMin, endMin });
-                        enhancedEditCell(bunk, startMin, endMin, currentText);
-                        return;
-                    }
-                    
-                    originalOnclick.call(this, e);
-                };
-            });
-        };
-        
-        setTimeout(patchAfterRender, 1000);
-        setTimeout(patchAfterRender, 2000);
-        setTimeout(patchAfterRender, 5000);
-        
-        if (window.updateTable && !window.updateTable._postEditHooked) {
-            const originalUpdate = window.updateTable;
-            window.updateTable = function(...args) {
-                const result = originalUpdate.apply(this, args);
-                setTimeout(patchAfterRender, 100);
-                return result;
-            };
-            window.updateTable._postEditHooked = true;
-            console.log('[PostEdit] Hooked updateTable for cell patching');
-        }
-        
-        const observer = new MutationObserver(() => {
-            setTimeout(patchAfterRender, 50);
+        // Observer for dynamic content
+        const observer = new MutationObserver((mutations) => {
+            overrideWindowEditCell();
         });
         
-        const scheduleContainer = document.getElementById('scheduleTable') || 
-                                   document.getElementById('unified-schedule');
+        const scheduleContainer = document.getElementById('scheduleTable') || document.getElementById('unified-schedule');
         if (scheduleContainer) {
             observer.observe(scheduleContainer, { childList: true, subtree: true });
         }
         
-        console.log('[PostEdit] Click interceptor installed');
+        debugLog('Click interceptor installed');
     }
 
     // =========================================================================
@@ -1528,15 +1891,13 @@
             document.head.appendChild(style);
         }
         
-        console.log('📝 Post-Generation Edit System v2.4 initialized');
-        console.log('   - Enhanced editCell with modal UI');
-        console.log('   - Click interceptor active (3 strategies)');
-        console.log('   - Conflict detection with RBAC awareness');
-        console.log('   - Smart rotation-aware bypass reassignment');
-        console.log('   - Fixed Supabase client access (CampistryDB)');
-        console.log('   - Fixed bunkHistory data structure (object, not array)');
-        console.log('   - Async bypass save with protection against remote merge');
-        console.log('   - Field format: "Location – Activity"');
+        console.log('📝 Post-Generation Edit System v3.0 initialized');
+        console.log('   - INTEGRATED Smart Regeneration');
+        console.log('   - Full rotation penalty scoring');
+        console.log('   - GlobalFieldLocks integration');
+        console.log('   - Candidate building (sports + specials)');
+        console.log('   - BYPASS mode with admin-level access');
+        console.log('   - Scheduler notifications');
     }
 
     // =========================================================================
@@ -1551,63 +1912,65 @@
     window.sendSchedulerNotification = sendSchedulerNotification;
     window.bypassSaveAllBunks = bypassSaveAllBunks;
     window.smartReassignBunkActivity = smartReassignBunkActivity;
-    window.findSmartAlternative = findSmartAlternative;
+    window.smartRegenerateConflicts = smartRegenerateConflicts;
+    window.findBestActivityForBunk = findBestActivityForBunk;
+    window.buildFieldUsageBySlot = buildFieldUsageBySlot;
+    window.buildCandidateOptions = buildCandidateOptions;
+    window.calculateRotationPenalty = calculateRotationPenalty;
+    window.isFieldAvailable = isFieldAvailable;
+    window.getActivityProperties = getActivityProperties;
+    window.applyPickToBunk = applyPickToBunk;
     
-    // Diagnostic function
-    window.diagnosePostEdit = function(bunk) {
-        const dateKey = window.currentDate || new Date().toISOString().split('T')[0];
-        console.log('=== POST-EDIT DIAGNOSTIC ===');
-        console.log('Date:', dateKey);
-        console.log('window.scheduleAssignments exists:', !!window.scheduleAssignments);
-        console.log('Total bunks in memory:', Object.keys(window.scheduleAssignments || {}).length);
+    // SmartRegenSystem namespace for compatibility
+    window.SmartRegenSystem = {
+        smartRegenerateConflicts,
+        smartReassignBunkActivity,
+        findBestActivityForBunk,
+        buildFieldUsageBySlot,
+        buildCandidateOptions,
+        calculateRotationPenalty,
+        isFieldAvailable,
+        getActivityProperties,
+        applyPickToBunk,
+        ROTATION_CONFIG
+    };
+    
+    // Debug utility
+    window.debugSmartRegen = function(bunk, slotIdx) {
+        const slots = [slotIdx];
+        const entry = window.scheduleAssignments?.[bunk]?.[slotIdx];
         
-        // Supabase access check
-        console.log('\n--- Supabase Access ---');
-        console.log('CampistryDB available:', !!window.CampistryDB);
-        console.log('CampistryDB.getClient():', !!window.CampistryDB?.getClient?.());
-        console.log('CampistryDB.getCampId():', window.CampistryDB?.getCampId?.());
-        console.log('CampistryDB.getUserId():', window.CampistryDB?.getUserId?.());
-        console.log('Fallback window.supabase:', !!window.supabase);
+        console.log('\n=== SMART REGEN DEBUG ===');
+        console.log('Bunk:', bunk);
+        console.log('Slot:', slotIdx);
+        console.log('Current entry:', entry);
         
-        if (bunk) {
-            console.log(`\n--- Bunk ${bunk} ---`);
-            console.log(`Bunk data:`, window.scheduleAssignments?.[bunk]);
-            
-            // Check rotation score
-            const slots = [0, 1, 2];
-            const rotationScore = calculateRotationScore(bunk, 'Baseball', slots);
-            console.log(`Sample rotation score (Baseball):`, rotationScore);
-            
-            // Show rotation history structure
-            const rotationHistory = window.loadRotationHistory?.() || { bunks: {} };
-            const bunkHistory = rotationHistory.bunks?.[bunk] || {};
-            console.log(`Rotation history for ${bunk}:`, bunkHistory);
-            console.log(`  Type:`, typeof bunkHistory);
-            console.log(`  Is array:`, Array.isArray(bunkHistory));
-            console.log(`  Keys:`, Object.keys(bunkHistory));
-        }
+        const activityProperties = getActivityProperties();
+        const fieldUsageBySlot = buildFieldUsageBySlot([bunk]);
         
-        // Check localStorage
-        const storageKey = `scheduleAssignments_${dateKey}`;
-        const stored = localStorage.getItem(storageKey);
-        console.log('\n--- localStorage ---');
-        console.log('Key:', storageKey);
-        console.log('Exists:', !!stored);
+        console.log('\nField Usage (excluding this bunk):');
+        console.log(fieldUsageBySlot[slotIdx] || {});
         
-        if (stored && bunk) {
-            const parsed = JSON.parse(stored);
-            console.log(`Bunk ${bunk}:`, parsed?.[bunk]);
-        }
+        console.log('\nCandidate Options:');
+        const candidates = buildCandidateOptions(slots, activityProperties, []);
+        candidates.slice(0, 10).forEach(c => {
+            const available = isFieldAvailable(c.field, slots, bunk, fieldUsageBySlot, activityProperties);
+            const penalty = calculateRotationPenalty(bunk, c.activityName, slots);
+            console.log(`  ${c.activityName} @ ${c.field}: available=${available}, penalty=${penalty === Infinity ? 'BLOCKED' : penalty}`);
+        });
         
-        console.log('\nPost-edit protection active:', !!window._postEditInProgress);
-        console.log('=== END DIAGNOSTIC ===');
+        console.log('\nBest Pick:');
+        const best = findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProperties, []);
+        console.log(best || 'None found');
+        
+        return best;
     };
 
     // Auto-initialize
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initPostEditSystem);
     } else {
-        initPostEditSystem();
+        setTimeout(initPostEditSystem, 100);
     }
 
 })();
