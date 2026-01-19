@@ -2233,6 +2233,24 @@
             console.log(`[RenderCell] 📊 ${bunk} slot ${slotIdx}: "${entry._activity}" (smartRegen=${!!entry._smartRegenerated}, postEdit=${!!entry._postEdit})`);
         }
         
+        // ★★★ DIAGNOSTIC: Log when we DON'T find an entry but scheduleAssignments has data ★★★
+        if (!entry && window._postEditInProgress) {
+            const bunkData = window.scheduleAssignments?.[bunk];
+            if (bunkData) {
+                // Check if there's ANY entry in this time range
+                const slots = findSlotsForRange(block.startMin, block.endMin, unifiedTimes);
+                const foundAny = slots.some(s => bunkData[s] && !bunkData[s].continuation);
+                if (foundAny) {
+                    console.warn(`[RenderCell] ⚠️ ${bunk} @ ${block.startMin}-${block.endMin}: getEntryForBlock returned null but slots ${slots.join(',')} have data`);
+                    slots.forEach(s => {
+                        if (bunkData[s]) {
+                            console.log(`  Slot ${s}:`, bunkData[s]);
+                        }
+                    });
+                }
+            }
+        }
+        
         let isBlocked = false;
         let blockedReason = '';
         
@@ -3686,19 +3704,39 @@
             console.log(`Divisions: ${Object.keys(window.divisions || {}).join(', ')}`);
             console.log(`Pinned activities: ${getPinnedActivities().length}`);
             console.log(`Post-edit in progress: ${!!window._postEditInProgress}`);
+            
+            // ★★★ Also show bunk names ★★★
+            const bunkNames = Object.keys(window.scheduleAssignments || {});
+            console.log(`Bunk names: ${bunkNames.slice(0, 10).join(', ')}${bunkNames.length > 10 ? '...' : ''}`);
+        },
+        
+        // ★★★ List all bunks ★★★
+        listBunks: () => {
+            const assignments = window.scheduleAssignments || {};
+            const bunkNames = Object.keys(assignments).sort((a, b) => 
+                String(a).localeCompare(String(b), undefined, { numeric: true })
+            );
+            console.log(`=== ALL BUNKS (${bunkNames.length}) ===`);
+            bunkNames.forEach(name => {
+                const data = assignments[name];
+                const nonEmpty = data ? data.filter(e => e && !e.continuation).length : 0;
+                console.log(`  "${name}" - ${nonEmpty} activities`);
+            });
+            return bunkNames;
         },
         
         // ★★★ NEW: Check specific bunk data ★★★
         checkBunk: (bunk, slotIdx) => {
             const assignments = window.scheduleAssignments || {};
             const bunkData = assignments[bunk];
-            const unifiedTimes = window.unifiedTimes || [];
+            const ut = window.unifiedTimes || [];
             
-            console.log(`=== CHECK BUNK: ${bunk} ===`);
+            console.log(`=== CHECK BUNK: "${bunk}" ===`);
             console.log(`Post-edit flag: ${window._postEditInProgress}`);
             
             if (!bunkData) {
-                console.log(`❌ No data for bunk ${bunk}`);
+                console.log(`❌ No data for bunk "${bunk}"`);
+                console.log(`Available bunks: ${Object.keys(assignments).slice(0, 5).join(', ')}...`);
                 return null;
             }
             
@@ -3706,7 +3744,7 @@
             
             if (slotIdx !== undefined) {
                 const entry = bunkData[slotIdx];
-                const time = unifiedTimes[slotIdx];
+                const time = ut[slotIdx];
                 const timeStr = time ? minutesToTimeLabel(getSlotStartMin(time)) : '?';
                 console.log(`Slot ${slotIdx} (${timeStr}):`, entry);
                 return entry;
@@ -3717,7 +3755,7 @@
             for (let i = 0; i < bunkData.length && count < 10; i++) {
                 const entry = bunkData[i];
                 if (entry && !entry.continuation) {
-                    const time = unifiedTimes[i];
+                    const time = ut[i];
                     const timeStr = time ? minutesToTimeLabel(getSlotStartMin(time)) : '?';
                     const activity = entry._activity || entry.field || 'unknown';
                     const flags = [];
@@ -3756,6 +3794,76 @@
                     window._postEditInProgress = false;
                 }, 1000);
             }
+        },
+        
+        // ★★★ NEW: Show recently modified bunks ★★★
+        showModified: () => {
+            const assignments = window.scheduleAssignments || {};
+            const ut = window.unifiedTimes || [];
+            
+            console.log('=== RECENTLY MODIFIED ENTRIES ===');
+            let found = 0;
+            
+            for (const [bunk, slots] of Object.entries(assignments)) {
+                if (!slots) continue;
+                for (let i = 0; i < slots.length; i++) {
+                    const entry = slots[i];
+                    if (entry && (entry._smartRegenerated || entry._postEdit)) {
+                        const time = ut[i];
+                        const timeStr = time ? minutesToTimeLabel(getSlotStartMin(time)) : '?';
+                        const activity = entry._activity || entry.field || 'unknown';
+                        const flags = [];
+                        if (entry._smartRegenerated) flags.push('smartRegen');
+                        if (entry._postEdit) flags.push('postEdit');
+                        if (entry._pinned) flags.push('pinned');
+                        console.log(`  ${bunk} [${i}] ${timeStr}: "${activity}" [${flags.join(', ')}]`);
+                        found++;
+                    }
+                }
+            }
+            
+            if (found === 0) {
+                console.log('  No entries with _smartRegenerated or _postEdit flags found');
+            } else {
+                console.log(`  Total: ${found} modified entries`);
+            }
+        },
+        
+        // ★★★ NEW: Trace a specific cell render ★★★
+        traceCell: (bunk, startMin, endMin) => {
+            const ut = window.unifiedTimes || [];
+            const assignments = window.scheduleAssignments || {};
+            
+            console.log(`=== TRACE CELL: ${bunk} @ ${startMin}-${endMin} ===`);
+            
+            // Find slots in range
+            const slots = findSlotsForRange(startMin, endMin, ut);
+            console.log(`Slots in range: [${slots.join(', ')}]`);
+            
+            // Check bunk data
+            const bunkData = assignments[bunk];
+            if (!bunkData) {
+                console.log(`❌ No data for bunk "${bunk}"`);
+                return;
+            }
+            
+            console.log(`Bunk "${bunk}" has ${bunkData.length} total slots`);
+            
+            // Show what's in each slot
+            slots.forEach(s => {
+                const entry = bunkData[s];
+                const time = ut[s];
+                const timeStr = time ? minutesToTimeLabel(getSlotStartMin(time)) : '?';
+                if (entry) {
+                    console.log(`  Slot ${s} (${timeStr}):`, entry);
+                } else {
+                    console.log(`  Slot ${s} (${timeStr}): (empty)`);
+                }
+            });
+            
+            // Now call getEntryForBlock
+            const result = getEntryForBlock(bunk, startMin, endMin, ut);
+            console.log(`getEntryForBlock result: slotIdx=${result.slotIdx}, entry=`, result.entry);
         },
         
         getState: () => ({
