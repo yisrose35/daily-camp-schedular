@@ -1272,6 +1272,18 @@
 
     function applyPickToBunk(bunk, slots, pick, fieldUsageBySlot, activityProperties) {
         const divName = getDivisionForBunk(bunk);
+        const unifiedTimes = window.unifiedTimes || [];
+        
+        // ★★★ FIX: Get time metadata so getEntryForBlock can find entries across divisions ★★★
+        let startMin = null;
+        let endMin = null;
+        if (slots.length > 0 && unifiedTimes[slots[0]]) {
+            startMin = getSlotStartMin(unifiedTimes[slots[0]]);
+            const lastSlot = unifiedTimes[slots[slots.length - 1]];
+            if (lastSlot) {
+                endMin = lastSlot.endMin !== undefined ? lastSlot.endMin : (getSlotStartMin(lastSlot) + 30);
+            }
+        }
         
         const pickData = {
             field: pick.field,
@@ -1279,7 +1291,10 @@
             _fixed: true,
             _activity: pick.activityName,
             _smartRegenerated: true,
-            _regeneratedAt: Date.now()
+            _regeneratedAt: Date.now(),
+            _startMin: startMin,
+            _endMin: endMin,
+            _blockStart: startMin
         };
 
         if (!window.scheduleAssignments) {
