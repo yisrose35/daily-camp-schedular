@@ -1183,60 +1183,36 @@
         
         const dateKey = window.currentDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
         
-        // Get Supabase client
-        const supabase = window.CampistryDB?.getClient?.() || window.supabase;
-        if (!supabase) {
-            console.error('[PostEdit] Supabase client not available for bypass save');
-            return;
-        }
-        
-        const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
-        const userId = window.CampistryDB?.getUserId?.() || null;
-        
-        if (!campId) {
-            console.error('[PostEdit] Camp ID not available');
-            return;
-        }
-        
-        try {
-            // Build the data to save
-            const scheduleData = {};
-            const leagueData = window.leagueAssignments || {};
-            
-            for (const bunkName of modifiedBunks) {
-                if (window.scheduleAssignments?.[bunkName]) {
-                    scheduleData[bunkName] = window.scheduleAssignments[bunkName];
-                }
-            }
-            
-            // Upsert to daily_schedules
-            const { error } = await supabase
-                .from('daily_schedules')
-                .upsert({
-                    camp_id: campId,
-                    date_key: dateKey,
-                    schedule_data: {
-                        scheduleAssignments: window.scheduleAssignments,
-                        leagueAssignments: leagueData,
-                        unifiedTimes: window.unifiedTimes,
-                        _bypassSaveAt: Date.now(),
-                        _bypassSaveBy: userId,
-                        _modifiedBunks: modifiedBunks
-                    },
-                    updated_at: new Date().toISOString()
-                }, {
-                    onConflict: 'camp_id,date_key'
+        // ★★★ FIX: Use ScheduleDB.saveSchedule with skipFilter instead of raw upsert ★★★
+        // This properly handles the (camp_id, date_key, scheduler_id) constraint
+        if (window.ScheduleDB?.saveSchedule) {
+            try {
+                const result = await window.ScheduleDB.saveSchedule(dateKey, {
+                    scheduleAssignments: window.scheduleAssignments,
+                    leagueAssignments: window.leagueAssignments || {},
+                    unifiedTimes: window.unifiedTimes,
+                    _bypassSaveAt: Date.now(),
+                    _modifiedBunks: modifiedBunks
+                }, { 
+                    skipFilter: true,  // ★★★ This bypasses RBAC filtering - saves ALL bunks
+                    immediate: true    // Don't debounce - save immediately
                 });
-            
-            if (error) {
-                console.error('[PostEdit] Bypass save error:', error);
-            } else {
-                console.log('[PostEdit] ✅ Bypass save successful');
+                
+                if (result?.success) {
+                    console.log('[PostEdit] ✅ Bypass save successful via ScheduleDB');
+                } else {
+                    console.error('[PostEdit] Bypass save error:', result?.error);
+                }
+                return result;
+            } catch (e) {
+                console.error('[PostEdit] Bypass save exception:', e);
             }
-            
-        } catch (e) {
-            console.error('[PostEdit] Bypass save exception:', e);
         }
+        
+        // Fallback: trigger standard save flow (will respect RBAC, but better than nothing)
+        console.log('[PostEdit] 🔓 Fallback: triggering standard save');
+        window.saveSchedule?.();
+        window.updateTable?.();
     }
 
     // =========================================================================
