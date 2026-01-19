@@ -1,6 +1,9 @@
 // =============================================================================
-// integration_hooks.js v6.0 — CAMPISTRY SCHEDULER INTEGRATION
+// integration_hooks.js v6.1 — CAMPISTRY SCHEDULER INTEGRATION
 // =============================================================================
+//
+// FIXES IN v6.1:
+// - ★ BYPASS SAVE GUARD - Skips remote merge during _postEditInProgress
 //
 // FIXES IN v6.0:
 // - ★ BATCHED GLOBAL SETTINGS SYNC - Multiple calls are batched into one cloud write
@@ -19,7 +22,7 @@
 (function() {
     'use strict';
 
-    console.log('🔗 Campistry Integration Hooks v6.0 loading...');
+    console.log('🔗 Campistry Integration Hooks v6.1 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -623,7 +626,7 @@
     }
 
     // =========================================================================
-    // HOOK: HANDLE REMOTE CHANGES
+    // HOOK: HANDLE REMOTE CHANGES (v6.1 - WITH BYPASS GUARD)
     // =========================================================================
 
     function hookRemoteChanges() {
@@ -633,10 +636,22 @@
         }
 
         window.ScheduleSync.onRemoteChange((change) => {
+            // ★★★ v6.1 GUARD: Skip during post-edit/bypass operations ★★★
+            if (window._postEditInProgress) {
+                console.log('🔗 Skipping remote merge - post-edit in progress');
+                return;
+            }
+            
             console.log('🔗 Remote change received:', change.type, 'from', change.scheduler);
 
             if (window.ScheduleDB?.loadSchedule && change.dateKey) {
                 window.ScheduleDB.loadSchedule(change.dateKey).then(result => {
+                    // Double-check guard in case state changed during async load
+                    if (window._postEditInProgress) {
+                        console.log('🔗 Skipping merge - post-edit started during load');
+                        return;
+                    }
+                    
                     if (result?.success && result.data) {
                         const myAssignments = window.PermissionsDB?.filterToMyDivisions?.(window.scheduleAssignments) || {};
                         const remoteAssignments = result.data.scheduleAssignments || {};
