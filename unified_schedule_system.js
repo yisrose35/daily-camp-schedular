@@ -1500,6 +1500,23 @@
         }
         console.log('='.repeat(60) + '\n');
 
+        // ★★★ VERIFICATION: Confirm changes are in window.scheduleAssignments ★★★
+        console.log('[SmartRegen] VERIFICATION - checking window.scheduleAssignments:');
+        for (const r of results.reassigned) {
+            const bunkData = window.scheduleAssignments?.[r.bunk];
+            if (bunkData) {
+                const firstSlot = r.slots[0];
+                const entry = bunkData[firstSlot];
+                const activity = entry?._activity || entry?.field || 'MISSING';
+                console.log(`  ✅ Bunk ${r.bunk} slot ${firstSlot}: "${activity}" (expected: "${r.to}")`);
+                if (activity !== r.to && activity !== 'MISSING') {
+                    console.warn(`  ⚠️ MISMATCH! Entry has "${activity}" but expected "${r.to}"`);
+                }
+            } else {
+                console.error(`  ❌ Bunk ${r.bunk}: NO DATA IN scheduleAssignments!`);
+            }
+        }
+
         return results;
     }
 
@@ -1932,7 +1949,14 @@
         
         const dateKey = getDateKey();
         
-        loadScheduleForDate(dateKey);
+        // ★★★ CRITICAL: Only load from storage if NOT in post-edit mode ★★★
+        // When _postEditInProgress is true, we MUST use the in-memory data
+        if (!window._postEditInProgress) {
+            loadScheduleForDate(dateKey);
+        } else {
+            console.log('[UnifiedSchedule] 🛡️ RENDER: Using in-memory data (post-edit in progress)');
+            console.log('[UnifiedSchedule]   scheduleAssignments has', Object.keys(window.scheduleAssignments || {}).length, 'bunks');
+        }
         
         const skeleton = getSkeleton(dateKey);
         const unifiedTimes = window.unifiedTimes || [];
@@ -2204,6 +2228,11 @@
         
         const { entry, slotIdx } = getEntryForBlock(bunk, block.startMin, block.endMin, unifiedTimes);
         
+        // ★★★ DIAGNOSTIC: Log if this bunk was recently modified ★★★
+        if (entry && (entry._smartRegenerated || entry._postEdit)) {
+            console.log(`[RenderCell] 📊 ${bunk} slot ${slotIdx}: "${entry._activity}" (smartRegen=${!!entry._smartRegenerated}, postEdit=${!!entry._postEdit})`);
+        }
+        
         let isBlocked = false;
         let blockedReason = '';
         
@@ -2462,7 +2491,8 @@
         console.log('[UnifiedSchedule] Resolving conflicts...', {
             editable: editableConflicts.length,
             nonEditable: nonEditableConflicts.length,
-            resolution: resolutionChoice
+            resolution: resolutionChoice,
+            postEditFlag: window._postEditInProgress
         });
         
         applyDirectEdit(bunk, slots, activity, location, false, true);
@@ -2486,6 +2516,8 @@
         }
         
         if (conflictsToResolve.length > 0) {
+            console.log('[UnifiedSchedule] 🔄 Running smart regeneration for', conflictsToResolve.length, 'conflicts');
+            
             const result = smartRegenerateConflicts(
                 bunk,
                 slots,
@@ -2494,6 +2526,11 @@
                 conflictsToResolve,
                 bypassMode
             );
+            
+            console.log('[UnifiedSchedule] Smart regen result:', {
+                reassigned: result.reassigned.length,
+                failed: result.failed.length
+            });
 
             if (bypassMode) {
                 console.log('[UnifiedSchedule] 🔓 Bypass mode - saving ALL modified bunks to cloud');
@@ -2502,6 +2539,7 @@
                     ...result.failed.map(f => f.bunk)
                 ];
                 
+                // Flag should already be set by applyEdit, but ensure it
                 window._postEditInProgress = true;
                 window._postEditTimestamp = Date.now();
                 
@@ -2526,6 +2564,8 @@
                 }
             }
         }
+        
+        console.log('[UnifiedSchedule] resolveConflictsAndApply complete, postEditFlag:', window._postEditInProgress);
     }
 
     // =========================================================================
@@ -2548,6 +2588,11 @@
         console.log(`[UnifiedSchedule] Applying edit for ${bunk}:`, { 
             activity, location, startMin, endMin, slots, hasConflict, resolutionChoice, isClear
         });
+        
+        // ★★★ SET FLAG EARLY - Before any modifications ★★★
+        window._postEditInProgress = true;
+        window._postEditTimestamp = Date.now();
+        console.log('[UnifiedSchedule] 🔒 Post-edit protection flag SET');
         
         if (!window.scheduleAssignments) {
             window.scheduleAssignments = {};
@@ -2590,29 +2635,31 @@
             console.error('[UnifiedSchedule] Failed to save to localStorage:', e);
         }
         
-        window._postEditInProgress = true;
-        window._postEditTimestamp = Date.now();
-        
+        // Clear flag after a delay
         setTimeout(() => {
             window._postEditInProgress = false;
             console.log('[UnifiedSchedule] 🔓 Post-edit protection flag cleared');
         }, 8000);
         
         console.log('[UnifiedSchedule] 🔄 Triggering UI refresh...');
+        console.log('[UnifiedSchedule] 📊 Current scheduleAssignments bunks:', Object.keys(window.scheduleAssignments).length);
         
         document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
             detail: { bunk, slots, activity, location, date: currentDate }
         }));
         
+        // Cloud save (don't await - fire and forget)
         saveSchedule();
         
-        console.log('[UnifiedSchedule] 🔄 Calling updateTable() immediately');
+        // ★★★ FORCE IMMEDIATE RENDER ★★★
+        console.log('[UnifiedSchedule] 🔄 Calling updateTable() - flag is:', window._postEditInProgress);
         updateTable();
         
+        // Second render after a small delay to catch any async updates
         setTimeout(() => {
-            console.log('[UnifiedSchedule] 🔄 Second render pass');
+            console.log('[UnifiedSchedule] 🔄 Second render pass - flag is:', window._postEditInProgress);
             updateTable();
-        }, 200);
+        }, 300);
     }
 
     // =========================================================================
@@ -3013,13 +3060,41 @@
     // =========================================================================
 
     function saveSchedule() {
-        window.saveCurrentDailyData?.('scheduleAssignments', window.scheduleAssignments);
-        window.saveCurrentDailyData?.('leagueAssignments', window.leagueAssignments);
-        window.saveCurrentDailyData?.('unifiedTimes', window.unifiedTimes);
+        // ★★★ Use silent save during post-edit to avoid triggering reload events ★★★
+        const silent = window._postEditInProgress;
+        
+        if (silent) {
+            console.log('[UnifiedSchedule] 💾 Silent save (post-edit in progress)');
+        }
+        
+        // Call external save function if available
+        if (window.saveCurrentDailyData) {
+            window.saveCurrentDailyData('scheduleAssignments', window.scheduleAssignments, { silent });
+            window.saveCurrentDailyData('leagueAssignments', window.leagueAssignments, { silent });
+            window.saveCurrentDailyData('unifiedTimes', window.unifiedTimes, { silent });
+        }
     }
 
     function updateTable() {
         const now = Date.now();
+        
+        // ★★★ Force immediate render when post-edit is in progress ★★★
+        if (window._postEditInProgress) {
+            console.log('[UnifiedSchedule] 🔄 FORCE RENDER (post-edit in progress)');
+            _lastRenderTime = now;
+            _renderQueued = false;
+            if (_renderTimeout) {
+                clearTimeout(_renderTimeout);
+                _renderTimeout = null;
+            }
+            const container = document.getElementById('scheduleTable');
+            if (container) {
+                renderStaggeredView(container);
+            } else {
+                console.error('[UnifiedSchedule] ❌ scheduleTable container not found!');
+            }
+            return;
+        }
         
         if (now - _lastRenderTime < RENDER_DEBOUNCE_MS) {
             if (!_renderQueued) {
@@ -3376,22 +3451,49 @@
 
     window.addEventListener('campistry-cloud-hydrated', () => {
         console.log('[UnifiedSchedule] Cloud hydration event received');
+        
+        // ★★★ Don't overwrite during post-edit ★★★
+        if (window._postEditInProgress) {
+            console.log('[UnifiedSchedule] 🛡️ Ignoring cloud hydration - post-edit in progress');
+            return;
+        }
+        
         _cloudHydrated = true;
         
         setTimeout(() => {
-            loadScheduleForDate(getDateKey());
-            updateTable();
+            if (!window._postEditInProgress) {
+                loadScheduleForDate(getDateKey());
+                updateTable();
+            }
         }, 100);
     });
 
     window.addEventListener('campistry-cloud-schedule-loaded', (e) => {
         console.log('[UnifiedSchedule] Cloud schedule loaded:', e.detail);
+        
+        // ★★★ Don't overwrite during post-edit ★★★
+        if (window._postEditInProgress) {
+            console.log('[UnifiedSchedule] 🛡️ Ignoring cloud schedule load - post-edit in progress');
+            return;
+        }
+        
         _cloudHydrated = true;
-        setTimeout(() => updateTable(), 100);
+        setTimeout(() => {
+            if (!window._postEditInProgress) {
+                updateTable();
+            }
+        }, 100);
     });
 
     window.addEventListener('campistry-daily-data-updated', () => {
         console.log('[UnifiedSchedule] Data update event received');
+        
+        // ★★★ Don't overwrite during post-edit ★★★
+        if (window._postEditInProgress) {
+            console.log('[UnifiedSchedule] 🛡️ Ignoring daily data update - post-edit in progress');
+            return;
+        }
+        
         loadScheduleForDate(getDateKey());
         updateTable();
     });
@@ -3399,12 +3501,20 @@
     window.addEventListener('campistry-date-changed', (e) => {
         console.log('[UnifiedSchedule] Date changed:', e.detail?.dateKey);
         
+        // ★★★ Don't overwrite during post-edit ★★★
+        if (window._postEditInProgress) {
+            console.log('[UnifiedSchedule] 🛡️ Ignoring date change - post-edit in progress');
+            return;
+        }
+        
         if (window.UnifiedCloudSchedule?.load) {
             window.UnifiedCloudSchedule.load().then(result => {
-                if (!result.merged) {
-                    loadScheduleForDate(e.detail?.dateKey || getDateKey());
+                if (!window._postEditInProgress) {
+                    if (!result.merged) {
+                        loadScheduleForDate(e.detail?.dateKey || getDateKey());
+                    }
+                    updateTable();
                 }
-                updateTable();
             });
         } else {
             loadScheduleForDate(e.detail?.dateKey || getDateKey());
@@ -3576,6 +3686,76 @@
             console.log(`Divisions: ${Object.keys(window.divisions || {}).join(', ')}`);
             console.log(`Pinned activities: ${getPinnedActivities().length}`);
             console.log(`Post-edit in progress: ${!!window._postEditInProgress}`);
+        },
+        
+        // ★★★ NEW: Check specific bunk data ★★★
+        checkBunk: (bunk, slotIdx) => {
+            const assignments = window.scheduleAssignments || {};
+            const bunkData = assignments[bunk];
+            const unifiedTimes = window.unifiedTimes || [];
+            
+            console.log(`=== CHECK BUNK: ${bunk} ===`);
+            console.log(`Post-edit flag: ${window._postEditInProgress}`);
+            
+            if (!bunkData) {
+                console.log(`❌ No data for bunk ${bunk}`);
+                return null;
+            }
+            
+            console.log(`Bunk has ${bunkData.length} slots`);
+            
+            if (slotIdx !== undefined) {
+                const entry = bunkData[slotIdx];
+                const time = unifiedTimes[slotIdx];
+                const timeStr = time ? minutesToTimeLabel(getSlotStartMin(time)) : '?';
+                console.log(`Slot ${slotIdx} (${timeStr}):`, entry);
+                return entry;
+            }
+            
+            // Show all non-empty, non-continuation entries
+            let count = 0;
+            for (let i = 0; i < bunkData.length && count < 10; i++) {
+                const entry = bunkData[i];
+                if (entry && !entry.continuation) {
+                    const time = unifiedTimes[i];
+                    const timeStr = time ? minutesToTimeLabel(getSlotStartMin(time)) : '?';
+                    const activity = entry._activity || entry.field || 'unknown';
+                    const flags = [];
+                    if (entry._smartRegenerated) flags.push('smartRegen');
+                    if (entry._postEdit) flags.push('postEdit');
+                    if (entry._pinned) flags.push('pinned');
+                    console.log(`  [${i}] ${timeStr}: "${activity}" ${flags.length ? `[${flags.join(', ')}]` : ''}`);
+                    count++;
+                }
+            }
+            
+            return bunkData;
+        },
+        
+        // ★★★ NEW: Force re-render ★★★
+        forceRender: () => {
+            console.log('[UnifiedSchedule] 🔄 FORCE RENDER requested');
+            console.log('  scheduleAssignments bunks:', Object.keys(window.scheduleAssignments || {}).length);
+            console.log('  postEditInProgress:', window._postEditInProgress);
+            
+            // Temporarily set flag to prevent loadScheduleForDate from overwriting
+            const wasSet = window._postEditInProgress;
+            window._postEditInProgress = true;
+            
+            const container = document.getElementById('scheduleTable');
+            if (container) {
+                renderStaggeredView(container);
+                console.log('[UnifiedSchedule] ✅ Force render complete');
+            } else {
+                console.error('[UnifiedSchedule] ❌ scheduleTable container not found');
+            }
+            
+            // Restore flag
+            if (!wasSet) {
+                setTimeout(() => {
+                    window._postEditInProgress = false;
+                }, 1000);
+            }
         },
         
         getState: () => ({
