@@ -2367,66 +2367,118 @@
     }
 
     // =========================================================================
-    // BYPASS SAVE
-    // =========================================================================
+// BYPASS SAVE - Save ALL modified bunks with IMMEDIATE cloud sync + broadcast
+// =========================================================================
 
-    async function bypassSaveAllBunks(modifiedBunks) {
-        console.log('[UnifiedSchedule] 🔓 BYPASS SAVE for bunks:', modifiedBunks);
+async function bypassSaveAllBunks(modifiedBunks) {
+    console.log('[UnifiedSchedule] 🔓 BYPASS SAVE for bunks:', modifiedBunks);
+    
+    const dateKey = window.currentScheduleDate || 
+                   window.currentDate || 
+                   document.getElementById('datePicker')?.value ||
+                   new Date().toISOString().split('T')[0];
+    
+    console.log(`[UnifiedSchedule] 📅 Bypass save using date key: ${dateKey}`);
+    
+    // ★★★ STEP 1: Save to localStorage IMMEDIATELY ★★★
+    try {
+        localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
         
-        const dateKey = window.currentScheduleDate || 
-                       window.currentDate || 
-                       document.getElementById('datePicker')?.value ||
-                       new Date().toISOString().split('T')[0];
-        
-        console.log(`[UnifiedSchedule] 📅 Bypass save using date key: ${dateKey}`);
-        
-        try {
-            localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
-            
-            const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
-            if (!allDailyData[dateKey]) {
-                allDailyData[dateKey] = {};
-            }
-            allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
-            allDailyData[dateKey].leagueAssignments = window.leagueAssignments || {};
-            allDailyData[dateKey].unifiedTimes = window.unifiedTimes || [];
-            allDailyData[dateKey]._bypassSaveAt = Date.now();
-            localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
-            
-            console.log(`[UnifiedSchedule] ✅ Bypass: saved to localStorage before cloud save`);
-        } catch (e) {
-            console.error('[UnifiedSchedule] Bypass localStorage save error:', e);
+        const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+        if (!allDailyData[dateKey]) {
+            allDailyData[dateKey] = {};
         }
+        allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
+        allDailyData[dateKey].leagueAssignments = window.leagueAssignments || {};
+        allDailyData[dateKey].unifiedTimes = window.unifiedTimes || [];
+        allDailyData[dateKey]._bypassSaveAt = Date.now();
+        localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
         
-        if (window.ScheduleDB?.saveSchedule) {
-            try {
-                const result = await window.ScheduleDB.saveSchedule(dateKey, {
-                    scheduleAssignments: window.scheduleAssignments,
-                    leagueAssignments: window.leagueAssignments || {},
-                    unifiedTimes: window.unifiedTimes,
-                    _bypassSaveAt: Date.now(),
-                    _modifiedBunks: modifiedBunks
-                }, { 
-                    skipFilter: true,
-                    immediate: true
-                });
-                
-                if (result?.success) {
-                    console.log('[UnifiedSchedule] ✅ Bypass save successful via ScheduleDB');
-                } else {
-                    console.error('[UnifiedSchedule] Bypass save error:', result?.error);
-                }
-                return result;
-            } catch (e) {
-                console.error('[UnifiedSchedule] Bypass save exception:', e);
-            }
-        }
-        
-        console.log('[UnifiedSchedule] 🔓 Fallback: triggering standard save');
-        saveSchedule();
-        updateTable();
+        console.log(`[UnifiedSchedule] ✅ Bypass: saved to localStorage`);
+    } catch (e) {
+        console.error('[UnifiedSchedule] Bypass localStorage save error:', e);
     }
-
+    
+    // ★★★ STEP 2: IMMEDIATE cloud save with skipFilter ★★★
+    let cloudResult = { success: false };
+    
+    if (window.ScheduleDB?.saveSchedule) {
+        try {
+            cloudResult = await window.ScheduleDB.saveSchedule(dateKey, {
+                scheduleAssignments: window.scheduleAssignments,
+                leagueAssignments: window.leagueAssignments || {},
+                unifiedTimes: window.unifiedTimes,
+                _bypassSaveAt: Date.now(),
+                _modifiedBunks: modifiedBunks
+            }, { 
+                skipFilter: true,   // ★★★ Bypass RBAC - saves ALL bunks
+                immediate: true,    // ★★★ Don't debounce - save NOW
+                forceSync: true     // ★★★ Force sync flag
+            });
+            
+            if (cloudResult?.success) {
+                console.log('[UnifiedSchedule] ✅ Bypass cloud save successful');
+            } else {
+                console.error('[UnifiedSchedule] Bypass cloud save error:', cloudResult?.error);
+            }
+        } catch (e) {
+            console.error('[UnifiedSchedule] Bypass cloud save exception:', e);
+        }
+    }
+    
+    // ★★★ STEP 3: Force realtime sync to broadcast to other schedulers ★★★
+    try {
+        // Method 1: Use ScheduleSync if available
+        if (window.ScheduleSync?.forceSave) {
+            await window.ScheduleSync.forceSave();
+            console.log('[UnifiedSchedule] ✅ Bypass: ScheduleSync.forceSave() called');
+        }
+        
+        // Method 2: Use forceSyncToCloud if available
+        if (window.forceSyncToCloud) {
+            await window.forceSyncToCloud();
+            console.log('[UnifiedSchedule] ✅ Bypass: forceSyncToCloud() called');
+        }
+        
+        // Method 3: Dispatch event for any listeners
+        window.dispatchEvent(new CustomEvent('campistry-bypass-save-complete', {
+            detail: { 
+                dateKey, 
+                modifiedBunks,
+                timestamp: Date.now()
+            }
+        }));
+    } catch (e) {
+        console.warn('[UnifiedSchedule] Bypass sync broadcast warning:', e);
+    }
+    
+    // ★★★ STEP 4: Show confirmation toast with details ★★★
+    const showBypassToast = window.showToast || window.ScheduleSync?.showToast;
+    if (showBypassToast) {
+        // Get division info for the modified bunks
+        const divisions = window.divisions || {};
+        const divisionNames = new Set();
+        modifiedBunks.forEach(bunk => {
+            for (const [divName, divData] of Object.entries(divisions)) {
+                if (divData.bunks?.includes(bunk) || divData.bunks?.includes(String(bunk))) {
+                    divisionNames.add(divName);
+                }
+            }
+        });
+        
+        const divList = [...divisionNames].join(', ');
+        const message = `🔓 Bypass saved: ${modifiedBunks.length} bunk(s)${divList ? ` in Div ${divList}` : ''} - synced to cloud`;
+        showBypassToast(message, 'success');
+    }
+    
+    console.log('[UnifiedSchedule] 🔓 Bypass save complete:', {
+        bunks: modifiedBunks,
+        cloudSuccess: cloudResult?.success,
+        dateKey
+    });
+    
+    return cloudResult;
+}
     // =========================================================================
     // SCHEDULER NOTIFICATION
     // =========================================================================
