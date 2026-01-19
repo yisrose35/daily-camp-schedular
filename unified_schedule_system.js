@@ -837,9 +837,19 @@
             const slots = [...conflictsByBunk[bunk]].sort((a, b) => a - b);
             const originalEntry = window.scheduleAssignments?.[bunk]?.[slots[0]];
             const originalActivity = originalEntry?._activity || originalEntry?.sport || fieldLabel(originalEntry?.field);
+            console.log(`[SmartRegen] Processing ${bunk}: slots=${slots.join(',')}, original=${originalActivity}`);
             const bestPick = findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProperties, [pinnedField]);
             if (bestPick) {
+                console.log(`[SmartRegen] ✅ ${bunk}: ${originalActivity} → ${bestPick.activityName} (field: ${bestPick.field})`);
                 applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProperties);
+                // Verify the data was written
+                const verifyEntry = window.scheduleAssignments?.[bunk]?.[slots[0]];
+                console.log(`[SmartRegen] VERIFY ${bunk}[${slots[0]}]:`, {
+                    _activity: verifyEntry?._activity,
+                    field: verifyEntry?.field,
+                    sport: verifyEntry?.sport,
+                    _smartRegenerated: verifyEntry?._smartRegenerated
+                });
                 results.reassigned.push({ bunk, slots, from: originalActivity || 'unknown', to: bestPick.activityName, field: bestPick.field, cost: bestPick.cost });
                 if (window.showToast) window.showToast(`↪️ ${bunk}: ${originalActivity} → ${bestPick.activityName}`, 'info');
             } else {
