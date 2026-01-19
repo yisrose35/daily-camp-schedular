@@ -87,13 +87,46 @@
     function canScheduleAtLocation(activityName, locationName, slots) {
         if (!locationName) return true;
 
-        const usage = window.locationUsageBySlot || {};
+        // ★★★ FIX: Use comprehensive field usage from ALL divisions ★★★
+        // buildFieldUsageBySlot() scans scheduleAssignments for ALL bunks,
+        // not just the current scheduler's real-time reservations
+        const comprehensiveUsage = window.buildFieldUsageBySlot?.() || {};
+        
+        // Get capacity for this location from global settings
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const fields = globalSettings.app1?.fields || globalSettings.fields || [];
+        const fieldConfig = fields.find(f => f.name?.toLowerCase() === locationName.toLowerCase());
+        
+        let maxCapacity = 1;
+        if (fieldConfig?.sharableWith?.capacity) {
+            maxCapacity = parseInt(fieldConfig.sharableWith.capacity) || 1;
+        } else if (fieldConfig?.sharable) {
+            maxCapacity = 2;
+        }
+        
+        // Also check activityProperties for capacity info
+        const actProps = window.activityProperties?.[locationName] || {};
+        if (actProps.sharableWith?.capacity) {
+            maxCapacity = Math.max(maxCapacity, parseInt(actProps.sharableWith.capacity) || 1);
+        } else if (actProps.sharable) {
+            maxCapacity = Math.max(maxCapacity, 2);
+        }
 
         for (const slotIdx of slots) {
-            const slotUsage = usage[slotIdx]?.[locationName];
+            const slotUsage = comprehensiveUsage[slotIdx]?.[locationName];
             if (slotUsage) {
-                if (slotUsage.activity.toLowerCase() !== activityName.toLowerCase()) {
-                    return false;
+                // Check if at capacity
+                if (slotUsage.count >= maxCapacity) {
+                    // Field is at capacity - check if all users are same activity (shareable case)
+                    const activitiesInUse = Object.values(slotUsage.bunks || {});
+                    const allSameActivity = activitiesInUse.every(
+                        act => act.toLowerCase() === activityName.toLowerCase()
+                    );
+                    
+                    if (!allSameActivity) {
+                        console.log(`[LOCATION] ${locationName} blocked at slot ${slotIdx}: ${slotUsage.count}/${maxCapacity} capacity, different activities in use`);
+                        return false;
+                    }
                 }
             }
         }
@@ -1914,6 +1947,6 @@
 
     window.registerSingleSlotUsage = registerSingleSlotUsage;
 
-    console.log('⚙️ Scheduler Core Main v17.2 loaded (LEAGUE MATCHUPS FIX - bunks ≠ teams, with fallback)');
+    console.log('⚙️ Scheduler Core Main v17.3 loaded (CROSS-DIVISION FIELD CONFLICT FIX)');
 
 })();
