@@ -759,23 +759,33 @@
             _regeneratedAt: Date.now()
         };
 
-        // Use fillBlock if available
-        if (typeof window.fillBlock === 'function') {
-            debugLog(`  Using fillBlock for ${bunk}`);
-            window.fillBlock(block, pickData, fieldUsageBySlot, window.yesterdayHistory || {}, false, activityProperties);
-        } else {
-            debugLog(`  Manual assignment for ${bunk}`);
-            
-            if (!window.scheduleAssignments[bunk]) {
-                window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
-            }
+        // ★★★ FIX: ALWAYS update window.scheduleAssignments directly ★★★
+        // fillBlock may update its own internal structures, but unified_schedule_system
+        // reads from window.scheduleAssignments, so we MUST update it here
+        if (!window.scheduleAssignments) {
+            window.scheduleAssignments = {};
+        }
+        if (!window.scheduleAssignments[bunk]) {
+            window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
+        }
 
-            slots.forEach((slotIdx, i) => {
-                window.scheduleAssignments[bunk][slotIdx] = {
-                    ...pickData,
-                    continuation: i > 0
-                };
-            });
+        slots.forEach((slotIdx, i) => {
+            window.scheduleAssignments[bunk][slotIdx] = {
+                ...pickData,
+                continuation: i > 0
+            };
+        });
+        
+        debugLog(`  ✅ Updated window.scheduleAssignments[${bunk}] slots ${slots.join(',')}`);
+
+        // Also call fillBlock if available (for any side effects it may have)
+        if (typeof window.fillBlock === 'function') {
+            debugLog(`  Also calling fillBlock for ${bunk}`);
+            try {
+                window.fillBlock(block, pickData, fieldUsageBySlot, window.yesterdayHistory || {}, false, activityProperties);
+            } catch (e) {
+                console.warn(`[PostEdit] fillBlock error for ${bunk}:`, e);
+            }
         }
 
         // Register field usage
@@ -983,6 +993,19 @@
         }
         console.log('='.repeat(60) + '\n');
 
+        // ★★★ VERIFICATION: Log what's actually in window.scheduleAssignments ★★★
+        console.log('[SmartRegen] VERIFICATION - checking window.scheduleAssignments:');
+        for (const r of results.reassigned) {
+            const bunkData = window.scheduleAssignments?.[r.bunk];
+            if (bunkData) {
+                const firstSlot = r.slots[0];
+                const entry = bunkData[firstSlot];
+                console.log(`  Bunk ${r.bunk} slot ${firstSlot}: ${entry?._activity || entry?.field || 'MISSING'}`);
+            } else {
+                console.log(`  Bunk ${r.bunk}: NO DATA IN scheduleAssignments!`);
+            }
+        }
+
         return results;
     }
 
@@ -1150,6 +1173,10 @@
                     ...result.failed.map(f => f.bunk)
                 ];
                 
+                // ★★★ FIX: Set protection flag BEFORE bypass save to prevent any listeners from overwriting ★★★
+                window._postEditInProgress = true;
+                window._postEditTimestamp = Date.now();
+                
                 // ★★★ FIX: Await the bypass save to prevent race conditions ★★★
                 await bypassSaveAllBunks(modifiedBunks);
                 
@@ -1190,6 +1217,28 @@
                        new Date().toISOString().split('T')[0];
         
         console.log(`[PostEdit] 📅 Bypass save using date key: ${dateKey}`);
+        
+        // ★★★ FIX: Save to localStorage IMMEDIATELY before cloud save ★★★
+        // This ensures the data is available when updateTable() calls loadScheduleForDate()
+        try {
+            // Format 1: scheduleAssignments_${date}
+            localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
+            
+            // Format 2: campDailyData_v1 (nested)
+            const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+            if (!allDailyData[dateKey]) {
+                allDailyData[dateKey] = {};
+            }
+            allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
+            allDailyData[dateKey].leagueAssignments = window.leagueAssignments || {};
+            allDailyData[dateKey].unifiedTimes = window.unifiedTimes || [];
+            allDailyData[dateKey]._bypassSaveAt = Date.now();
+            localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
+            
+            console.log(`[PostEdit] ✅ Bypass: saved to localStorage before cloud save`);
+        } catch (e) {
+            console.error('[PostEdit] Bypass localStorage save error:', e);
+        }
         
         // ★★★ FIX: Use ScheduleDB.saveSchedule with skipFilter instead of raw upsert ★★★
         // This properly handles the (camp_id, date_key, scheduler_id) constraint
@@ -1366,28 +1415,59 @@
             console.error('[PostEdit] Failed to save to localStorage:', e);
         }
         
-        // Save to unified data key (use same date!)
-        const unifiedKey = `campDailyData_v1_${currentDate}`;
+        // ★★★ FIX: Save to BOTH storage formats for compatibility ★★★
+        // Format 1: campDailyData_v1_${date} (per-date key)
+        const unifiedKeyWithDate = `campDailyData_v1_${currentDate}`;
         try {
-            const dailyData = JSON.parse(localStorage.getItem(unifiedKey) || '{}');
+            const dailyData = JSON.parse(localStorage.getItem(unifiedKeyWithDate) || '{}');
             dailyData.scheduleAssignments = window.scheduleAssignments;
             dailyData._postEditAt = Date.now();
-            localStorage.setItem(unifiedKey, JSON.stringify(dailyData));
+            localStorage.setItem(unifiedKeyWithDate, JSON.stringify(dailyData));
+            console.log(`[PostEdit] ✅ Saved to: ${unifiedKeyWithDate}`);
         } catch (e) {
-            console.error('[PostEdit] Failed to save to unified storage:', e);
+            console.error('[PostEdit] Failed to save to unified storage (per-date):', e);
+        }
+        
+        // Format 2: campDailyData_v1 with nested date keys (what loadScheduleForDate expects)
+        const unifiedKeyNested = 'campDailyData_v1';
+        try {
+            const allDailyData = JSON.parse(localStorage.getItem(unifiedKeyNested) || '{}');
+            if (!allDailyData[currentDate]) {
+                allDailyData[currentDate] = {};
+            }
+            allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
+            allDailyData[currentDate].leagueAssignments = window.leagueAssignments || {};
+            allDailyData[currentDate].unifiedTimes = window.unifiedTimes || [];
+            allDailyData[currentDate]._postEditAt = Date.now();
+            localStorage.setItem(unifiedKeyNested, JSON.stringify(allDailyData));
+            console.log(`[PostEdit] ✅ Saved to: ${unifiedKeyNested}[${currentDate}]`);
+        } catch (e) {
+            console.error('[PostEdit] Failed to save to unified storage (nested):', e);
         }
         
         // Protection flag - prevent cloud hydration from overwriting
+        // Note: This flag is also set earlier in resolveConflictsAndApply for bypass mode
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
+        
+        // Clear the flag after a longer timeout to allow for all async operations
+        // The patchLoadScheduleForDate will skip loading while this flag is true
         setTimeout(() => {
             window._postEditInProgress = false;
-        }, 5000);
+            console.log('[PostEdit] 🔓 Post-edit protection flag cleared');
+        }, 8000); // 8 seconds to be safe
         
         // ★★★ FIX: Don't dispatch campistry-daily-data-updated - it triggers a reload ★★★
         // Our in-memory window.scheduleAssignments is already correct
         // Just dispatch a notification event and render directly
         console.log('[PostEdit] 🔄 Triggering UI refresh...');
+        
+        // ★★★ VERIFICATION: Check window.scheduleAssignments before render ★★★
+        console.log('[PostEdit] VERIFICATION before render:');
+        console.log(`  Total bunks in scheduleAssignments: ${Object.keys(window.scheduleAssignments || {}).length}`);
+        // Log the bunk we just edited
+        const editedEntry = window.scheduleAssignments?.[bunk]?.[slots[0]];
+        console.log(`  Edited bunk ${bunk} slot ${slots[0]}: ${editedEntry?._activity || editedEntry?.field || 'MISSING'}`);
         
         // Dispatch post-edit event for any listeners (informational only)
         document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
@@ -1981,6 +2061,49 @@
         
         return best;
     };
+
+    // =========================================================================
+    // ★★★ CRITICAL PATCH: Make loadScheduleForDate respect _postEditInProgress ★★★
+    // =========================================================================
+    // 
+    // Problem: When we update window.scheduleAssignments in memory and call updateTable(),
+    // renderStaggeredView() calls loadScheduleForDate() which OVERWRITES our changes.
+    // 
+    // Solution: Patch loadScheduleForDate to skip loading when _postEditInProgress is true.
+    // 
+    // =========================================================================
+
+    function patchLoadScheduleForDate() {
+        if (window._loadScheduleForDatePatched) return;
+        
+        const original = window.loadScheduleForDate;
+        if (!original) {
+            console.warn('[PostEdit] loadScheduleForDate not found, will retry...');
+            setTimeout(patchLoadScheduleForDate, 500);
+            return;
+        }
+
+        window.loadScheduleForDate = function(dateKey) {
+            // ★★★ Skip loading if post-edit is in progress ★★★
+            if (window._postEditInProgress) {
+                console.log('[PostEdit] 🛡️ Skipping loadScheduleForDate - post-edit in progress');
+                console.log('[PostEdit]   Current scheduleAssignments bunks:', Object.keys(window.scheduleAssignments || {}).length);
+                return; // Don't overwrite our in-memory changes
+            }
+            
+            // Call original
+            return original.call(this, dateKey);
+        };
+
+        window._loadScheduleForDatePatched = true;
+        console.log('[PostEdit] ✅ Patched loadScheduleForDate to respect _postEditInProgress flag');
+    }
+
+    // Patch immediately and also after delays (in case unified_schedule_system loads later)
+    patchLoadScheduleForDate();
+    setTimeout(patchLoadScheduleForDate, 100);
+    setTimeout(patchLoadScheduleForDate, 500);
+    setTimeout(patchLoadScheduleForDate, 1500);
 
     // Auto-initialize
     if (document.readyState === 'loading') {
