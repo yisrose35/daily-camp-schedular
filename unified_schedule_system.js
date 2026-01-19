@@ -1,5 +1,5 @@
 // =============================================================================
-// unified_schedule_system.js v3.5.3 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
+// unified_schedule_system.js v4.0.0 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
 // =============================================================================
 //
 // This file REPLACES ALL of the following:
@@ -8,6 +8,8 @@
 // ❌ view_schedule_loader_fix.js
 // ❌ schedule_version_merger.js
 // ❌ schedule_version_ui.js
+// ❌ post_generation_edit_system.js (NOW INTEGRATED)
+// ❌ pinned_activity_preservation.js (NOW INTEGRATED)
 //
 // CRITICAL FIXES:
 // ✅ normalizeUnifiedTimes preserves startMin/endMin (was losing them!)
@@ -20,6 +22,10 @@
 // ✅ RBAC and multi-scheduler support
 // ✅ v3.5: SPLIT TILE VISUAL FIX - renders split tiles as two rows
 // ✅ v3.5.3: LEAGUE MATCHUPS FIX - bunks ≠ league teams, handles array/object formats
+// ✅ v4.0: INTEGRATED POST-GENERATION EDITING with smart regeneration
+// ✅ v4.0: INTEGRATED PINNED ACTIVITY PRESERVATION
+// ✅ v4.0: BYPASS MODE for admin-level access
+// ✅ v4.0: Conflict detection and resolution UI
 //
 // REQUIRES: unified_cloud_schedule_system.js for proper cloud sync
 //
@@ -28,7 +34,7 @@
 (function() {
     'use strict';
 
-    console.log('📅 Unified Schedule System v3.5.3 loading...');
+    console.log('📅 Unified Schedule System v4.0.0 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -37,12 +43,50 @@
     const RENDER_DEBOUNCE_MS = 150;
     let DEBUG = false;
     const HIDE_VERSION_TOOLBAR = true;
+    const MODAL_ID = 'post-edit-modal';
+    const OVERLAY_ID = 'post-edit-overlay';
+    const TRANSITION_TYPE = window.TRANSITION_TYPE || "Transition/Buffer";
     
     let _lastRenderTime = 0;
     let _renderQueued = false;
     let _renderTimeout = null;
     let _initialized = false;
     let _cloudHydrated = false;
+
+    // =========================================================================
+    // ROTATION CONFIGURATION (for smart regeneration)
+    // =========================================================================
+    
+    const ROTATION_CONFIG = {
+        // Hard rules
+        SAME_DAY_PENALTY: Infinity,            // NEVER allow same activity twice in one day
+
+        // Recency penalties (days ago)
+        YESTERDAY_PENALTY: 5000,               // Did it yesterday
+        TWO_DAYS_AGO_PENALTY: 3000,            // Did it 2 days ago
+        THREE_DAYS_AGO_PENALTY: 2000,          // Did it 3 days ago
+        FOUR_TO_SEVEN_DAYS_PENALTY: 800,       // Did it 4-7 days ago
+        WEEK_PLUS_PENALTY: 200,                // Did it more than a week ago
+
+        // Frequency penalties
+        HIGH_FREQUENCY_PENALTY: 1500,          // Done this much more than others
+        ABOVE_AVERAGE_PENALTY: 500,            // Done this more than average
+
+        // Variety bonuses (negative = good)
+        NEVER_DONE_BONUS: -1500,               // NEVER done this activity before
+        UNDER_UTILIZED_BONUS: -800,            // Done less than average
+
+        // Sharing bonus
+        ADJACENT_BUNK_BONUS: -100,             // Adjacent bunk doing same activity
+        NEARBY_BUNK_BONUS: -30                 // Nearby bunk (within 3) doing same
+    };
+
+    // =========================================================================
+    // PINNED ACTIVITY STORAGE
+    // =========================================================================
+    
+    let _pinnedSnapshot = {};  // { bunk: { slotIdx: entry } }
+    let _pinnedFieldLocks = []; // Track what we locked so we can verify
 
     // =========================================================================
     // TIME UTILITIES
@@ -90,11 +134,31 @@
         return `${h12}:${String(m).padStart(2, '0')} ${ap}`;
     }
 
+    function minutesToTimeString(mins) {
+        if (mins === null || mins === undefined) return '';
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+
     function escapeHtml(text) {
         if (!text) return '';
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    function fieldLabel(f) {
+        if (window.SchedulerCoreUtils?.fieldLabel) {
+            return window.SchedulerCoreUtils.fieldLabel(f);
+        }
+        if (typeof f === "string") return f;
+        if (f && typeof f === "object" && typeof f.name === "string") return f.name;
+        return "";
+    }
+
+    function debugLog(...args) {
+        if (DEBUG) console.log('[UnifiedSchedule]', ...args);
     }
 
     // =========================================================================
@@ -111,7 +175,7 @@
             if (parent && parent.children.length === 1) {
                 parent.style.display = 'none';
             }
-            if (DEBUG) console.log('[UnifiedSchedule] Hidden version toolbar');
+            debugLog('Hidden version toolbar');
         }
     }
 
@@ -134,9 +198,16 @@
     }
 
     function loadScheduleForDate(dateKey) {
+        // ★★★ Skip loading if post-edit is in progress ★★★
+        if (window._postEditInProgress) {
+            console.log('[UnifiedSchedule] 🛡️ Skipping loadScheduleForDate - post-edit in progress');
+            console.log('[UnifiedSchedule]   Current scheduleAssignments bunks:', Object.keys(window.scheduleAssignments || {}).length);
+            return;
+        }
+
         if (!dateKey) dateKey = getDateKey();
         
-        if (DEBUG) console.log(`[UnifiedSchedule] Loading data for: ${dateKey}`);
+        debugLog(`Loading data for: ${dateKey}`);
         
         const dailyData = loadDailyData();
         const dateData = dailyData[dateKey] || {};
@@ -150,19 +221,19 @@
         // Priority 1: Window global (set by cloud bridge, version merger, generator)
         if (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0) {
             loadedAssignments = true;
-            if (DEBUG) console.log('[UnifiedSchedule] Using window.scheduleAssignments:', Object.keys(window.scheduleAssignments).length);
+            debugLog('Using window.scheduleAssignments:', Object.keys(window.scheduleAssignments).length);
         }
         // Priority 2: Date-specific localStorage
         else if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
             window.scheduleAssignments = dateData.scheduleAssignments;
             loadedAssignments = true;
-            if (DEBUG) console.log('[UnifiedSchedule] Loaded from dateData:', Object.keys(window.scheduleAssignments).length);
+            debugLog('Loaded from dateData:', Object.keys(window.scheduleAssignments).length);
         }
         // Priority 3: Root-level legacy
         else if (dailyData.scheduleAssignments && Object.keys(dailyData.scheduleAssignments).length > 0) {
             window.scheduleAssignments = dailyData.scheduleAssignments;
             loadedAssignments = true;
-            if (DEBUG) console.log('[UnifiedSchedule] Loaded from root:', Object.keys(window.scheduleAssignments).length);
+            debugLog('Loaded from root:', Object.keys(window.scheduleAssignments).length);
         }
         
         if (!loadedAssignments) {
@@ -191,25 +262,25 @@
         
         // Priority 1: Keep existing window.unifiedTimes if valid AND from cloud
         if (cloudLoaded && window.unifiedTimes && window.unifiedTimes.length > 0) {
-            if (DEBUG) console.log('[UnifiedSchedule] Using cloud-loaded unifiedTimes:', window.unifiedTimes.length);
+            debugLog('Using cloud-loaded unifiedTimes:', window.unifiedTimes.length);
             // Don't overwrite - cloud data is authoritative
         }
         // Priority 2: Keep existing window.unifiedTimes if valid (set by scheduler after generation)
         else if (window.unifiedTimes && window.unifiedTimes.length > 0) {
-            if (DEBUG) console.log('[UnifiedSchedule] Using existing window.unifiedTimes:', window.unifiedTimes.length);
+            debugLog('Using existing window.unifiedTimes:', window.unifiedTimes.length);
             // Don't overwrite - scheduler already set this
         }
         // Priority 3: Load from localStorage (saved from previous session)
         else if (dateData.unifiedTimes && dateData.unifiedTimes.length > 0) {
             window.unifiedTimes = normalizeUnifiedTimes(dateData.unifiedTimes);
-            if (DEBUG) console.log('[UnifiedSchedule] Loaded unifiedTimes from dateData:', window.unifiedTimes.length);
+            debugLog('Loaded unifiedTimes from dateData:', window.unifiedTimes.length);
         }
         // Priority 4: Build from skeleton (fallback)
         else {
             const skeleton = getSkeleton(dateKey);
             if (skeleton.length > 0) {
                 window.unifiedTimes = buildUnifiedTimesFromSkeleton(skeleton);
-                if (DEBUG) console.log('[UnifiedSchedule] Built unifiedTimes from skeleton:', window.unifiedTimes.length);
+                debugLog('Built unifiedTimes from skeleton:', window.unifiedTimes.length);
             } else {
                 window.unifiedTimes = [];
             }
@@ -225,14 +296,12 @@
             window.manualSkeleton = dateData.skeleton;
         }
         
-        if (DEBUG) {
-            console.log('[UnifiedSchedule] Data state:', {
-                assignments: Object.keys(window.scheduleAssignments || {}).length,
-                leagues: Object.keys(window.leagueAssignments || {}).length,
-                times: (window.unifiedTimes || []).length,
-                skeleton: (window.manualSkeleton || window.skeleton || []).length
-            });
-        }
+        debugLog('Data state:', {
+            assignments: Object.keys(window.scheduleAssignments || {}).length,
+            leagues: Object.keys(window.leagueAssignments || {}).length,
+            times: (window.unifiedTimes || []).length,
+            skeleton: (window.manualSkeleton || window.skeleton || []).length
+        });
         
         return {
             scheduleAssignments: window.scheduleAssignments || {},
@@ -243,12 +312,12 @@
     }
 
     function getSkeleton(dateKey) {
-    const dailyData = loadDailyData();
-    const dateData = dailyData[dateKey || getDateKey()] || {};
-    return dateData.manualSkeleton || dateData.skeleton || 
-           window.dailyOverrideSkeleton ||  // ← ADD THIS LINE
-           window.manualSkeleton || window.skeleton || [];
-}
+        const dailyData = loadDailyData();
+        const dateData = dailyData[dateKey || getDateKey()] || {};
+        return dateData.manualSkeleton || dateData.skeleton || 
+               window.dailyOverrideSkeleton ||
+               window.manualSkeleton || window.skeleton || [];
+    }
 
     function normalizeUnifiedTimes(times) {
         if (!times || !Array.isArray(times)) return [];
@@ -335,7 +404,7 @@
             });
         }
         
-        if (DEBUG) console.log(`[UnifiedSchedule] Generated ${timeSlots.length} slots (${minutesToTimeLabel(minTime)} - ${minutesToTimeLabel(maxTime)})`);
+        debugLog(`Generated ${timeSlots.length} slots (${minutesToTimeLabel(minTime)} - ${minutesToTimeLabel(maxTime)})`);
         
         return timeSlots;
     }
@@ -363,10 +432,6 @@
     /**
      * Find ALL slot indices in unifiedTimes that fall within a skeleton block's time range.
      * This is the KEY FIX - skeleton blocks can span multiple 30-min slots.
-     * 
-     * Example: Skeleton block 11:00 AM - 12:00 PM (60 min) 
-     *          unifiedTimes has 30-min slots: [0]=11:00, [1]=11:30, [2]=12:00...
-     *          This returns [0, 1] - both slots that fall within the block
      */
     function findSlotsForRange(startMin, endMin, unifiedTimes) {
         if (!unifiedTimes || unifiedTimes.length === 0) return [];
@@ -425,7 +490,6 @@
     /**
      * Get entry for a skeleton block - searches ALL slots in the bunk's data
      * and finds entries that fall within the block's time range.
-     * This is more robust than just using findSlotsForRange.
      */
     function getEntryForBlock(bunk, startMin, endMin, unifiedTimes) {
         const assignments = window.scheduleAssignments || {};
@@ -478,29 +542,44 @@
         return { entry: null, slotIdx: slots[0] || -1 };
     }
 
+    function getSlotTimeRange(slotIdx) {
+        const unifiedTimes = window.unifiedTimes || [];
+        const slot = unifiedTimes[slotIdx];
+        if (!slot) return { startMin: null, endMin: null };
+        const start = new Date(slot.start);
+        const end = new Date(slot.end);
+        return {
+            startMin: start.getHours() * 60 + start.getMinutes(),
+            endMin: end.getHours() * 60 + end.getMinutes()
+        };
+    }
+
+    function getDivisionForBunk(bunkName) {
+        const divisions = window.divisions || {};
+        for (const [divName, divData] of Object.entries(divisions)) {
+            if (divData.bunks && divData.bunks.includes(bunkName)) {
+                return divName;
+            }
+        }
+        return null;
+    }
+
     // =========================================================================
     // SPLIT TILE DETECTION - v3.5 FIX
     // =========================================================================
     
     /**
      * Detect if a skeleton block is a split tile.
-     * Split tiles have "/" in the name (e.g., "Swim / Activity") and
-     * different bunks switch activities at the midpoint.
      */
     function isSplitTileBlock(block, bunks, unifiedTimes) {
         if (!block || !block.event) return false;
         
-        // Must contain "/" to be a split candidate
         if (!block.event.includes('/')) return false;
-        
-        // "Special" blocks are smart tiles, not split tiles
         if (block.event.toLowerCase().includes('special')) return false;
         
-        // Block must be at least 60 minutes to be split
         const duration = block.endMin - block.startMin;
         if (duration < 60) return false;
         
-        // Check actual data: do bunks have different activities in first vs second half?
         const midpoint = Math.floor((block.startMin + block.endMin) / 2);
         const firstHalfSlots = findSlotsForRange(block.startMin, midpoint, unifiedTimes);
         const secondHalfSlots = findSlotsForRange(midpoint, block.endMin, unifiedTimes);
@@ -509,7 +588,6 @@
         
         const assignments = window.scheduleAssignments || {};
         
-        // Check if ANY bunk has different activities in the two halves
         for (const bunk of bunks) {
             const bunkData = assignments[bunk];
             if (!bunkData) continue;
@@ -521,9 +599,8 @@
                 const firstAct = formatEntry(firstEntry);
                 const secondAct = formatEntry(secondEntry);
                 
-                // If activities differ, this is a split tile
                 if (firstAct && secondAct && firstAct !== secondAct) {
-                    if (DEBUG) console.log(`[UnifiedSchedule] Detected split tile: ${block.event} (${firstAct} → ${secondAct})`);
+                    debugLog(`Detected split tile: ${block.event} (${firstAct} → ${secondAct})`);
                     return true;
                 }
             }
@@ -540,10 +617,8 @@
         
         divBlocks.forEach(block => {
             if (isSplitTileBlock(block, bunks, unifiedTimes)) {
-                // Split into two halves
                 const midpoint = Math.floor((block.startMin + block.endMin) / 2);
                 
-                // First half
                 expandedBlocks.push({
                     ...block,
                     endMin: midpoint,
@@ -552,7 +627,6 @@
                     _isSplitTile: true
                 });
                 
-                // Second half
                 expandedBlocks.push({
                     ...block,
                     startMin: midpoint,
@@ -561,7 +635,7 @@
                     _isSplitTile: true
                 });
                 
-                if (DEBUG) console.log(`[UnifiedSchedule] Expanded split tile: ${block.event} into 2 rows (${block.startMin}-${midpoint}, ${midpoint}-${block.endMin})`);
+                debugLog(`Expanded split tile: ${block.event} into 2 rows`);
             } else {
                 expandedBlocks.push(block);
             }
@@ -617,6 +691,7 @@
         if (entry._h2h || entry._isSpecialtyLeague) return '#e3f2fd';
         if (entry._fixed) return '#fff8e1';
         if (entry._fromBackground) return '#f3e5f5';
+        if (entry._pinned) return '#fef3c7'; // Yellow tint for pinned
         
         return '#f0f9ff';
     }
@@ -635,18 +710,1131 @@
     }
 
     // =========================================================================
+    // ACTIVITY PROPERTIES & LOCATIONS
+    // =========================================================================
+
+    function getActivityProperties() {
+        if (window.activityProperties && Object.keys(window.activityProperties).length > 0) {
+            return window.activityProperties;
+        }
+        
+        const settings = window.loadGlobalSettings?.() || {};
+        const app1 = settings.app1 || {};
+        const props = {};
+        
+        (app1.fields || []).forEach(f => {
+            if (f.name) {
+                props[f.name] = {
+                    ...f,
+                    type: 'field',
+                    capacity: f.sharableWith?.capacity || (f.sharableWith?.type === 'all' ? 2 : 1)
+                };
+            }
+        });
+        
+        (app1.specialActivities || []).forEach(s => {
+            if (s.name) {
+                props[s.name] = {
+                    ...s,
+                    type: 'special',
+                    capacity: s.sharableWith?.capacity || 1
+                };
+            }
+        });
+        
+        return props;
+    }
+
+    function getAllLocations() {
+        const settings = window.loadGlobalSettings?.() || {};
+        const app1 = settings.app1 || {};
+        const locations = [];
+        
+        (app1.fields || []).forEach(f => {
+            if (f.name && f.available !== false) {
+                locations.push({
+                    name: f.name,
+                    type: 'field',
+                    capacity: f.sharableWith?.capacity || 1
+                });
+            }
+        });
+        
+        (app1.specialActivities || []).forEach(s => {
+            if (s.name) {
+                locations.push({
+                    name: s.name,
+                    type: 'special',
+                    capacity: s.sharableWith?.capacity || 1
+                });
+            }
+        });
+        
+        return locations;
+    }
+
+    // =========================================================================
+    // RBAC HELPERS
+    // =========================================================================
+
+    function getEditableBunks() {
+        const editableBunks = new Set();
+        
+        const editableDivisions = window.AccessControl?.getEditableDivisions?.() || [];
+        const divisions = window.divisions || {};
+        
+        for (const divName of editableDivisions) {
+            const divInfo = divisions[divName];
+            if (divInfo?.bunks) {
+                divInfo.bunks.forEach(b => editableBunks.add(String(b)));
+            }
+        }
+        
+        // If no RBAC or owner, all bunks are editable
+        if (editableBunks.size === 0) {
+            const role = window.AccessControl?.getCurrentRole?.();
+            if (!window.AccessControl || role === 'owner' || role === 'admin') {
+                Object.keys(window.scheduleAssignments || {}).forEach(b => editableBunks.add(b));
+            }
+        }
+        
+        return editableBunks;
+    }
+
+    function canEditBunk(bunkName) {
+        const role = window.AccessControl?.getCurrentRole?.();
+        if (role === 'owner' || role === 'admin') return true;
+        
+        const editableBunks = getEditableBunks();
+        return editableBunks.has(bunkName);
+    }
+
+    // =========================================================================
+    // FIELD USAGE TRACKING
+    // =========================================================================
+
+    function buildFieldUsageBySlot(excludeBunks = []) {
+        const fieldUsageBySlot = {};
+        const assignments = window.scheduleAssignments || {};
+        const excludeSet = new Set(excludeBunks);
+
+        for (const [bunkName, bunkSlots] of Object.entries(assignments)) {
+            if (excludeSet.has(bunkName)) continue;
+            if (!bunkSlots || !Array.isArray(bunkSlots)) continue;
+
+            for (let slotIdx = 0; slotIdx < bunkSlots.length; slotIdx++) {
+                const entry = bunkSlots[slotIdx];
+                if (!entry || !entry.field) continue;
+                if (entry._isTransition || entry.field === TRANSITION_TYPE) continue;
+
+                const fName = fieldLabel(entry.field);
+                if (!fName || fName === 'Free') continue;
+
+                if (!fieldUsageBySlot[slotIdx]) {
+                    fieldUsageBySlot[slotIdx] = {};
+                }
+
+                if (!fieldUsageBySlot[slotIdx][fName]) {
+                    fieldUsageBySlot[slotIdx][fName] = {
+                        count: 0,
+                        bunks: {},
+                        divisions: []
+                    };
+                }
+
+                const usage = fieldUsageBySlot[slotIdx][fName];
+                usage.count++;
+                usage.bunks[bunkName] = entry._activity || fName;
+
+                const divName = getDivisionForBunk(bunkName);
+                if (divName && !usage.divisions.includes(divName)) {
+                    usage.divisions.push(divName);
+                }
+            }
+        }
+
+        return fieldUsageBySlot;
+    }
+
+    // =========================================================================
+    // CONFLICT DETECTION
+    // =========================================================================
+
+    function checkLocationConflict(locationName, slots, excludeBunk) {
+        const assignments = window.scheduleAssignments || {};
+        const activityProperties = getActivityProperties();
+        const locationInfo = activityProperties[locationName] || {};
+        
+        let maxCapacity = 1;
+        if (locationInfo.sharableWith?.capacity) {
+            maxCapacity = parseInt(locationInfo.sharableWith.capacity) || 1;
+        } else if (locationInfo.sharable) {
+            maxCapacity = 2;
+        }
+        
+        const editableBunks = getEditableBunks();
+        const conflicts = [];
+        const usageBySlot = {};
+        
+        for (const slotIdx of slots) {
+            usageBySlot[slotIdx] = [];
+            
+            for (const [bunkName, bunkSlots] of Object.entries(assignments)) {
+                if (bunkName === excludeBunk) continue;
+                
+                const entry = bunkSlots?.[slotIdx];
+                if (!entry) continue;
+                
+                const entryField = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                const entryActivity = entry._activity || entryField;
+                const entryLocation = entry._location || entryField;
+                
+                const matchesLocation = 
+                    entryField?.toLowerCase() === locationName.toLowerCase() ||
+                    entryLocation?.toLowerCase() === locationName.toLowerCase() ||
+                    entryActivity?.toLowerCase() === locationName.toLowerCase();
+                
+                if (matchesLocation) {
+                    usageBySlot[slotIdx].push({
+                        bunk: bunkName,
+                        activity: entryActivity || entryField,
+                        field: entryField,
+                        canEdit: editableBunks.has(bunkName)
+                    });
+                }
+            }
+        }
+        
+        // Check GlobalFieldLocks
+        let globalLock = null;
+        if (window.GlobalFieldLocks) {
+            const divName = getDivisionForBunk(excludeBunk);
+            const lockInfo = window.GlobalFieldLocks.isFieldLocked(locationName, slots, divName);
+            if (lockInfo) {
+                globalLock = lockInfo;
+            }
+        }
+        
+        let hasConflict = !!globalLock;
+        let currentUsage = 0;
+        
+        for (const slotIdx of slots) {
+            const slotUsage = usageBySlot[slotIdx] || [];
+            currentUsage = Math.max(currentUsage, slotUsage.length);
+            
+            if (slotUsage.length >= maxCapacity) {
+                hasConflict = true;
+                slotUsage.forEach(u => {
+                    if (!conflicts.find(c => c.bunk === u.bunk && c.slot === slotIdx)) {
+                        conflicts.push({ ...u, slot: slotIdx });
+                    }
+                });
+            }
+        }
+        
+        const editableConflicts = conflicts.filter(c => c.canEdit);
+        const nonEditableConflicts = conflicts.filter(c => !c.canEdit);
+        
+        return {
+            hasConflict,
+            conflicts,
+            editableConflicts,
+            nonEditableConflicts,
+            globalLock,
+            canShare: maxCapacity > 1 && currentUsage < maxCapacity,
+            currentUsage,
+            maxCapacity
+        };
+    }
+
+    // =========================================================================
+    // ROTATION SCORING (for smart regeneration)
+    // =========================================================================
+
+    function getActivitiesDoneToday(bunk, beforeSlot) {
+        const done = new Set();
+        const bunkData = window.scheduleAssignments?.[bunk];
+        if (!bunkData) return done;
+
+        for (let i = 0; i < beforeSlot; i++) {
+            const entry = bunkData[i];
+            if (entry) {
+                const actName = entry._activity || entry.sport || fieldLabel(entry.field);
+                if (actName && actName.toLowerCase() !== 'free' && !actName.toLowerCase().includes('transition')) {
+                    done.add(actName.toLowerCase().trim());
+                }
+            }
+        }
+        return done;
+    }
+
+    function getActivityCount(bunk, activityName) {
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const historicalCounts = globalSettings.historicalCounts || {};
+        return historicalCounts[bunk]?.[activityName] || 0;
+    }
+
+    function getDaysSinceActivity(bunk, activityName) {
+        const rotationHistory = window.loadRotationHistory?.() || {};
+        const bunkHistory = rotationHistory.bunks?.[bunk] || {};
+        const lastDone = bunkHistory[activityName];
+        
+        if (!lastDone) return null;
+        
+        const now = Date.now();
+        const daysSince = Math.floor((now - lastDone) / (24 * 60 * 60 * 1000));
+        return daysSince;
+    }
+
+    function calculateRotationPenalty(bunk, activityName, slots) {
+        if (!activityName || activityName === 'Free') return 0;
+
+        const firstSlot = slots[0];
+        const doneToday = getActivitiesDoneToday(bunk, firstSlot);
+        const actLower = activityName.toLowerCase().trim();
+
+        // HARD BLOCK: Already done today
+        if (doneToday.has(actLower)) {
+            return ROTATION_CONFIG.SAME_DAY_PENALTY;
+        }
+
+        // Recency penalty
+        const daysSince = getDaysSinceActivity(bunk, activityName);
+        let recencyPenalty = 0;
+
+        if (daysSince === null) {
+            recencyPenalty = ROTATION_CONFIG.NEVER_DONE_BONUS;
+        } else if (daysSince === 0) {
+            return ROTATION_CONFIG.SAME_DAY_PENALTY;
+        } else if (daysSince === 1) {
+            recencyPenalty = ROTATION_CONFIG.YESTERDAY_PENALTY;
+        } else if (daysSince === 2) {
+            recencyPenalty = ROTATION_CONFIG.TWO_DAYS_AGO_PENALTY;
+        } else if (daysSince === 3) {
+            recencyPenalty = ROTATION_CONFIG.THREE_DAYS_AGO_PENALTY;
+        } else if (daysSince <= 7) {
+            recencyPenalty = ROTATION_CONFIG.FOUR_TO_SEVEN_DAYS_PENALTY;
+        } else {
+            recencyPenalty = ROTATION_CONFIG.WEEK_PLUS_PENALTY;
+        }
+
+        // Frequency penalty
+        const count = getActivityCount(bunk, activityName);
+        let frequencyPenalty = 0;
+        if (count > 5) {
+            frequencyPenalty = ROTATION_CONFIG.HIGH_FREQUENCY_PENALTY;
+        } else if (count > 3) {
+            frequencyPenalty = ROTATION_CONFIG.ABOVE_AVERAGE_PENALTY;
+        } else if (count === 0) {
+            frequencyPenalty = ROTATION_CONFIG.UNDER_UTILIZED_BONUS;
+        }
+
+        return recencyPenalty + frequencyPenalty;
+    }
+
+    // =========================================================================
+    // FIELD AVAILABILITY CHECK
+    // =========================================================================
+
+    function isFieldAvailable(fieldName, slots, excludeBunk, fieldUsageBySlot, activityProperties) {
+        const divName = getDivisionForBunk(excludeBunk);
+        
+        // Check GlobalFieldLocks
+        if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots, divName)) {
+            return false;
+        }
+
+        // Check disabled fields
+        const disabledFields = window.currentDisabledFields || [];
+        if (disabledFields.includes(fieldName)) {
+            return false;
+        }
+
+        // Check capacity
+        const props = activityProperties[fieldName] || {};
+        let maxCapacity = 1;
+        if (props.sharableWith?.capacity) {
+            maxCapacity = parseInt(props.sharableWith.capacity) || 1;
+        } else if (props.sharable) {
+            maxCapacity = 2;
+        }
+
+        for (const slotIdx of slots) {
+            const slotUsage = fieldUsageBySlot[slotIdx]?.[fieldName];
+            if (slotUsage && slotUsage.count >= maxCapacity) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // =========================================================================
+    // BUILD CANDIDATE OPTIONS (for smart regeneration)
+    // =========================================================================
+
+    function buildCandidateOptions(slots, activityProperties, disabledFields = []) {
+        const options = [];
+        const seenKeys = new Set();
+        const settings = window.loadGlobalSettings?.() || {};
+        const app1 = settings.app1 || {};
+
+        // From fields (sports) - using fieldsBySport
+        const fieldsBySport = settings.fieldsBySport || {};
+        for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
+            (sportFields || []).forEach(fieldName => {
+                if (disabledFields.includes(fieldName)) return;
+
+                if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots)) {
+                    return;
+                }
+
+                const key = `${fieldName}|${sport}`;
+                if (!seenKeys.has(key)) {
+                    seenKeys.add(key);
+                    options.push({
+                        field: fieldName,
+                        sport: sport,
+                        activityName: sport,
+                        type: 'sport'
+                    });
+                }
+            });
+        }
+
+        // From special activities
+        const specials = app1.specialActivities || [];
+        for (const special of specials) {
+            if (!special.name) continue;
+            if (disabledFields.includes(special.name)) continue;
+
+            if (window.GlobalFieldLocks?.isFieldLocked(special.name, slots)) {
+                continue;
+            }
+
+            const key = `special|${special.name}`;
+            if (!seenKeys.has(key)) {
+                seenKeys.add(key);
+                options.push({
+                    field: special.name,
+                    sport: null,
+                    activityName: special.name,
+                    type: 'special'
+                });
+            }
+        }
+
+        // Also add fields directly if they support general activities
+        const fields = app1.fields || [];
+        for (const field of fields) {
+            if (!field.name || field.available === false) continue;
+            if (disabledFields.includes(field.name)) continue;
+
+            if (window.GlobalFieldLocks?.isFieldLocked(field.name, slots)) {
+                continue;
+            }
+
+            (field.activities || []).forEach(activity => {
+                const key = `${field.name}|${activity}`;
+                if (!seenKeys.has(key)) {
+                    seenKeys.add(key);
+                    options.push({
+                        field: field.name,
+                        sport: activity,
+                        activityName: activity,
+                        type: 'sport'
+                    });
+                }
+            });
+        }
+
+        return options;
+    }
+
+    // =========================================================================
+    // CALCULATE FULL PENALTY COST
+    // =========================================================================
+
+    function calculatePenaltyCost(bunk, slots, pick, fieldUsageBySlot, activityProperties) {
+        let penalty = 0;
+        const activityName = pick.activityName || pick._activity || pick.sport;
+        const fieldName = pick.field;
+        const divName = getDivisionForBunk(bunk);
+
+        // Rotation penalty (PRIMARY FACTOR)
+        const rotationPenalty = calculateRotationPenalty(bunk, activityName, slots);
+        if (rotationPenalty === Infinity) {
+            return Infinity;
+        }
+        penalty += rotationPenalty;
+
+        // Division preference bonus
+        const props = activityProperties[fieldName] || {};
+        if (props.preferences?.enabled && props.preferences?.list) {
+            const prefList = props.preferences.list;
+            const idx = prefList.indexOf(divName);
+            if (idx !== -1) {
+                penalty -= (50 - idx * 5);
+            } else if (props.preferences.exclusive) {
+                return Infinity;
+            } else {
+                penalty += 500;
+            }
+        }
+
+        // Sharing bonus (adjacent bunks doing same activity)
+        const myNum = parseInt((bunk.match(/\d+/) || [])[0]) || 0;
+        
+        for (const slotIdx of slots) {
+            const slotUsage = fieldUsageBySlot[slotIdx]?.[fieldName];
+            if (slotUsage && slotUsage.bunks) {
+                for (const otherBunk of Object.keys(slotUsage.bunks)) {
+                    if (otherBunk === bunk) continue;
+                    const otherNum = parseInt((otherBunk.match(/\d+/) || [])[0]) || 0;
+                    const distance = Math.abs(myNum - otherNum);
+                    if (distance === 1) {
+                        penalty += ROTATION_CONFIG.ADJACENT_BUNK_BONUS;
+                    } else if (distance <= 3) {
+                        penalty += ROTATION_CONFIG.NEARBY_BUNK_BONUS;
+                    }
+                }
+            }
+        }
+
+        // Usage limit check
+        const maxUsage = props.maxUsage || 0;
+        if (maxUsage > 0) {
+            const hist = getActivityCount(bunk, activityName);
+            if (hist >= maxUsage) {
+                return Infinity;
+            }
+            if (hist >= maxUsage - 1) {
+                penalty += 2000;
+            }
+        }
+
+        return penalty;
+    }
+
+    // =========================================================================
+    // FIND BEST ACTIVITY FOR BUNK (Mini-solver)
+    // =========================================================================
+
+    function findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProperties, avoidFields = []) {
+        const disabledFields = window.currentDisabledFields || [];
+        const avoidSet = new Set(avoidFields.map(f => f.toLowerCase()));
+
+        const candidates = buildCandidateOptions(slots, activityProperties, disabledFields);
+        
+        debugLog(`Finding best activity for ${bunk} at slots ${slots.join(',')}`);
+        debugLog(`  ${candidates.length} candidates available, avoiding: ${avoidFields.join(', ')}`);
+
+        const scoredPicks = [];
+
+        for (const cand of candidates) {
+            const fieldName = cand.field;
+            const activityName = cand.activityName;
+
+            if (avoidSet.has(fieldName.toLowerCase()) || avoidSet.has(activityName?.toLowerCase())) {
+                continue;
+            }
+
+            if (!isFieldAvailable(fieldName, slots, bunk, fieldUsageBySlot, activityProperties)) {
+                continue;
+            }
+
+            const cost = calculatePenaltyCost(bunk, slots, cand, fieldUsageBySlot, activityProperties);
+
+            if (cost < Infinity) {
+                scoredPicks.push({
+                    field: fieldName,
+                    sport: cand.sport,
+                    activityName: activityName,
+                    type: cand.type,
+                    cost: cost
+                });
+            }
+        }
+
+        scoredPicks.sort((a, b) => a.cost - b.cost);
+
+        debugLog(`  ${scoredPicks.length} valid picks after filtering`);
+        if (scoredPicks.length > 0) {
+            debugLog(`  Best pick: ${scoredPicks[0].activityName} on ${scoredPicks[0].field} (cost: ${scoredPicks[0].cost})`);
+        }
+
+        return scoredPicks.length > 0 ? scoredPicks[0] : null;
+    }
+
+    // =========================================================================
+    // APPLY PICK TO BUNK
+    // =========================================================================
+
+    function applyPickToBunk(bunk, slots, pick, fieldUsageBySlot, activityProperties) {
+        const divName = getDivisionForBunk(bunk);
+        
+        const pickData = {
+            field: pick.field,
+            sport: pick.sport,
+            _fixed: true,
+            _activity: pick.activityName,
+            _smartRegenerated: true,
+            _regeneratedAt: Date.now()
+        };
+
+        if (!window.scheduleAssignments) {
+            window.scheduleAssignments = {};
+        }
+        if (!window.scheduleAssignments[bunk]) {
+            window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
+        }
+
+        slots.forEach((slotIdx, i) => {
+            window.scheduleAssignments[bunk][slotIdx] = {
+                ...pickData,
+                continuation: i > 0
+            };
+        });
+        
+        debugLog(`  ✅ Updated window.scheduleAssignments[${bunk}] slots ${slots.join(',')}`);
+
+        // Also call fillBlock if available (for any side effects it may have)
+        if (typeof window.fillBlock === 'function') {
+            debugLog(`  Also calling fillBlock for ${bunk}`);
+            try {
+                const firstSlotTime = getSlotTimeRange(slots[0]);
+                const lastSlotTime = getSlotTimeRange(slots[slots.length - 1]);
+                
+                const block = {
+                    divName: divName,
+                    bunk: bunk,
+                    startTime: firstSlotTime.startMin,
+                    endTime: lastSlotTime.endMin,
+                    slots: slots
+                };
+                window.fillBlock(block, pickData, fieldUsageBySlot, window.yesterdayHistory || {}, false, activityProperties);
+            } catch (e) {
+                console.warn(`[UnifiedSchedule] fillBlock error for ${bunk}:`, e);
+            }
+        }
+
+        // Register field usage
+        const fieldName = pick.field;
+        for (const slotIdx of slots) {
+            if (!fieldUsageBySlot[slotIdx]) {
+                fieldUsageBySlot[slotIdx] = {};
+            }
+            if (!fieldUsageBySlot[slotIdx][fieldName]) {
+                fieldUsageBySlot[slotIdx][fieldName] = {
+                    count: 0,
+                    bunks: {},
+                    divisions: []
+                };
+            }
+            const usage = fieldUsageBySlot[slotIdx][fieldName];
+            usage.count++;
+            usage.bunks[bunk] = pick.activityName;
+            if (divName && !usage.divisions.includes(divName)) {
+                usage.divisions.push(divName);
+            }
+        }
+
+        debugLog(`  ✅ Applied ${pick.activityName} on ${pick.field} to ${bunk}`);
+    }
+
+    // =========================================================================
+    // SMART REGENERATION FOR CONFLICTS
+    // =========================================================================
+
+    function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedActivity, conflicts, bypassMode = false) {
+        console.log('\n' + '='.repeat(60));
+        console.log('[SmartRegen] ★★★ SMART REGENERATION STARTED ★★★');
+        if (bypassMode) {
+            console.log('[SmartRegen] 🔓 BYPASS MODE ACTIVE - Operating with ADMIN privileges');
+        }
+        console.log('='.repeat(60));
+        
+        debugLog('Pinned:', { bunk: pinnedBunk, slots: pinnedSlots, field: pinnedField, activity: pinnedActivity });
+        debugLog('Conflicts:', conflicts.length);
+
+        const activityProperties = getActivityProperties();
+        const results = {
+            success: true,
+            reassigned: [],
+            failed: [],
+            pinnedLock: null,
+            bypassMode: bypassMode
+        };
+
+        // STEP 1: Lock the pinned field in GlobalFieldLocks
+        if (window.GlobalFieldLocks) {
+            const pinnedDivName = getDivisionForBunk(pinnedBunk);
+            window.GlobalFieldLocks.lockField(pinnedField, pinnedSlots, {
+                lockedBy: 'smart_regen_pinned',
+                division: pinnedDivName,
+                activity: pinnedActivity,
+                bunk: pinnedBunk
+            });
+            results.pinnedLock = { field: pinnedField, slots: pinnedSlots };
+            debugLog('Step 1: Locked pinned field in GlobalFieldLocks');
+        }
+
+        // STEP 2: Group conflicts by bunk
+        const conflictsByBunk = {};
+        for (const conflict of conflicts) {
+            if (!conflictsByBunk[conflict.bunk]) {
+                conflictsByBunk[conflict.bunk] = new Set();
+            }
+            conflictsByBunk[conflict.bunk].add(conflict.slot);
+        }
+
+        debugLog(`Step 2: ${Object.keys(conflictsByBunk).length} bunks need reassignment`);
+
+        // STEP 3: Build fieldUsageBySlot EXCLUDING conflicting bunks
+        const bunksToReassign = Object.keys(conflictsByBunk);
+        const fieldUsageBySlot = buildFieldUsageBySlot(bunksToReassign);
+        
+        // Add the pinned bunk's usage
+        for (const slotIdx of pinnedSlots) {
+            if (!fieldUsageBySlot[slotIdx]) {
+                fieldUsageBySlot[slotIdx] = {};
+            }
+            if (!fieldUsageBySlot[slotIdx][pinnedField]) {
+                fieldUsageBySlot[slotIdx][pinnedField] = {
+                    count: 0,
+                    bunks: {},
+                    divisions: []
+                };
+            }
+            const usage = fieldUsageBySlot[slotIdx][pinnedField];
+            usage.count++;
+            usage.bunks[pinnedBunk] = pinnedActivity;
+        }
+
+        debugLog('Step 3: Built fieldUsageBySlot');
+
+        // STEP 4: Sort and process bunks
+        bunksToReassign.sort((a, b) => {
+            const numA = parseInt((a.match(/\d+/) || [])[0]) || 0;
+            const numB = parseInt((b.match(/\d+/) || [])[0]) || 0;
+            return numA - numB;
+        });
+
+        debugLog('Step 4: Processing bunks in order:', bunksToReassign.join(', '));
+
+        for (const bunk of bunksToReassign) {
+            const slotSet = conflictsByBunk[bunk];
+            const slots = [...slotSet].sort((a, b) => a - b);
+            
+            debugLog(`\nProcessing ${bunk} for slots: ${slots.join(', ')}`);
+
+            const originalEntry = window.scheduleAssignments?.[bunk]?.[slots[0]];
+            const originalActivity = originalEntry?._activity || originalEntry?.sport || fieldLabel(originalEntry?.field);
+            
+            debugLog(`  Original activity: ${originalActivity || 'none'}`);
+
+            const bestPick = findBestActivityForBunk(
+                bunk, 
+                slots, 
+                fieldUsageBySlot, 
+                activityProperties, 
+                [pinnedField]
+            );
+
+            if (bestPick) {
+                applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProperties);
+                
+                results.reassigned.push({
+                    bunk: bunk,
+                    slots: slots,
+                    from: originalActivity || 'unknown',
+                    to: bestPick.activityName,
+                    field: bestPick.field,
+                    cost: bestPick.cost
+                });
+
+                if (window.showToast) {
+                    window.showToast(`↪️ ${bunk}: ${originalActivity} → ${bestPick.activityName}`, 'info');
+                }
+            } else {
+                debugLog(`  ⚠️ No valid pick found for ${bunk}, marking as Free`);
+                
+                if (!window.scheduleAssignments[bunk]) {
+                    window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
+                }
+
+                slots.forEach((slotIdx, i) => {
+                    window.scheduleAssignments[bunk][slotIdx] = {
+                        field: 'Free',
+                        sport: null,
+                        continuation: i > 0,
+                        _fixed: false,
+                        _activity: 'Free',
+                        _smartRegenFailed: true,
+                        _originalActivity: originalActivity,
+                        _failedAt: Date.now()
+                    };
+                });
+
+                results.failed.push({
+                    bunk: bunk,
+                    slots: slots,
+                    originalActivity: originalActivity,
+                    reason: 'No valid alternative found'
+                });
+
+                results.success = false;
+
+                if (window.showToast) {
+                    window.showToast(`⚠️ ${bunk}: No alternative found`, 'warning');
+                }
+            }
+        }
+
+        console.log('\n' + '='.repeat(60));
+        console.log('[SmartRegen] ★★★ REGENERATION COMPLETE ★★★');
+        console.log(`  Reassigned: ${results.reassigned.length} bunks`);
+        console.log(`  Failed: ${results.failed.length} bunks`);
+        if (bypassMode) {
+            console.log('  Mode: BYPASS (admin privileges)');
+        }
+        console.log('='.repeat(60) + '\n');
+
+        return results;
+    }
+
+    // =========================================================================
+    // SMART REASSIGN BUNK ACTIVITY
+    // =========================================================================
+
+    function smartReassignBunkActivity(bunk, slots, avoidLocation) {
+        debugLog(`smartReassignBunkActivity called for ${bunk}`);
+        
+        const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
+        if (!entry) {
+            console.warn(`[UnifiedSchedule] No existing entry for ${bunk} at slot ${slots[0]}`);
+            return { success: false };
+        }
+
+        const originalActivity = entry._activity || entry.sport || fieldLabel(entry.field);
+        const activityProperties = getActivityProperties();
+        const fieldUsageBySlot = buildFieldUsageBySlot([bunk]);
+
+        const bestPick = findBestActivityForBunk(
+            bunk,
+            slots,
+            fieldUsageBySlot,
+            activityProperties,
+            [avoidLocation]
+        );
+
+        if (bestPick) {
+            applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProperties);
+
+            if (window.showToast) {
+                window.showToast(`↪️ ${bunk}: Moved to ${bestPick.activityName}`, 'info');
+            }
+
+            return {
+                success: true,
+                field: bestPick.field,
+                activity: bestPick.activityName,
+                cost: bestPick.cost
+            };
+        } else {
+            console.warn(`[UnifiedSchedule] ⚠️ No alternative found for ${bunk}, marking as Free`);
+
+            if (!window.scheduleAssignments[bunk]) {
+                window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
+            }
+
+            slots.forEach((slotIdx, i) => {
+                window.scheduleAssignments[bunk][slotIdx] = {
+                    field: 'Free',
+                    sport: null,
+                    continuation: i > 0,
+                    _fixed: false,
+                    _activity: 'Free',
+                    _noAlternative: true,
+                    _originalActivity: originalActivity,
+                    _originalField: avoidLocation
+                };
+            });
+
+            if (window.showToast) {
+                window.showToast(`⚠️ ${bunk}: No alternative found`, 'warning');
+            }
+
+            return { success: false, reason: 'No valid alternative found' };
+        }
+    }
+
+    // =========================================================================
+    // PINNED ACTIVITY PRESERVATION
+    // =========================================================================
+
+    /**
+     * Scan current scheduleAssignments and capture all pinned entries
+     */
+    function capturePinnedActivities(allowedDivisions) {
+        const assignments = window.scheduleAssignments || {};
+        const divisions = window.divisions || {};
+        
+        _pinnedSnapshot = {};
+        _pinnedFieldLocks = [];
+        
+        let capturedCount = 0;
+        
+        let allowedBunks = null;
+        if (allowedDivisions && allowedDivisions.length > 0) {
+            allowedBunks = new Set();
+            for (const divName of allowedDivisions) {
+                const divInfo = divisions[divName];
+                if (divInfo?.bunks) {
+                    divInfo.bunks.forEach(b => allowedBunks.add(b));
+                }
+            }
+        }
+        
+        for (const [bunkName, slots] of Object.entries(assignments)) {
+            if (allowedBunks && !allowedBunks.has(bunkName)) {
+                continue;
+            }
+            
+            if (!slots || !Array.isArray(slots)) continue;
+            
+            for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
+                const entry = slots[slotIdx];
+                
+                if (entry && entry._pinned === true) {
+                    if (!_pinnedSnapshot[bunkName]) {
+                        _pinnedSnapshot[bunkName] = {};
+                    }
+                    
+                    _pinnedSnapshot[bunkName][slotIdx] = {
+                        ...entry,
+                        _preservedAt: Date.now()
+                    };
+                    
+                    capturedCount++;
+                    
+                    const fieldName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                    if (fieldName && fieldName !== 'Free') {
+                        _pinnedFieldLocks.push({
+                            field: fieldName,
+                            slot: slotIdx,
+                            bunk: bunkName,
+                            activity: entry._activity || fieldName
+                        });
+                    }
+                }
+            }
+        }
+        
+        console.log(`[PinnedPreserve] 📌 Captured ${capturedCount} pinned activities from ${Object.keys(_pinnedSnapshot).length} bunks`);
+        
+        if (_pinnedFieldLocks.length > 0) {
+            console.log(`[PinnedPreserve] 🔒 Will lock ${_pinnedFieldLocks.length} field-slot combinations`);
+        }
+        
+        return _pinnedSnapshot;
+    }
+
+    /**
+     * Lock all fields used by pinned activities
+     */
+    function registerPinnedFieldLocks() {
+        if (!window.GlobalFieldLocks) {
+            console.warn('[PinnedPreserve] GlobalFieldLocks not available');
+            return;
+        }
+        
+        const divisions = window.divisions || {};
+        let locksRegistered = 0;
+        
+        for (const lockInfo of _pinnedFieldLocks) {
+            const divName = Object.keys(divisions).find(d => 
+                divisions[d]?.bunks?.includes(lockInfo.bunk)
+            );
+            
+            const success = window.GlobalFieldLocks.lockField(
+                lockInfo.field,
+                [lockInfo.slot],
+                {
+                    lockedBy: 'pinned_activity',
+                    division: divName || 'unknown',
+                    activity: lockInfo.activity,
+                    bunk: lockInfo.bunk,
+                    _pinnedLock: true
+                }
+            );
+            
+            if (success !== false) {
+                locksRegistered++;
+            }
+        }
+        
+        console.log(`[PinnedPreserve] 🔒 Registered ${locksRegistered}/${_pinnedFieldLocks.length} field locks for pinned activities`);
+    }
+
+    /**
+     * Register in fieldUsageBySlot
+     */
+    function registerPinnedFieldUsage(fieldUsageBySlot, activityProperties) {
+        if (!fieldUsageBySlot) return;
+        
+        const divisions = window.divisions || {};
+        
+        for (const lockInfo of _pinnedFieldLocks) {
+            const slotIdx = lockInfo.slot;
+            const fieldName = lockInfo.field;
+            
+            if (!fieldUsageBySlot[slotIdx]) {
+                fieldUsageBySlot[slotIdx] = {};
+            }
+            
+            const props = activityProperties?.[fieldName] || {};
+            let maxCapacity = 1;
+            if (props.sharableWith?.capacity) {
+                maxCapacity = parseInt(props.sharableWith.capacity) || 1;
+            } else if (props.sharable) {
+                maxCapacity = 2;
+            }
+            
+            if (!fieldUsageBySlot[slotIdx][fieldName]) {
+                fieldUsageBySlot[slotIdx][fieldName] = {
+                    count: 0,
+                    divisions: [],
+                    bunks: {},
+                    _locked: true,
+                    _fromPinned: true
+                };
+            }
+            
+            const usage = fieldUsageBySlot[slotIdx][fieldName];
+            usage.count++;
+            usage.bunks[lockInfo.bunk] = lockInfo.activity;
+            
+            const divName = Object.keys(divisions).find(d => 
+                divisions[d]?.bunks?.includes(lockInfo.bunk)
+            );
+            if (divName && !usage.divisions.includes(divName)) {
+                usage.divisions.push(divName);
+            }
+        }
+        
+        console.log(`[PinnedPreserve] 📊 Registered pinned field usage in fieldUsageBySlot`);
+    }
+
+    /**
+     * Restore all captured pinned activities
+     */
+    function restorePinnedActivities() {
+        const assignments = window.scheduleAssignments || {};
+        let restoredCount = 0;
+        
+        for (const [bunkName, pinnedSlots] of Object.entries(_pinnedSnapshot)) {
+            if (!assignments[bunkName]) {
+                const totalSlots = (window.unifiedTimes || []).length;
+                assignments[bunkName] = new Array(totalSlots);
+            }
+            
+            for (const [slotIdxStr, entry] of Object.entries(pinnedSlots)) {
+                const slotIdx = parseInt(slotIdxStr, 10);
+                
+                assignments[bunkName][slotIdx] = {
+                    ...entry,
+                    _restoredAt: Date.now()
+                };
+                
+                restoredCount++;
+            }
+        }
+        
+        console.log(`[PinnedPreserve] ✅ Restored ${restoredCount} pinned activities`);
+        
+        return restoredCount;
+    }
+
+    /**
+     * Get all currently pinned activities
+     */
+    function getPinnedActivities() {
+        const assignments = window.scheduleAssignments || {};
+        const pinned = [];
+        
+        for (const [bunkName, slots] of Object.entries(assignments)) {
+            if (!slots || !Array.isArray(slots)) continue;
+            
+            for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
+                const entry = slots[slotIdx];
+                if (entry && entry._pinned === true) {
+                    pinned.push({
+                        bunk: bunkName,
+                        slot: slotIdx,
+                        activity: entry._activity || entry.field,
+                        field: typeof entry.field === 'object' ? entry.field?.name : entry.field,
+                        editedAt: entry._editedAt || entry._preservedAt
+                    });
+                }
+            }
+        }
+        
+        return pinned;
+    }
+
+    /**
+     * Remove the pinned flag from a specific entry
+     */
+    function unpinActivity(bunk, slotIdx) {
+        const entry = window.scheduleAssignments?.[bunk]?.[slotIdx];
+        if (entry) {
+            delete entry._pinned;
+            delete entry._postEdit;
+            entry._unpinnedAt = Date.now();
+            
+            saveSchedule();
+            updateTable();
+            
+            console.log(`[PinnedPreserve] 📌❌ Unpinned ${bunk} at slot ${slotIdx}`);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Unpin all activities
+     */
+    function unpinAllActivities() {
+        const assignments = window.scheduleAssignments || {};
+        let unpinnedCount = 0;
+        
+        for (const [bunkName, slots] of Object.entries(assignments)) {
+            if (!slots || !Array.isArray(slots)) continue;
+            
+            for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
+                const entry = slots[slotIdx];
+                if (entry && entry._pinned === true) {
+                    delete entry._pinned;
+                    delete entry._postEdit;
+                    entry._unpinnedAt = Date.now();
+                    unpinnedCount++;
+                }
+            }
+        }
+        
+        saveSchedule();
+        updateTable();
+        
+        console.log(`[PinnedPreserve] 📌❌ Unpinned ${unpinnedCount} activities`);
+        return unpinnedCount;
+    }
+
+    // =========================================================================
     // LEAGUE MATCHUPS RETRIEVAL - v3.5.2 FIX
     // =========================================================================
-    // ★★★ CRITICAL: League teams are NOT bunks ★★★
-    // League teams are separate entities created in leagues.js
-    // They consist of people from different bunks combined into teams
-    // We must NOT scan bunks to find league data - use leagueAssignments only
 
     function getLeagueMatchups(divName, slotIdx) {
-        // =====================================================================
-        // PRIORITY 1: Direct leagueAssignments lookup (AUTHORITATIVE SOURCE)
-        // This is where scheduler_core_main.js stores league team matchups
-        // =====================================================================
         const leagues = window.leagueAssignments || {};
         
         if (leagues[divName] && leagues[divName][slotIdx]) {
@@ -660,15 +1848,10 @@
             };
         }
         
-        // =====================================================================
-        // PRIORITY 2: Check all slots in leagueAssignments for this division
-        // Sometimes slot indices don't align perfectly
-        // =====================================================================
         if (leagues[divName]) {
             const divSlots = Object.keys(leagues[divName]).map(Number).sort((a, b) => a - b);
-            // Find closest slot
             for (const storedSlot of divSlots) {
-                if (Math.abs(storedSlot - slotIdx) <= 2) { // Allow small variance
+                if (Math.abs(storedSlot - slotIdx) <= 2) {
                     const data = leagues[divName][storedSlot];
                     if (data && (data.matchups?.length > 0 || data.gameLabel)) {
                         console.log(`[getLeagueMatchups] ✅ Found matchups for ${divName} at nearby slot ${storedSlot} (requested ${slotIdx}):`, data);
@@ -683,16 +1866,10 @@
             }
         }
         
-        // =====================================================================
-        // PRIORITY 3: Look up league configuration for this division
-        // If leagueAssignments wasn't populated, try to get league info
-        // from the master leagues configuration
-        // =====================================================================
         const rawMasterLeagues = window.masterLeagues || 
                              window.loadGlobalSettings?.()?.app1?.leagues || 
                              [];
         
-        // Handle both array and object formats
         let masterLeaguesList = [];
         if (Array.isArray(rawMasterLeagues)) {
             masterLeaguesList = rawMasterLeagues;
@@ -700,22 +1877,18 @@
             masterLeaguesList = Object.values(rawMasterLeagues);
         }
         
-        // Find leagues that include this division
         const applicableLeagues = masterLeaguesList.filter(league => {
             if (!league || !league.name || !league.divisions) return false;
             return league.divisions.includes(divName);
         });
         
         if (applicableLeagues.length > 0) {
-            // Get the first applicable league's teams for display
             const league = applicableLeagues[0];
             const teams = league.teams || [];
             
             if (teams.length >= 2) {
                 console.log(`[getLeagueMatchups] 📋 Found league "${league.name}" for ${divName} with ${teams.length} teams`);
                 
-                // Generate display matchups from teams
-                // Note: This is a fallback - actual matchup order is determined by scheduler
                 const displayMatchups = [];
                 for (let i = 0; i < teams.length - 1; i += 2) {
                     if (teams[i + 1]) {
@@ -726,7 +1899,6 @@
                         });
                     }
                 }
-                // If odd number of teams, last team gets a bye
                 if (teams.length % 2 === 1) {
                     displayMatchups.push({
                         teamA: teams[teams.length - 1],
@@ -744,12 +1916,6 @@
             }
         }
         
-        // =====================================================================
-        // NO DATA FOUND - Return empty
-        // =====================================================================
-        // ★★★ DO NOT scan bunks for league data ★★★
-        // Bunks are NOT league teams - they are separate entities
-        
         console.log(`[getLeagueMatchups] ⚠️ No league data found for ${divName} at slot ${slotIdx}`);
         return { matchups: [], gameLabel: '', sport: '', leagueName: '' };
     }
@@ -766,15 +1932,12 @@
         
         const dateKey = getDateKey();
         
-        // Load data
         loadScheduleForDate(dateKey);
         
-        // Get skeleton - THE SOURCE OF TRUTH FOR ROWS
         const skeleton = getSkeleton(dateKey);
         const unifiedTimes = window.unifiedTimes || [];
         const divisions = window.divisions || {};
         
-        // AUTO-DEBUG: Log render state
         console.log('[UnifiedSchedule] RENDER STATE:', {
             dateKey,
             skeletonBlocks: skeleton.length,
@@ -784,50 +1947,6 @@
             divisionsCount: Object.keys(divisions).length
         });
         
-        // Log league assignments state
-        const leagueAssigns = window.leagueAssignments || {};
-        if (Object.keys(leagueAssigns).length > 0) {
-            console.log('[UnifiedSchedule] League Assignments:');
-            Object.keys(leagueAssigns).forEach(div => {
-                const slots = Object.keys(leagueAssigns[div]);
-                console.log(`   ${div}: slots [${slots.join(', ')}]`);
-                slots.forEach(slot => {
-                    const data = leagueAssigns[div][slot];
-                    console.log(`      slot ${slot}: ${data.matchups?.length || 0} matchups, "${data.gameLabel}"`);
-                });
-            });
-        } else {
-            console.log('[UnifiedSchedule] ⚠️ No league assignments found');
-        }
-        
-        // Show first few unifiedTimes slots
-        if (unifiedTimes.length > 0) {
-            console.log('[UnifiedSchedule] First 3 unifiedTimes slots:');
-            unifiedTimes.slice(0, 3).forEach((slot, i) => {
-                const mins = getSlotStartMin(slot);
-                console.log(`  [${i}] startMin=${slot.startMin}, computed=${mins} → ${minutesToTimeLabel(mins)}`);
-            });
-        }
-        
-        // Show first bunk's data
-        const bunkKeys = Object.keys(window.scheduleAssignments || {});
-        if (bunkKeys.length > 0) {
-            const firstBunk = bunkKeys[0];
-            const bunkData = window.scheduleAssignments[firstBunk];
-            console.log(`[UnifiedSchedule] Bunk "${firstBunk}" has ${bunkData?.length || 0} slots`);
-            if (bunkData) {
-                let shown = 0;
-                for (let i = 0; i < bunkData.length && shown < 3; i++) {
-                    if (bunkData[i] && !bunkData[i].continuation) {
-                        const slotTime = unifiedTimes[i] ? getSlotStartMin(unifiedTimes[i]) : '?';
-                        console.log(`  [${i}] ${minutesToTimeLabel(slotTime)}: ${formatEntry(bunkData[i])}`);
-                        shown++;
-                    }
-                }
-            }
-        }
-        
-        // Clear container
         container.innerHTML = '';
         
         if (!skeleton || skeleton.length === 0) {
@@ -840,13 +1959,11 @@
             return;
         }
         
-        // Get divisions to show
         let divisionsToShow = Object.keys(divisions);
         if (divisionsToShow.length === 0 && window.availableDivisions) {
             divisionsToShow = window.availableDivisions;
         }
         
-        // Sort numerically
         divisionsToShow.sort((a, b) => {
             const numA = parseInt(a);
             const numB = parseInt(b);
@@ -863,15 +1980,12 @@
             return;
         }
         
-        // Create wrapper
         const wrapper = document.createElement('div');
         wrapper.className = 'schedule-view-wrapper';
         wrapper.style.cssText = 'display: flex; flex-direction: column; gap: 24px;';
         
-        // Get editable divisions for RBAC
         const editableDivisions = window.AccessControl?.getEditableDivisions?.() || divisionsToShow;
         
-        // Render each division
         divisionsToShow.forEach(divName => {
             const divInfo = divisions[divName];
             if (!divInfo) return;
@@ -890,12 +2004,10 @@
         
         container.appendChild(wrapper);
         
-        // Apply multi-scheduler blocking if available
         if (window.MultiSchedulerAutonomous?.applyBlockingToGrid) {
             setTimeout(() => window.MultiSchedulerAutonomous.applyBlockingToGrid(), 50);
         }
         
-        // Dispatch render complete event
         window.dispatchEvent(new CustomEvent('campistry-schedule-rendered', {
             detail: { dateKey }
         }));
@@ -904,7 +2016,6 @@
     }
 
     function renderDivisionTable(divName, divInfo, bunks, skeleton, unifiedTimes, isEditable) {
-        // Filter skeleton blocks for this division
         let divBlocks = skeleton
             .filter(b => b.division === divName)
             .map(b => ({
@@ -920,22 +2031,7 @@
             return null;
         }
         
-        // =====================================================================
-        // v3.5 FIX: Expand split tiles into two rows
-        // =====================================================================
         divBlocks = expandBlocksForSplitTiles(divBlocks, bunks, unifiedTimes);
-        
-        // DEBUG: Show first block lookup for first bunk
-        if (divBlocks.length > 0 && bunks.length > 0) {
-            const firstBlock = divBlocks[0];
-            const firstBunk = bunks[0];
-            const slotsInRange = findSlotsForRange(firstBlock.startMin, firstBlock.endMin, unifiedTimes);
-            console.log(`[UnifiedSchedule] Div ${divName} first block: ${firstBlock.event} (${firstBlock.startMin}-${firstBlock.endMin})`);
-            console.log(`  → findSlotsForRange returns: [${slotsInRange.join(',')}]`);
-            
-            const result = getEntryForBlock(firstBunk, firstBlock.startMin, firstBlock.endMin, unifiedTimes);
-            console.log(`  → getEntryForBlock("${firstBunk}") = slot ${result.slotIdx}: "${formatEntry(result.entry)}"`);
-        }
         
         const table = document.createElement('table');
         table.className = 'schedule-division-table';
@@ -951,10 +2047,9 @@
         
         const divColor = divInfo.color || '#4b5563';
         
-        // ===== HEADER =====
+        // HEADER
         const thead = document.createElement('thead');
         
-        // Division name row
         const tr1 = document.createElement('tr');
         const th = document.createElement('th');
         th.colSpan = 1 + bunks.length;
@@ -970,7 +2065,6 @@
         tr1.appendChild(th);
         thead.appendChild(tr1);
         
-        // Bunk header row
         const tr2 = document.createElement('tr');
         tr2.style.background = '#f9fafb';
         
@@ -988,29 +2082,25 @@
         thead.appendChild(tr2);
         table.appendChild(thead);
         
-        // ===== BODY =====
+        // BODY
         const tbody = document.createElement('tbody');
         
-        // Render each skeleton block as a row
         divBlocks.forEach((block, blockIdx) => {
             const timeLabel = `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(block.endMin)}`;
             
             const tr = document.createElement('tr');
             tr.style.background = blockIdx % 2 === 0 ? '#fff' : '#fafafa';
             
-            // Add visual indicator for split tile rows
             if (block._isSplitTile) {
                 tr.style.background = block._splitHalf === 1 
-                    ? (blockIdx % 2 === 0 ? '#f0fdf4' : '#ecfdf5')  // Light green tint for first half
-                    : (blockIdx % 2 === 0 ? '#fef3c7' : '#fef9c3'); // Light yellow tint for second half
+                    ? (blockIdx % 2 === 0 ? '#f0fdf4' : '#ecfdf5')
+                    : (blockIdx % 2 === 0 ? '#fef3c7' : '#fef9c3');
             }
             
-            // Time cell
             const tdTime = document.createElement('td');
             tdTime.textContent = timeLabel;
             tdTime.style.cssText = 'padding: 10px 12px; font-weight: 500; color: #4b5563; border-right: 1px solid #e5e7eb; white-space: nowrap;';
             
-            // Add split indicator to time cell
             if (block._isSplitTile) {
                 const halfLabel = block._splitHalf === 1 ? '①' : '②';
                 tdTime.innerHTML = `${escapeHtml(timeLabel)} <span style="color: #6b7280; font-size: 0.8rem;">${halfLabel}</span>`;
@@ -1018,7 +2108,6 @@
             
             tr.appendChild(tdTime);
             
-            // League block - merged cell with matchups
             if (isLeagueBlockType(block.event)) {
                 const td = renderLeagueCell(block, bunks, divName, unifiedTimes, isEditable);
                 tr.appendChild(td);
@@ -1026,7 +2115,6 @@
                 return;
             }
             
-            // Regular cells - one per bunk
             bunks.forEach(bunk => {
                 const td = renderBunkCell(block, bunk, divName, unifiedTimes, isEditable);
                 tr.appendChild(td);
@@ -1049,13 +2137,9 @@
             vertical-align: top;
         `;
         
-        // Find ALL slot indices for this block's time range
         const slots = findSlotsForRange(block.startMin, block.endMin, unifiedTimes);
         const slotIdx = slots.length > 0 ? slots[0] : -1;
         
-        console.log(`[renderLeagueCell] ${divName} block "${block.event}" @ ${block.startMin}-${block.endMin}, slots: [${slots.join(',')}]`);
-        
-        // Try to get league info from all slots in the range
         let leagueInfo = { matchups: [], gameLabel: '', sport: '', leagueName: '' };
         for (const idx of slots) {
             const info = getLeagueMatchups(divName, idx);
@@ -1086,12 +2170,10 @@
                     if (m.field) matchText += ` @ ${m.field}`;
                     if (m.sport) matchText += ` (${m.sport})`;
                 } else if (m.team1 && m.team2) {
-                    // Handle alternate format from scheduler core
                     matchText = `${m.team1} vs ${m.team2}`;
                     if (m.field) matchText += ` @ ${m.field}`;
                     if (m.sport) matchText += ` (${m.sport})`;
                 } else if (m.matchup) {
-                    // Handle matchup string format
                     matchText = m.matchup;
                     if (m.field) matchText += ` @ ${m.field}`;
                 } else {
@@ -1110,7 +2192,7 @@
         
         if (isEditable && bunks.length > 0) {
             td.style.cursor = 'pointer';
-            td.onclick = () => window.editCell(bunks[0], block.startMin, block.endMin, block.event);
+            td.onclick = () => enhancedEditCell(bunks[0], block.startMin, block.endMin, block.event);
         }
         
         return td;
@@ -1120,10 +2202,8 @@
         const td = document.createElement('td');
         td.style.cssText = 'padding: 8px 10px; text-align: center; border: 1px solid #e5e7eb;';
         
-        // Get entry using the new multi-slot lookup
         const { entry, slotIdx } = getEntryForBlock(bunk, block.startMin, block.endMin, unifiedTimes);
         
-        // Check multi-scheduler blocking
         let isBlocked = false;
         let blockedReason = '';
         
@@ -1135,15 +2215,18 @@
             }
         }
         
-        // Get display text and background
         let displayText = '';
         let bgColor = '#fff';
         
         if (entry && !entry.continuation) {
             displayText = formatEntry(entry);
             bgColor = getEntryBackground(entry, block.event);
+            
+            // Add pin indicator
+            if (entry._pinned) {
+                displayText = '📌 ' + displayText;
+            }
         } else if (!entry) {
-            // No data - show skeleton event or empty
             if (isFixedBlockType(block.event)) {
                 displayText = block.event;
                 bgColor = '#fff8e1';
@@ -1156,7 +2239,6 @@
         td.textContent = displayText;
         td.style.background = bgColor;
         
-        // Add data attributes for multi-scheduler
         td.dataset.slot = slotIdx;
         td.dataset.slotIndex = slotIdx;
         td.dataset.bunk = bunk;
@@ -1164,7 +2246,6 @@
         td.dataset.startMin = block.startMin;
         td.dataset.endMin = block.endMin;
         
-        // Handle click
         if (isBlocked) {
             td.style.cursor = 'not-allowed';
             td.onclick = () => {
@@ -1176,7 +2257,7 @@
             };
         } else if (isEditable) {
             td.style.cursor = 'pointer';
-            td.onclick = () => window.editCell(bunk, block.startMin, block.endMin, displayText);
+            td.onclick = () => enhancedEditCell(bunk, block.startMin, block.endMin, displayText.replace('📌 ', ''));
         } else {
             td.style.cursor = 'default';
         }
@@ -1185,80 +2266,746 @@
     }
 
     // =========================================================================
-    // EDIT CELL
+    // APPLY DIRECT EDIT
     // =========================================================================
 
-    function editCell(bunk, startMin, endMin, current) {
-        if (!bunk) return;
-        
+    function applyDirectEdit(bunk, slots, activity, location, isClear, shouldPin = true) {
         const unifiedTimes = window.unifiedTimes || [];
-        const slotIdx = findSlotIndexForTime(startMin, unifiedTimes);
         
-        // Check multi-scheduler blocking
-        if (window.MultiSchedulerAutonomous?.isBunkSlotBlocked) {
-            const blockCheck = window.MultiSchedulerAutonomous.isBunkSlotBlocked(bunk, slotIdx);
-            if (blockCheck.blocked) {
-                if (window.showToast) {
-                    window.showToast(`🔒 Cannot edit: ${blockCheck.reason}`, 'error');
-                } else {
-                    alert(`🔒 Cannot edit: ${blockCheck.reason}`);
-                }
-                return;
-            }
-        }
-        
-        // Check RBAC permissions
-        if (window.AccessControl && !window.AccessControl.canEditBunk?.(bunk)) {
-            alert('You do not have permission to edit this schedule.\n\n(You can only edit your assigned divisions.)');
-            return;
-        }
-        
-        const timeLabel = `${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}`;
-        const newValue = prompt(
-            `Edit activity for ${bunk}\n${timeLabel}\n\nCurrent: ${current || 'Empty'}\n\n(Enter CLEAR or FREE to empty)`,
-            current || ''
-        );
-        
-        if (newValue === null) return;
-        
-        const value = newValue.trim();
-        const isClear = value === '' || value.toUpperCase() === 'CLEAR' || value.toUpperCase() === 'FREE';
-        
-        // Find slots for this time range
-        let slots = findSlotsForRange(startMin, endMin, unifiedTimes);
-        
-        if (!slots || slots.length === 0) {
-            // Fallback to single slot
-            if (slotIdx >= 0) {
-                slots = [slotIdx];
-            } else {
-                alert('Error: Could not match this time range. Please refresh the page.');
-                return;
-            }
-        }
-        
-        // Initialize if needed
         if (!window.scheduleAssignments) {
             window.scheduleAssignments = {};
         }
         if (!window.scheduleAssignments[bunk]) {
-            window.scheduleAssignments[bunk] = new Array((window.unifiedTimes || []).length);
+            window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
         }
-        
-        // Apply edit
+
+        const fieldValue = location ? `${location} – ${activity}` : activity;
+
         slots.forEach((idx, i) => {
             window.scheduleAssignments[bunk][idx] = {
-                field: isClear ? 'Free' : value,
-                sport: null,
+                field: isClear ? 'Free' : fieldValue,
+                sport: isClear ? null : activity,
                 continuation: i > 0,
-                _fixed: true,
-                _activity: isClear ? 'Free' : value
+                _fixed: !isClear,
+                _activity: isClear ? 'Free' : activity,
+                _location: location,
+                _postEdit: true,
+                _pinned: shouldPin && !isClear, // Pin by default for post-edit
+                _editedAt: Date.now()
             };
+            debugLog(`Set bunk ${bunk} slot ${idx}:`, window.scheduleAssignments[bunk][idx]);
         });
         
-        // Save and refresh
+        if (location && !isClear && window.registerLocationUsage) {
+            const divName = getDivisionForBunk(bunk);
+            slots.forEach(idx => {
+                window.registerLocationUsage(idx, location, activity, divName);
+            });
+        }
+    }
+
+    // =========================================================================
+    // BYPASS SAVE
+    // =========================================================================
+
+    async function bypassSaveAllBunks(modifiedBunks) {
+        console.log('[UnifiedSchedule] 🔓 BYPASS SAVE for bunks:', modifiedBunks);
+        
+        const dateKey = window.currentScheduleDate || 
+                       window.currentDate || 
+                       document.getElementById('datePicker')?.value ||
+                       new Date().toISOString().split('T')[0];
+        
+        console.log(`[UnifiedSchedule] 📅 Bypass save using date key: ${dateKey}`);
+        
+        try {
+            localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
+            
+            const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+            if (!allDailyData[dateKey]) {
+                allDailyData[dateKey] = {};
+            }
+            allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
+            allDailyData[dateKey].leagueAssignments = window.leagueAssignments || {};
+            allDailyData[dateKey].unifiedTimes = window.unifiedTimes || [];
+            allDailyData[dateKey]._bypassSaveAt = Date.now();
+            localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
+            
+            console.log(`[UnifiedSchedule] ✅ Bypass: saved to localStorage before cloud save`);
+        } catch (e) {
+            console.error('[UnifiedSchedule] Bypass localStorage save error:', e);
+        }
+        
+        if (window.ScheduleDB?.saveSchedule) {
+            try {
+                const result = await window.ScheduleDB.saveSchedule(dateKey, {
+                    scheduleAssignments: window.scheduleAssignments,
+                    leagueAssignments: window.leagueAssignments || {},
+                    unifiedTimes: window.unifiedTimes,
+                    _bypassSaveAt: Date.now(),
+                    _modifiedBunks: modifiedBunks
+                }, { 
+                    skipFilter: true,
+                    immediate: true
+                });
+                
+                if (result?.success) {
+                    console.log('[UnifiedSchedule] ✅ Bypass save successful via ScheduleDB');
+                } else {
+                    console.error('[UnifiedSchedule] Bypass save error:', result?.error);
+                }
+                return result;
+            } catch (e) {
+                console.error('[UnifiedSchedule] Bypass save exception:', e);
+            }
+        }
+        
+        console.log('[UnifiedSchedule] 🔓 Fallback: triggering standard save');
         saveSchedule();
         updateTable();
+    }
+
+    // =========================================================================
+    // SCHEDULER NOTIFICATION
+    // =========================================================================
+
+    async function sendSchedulerNotification(affectedBunks, location, activity, notificationType) {
+        console.log(`[UnifiedSchedule] 📧 Sending ${notificationType} notification for bunks:`, affectedBunks);
+        
+        const supabase = window.CampistryDB?.getClient?.() || window.supabase;
+        if (!supabase) {
+            console.warn('[UnifiedSchedule] Supabase not available for notifications');
+            return;
+        }
+        
+        const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
+        const userId = window.CampistryDB?.getUserId?.() || null;
+        const dateKey = window.currentDate || new Date().toISOString().split('T')[0];
+        
+        if (!campId) return;
+        
+        try {
+            const affectedDivisions = new Set();
+            const divisions = window.divisions || {};
+            
+            for (const bunk of affectedBunks) {
+                for (const [divName, divData] of Object.entries(divisions)) {
+                    if (divData.bunks?.includes(bunk)) {
+                        affectedDivisions.add(divName);
+                    }
+                }
+            }
+            
+            const { data: schedulers } = await supabase
+                .from('camp_users')
+                .select('user_id, divisions')
+                .eq('camp_id', campId)
+                .neq('user_id', userId);
+            
+            if (!schedulers) return;
+            
+            const notifyUsers = [];
+            for (const scheduler of schedulers) {
+                const theirDivisions = scheduler.divisions || [];
+                if (theirDivisions.some(d => affectedDivisions.has(d))) {
+                    notifyUsers.push(scheduler.user_id);
+                }
+            }
+            
+            if (notifyUsers.length === 0) return;
+            
+            const notifications = notifyUsers.map(targetUserId => ({
+                camp_id: campId,
+                user_id: targetUserId,
+                type: notificationType === 'bypassed' ? 'schedule_bypassed' : 'schedule_conflict',
+                title: notificationType === 'bypassed' 
+                    ? '🔓 Your schedule was modified' 
+                    : '⚠️ Schedule conflict detected',
+                message: notificationType === 'bypassed'
+                    ? `Another scheduler reassigned bunks (${affectedBunks.join(', ')}) for ${location} - ${activity} on ${dateKey}`
+                    : `Conflict at ${location} for ${activity} on ${dateKey}. Affected bunks: ${affectedBunks.join(', ')}`,
+                metadata: {
+                    dateKey,
+                    bunks: affectedBunks,
+                    location,
+                    activity,
+                    initiatedBy: userId
+                },
+                read: false,
+                created_at: new Date().toISOString()
+            }));
+            
+            const { error } = await supabase
+                .from('notifications')
+                .insert(notifications);
+            
+            if (error) {
+                console.error('[UnifiedSchedule] Notification insert error:', error);
+            } else {
+                console.log(`[UnifiedSchedule] ✅ Sent ${notificationType} notifications to ${notifyUsers.length} user(s)`);
+            }
+            
+        } catch (e) {
+            console.error('[UnifiedSchedule] Notification error:', e);
+        }
+    }
+
+    // =========================================================================
+    // RESOLVE CONFLICTS AND APPLY
+    // =========================================================================
+
+    async function resolveConflictsAndApply(bunk, slots, activity, location, editData) {
+        const editableConflicts = editData.editableConflicts || [];
+        const nonEditableConflicts = editData.nonEditableConflicts || [];
+        const resolutionChoice = editData.resolutionChoice || 'notify';
+        
+        console.log('[UnifiedSchedule] Resolving conflicts...', {
+            editable: editableConflicts.length,
+            nonEditable: nonEditableConflicts.length,
+            resolution: resolutionChoice
+        });
+        
+        applyDirectEdit(bunk, slots, activity, location, false, true);
+        
+        if (window.GlobalFieldLocks) {
+            const divName = getDivisionForBunk(bunk);
+            window.GlobalFieldLocks.lockField(location, slots, {
+                lockedBy: 'post_edit_pinned',
+                division: divName,
+                activity: activity
+            });
+        }
+        
+        let conflictsToResolve = [...editableConflicts];
+        const bypassMode = resolutionChoice === 'bypass';
+        
+        if (bypassMode && nonEditableConflicts.length > 0) {
+            console.log('[UnifiedSchedule] 🔓 BYPASS MODE - Acting as ADMIN/OWNER');
+            console.log('[UnifiedSchedule] Including non-editable bunks:', nonEditableConflicts.map(c => c.bunk));
+            conflictsToResolve = [...conflictsToResolve, ...nonEditableConflicts];
+        }
+        
+        if (conflictsToResolve.length > 0) {
+            const result = smartRegenerateConflicts(
+                bunk,
+                slots,
+                location,
+                activity,
+                conflictsToResolve,
+                bypassMode
+            );
+
+            if (bypassMode) {
+                console.log('[UnifiedSchedule] 🔓 Bypass mode - saving ALL modified bunks to cloud');
+                const modifiedBunks = [
+                    ...result.reassigned.map(r => r.bunk),
+                    ...result.failed.map(f => f.bunk)
+                ];
+                
+                window._postEditInProgress = true;
+                window._postEditTimestamp = Date.now();
+                
+                await bypassSaveAllBunks(modifiedBunks);
+                
+                if (nonEditableConflicts.length > 0) {
+                    const affectedBunks = [...new Set(nonEditableConflicts.map(c => c.bunk))];
+                    sendSchedulerNotification(affectedBunks, location, activity, 'bypassed');
+                    
+                    if (window.showToast) {
+                        window.showToast(`🔓 Bypassed permissions - reassigned ${affectedBunks.length} bunk(s)`, 'info');
+                    }
+                }
+            } else if (nonEditableConflicts.length > 0) {
+                const affectedBunks = [...new Set(nonEditableConflicts.map(c => c.bunk))];
+                console.warn(`[UnifiedSchedule] 📧 Double-booking created: ${affectedBunks.join(', ')}`);
+                
+                sendSchedulerNotification(affectedBunks, location, activity, 'conflict');
+                
+                if (window.showToast) {
+                    window.showToast(`📧 Notification sent about ${affectedBunks.length} conflict(s)`, 'warning');
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // APPLY EDIT (Main entry point)
+    // =========================================================================
+
+    async function applyEdit(bunk, editData) {
+        const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
+        const unifiedTimes = window.unifiedTimes || [];
+        
+        const isClear = activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
+        const slots = findSlotsForRange(startMin, endMin, unifiedTimes);
+        
+        if (slots.length === 0) {
+            console.error('[UnifiedSchedule] ❌ No slots found for time range:', startMin, '-', endMin);
+            alert('Error: Could not find time slots for the specified range.');
+            return;
+        }
+        
+        console.log(`[UnifiedSchedule] Applying edit for ${bunk}:`, { 
+            activity, location, startMin, endMin, slots, hasConflict, resolutionChoice, isClear
+        });
+        
+        if (!window.scheduleAssignments) {
+            window.scheduleAssignments = {};
+        }
+        if (!window.scheduleAssignments[bunk]) {
+            window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
+        }
+        
+        if (hasConflict) {
+            await resolveConflictsAndApply(bunk, slots, activity, location, editData);
+        } else {
+            applyDirectEdit(bunk, slots, activity, location, isClear, true);
+        }
+        
+        console.log(`[UnifiedSchedule] ✅ After edit, bunk ${bunk} slot ${slots[0]}:`, window.scheduleAssignments[bunk][slots[0]]);
+        
+        const currentDate = window.currentScheduleDate || 
+                           window.currentDate || 
+                           document.getElementById('datePicker')?.value ||
+                           new Date().toISOString().split('T')[0];
+        
+        console.log(`[UnifiedSchedule] 📅 Using date key: ${currentDate}`);
+        
+        // Save to localStorage
+        try {
+            localStorage.setItem(`scheduleAssignments_${currentDate}`, JSON.stringify(window.scheduleAssignments));
+            
+            const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+            if (!allDailyData[currentDate]) {
+                allDailyData[currentDate] = {};
+            }
+            allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
+            allDailyData[currentDate].leagueAssignments = window.leagueAssignments || {};
+            allDailyData[currentDate].unifiedTimes = window.unifiedTimes || [];
+            allDailyData[currentDate]._postEditAt = Date.now();
+            localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
+            
+            console.log(`[UnifiedSchedule] ✅ Saved to localStorage`);
+        } catch (e) {
+            console.error('[UnifiedSchedule] Failed to save to localStorage:', e);
+        }
+        
+        window._postEditInProgress = true;
+        window._postEditTimestamp = Date.now();
+        
+        setTimeout(() => {
+            window._postEditInProgress = false;
+            console.log('[UnifiedSchedule] 🔓 Post-edit protection flag cleared');
+        }, 8000);
+        
+        console.log('[UnifiedSchedule] 🔄 Triggering UI refresh...');
+        
+        document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+            detail: { bunk, slots, activity, location, date: currentDate }
+        }));
+        
+        saveSchedule();
+        
+        console.log('[UnifiedSchedule] 🔄 Calling updateTable() immediately');
+        updateTable();
+        
+        setTimeout(() => {
+            console.log('[UnifiedSchedule] 🔄 Second render pass');
+            updateTable();
+        }, 200);
+    }
+
+    // =========================================================================
+    // MODAL UI
+    // =========================================================================
+
+    function createModal() {
+        document.getElementById(OVERLAY_ID)?.remove();
+        document.getElementById(MODAL_ID)?.remove();
+        
+        const overlay = document.createElement('div');
+        overlay.id = OVERLAY_ID;
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 10000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 0.2s ease;
+        `;
+        
+        const modal = document.createElement('div');
+        modal.id = MODAL_ID;
+        modal.style.cssText = `
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            min-width: 400px;
+            max-width: 500px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-height: 90vh;
+            overflow-y: auto;
+        `;
+        
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+        
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) closeModal();
+        });
+        
+        const escHandler = (e) => {
+            if (e.key === 'Escape') {
+                closeModal();
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
+        
+        return modal;
+    }
+
+    function closeModal() {
+        document.getElementById(OVERLAY_ID)?.remove();
+    }
+
+    function showEditModal(bunk, startMin, endMin, currentValue, onSave) {
+        const modal = createModal();
+        const locations = getAllLocations();
+        const unifiedTimes = window.unifiedTimes || [];
+        
+        let currentActivity = currentValue || '';
+        let currentField = '';
+        let resolutionChoice = 'notify';
+        
+        const slots = findSlotsForRange(startMin, endMin, unifiedTimes);
+        if (slots.length > 0) {
+            const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
+            if (entry) {
+                currentField = typeof entry.field === 'object' ? entry.field?.name : (entry.field || '');
+                currentActivity = entry._activity || currentField || currentValue;
+            }
+        }
+        
+        modal.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 style="margin: 0; font-size: 1.25rem; color: #1f2937;">Edit Schedule Cell</h2>
+                <button id="post-edit-close" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #9ca3af; line-height: 1;">&times;</button>
+            </div>
+            
+            <div style="background: #f3f4f6; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;">
+                <div style="font-weight: 600; color: #374151;">${bunk}</div>
+                <div style="font-size: 0.875rem; color: #6b7280;" id="post-edit-time-display">
+                    ${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}
+                </div>
+            </div>
+            
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+                <!-- Activity Name -->
+                <div>
+                    <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">
+                        Activity Name
+                    </label>
+                    <input type="text" id="post-edit-activity" 
+                        value="${escapeHtml(currentActivity)}"
+                        placeholder="e.g., Impromptu Carnival, Basketball"
+                        style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box;">
+                    <div style="font-size: 0.75rem; color: #9ca3af; margin-top: 4px;">
+                        Enter CLEAR or FREE to empty this slot
+                    </div>
+                </div>
+                
+                <!-- Location/Field -->
+                <div>
+                    <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">
+                        Location / Field
+                    </label>
+                    <select id="post-edit-location" 
+                        style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box; background: white;">
+                        <option value="">-- No specific location --</option>
+                        <optgroup label="Fields">
+                            ${locations.filter(l => l.type === 'field').map(l => 
+                                `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}${l.capacity > 1 ? ` (capacity: ${l.capacity})` : ''}</option>`
+                            ).join('')}
+                        </optgroup>
+                        <optgroup label="Special Activities">
+                            ${locations.filter(l => l.type === 'special').map(l => 
+                                `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}</option>`
+                            ).join('')}
+                        </optgroup>
+                    </select>
+                </div>
+                
+                <!-- Change Time Toggle -->
+                <div>
+                    <button type="button" id="post-edit-time-toggle" style="
+                        background: none;
+                        border: none;
+                        color: #2563eb;
+                        font-size: 0.875rem;
+                        cursor: pointer;
+                        padding: 0;
+                        display: flex;
+                        align-items: center;
+                        gap: 4px;
+                    ">
+                        <span id="post-edit-time-arrow">▶</span> Change time
+                    </button>
+                    
+                    <div id="post-edit-time-section" style="display: none; margin-top: 12px;">
+                        <div style="display: flex; gap: 12px;">
+                            <div style="flex: 1;">
+                                <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px; font-size: 0.875rem;">
+                                    Start Time
+                                </label>
+                                <input type="time" id="post-edit-start" 
+                                    value="${minutesToTimeString(startMin)}"
+                                    style="width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.9rem; box-sizing: border-box;">
+                            </div>
+                            <div style="flex: 1;">
+                                <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px; font-size: 0.875rem;">
+                                    End Time
+                                </label>
+                                <input type="time" id="post-edit-end" 
+                                    value="${minutesToTimeString(endMin)}"
+                                    style="width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.9rem; box-sizing: border-box;">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Conflict Warning Area -->
+                <div id="post-edit-conflict" style="display: none;"></div>
+                
+                <!-- Buttons -->
+                <div style="display: flex; gap: 12px; margin-top: 8px;">
+                    <button id="post-edit-cancel" style="
+                        flex: 1;
+                        padding: 12px;
+                        border: 1px solid #d1d5db;
+                        border-radius: 8px;
+                        background: white;
+                        color: #374151;
+                        font-size: 1rem;
+                        cursor: pointer;
+                        font-weight: 500;
+                    ">Cancel</button>
+                    <button id="post-edit-save" style="
+                        flex: 1;
+                        padding: 12px;
+                        border: none;
+                        border-radius: 8px;
+                        background: #2563eb;
+                        color: white;
+                        font-size: 1rem;
+                        cursor: pointer;
+                        font-weight: 500;
+                    ">Save Changes</button>
+                </div>
+            </div>
+        `;
+        
+        let useOriginalTime = true;
+        const originalStartMin = startMin;
+        const originalEndMin = endMin;
+        
+        document.getElementById('post-edit-close').onclick = closeModal;
+        document.getElementById('post-edit-cancel').onclick = closeModal;
+        
+        const timeToggle = document.getElementById('post-edit-time-toggle');
+        const timeSection = document.getElementById('post-edit-time-section');
+        const timeArrow = document.getElementById('post-edit-time-arrow');
+        const timeDisplay = document.getElementById('post-edit-time-display');
+        
+        timeToggle.onclick = () => {
+            const isHidden = timeSection.style.display === 'none';
+            timeSection.style.display = isHidden ? 'block' : 'none';
+            timeArrow.textContent = isHidden ? '▼' : '▶';
+            useOriginalTime = !isHidden;
+        };
+        
+        const locationSelect = document.getElementById('post-edit-location');
+        const conflictArea = document.getElementById('post-edit-conflict');
+        const startInput = document.getElementById('post-edit-start');
+        const endInput = document.getElementById('post-edit-end');
+        
+        function getEffectiveTimes() {
+            if (useOriginalTime) {
+                return { startMin: originalStartMin, endMin: originalEndMin };
+            }
+            return {
+                startMin: parseTimeToMinutes(startInput.value) || originalStartMin,
+                endMin: parseTimeToMinutes(endInput.value) || originalEndMin
+            };
+        }
+        
+        function updateTimeDisplay() {
+            const times = getEffectiveTimes();
+            timeDisplay.textContent = `${minutesToTimeLabel(times.startMin)} - ${minutesToTimeLabel(times.endMin)}`;
+        }
+        
+        function checkAndShowConflicts() {
+            const location = locationSelect.value;
+            const times = getEffectiveTimes();
+            
+            if (!location) {
+                conflictArea.style.display = 'none';
+                return null;
+            }
+            
+            const targetSlots = findSlotsForRange(times.startMin, times.endMin, unifiedTimes);
+            const conflictCheck = checkLocationConflict(location, targetSlots, bunk);
+            
+            if (conflictCheck.hasConflict) {
+                const editableBunks = [...new Set(conflictCheck.editableConflicts.map(c => c.bunk))];
+                const nonEditableBunks = [...new Set(conflictCheck.nonEditableConflicts.map(c => c.bunk))];
+                
+                conflictArea.style.display = 'block';
+                
+                let html = `<div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                        <span style="font-size: 1.25rem;">⚠️</span>
+                        <strong style="color: #92400e;">Location Conflict Detected</strong>
+                    </div>
+                    <p style="margin: 0 0 8px 0; color: #78350f; font-size: 0.875rem;">
+                        <strong>${location}</strong> is already in use:
+                    </p>`;
+                
+                if (editableBunks.length > 0) {
+                    html += `<div style="margin-bottom: 8px; padding: 8px; background: #d1fae5; border-radius: 6px;">
+                        <div style="font-size: 0.8rem; color: #065f46;">
+                            <strong>✓ Can auto-reassign:</strong> ${editableBunks.join(', ')}
+                        </div>
+                    </div>`;
+                }
+                
+                if (nonEditableBunks.length > 0) {
+                    html += `<div style="margin-bottom: 8px; padding: 8px; background: #fee2e2; border-radius: 6px;">
+                        <div style="font-size: 0.8rem; color: #991b1b;">
+                            <strong>✗ Other scheduler's bunks:</strong> ${nonEditableBunks.join(', ')}
+                        </div>
+                    </div>
+                    
+                    <div style="margin-top: 12px;">
+                        <div style="font-weight: 500; color: #374151; margin-bottom: 8px; font-size: 0.875rem;">
+                            How to handle their bunks?
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;">
+                                <input type="radio" name="conflict-resolution" value="notify" checked style="margin-top: 2px;">
+                                <div>
+                                    <div style="font-weight: 500; color: #374151;">📧 Notify other scheduler</div>
+                                    <div style="font-size: 0.75rem; color: #6b7280;">Create double-booking & send them a warning</div>
+                                </div>
+                            </label>
+                            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;">
+                                <input type="radio" name="conflict-resolution" value="bypass" style="margin-top: 2px;">
+                                <div>
+                                    <div style="font-weight: 500; color: #374151;">🔓 Bypass & reassign (Admin mode)</div>
+                                    <div style="font-size: 0.75rem; color: #6b7280;">Override permissions and use smart regeneration</div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>`;
+                }
+                
+                html += `</div>`;
+                conflictArea.innerHTML = html;
+                
+                const radioButtons = conflictArea.querySelectorAll('input[name="conflict-resolution"]');
+                radioButtons.forEach(radio => {
+                    radio.addEventListener('change', (e) => {
+                        resolutionChoice = e.target.value;
+                    });
+                });
+                
+                return conflictCheck;
+            } else {
+                conflictArea.style.display = 'none';
+                return null;
+            }
+        }
+        
+        locationSelect.addEventListener('change', checkAndShowConflicts);
+        startInput.addEventListener('change', () => { updateTimeDisplay(); checkAndShowConflicts(); });
+        endInput.addEventListener('change', () => { updateTimeDisplay(); checkAndShowConflicts(); });
+        
+        checkAndShowConflicts();
+        
+        document.getElementById('post-edit-save').onclick = () => {
+            const activity = document.getElementById('post-edit-activity').value.trim();
+            const location = locationSelect.value;
+            const times = getEffectiveTimes();
+            
+            if (!activity) {
+                alert('Please enter an activity name.');
+                return;
+            }
+            
+            if (times.endMin <= times.startMin) {
+                alert('End time must be after start time.');
+                return;
+            }
+            
+            const targetSlots = findSlotsForRange(times.startMin, times.endMin, unifiedTimes);
+            const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
+            
+            if (conflictCheck?.hasConflict) {
+                onSave({
+                    activity,
+                    location,
+                    startMin: times.startMin,
+                    endMin: times.endMin,
+                    hasConflict: true,
+                    conflicts: conflictCheck.conflicts,
+                    editableConflicts: conflictCheck.editableConflicts || [],
+                    nonEditableConflicts: conflictCheck.nonEditableConflicts || [],
+                    resolutionChoice: resolutionChoice
+                });
+            } else {
+                onSave({
+                    activity,
+                    location,
+                    startMin: times.startMin,
+                    endMin: times.endMin,
+                    hasConflict: false,
+                    conflicts: []
+                });
+            }
+            
+            closeModal();
+        };
+        
+        document.getElementById('post-edit-activity').focus();
+        document.getElementById('post-edit-activity').select();
+    }
+
+    // =========================================================================
+    // ENHANCED EDIT CELL (Main entry point for editing)
+    // =========================================================================
+
+    function enhancedEditCell(bunk, startMin, endMin, current) {
+        debugLog(`enhancedEditCell called: ${bunk}, ${startMin}-${endMin}, "${current}"`);
+        
+        if (!canEditBunk(bunk)) {
+            alert('You do not have permission to edit this schedule.\n\n(You can only edit your assigned divisions.)');
+            return;
+        }
+        
+        showEditModal(bunk, startMin, endMin, current, (editData) => {
+            applyEdit(bunk, editData);
+        });
+    }
+
+    // =========================================================================
+    // SIMPLE EDIT CELL (Legacy compatibility)
+    // =========================================================================
+
+    function editCell(bunk, startMin, endMin, current) {
+        enhancedEditCell(bunk, startMin, endMin, current);
     }
 
     // =========================================================================
@@ -1274,7 +3021,6 @@
     function updateTable() {
         const now = Date.now();
         
-        // Throttle renders
         if (now - _lastRenderTime < RENDER_DEBOUNCE_MS) {
             if (!_renderQueued) {
                 _renderQueued = true;
@@ -1461,7 +3207,7 @@
                     return { success: false };
                 }
                 
-                if (DEBUG) console.log(`[VersionMerger] Merging ${versions.length} versions...`);
+                debugLog(`[VersionMerger] Merging ${versions.length} versions...`);
                 
                 const mergedAssignments = {};
                 const bunksTouched = new Set();
@@ -1490,7 +3236,7 @@
                     }
                 });
                 
-                if (DEBUG) console.log(`[VersionMerger] Merged ${bunksTouched.size} bunks from ${versions.length} versions`);
+                debugLog(`[VersionMerger] Merged ${bunksTouched.size} bunks from ${versions.length} versions`);
                 
                 window.scheduleAssignments = mergedAssignments;
                 
@@ -1514,6 +3260,64 @@
     };
 
     // =========================================================================
+    // SCHEDULER HOOKS FOR PINNED ACTIVITIES
+    // =========================================================================
+
+    function hookSchedulerGeneration() {
+        if (typeof window.runScheduler === 'function' && !window.runScheduler._pinnedHooked) {
+            const originalRunScheduler = window.runScheduler;
+            
+            window.runScheduler = async function(...args) {
+                console.log('[UnifiedSchedule] 🚀 Generation starting - capturing pinned activities');
+                
+                const allowedDivisions = args[0]?.allowedDivisions || null;
+                capturePinnedActivities(allowedDivisions);
+                
+                const result = await originalRunScheduler.apply(this, args);
+                
+                if (Object.keys(_pinnedSnapshot).length > 0) {
+                    console.log('[UnifiedSchedule] 🔄 Generation complete - restoring pinned activities');
+                    restorePinnedActivities();
+                    saveSchedule();
+                }
+                
+                return result;
+            };
+            
+            window.runScheduler._pinnedHooked = true;
+            console.log('[UnifiedSchedule] ✅ Hooked into runScheduler for pinned preservation');
+        }
+        
+        if (typeof window.generateSchedule === 'function' && !window.generateSchedule._pinnedHooked) {
+            const originalGenerateSchedule = window.generateSchedule;
+            
+            window.generateSchedule = async function(...args) {
+                console.log('[UnifiedSchedule] 🚀 Generation starting - capturing pinned activities');
+                
+                const allowedDivisions = args[0]?.allowedDivisions || 
+                                        window.selectedDivisionsForGeneration || 
+                                        null;
+                
+                capturePinnedActivities(allowedDivisions);
+                
+                const result = await originalGenerateSchedule.apply(this, args);
+                
+                if (Object.keys(_pinnedSnapshot).length > 0) {
+                    console.log('[UnifiedSchedule] 🔄 Generation complete - restoring pinned activities');
+                    restorePinnedActivities();
+                    saveSchedule();
+                    updateTable();
+                }
+                
+                return result;
+            };
+            
+            window.generateSchedule._pinnedHooked = true;
+            console.log('[UnifiedSchedule] ✅ Hooked into generateSchedule for pinned preservation');
+        }
+    }
+
+    // =========================================================================
     // INITIALIZATION
     // =========================================================================
 
@@ -1523,8 +3327,41 @@
         const dateKey = getDateKey();
         loadScheduleForDate(dateKey);
         
+        // Add styles for modal
+        if (!document.getElementById('unified-schedule-styles')) {
+            const style = document.createElement('style');
+            style.id = 'unified-schedule-styles';
+            style.textContent = `
+                @keyframes fadeIn {
+                    from { opacity: 0; }
+                    to { opacity: 1; }
+                }
+                
+                #${MODAL_ID} input:focus,
+                #${MODAL_ID} select:focus {
+                    outline: none;
+                    border-color: #2563eb;
+                    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+                }
+                
+                #${MODAL_ID} button:hover {
+                    opacity: 0.9;
+                }
+                
+                #${MODAL_ID} button:active {
+                    transform: scale(0.98);
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        // Hook scheduler for pinned preservation
+        hookSchedulerGeneration();
+        setTimeout(hookSchedulerGeneration, 1000);
+        setTimeout(hookSchedulerGeneration, 3000);
+        
         _initialized = true;
-        if (DEBUG) console.log('[UnifiedSchedule] System initialized');
+        debugLog('System initialized');
     }
 
     function reconcileOrRenderSaved() {
@@ -1537,7 +3374,6 @@
     // EVENT LISTENERS
     // =========================================================================
 
-    // Listen for cloud hydration (legacy)
     window.addEventListener('campistry-cloud-hydrated', () => {
         console.log('[UnifiedSchedule] Cloud hydration event received');
         _cloudHydrated = true;
@@ -1548,32 +3384,24 @@
         }, 100);
     });
 
-    // Listen for NEW cloud schedule loaded (from UnifiedCloudSchedule)
     window.addEventListener('campistry-cloud-schedule-loaded', (e) => {
         console.log('[UnifiedSchedule] Cloud schedule loaded:', e.detail);
         _cloudHydrated = true;
-        
-        // Don't call loadScheduleForDate - the cloud system already set window globals
-        // Just refresh the UI
         setTimeout(() => updateTable(), 100);
     });
 
-    // Listen for data updates
     window.addEventListener('campistry-daily-data-updated', () => {
         console.log('[UnifiedSchedule] Data update event received');
         loadScheduleForDate(getDateKey());
         updateTable();
     });
 
-    // Listen for date changes
     window.addEventListener('campistry-date-changed', (e) => {
         console.log('[UnifiedSchedule] Date changed:', e.detail?.dateKey);
         
-        // Try to load from cloud first
         if (window.UnifiedCloudSchedule?.load) {
             window.UnifiedCloudSchedule.load().then(result => {
                 if (!result.merged) {
-                    // No cloud data, load from localStorage
                     loadScheduleForDate(e.detail?.dateKey || getDateKey());
                 }
                 updateTable();
@@ -1584,11 +3412,9 @@
         }
     });
 
-    // Listen for generation complete
     window.addEventListener('campistry-generation-complete', () => {
         console.log('[UnifiedSchedule] Generation complete - saving to cloud');
         
-        // Auto-save to cloud after generation
         if (window.UnifiedCloudSchedule?.save) {
             setTimeout(() => {
                 window.UnifiedCloudSchedule.save().then(result => {
@@ -1602,6 +3428,12 @@
         updateTable();
     });
 
+    window.addEventListener('campistry-generation-starting', (e) => {
+        console.log('[UnifiedSchedule] 📡 Received generation-starting event');
+        const allowedDivisions = e.detail?.allowedDivisions || null;
+        capturePinnedActivities(allowedDivisions);
+    });
+
     // Hide toolbar when DOM is ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', hideVersionToolbar);
@@ -1609,7 +3441,6 @@
         hideVersionToolbar();
     }
 
-    // Also try after delays (for dynamically added toolbar)
     setTimeout(hideVersionToolbar, 500);
     setTimeout(hideVersionToolbar, 1500);
     setTimeout(hideVersionToolbar, 3000);
@@ -1628,6 +3459,7 @@
     
     // Edit functions
     window.editCell = editCell;
+    window.enhancedEditCell = enhancedEditCell;
     window.findFirstSlotForTime = (min) => findSlotIndexForTime(min, window.unifiedTimes);
     window.findSlotsForRange = (start, end) => findSlotsForRange(start, end, window.unifiedTimes);
     
@@ -1639,10 +3471,48 @@
     window.getEntry = getEntry;
     window.formatEntry = formatEntry;
     
+    // RBAC functions
+    window.getEditableBunks = getEditableBunks;
+    window.canEditBunk = canEditBunk;
+    
+    // Conflict detection
+    window.checkLocationConflict = checkLocationConflict;
+    window.getAllLocations = getAllLocations;
+    
+    // Smart regeneration
+    window.smartRegenerateConflicts = smartRegenerateConflicts;
+    window.smartReassignBunkActivity = smartReassignBunkActivity;
+    window.findBestActivityForBunk = findBestActivityForBunk;
+    window.buildFieldUsageBySlot = buildFieldUsageBySlot;
+    window.buildCandidateOptions = buildCandidateOptions;
+    window.calculateRotationPenalty = calculateRotationPenalty;
+    window.isFieldAvailable = isFieldAvailable;
+    window.getActivityProperties = getActivityProperties;
+    window.applyPickToBunk = applyPickToBunk;
+    
+    // Bypass and notifications
+    window.bypassSaveAllBunks = bypassSaveAllBunks;
+    window.sendSchedulerNotification = sendSchedulerNotification;
+    
+    // Pinned activities
+    window.getPinnedActivities = getPinnedActivities;
+    window.unpinActivity = unpinActivity;
+    window.unpinAllActivities = unpinAllActivities;
+    window.preservePinnedForRegeneration = (allowedDivisions) => {
+        capturePinnedActivities(allowedDivisions);
+        registerPinnedFieldLocks();
+    };
+    window.restorePinnedAfterRegeneration = () => {
+        const count = restorePinnedActivities();
+        saveSchedule();
+        updateTable();
+        return count;
+    };
+    
     // Version management
     window.ScheduleVersionManager = VersionManager;
     
-    // Legacy compatibility - ScheduleVersionMerger (used by other modules)
+    // Legacy compatibility
     window.ScheduleVersionMerger = {
         mergeAndPush: async (dateKey) => {
             window.currentScheduleDate = dateKey;
@@ -1650,9 +3520,35 @@
         }
     };
     
+    // SmartRegenSystem namespace for compatibility
+    window.SmartRegenSystem = {
+        smartRegenerateConflicts,
+        smartReassignBunkActivity,
+        findBestActivityForBunk,
+        buildFieldUsageBySlot,
+        buildCandidateOptions,
+        calculateRotationPenalty,
+        isFieldAvailable,
+        getActivityProperties,
+        applyPickToBunk,
+        ROTATION_CONFIG
+    };
+    
+    // PinnedActivitySystem namespace
+    window.PinnedActivitySystem = {
+        capture: capturePinnedActivities,
+        registerLocks: registerPinnedFieldLocks,
+        registerUsage: registerPinnedFieldUsage,
+        restore: restorePinnedActivities,
+        getAll: getPinnedActivities,
+        unpin: unpinActivity,
+        unpinAll: unpinAllActivities,
+        debug: () => ({ snapshot: _pinnedSnapshot, locks: _pinnedFieldLocks })
+    };
+    
     // Debug namespace
     window.UnifiedScheduleSystem = {
-        version: '3.5.3',
+        version: '4.0.0',
         loadScheduleForDate,
         renderStaggeredView,
         findSlotIndexForTime,
@@ -1663,160 +3559,23 @@
         isSplitTileBlock,
         expandBlocksForSplitTiles,
         VersionManager,
+        SmartRegenSystem: window.SmartRegenSystem,
+        PinnedActivitySystem: window.PinnedActivitySystem,
+        ROTATION_CONFIG,
         DEBUG_ON: () => { DEBUG = true; console.log('[UnifiedSchedule] Debug enabled'); },
         DEBUG_OFF: () => { DEBUG = false; console.log('[UnifiedSchedule] Debug disabled'); },
         
-        // Dump league assignments
-        dumpLeagueAssignments: () => {
-            const leagues = window.leagueAssignments || {};
-            console.log('=== LEAGUE ASSIGNMENTS ===');
-            if (Object.keys(leagues).length === 0) {
-                console.log('  (empty)');
-                return;
-            }
-            Object.keys(leagues).forEach(div => {
-                console.log(`Division: ${div}`);
-                Object.keys(leagues[div]).forEach(slot => {
-                    const data = leagues[div][slot];
-                    console.log(`  Slot ${slot}:`);
-                    console.log(`    gameLabel: "${data.gameLabel}"`);
-                    console.log(`    sport: "${data.sport}"`);
-                    console.log(`    matchups: ${data.matchups?.length || 0}`);
-                    (data.matchups || []).forEach((m, i) => {
-                        if (m.teamA && m.teamB) {
-                            console.log(`      ${i + 1}. ${m.teamA} vs ${m.teamB}`);
-                        } else if (m.team1 && m.team2) {
-                            console.log(`      ${i + 1}. ${m.team1} vs ${m.team2}`);
-                        } else {
-                            console.log(`      ${i + 1}. ${JSON.stringify(m)}`);
-                        }
-                    });
-                });
-            });
-        },
-        
-        // Dump all data for a bunk
-        dumpBunkData: (bunk) => {
-            const assignments = window.scheduleAssignments || {};
-            const data = assignments[bunk];
-            if (!data) {
-                console.log(`No data for bunk: ${bunk}`);
-                return;
-            }
-            console.log(`Bunk ${bunk}: ${data.length} slots`);
-            const ut = window.unifiedTimes || [];
-            data.forEach((e, i) => {
-                if (e && !e.continuation) {
-                    let timeStr = '?';
-                    if (ut[i]) {
-                        const mins = getSlotStartMin(ut[i]);
-                        timeStr = minutesToTimeLabel(mins);
-                    }
-                    console.log(`  [${i}] ${timeStr}: ${formatEntry(e)}`);
-                }
-            });
-        },
-        
-        // Dump unifiedTimes 
-        dumpUnifiedTimes: () => {
-            const ut = window.unifiedTimes || [];
-            console.log(`unifiedTimes: ${ut.length} slots`);
-            ut.forEach((slot, i) => {
-                const mins = getSlotStartMin(slot);
-                console.log(`  [${i}] ${minutesToTimeLabel(mins)} (${mins} min)`);
-            });
-        },
-        
-        // See how skeleton blocks map to slots
-        dumpSlotMapping: (divName) => {
-            const skeleton = getSkeleton();
-            const divBlocks = skeleton.filter(b => b.division === divName);
-            const ut = window.unifiedTimes || [];
-            const assignments = window.scheduleAssignments || {};
-            
-            console.log(`=== Slot mapping for Division ${divName} ===`);
-            console.log(`unifiedTimes has ${ut.length} slots`);
-            console.log(`scheduleAssignments has ${Object.keys(assignments).length} bunks`);
-            
-            divBlocks.forEach(block => {
-                const startMin = parseTimeToMinutes(block.startTime);
-                const endMin = parseTimeToMinutes(block.endTime);
-                const slots = findSlotsForRange(startMin, endMin, ut);
-                console.log(`\n${block.event}: ${block.startTime}-${block.endTime} (${startMin}-${endMin} min)`);
-                console.log(`  → findSlotsForRange returns: [${slots.join(',')}]`);
-                
-                // Check what's in those slots for the first bunk
-                const divisions = window.divisions || {};
-                const bunks = divisions[divName]?.bunks || [];
-                if (bunks.length > 0) {
-                    const firstBunk = bunks[0];
-                    console.log(`  → Bunk ${firstBunk} data at those slots:`);
-                    slots.forEach(idx => {
-                        const entry = assignments[firstBunk]?.[idx];
-                        if (entry) {
-                            console.log(`     [${idx}]: ${formatEntry(entry)}`);
-                        } else {
-                            console.log(`     [${idx}]: (empty)`);
-                        }
-                    });
-                    
-                    // Also show what getEntryForBlock returns
-                    const result = getEntryForBlock(firstBunk, startMin, endMin, ut);
-                    console.log(`  → getEntryForBlock(${firstBunk}, ${startMin}, ${endMin}) = slot ${result.slotIdx}: ${formatEntry(result.entry)}`);
-                }
-            });
-        },
-        
-        // Full diagnostic
         diagnose: () => {
             const dateKey = getDateKey();
-            console.log('=== UNIFIED SCHEDULE SYSTEM DIAGNOSTIC ===');
+            console.log('=== UNIFIED SCHEDULE SYSTEM v4.0 DIAGNOSTIC ===');
             console.log(`Date: ${dateKey}`);
             console.log(`window.scheduleAssignments: ${Object.keys(window.scheduleAssignments || {}).length} bunks`);
             console.log(`window.unifiedTimes: ${(window.unifiedTimes || []).length} slots`);
             console.log(`window.leagueAssignments: ${Object.keys(window.leagueAssignments || {}).length} divisions`);
             console.log(`Skeleton: ${getSkeleton().length} blocks`);
             console.log(`Divisions: ${Object.keys(window.divisions || {}).join(', ')}`);
-            
-            // Show league assignments summary
-            const leagues = window.leagueAssignments || {};
-            if (Object.keys(leagues).length > 0) {
-                console.log('\nLeague Assignments:');
-                Object.keys(leagues).forEach(div => {
-                    const slots = Object.keys(leagues[div]);
-                    console.log(`  ${div}: ${slots.length} slots with data`);
-                });
-            }
-            
-            // Show first few slots of unifiedTimes
-            const ut = window.unifiedTimes || [];
-            if (ut.length > 0) {
-                console.log('\nFirst 5 unifiedTimes slots:');
-                ut.slice(0, 5).forEach((slot, i) => {
-                    const mins = getSlotStartMin(slot);
-                    console.log(`  [${i}] ${minutesToTimeLabel(mins)} (${mins} min)`);
-                });
-            }
-            
-            // Show first bunk's data
-            const bunks = Object.keys(window.scheduleAssignments || {});
-            if (bunks.length > 0) {
-                const firstBunk = bunks[0];
-                const data = window.scheduleAssignments[firstBunk];
-                console.log(`\nFirst bunk (${firstBunk}) data sample:`);
-                let count = 0;
-                for (let i = 0; i < data.length && count < 5; i++) {
-                    if (data[i] && !data[i].continuation) {
-                        let timeStr = '?';
-                        if (ut[i]) {
-                            const mins = getSlotStartMin(ut[i]);
-                            timeStr = minutesToTimeLabel(mins);
-                        }
-                        console.log(`  [${i}] ${timeStr}: ${formatEntry(data[i])}`);
-                        count++;
-                    }
-                }
-            }
+            console.log(`Pinned activities: ${getPinnedActivities().length}`);
+            console.log(`Post-edit in progress: ${!!window._postEditInProgress}`);
         },
         
         getState: () => ({
@@ -1826,15 +3585,30 @@
             times: (window.unifiedTimes || []).length,
             skeleton: (window.manualSkeleton || window.skeleton || []).length,
             cloudHydrated: _cloudHydrated,
-            initialized: _initialized
+            initialized: _initialized,
+            pinnedCount: getPinnedActivities().length,
+            postEditInProgress: !!window._postEditInProgress
         })
     };
 
-    console.log('📅 Unified Schedule System v3.5.3 loaded successfully');
+    // Auto-initialize
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initScheduleSystem);
+    } else {
+        setTimeout(initScheduleSystem, 100);
+    }
+
+    console.log('📅 Unified Schedule System v4.0.0 loaded successfully');
     console.log('   Replaces: scheduler_ui.js, render_sync_fix.js, view_schedule_loader_fix.js');
     console.log('   Replaces: schedule_version_merger.js, schedule_version_ui.js');
+    console.log('   Replaces: post_generation_edit_system.js (NOW INTEGRATED)');
+    console.log('   Replaces: pinned_activity_preservation.js (NOW INTEGRATED)');
     console.log('   REQUIRES: unified_cloud_schedule_system.js for proper cloud sync');
-    console.log('   ✅ v3.5: Split tile visual fix - renders split tiles as two rows');
-    console.log('   ✅ v3.5.3: LEAGUE MATCHUPS FIX - bunks ≠ teams, handles array/object formats');
+    console.log('   ✅ v3.5: Split tile visual fix');
+    console.log('   ✅ v3.5.3: League matchups fix');
+    console.log('   ✅ v4.0: Integrated post-generation editing with smart regeneration');
+    console.log('   ✅ v4.0: Integrated pinned activity preservation');
+    console.log('   ✅ v4.0: Bypass mode for admin-level access');
+    console.log('   ✅ v4.0: Conflict detection and resolution UI');
 
 })();
