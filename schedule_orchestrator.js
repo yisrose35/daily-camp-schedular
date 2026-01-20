@@ -781,14 +781,17 @@
         }
 
         const divisions = window.divisions || {};
-        const slotCount = (window.unifiedTimes || []).length || 22;
 
         for (const [divName, divData] of Object.entries(divisions)) {
             const bunks = divData.bunks || [];
+            
+            // ★★★ FIX: Use division-specific slot count, not global unifiedTimes ★★★
+            const divSlotCount = window.divisionTimes?.[divName]?.length || 
+                                 (window.unifiedTimes || []).length || 22;
 
             for (const bunk of bunks) {
                 if (!window.scheduleAssignments[bunk]) {
-                    window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
+                    window.scheduleAssignments[bunk] = new Array(divSlotCount).fill(null);
                 }
             }
         }
