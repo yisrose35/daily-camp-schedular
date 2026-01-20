@@ -803,5 +803,237 @@
     console.log('   - DivisionTimesSystem.buildFromSkeleton(skeleton, divisions)');
     console.log('');
     console.log('═══════════════════════════════════════════════════════════════════════');
+// =========================================================================
+    // ENHANCED BUNK LOOKUP (from division_times_bunk_fix.js)
+    // =========================================================================
+    
+    /**
+     * Enhanced bunk-to-division lookup with type coercion
+     * Handles string vs number mismatches, leading zeros, etc.
+     */
+    function getDivisionForBunkEnhanced(bunkName) {
+        if (!bunkName) return null;
+        
+        const divisions = window.divisions || {};
+        const bunkStr = String(bunkName).trim();
+        const bunkNum = parseInt(bunkName, 10);
+        const bunkLower = bunkStr.toLowerCase();
+        
+        for (const [divName, divData] of Object.entries(divisions)) {
+            if (!divData.bunks || !Array.isArray(divData.bunks)) continue;
+            
+            const found = divData.bunks.some(b => {
+                if (b === bunkName) return true;  // Exact match
+                if (String(b) === bunkStr) return true;  // String match
+                if (!isNaN(bunkNum) && parseInt(b, 10) === bunkNum) return true;  // Numeric match
+                if (String(b).toLowerCase() === bunkLower) return true;  // Case-insensitive
+                return false;
+            });
+            
+            if (found) return divName;
+        }
+        
+        return null;
+    }
 
+    // =========================================================================
+    // BUNK SLOT COUNT UTILITIES
+    // =========================================================================
+    
+    /**
+     * Fix all bunk slot counts to match their division's slot count
+     */
+    function fixAllBunkSlotCounts() {
+        console.log('[DivisionTimes] Fixing all bunk slot counts...');
+        
+        const divisions = window.divisions || {};
+        const divisionTimes = window.divisionTimes || {};
+        const assignments = window.scheduleAssignments || {};
+        
+        let fixedCount = 0;
+        let errorCount = 0;
+        
+        Object.entries(assignments).forEach(([bunk, slots]) => {
+            const divName = getDivisionForBunkEnhanced(bunk);
+            
+            if (!divName) {
+                console.warn(`   ⚠️ ${bunk}: No division found`);
+                errorCount++;
+                return;
+            }
+            
+            const expectedSlots = divisionTimes[divName]?.length || 0;
+            const actualSlots = slots?.length || 0;
+            
+            if (expectedSlots === 0) {
+                errorCount++;
+                return;
+            }
+            
+            if (actualSlots !== expectedSlots) {
+                const newArr = new Array(expectedSlots).fill(null);
+                const minLen = Math.min(actualSlots, expectedSlots);
+                
+                for (let i = 0; i < minLen; i++) {
+                    newArr[i] = slots[i];
+                }
+                
+                window.scheduleAssignments[bunk] = newArr;
+                fixedCount++;
+            }
+        });
+        
+        console.log(`[DivisionTimes] Fixed ${fixedCount} bunks, ${errorCount} errors`);
+        window.updateTable?.();
+        
+        return { fixed: fixedCount, errors: errorCount };
+    }
+
+    /**
+     * Fill missing pinned slots with their event data
+     */
+    function fillMissingPinnedSlots() {
+        console.log('[DivisionTimes] Filling missing pinned slots...');
+        
+        const divisions = window.divisions || {};
+        const divisionTimes = window.divisionTimes || {};
+        const assignments = window.scheduleAssignments || {};
+        
+        let filledCount = 0;
+        
+        Object.entries(divisionTimes).forEach(([divName, slots]) => {
+            const divBunks = (divisions[divName]?.bunks || []).map(b => String(b));
+            const assignedBunks = Object.keys(assignments).filter(bunk => 
+                getDivisionForBunkEnhanced(bunk) === divName
+            );
+            const allBunks = [...new Set([...divBunks, ...assignedBunks])];
+            
+            slots.forEach((slot, idx) => {
+                if (slot.type !== 'pinned') return;
+                
+                const eventName = slot.event || 'Pinned Event';
+                
+                allBunks.forEach(bunk => {
+                    if (!assignments[bunk]) {
+                        assignments[bunk] = new Array(slots.length).fill(null);
+                    }
+                    
+                    const entry = assignments[bunk][idx];
+                    if (!entry) {
+                        assignments[bunk][idx] = {
+                            field: eventName,
+                            sport: null,
+                            _fixed: true,
+                            _activity: eventName,
+                            _pinned: true,
+                            _startMin: slot.startMin,
+                            _endMin: slot.endMin,
+                            _slotIndex: idx,
+                            _division: divName,
+                            _autoFilled: true
+                        };
+                        filledCount++;
+                    }
+                });
+            });
+        });
+        
+        console.log(`[DivisionTimes] Filled ${filledCount} missing pinned slots`);
+        window.updateTable?.();
+        
+        return filledCount;
+    }
+
+    // =========================================================================
+    // GENERATION COMPLETE HOOK
+    // =========================================================================
+    
+    function setupGenerationCompleteHook() {
+        window.addEventListener('campistry-generation-complete', function(e) {
+            console.log('[DivisionTimes] Generation complete - running auto-fixes...');
+            
+            setTimeout(() => {
+                const slotFixes = fixAllBunkSlotCounts();
+                const pinnedFills = fillMissingPinnedSlots();
+                console.log(`[DivisionTimes] Post-generation: ${slotFixes.fixed} slot resizes, ${pinnedFills} pinned fills`);
+            }, 100);
+        });
+    }
+
+    // =========================================================================
+    // ENHANCED DIAGNOSTIC
+    // =========================================================================
+    
+    function diagnoseBunkSlots() {
+        console.log('\n' + '═'.repeat(70));
+        console.log('🔧 DIVISION TIMES BUNK DIAGNOSTIC');
+        console.log('═'.repeat(70));
+        
+        const divisions = window.divisions || {};
+        const divisionTimes = window.divisionTimes || {};
+        const assignments = window.scheduleAssignments || {};
+        
+        console.log('\n=== DIVISION STRUCTURE ===');
+        Object.entries(divisions).forEach(([divName, divData]) => {
+            const bunks = divData.bunks || [];
+            const slotCount = divisionTimes[divName]?.length || 0;
+            console.log(`Division "${divName}": ${bunks.length} bunks, ${slotCount} slots`);
+        });
+        
+        console.log('\n=== SLOT ALIGNMENT ===');
+        let correctCount = 0, fixedCount = 0, errorCount = 0;
+        
+        Object.entries(assignments).forEach(([bunk, slots]) => {
+            const divName = getDivisionForBunkEnhanced(bunk);
+            const expectedSlots = divisionTimes[divName]?.length || 0;
+            const actualSlots = slots?.length || 0;
+            
+            if (!divName) {
+                errorCount++;
+            } else if (actualSlots === expectedSlots) {
+                correctCount++;
+            } else {
+                fixedCount++;
+                console.log(`   ⚠️ ${bunk}: has ${actualSlots}, should have ${expectedSlots}`);
+            }
+        });
+        
+        console.log(`\nSummary: ${correctCount} correct, ${fixedCount} need resize, ${errorCount} no division`);
+        
+        if (fixedCount > 0) {
+            console.log('\n💡 Run fixAllBunkSlotCounts() to fix mismatched arrays');
+        }
+        
+        console.log('\n' + '═'.repeat(70));
+    }
+
+    // =========================================================================
+    // EXPORTS (add to existing DivisionTimesSystem object)
+    // =========================================================================
+    
+    // Update getDivisionForBunk to use enhanced version
+    window.DivisionTimesSystem.getDivisionForBunk = getDivisionForBunkEnhanced;
+    
+    // Add new utilities
+    window.DivisionTimesSystem.fixAllBunkSlotCounts = fixAllBunkSlotCounts;
+    window.DivisionTimesSystem.fillMissingPinnedSlots = fillMissingPinnedSlots;
+    window.DivisionTimesSystem.diagnoseBunkSlots = diagnoseBunkSlots;
+    
+    // Global exports for convenience
+    window.fixAllBunkSlotCounts = fixAllBunkSlotCounts;
+    window.fillMissingPinnedSlots = fillMissingPinnedSlots;
+    window.getDivisionForBunk = getDivisionForBunkEnhanced;
+    
+    // Legacy compatibility
+    window.BunkFix = {
+        diagnose: diagnoseBunkSlots,
+        fixSlotCounts: fixAllBunkSlotCounts,
+        getDivisionForBunk: getDivisionForBunkEnhanced,
+        version: '2.0 (integrated)'
+    };
+    
+    // Setup hooks
+    setupGenerationCompleteHook();
+    
+    console.log('[DivisionTimes] ✅ Bunk fix utilities integrated');
 })();
