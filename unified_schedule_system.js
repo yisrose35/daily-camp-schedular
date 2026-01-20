@@ -464,7 +464,293 @@
         }
         return null;
     }
+// =========================================================================
+    // UNIFIED TIMES BACKWARDS COMPATIBILITY LAYER
+    // =========================================================================
+    // Auto-populates window.unifiedTimes from divisionTimes for legacy code
+    
+    let _unifiedTimesCache = null;
+    
+    // Define getter/setter for window.unifiedTimes
+    if (!Object.getOwnPropertyDescriptor(window, 'unifiedTimes')?.get) {
+        Object.defineProperty(window, 'unifiedTimes', {
+            get: function() {
+                // Return cached if available
+                if (_unifiedTimesCache && _unifiedTimesCache.length > 0) {
+                    return _unifiedTimesCache;
+                }
+                
+                // Auto-build from divisionTimes
+                if (window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
+                    const built = window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes?.(window.divisionTimes);
+                    if (built && built.length > 0) {
+                        _unifiedTimesCache = built;
+                        return built;
+                    }
+                }
+                
+                return _unifiedTimesCache || [];
+            },
+            set: function(val) {
+                _unifiedTimesCache = val;
+            },
+            configurable: true
+        });
+    }
 
+    // =========================================================================
+    // TIME-BASED FIELD USAGE SYSTEM
+    // =========================================================================
+    // Real time-based cross-division conflict detection
+    
+    window.TimeBasedFieldUsage = {
+        getUsageAtTime: function(fieldName, startMin, endMin, excludeBunk = null) {
+            const usage = [];
+            const divisions = window.divisions || {};
+            const fieldLower = fieldName.toLowerCase();
+            
+            for (const [divName, divData] of Object.entries(divisions)) {
+                const divSlots = window.divisionTimes?.[divName] || [];
+                
+                for (const bunk of (divData.bunks || [])) {
+                    if (excludeBunk && String(bunk) === String(excludeBunk)) continue;
+                    
+                    const assignments = window.scheduleAssignments?.[bunk] || [];
+                    
+                    for (let idx = 0; idx < divSlots.length; idx++) {
+                        const slot = divSlots[idx];
+                        
+                        // Time overlap check
+                        if (slot.startMin < endMin && slot.endMin > startMin) {
+                            const entry = assignments[idx];
+                            if (!entry || entry.continuation) continue;
+                            
+                            const entryField = (typeof entry.field === 'object' ? entry.field?.name : entry.field) || '';
+                            
+                            if (entryField.toLowerCase() === fieldLower) {
+                                usage.push({
+                                    bunk,
+                                    division: divName,
+                                    slotIndex: idx,
+                                    timeStart: slot.startMin,
+                                    timeEnd: slot.endMin,
+                                    activity: entry._activity || entryField,
+                                    field: entryField
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            return usage;
+        },
+        
+        checkAvailability: function(fieldName, startMin, endMin, capacity = 1, excludeBunk = null) {
+            const usage = this.getUsageAtTime(fieldName, startMin, endMin, excludeBunk);
+            
+            // Find max concurrent usage
+            let maxConcurrent = 0;
+            const timePoints = new Set();
+            usage.forEach(u => {
+                timePoints.add(u.timeStart);
+                timePoints.add(u.timeEnd);
+            });
+            
+            for (const t of timePoints) {
+                const concurrent = usage.filter(u => u.timeStart <= t && u.timeEnd > t).length;
+                maxConcurrent = Math.max(maxConcurrent, concurrent);
+            }
+            
+            return {
+                available: maxConcurrent < capacity,
+                currentUsage: maxConcurrent,
+                capacity,
+                conflicts: usage
+            };
+        },
+        
+        buildUsageMap: function(excludeBunks = []) {
+            const map = {};
+            const excludeSet = new Set(excludeBunks.map(String));
+            const divisions = window.divisions || {};
+            
+            for (const [divName, divData] of Object.entries(divisions)) {
+                const divSlots = window.divisionTimes?.[divName] || [];
+                
+                for (const bunk of (divData.bunks || [])) {
+                    if (excludeSet.has(String(bunk))) continue;
+                    
+                    const assignments = window.scheduleAssignments?.[bunk] || [];
+                    
+                    for (let idx = 0; idx < divSlots.length; idx++) {
+                        const slot = divSlots[idx];
+                        const entry = assignments[idx];
+                        
+                        if (!entry || entry.continuation || !entry.field) continue;
+                        
+                        const fieldName = (typeof entry.field === 'object' ? entry.field?.name : entry.field) || '';
+                        if (!fieldName || fieldName === 'Free') continue;
+                        
+                        if (!map[fieldName]) map[fieldName] = [];
+                        
+                        map[fieldName].push({
+                            startMin: slot.startMin,
+                            endMin: slot.endMin,
+                            division: divName,
+                            bunk,
+                            activity: entry._activity || fieldName
+                        });
+                    }
+                }
+            }
+            return map;
+        }
+    };
+
+    // =========================================================================
+    // DIVISION-AWARE SLOT TIME RANGE
+    // =========================================================================
+    
+    function getSlotTimeRange(slotIdx, bunkOrDiv) {
+        // Try division-specific lookup first
+        if (bunkOrDiv && window.divisionTimes) {
+            let divName = bunkOrDiv;
+            const possibleDiv = getDivisionForBunk(bunkOrDiv);
+            if (possibleDiv) divName = possibleDiv;
+            
+            const slot = window.divisionTimes[divName]?.[slotIdx];
+            if (slot) {
+                return { startMin: slot.startMin, endMin: slot.endMin };
+            }
+        }
+        
+        // Legacy fallback using unifiedTimes
+        const unifiedTimes = window.unifiedTimes || [];
+        const slot = unifiedTimes[slotIdx];
+        if (!slot) return { startMin: null, endMin: null };
+        
+        let startMin, endMin;
+        if (slot.startMin !== undefined) {
+            startMin = slot.startMin;
+            endMin = slot.endMin;
+        } else {
+            const start = new Date(slot.start);
+            const end = new Date(slot.end);
+            startMin = start.getHours() * 60 + start.getMinutes();
+            endMin = end.getHours() * 60 + end.getMinutes();
+        }
+        return { startMin, endMin };
+    }
+
+    // =========================================================================
+    // DIVISION-AWARE FIND FIRST SLOT FOR TIME
+    // =========================================================================
+    
+    function findFirstSlotForTime(targetMin, bunkOrDiv) {
+        if (bunkOrDiv && window.divisionTimes) {
+            let divName = bunkOrDiv;
+            const possibleDiv = getDivisionForBunk(bunkOrDiv);
+            if (possibleDiv) divName = possibleDiv;
+            
+            const divSlots = window.divisionTimes[divName] || [];
+            for (let i = 0; i < divSlots.length; i++) {
+                if (divSlots[i].startMin === targetMin) return i;
+                if (divSlots[i].startMin <= targetMin && divSlots[i].endMin > targetMin) return i;
+            }
+        }
+        
+        // Legacy fallback
+        const unifiedTimes = window.unifiedTimes || [];
+        for (let i = 0; i < unifiedTimes.length; i++) {
+            const slotStart = getSlotStartMin(unifiedTimes[i]);
+            if (slotStart === targetMin) return i;
+        }
+        return -1;
+    }
+
+    // =========================================================================
+    // CROSS-DIVISION CONFLICT CHECK (TIME-BASED)
+    // =========================================================================
+    
+    function checkCrossDivisionConflict(bunk, fieldName, slotIndex) {
+        const divName = getDivisionForBunk(bunk);
+        const slot = window.divisionTimes?.[divName]?.[slotIndex];
+        if (!slot) return { conflict: false, conflicts: [] };
+        
+        const startMin = slot.startMin;
+        const endMin = slot.endMin;
+        
+        // Get capacity
+        const activityProperties = window.activityProperties || window.getActivityProperties?.() || {};
+        const fieldInfo = activityProperties[fieldName] || {};
+        let maxCapacity = 1;
+        if (fieldInfo.sharableWith?.capacity) {
+            maxCapacity = parseInt(fieldInfo.sharableWith.capacity) || 1;
+        } else if (fieldInfo.sharable) {
+            maxCapacity = 2;
+        }
+        
+        const availability = window.TimeBasedFieldUsage.checkAvailability(
+            fieldName, startMin, endMin, maxCapacity, bunk
+        );
+        
+        return {
+            conflict: !availability.available,
+            conflicts: availability.conflicts,
+            startMin,
+            endMin,
+            capacity: maxCapacity,
+            currentUsage: availability.currentUsage
+        };
+    }
+
+    // =========================================================================
+    // DIVISION-AWARE BUILD FIELD USAGE BY SLOT
+    // =========================================================================
+    
+    function buildFieldUsageBySlot(excludeBunks = []) {
+        const fieldUsageBySlot = {};
+        const excludeSet = new Set((excludeBunks || []).map(String));
+        const divisions = window.divisions || {};
+        
+        for (const [divName, divData] of Object.entries(divisions)) {
+            const divSlots = window.divisionTimes?.[divName] || [];
+            
+            for (const bunk of (divData.bunks || [])) {
+                if (excludeSet.has(String(bunk))) continue;
+                
+                const assignments = window.scheduleAssignments?.[bunk] || [];
+                
+                for (let slotIdx = 0; slotIdx < assignments.length; slotIdx++) {
+                    const entry = assignments[slotIdx];
+                    if (!entry || !entry.field || entry._isTransition) continue;
+                    
+                    const fName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                    if (!fName || fName === 'Free' || fName === 'Transition/Buffer') continue;
+                    
+                    const slot = divSlots[slotIdx];
+                    
+                    if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
+                    if (!fieldUsageBySlot[slotIdx][fName]) {
+                        fieldUsageBySlot[slotIdx][fName] = { 
+                            count: 0, 
+                            bunks: {}, 
+                            divisions: [],
+                            timeRange: slot ? { startMin: slot.startMin, endMin: slot.endMin } : null
+                        };
+                    }
+                    
+                    const usage = fieldUsageBySlot[slotIdx][fName];
+                    usage.count++;
+                    usage.bunks[bunk] = entry._activity || fName;
+                    if (divName && !usage.divisions.includes(divName)) {
+                        usage.divisions.push(divName);
+                    }
+                }
+            }
+        }
+        return fieldUsageBySlot;
+    }
     // =========================================================================
     // SPLIT TILE DETECTION
     // =========================================================================
