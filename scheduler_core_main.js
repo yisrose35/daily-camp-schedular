@@ -344,10 +344,13 @@
         const zone = trans.zone;
 
         // ★★★ CRITICAL: Initialize bunk array if not exists (MUST be done FIRST) ★★★
-        if (!window.scheduleAssignments[bunk]) {
-            // Fallback to global unifiedTimes length if divisionTimes logic hasn't set it yet
-            window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
-        }
+if (!window.scheduleAssignments[bunk]) {
+    // Use division-specific slot count, not global unifiedTimes
+    const divName = block.divName || Utils.getDivisionForBunk?.(bunk) || window.DivisionTimesSystem?.getDivisionForBunk(bunk);
+    const divSlots = window.divisionTimes?.[divName];
+    const slotCount = divSlots?.length || window.unifiedTimes?.length || 50;
+    window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
+}
 
         let writePre = trans.preMin > 0;
         let writePost = trans.postMin > 0;
