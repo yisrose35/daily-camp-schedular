@@ -3350,55 +3350,66 @@
     // EXPORTS
     // =========================================================================
 
+    // Core UI functions
     window.updateTable = updateTable;
     window.renderStaggeredView = renderStaggeredView;
     window.initScheduleSystem = initScheduleSystem;
+    window.editCell = editCell;
+    window.enhancedEditCell = enhancedEditCell;
+
+    // Save/Load functions
     window.saveSchedule = saveSchedule;
     window.loadScheduleForDate = loadScheduleForDate;
     window.reconcileOrRenderSaved = reconcileOrRenderSaved;
-    window.editCell = editCell;
-    window.enhancedEditCell = enhancedEditCell;
-    window.findFirstSlotForTime = (min) => findSlotIndexForTime(min, window.unifiedTimes);
-    window.findSlotsForRange = (start, end) => findSlotsForRange(start, end, window.unifiedTimes);
+
+    // Time/Slot functions (division-aware)
     window.parseTimeToMinutes = parseTimeToMinutes;
     window.minutesToTimeLabel = minutesToTimeLabel;
+    window.findFirstSlotForTime = findFirstSlotForTime;
+    window.findSlotsForRange = findSlotsForRange;
+    window.getSlotTimeRange = getSlotTimeRange;
+    window.findSlotIndexForTime = findSlotIndexForTime;
+
+    // Entry/Bunk functions
     window.getEntry = getEntry;
+    window.getEntryForBlock = getEntryForBlock;
     window.formatEntry = formatEntry;
+    window.getDivisionForBunk = getDivisionForBunk;
     window.getEditableBunks = getEditableBunks;
     window.canEditBunk = canEditBunk;
+
+    // Conflict detection (time-based, division-aware)
     window.checkLocationConflict = checkLocationConflict;
+    window.checkCrossDivisionConflict = checkCrossDivisionConflict;
     window.getAllLocations = getAllLocations;
+    window.buildFieldUsageBySlot = buildFieldUsageBySlot;
+    window.isFieldAvailable = isFieldAvailable;
+
+    // Smart regeneration
     window.smartRegenerateConflicts = smartRegenerateConflicts;
     window.smartReassignBunkActivity = smartReassignBunkActivity;
     window.findBestActivityForBunk = findBestActivityForBunk;
-    window.buildFieldUsageBySlot = buildFieldUsageBySlot;
     window.buildCandidateOptions = buildCandidateOptions;
     window.calculateRotationPenalty = calculateRotationPenalty;
-    window.isFieldAvailable = isFieldAvailable;
     window.getActivityProperties = getActivityProperties;
     window.applyPickToBunk = applyPickToBunk;
+
+    // RBAC bypass
+    window.enableBypassRBACView = enableBypassRBACView;
+    window.disableBypassRBACView = disableBypassRBACView;
+    window.shouldShowDivision = shouldShowDivision;
+    window.shouldHighlightBunk = shouldHighlightBunk;
     window.bypassSaveAllBunks = bypassSaveAllBunks;
     window.sendSchedulerNotification = sendSchedulerNotification;
+
+    // Pinned activities
     window.getPinnedActivities = getPinnedActivities;
     window.unpinActivity = unpinActivity;
     window.unpinAllActivities = unpinAllActivities;
     window.preservePinnedForRegeneration = (allowedDivisions) => { capturePinnedActivities(allowedDivisions); registerPinnedFieldLocks(); };
     window.restorePinnedAfterRegeneration = () => { const count = restorePinnedActivities(); saveSchedule(); updateTable(); return count; };
-    window.ScheduleVersionManager = VersionManager;
-    window.ScheduleVersionMerger = { mergeAndPush: async (dateKey) => { window.currentScheduleDate = dateKey; return await VersionManager.mergeVersions(); } };
-    window.SmartRegenSystem = { smartRegenerateConflicts, smartReassignBunkActivity, findBestActivityForBunk, buildFieldUsageBySlot, buildCandidateOptions, calculateRotationPenalty, isFieldAvailable, getActivityProperties, applyPickToBunk, ROTATION_CONFIG };
-    window.PinnedActivitySystem = { capture: capturePinnedActivities, registerLocks: registerPinnedFieldLocks, registerUsage: registerPinnedFieldUsage, restore: restorePinnedActivities, getAll: getPinnedActivities, unpin: unpinActivity, unpinAll: unpinAllActivities, debug: () => ({ snapshot: _pinnedSnapshot, locks: _pinnedFieldLocks }) };
-    window.getSlotTimeRange = getSlotTimeRange;
-    window.findFirstSlotForTime = findFirstSlotForTime;
-    window.checkCrossDivisionConflict = checkCrossDivisionConflict;
-    window.buildFieldUsageBySlot = buildFieldUsageBySlot;
-    // ★★★ RBAC BYPASS EXPORTS ★★★
-    window.enableBypassRBACView = enableBypassRBACView;
-    window.disableBypassRBACView = disableBypassRBACView;
-    window.shouldShowDivision = shouldShowDivision;
-    window.shouldHighlightBunk = shouldHighlightBunk;
-    
-    // ★★★ INTEGRATED EDIT EXPORTS (v4.0.3) ★★★
+
+    // Integrated Edit Modal
     window.openIntegratedEditModal = openIntegratedEditModal;
     window.closeIntegratedEditModal = closeIntegratedEditModal;
     window.openMultiBunkEditModal = openMultiBunkEditModal;
@@ -3409,24 +3420,61 @@
     window.buildCascadeResolutionPlan = buildCascadeResolutionPlan;
     window.findAllConflictsForClaim = findAllConflictsForClaim;
     window.findAlternativeForBunk = findAlternativeForBunk;
+
+    // Proposal system
     window.createMultiBunkProposal = createMultiBunkProposal;
     window.loadProposal = loadProposal;
     window.loadMyPendingProposals = loadMyPendingProposals;
     window.openProposalReviewModal = openProposalReviewModal;
     window.respondToProposal = respondToProposal;
     window.applyApprovedProposal = applyApprovedProposal;
+
+    // Backup system
     window.createAutoBackup = createAutoBackup;
     window.cleanupOldAutoBackups = cleanupOldAutoBackups;
     window.listAutoBackups = listAutoBackups;
+
+    // Utility
     window.getMyDivisions = getMyDivisions;
     window.getBunksForDivision = getBunksForDivision;
     window.showIntegratedToast = showIntegratedToast;
 
+    // Legacy compatibility
+    window.ScheduleVersionManager = VersionManager;
+    window.ScheduleVersionMerger = { mergeAndPush: async (dateKey) => { window.currentScheduleDate = dateKey; return await VersionManager.mergeVersions(); } };
+
+    // System objects
+    window.SmartRegenSystem = { 
+        smartRegenerateConflicts, smartReassignBunkActivity, findBestActivityForBunk, 
+        buildFieldUsageBySlot, buildCandidateOptions, calculateRotationPenalty, 
+        isFieldAvailable, getActivityProperties, applyPickToBunk, ROTATION_CONFIG 
+    };
+    
+    window.PinnedActivitySystem = { 
+        capture: capturePinnedActivities, registerLocks: registerPinnedFieldLocks, 
+        registerUsage: registerPinnedFieldUsage, restore: restorePinnedActivities, 
+        getAll: getPinnedActivities, unpin: unpinActivity, unpinAll: unpinAllActivities, 
+        debug: () => ({ snapshot: _pinnedSnapshot, locks: _pinnedFieldLocks }) 
+    };
+
     window.UnifiedScheduleSystem = {
         version: '4.0.4',
-        loadScheduleForDate, renderStaggeredView, findSlotIndexForTime, findSlotsForRange, getLeagueMatchups, getEntryForBlock,
-        buildUnifiedTimesFromSkeleton, isSplitTileBlock, expandBlocksForSplitTiles, VersionManager,
-        SmartRegenSystem: window.SmartRegenSystem, PinnedActivitySystem: window.PinnedActivitySystem, ROTATION_CONFIG,
+        
+        // Core functions
+        loadScheduleForDate, renderStaggeredView, findSlotIndexForTime, findSlotsForRange,
+        getLeagueMatchups, getEntryForBlock, getDivisionForBunk, getSlotTimeRange,
+        buildUnifiedTimesFromSkeleton, isSplitTileBlock, expandBlocksForSplitTiles,
+        
+        // Conflict detection
+        checkLocationConflict, checkCrossDivisionConflict, buildFieldUsageBySlot,
+        TimeBasedFieldUsage: window.TimeBasedFieldUsage,
+        
+        // Sub-systems
+        VersionManager,
+        SmartRegenSystem: window.SmartRegenSystem, 
+        PinnedActivitySystem: window.PinnedActivitySystem, 
+        ROTATION_CONFIG,
+        
         IntegratedEditSystem: {
             open: openIntegratedEditModal,
             close: closeIntegratedEditModal,
@@ -3434,6 +3482,7 @@
             buildPlan: buildCascadeResolutionPlan,
             apply: applyMultiBunkEdit
         },
+        
         ProposalSystem: {
             create: createMultiBunkProposal,
             load: loadProposal,
@@ -3441,23 +3490,52 @@
             openReview: openProposalReviewModal,
             respond: respondToProposal
         },
+        
         AutoBackup: {
             create: createAutoBackup,
             cleanup: cleanupOldAutoBackups,
             list: listAutoBackups
         },
+        
+        // Debug utilities
         DEBUG_ON: () => { DEBUG = true; console.log('[UnifiedSchedule] Debug enabled'); },
         DEBUG_OFF: () => { DEBUG = false; console.log('[UnifiedSchedule] Debug disabled'); },
-        diagnose: () => { console.log('=== UNIFIED SCHEDULE SYSTEM v4.0.3 DIAGNOSTIC ==='); console.log(`Date: ${getDateKey()}`); console.log(`window.scheduleAssignments: ${Object.keys(window.scheduleAssignments || {}).length} bunks`); console.log(`window.unifiedTimes: ${(window.unifiedTimes || []).length} slots`); console.log(`Pinned activities: ${getPinnedActivities().length}`); console.log(`RBAC bypass view: ${_bypassRBACViewEnabled}`); console.log(`Highlighted bunks: ${[..._bypassHighlightBunks].join(', ') || 'none'}`); },
-        getState: () => ({ dateKey: getDateKey(), assignments: Object.keys(window.scheduleAssignments || {}).length, leagues: Object.keys(window.leagueAssignments || {}).length, times: (window.unifiedTimes || []).length, cloudHydrated: _cloudHydrated, initialized: _initialized, pinnedCount: getPinnedActivities().length, postEditInProgress: !!window._postEditInProgress, bypassRBACViewEnabled: _bypassRBACViewEnabled, highlightedBunks: [..._bypassHighlightBunks] })
+        
+        diagnose: () => { 
+            console.log('=== UNIFIED SCHEDULE SYSTEM v4.0.4 DIAGNOSTIC ==='); 
+            console.log(`Date: ${getDateKey()}`); 
+            console.log(`window.scheduleAssignments: ${Object.keys(window.scheduleAssignments || {}).length} bunks`); 
+            console.log(`window.unifiedTimes: ${(window.unifiedTimes || []).length} slots`);
+            console.log(`window.divisionTimes: ${Object.keys(window.divisionTimes || {}).length} divisions`);
+            console.log(`TimeBasedFieldUsage: ${window.TimeBasedFieldUsage ? '✅' : '❌'}`);
+            console.log(`Pinned activities: ${getPinnedActivities().length}`); 
+            console.log(`RBAC bypass view: ${_bypassRBACViewEnabled}`); 
+            console.log(`Highlighted bunks: ${[..._bypassHighlightBunks].join(', ') || 'none'}`); 
+        },
+        
+        getState: () => ({ 
+            dateKey: getDateKey(), 
+            assignments: Object.keys(window.scheduleAssignments || {}).length, 
+            leagues: Object.keys(window.leagueAssignments || {}).length, 
+            times: (window.unifiedTimes || []).length,
+            divisionTimes: Object.keys(window.divisionTimes || {}).length,
+            cloudHydrated: _cloudHydrated, 
+            initialized: _initialized, 
+            pinnedCount: getPinnedActivities().length, 
+            postEditInProgress: !!window._postEditInProgress, 
+            bypassRBACViewEnabled: _bypassRBACViewEnabled, 
+            highlightedBunks: [..._bypassHighlightBunks] 
+        })
     };
 
+    // Initialize on DOM ready
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initScheduleSystem);
     else setTimeout(initScheduleSystem, 100);
 
-    console.log('📅 Unified Schedule System v4.0.3 loaded successfully');
-    console.log('   ✅ v4.0.4: Integrated Edit with multi-bunk support');
-    console.log('   ✅ v4.0.4: Cascade resolution with auto-backup');
-    console.log('   ✅ v4.0.4: Proposal system for cross-division changes');
+    console.log('📅 Unified Schedule System v4.0.4 loaded successfully');
+    console.log('   ✅ Division-aware time slot management');
+    console.log('   ✅ TimeBasedFieldUsage for cross-division conflicts');
+    console.log('   ✅ Integrated Edit with multi-bunk support');
+    console.log('   ✅ Proposal system for cross-division changes');
 
 })();
