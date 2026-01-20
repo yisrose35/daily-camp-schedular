@@ -2242,45 +2242,53 @@
     }
 
     function proceedWithScope() {
-        const scope = document.querySelector('input[name="edit-scope"]:checked')?.value;
-        
-        if (scope === 'single') {
-            closeIntegratedEditModal();
-            // Fall back to existing enhanced edit
-            enhancedEditCell(
-                _currentEditContext.bunk,
-                _currentEditContext.slotInfo.startMin || _currentEditContext.slotInfo.start,
-                _currentEditContext.slotInfo.endMin || _currentEditContext.slotInfo.end,
-                _currentEditContext.existingEntry?._activity || ''
-            );
-        } else if (scope === 'division') {
-            const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
-            const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
-            
-            if (endSlot < startSlot) { alert('End time must be after start time'); return; }
-
-            const slots = [];
-            for (let i = startSlot; i <= endSlot; i++) slots.push(i);
-
-            closeIntegratedEditModal();
-            openMultiBunkEditModal(_currentEditContext.bunksInDivision, slots, _currentEditContext.divName);
-        } else if (scope === 'select') {
-            const selectedBunks = Array.from(document.querySelectorAll('.bunk-checkbox:checked')).map(cb => cb.value);
-            
-            if (selectedBunks.length === 0) { alert('Please select at least one bunk'); return; }
-
-            const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
-            const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
-            
-            if (endSlot < startSlot) { alert('End time must be after start time'); return; }
-
-            const slots = [];
-            for (let i = startSlot; i <= endSlot; i++) slots.push(i);
-
-            closeIntegratedEditModal();
-            openMultiBunkEditModal(selectedBunks, slots, _currentEditContext.divName);
-        }
+    const scope = document.querySelector('input[name="edit-scope"]:checked')?.value;
+    
+    // ★★★ FIX: Save context BEFORE closing modal ★★★
+    const ctx = _currentEditContext;
+    if (!ctx) {
+        alert('Edit context lost. Please try again.');
+        closeIntegratedEditModal();
+        return;
     }
+    
+    if (scope === 'single') {
+        closeIntegratedEditModal();
+        // Use saved ctx instead of _currentEditContext
+        enhancedEditCell(
+            ctx.bunk,
+            ctx.slotInfo?.startMin ?? ctx.slotInfo?.start,
+            ctx.slotInfo?.endMin ?? ctx.slotInfo?.end,
+            ctx.existingEntry?._activity || ''
+        );
+    } else if (scope === 'division') {
+        const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
+        const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
+        
+        if (endSlot < startSlot) { alert('End time must be after start time'); return; }
+
+        const slots = [];
+        for (let i = startSlot; i <= endSlot; i++) slots.push(i);
+
+        closeIntegratedEditModal();
+        openMultiBunkEditModal(ctx.bunksInDivision, slots, ctx.divName);
+    } else if (scope === 'select') {
+        const selectedBunks = Array.from(document.querySelectorAll('.bunk-checkbox:checked')).map(cb => cb.value);
+        
+        if (selectedBunks.length === 0) { alert('Please select at least one bunk'); return; }
+
+        const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
+        const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
+        
+        if (endSlot < startSlot) { alert('End time must be after start time'); return; }
+
+        const slots = [];
+        for (let i = startSlot; i <= endSlot; i++) slots.push(i);
+
+        closeIntegratedEditModal();
+        openMultiBunkEditModal(selectedBunks, slots, ctx.divName);
+    }
+}
 
     // --- MULTI-BUNK EDIT MODAL ---
 
