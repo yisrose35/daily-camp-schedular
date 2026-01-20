@@ -1993,67 +1993,101 @@
 
     // --- HELPER: FIND ALTERNATIVE ACTIVITY FOR A BUNK ---
 
-    function findAlternativeForBunk(bunk, slots, divName, simulatedUsage, excludeFields = []) {
+   function findAlternativeForBunk(bunk, slots, divName, simulatedUsage, excludeFields = []) {
         const activityProperties = getActivityProperties();
         const excludeSet = new Set(excludeFields.map(f => fieldLabel(f)));
-
-        const config = {
-            masterFields: window.masterFields || [],
-            masterSpecials: window.masterSpecials || []
-        };
+        
+        // Use the SAME data sources as buildCandidateOptions
+        const settings = window.loadGlobalSettings?.() || {};
+        const app1 = settings.app1 || {};
+        const fieldsBySport = settings.fieldsBySport || {};
+        const disabledFields = window.currentDisabledFields || [];
 
         const candidates = [];
         
-        // Sports
-        (config.masterFields || []).forEach(f => {
-            if (excludeSet.has(f.name)) return;
-            
-            (f.activities || []).forEach(sport => {
+        // Sports from fieldsBySport (same as buildCandidateOptions)
+        for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
+            (sportFields || []).forEach(fieldName => {
+                if (excludeSet.has(fieldName)) return;
+                if (disabledFields.includes(fieldName)) return;
+                if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots, divName)) return;
+
+                // Check simulated usage
                 let available = true;
-                const props = activityProperties[f.name] || {};
+                const props = activityProperties[fieldName] || {};
                 const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
 
                 for (const slotIdx of slots) {
-                    const usage = simulatedUsage[slotIdx]?.[f.name];
+                    const usage = simulatedUsage[slotIdx]?.[fieldName];
                     if (usage && usage.count >= maxCapacity) { available = false; break; }
-                    if (window.GlobalFieldLocks?.isFieldLocked(f.name, [slotIdx], divName)) { available = false; break; }
                 }
 
                 if (available) {
-                    const penalty = calculateRotationPenalty(bunk, sport, slots, activityProperties);
+                    const penalty = calculateRotationPenalty(bunk, sport, slots);
                     if (penalty !== Infinity) {
-                        candidates.push({ field: f.name, activityName: sport, type: 'sport', penalty });
+                        candidates.push({ field: fieldName, activityName: sport, type: 'sport', penalty });
                     }
                 }
             });
-        });
+        }
 
-        // Specials
-        (config.masterSpecials || []).forEach(s => {
-            if (excludeSet.has(s.name)) return;
+        // Specials from app1.specialActivities
+        (app1.specialActivities || []).forEach(special => {
+            if (!special.name) return;
+            if (excludeSet.has(special.name)) return;
+            if (disabledFields.includes(special.name)) return;
+            if (window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) return;
 
             let available = true;
-            const props = activityProperties[s.name] || {};
+            const props = activityProperties[special.name] || {};
             const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
 
             for (const slotIdx of slots) {
-                const usage = simulatedUsage[slotIdx]?.[s.name];
+                const usage = simulatedUsage[slotIdx]?.[special.name];
                 if (usage && usage.count >= maxCapacity) { available = false; break; }
-                if (window.GlobalFieldLocks?.isFieldLocked(s.name, [slotIdx], divName)) { available = false; break; }
             }
 
             if (available) {
-                const penalty = calculateRotationPenalty(bunk, s.name, slots, activityProperties);
+                const penalty = calculateRotationPenalty(bunk, special.name, slots);
                 if (penalty !== Infinity) {
-                    candidates.push({ field: s.name, activityName: s.name, type: 'special', penalty });
+                    candidates.push({ field: special.name, activityName: special.name, type: 'special', penalty });
                 }
             }
         });
 
+        // Fields from app1.fields with their activities
+        (app1.fields || []).forEach(field => {
+            if (!field.name || field.available === false) return;
+            if (excludeSet.has(field.name)) return;
+            if (disabledFields.includes(field.name)) return;
+            if (window.GlobalFieldLocks?.isFieldLocked(field.name, slots, divName)) return;
+
+            let available = true;
+            const props = activityProperties[field.name] || {};
+            const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
+
+            for (const slotIdx of slots) {
+                const usage = simulatedUsage[slotIdx]?.[field.name];
+                if (usage && usage.count >= maxCapacity) { available = false; break; }
+            }
+
+            if (available) {
+                (field.activities || []).forEach(activity => {
+                    const penalty = calculateRotationPenalty(bunk, activity, slots);
+                    if (penalty !== Infinity) {
+                        candidates.push({ field: field.name, activityName: activity, type: 'sport', penalty });
+                    }
+                });
+            }
+        });
+
+        // Sort by penalty (lowest first) and return best
         candidates.sort((a, b) => a.penalty - b.penalty);
+        
+        console.log(`[findAlternative] ${bunk}: Found ${candidates.length} candidates, best: ${candidates[0]?.activityName || 'none'}`);
+        
         return candidates[0] || null;
     }
-
     // --- HELPER: CHECK IF MOVE CREATES NEW CONFLICTS ---
 
     function checkIfMoveCreatesConflict(bunk, slot, newField, simulatedUsage, alreadyProcessed) {
