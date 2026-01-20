@@ -2031,7 +2031,8 @@
         if (window.saveCurrentDailyData) {
             window.saveCurrentDailyData('scheduleAssignments', window.scheduleAssignments, { silent });
             window.saveCurrentDailyData('leagueAssignments', window.leagueAssignments, { silent });
-            window.saveCurrentDailyData('unifiedTimes', window.unifiedTimes, { silent });
+            // Save divisionTimes instead of unifiedTimes (unifiedTimes is deprecated)
+            window.saveCurrentDailyData('divisionTimes', window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || {}, { silent });
         }
     }
 
@@ -3387,7 +3388,10 @@
     window.ScheduleVersionMerger = { mergeAndPush: async (dateKey) => { window.currentScheduleDate = dateKey; return await VersionManager.mergeVersions(); } };
     window.SmartRegenSystem = { smartRegenerateConflicts, smartReassignBunkActivity, findBestActivityForBunk, buildFieldUsageBySlot, buildCandidateOptions, calculateRotationPenalty, isFieldAvailable, getActivityProperties, applyPickToBunk, ROTATION_CONFIG };
     window.PinnedActivitySystem = { capture: capturePinnedActivities, registerLocks: registerPinnedFieldLocks, registerUsage: registerPinnedFieldUsage, restore: restorePinnedActivities, getAll: getPinnedActivities, unpin: unpinActivity, unpinAll: unpinAllActivities, debug: () => ({ snapshot: _pinnedSnapshot, locks: _pinnedFieldLocks }) };
-    
+    window.getSlotTimeRange = getSlotTimeRange;
+    window.findFirstSlotForTime = findFirstSlotForTime;
+    window.checkCrossDivisionConflict = checkCrossDivisionConflict;
+    window.buildFieldUsageBySlot = buildFieldUsageBySlot;
     // ★★★ RBAC BYPASS EXPORTS ★★★
     window.enableBypassRBACView = enableBypassRBACView;
     window.disableBypassRBACView = disableBypassRBACView;
