@@ -877,13 +877,16 @@
             }
         }
 
-        // ★★★ INITIALIZE ASSIGNMENTS PER DIVISION (with correct slot count) ★★★
+        // ★★★ INITIALIZE WITH DIVISION-SPECIFIC SLOT COUNTS ★★★
         Object.keys(divisions).forEach(divName => {
             const divSlots = window.divisionTimes?.[divName] || [];
-            const slotCount = divSlots.length || window.unifiedTimes.length;
+            const slotCount = divSlots.length > 0 ? divSlots.length : (window.unifiedTimes?.length || 20);
+
             (divisions[divName]?.bunks || []).forEach(b => {
                 window.scheduleAssignments[b] = new Array(slotCount).fill(null);
             });
+
+            console.log(`[STEP 1] Initialized ${divName} bunks with ${slotCount} slots`);
         });
 
         // =========================================================================
