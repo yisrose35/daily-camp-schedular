@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v17.4 - DIVISION TIMES SUPPORT)
+// scheduler_core_main.js (FIXED v17.5 - SPLIT TILE & PINNED EVENT FIXES)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
@@ -15,6 +15,8 @@
 // v17 FIX: Fixed forEach loop that wasn't properly closed, causing Steps 4-8
 //          to be nested inside the loop instead of after it.
 // v17.4: Added DivisionTimesSystem support for division-specific slotting.
+// v17.5: Fixed split tile handling - store time metadata, fix Step 7 filter
+//        Fixed pinned events not being filled properly
 // ============================================================================
 
 (function() {
@@ -88,12 +90,8 @@
     function canScheduleAtLocation(activityName, locationName, slots) {
         if (!locationName) return true;
 
-        // ★★★ FIX: Use comprehensive field usage from ALL divisions ★★★
-        // buildFieldUsageBySlot() scans scheduleAssignments for ALL bunks,
-        // not just the current scheduler's real-time reservations
         const comprehensiveUsage = window.buildFieldUsageBySlot?.() || {};
         
-        // Get capacity for this location from global settings
         const globalSettings = window.loadGlobalSettings?.() || {};
         const fields = globalSettings.app1?.fields || globalSettings.fields || [];
         const fieldConfig = fields.find(f => f.name?.toLowerCase() === locationName.toLowerCase());
@@ -105,7 +103,6 @@
             maxCapacity = 2;
         }
         
-        // Also check activityProperties for capacity info
         const actProps = window.activityProperties?.[locationName] || {};
         if (actProps.sharableWith?.capacity) {
             maxCapacity = Math.max(maxCapacity, parseInt(actProps.sharableWith.capacity) || 1);
@@ -116,9 +113,7 @@
         for (const slotIdx of slots) {
             const slotUsage = comprehensiveUsage[slotIdx]?.[locationName];
             if (slotUsage) {
-                // Check if at capacity
                 if (slotUsage.count >= maxCapacity) {
-                    // Field is at capacity - check if all users are same activity (shareable case)
                     const activitiesInUse = Object.values(slotUsage.bunks || {});
                     const allSameActivity = activitiesInUse.every(
                         act => act.toLowerCase() === activityName.toLowerCase()
@@ -266,27 +261,20 @@
     // -------------------------------------------------------------------------
     // fillBlock — Buffer/Merge-Safe Inline Writer
     // -------------------------------------------------------------------------
+    // v17.5 FIX: Added time range metadata (_startMin, _endMin) for split tiles
 
     function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill = false, activityProperties) {
         const Utils = window.SchedulerCoreUtils;
         
-        // ★★★ SAFETY: Handle missing block gracefully ★★★
         if (!block) {
             console.error('[fillBlock] Block is null/undefined');
             return;
         }
         
         // ★★★ SPECIAL CASE: League blocks with bunks array (teams ≠ bunks) ★★★
-        // When league cores call fillBlock with a league block, the block has a `bunks` array
-        // (all bunks in division) but NO specific `bunk` property because:
-        // - League TEAMS are separate entities defined in leagues.js
-        // - Teams consist of people from MULTIPLE bunks
-        // - We should NOT write to individual bunk schedules for league games
-        // - Instead, store the matchup data at the DIVISION level
         if (block.type === 'league' && block.bunks && !block.bunk && !block.team) {
             console.log(`[fillBlock] League block for ${block.divName} - storing matchups only (teams ≠ bunks)`);
             
-            // Store league matchups at division level
             if (pick && (pick._allMatchups || pick._h2h) && block.divName && block.slots?.length > 0) {
                 if (!window.leagueAssignments) window.leagueAssignments = {};
                 if (!window.leagueAssignments[block.divName]) {
@@ -304,10 +292,9 @@
                     console.log(`[fillBlock] ✅ Stored league matchups for ${block.divName} at slot ${slotIdx}: ${(pick._allMatchups || []).length} matchups`);
                 }
             }
-            return; // Don't try to write to individual bunks for league blocks
+            return;
         }
         
-        // If bunk is missing, try to get it from alternative properties (leagues use different format)
         let bunk = block.bunk;
         if (!bunk && block.team) bunk = block.team;
         if (!bunk && block.bunkName) bunk = block.bunkName;
@@ -317,13 +304,10 @@
             return;
         }
         
-        // Normalize bunk to the block object
         block.bunk = bunk;
         
-        // ★★★ SAFETY: Compute slots if missing ★★★
         if (!block.slots || block.slots.length === 0) {
             if (block.startTime !== undefined && block.endTime !== undefined) {
-                // IMPORTANT: Pass block.divName to findSlotsForRange if available
                 block.slots = Utils.findSlotsForRange(block.startTime, block.endTime, block.divName);
             }
             if (!block.slots || block.slots.length === 0) {
@@ -340,17 +324,15 @@
             effectiveStart,
             effectiveEnd
         } = Utils.getEffectiveTimeRange(block, trans);
-        // bunk already extracted above
         const zone = trans.zone;
 
-        // ★★★ CRITICAL: Initialize bunk array if not exists (MUST be done FIRST) ★★★
-if (!window.scheduleAssignments[bunk]) {
-    // Use division-specific slot count, not global unifiedTimes
-    const divName = block.divName || Utils.getDivisionForBunk?.(bunk) || window.DivisionTimesSystem?.getDivisionForBunk(bunk);
-    const divSlots = window.divisionTimes?.[divName];
-    const slotCount = divSlots?.length || window.unifiedTimes?.length || 50;
-    window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
-}
+        // ★★★ CRITICAL: Initialize bunk array if not exists ★★★
+        if (!window.scheduleAssignments[bunk]) {
+            const divName = block.divName || Utils.getDivisionForBunk?.(bunk) || window.DivisionTimesSystem?.getDivisionForBunk(bunk);
+            const divSlots = window.divisionTimes?.[divName];
+            const slotCount = divSlots?.length || window.unifiedTimes?.length || 50;
+            window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
+        }
 
         let writePre = trans.preMin > 0;
         let writePost = trans.postMin > 0;
@@ -395,7 +377,15 @@ if (!window.scheduleAssignments[bunk]) {
 
         mainSlots.forEach((slotIndex, i) => {
             const existing = window.scheduleAssignments[bunk][slotIndex];
-            if (!existing || existing._isTransition) {
+            
+            // ★★★ v17.5 FIX: For split tiles, check time overlap before rejecting ★★★
+            const canWrite = !existing || 
+                            existing._isTransition ||
+                            (pick._fromSplitTile && existing._fromSplitTile && 
+                             block.startTime !== undefined && existing._startMin !== undefined &&
+                             (block.startTime >= existing._endMin || block.endTime <= existing._startMin));
+            
+            if (canWrite) {
                 window.scheduleAssignments[bunk][slotIndex] = {
                     field: fName,
                     sport: pick.sport,
@@ -407,15 +397,17 @@ if (!window.scheduleAssignments[bunk]) {
                     _gameLabel: pick._gameLabel || null,
                     _zone: zone,
                     _endTime: effectiveEnd,
-                    _bunkOverride: pick._bunkOverride || false
+                    _bunkOverride: pick._bunkOverride || false,
+                    // ★★★ v17.5: Store time range for split tile disambiguation ★★★
+                    _startMin: block.startTime,
+                    _endMin: block.endTime,
+                    _fromSplitTile: pick._fromSplitTile || false
                 };
                 window.registerSingleSlotUsage(slotIndex, fName, block.divName, bunk, pick._activity || fName, fieldUsageBySlot, activityProperties);
             }
         });
 
-        // ★★★ CRITICAL: Store league matchups in leagueAssignments by DIVISION ★★★
-        // League teams are SEPARATE from bunks - matchups must be stored by division/slot
-        // This allows the UI to retrieve team matchups without scanning bunks
+        // Store league matchups
         if ((pick._h2h || pick._allMatchups) && block.divName) {
             if (!window.leagueAssignments) window.leagueAssignments = {};
             if (!window.leagueAssignments[block.divName]) {
@@ -423,7 +415,6 @@ if (!window.scheduleAssignments[bunk]) {
             }
             
             mainSlots.forEach(slotIndex => {
-                // Only set if not already set (first write wins for this slot)
                 if (!window.leagueAssignments[block.divName][slotIndex]) {
                     window.leagueAssignments[block.divName][slotIndex] = {
                         matchups: pick._allMatchups || [],
@@ -633,7 +624,7 @@ if (!window.scheduleAssignments[bunk]) {
 
     window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v17 - FOREACH CLOSURE FIX) ★★★");
+        console.log("★★★ OPTIMIZER STARTED (v17.5 - SPLIT TILE & PINNED FIX) ★★★");
 
         // ★★★ SCHEDULER RESTRICTION ★★★
         if (window.AccessControl?.filterDivisionsForGeneration) {
@@ -682,7 +673,10 @@ if (!window.scheduleAssignments[bunk]) {
 
             if (snapshotSource && Object.keys(snapshotSource).length > 0) {
                 existingScheduleSnapshot = JSON.parse(JSON.stringify(snapshotSource));
-                if (!existingUnifiedTimes) existingUnifiedTimes = window.unifiedTimes;
+                if (!existingUnifiedTimes) {
+                    // ★★★ v17.5 FIX: Build proper unifiedTimes for Step 1.5 ★★★
+                    existingUnifiedTimes = window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes?.(window.divisionTimes) || window.unifiedTimes;
+                }
                 console.log(`[OPTIMIZER] ✅ Preserved snapshot of ${Object.keys(existingScheduleSnapshot).length} bunks for background restoration.`);
             } else {
                 console.warn("[OPTIMIZER] ⚠️ No existing schedule found to preserve. Generating fresh.");
@@ -850,14 +844,13 @@ if (!window.scheduleAssignments[bunk]) {
 
         console.log('[STEP 1] Building division-specific time slots...');
         
-        // ★★★ USE NEW DIVISION TIMES SYSTEM ★★★
         if (window.DivisionTimesSystem) {
             window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
-            window.unifiedTimes = window.DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes();
+            // ★★★ v17.5 FIX: Build proper unifiedTimes (not empty) ★★★
+            window.unifiedTimes = window.DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes(window.divisionTimes);
             console.log(`[STEP 1] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
             console.log(`[STEP 1] Virtual unifiedTimes: ${window.unifiedTimes.length} slots`);
         } else {
-            // Fallback to old system if new system not loaded
             console.warn('[STEP 1] DivisionTimesSystem not loaded, using legacy grid');
             const timePoints = new Set([540, 960]);
             manualSkeleton.forEach(item => {
@@ -907,6 +900,8 @@ if (!window.scheduleAssignments[bunk]) {
                 if (t instanceof Date) return t.toISOString();
                 if (t.start instanceof Date) return t.start.toISOString();
                 if (typeof t.start === 'string') return t.start;
+                // ★★★ v17.5 FIX: Also use startMin-endMin as signature ★★★
+                if (t.startMin !== undefined) return `${t.startMin}-${t.endMin}`;
                 return String(t);
             }
 
@@ -920,13 +915,15 @@ if (!window.scheduleAssignments[bunk]) {
                 let restoredBunks = 0;
                 let restoredSlots = 0;
 
+                // ★★★ v17.5 FIX: Build proper time map ★★★
                 const newTimeMap = new Map();
-                window.unifiedTimes.forEach((t, i) => {
+                const newUnifiedTimes = window.unifiedTimes || [];
+                newUnifiedTimes.forEach((t, i) => {
                     const sig = getTimeSig(t);
                     if (sig) newTimeMap.set(sig, i);
                 });
 
-                console.log(`[Step1.5] Mapping existing data to ${window.unifiedTimes.length} slots...`);
+                console.log(`[Step1.5] Mapping existing data to ${newUnifiedTimes.length} slots...`);
                 console.log(`[Step1.5]    Snapshot bunks: ${Object.keys(snapshot).length}`);
                 console.log(`[Step1.5]    Allowed divisions (will skip): ${allowedDivisions?.join(', ') || 'NONE'}`);
 
@@ -941,26 +938,20 @@ if (!window.scheduleAssignments[bunk]) {
                         continue;
                     }
 
+                    // ★★★ v17.5 FIX: Use correct slot count for division ★★★
+                    const divSlots = window.divisionTimes?.[divName] || [];
+                    const targetSlotCount = divSlots.length || newUnifiedTimes.length || slots.length;
+                    
                     if (!window.scheduleAssignments[bunkName]) {
-                        window.scheduleAssignments[bunkName] = new Array(window.unifiedTimes.length);
+                        window.scheduleAssignments[bunkName] = new Array(targetSlotCount).fill(null);
                     }
 
                     for (let i = 0; i < slots.length; i++) {
                         if (slots[i]) {
                             let targetIndex = i;
 
-                            if (existingUnifiedTimes && existingUnifiedTimes[i]) {
-                                const oldSig = getTimeSig(existingUnifiedTimes[i]);
-                                if (newTimeMap.has(oldSig)) {
-                                    targetIndex = newTimeMap.get(oldSig);
-                                } else {
-                                    continue;
-                                }
-                            } else if (window.unifiedTimes.length !== slots.length) {
-                                // Length mismatch, proceed with caution
-                            }
-
-                            if (targetIndex < window.scheduleAssignments[bunkName].length) {
+                            // ★★★ v17.5: Try direct index mapping first for division-aware restoration ★★★
+                            if (targetIndex < targetSlotCount) {
                                 window.scheduleAssignments[bunkName][targetIndex] = {
                                     ...slots[i],
                                     _locked: true,
@@ -988,12 +979,6 @@ if (!window.scheduleAssignments[bunk]) {
                 const allowedSet = new Set(allowedDivisions || []);
                 let registrations = 0;
 
-                const newTimeMap = new Map();
-                window.unifiedTimes.forEach((t, i) => {
-                    const sig = getTimeSig(t);
-                    if (sig) newTimeMap.set(sig, i);
-                });
-
                 console.log('[Step1.5] Registering field usage from restored schedules...');
 
                 for (const [bunkName, slots] of Object.entries(snapshot)) {
@@ -1009,13 +994,7 @@ if (!window.scheduleAssignments[bunk]) {
                         const slotData = slots[i];
                         if (!slotData || !slotData.field) continue;
 
-                        let targetIndex = i;
-                        if (existingUnifiedTimes && existingUnifiedTimes[i]) {
-                            const oldSig = getTimeSig(existingUnifiedTimes[i]);
-                            if (newTimeMap.has(oldSig)) targetIndex = newTimeMap.get(oldSig);
-                            else continue;
-                        }
-
+                        const targetIndex = i;
                         const fieldName = slotData.field;
                         const activityName = slotData._activity || fieldName;
 
@@ -1363,6 +1342,9 @@ if (!window.scheduleAssignments[bunk]) {
         const leagueBlocks = [];
         const specialtyLeagueBlocks = [];
         const GENERATOR_TYPES = ["slot", "activity", "sports", "special", "league", "specialty_league"];
+        
+        // ★★★ v17.5: Track pinned events for verification ★★★
+        let pinnedEventCount = 0;
 
         manualSkeleton.forEach(item => {
             const divName = item.division;
@@ -1377,11 +1359,50 @@ if (!window.scheduleAssignments[bunk]) {
             const sMin = Utils.parseTimeToMinutes(item.startTime);
             const eMin = Utils.parseTimeToMinutes(item.endTime);
 
+            // ★★★ v17.5 FIX: Process PINNED events FIRST (before overlap check) ★★★
+            const isPinnedType = item.type === 'pinned' || 
+                                item.pinned === true ||
+                                ['lunch', 'snacks', 'dismissal', 'regroup', 'swim'].some(
+                                    pt => (item.type || '').toLowerCase() === pt ||
+                                          (item.event || '').toLowerCase().includes(pt)
+                                );
+            
+            if (isPinnedType && item.type !== 'split' && item.type !== 'smart') {
+                const slots = Utils.findSlotsForRange(sMin, eMin, divName);
+                if (slots.length > 0) {
+                    const eventName = item.event || item.type || 'Pinned Event';
+                    
+                    bunkList.forEach(bunk => {
+                        const existing = window.scheduleAssignments[bunk]?.[slots[0]];
+                        if (existing && existing._bunkOverride) return;
+
+                        fillBlock({
+                            divName,
+                            bunk,
+                            startTime: sMin,
+                            endTime: eMin,
+                            slots
+                        }, {
+                            field: eventName,
+                            sport: null,
+                            _fixed: true,
+                            _pinned: true,
+                            _activity: eventName
+                        }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                        
+                        pinnedEventCount++;
+                    });
+                    
+                    console.log(`[SKELETON] ✅ Filled pinned "${eventName}" for ${divName} (${bunkList.length} bunks)`);
+                }
+                return; // Done with this item
+            }
+
             // Skip slots that overlap with pinned events
             if (item.type === 'slot' || GENERATOR_TYPES.includes(item.type)) {
                 const hasPinnedOverlap = manualSkeleton.some(other =>
                     other.division === divName &&
-                    other.type === 'pinned' &&
+                    (other.type === 'pinned' || other.pinned === true) &&
                     Utils.parseTimeToMinutes(other.startTime) < eMin &&
                     Utils.parseTimeToMinutes(other.endTime) > sMin
                 );
@@ -1463,6 +1484,7 @@ if (!window.scheduleAssignments[bunk]) {
                             return;
                         }
 
+                        // ★★★ v17.5 FIX: Always fill directly, queue with time metadata ★★★
                         if (isGen) {
                             schedulableSlotBlocks.push({
                                 divName,
@@ -1472,9 +1494,12 @@ if (!window.scheduleAssignments[bunk]) {
                                 startTime: start,
                                 endTime: end,
                                 slots,
-                                fromSplitTile: true
+                                fromSplitTile: true,
+                                // ★★★ v17.5: Store time range explicitly ★★★
+                                _splitTimeStart: start,
+                                _splitTimeEnd: end
                             });
-                            console.log(`[SPLIT]    📋 ${b} → QUEUED for "${normName}"`);
+                            console.log(`[SPLIT]    📋 ${b} → QUEUED for "${normName}" (${start}-${end})`);
                         } else {
                             fillBlock({
                                 divName,
@@ -1487,9 +1512,11 @@ if (!window.scheduleAssignments[bunk]) {
                                 sport: null,
                                 _fixed: true,
                                 _activity: actName,
-                                _fromSplitTile: true
+                                _fromSplitTile: true,
+                                _startMin: start,
+                                _endMin: end
                             }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                            console.log(`[SPLIT]    ✅ ${b} → FILLED with "${actName}"`);
+                            console.log(`[SPLIT]    ✅ ${b} → FILLED with "${actName}" (${start}-${end})`);
                         }
                     });
                 };
@@ -1516,7 +1543,6 @@ if (!window.scheduleAssignments[bunk]) {
             // NON-SPLIT BLOCKS: Categorize into league/specialty/schedulable
             // =========================================================================
             
-            // ★★★ FIX: Use division-specific slots ★★★
             const slots = Utils.findSlotsForRange(sMin, eMin, divName);
             if (slots.length === 0) return;
 
@@ -1553,28 +1579,6 @@ if (!window.scheduleAssignments[bunk]) {
                 return;
             }
 
-            // Check if it's a pinned event
-            if (item.type === 'pinned' || item.pinned) {
-                bunkList.forEach(bunk => {
-                    const existing = window.scheduleAssignments[bunk]?.[slots[0]];
-                    if (existing && existing._bunkOverride) return;
-
-                    fillBlock({
-                        divName,
-                        bunk,
-                        startTime: sMin,
-                        endTime: eMin,
-                        slots
-                    }, {
-                        field: eventName,
-                        sport: null,
-                        _fixed: true,
-                        _activity: eventName
-                    }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                });
-                return;
-            }
-
             // Check if it's a smart tile (handled separately)
             if (item.type === 'smart' || item.smartActivities) {
                 return; // Smart tiles are processed in processSmartTiles
@@ -1600,6 +1604,7 @@ if (!window.scheduleAssignments[bunk]) {
         }); // ★★★ END OF manualSkeleton.forEach ★★★
 
         console.log(`[SKELETON] Categorized: ${specialtyLeagueBlocks.length} specialty league, ${leagueBlocks.length} regular league, ${schedulableSlotBlocks.length} general blocks`);
+        console.log(`[SKELETON] ✅ Filled ${pinnedEventCount} pinned event assignments`);
 
         // =========================================================================
         // ★★★ STEP 4: PROCESS SPECIALTY LEAGUES FIRST ★★★
@@ -1624,7 +1629,6 @@ if (!window.scheduleAssignments[bunk]) {
             dailyLeagueSportsUsage: {},
             fillBlock,
             fields: config.masterFields || [],
-            // ★★★ NEW: Provide direct access to leagueAssignments for league cores ★★★
             leagueAssignments: window.leagueAssignments,
             storeLeagueMatchups: function(divName, slots, matchups, gameLabel, sport, leagueName) {
                 if (!window.leagueAssignments[divName]) {
@@ -1664,19 +1668,13 @@ if (!window.scheduleAssignments[bunk]) {
         // =========================================================================
         // ★★★ STEP 5.5: CONSOLIDATE LEAGUE ASSIGNMENTS ★★★
         // =========================================================================
-        // League teams are SEPARATE from bunks - they're defined in leagues.js
-        // This step ensures window.leagueAssignments is properly populated with
-        // team-based matchups at the division level for UI rendering
-        // =========================================================================
 
         console.log("\n[STEP 5.5] Consolidating league assignments...");
         
-        // Get all active leagues - handle both array and object formats
         let activeLeagues = [];
         if (Array.isArray(masterLeagues)) {
             activeLeagues = masterLeagues.filter(l => !disabledLeagues?.includes(l.name));
         } else if (masterLeagues && typeof masterLeagues === 'object') {
-            // masterLeagues might be an object keyed by league name
             activeLeagues = Object.values(masterLeagues).filter(l => l && !disabledLeagues?.includes(l.name));
         }
         
@@ -1689,13 +1687,11 @@ if (!window.scheduleAssignments[bunk]) {
         
         console.log(`[STEP 5.5] Active leagues: ${activeLeagues.length}, Specialty: ${activeSpecialtyLeagues.length}`);
         
-        // Process regular league blocks - store team matchups at division level
         leagueBlocks.forEach(block => {
             const divName = block.divName;
             const slots = block.slots || [];
             if (slots.length === 0) return;
             
-            // Find leagues that apply to this division
             const applicableLeagues = activeLeagues.filter(league => {
                 return league.divisions?.includes(divName);
             });
@@ -1704,26 +1700,21 @@ if (!window.scheduleAssignments[bunk]) {
                 const leagueTeams = league.teams || [];
                 if (leagueTeams.length < 2) return;
                 
-                // Initialize division in leagueAssignments
                 if (!window.leagueAssignments[divName]) {
                     window.leagueAssignments[divName] = {};
                 }
                 
-                // Store at first slot of the block
                 const slotIdx = slots[0];
                 
-                // Check if already populated (by fillBlock or earlier)
                 if (window.leagueAssignments[divName][slotIdx]?.matchups?.length > 0) {
                     console.log(`   ✓ ${divName} slot ${slotIdx}: Already has ${window.leagueAssignments[divName][slotIdx].matchups.length} matchups`);
                     return;
                 }
                 
-                // Try to get matchups from multiple sources:
                 let foundMatchups = [];
                 let foundGameLabel = league.name + ' Game';
                 let foundSport = league.sports?.[0] || '';
                 
-                // Source 1: Check bunk entries for _allMatchups
                 const bunks = divisions[divName]?.bunks || [];
                 for (const bunk of bunks) {
                     const entry = window.scheduleAssignments[bunk]?.[slotIdx];
@@ -1735,7 +1726,6 @@ if (!window.scheduleAssignments[bunk]) {
                     }
                 }
                 
-                // Source 2: Check window.lastLeagueMatchups (if set by league core)
                 if (foundMatchups.length === 0 && window.lastLeagueMatchups?.[divName]) {
                     const lastData = window.lastLeagueMatchups[divName];
                     foundMatchups = lastData.matchups || [];
@@ -1743,12 +1733,9 @@ if (!window.scheduleAssignments[bunk]) {
                     foundSport = lastData.sport || foundSport;
                 }
                 
-                // Source 3: Generate round-robin matchups from team configuration
-                // This is a fallback when the league core didn't store matchups
                 if (foundMatchups.length === 0 && leagueTeams.length >= 2) {
                     console.log(`   ⚠️ No stored matchups for ${league.name} in ${divName}, generating from team config`);
                     
-                    // Generate round-robin matchups
                     for (let i = 0; i < leagueTeams.length - 1; i += 2) {
                         const teamA = leagueTeams[i];
                         const teamB = leagueTeams[i + 1];
@@ -1760,7 +1747,6 @@ if (!window.scheduleAssignments[bunk]) {
                             });
                         }
                     }
-                    // Handle odd number of teams
                     if (leagueTeams.length % 2 === 1) {
                         foundMatchups.push({
                             teamA: leagueTeams[leagueTeams.length - 1],
@@ -1783,7 +1769,6 @@ if (!window.scheduleAssignments[bunk]) {
             });
         });
         
-        // Process specialty league blocks similarly
         specialtyLeagueBlocks.forEach(block => {
             const divName = block.divName;
             const slots = block.slots || [];
@@ -1803,7 +1788,6 @@ if (!window.scheduleAssignments[bunk]) {
                 
                 const slotIdx = slots[0];
                 
-                // Check if already populated
                 if (window.leagueAssignments[divName][slotIdx]?.matchups?.length > 0) {
                     return;
                 }
@@ -1823,7 +1807,6 @@ if (!window.scheduleAssignments[bunk]) {
                     }
                 }
                 
-                // Fallback: Generate from team config
                 if (foundMatchups.length === 0 && leagueTeams.length >= 2) {
                     for (let i = 0; i < leagueTeams.length - 1; i += 2) {
                         const teamA = leagueTeams[i];
@@ -1879,6 +1862,7 @@ if (!window.scheduleAssignments[bunk]) {
 
         console.log("\n[STEP 7] Running Total Solver for remaining activities...");
 
+        // ★★★ v17.5 FIX: Modified filter to allow split tile second-half items ★★★
         const remainingActivityBlocks = schedulableSlotBlocks
             .filter(b => {
                 const isLeague = /league/i.test(b.event) || b.type === 'league' || b.type === 'specialty_league';
@@ -1887,8 +1871,33 @@ if (!window.scheduleAssignments[bunk]) {
             .filter(block => {
                 const s = block.slots;
                 if (!s || s.length === 0) return false;
+                
                 const existing = window.scheduleAssignments[block.bunk]?.[s[0]];
                 if (existing && existing._bunkOverride) return false;
+                
+                // ★★★ v17.5 FIX: Allow split tile items even if slot has existing data ★★★
+                // Split tiles may have both halves targeting the same slot index
+                if (block.fromSplitTile) {
+                    // Check if existing entry is from a different time range
+                    if (existing && existing._fromSplitTile) {
+                        const existingStart = existing._startMin;
+                        const existingEnd = existing._endMin;
+                        const blockStart = block.startTime || block._splitTimeStart;
+                        const blockEnd = block.endTime || block._splitTimeEnd;
+                        
+                        // Allow if time ranges don't overlap
+                        if (blockStart >= existingEnd || blockEnd <= existingStart) {
+                            return true;
+                        }
+                    }
+                    // If no existing or existing is not from split, allow
+                    if (!existing || existing._activity === TRANSITION_TYPE) {
+                        return true;
+                    }
+                    // If existing is from split but same time range, skip (already filled)
+                    return false;
+                }
+                
                 return !existing || existing._activity === TRANSITION_TYPE;
             })
             .map(b => ({ ...b, _isLeague: false }));
@@ -1973,6 +1982,6 @@ if (!window.scheduleAssignments[bunk]) {
 
     window.registerSingleSlotUsage = registerSingleSlotUsage;
 
-    console.log('⚙️ Scheduler Core Main v17.4 loaded (DIVISION TIMES SUPPORT)');
+    console.log('⚙️ Scheduler Core Main v17.5 loaded (SPLIT TILE & PINNED EVENT FIXES)');
 
 })();
