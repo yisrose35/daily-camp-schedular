@@ -85,16 +85,77 @@
         return d;
     };
 
-    Utils.findSlotsForRange = function (startMin, endMin) {
+    /**
+     * Find slot indices for a time range
+     * @param {number} startMin - Start time in minutes
+     * @param {number} endMin - End time in minutes
+     * @param {string} [divisionOrBunk] - Division name or bunk name (NEW: for division-specific lookup)
+     * @returns {number[]} Array of slot indices
+     */
+    Utils.findSlotsForRange = function (startMin, endMin, divisionOrBunk = null) {
         const slots = [];
-        if (!window.unifiedTimes || startMin == null || endMin == null) return slots;
+        if (startMin == null || endMin == null) return slots;
+
+        // ★★★ NEW: Division-specific lookup ★★★
+        if (divisionOrBunk && window.divisionTimes) {
+            let divName = divisionOrBunk;
+
+            // Check if it's a bunk name, get its division
+            const divisions = window.divisions || {};
+            for (const [dName, dData] of Object.entries(divisions)) {
+                if (dData.bunks?.includes(divisionOrBunk)) {
+                    divName = dName;
+                    break;
+                }
+            }
+
+            const divSlots = window.divisionTimes[divName];
+            if (divSlots && divSlots.length > 0) {
+                for (let i = 0; i < divSlots.length; i++) {
+                    const slot = divSlots[i];
+                    // Check if slot overlaps with requested range
+                    if (!(slot.endMin <= startMin || slot.startMin >= endMin)) {
+                        slots.push(i);
+                    }
+                }
+                return slots;
+            }
+        }
+
+        // Fallback to legacy unifiedTimes
+        if (!window.unifiedTimes) return slots;
 
         for (let i = 0; i < window.unifiedTimes.length; i++) {
             const slot = window.unifiedTimes[i];
-            const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+            const slotStart = slot.startMin ?? (new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes());
             if (slotStart >= startMin && slotStart < endMin) slots.push(i);
         }
         return slots;
+    };
+
+    /**
+     * NEW: Get slot info for a division at a specific index
+     */
+    Utils.getDivisionSlot = function(divisionName, slotIndex) {
+        return window.divisionTimes?.[divisionName]?.[slotIndex] || null;
+    };
+
+    /**
+     * NEW: Get all slots for a division
+     */
+    Utils.getDivisionSlots = function(divisionName) {
+        return window.divisionTimes?.[divisionName] || [];
+    };
+
+    /**
+     * NEW: Get division name for a bunk
+     */
+    Utils.getDivisionForBunk = function(bunkName) {
+        const divisions = window.divisions || {};
+        for (const [divName, divData] of Object.entries(divisions)) {
+            if (divData.bunks?.includes(bunkName)) return divName;
+        }
+        return null;
     };
 
     Utils.getBlockTimeRange = function (block) {
