@@ -1,6 +1,11 @@
 // =============================================================================
-// division_times_integration.js v1.0 — INTEGRATION LAYER
+// division_times_integration.js v1.1 — INTEGRATION LAYER
 // =============================================================================
+//
+// v1.1 CHANGES:
+// - Added skeleton parameter fallback to window.manualSkeleton, 
+//   window.dailyOverrideSkeleton, or localStorage when parameter is empty
+// - Fixed division 4,5,6 getting wrong slot counts
 //
 // This file patches the existing scheduler systems to use the new
 // per-division time slot system instead of the fixed 30-minute grid.
@@ -15,7 +20,7 @@
 (function() {
     'use strict';
 
-    const VERSION = '1.0.0';
+    const VERSION = '1.1.0';
     const DEBUG = true;
 
     function log(...args) {
@@ -40,6 +45,57 @@
     }
 
     // =========================================================================
+    // HELPER: GET SKELETON FROM ANY SOURCE
+    // =========================================================================
+
+    function getSkeletonFromAnySource() {
+        // Priority 1: Window globals
+        if (window.manualSkeleton && window.manualSkeleton.length > 0) {
+            log('Using skeleton from window.manualSkeleton: ' + window.manualSkeleton.length + ' items');
+            return window.manualSkeleton;
+        }
+        
+        if (window.dailyOverrideSkeleton && window.dailyOverrideSkeleton.length > 0) {
+            log('Using skeleton from window.dailyOverrideSkeleton: ' + window.dailyOverrideSkeleton.length + ' items');
+            return window.dailyOverrideSkeleton;
+        }
+        
+        // Priority 2: localStorage with date key
+        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const storageKey = 'campManualSkeleton_' + dateKey;
+        
+        try {
+            const stored = localStorage.getItem(storageKey);
+            if (stored) {
+                const parsed = JSON.parse(stored);
+                if (parsed && parsed.length > 0) {
+                    log('Using skeleton from localStorage (' + storageKey + '): ' + parsed.length + ' items');
+                    // Also set window globals for consistency
+                    window.manualSkeleton = parsed;
+                    window.dailyOverrideSkeleton = parsed;
+                    return parsed;
+                }
+            }
+        } catch (e) {
+            log('Failed to load skeleton from localStorage:', e);
+        }
+        
+        // Priority 3: app1 globals
+        try {
+            const app1 = window.app1 || window.loadGlobalSettings?.()?.app1;
+            if (app1?.dailySkeletons?.[dateKey]?.length > 0) {
+                log('Using skeleton from app1.dailySkeletons: ' + app1.dailySkeletons[dateKey].length + ' items');
+                return app1.dailySkeletons[dateKey];
+            }
+        } catch (e) {
+            log('Failed to load from app1:', e);
+        }
+        
+        log('WARNING: No skeleton found from any source!');
+        return [];
+    }
+
+    // =========================================================================
     // PATCH: SCHEDULER CORE - runSkeletonOptimizer
     // =========================================================================
 
@@ -51,6 +107,13 @@
 
         // Create wrapper that builds divisionTimes first
         window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
+            
+            // ★★★ FIX v1.1: Fallback if skeleton parameter is empty ★★★
+            if (!manualSkeleton || manualSkeleton.length === 0) {
+                log('Skeleton parameter empty, checking fallbacks...');
+                manualSkeleton = getSkeletonFromAnySource();
+            }
+            
             console.log('\n' + '═'.repeat(70));
             console.log('★★★ DIVISION TIMES INTEGRATION - PRE-OPTIMIZER SETUP ★★★');
             console.log('═'.repeat(70));
@@ -119,22 +182,17 @@
             const oldSlot = oldUnifiedTimes[oldIdx];
             if (!oldSlot) return;
 
-            const startMin = oldSlot.startMin ?? (oldSlot.start instanceof Date ? 
+            const startMin = oldSlot.startMin ?? (oldSlot.start instanceof Date ?
                 oldSlot.start.getHours() * 60 + oldSlot.start.getMinutes() : null);
-            
+
             if (startMin === null) return;
 
             // Find matching new slot by time
             for (let newIdx = 0; newIdx < newDivSlots.length; newIdx++) {
                 const newSlot = newDivSlots[newIdx];
-                if (newSlot.startMin <= startMin && startMin < newSlot.endMin) {
-                    window.scheduleAssignments[bunk][newIdx] = {
-                        ...assignment,
-                        _migratedFrom: oldIdx,
-                        _startMin: newSlot.startMin,
-                        _endMin: newSlot.endMin
-                    };
-                    log(`  ${bunk}[${oldIdx}] → [${newIdx}] (${assignment._activity || assignment.field})`);
+                if (newSlot.startMin === startMin) {
+                    window.scheduleAssignments[bunk][newIdx] = assignment;
+                    log(`  Migrated slot ${oldIdx} → ${newIdx} (${startMin} min)`);
                     break;
                 }
             }
@@ -142,30 +200,29 @@
     }
 
     // =========================================================================
-    // PATCH: Utils.findSlotsForRange - DIVISION AWARE
+    // PATCH: UTILS FUNCTIONS
     // =========================================================================
 
     function patchUtilsFunctions() {
         log('Patching utility functions...');
 
-        // Wait for SchedulerCoreUtils to exist
         const patchUtils = () => {
-            const Utils = window.SchedulerCoreUtils;
+            const Utils = window.SchedulerCoreUtils || window.Utils;
             if (!Utils) {
                 setTimeout(patchUtils, 100);
                 return;
             }
 
-            // Store original
             const originalFindSlotsForRange = Utils.findSlotsForRange;
 
-            // NEW: Division-aware version
-            Utils.findSlotsForRange = function(startMin, endMin, divisionNameOrBunk = null) {
-                // If division/bunk provided, use new system
-                if (divisionNameOrBunk) {
+            Utils.findSlotsForRange = function(startMin, endMin, divisionNameOrBunk) {
+                if (startMin === null || endMin === null) return [];
+
+                // Try to use division-aware logic
+                if (divisionNameOrBunk && window.divisionTimes) {
                     let divName = divisionNameOrBunk;
                     
-                    // Check if it's a bunk name
+                    // Check if it's a bunk name, get division
                     const divisions = window.divisions || {};
                     for (const [dName, dData] of Object.entries(divisions)) {
                         if (dData.bunks?.includes(divisionNameOrBunk)) {
@@ -173,19 +230,20 @@
                             break;
                         }
                     }
-
-                    const divSlots = window.DivisionTimesSystem?.getSlotsForDivision(divName) || [];
-                    const result = [];
                     
-                    for (let i = 0; i < divSlots.length; i++) {
-                        const slot = divSlots[i];
-                        // Check if slot overlaps with range
-                        if (!(slot.endMin <= startMin || slot.startMin >= endMin)) {
-                            result.push(i);
+                    const divSlots = window.divisionTimes[divName];
+                    if (divSlots && divSlots.length > 0) {
+                        const result = [];
+                        for (let i = 0; i < divSlots.length; i++) {
+                            const slot = divSlots[i];
+                            // Check for overlap
+                            if (!(slot.endMin <= startMin || slot.startMin >= endMin)) {
+                                result.push(i);
+                            }
                         }
+                        
+                        return result;
                     }
-                    
-                    return result;
                 }
 
                 // Fallback to original for backwards compat
@@ -248,46 +306,16 @@
                 const divName = window.DivisionTimesSystem?.getDivisionForBunk(bunk);
                 
                 if (divName && window.divisionTimes?.[divName]) {
-                    // Use division-specific slot lookup
-                    const divSlots = window.DivisionTimesSystem.getSlotsForDivision(divName);
+                    // Ensure block has divName for slot calculation
+                    block.divName = divName;
                     
-                    // Find slot by time range
-                    const startMin = block.startTime;
-                    const endMin = block.endTime;
-                    
-                    let slotIdx = -1;
-                    for (let i = 0; i < divSlots.length; i++) {
-                        if (divSlots[i].startMin === startMin || 
-                            (divSlots[i].startMin <= startMin && startMin < divSlots[i].endMin)) {
-                            slotIdx = i;
-                            break;
-                        }
-                    }
-
-                    if (slotIdx >= 0) {
-                        // Update block with correct slots
-                        block.slots = [slotIdx];
-                        block._divisionSlotIndex = slotIdx;
-                        block._divisionName = divName;
-                    }
-
-                    // Register with time-based field tracker
-                    if (window.fieldUsageTracker && pick.field) {
-                        const slot = divSlots[slotIdx];
-                        if (slot) {
-                            window.fieldUsageTracker.register(
-                                pick.field,
-                                slot.startMin,
-                                slot.endMin,
-                                divName,
-                                bunk,
-                                pick._activity || pick.sport
-                            );
-                        }
+                    // ★★★ FIX: Use division-specific slot count ★★★
+                    const divSlots = window.divisionTimes[divName];
+                    if (!window.scheduleAssignments[bunk]) {
+                        window.scheduleAssignments[bunk] = new Array(divSlots.length).fill(null);
                     }
                 }
 
-                // Call original
                 return originalFillBlock?.apply(this, arguments);
             };
 
@@ -340,7 +368,7 @@
                         // Rebuild virtual unifiedTimes
                         window.unifiedTimes = window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes() || [];
                         
-                        log(`Restored divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
+                        log(`Restored divisionTimes: ${Object.keys(window.divisionTimes).length} divisions`);
                     }
 
                     return result;
@@ -354,7 +382,7 @@
     }
 
     // =========================================================================
-    // PATCH: LOCAL STORAGE HANDLERS
+    // PATCH: LOCAL STORAGE
     // =========================================================================
 
     function patchLocalStorage() {
@@ -363,40 +391,34 @@
         // Patch saveCurrentDailyData if it exists
         const originalSaveCurrentDailyData = window.saveCurrentDailyData;
 
-        window.saveCurrentDailyData = function(key, value) {
-            // If saving the whole schedule object, include divisionTimes
-            if (key === 'scheduleAssignments' || key === 'all') {
-                // Also save divisionTimes
-                const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-                try {
-                    const allData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
-                    if (!allData[dateKey]) allData[dateKey] = {};
-                    allData[dateKey].divisionTimes = window.DivisionTimesSystem?.serialize(window.divisionTimes) || {};
-                    localStorage.setItem('campDailyData_v1', JSON.stringify(allData));
-                } catch (e) {
-                    console.error('Error saving divisionTimes to localStorage:', e);
+        if (typeof originalSaveCurrentDailyData === 'function') {
+            window.saveCurrentDailyData = function(key, value) {
+                // If saving full data, include divisionTimes
+                if (key === undefined && typeof value === 'object') {
+                    value.divisionTimes = window.DivisionTimesSystem?.serialize(window.divisionTimes) || {};
                 }
-            }
-
-            if (originalSaveCurrentDailyData) {
+                
                 return originalSaveCurrentDailyData.call(this, key, value);
-            }
-        };
+            };
+        }
 
         // Patch loadCurrentDailyData if it exists
         const originalLoadCurrentDailyData = window.loadCurrentDailyData;
 
-        window.loadCurrentDailyData = function() {
-            const result = originalLoadCurrentDailyData ? originalLoadCurrentDailyData.call(this) : {};
+        if (typeof originalLoadCurrentDailyData === 'function') {
+            window.loadCurrentDailyData = function() {
+                const result = originalLoadCurrentDailyData ? 
+                    originalLoadCurrentDailyData.call(this) : {};
 
-            // If divisionTimes exists in loaded data, restore it
-            if (result?.divisionTimes) {
-                window.divisionTimes = window.DivisionTimesSystem?.deserialize(result.divisionTimes) || {};
-                log('Restored divisionTimes from localStorage');
-            }
+                // If divisionTimes exists in loaded data, restore it
+                if (result?.divisionTimes) {
+                    window.divisionTimes = window.DivisionTimesSystem?.deserialize(result.divisionTimes) || {};
+                    log('Restored divisionTimes from localStorage');
+                }
 
-            return result;
-        };
+                return result;
+            };
+        }
 
         log('✅ Patched localStorage handlers');
     }
@@ -420,7 +442,7 @@
             window.updateTable = function(...args) {
                 // Ensure divisionTimes is synced before rendering
                 if (!window.divisionTimes || Object.keys(window.divisionTimes).length === 0) {
-                    const skeleton = window.dailyOverrideSkeleton || window.manualSkeleton || [];
+                    const skeleton = getSkeletonFromAnySource();
                     const divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
                     
                     if (skeleton.length > 0) {
@@ -449,67 +471,101 @@
          * Check if assigning a field to a bunk would conflict with other divisions
          * This uses TIME-BASED comparison, not slot indices!
          */
-        window.checkFieldConflictAcrossDivisions = function(fieldName, bunk, slotIndex, capacity = 1) {
+        window.checkCrossDivisionConflict = function(bunk, slotIndex, fieldName) {
             const divName = window.DivisionTimesSystem?.getDivisionForBunk(bunk);
-            const slot = window.DivisionTimesSystem?.getSlotAtIndex(divName, slotIndex);
-            
-            if (!slot) return { hasConflict: false };
+            if (!divName) return { conflict: false };
 
-            // Check time-based usage
-            if (window.fieldUsageTracker) {
-                const result = window.fieldUsageTracker.checkAvailability(
-                    fieldName,
-                    slot.startMin,
-                    slot.endMin,
-                    capacity,
-                    bunk // exclude self
-                );
+            const slot = window.divisionTimes?.[divName]?.[slotIndex];
+            if (!slot) return { conflict: false };
 
-                if (!result.available) {
-                    return {
-                        hasConflict: true,
-                        conflicts: result.conflicts,
-                        timeRange: `${window.DivisionTimesSystem.minutesToTimeLabel(slot.startMin)} - ${window.DivisionTimesSystem.minutesToTimeLabel(slot.endMin)}`
-                    };
+            const startMin = slot.startMin;
+            const endMin = slot.endMin;
+
+            // Check all other divisions for overlapping time slots using this field
+            const conflicts = [];
+            const divisions = window.divisions || {};
+
+            for (const [otherDiv, divData] of Object.entries(divisions)) {
+                if (otherDiv === divName) continue;
+
+                const otherSlots = window.divisionTimes?.[otherDiv] || [];
+                for (let i = 0; i < otherSlots.length; i++) {
+                    const otherSlot = otherSlots[i];
+                    
+                    // Check time overlap
+                    if (otherSlot.startMin < endMin && otherSlot.endMin > startMin) {
+                        // Time overlaps - check if any bunk in this division uses the same field
+                        for (const otherBunk of (divData.bunks || [])) {
+                            const assignment = window.scheduleAssignments?.[otherBunk]?.[i];
+                            if (assignment?.field === fieldName) {
+                                conflicts.push({
+                                    division: otherDiv,
+                                    bunk: otherBunk,
+                                    slot: i,
+                                    time: `${otherSlot.startMin}-${otherSlot.endMin}`
+                                });
+                            }
+                        }
+                    }
                 }
             }
 
-            return { hasConflict: false };
+            return {
+                conflict: conflicts.length > 0,
+                conflicts
+            };
         };
 
-        log('✅ Field conflict detection ready');
+        log('✅ Cross-division conflict detection ready');
     }
 
     // =========================================================================
-    // DIAGNOSTIC ENHANCEMENTS
+    // DIAGNOSTICS
     // =========================================================================
 
     function setupDiagnostics() {
         window.DivisionTimesIntegration = {
             version: VERSION,
+            
+            // Full diagnostic
             diagnose: () => {
                 console.log('\n' + '═'.repeat(70));
-                console.log('📊 DIVISION TIMES INTEGRATION DIAGNOSTIC');
+                console.log('📊 DIVISION TIMES INTEGRATION DIAGNOSTIC v' + VERSION);
                 console.log('═'.repeat(70));
 
-                console.log('\n1. DIVISION TIMES:');
-                window.DivisionTimesSystem?.diagnose();
-
-                console.log('\n2. FIELD USAGE TRACKER:');
-                const tracker = window.fieldUsageTracker;
-                if (tracker) {
-                    const raw = tracker.getRawData();
-                    Object.entries(raw).forEach(([field, usages]) => {
-                        console.log(`   ${field}: ${usages.length} usages`);
-                        usages.forEach(u => {
-                            console.log(`     ${window.DivisionTimesSystem.minutesToTimeLabel(u.startMin)}-${window.DivisionTimesSystem.minutesToTimeLabel(u.endMin)} | ${u.division} | ${u.bunk}`);
-                        });
-                    });
-                } else {
-                    console.log('   Not initialized');
+                // Check skeleton sources
+                console.log('\n=== SKELETON SOURCES ===');
+                console.log('window.manualSkeleton:', window.manualSkeleton?.length || 'empty');
+                console.log('window.dailyOverrideSkeleton:', window.dailyOverrideSkeleton?.length || 'empty');
+                const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                const storageKey = 'campManualSkeleton_' + dateKey;
+                try {
+                    const stored = localStorage.getItem(storageKey);
+                    const parsed = stored ? JSON.parse(stored) : null;
+                    console.log('localStorage (' + storageKey + '):', parsed?.length || 'empty');
+                } catch(e) {
+                    console.log('localStorage: error reading');
                 }
 
-                console.log('\n3. BACKWARDS COMPAT:');
+                // Check divisionTimes
+                console.log('\n=== DIVISION TIMES ===');
+                const divisionTimes = window.divisionTimes || {};
+                Object.entries(divisionTimes).forEach(([div, slots]) => {
+                    console.log(`  ${div}: ${slots.length} slots`);
+                });
+
+                // Check scheduleAssignments alignment
+                console.log('\n=== SCHEDULE ASSIGNMENTS ALIGNMENT ===');
+                const divisions = window.divisions || {};
+                Object.entries(divisions).forEach(([divName, divData]) => {
+                    const expected = divisionTimes[divName]?.length || 0;
+                    const sample = divData.bunks?.[0];
+                    const actual = window.scheduleAssignments?.[sample]?.length || 0;
+                    const status = actual === expected ? '✅' : '❌';
+                    console.log(`  ${divName}: ${actual}/${expected} ${status}`);
+                });
+
+                console.log('\n=== BACKWARDS COMPAT:');
                 console.log(`   window.unifiedTimes: ${(window.unifiedTimes || []).length} virtual slots`);
                 console.log(`   window.divisionTimes: ${Object.keys(window.divisionTimes || {}).length} divisions`);
 
@@ -518,14 +574,34 @@
 
             // Force rebuild from skeleton
             rebuild: () => {
-                const skeleton = window.dailyOverrideSkeleton || window.manualSkeleton || [];
+                const skeleton = getSkeletonFromAnySource();
                 const divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+                
+                if (skeleton.length === 0) {
+                    console.warn('Cannot rebuild: No skeleton found from any source');
+                    return false;
+                }
                 
                 window.divisionTimes = window.DivisionTimesSystem?.buildFromSkeleton(skeleton, divisions) || {};
                 window.unifiedTimes = window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes() || [];
                 
+                // Also fix any misaligned scheduleAssignments
+                Object.entries(divisions).forEach(([divName, divData]) => {
+                    const expected = window.divisionTimes[divName]?.length || 0;
+                    (divData.bunks || []).forEach(bunk => {
+                        const current = window.scheduleAssignments?.[bunk];
+                        if (current && current.length > expected) {
+                            window.scheduleAssignments[bunk] = current.slice(0, expected);
+                            console.log('Trimmed ' + bunk + ' to ' + expected + ' slots');
+                        } else if (!current) {
+                            window.scheduleAssignments[bunk] = new Array(expected).fill(null);
+                        }
+                    });
+                });
+                
                 console.log('✅ Rebuilt divisionTimes from skeleton');
-                window.DivisionTimesSystem?.diagnose();
+                window.DivisionTimesSystem?.diagnose?.();
+                return true;
             },
 
             // Check a specific field's availability
@@ -535,7 +611,10 @@
                     console.log(`Field "${fieldName}" at ${startMin}-${endMin}:`, result);
                     return result;
                 }
-            }
+            },
+            
+            // Get skeleton from any source (exposed for debugging)
+            getSkeletonFromAnySource
         };
     }
 
@@ -560,9 +639,10 @@
 
         log('✅ All patches applied');
 
-        // Auto-rebuild if skeleton exists
+        // Auto-rebuild if skeleton exists but divisionTimes is empty
         setTimeout(() => {
-            if ((window.dailyOverrideSkeleton || window.manualSkeleton)?.length > 0 && 
+            const skeleton = getSkeletonFromAnySource();
+            if (skeleton.length > 0 && 
                 (!window.divisionTimes || Object.keys(window.divisionTimes).length === 0)) {
                 log('Auto-rebuilding divisionTimes from existing skeleton...');
                 window.DivisionTimesIntegration?.rebuild();
@@ -587,6 +667,8 @@
     console.log('   - ScheduleDB (saves/loads divisionTimes)');
     console.log('   - localStorage handlers');
     console.log('   - updateTable (syncs before render)');
+    console.log('');
+    console.log('   v1.1 FIX: Skeleton parameter fallback to window/localStorage');
     console.log('');
     console.log('   Commands:');
     console.log('   - DivisionTimesIntegration.diagnose()  → Full diagnostic');
