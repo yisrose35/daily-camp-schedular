@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v17 - FOREACH CLOSURE FIX)
+// scheduler_core_main.js (FIXED v17.4 - DIVISION TIMES SUPPORT)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
@@ -14,6 +14,7 @@
 //
 // v17 FIX: Fixed forEach loop that wasn't properly closed, causing Steps 4-8
 //          to be nested inside the loop instead of after it.
+// v17.4: Added DivisionTimesSystem support for division-specific slotting.
 // ============================================================================
 
 (function() {
@@ -322,7 +323,8 @@
         // ★★★ SAFETY: Compute slots if missing ★★★
         if (!block.slots || block.slots.length === 0) {
             if (block.startTime !== undefined && block.endTime !== undefined) {
-                block.slots = Utils.findSlotsForRange(block.startTime, block.endTime);
+                // IMPORTANT: Pass block.divName to findSlotsForRange if available
+                block.slots = Utils.findSlotsForRange(block.startTime, block.endTime, block.divName);
             }
             if (!block.slots || block.slots.length === 0) {
                 console.warn(`[fillBlock] No slots for ${bunk}, times: ${block.startTime}-${block.endTime}`);
@@ -343,6 +345,7 @@
 
         // ★★★ CRITICAL: Initialize bunk array if not exists (MUST be done FIRST) ★★★
         if (!window.scheduleAssignments[bunk]) {
+            // Fallback to global unifiedTimes length if divisionTimes logic hasn't set it yet
             window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
         }
 
@@ -359,23 +362,25 @@
         }
 
         if (writePre) {
-            const preSlots = Utils.findSlotsForRange(blockStartMin, effectiveStart);
+            const preSlots = Utils.findSlotsForRange(blockStartMin, effectiveStart, block.divName);
             preSlots.forEach((slotIndex, i) => {
-                window.scheduleAssignments[bunk][slotIndex] = {
-                    field: TRANSITION_TYPE,
-                    sport: trans.label,
-                    continuation: i > 0,
-                    _fixed: true,
-                    _activity: TRANSITION_TYPE,
-                    _isTransition: true,
-                    _transitionType: "Pre",
-                    _zone: zone,
-                    _endTime: effectiveStart
-                };
+                if (window.scheduleAssignments[bunk][slotIndex]) {
+                    window.scheduleAssignments[bunk][slotIndex] = {
+                        field: TRANSITION_TYPE,
+                        sport: trans.label,
+                        continuation: i > 0,
+                        _fixed: true,
+                        _activity: TRANSITION_TYPE,
+                        _isTransition: true,
+                        _transitionType: "Pre",
+                        _zone: zone,
+                        _endTime: effectiveStart
+                    };
+                }
             });
         }
 
-        let mainSlots = Utils.findSlotsForRange(effectiveStart, effectiveEnd);
+        let mainSlots = Utils.findSlotsForRange(effectiveStart, effectiveEnd, block.divName);
         if (mainSlots.length === 0 && block.slots && block.slots.length > 0) {
             if (trans.preMin === 0 && trans.postMin === 0) mainSlots = block.slots;
         }
@@ -429,19 +434,21 @@
         }
 
         if (writePost) {
-            const postSlots = Utils.findSlotsForRange(effectiveEnd, blockEndMin);
+            const postSlots = Utils.findSlotsForRange(effectiveEnd, blockEndMin, block.divName);
             postSlots.forEach((slotIndex, i) => {
-                window.scheduleAssignments[bunk][slotIndex] = {
-                    field: TRANSITION_TYPE,
-                    sport: trans.label,
-                    continuation: i > 0,
-                    _fixed: true,
-                    _activity: TRANSITION_TYPE,
-                    _isTransition: true,
-                    _transitionType: "Post",
-                    _zone: zone,
-                    _endTime: blockEndMin
-                };
+                if (window.scheduleAssignments[bunk][slotIndex]) {
+                    window.scheduleAssignments[bunk][slotIndex] = {
+                        field: TRANSITION_TYPE,
+                        sport: trans.label,
+                        continuation: i > 0,
+                        _fixed: true,
+                        _activity: TRANSITION_TYPE,
+                        _isTransition: true,
+                        _transitionType: "Post",
+                        _zone: zone,
+                        _endTime: blockEndMin
+                    };
+                }
             });
         }
     }
@@ -549,7 +556,7 @@
             function routeActivity(bunk, activityLabel, blockInfo) {
                 const startMin = blockInfo.startMin;
                 const endMin = blockInfo.endMin;
-                const slots = Utils.findSlotsForRange(startMin, endMin);
+                const slots = Utils.findSlotsForRange(startMin, endMin, divName);
 
                 if (slots.length === 0) {
                     console.warn(`[SmartTile] No slots for ${bunk} at ${startMin}-${endMin}`);
@@ -835,36 +842,48 @@
         }
 
         // =========================================================================
-        // STEP 1: Build Time Grid
+        // STEP 1: Build Division-Specific Time Slots (NEW SYSTEM)
         // =========================================================================
 
-        const timePoints = new Set([540, 960]);
-        manualSkeleton.forEach(item => {
-            const s = Utils.parseTimeToMinutes(item.startTime);
-            const e = Utils.parseTimeToMinutes(item.endTime);
-            if (s != null) timePoints.add(s);
-            if (e != null) timePoints.add(e);
-
-            if (item.type === 'split' && s != null && e != null) {
-                timePoints.add(Math.floor(s + (e - s) / 2));
-            }
-        });
-
-        const sorted = [...timePoints].sort((a, b) => a - b);
-        for (let i = 0; i < sorted.length - 1; i++) {
-            if (sorted[i + 1] - sorted[i] >= 5) {
-                const s = Utils.minutesToDate(sorted[i]);
-                const e = Utils.minutesToDate(sorted[i + 1]);
-                window.unifiedTimes.push({
-                    start: s,
-                    end: e,
-                    label: `${Utils.fmtTime(s)} - ${Utils.fmtTime(e)}`
-                });
+        console.log('[STEP 1] Building division-specific time slots...');
+        
+        // ★★★ USE NEW DIVISION TIMES SYSTEM ★★★
+        if (window.DivisionTimesSystem) {
+            window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
+            window.unifiedTimes = window.DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes();
+            console.log(`[STEP 1] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
+            console.log(`[STEP 1] Virtual unifiedTimes: ${window.unifiedTimes.length} slots`);
+        } else {
+            // Fallback to old system if new system not loaded
+            console.warn('[STEP 1] DivisionTimesSystem not loaded, using legacy grid');
+            const timePoints = new Set([540, 960]);
+            manualSkeleton.forEach(item => {
+                const s = Utils.parseTimeToMinutes(item.startTime);
+                const e = Utils.parseTimeToMinutes(item.endTime);
+                if (s != null) timePoints.add(s);
+                if (e != null) timePoints.add(e);
+                if (item.type === 'split' && s != null && e != null) {
+                    timePoints.add(Math.floor(s + (e - s) / 2));
+                }
+            });
+            const sorted = [...timePoints].sort((a, b) => a - b);
+            for (let i = 0; i < sorted.length - 1; i++) {
+                if (sorted[i + 1] - sorted[i] >= 5) {
+                    const s = Utils.minutesToDate(sorted[i]);
+                    const e = Utils.minutesToDate(sorted[i + 1]);
+                    window.unifiedTimes.push({ start: s, end: e, startMin: sorted[i], endMin: sorted[i + 1],
+                        label: `${Utils.fmtTime(s)} - ${Utils.fmtTime(e)}` });
+                }
             }
         }
 
+        // ★★★ INITIALIZE ASSIGNMENTS PER DIVISION (with correct slot count) ★★★
         Object.keys(divisions).forEach(divName => {
-            (divisions[divName]?.bunks || []).forEach(b => window.scheduleAssignments[b] = new Array(window.unifiedTimes.length));
+            const divSlots = window.divisionTimes?.[divName] || [];
+            const slotCount = divSlots.length || window.unifiedTimes.length;
+            (divisions[divName]?.bunks || []).forEach(b => {
+                window.scheduleAssignments[b] = new Array(slotCount).fill(null);
+            });
         });
 
         // =========================================================================
@@ -1115,9 +1134,9 @@
             const overrideType = override.type;
             const startMin = Utils.parseTimeToMinutes(override.startTime);
             const endMin = Utils.parseTimeToMinutes(override.endTime);
-            const slots = Utils.findSlotsForRange(startMin, endMin);
             const bunk = override.bunk;
             const divName = Object.keys(divisions).find(d => divisions[d].bunks?.includes(bunk));
+            const slots = Utils.findSlotsForRange(startMin, endMin, divName);
 
             if (!divName || slots.length === 0) {
                 console.warn(`[BunkOverride] Skipping ${bunk} - no division found or no slots`);
@@ -1284,7 +1303,7 @@
             const activities = elective.electiveActivities || [];
             const startMin = Utils.parseTimeToMinutes(elective.startTime);
             const endMin = Utils.parseTimeToMinutes(elective.endTime);
-            const slots = Utils.findSlotsForRange(startMin, endMin);
+            const slots = Utils.findSlotsForRange(startMin, endMin, electiveDivision);
 
             if (activities.length === 0 || slots.length === 0) {
                 console.warn(`[Elective] Skipping elective for ${electiveDivision} - no activities or slots`);
@@ -1422,7 +1441,7 @@
                 console.log(`[SPLIT] ---------------------------------------------------`);
 
                 const routeSplitActivity = (bunks, actName, start, end, groupLabel, actLabel) => {
-                    const slots = Utils.findSlotsForRange(start, end);
+                    const slots = Utils.findSlotsForRange(start, end, divName);
                     if (slots.length === 0) {
                         console.warn(`[SPLIT] WARNING: No slots found for range ${start}-${end}`);
                         return;
@@ -1491,7 +1510,8 @@
             // NON-SPLIT BLOCKS: Categorize into league/specialty/schedulable
             // =========================================================================
             
-            const slots = Utils.findSlotsForRange(sMin, eMin);
+            // ★★★ FIX: Use division-specific slots ★★★
+            const slots = Utils.findSlotsForRange(sMin, eMin, divName);
             if (slots.length === 0) return;
 
             const eventName = item.event || '';
@@ -1947,6 +1967,6 @@
 
     window.registerSingleSlotUsage = registerSingleSlotUsage;
 
-    console.log('⚙️ Scheduler Core Main v17.3 loaded (CROSS-DIVISION FIELD CONFLICT FIX)');
+    console.log('⚙️ Scheduler Core Main v17.4 loaded (DIVISION TIMES SUPPORT)');
 
 })();
