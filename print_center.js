@@ -9,6 +9,7 @@
 // - Print Selected Locations (Multi-select) - Excel Export
 // - UPDATED: Bunk view shows FULL league schedule (all matchups).
 // - UPDATED: Field view shows ONLY the specific matchup on that field.
+// - UPDATED: Support for Division-Specific Timelines (DivisionTimes)
 // =================================================================
 
 (function() {
@@ -45,7 +46,25 @@ function minutesToTimeLabel(min) {
   return `${h}:${m.toString().padStart(2, '0')} ${ap}`;
 }
 
-function findFirstSlotForTime(startMin) {
+/**
+ * Find the first slot index corresponding to a time.
+ * UPDATED: Supports division-specific timelines.
+ */
+function findFirstSlotForTime(startMin, divName = null) {
+  // 1. Try Division Specific Times
+  if (divName && window.divisionTimes && window.divisionTimes[divName]) {
+      const times = window.divisionTimes[divName];
+      for (let i = 0; i < times.length; i++) {
+          const slot = times[i];
+          const slotStart = slot.startMin !== undefined ? slot.startMin : (new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes());
+          if (slotStart >= startMin && slotStart < startMin + INCREMENT_MINS) {
+            return i;
+          }
+      }
+      return -1;
+  }
+
+  // 2. Fallback to Unified Times
   const times = window.unifiedTimes || [];
   if (startMin === null || !times.length) return -1;
   for (let i = 0; i < times.length; i++) {
@@ -320,7 +339,8 @@ function generateDivisionHTML(divName) {
         if (isLeague) {
             // --- Merged Cell for League ---
             // Calculate matchups
-            const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin);
+            // ★★★ UPDATED: Use divName for slot lookup
+            const firstSlotIndex = findFirstSlotForTime(eventBlock.startMin, divName);
             let allMatchups = [];
             if (bunks.length > 0) {
                 const entry = getEntry(bunks[0], firstSlotIndex);
@@ -341,7 +361,8 @@ function generateDivisionHTML(divName) {
         } else {
             // --- Standard Cells ---
             bunks.forEach(bunk => {
-                const slotIndex = findFirstSlotForTime(eventBlock.startMin);
+                // ★★★ UPDATED: Use divName for slot lookup
+                const slotIndex = findFirstSlotForTime(eventBlock.startMin, divName);
                 const entry = getEntry(bunk, slotIndex);
                 let text = "";
                 let bg = "";
@@ -371,7 +392,19 @@ function generateDivisionHTML(divName) {
 function generateBunkHTML(bunk) {
     const daily = window.loadCurrentDailyData?.() || {};
     const schedule = daily.scheduleAssignments?.[bunk] || [];
-    const times = window.unifiedTimes || [];
+    
+    // ★★★ UPDATED: Determine Division for correct times
+    let divName = null;
+    const divisions = window.loadGlobalSettings?.().app1.divisions || {};
+    for (const [dName, dData] of Object.entries(divisions)) {
+        if (dData.bunks && dData.bunks.includes(bunk)) {
+            divName = dName;
+            break;
+        }
+    }
+    
+    // Use division times if available, otherwise global
+    const times = (divName && window.divisionTimes?.[divName]) || window.unifiedTimes || [];
 
     let html = `
         <div class="print-page portrait">
