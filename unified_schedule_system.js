@@ -3423,7 +3423,7 @@
     window.showIntegratedToast = showIntegratedToast;
 
     window.UnifiedScheduleSystem = {
-        version: '4.0.3',
+        version: '4.0.4',
         loadScheduleForDate, renderStaggeredView, findSlotIndexForTime, findSlotsForRange, getLeagueMatchups, getEntryForBlock,
         buildUnifiedTimesFromSkeleton, isSplitTileBlock, expandBlocksForSplitTiles, VersionManager,
         SmartRegenSystem: window.SmartRegenSystem, PinnedActivitySystem: window.PinnedActivitySystem, ROTATION_CONFIG,
@@ -3456,8 +3456,8 @@
     else setTimeout(initScheduleSystem, 100);
 
     console.log('📅 Unified Schedule System v4.0.3 loaded successfully');
-    console.log('   ✅ v4.0.3: Integrated Edit with multi-bunk support');
-    console.log('   ✅ v4.0.3: Cascade resolution with auto-backup');
-    console.log('   ✅ v4.0.3: Proposal system for cross-division changes');
+    console.log('   ✅ v4.0.4: Integrated Edit with multi-bunk support');
+    console.log('   ✅ v4.0.4: Cascade resolution with auto-backup');
+    console.log('   ✅ v4.0.4: Proposal system for cross-division changes');
 
 })();
