@@ -417,32 +417,37 @@
     }
     
     function getEntryForBlock(bunk, startMin, endMin, unifiedTimes) {
-        const assignments = window.scheduleAssignments || {};
-        if (!assignments[bunk]) {
-            const fallbackSlots = findSlotsForRange(startMin, endMin, unifiedTimes);
-            return { entry: null, slotIdx: fallbackSlots[0] || -1 };
-        }
-        const bunkData = assignments[bunk];
-        for (let slotIdx = 0; slotIdx < bunkData.length; slotIdx++) {
-            const entry = bunkData[slotIdx];
-            if (!entry || entry.continuation) continue;
-            let slotStart = null;
-            if (unifiedTimes && unifiedTimes[slotIdx]) slotStart = getSlotStartMin(unifiedTimes[slotIdx]);
-            if (slotStart !== null && slotStart >= startMin && slotStart < endMin) return { entry, slotIdx };
-        }
-        const slots = findSlotsForRange(startMin, endMin, unifiedTimes);
-        for (const slotIdx of slots) {
-            const entry = bunkData[slotIdx];
-            if (entry && !entry.continuation) return { entry, slotIdx };
-        }
-        for (let slotIdx = 0; slotIdx < bunkData.length; slotIdx++) {
-            const entry = bunkData[slotIdx];
-            if (!entry || entry.continuation) continue;
-            const entryStartMin = entry._blockStart || entry._startMin || entry.startMin;
-            if (entryStartMin !== undefined && entryStartMin >= startMin && entryStartMin < endMin) return { entry, slotIdx };
-        }
-        return { entry: null, slotIdx: slots[0] || -1 };
+    const assignments = window.scheduleAssignments || {};
+    if (!assignments[bunk]) {
+        return { entry: null, slotIdx: -1 };
     }
+    const bunkData = assignments[bunk];
+    
+    // ★★★ FIX: Use divisionTimes for slot lookup, not unifiedTimes ★★★
+    const divName = getDivisionForBunk(bunk);
+    const divSlots = window.divisionTimes?.[divName] || [];
+    
+    // Method 1: Find by matching time in divisionTimes
+    for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
+        const slot = divSlots[slotIdx];
+        if (slot.startMin >= startMin && slot.startMin < endMin) {
+            return { entry: bunkData[slotIdx] || null, slotIdx };
+        }
+    }
+    
+    // Method 2: Check embedded time in entry
+    for (let slotIdx = 0; slotIdx < bunkData.length; slotIdx++) {
+        const entry = bunkData[slotIdx];
+        if (!entry || entry.continuation) continue;
+        const entryStartMin = entry._blockStart || entry._startMin || entry.startMin;
+        if (entryStartMin !== undefined && entryStartMin >= startMin && entryStartMin < endMin) {
+            return { entry, slotIdx };
+        }
+    }
+    
+    return { entry: null, slotIdx: -1 };
+}
+       
 
     function getSlotTimeRange(slotIdx) {
         const unifiedTimes = window.unifiedTimes || [];
