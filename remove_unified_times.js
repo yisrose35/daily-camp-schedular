@@ -1,6 +1,9 @@
 // =============================================================================
-// remove_unified_times.js v1.0 - PERMANENT unifiedTimes REMOVAL PATCH
+// remove_unified_times.js v1.1 - FIXED unifiedTimes REMOVAL PATCH
 // =============================================================================
+//
+// v1.1 FIX: buildUnifiedTimesFromDivisionTimes now returns actual data
+//           (was returning empty array, breaking Step 1.5 time mapping)
 //
 // LOAD ORDER: Add this AFTER all scheduler files:
 //   1. division_times_system.js
@@ -15,7 +18,7 @@
 (function() {
     'use strict';
     
-    const VERSION = '1.0.0';
+    const VERSION = '1.1.0';
     
     console.log('═══════════════════════════════════════════════════════════════════════');
     console.log('🗑️  REMOVING UNIFIED TIMES DEPENDENCY v' + VERSION);
@@ -46,14 +49,52 @@
     window.getDivisionForBunk = getDivisionForBunk;
     
     // =========================================================================
-    // 1. DEPRECATE: buildUnifiedTimesFromDivisionTimes
+    // 1. FIX: buildUnifiedTimesFromDivisionTimes - Return actual data for backwards compat
     // =========================================================================
+    // NOTE: This was previously returning [] which broke Step 1.5 time mapping!
+    // We need to return a unified superset of all division time slots.
     if (window.DivisionTimesSystem) {
-        window.DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes = function() {
-            console.warn('[DEPRECATED] buildUnifiedTimesFromDivisionTimes called - returning empty array');
-            return [];
+        window.DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes = function(divisionTimes) {
+            const dt = divisionTimes || window.divisionTimes || {};
+            
+            if (Object.keys(dt).length === 0) {
+                console.warn('[buildUnifiedTimesFromDivisionTimes] No divisionTimes available');
+                return [];
+            }
+            
+            // Build a unified superset of all time slots (for backwards compatibility)
+            const allTimesSet = new Map(); // key = "startMin-endMin", value = slot object
+            
+            for (const [divName, slots] of Object.entries(dt)) {
+                if (!Array.isArray(slots)) continue;
+                
+                for (const slot of slots) {
+                    if (!slot || slot.startMin === undefined) continue;
+                    
+                    const key = `${slot.startMin}-${slot.endMin}`;
+                    if (!allTimesSet.has(key)) {
+                        allTimesSet.set(key, {
+                            startMin: slot.startMin,
+                            endMin: slot.endMin,
+                            event: slot.event || 'Slot',
+                            type: slot.type || 'slot',
+                            // Also provide Date objects for legacy compatibility
+                            start: new Date(2000, 0, 1, Math.floor(slot.startMin / 60), slot.startMin % 60),
+                            end: new Date(2000, 0, 1, Math.floor(slot.endMin / 60), slot.endMin % 60)
+                        });
+                    }
+                }
+            }
+            
+            // Sort by start time and return
+            const unified = Array.from(allTimesSet.values())
+                .sort((a, b) => a.startMin - b.startMin);
+            
+            console.log(`[buildUnifiedTimesFromDivisionTimes] Built ${unified.length} unified slots from ${Object.keys(dt).length} divisions`);
+            
+            return unified;
         };
-        console.log('✅ Deprecated DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes');
+        console.log('✅ Fixed DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes (returns actual data)');
     }
     
     // =========================================================================
@@ -460,10 +501,35 @@
     console.log('✅ Replaced buildFieldUsageBySlot (division-aware)');
     
     // =========================================================================
-    // 10. SET unifiedTimes TO EMPTY
+    // 10. KEEP unifiedTimes populated via getter
     // =========================================================================
-    window.unifiedTimes = [];
-    console.log('✅ Set window.unifiedTimes = [] (deprecated)');
+    // Instead of setting to empty, use a getter that auto-populates from divisionTimes
+    let _unifiedTimesCache = null;
+    
+    Object.defineProperty(window, 'unifiedTimes', {
+        get: function() {
+            // Return cached if available
+            if (_unifiedTimesCache && _unifiedTimesCache.length > 0) {
+                return _unifiedTimesCache;
+            }
+            
+            // Auto-build from divisionTimes
+            if (window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
+                const built = window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes?.(window.divisionTimes);
+                if (built && built.length > 0) {
+                    _unifiedTimesCache = built;
+                    return built;
+                }
+            }
+            
+            return _unifiedTimesCache || [];
+        },
+        set: function(val) {
+            _unifiedTimesCache = val;
+        },
+        configurable: true
+    });
+    console.log('✅ window.unifiedTimes now auto-populates from divisionTimes');
     
     // =========================================================================
     // 11. PATCH: saveSchedule to not save unifiedTimes
@@ -494,7 +560,7 @@
             console.log('═'.repeat(60));
             
             console.log('\n1. window.unifiedTimes:', window.unifiedTimes?.length || 0, 'slots');
-            console.log('   Expected: 0 (deprecated)');
+            console.log('   Expected: Auto-populated from divisionTimes');
             
             console.log('\n2. window.divisionTimes:');
             Object.entries(window.divisionTimes || {}).forEach(([div, slots]) => {
@@ -527,15 +593,30 @@
             console.log('Current usage:', usage);
             const avail = window.TimeBasedFieldUsage.checkAvailability(fieldName, startMin, endMin);
             console.log('Availability:', avail);
+        },
+        
+        forceRebuild: function() {
+            if (window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
+                const built = window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes?.(window.divisionTimes);
+                window.unifiedTimes = built || [];
+                console.log(`✅ Rebuilt unifiedTimes: ${window.unifiedTimes.length} slots`);
+                return window.unifiedTimes;
+            }
+            console.warn('No divisionTimes available to rebuild from');
+            return [];
         }
     };
     
     console.log('');
     console.log('═══════════════════════════════════════════════════════════════════════');
-    console.log('🗑️  UNIFIED TIMES REMOVED - Using divisionTimes directly');
+    console.log('🗑️  UNIFIED TIMES REMOVAL v' + VERSION + ' LOADED');
+    console.log('');
+    console.log('   FIX: buildUnifiedTimesFromDivisionTimes now returns actual data');
+    console.log('   FIX: window.unifiedTimes auto-populates from divisionTimes');
     console.log('');
     console.log('   Verify with: UnifiedTimesRemoval.verify()');
     console.log('   Test field:  UnifiedTimesRemoval.testFieldConflict("Pool", 660, 720)');
+    console.log('   Force rebuild: UnifiedTimesRemoval.forceRebuild()');
     console.log('');
     console.log('═══════════════════════════════════════════════════════════════════════');
     
