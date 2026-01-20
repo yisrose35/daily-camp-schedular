@@ -1,5 +1,5 @@
 // =============================================================================
-// supabase_schedules.js v5.1 — CAMPISTRY SCHEDULE DATABASE OPERATIONS
+// supabase_schedules.js v5.2 — CAMPISTRY SCHEDULE DATABASE OPERATIONS
 // =============================================================================
 //
 // Pure data operations for schedules.
@@ -16,6 +16,9 @@
 //
 // REQUIRES: supabase_client.js, supabase_permissions.js
 //
+// v5.2 UPDATE:
+// - Added divisionTimes support in save payload and merge logic
+//
 // v5.1 FIXES:
 // - Fixed filtering to use AccessControl instead of PermissionsDB
 // - PermissionsDB was returning empty bunks, causing 0 bunks to be saved
@@ -23,7 +26,7 @@
 // =============================================================================
 (function() {
     'use strict';
-    console.log('📅 Campistry Schedule DB v5.1 loading...');
+    console.log('📅 Campistry Schedule DB v5.2 loading...');
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
@@ -375,6 +378,7 @@
         const mergedAssignments = {};
         const mergedLeagues = {};
         let masterUnifiedTimes = [];
+        let mergedDivisionTimes = {};
         let maxSlots = 0;
         let isRainyDay = false;
         records.forEach(record => {
@@ -402,6 +406,18 @@
                 maxSlots = times.length;
                 masterUnifiedTimes = times;
             }
+
+            // ★★★ NEW: Merge divisionTimes ★★★
+            if (data.divisionTimes && Object.keys(data.divisionTimes).length > 0) {
+                if (!mergedDivisionTimes) mergedDivisionTimes = {};
+                Object.entries(data.divisionTimes).forEach(([divName, slots]) => {
+                    // Keep the version with more slots for each division
+                    if (!mergedDivisionTimes[divName] || slots.length > mergedDivisionTimes[divName].length) {
+                        mergedDivisionTimes[divName] = slots;
+                    }
+                });
+            }
+
             // Rainy day flag
             if (record.is_rainy_day) {
                 isRainyDay = true;
@@ -411,6 +427,7 @@
             scheduleAssignments: mergedAssignments,
             leagueAssignments: mergedLeagues,
             unifiedTimes: deserializeUnifiedTimes(masterUnifiedTimes),
+            divisionTimes: window.DivisionTimesSystem?.deserialize(mergedDivisionTimes) || {}, // ★★★ NEW ★★★
             slotCount: maxSlots,
             isRainyDay,
             _mergedAt: new Date().toISOString(),
@@ -423,8 +440,7 @@
     /**
      * Save schedule for a date.
      * Automatically filters to user's divisions and UPSERTs.
-     * 
-     * FIXED in v5.1: Uses AccessControl instead of PermissionsDB for filtering
+     * * FIXED in v5.1: Uses AccessControl instead of PermissionsDB for filtering
      */
     async function saveSchedule(dateKey, data, options = {}) {
         const client = getClient();
@@ -460,7 +476,9 @@
                 scheduleAssignments: filteredAssignments,
                 leagueAssignments: data.leagueAssignments || {},
                 unifiedTimes: serializeUnifiedTimes(data.unifiedTimes || window.unifiedTimes || []),
-                slotCount: data.unifiedTimes?.length || window.unifiedTimes?.length || 0
+                slotCount: data.unifiedTimes?.length || window.unifiedTimes?.length || 0,
+                // ★★★ NEW: Include division-specific times ★★★
+                divisionTimes: window.DivisionTimesSystem?.serialize(window.divisionTimes) || {}
             };
 
             // Get user's divisions (use AccessControl)
@@ -886,7 +904,7 @@
         });
     }
 
-    console.log('📅 [ScheduleDB] v5.1 loaded with AccessControl filtering fix');
+    console.log('📅 [ScheduleDB] v5.2 loaded with AccessControl filtering fix');
     console.log('   Run: ScheduleDB.diagnose() to check sync status');
 
 })();
