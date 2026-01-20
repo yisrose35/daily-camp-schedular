@@ -649,5 +649,306 @@
             setTimeout(initialize, 150);
         });
     }
+// =========================================================================
+    // MULTI-SCHEDULER SYNC SYSTEM (integrated from multi_scheduler_sync_master_patch.js)
+    // =========================================================================
+    
+    const DAILY_DATA_KEY = 'campDailyData_v1';
+    let _initialHydrationDone = false;
+    
+    function getCurrentDateKey() {
+        return window.currentScheduleDate || new Date().toISOString().split('T')[0];
+    }
 
+    // =========================================================================
+    // FORCE HYDRATION FROM LOCALSTORAGE
+    // =========================================================================
+    
+    function forceHydrateFromLocalStorage(dateKey, forceOverwrite = false) {
+        if (!dateKey) dateKey = getCurrentDateKey();
+        
+        console.log(`[Sync] Force hydrating for date: ${dateKey}, forceOverwrite: ${forceOverwrite}`);
+        
+        try {
+            const raw = localStorage.getItem(DAILY_DATA_KEY);
+            if (!raw) {
+                console.log('[Sync] No data in localStorage - clearing window globals');
+                window.scheduleAssignments = {};
+                window.leagueAssignments = {};
+                return false;
+            }
+            
+            const dailyData = JSON.parse(raw);
+            const dateData = dailyData[dateKey];
+            
+            if (!dateData) {
+                console.log('[Sync] No data for date:', dateKey, '- clearing window globals');
+                window.scheduleAssignments = {};
+                window.leagueAssignments = {};
+                return false;
+            }
+            
+            let hydrated = false;
+            
+            // Hydrate scheduleAssignments
+            if (dateData.scheduleAssignments) {
+                const localBunkCount = Object.keys(dateData.scheduleAssignments).length;
+                const windowBunkCount = Object.keys(window.scheduleAssignments || {}).length;
+                
+                if (forceOverwrite || windowBunkCount === 0) {
+                    window.scheduleAssignments = JSON.parse(JSON.stringify(dateData.scheduleAssignments));
+                    hydrated = true;
+                    console.log('[Sync] ✅ Hydrated scheduleAssignments:', localBunkCount, 'bunks');
+                }
+            } else {
+                window.scheduleAssignments = window.scheduleAssignments || {};
+            }
+            
+            // Hydrate leagueAssignments  
+            if (dateData.leagueAssignments) {
+                if (forceOverwrite || !window.leagueAssignments || Object.keys(window.leagueAssignments).length === 0) {
+                    window.leagueAssignments = JSON.parse(JSON.stringify(dateData.leagueAssignments));
+                    console.log('[Sync] ✅ Hydrated leagueAssignments');
+                    hydrated = true;
+                }
+            } else {
+                window.leagueAssignments = window.leagueAssignments || {};
+            }
+            
+            // Hydrate divisionTimes if present
+            if (dateData.divisionTimes && window.DivisionTimesSystem?.deserialize) {
+                window.divisionTimes = window.DivisionTimesSystem.deserialize(dateData.divisionTimes);
+                console.log('[Sync] ✅ Hydrated divisionTimes');
+            }
+            
+            return hydrated;
+            
+        } catch (e) {
+            console.error('[Sync] Hydration error:', e);
+            return false;
+        }
+    }
+
+    // =========================================================================
+    // ENSURE EMPTY STATE FOR UNSCHEDULED DIVISIONS
+    // =========================================================================
+    
+    function ensureEmptyStateForUnscheduledDivisions() {
+        if (!window.scheduleAssignments) {
+            window.scheduleAssignments = {};
+        }
+        
+        const divisions = window.divisions || {};
+        
+        for (const [divName, divData] of Object.entries(divisions)) {
+            const bunks = divData.bunks || [];
+            
+            // Use division-specific slot count
+            const divSlotCount = window.divisionTimes?.[divName]?.length || 
+                                 (window.unifiedTimes || []).length || 8;
+            
+            const hasData = bunks.some(bunk => {
+                const bunkData = window.scheduleAssignments[bunk];
+                if (!bunkData || !Array.isArray(bunkData)) return false;
+                return bunkData.some(slot => slot && (slot.field || slot._activity));
+            });
+            
+            if (!hasData) {
+                bunks.forEach(bunk => {
+                    if (!window.scheduleAssignments[bunk]) {
+                        window.scheduleAssignments[bunk] = new Array(divSlotCount).fill(null);
+                    }
+                });
+            }
+        }
+    }
+
+    // =========================================================================
+    // REFRESH MULTI-SCHEDULER VIEW
+    // =========================================================================
+    
+    async function refreshMultiSchedulerView(dateKey, forceOverwrite = false) {
+        if (!dateKey) dateKey = getCurrentDateKey();
+        
+        console.log('[Sync] Refreshing Multi-Scheduler view for:', dateKey);
+        
+        // Step 1: Force hydrate from localStorage
+        forceHydrateFromLocalStorage(dateKey, forceOverwrite);
+        
+        // Step 2: Ensure empty state for unscheduled divisions
+        ensureEmptyStateForUnscheduledDivisions();
+        
+        // Step 3: Refresh Multi-Scheduler System if available
+        if (window.MultiSchedulerSystem?.refresh) {
+            try {
+                await window.MultiSchedulerSystem.refresh();
+                console.log('[Sync] ✅ MSS refresh complete');
+            } catch (err) {
+                console.warn('[Sync] MSS refresh error:', err);
+            }
+        } else if (window.MultiSchedulerSystem?.initializeView) {
+            try {
+                await window.MultiSchedulerSystem.initializeView(dateKey);
+                window.MultiSchedulerSystem.applyBlockingToGrid?.();
+            } catch (err) {
+                console.warn('[Sync] MSS init error:', err);
+            }
+        }
+        
+        // Step 4: Update the table
+        if (window.updateTable) {
+            window.updateTable();
+            console.log('[Sync] ✅ Table updated');
+        }
+    }
+
+    // =========================================================================
+    // DIAGNOSTIC FUNCTIONS
+    // =========================================================================
+    
+    window.diagnoseScheduleSync = function() {
+        const dateKey = getCurrentDateKey();
+        
+        console.log('═══════════════════════════════════════════════════════');
+        console.log('🔍 SCHEDULE SYNC DIAGNOSIS');
+        console.log('═══════════════════════════════════════════════════════');
+        console.log('Date:', dateKey);
+        console.log('Initial hydration done:', _initialHydrationDone);
+        console.log('');
+        
+        console.log('=== Window Globals ===');
+        const windowBunks = Object.keys(window.scheduleAssignments || {});
+        console.log('scheduleAssignments bunks:', windowBunks.length);
+        console.log('divisionTimes divisions:', Object.keys(window.divisionTimes || {}).length);
+        console.log('unifiedTimes slots:', (window.unifiedTimes || []).length);
+        
+        if (windowBunks.length > 0) {
+            const firstBunk = windowBunks[0];
+            const firstData = window.scheduleAssignments[firstBunk];
+            console.log(`First bunk "${firstBunk}": ${firstData?.length || 0} slots`);
+        }
+        console.log('');
+        
+        console.log('=== LocalStorage ===');
+        try {
+            const raw = localStorage.getItem(DAILY_DATA_KEY);
+            const daily = raw ? JSON.parse(raw) : {};
+            const dateData = daily[dateKey] || {};
+            const localBunks = Object.keys(dateData.scheduleAssignments || {});
+            console.log('scheduleAssignments bunks:', localBunks.length);
+            
+            if (localBunks.length > 0 && windowBunks.length > 0) {
+                const firstBunk = localBunks[0];
+                const windowSlot = window.scheduleAssignments[firstBunk]?.[0];
+                const localSlot = dateData.scheduleAssignments[firstBunk]?.[0];
+                const match = JSON.stringify(windowSlot) === JSON.stringify(localSlot);
+                console.log('Window/Local match:', match ? '✅ YES' : '❌ NO');
+            }
+        } catch (e) {
+            console.log('Error:', e.message);
+        }
+        
+        console.log('═══════════════════════════════════════════════════════');
+    };
+
+    window.forceScheduleRefresh = function(dateKey) {
+        dateKey = dateKey || getCurrentDateKey();
+        console.log('[Sync] Manual FORCE refresh for:', dateKey);
+        
+        window.scheduleAssignments = {};
+        window.leagueAssignments = {};
+        
+        forceHydrateFromLocalStorage(dateKey, true);
+        ensureEmptyStateForUnscheduledDivisions();
+        refreshMultiSchedulerView(dateKey, true);
+        
+        console.log('[Sync] ✅ Manual refresh complete');
+    };
+
+    // =========================================================================
+    // EVENT LISTENERS
+    // =========================================================================
+    
+    // After cloud hydration, force hydrate window globals
+    window.addEventListener('campistry-cloud-hydrated', (e) => {
+        console.log('[Sync] Cloud hydration event received');
+        
+        setTimeout(() => {
+            const dateKey = getCurrentDateKey();
+            const hydrated = forceHydrateFromLocalStorage(dateKey, true);
+            
+            if (hydrated) {
+                console.log('[Sync] ✅ Window globals updated from localStorage');
+                ensureEmptyStateForUnscheduledDivisions();
+                if (window.updateTable) window.updateTable();
+            }
+            
+            _initialHydrationDone = true;
+        }, 300);
+    });
+
+    // After date change, ensure proper hydration
+    window.addEventListener('campistry-date-changed', (e) => {
+        const dateKey = e.detail?.dateKey || getCurrentDateKey();
+        console.log('[Sync] Date changed to:', dateKey);
+        
+        setTimeout(() => {
+            forceHydrateFromLocalStorage(dateKey, true);
+            ensureEmptyStateForUnscheduledDivisions();
+            refreshMultiSchedulerView(dateKey, true);
+        }, 100);
+    });
+
+    // Listen for realtime updates
+    window.addEventListener('campistry-realtime-update', (e) => {
+        console.log('[Sync] Realtime update event received');
+        refreshMultiSchedulerView(getCurrentDateKey(), true);
+    });
+
+    // =========================================================================
+    // INITIALIZATION - Run after RBAC is ready
+    // =========================================================================
+    
+    const initMultiSchedulerSync = () => {
+        const waitForRBAC = setInterval(() => {
+            if (!window.AccessControl?.isInitialized) return;
+            
+            clearInterval(waitForRBAC);
+            console.log('[Sync] RBAC ready, performing initial hydration');
+            
+            const dateKey = getCurrentDateKey();
+            forceHydrateFromLocalStorage(dateKey, true);
+            ensureEmptyStateForUnscheduledDivisions();
+            
+            if (window.MultiSchedulerSystem?.initializeView) {
+                window.MultiSchedulerSystem.initializeView(dateKey).then(() => {
+                    window.MultiSchedulerSystem.applyBlockingToGrid?.();
+                    if (window.updateTable) window.updateTable();
+                });
+            } else if (window.updateTable) {
+                window.updateTable();
+            }
+            
+            _initialHydrationDone = true;
+        }, 100);
+        
+        setTimeout(() => clearInterval(waitForRBAC), 15000);
+    };
+    
+    // Start initialization
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initMultiSchedulerSync);
+    } else {
+        setTimeout(initMultiSchedulerSync, 100);
+    }
+
+    // =========================================================================
+    // EXPORTS
+    // =========================================================================
+    
+    window.forceHydrateFromLocalStorage = forceHydrateFromLocalStorage;
+    window.ensureEmptyStateForUnscheduledDivisions = ensureEmptyStateForUnscheduledDivisions;
+    window.refreshMultiSchedulerView = refreshMultiSchedulerView;
+
+    console.log('[Sync] ✅ Multi-scheduler sync system initialized');
 })();
