@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v17.8 - SPLIT TILE SLOT & SOLVER FIX)
+// scheduler_core_main.js (FIXED v17.8 + DIAGNOSTICS)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
@@ -17,6 +17,7 @@
 // v17.5: Fixed split tile metadata & pinned events
 // v17.6: Fixed Split Tile targeting using exact slot matching vs broad range
 // v17.7: Fixed split tile fillBlock slot usage & solver pick propagation
+// v17.8: Added D2 Diagnostics & Gap Detection Type Coercion Fix
 // ============================================================================
 
 (function() {
@@ -667,7 +668,7 @@
 
     window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v17.7 - SPLIT TILE SLOT FIX) ★★★");
+        console.log("★★★ OPTIMIZER STARTED (v17.8 - D2 DIAGNOSTICS & GAP FIX) ★★★");
 
         // ★★★ SCHEDULER RESTRICTION ★★★
         if (window.AccessControl?.filterDivisionsForGeneration) {
@@ -1390,6 +1391,14 @@
         let pinnedEventCount = 0;
 
         manualSkeleton.forEach(item => {
+            // ★★★ DIAGNOSTIC: Log D2 skeleton items to trace slot assignments ★★★
+            if (item.division === '2' || item.division === 2) {
+                const _diagStart = Utils.parseTimeToMinutes(item.startTime);
+                const _diagEnd = Utils.parseTimeToMinutes(item.endTime);
+                const _diagSlots = Utils.findSlotsForRange(_diagStart, _diagEnd, '2');
+                console.log(`[D2-TRACE] Skeleton: "${item.event}" ${item.startTime}-${item.endTime} (${_diagStart}-${_diagEnd}) type=${item.type} → slots=[${_diagSlots.join(',')}]`);
+            }
+
             const divName = item.division;
             const bunkList = divisions[divName]?.bunks || [];
             if (bunkList.length === 0) return;
@@ -1659,17 +1668,30 @@
                 });
             }
         }); // ★★★ END OF manualSkeleton.forEach ★★★
- // =========================================================================
-        // ★★★ STEP 3.5: GAP DETECTION - Fill unfilled "slot" type time ranges ★★★
+
+        // =========================================================================
+        // ★★★ STEP 3.5: GAP DETECTION (FIXED with type coercion) ★★★
         // =========================================================================
         
         console.log("\n[STEP 3.5] Detecting unfilled slot gaps in divisionTimes...");
         
         let gapBlocksAdded = 0;
         
-        // Process each division's divisionTimes
+        // ★★★ DIAGNOSTIC: Show D2 blocks created so far ★★★
+        console.log("[STEP 3.5-DIAG] D2 blocks by slot BEFORE gap detection:");
+        const _d2Blocks = schedulableSlotBlocks.filter(b => String(b.divName) === '2');
+        const _d2BySlot = {};
+        _d2Blocks.forEach(b => {
+            const s = b.slots?.[0] ?? 'none';
+            _d2BySlot[s] = (_d2BySlot[s] || 0) + 1;
+        });
+        Object.entries(_d2BySlot).sort((a,b) => Number(a[0]) - Number(b[0])).forEach(([slot, count]) => {
+            const marker = (slot === '5' || slot === 5 || slot === '7' || slot === 7) ? ' ← TARGET' : '';
+            console.log(`[STEP 3.5-DIAG]    Slot ${slot}: ${count} blocks${marker}`);
+        });
+        
+        // Process each division's divisionTimes for gap detection
         Object.entries(divisions).forEach(([divName, divData]) => {
-            // ★★★ PARTIAL GEN CHECK ★★★
             if (allowedDivisionsSet && !allowedDivisionsSet.has(String(divName))) {
                 return;
             }
@@ -1680,34 +1702,34 @@
             const divSlots = window.divisionTimes?.[divName] || [];
             
             divSlots.forEach((slot, slotIdx) => {
-                // Only process "slot" type entries (General Activity Slots)
                 if (slot.type !== 'slot') return;
-                
-                // Skip split_half slots - they're handled separately
                 if (slot._splitHalf) return;
                 
                 const slotStart = slot.startMin;
                 const slotEnd = slot.endMin;
                 
-                // Check if this slot time range already has schedulable blocks
+                // ★★★ FIXED: Use String() for divName comparison ★★★
                 const hasBlocks = schedulableSlotBlocks.some(block => 
-                    block.divName === divName &&
+                    String(block.divName) === String(divName) &&
                     block.startTime === slotStart &&
                     block.endTime === slotEnd
                 );
                 
+                // ★★★ DIAGNOSTIC: Log D2 gap check results ★★★
+                if (String(divName) === '2' && (slotIdx === 5 || slotIdx === 7)) {
+                    console.log(`[STEP 3.5-DIAG] D2 slot ${slotIdx} (${slotStart}-${slotEnd}): hasBlocks=${hasBlocks}`);
+                }
+                
                 if (!hasBlocks) {
-                    // No blocks exist for this time range - create them
                     console.log(`[GAP] Adding blocks for ${divName} slot ${slotIdx}: ${slot.label || slot.event} (${slotStart}-${slotEnd})`);
                     
                     bunkList.forEach(bunk => {
-                        // Check if bunk already has an assignment at this slot
                         const existing = window.scheduleAssignments[bunk]?.[slotIdx];
                         if (existing && existing._bunkOverride) return;
                         if (existing && existing._activity && existing._activity !== TRANSITION_TYPE) return;
                         
                         schedulableSlotBlocks.push({
-                            divName,
+                            divName: String(divName),
                             bunk,
                             event: 'General Activity Slot',
                             type: 'slot',
@@ -1986,6 +2008,27 @@
 
         console.log("\n[STEP 7] Running Total Solver for remaining activities...");
 
+        // ★★★ DIAGNOSTIC: Check D2 slots 5 & 7 status before filter ★★★
+        console.log("\n[STEP 7-DIAG] Checking D2 bunk assignments at slots 5 & 7:");
+        const _d2BunkSample = divisions['2']?.bunks?.slice(0, 3) || [];
+        _d2BunkSample.forEach(bunk => {
+            [5, 7].forEach(slotIdx => {
+                const entry = window.scheduleAssignments[bunk]?.[slotIdx];
+                const status = entry ? `FILLED: ${entry._activity || entry.field || JSON.stringify(entry).substring(0,50)}` : 'NULL ✓';
+                console.log(`[STEP 7-DIAG]    Bunk ${bunk} slot ${slotIdx}: ${status}`);
+            });
+        });
+        
+        // ★★★ DIAGNOSTIC: Count D2 blocks by target slot ★★★
+        const _d2Slot5Count = schedulableSlotBlocks.filter(b => 
+            String(b.divName) === '2' && b.slots?.[0] === 5 && !(/league/i.test(b.event))
+        ).length;
+        const _d2Slot7Count = schedulableSlotBlocks.filter(b => 
+            String(b.divName) === '2' && b.slots?.[0] === 7 && !(/league/i.test(b.event))
+        ).length;
+        console.log(`[STEP 7-DIAG] D2 blocks targeting slot 5: ${_d2Slot5Count}`);
+        console.log(`[STEP 7-DIAG] D2 blocks targeting slot 7: ${_d2Slot7Count}`);
+
         // ★★★ v17.7 FIX: Improved filter to properly handle split tile blocks ★★★
         const remainingActivityBlocks = schedulableSlotBlocks
             .filter(b => {
@@ -2013,6 +2056,13 @@
                     return true;
                 }
                 
+                // ★★★ DIAGNOSTIC: Log D2 slots 5 & 7 filter removals ★★★
+                if (existing && existing._activity !== TRANSITION_TYPE) {
+                    if (String(block.divName) === '2' && (s[0] === 5 || s[0] === 7)) {
+                        console.log(`[FILTER] ★ REMOVED D2 bunk ${block.bunk} slot ${s[0]}: existing._activity="${existing._activity}" existing.field="${existing.field}"`);
+                    }
+                    return false;
+                }
                 return !existing || existing._activity === TRANSITION_TYPE;
             })
             .map(b => ({ ...b, _isLeague: false }));
@@ -2097,6 +2147,6 @@
 
     window.registerSingleSlotUsage = registerSingleSlotUsage;
 
-    console.log('⚙️ Scheduler Core Main v17.7 loaded (SPLIT TILE SLOT & SOLVER FIX)');
+    console.log('⚙️ Scheduler Core Main v17.8 loaded (D2 DIAGNOSTICS & GAP FIX)');
 
 })();
