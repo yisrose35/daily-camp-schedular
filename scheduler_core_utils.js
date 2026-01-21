@@ -607,75 +607,95 @@ const divSlots = window.divisionTimes[divName];
             return false;
         }
 
-        // =================================================================
+       // =================================================================
         // CAPACITY CALCULATION
         // =================================================================
         let maxCapacity = 1;
-
         if (effectiveProps.sharableWith?.capacity) {
             maxCapacity = parseInt(effectiveProps.sharableWith.capacity) || 1;
         } else if (effectiveProps.sharable || effectiveProps.sharableWith?.type === "all" || effectiveProps.sharableWith?.type === "custom") {
             maxCapacity = 2;
         }
-
         // Basic availability checks
         if (effectiveProps.available === false) {
             if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - not available`);
             return false;
         }
-// =================================================================
-// ★★★ TIME-BASED AVAILABILITY CHECK (timeRules) ★★★
-// Handles both "Available" (only during) and "Unavailable" (blocked during)
-// =================================================================
-if (effectiveProps.timeRules && effectiveProps.timeRules.length > 0) {
-    const { blockStartMin, blockEndMin } = Utils.getBlockTimeRange ? 
-        Utils.getBlockTimeRange(block) : 
-        { blockStartMin: block.startTime, blockEndMin: block.endTime };
-    
-    if (blockStartMin != null && blockEndMin != null) {
-        // Separate rules by type
-        const availableRules = effectiveProps.timeRules.filter(r => r.type === 'Available' || r.available === true);
-        const unavailableRules = effectiveProps.timeRules.filter(r => r.type === 'Unavailable' || r.available === false);
-        
-        // If there are "Available" rules, block must be WITHIN at least one
-        if (availableRules.length > 0) {
-            let withinAvailable = false;
-            
-            for (const rule of availableRules) {
-                const ruleStart = Utils.parseTimeToMinutes(rule.startTime || rule.start);
-                const ruleEnd = Utils.parseTimeToMinutes(rule.endTime || rule.end);
-                
-                if (ruleStart == null || ruleEnd == null) continue;
-                
-                // Block must be completely within the available window
-                if (blockStartMin >= ruleStart && blockEndMin <= ruleEnd) {
-                    withinAvailable = true;
-                    break;
+
+        // =================================================================
+        // ★★★ LIMIT USAGE CHECK (Division & Bunk Restrictions) ★★★
+        // =================================================================
+        if (effectiveProps.limitUsage?.enabled) {
+            const divisionRules = effectiveProps.limitUsage.divisions || {};
+            if (!(block.divName in divisionRules)) {
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - limitUsage: division ${block.divName} not in allowed list`);
+                return false;
+            }
+            const divRule = divisionRules[block.divName];
+            if (Array.isArray(divRule) && divRule.length > 0) {
+                const bunkStr = String(block.bunk);
+                const bunkNum = parseInt(block.bunk);
+                const inList = divRule.some(b => String(b) === bunkStr || parseInt(b) === bunkNum);
+                if (!inList) {
+                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - limitUsage: bunk not in allowed list`);
+                    return false;
                 }
             }
+        }
+
+        // =================================================================
+        // ★★★ TIME-BASED AVAILABILITY CHECK (timeRules) ★★★
+        // Handles both "Available" (only during) and "Unavailable" (blocked during)
+        // =================================================================
+        if (effectiveProps.timeRules && effectiveProps.timeRules.length > 0) {
+            const { blockStartMin, blockEndMin } = Utils.getBlockTimeRange ? 
+                Utils.getBlockTimeRange(block) : 
+                { blockStartMin: block.startTime, blockEndMin: block.endTime };
             
-            if (!withinAvailable) {
-                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - not within any Available time window`);
-                return false;
+            if (blockStartMin != null && blockEndMin != null) {
+                // Separate rules by type
+                const availableRules = effectiveProps.timeRules.filter(r => r.type === 'Available' || r.available === true);
+                const unavailableRules = effectiveProps.timeRules.filter(r => r.type === 'Unavailable' || r.available === false);
+                
+                // If there are "Available" rules, block must be WITHIN at least one
+                if (availableRules.length > 0) {
+                    let withinAvailable = false;
+                    
+                    for (const rule of availableRules) {
+                        const ruleStart = Utils.parseTimeToMinutes(rule.startTime || rule.start);
+                        const ruleEnd = Utils.parseTimeToMinutes(rule.endTime || rule.end);
+                        
+                        if (ruleStart == null || ruleEnd == null) continue;
+                        
+                        // Block must be completely within the available window
+                        if (blockStartMin >= ruleStart && blockEndMin <= ruleEnd) {
+                            withinAvailable = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!withinAvailable) {
+                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - not within any Available time window`);
+                        return false;
+                    }
+                }
+                
+                // Check "Unavailable" rules - block must NOT overlap
+                for (const rule of unavailableRules) {
+                    const ruleStart = Utils.parseTimeToMinutes(rule.startTime || rule.start);
+                    const ruleEnd = Utils.parseTimeToMinutes(rule.endTime || rule.end);
+                    
+                    if (ruleStart == null || ruleEnd == null) continue;
+                    
+                    const overlaps = !(blockEndMin <= ruleStart || blockStartMin >= ruleEnd);
+                    
+                    if (overlaps) {
+                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - overlaps Unavailable ${ruleStart}-${ruleEnd}`);
+                        return false;
+                    }
+                }
             }
         }
-        
-        // Check "Unavailable" rules - block must NOT overlap
-        for (const rule of unavailableRules) {
-            const ruleStart = Utils.parseTimeToMinutes(rule.startTime || rule.start);
-            const ruleEnd = Utils.parseTimeToMinutes(rule.endTime || rule.end);
-            
-            if (ruleStart == null || ruleEnd == null) continue;
-            
-            const overlaps = !(blockEndMin <= ruleStart || blockStartMin >= ruleEnd);
-            
-            if (overlaps) {
-                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - overlaps Unavailable ${ruleStart}-${ruleEnd}`);
-                return false;
-            }
-        }
-    }
-}
         // =================================================================
         // CHECK EACH SLOT FOR CAPACITY AND ACTIVITY MATCHING
         // =================================================================
