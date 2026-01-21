@@ -1020,9 +1020,11 @@
      * * @param {string} divisionName - Division name
      * @returns {Array} Array of slot objects with startMin, endMin, label
      */
-    Utils.getSlotsForDivision = function(divisionName) {
-        return window.divisionTimes?.[divisionName] || [];
-    };
+   Utils.getSlotsForDivision = function(divisionName) {
+    // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
+    const divNameStr = String(divisionName);
+    return window.divisionTimes?.[divNameStr] || [];
+};
 
     /**
      * Get slot at a specific index for a division
