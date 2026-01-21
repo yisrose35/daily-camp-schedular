@@ -640,7 +640,7 @@ if (effectiveProps.timeRules && effectiveProps.timeRules.length > 0) {
         // Check for overlap with unavailable time
         const overlaps = !(blockEndMin <= ruleStart || blockStartMin >= ruleEnd);
         
-        if (overlaps && rule.available === false) {
+        if (overlaps && (rule.available === false || rule.type === 'Unavailable')) {
             if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - unavailable during ${ruleStart}-${ruleEnd}`);
             return false;
         }
