@@ -4,6 +4,7 @@
 // UPDATED:
 // - Added "Usage Manager" view to manually adjust activity counts.
 // - Cleaned, formatted, structured into logical sections.
+// - Refactored to use window.SchedulerCoreUtils for time/string helpers.
 // ============================================================================
 
 (function () {
@@ -15,110 +16,23 @@
     // TIME HELPERS
     // ========================================================================
 
-    function parseTimeToMinutes(val) {
-        if (!val) return null;
-
-        if (val instanceof Date)
-            return val.getHours() * 60 + val.getMinutes();
-
-        if (typeof val === "number")
-            return val;
-
-        if (typeof val === "string") {
-            let s = val.trim().toLowerCase();
-
-            // Case: ISO-like or date-time string
-            if (s.includes("t") || s.includes("-")) {
-                const d = new Date(val);
-                if (!isNaN(d.getTime()))
-                    return d.getHours() * 60 + d.getMinutes();
-            }
-
-            // AM/PM parse
-            let mer = null;
-            if (s.endsWith("am") || s.endsWith("pm")) {
-                mer = s.endsWith("am") ? "am" : "pm";
-                s = s.replace(/am|pm/g, "").trim();
-            }
-
-            const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-            if (!m) return null;
-
-            let hh = parseInt(m[1]);
-            const mm = parseInt(m[2]);
-
-            if (mer) {
-                if (hh === 12) hh = mer === "am" ? 0 : 12;
-                else if (mer === "pm") hh += 12;
-            }
-
-            return hh * 60 + mm;
-        }
-
-        return null;
-    }
-
-    function minutesToTime(m) {
-        let h = Math.floor(m / 60);
-        const mm = m % 60;
-        const ap = h >= 12 ? "PM" : "AM";
-        h = h % 12 || 12;
-
-        return `${h}:${mm < 10 ? "0" + mm : mm} ${ap}`;
-    }
-
-    function fieldLabel(f) {
-        return (f && typeof f === "object" && f.name) ? f.name : f;
-    }
+    // REMOVED: parseTimeToMinutes (Use window.SchedulerCoreUtils.parseTimeToMinutes)
+    // REMOVED: minutesToTime (Use window.SchedulerCoreUtils.minutesToTimeLabel)
+    // REMOVED: fieldLabel (Use window.SchedulerCoreUtils.fieldLabel)
+    // REMOVED: isTimeAvailable (Use window.SchedulerCoreUtils.isTimeAvailable if needed)
 
     function getEntryTimes(entry, fallback, incMin) {
         let start = entry.start || entry.startTime || entry.s || (fallback ? fallback.start : null);
         let end = entry.end || entry.endTime || entry.e;
 
         if (start && !end) {
-            const sm = parseTimeToMinutes(start);
-            if (sm != null) end = minutesToTime(sm + incMin);
+            // UPDATED: Use Utils
+            const sm = window.SchedulerCoreUtils.parseTimeToMinutes(start);
+            // UPDATED: Use Utils
+            if (sm != null) end = window.SchedulerCoreUtils.minutesToTimeLabel(sm + incMin);
         }
 
         return { start, end };
-    }
-
-    function isTimeAvailable(slotIndex, props) {
-        if (!window.unifiedTimes[slotIndex]) return false;
-
-        const t = window.unifiedTimes[slotIndex];
-        const sm = new Date(t.start).getHours() * 60 + new Date(t.start).getMinutes();
-        const em = sm + (window.INCREMENT_MINS || 30);
-
-        const rules = props.timeRules || [];
-        if (!rules.length) return props.available;
-
-        if (!props.available) return false;
-
-        // Default: unavailable unless an "Available" matches
-        let allowed = !rules.some(r => r.type === "Available");
-
-        // Mark Available if inside Available rule
-        for (const r of rules) {
-            if (r.type === "Available") {
-                if (sm >= parseTimeToMinutes(r.start) &&
-                    em <= parseTimeToMinutes(r.end)) {
-                    allowed = true;
-                }
-            }
-        }
-
-        // Remove availability if inside an Unavailable rule
-        for (const r of rules) {
-            if (r.type === "Unavailable") {
-                if (sm < parseTimeToMinutes(r.end) &&
-                    em > parseTimeToMinutes(r.start)) {
-                    allowed = false;
-                }
-            }
-        }
-
-        return allowed;
     }
 
 
@@ -469,7 +383,8 @@
 
             sched.forEach((entry, idx) => {
                 if (entry && entry.field && entry.field !== "Free" && entry.field !== "No Field") {
-                    const name = fieldLabel(entry.field);
+                    // UPDATED: Use Utils
+                    const name = window.SchedulerCoreUtils.fieldLabel(entry.field);
                     if (!usageMap[idx]) usageMap[idx] = {};
                     usageMap[idx][name] = true;
                 }
