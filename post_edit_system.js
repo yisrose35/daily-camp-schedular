@@ -1080,7 +1080,7 @@
     console.log('📝 Post-Edit System v4.0 initialized (consolidated)');
 }
 
-window.initPostEditSystem = initPostEditSystem;
+
         
         console.log('📝 Post-Generation Edit System v3.1 initialized');
         console.log('   - Client UI Only (Regeneration logic delegated)');
@@ -1100,7 +1100,7 @@ window.initPostEditSystem = initPostEditSystem;
     window.getEditableBunks = getEditableBunks;
     window.sendSchedulerNotification = sendSchedulerNotification;
     window.bypassSaveAllBunks = bypassSaveAllBunks;
-    window.initPostEditSystem = initPostEditSystem;
+   
     
     // =========================================================================
     // ★★★ CRITICAL PATCH: Make loadScheduleForDate respect _postEditInProgress ★★★
