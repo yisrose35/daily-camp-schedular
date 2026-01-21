@@ -1185,7 +1185,8 @@
         td.colSpan = bunks.length;
         td.style.cssText = 'padding: 12px 16px; background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border-left: 4px solid #0284c7; vertical-align: top;';
         
-        const slots = window.findSlotsForRange(block.startMin, block.endMin, unifiedTimes);
+       // ★★★ FIX v4.0.6: Use division-specific slot lookup for league matchups ★★★
+const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block.endMin, divName) || [];
         let leagueInfo = { matchups: [], gameLabel: '', sport: '', leagueName: '' };
         for (const idx of slots) { 
             const info = getLeagueMatchups(divName, idx); 
