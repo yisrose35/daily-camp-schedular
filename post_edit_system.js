@@ -1,5 +1,5 @@
 // =============================================================================
-// POST-GENERATION EDIT SYSTEM v3.0 - INTEGRATED SMART REGENERATION
+// POST-GENERATION EDIT SYSTEM v3.1 - CLIENT UI ONLY
 // =============================================================================
 // 
 // FEATURES:
@@ -7,23 +7,20 @@
 // - Activity name and location/field selection
 // - Optional time change (hidden by default, shown on request)
 // - Scans current schedule for field conflicts
-// - SMART REGENERATION using full scheduler-core pipeline:
-//   * GlobalFieldLocks integration
-//   * Full candidate building (sports + specials)
-//   * Rotation penalty scoring (recency, frequency, variety)
-//   * Capacity and preference awareness
-//   * fillBlock integration
+// - DELEGATES REGENERATION to unified_schedule_system.js globals:
+//   * window.resolveConflictsAndApply
+//   * window.smartRegenerateConflicts
 // - BYPASS MODE: When scheduler bypasses RBAC, they become admin-like
 //   and can modify ANY bunk with full regeneration privileges
 //
-// INTEGRATION: Add this file AFTER scheduler_core_main.js, total_solver_engine.js
+// INTEGRATION: Add this file AFTER unified_schedule_system.js
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('📝 Post-Generation Edit System v3.0 (INTEGRATED SMART REGEN) loading...');
+    console.log('📝 Post-Generation Edit System v3.1 (UI Client) loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -34,33 +31,7 @@
     const DEBUG = true;
     const TRANSITION_TYPE = window.TRANSITION_TYPE || "Transition/Buffer";
 
-    // =========================================================================
-    // ROTATION CONFIGURATION (from scheduler_logic_fillers)
-    // =========================================================================
-    
-    const ROTATION_CONFIG = {
-        // Hard rules
-        SAME_DAY_PENALTY: Infinity,            // NEVER allow same activity twice in one day
-
-        // Recency penalties (days ago)
-        YESTERDAY_PENALTY: 5000,               // Did it yesterday
-        TWO_DAYS_AGO_PENALTY: 3000,            // Did it 2 days ago
-        THREE_DAYS_AGO_PENALTY: 2000,          // Did it 3 days ago
-        FOUR_TO_SEVEN_DAYS_PENALTY: 800,       // Did it 4-7 days ago
-        WEEK_PLUS_PENALTY: 200,                // Did it more than a week ago
-
-        // Frequency penalties
-        HIGH_FREQUENCY_PENALTY: 1500,          // Done this much more than others
-        ABOVE_AVERAGE_PENALTY: 500,            // Done this more than average
-
-        // Variety bonuses (negative = good)
-        NEVER_DONE_BONUS: -1500,               // NEVER done this activity before
-        UNDER_UTILIZED_BONUS: -800,            // Done less than average
-
-        // Sharing bonus
-        ADJACENT_BUNK_BONUS: -100,             // Adjacent bunk doing same activity
-        NEARBY_BUNK_BONUS: -30                 // Nearby bunk (within 3) doing same
-    };
+    // REMOVED: ROTATION_CONFIG (Moved to unified_schedule_system.js)
 
     // =========================================================================
     // DEBUG LOGGING
@@ -107,15 +78,6 @@
         const m = mins % 60;
         return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
     }
-
-    // REMOVED: minutesToTimeLabel (use window.SchedulerCoreUtils.minutesToTimeLabel)
-    // REMOVED: fieldLabel (use window.SchedulerCoreUtils.fieldLabel)
-    // REMOVED: findSlotsForRange (use window.SchedulerCoreUtils.findSlotsForRange)
-    // REMOVED: getSlotTimeRange (use window.SchedulerCoreUtils.getSlotTimeRange)
-    // REMOVED: getDivisionForBunk (use window.SchedulerCoreUtils.getDivisionForBunk)
-    // REMOVED: getActivityProperties (use window.SchedulerCoreUtils.getActivityProperties)
-    // REMOVED: buildFieldUsageBySlot (use window.SchedulerCoreUtils.buildFieldUsageBySlot)
-    // REMOVED: isFieldAvailable (use window.SchedulerCoreUtils.isFieldAvailable)
 
     // =========================================================================
     // GET ALL LOCATIONS (for dropdown)
@@ -282,651 +244,14 @@
         };
     }
 
-    // =========================================================================
-    // ROTATION SCORING (from total_solver_engine)
-    // =========================================================================
-
-    function getActivitiesDoneToday(bunk, beforeSlot) {
-        const done = new Set();
-        const bunkData = window.scheduleAssignments?.[bunk];
-        if (!bunkData) return done;
-
-        for (let i = 0; i < beforeSlot; i++) {
-            const entry = bunkData[i];
-            if (entry) {
-                // UPDATED: Use SchedulerCoreUtils
-                const actName = entry._activity || entry.sport || window.SchedulerCoreUtils.fieldLabel(entry.field);
-                if (actName && actName.toLowerCase() !== 'free' && !actName.toLowerCase().includes('transition')) {
-                    done.add(actName.toLowerCase().trim());
-                }
-            }
-        }
-        return done;
-    }
-
-    function getActivityCount(bunk, activityName) {
-        const globalSettings = window.loadGlobalSettings?.() || {};
-        const historicalCounts = globalSettings.historicalCounts || {};
-        return historicalCounts[bunk]?.[activityName] || 0;
-    }
-
-    function getDaysSinceActivity(bunk, activityName) {
-        const rotationHistory = window.loadRotationHistory?.() || {};
-        const bunkHistory = rotationHistory.bunks?.[bunk] || {};
-        const lastDone = bunkHistory[activityName];
-        
-        if (!lastDone) return null;
-        
-        const now = Date.now();
-        const daysSince = Math.floor((now - lastDone) / (24 * 60 * 60 * 1000));
-        return daysSince;
-    }
-
-    function calculateRotationPenalty(bunk, activityName, slots) {
-        if (!activityName || activityName === 'Free') return 0;
-
-        const firstSlot = slots[0];
-        const doneToday = getActivitiesDoneToday(bunk, firstSlot);
-        const actLower = activityName.toLowerCase().trim();
-
-        // HARD BLOCK: Already done today
-        if (doneToday.has(actLower)) {
-            return ROTATION_CONFIG.SAME_DAY_PENALTY;
-        }
-
-        // Recency penalty
-        const daysSince = getDaysSinceActivity(bunk, activityName);
-        let recencyPenalty = 0;
-
-        if (daysSince === null) {
-            recencyPenalty = ROTATION_CONFIG.NEVER_DONE_BONUS;
-        } else if (daysSince === 0) {
-            return ROTATION_CONFIG.SAME_DAY_PENALTY;
-        } else if (daysSince === 1) {
-            recencyPenalty = ROTATION_CONFIG.YESTERDAY_PENALTY;
-        } else if (daysSince === 2) {
-            recencyPenalty = ROTATION_CONFIG.TWO_DAYS_AGO_PENALTY;
-        } else if (daysSince === 3) {
-            recencyPenalty = ROTATION_CONFIG.THREE_DAYS_AGO_PENALTY;
-        } else if (daysSince <= 7) {
-            recencyPenalty = ROTATION_CONFIG.FOUR_TO_SEVEN_DAYS_PENALTY;
-        } else {
-            recencyPenalty = ROTATION_CONFIG.WEEK_PLUS_PENALTY;
-        }
-
-        // Frequency penalty
-        const count = getActivityCount(bunk, activityName);
-        let frequencyPenalty = 0;
-        if (count > 5) {
-            frequencyPenalty = ROTATION_CONFIG.HIGH_FREQUENCY_PENALTY;
-        } else if (count > 3) {
-            frequencyPenalty = ROTATION_CONFIG.ABOVE_AVERAGE_PENALTY;
-        } else if (count === 0) {
-            frequencyPenalty = ROTATION_CONFIG.UNDER_UTILIZED_BONUS;
-        }
-
-        return recencyPenalty + frequencyPenalty;
-    }
-
-    // =========================================================================
-    // BUILD CANDIDATE OPTIONS (from total_solver_engine)
-    // =========================================================================
-
-    function buildCandidateOptions(slots, activityProperties, disabledFields = []) {
-        const options = [];
-        const seenKeys = new Set();
-        const settings = window.loadGlobalSettings?.() || {};
-        const app1 = settings.app1 || {};
-
-        // From fields (sports) - using fieldsBySport
-        const fieldsBySport = settings.fieldsBySport || {};
-        for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
-            (sportFields || []).forEach(fieldName => {
-                if (disabledFields.includes(fieldName)) return;
-
-                if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots)) {
-                    return;
-                }
-
-                const key = `${fieldName}|${sport}`;
-                if (!seenKeys.has(key)) {
-                    seenKeys.add(key);
-                    options.push({
-                        field: fieldName,
-                        sport: sport,
-                        activityName: sport,
-                        type: 'sport'
-                    });
-                }
-            });
-        }
-
-        // From special activities
-        const specials = app1.specialActivities || [];
-        for (const special of specials) {
-            if (!special.name) continue;
-            if (disabledFields.includes(special.name)) continue;
-
-            if (window.GlobalFieldLocks?.isFieldLocked(special.name, slots)) {
-                continue;
-            }
-
-            const key = `special|${special.name}`;
-            if (!seenKeys.has(key)) {
-                seenKeys.add(key);
-                options.push({
-                    field: special.name,
-                    sport: null,
-                    activityName: special.name,
-                    type: 'special'
-                });
-            }
-        }
-
-        // Also add fields directly if they support general activities
-        const fields = app1.fields || [];
-        for (const field of fields) {
-            if (!field.name || field.available === false) continue;
-            if (disabledFields.includes(field.name)) continue;
-
-            if (window.GlobalFieldLocks?.isFieldLocked(field.name, slots)) {
-                continue;
-            }
-
-            // Add field as a generic option if it has activities
-            (field.activities || []).forEach(activity => {
-                const key = `${field.name}|${activity}`;
-                if (!seenKeys.has(key)) {
-                    seenKeys.add(key);
-                    options.push({
-                        field: field.name,
-                        sport: activity,
-                        activityName: activity,
-                        type: 'sport'
-                    });
-                }
-            });
-        }
-
-        return options;
-    }
-
-    // =========================================================================
-    // CALCULATE FULL PENALTY COST
-    // =========================================================================
-
-    function calculatePenaltyCost(bunk, slots, pick, fieldUsageBySlot, activityProperties) {
-        let penalty = 0;
-        const activityName = pick.activityName || pick._activity || pick.sport;
-        const fieldName = pick.field;
-        // UPDATED: Use SchedulerCoreUtils
-        const divName = window.SchedulerCoreUtils.getDivisionForBunk(bunk);
-
-        // Rotation penalty (PRIMARY FACTOR)
-        const rotationPenalty = calculateRotationPenalty(bunk, activityName, slots);
-        if (rotationPenalty === Infinity) {
-            return Infinity;
-        }
-        penalty += rotationPenalty;
-
-        // Division preference bonus
-        const props = activityProperties[fieldName] || {};
-        if (props.preferences?.enabled && props.preferences?.list) {
-            const prefList = props.preferences.list;
-            const idx = prefList.indexOf(divName);
-            if (idx !== -1) {
-                penalty -= (50 - idx * 5);
-            } else if (props.preferences.exclusive) {
-                return Infinity;
-            } else {
-                penalty += 500;
-            }
-        }
-
-        // Sharing bonus (adjacent bunks doing same activity)
-        const myNum = parseInt((bunk.match(/\d+/) || [])[0]) || 0;
-        
-        for (const slotIdx of slots) {
-            const slotUsage = fieldUsageBySlot[slotIdx]?.[fieldName];
-            if (slotUsage && slotUsage.bunks) {
-                for (const otherBunk of Object.keys(slotUsage.bunks)) {
-                    if (otherBunk === bunk) continue;
-                    const otherNum = parseInt((otherBunk.match(/\d+/) || [])[0]) || 0;
-                    const distance = Math.abs(myNum - otherNum);
-                    if (distance === 1) {
-                        penalty += ROTATION_CONFIG.ADJACENT_BUNK_BONUS;
-                    } else if (distance <= 3) {
-                        penalty += ROTATION_CONFIG.NEARBY_BUNK_BONUS;
-                    }
-                }
-            }
-        }
-
-        // Usage limit check
-        const maxUsage = props.maxUsage || 0;
-        if (maxUsage > 0) {
-            const hist = getActivityCount(bunk, activityName);
-            if (hist >= maxUsage) {
-                return Infinity;
-            }
-            if (hist >= maxUsage - 1) {
-                penalty += 2000;
-            }
-        }
-
-        return penalty;
-    }
-
-    // =========================================================================
-    // FIND BEST ACTIVITY FOR BUNK (Mini-solver)
-    // =========================================================================
-
-    function findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProperties, avoidFields = []) {
-        const disabledFields = window.currentDisabledFields || [];
-        const avoidSet = new Set(avoidFields.map(f => f.toLowerCase()));
-
-        // Build candidate options
-        const candidates = buildCandidateOptions(slots, activityProperties, disabledFields);
-        
-        debugLog(`Finding best activity for ${bunk} at slots ${slots.join(',')}`);
-        debugLog(`  ${candidates.length} candidates available, avoiding: ${avoidFields.join(', ')}`);
-
-        const scoredPicks = [];
-
-        for (const cand of candidates) {
-            const fieldName = cand.field;
-            const activityName = cand.activityName;
-
-            // Skip avoided fields
-            if (avoidSet.has(fieldName.toLowerCase()) || avoidSet.has(activityName?.toLowerCase())) {
-                continue;
-            }
-
-            // Check field availability
-            // UPDATED: Use SchedulerCoreUtils
-            if (!window.SchedulerCoreUtils.isFieldAvailable(fieldName, slots, bunk, fieldUsageBySlot, activityProperties)) {
-                continue;
-            }
-
-            // Calculate penalty cost
-            const cost = calculatePenaltyCost(bunk, slots, cand, fieldUsageBySlot, activityProperties);
-
-            if (cost < Infinity) {
-                scoredPicks.push({
-                    field: fieldName,
-                    sport: cand.sport,
-                    activityName: activityName,
-                    type: cand.type,
-                    cost: cost
-                });
-            }
-        }
-
-        // Sort by cost (lower is better)
-        scoredPicks.sort((a, b) => a.cost - b.cost);
-
-        debugLog(`  ${scoredPicks.length} valid picks after filtering`);
-        if (scoredPicks.length > 0) {
-            debugLog(`  Best pick: ${scoredPicks[0].activityName} on ${scoredPicks[0].field} (cost: ${scoredPicks[0].cost})`);
-        }
-
-        return scoredPicks.length > 0 ? scoredPicks[0] : null;
-    }
-
-    // =========================================================================
-    // APPLY PICK TO BUNK (uses fillBlock when available)
-    // =========================================================================
-
-    function applyPickToBunk(bunk, slots, pick, fieldUsageBySlot, activityProperties) {
-        // UPDATED: Use SchedulerCoreUtils
-        const divName = window.SchedulerCoreUtils.getDivisionForBunk(bunk);
-        
-        // Get time range
-        // UPDATED: Use SchedulerCoreUtils
-        const firstSlotTime = window.SchedulerCoreUtils.getSlotTimeRange(slots[0]);
-        const lastSlotTime = window.SchedulerCoreUtils.getSlotTimeRange(slots[slots.length - 1]);
-        
-        const block = {
-            divName: divName,
-            bunk: bunk,
-            startTime: firstSlotTime.startMin,
-            endTime: lastSlotTime.endMin,
-            slots: slots
-        };
-
-        const pickData = {
-            field: pick.field,
-            sport: pick.sport,
-            _fixed: true,
-            _activity: pick.activityName,
-            _smartRegenerated: true,
-            _regeneratedAt: Date.now()
-        };
-
-        // ★★★ FIX: ALWAYS update window.scheduleAssignments directly ★★★
-        // fillBlock may update its own internal structures, but unified_schedule_system
-        // reads from window.scheduleAssignments, so we MUST update it here
-        if (!window.scheduleAssignments) {
-            window.scheduleAssignments = {};
-        }
-        if (!window.scheduleAssignments[bunk]) {
-            window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
-        }
-
-        slots.forEach((slotIdx, i) => {
-            window.scheduleAssignments[bunk][slotIdx] = {
-                ...pickData,
-                continuation: i > 0
-            };
-        });
-        
-        debugLog(`  ✅ Updated window.scheduleAssignments[${bunk}] slots ${slots.join(',')}`);
-
-        // Also call fillBlock if available (for any side effects it may have)
-        if (typeof window.fillBlock === 'function') {
-            debugLog(`  Also calling fillBlock for ${bunk}`);
-            try {
-                window.fillBlock(block, pickData, fieldUsageBySlot, window.yesterdayHistory || {}, false, activityProperties);
-            } catch (e) {
-                console.warn(`[PostEdit] fillBlock error for ${bunk}:`, e);
-            }
-        }
-
-        // Register field usage
-        const fieldName = pick.field;
-        for (const slotIdx of slots) {
-            if (!fieldUsageBySlot[slotIdx]) {
-                fieldUsageBySlot[slotIdx] = {};
-            }
-            if (!fieldUsageBySlot[slotIdx][fieldName]) {
-                fieldUsageBySlot[slotIdx][fieldName] = {
-                    count: 0,
-                    bunks: {},
-                    divisions: []
-                };
-            }
-            const usage = fieldUsageBySlot[slotIdx][fieldName];
-            usage.count++;
-            usage.bunks[bunk] = pick.activityName;
-            if (divName && !usage.divisions.includes(divName)) {
-                usage.divisions.push(divName);
-            }
-        }
-
-        debugLog(`  ✅ Applied ${pick.activityName} on ${pick.field} to ${bunk}`);
-    }
-
-    // Continues in Part 2...
-// ... continuation from Part 1
-
-    // =========================================================================
-    // SMART REGENERATION FOR CONFLICTS
-    // =========================================================================
-
-    /**
-     * Smart regeneration using full scheduler-core logic.
-     * When bypassMode is true, the scheduler acts as admin/owner.
-     */
-    function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedActivity, conflicts, bypassMode = false) {
-        console.log('\n' + '='.repeat(60));
-        console.log('[SmartRegen] ★★★ SMART REGENERATION STARTED ★★★');
-        if (bypassMode) {
-            console.log('[SmartRegen] 🔓 BYPASS MODE ACTIVE - Operating with ADMIN privileges');
-        }
-        console.log('='.repeat(60));
-        
-        debugLog('Pinned:', { bunk: pinnedBunk, slots: pinnedSlots, field: pinnedField, activity: pinnedActivity });
-        debugLog('Conflicts:', conflicts.length);
-
-        // UPDATED: Use SchedulerCoreUtils
-        const activityProperties = window.SchedulerCoreUtils.getActivityProperties();
-        const results = {
-            success: true,
-            reassigned: [],
-            failed: [],
-            pinnedLock: null,
-            bypassMode: bypassMode
-        };
-
-        // =====================================================================
-        // STEP 1: Lock the pinned field in GlobalFieldLocks
-        // =====================================================================
-        
-        if (window.GlobalFieldLocks) {
-            // UPDATED: Use SchedulerCoreUtils
-            const pinnedDivName = window.SchedulerCoreUtils.getDivisionForBunk(pinnedBunk);
-            window.GlobalFieldLocks.lockField(pinnedField, pinnedSlots, {
-                lockedBy: 'smart_regen_pinned',
-                division: pinnedDivName,
-                activity: pinnedActivity,
-                bunk: pinnedBunk
-            });
-            results.pinnedLock = { field: pinnedField, slots: pinnedSlots };
-            debugLog('Step 1: Locked pinned field in GlobalFieldLocks');
-        }
-
-        // =====================================================================
-        // STEP 2: Group conflicts by bunk
-        // =====================================================================
-        
-        const conflictsByBunk = {};
-        for (const conflict of conflicts) {
-            if (!conflictsByBunk[conflict.bunk]) {
-                conflictsByBunk[conflict.bunk] = new Set();
-            }
-            conflictsByBunk[conflict.bunk].add(conflict.slot);
-        }
-
-        debugLog(`Step 2: ${Object.keys(conflictsByBunk).length} bunks need reassignment`);
-
-        // =====================================================================
-        // STEP 3: Build fieldUsageBySlot EXCLUDING conflicting bunks
-        // =====================================================================
-        
-        const bunksToReassign = Object.keys(conflictsByBunk);
-        // UPDATED: Use SchedulerCoreUtils
-        const fieldUsageBySlot = window.SchedulerCoreUtils.buildFieldUsageBySlot(bunksToReassign);
-        
-        // Add the pinned bunk's usage
-        for (const slotIdx of pinnedSlots) {
-            if (!fieldUsageBySlot[slotIdx]) {
-                fieldUsageBySlot[slotIdx] = {};
-            }
-            if (!fieldUsageBySlot[slotIdx][pinnedField]) {
-                fieldUsageBySlot[slotIdx][pinnedField] = {
-                    count: 0,
-                    bunks: {},
-                    divisions: []
-                };
-            }
-            const usage = fieldUsageBySlot[slotIdx][pinnedField];
-            usage.count++;
-            usage.bunks[pinnedBunk] = pinnedActivity;
-        }
-
-        debugLog('Step 3: Built fieldUsageBySlot');
-
-        // =====================================================================
-        // STEP 4: Sort and process bunks
-        // =====================================================================
-        
-        bunksToReassign.sort((a, b) => {
-            const numA = parseInt((a.match(/\d+/) || [])[0]) || 0;
-            const numB = parseInt((b.match(/\d+/) || [])[0]) || 0;
-            return numA - numB;
-        });
-
-        debugLog('Step 4: Processing bunks in order:', bunksToReassign.join(', '));
-
-        for (const bunk of bunksToReassign) {
-            const slotSet = conflictsByBunk[bunk];
-            const slots = [...slotSet].sort((a, b) => a - b);
-            
-            debugLog(`\nProcessing ${bunk} for slots: ${slots.join(', ')}`);
-
-            // Get original activity
-            const originalEntry = window.scheduleAssignments?.[bunk]?.[slots[0]];
-            // UPDATED: Use SchedulerCoreUtils
-            const originalActivity = originalEntry?._activity || originalEntry?.sport || window.SchedulerCoreUtils.fieldLabel(originalEntry?.field);
-            
-            debugLog(`  Original activity: ${originalActivity || 'none'}`);
-
-            // Find best pick
-            const bestPick = findBestActivityForBunk(
-                bunk, 
-                slots, 
-                fieldUsageBySlot, 
-                activityProperties, 
-                [pinnedField]
-            );
-
-            if (bestPick) {
-                applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProperties);
-                
-                results.reassigned.push({
-                    bunk: bunk,
-                    slots: slots,
-                    from: originalActivity || 'unknown',
-                    to: bestPick.activityName,
-                    field: bestPick.field,
-                    cost: bestPick.cost
-                });
-
-                if (window.showToast) {
-                    window.showToast(`↪️ ${bunk}: ${originalActivity} → ${bestPick.activityName}`, 'info');
-                }
-            } else {
-                // No valid pick found - mark as Free
-                debugLog(`  ⚠️ No valid pick found for ${bunk}, marking as Free`);
-                
-                if (!window.scheduleAssignments[bunk]) {
-                    window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
-                }
-
-                slots.forEach((slotIdx, i) => {
-                    window.scheduleAssignments[bunk][slotIdx] = {
-                        field: 'Free',
-                        sport: null,
-                        continuation: i > 0,
-                        _fixed: false,
-                        _activity: 'Free',
-                        _smartRegenFailed: true,
-                        _originalActivity: originalActivity,
-                        _failedAt: Date.now()
-                    };
-                });
-
-                results.failed.push({
-                    bunk: bunk,
-                    slots: slots,
-                    originalActivity: originalActivity,
-                    reason: 'No valid alternative found'
-                });
-
-                results.success = false;
-
-                if (window.showToast) {
-                    window.showToast(`⚠️ ${bunk}: No alternative found`, 'warning');
-                }
-            }
-        }
-
-        // =====================================================================
-        // STEP 5: Summary
-        // =====================================================================
-        
-        console.log('\n' + '='.repeat(60));
-        console.log('[SmartRegen] ★★★ REGENERATION COMPLETE ★★★');
-        console.log(`  Reassigned: ${results.reassigned.length} bunks`);
-        console.log(`  Failed: ${results.failed.length} bunks`);
-        if (bypassMode) {
-            console.log('  Mode: BYPASS (admin privileges)');
-        }
-        console.log('='.repeat(60) + '\n');
-
-        // ★★★ VERIFICATION: Log what's actually in window.scheduleAssignments ★★★
-        console.log('[SmartRegen] VERIFICATION - checking window.scheduleAssignments:');
-        for (const r of results.reassigned) {
-            const bunkData = window.scheduleAssignments?.[r.bunk];
-            if (bunkData) {
-                const firstSlot = r.slots[0];
-                const entry = bunkData[firstSlot];
-                console.log(`  Bunk ${r.bunk} slot ${firstSlot}: ${entry?._activity || entry?.field || 'MISSING'}`);
-            } else {
-                console.log(`  Bunk ${r.bunk}: NO DATA IN scheduleAssignments!`);
-            }
-        }
-
-        return results;
-    }
-
-    // =========================================================================
-    // SIMPLIFIED smartReassignBunkActivity (drop-in replacement)
-    // =========================================================================
-
-    function smartReassignBunkActivity(bunk, slots, avoidLocation) {
-        debugLog(`smartReassignBunkActivity called for ${bunk}`);
-        
-        const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
-        if (!entry) {
-            console.warn(`[PostEdit] No existing entry for ${bunk} at slot ${slots[0]}`);
-            return { success: false };
-        }
-
-        // UPDATED: Use SchedulerCoreUtils
-        const originalActivity = entry._activity || entry.sport || window.SchedulerCoreUtils.fieldLabel(entry.field);
-        const activityProperties = window.SchedulerCoreUtils.getActivityProperties();
-        const fieldUsageBySlot = window.SchedulerCoreUtils.buildFieldUsageBySlot([bunk]);
-
-        const bestPick = findBestActivityForBunk(
-            bunk,
-            slots,
-            fieldUsageBySlot,
-            activityProperties,
-            [avoidLocation]
-        );
-
-        if (bestPick) {
-            applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProperties);
-
-            if (window.showToast) {
-                window.showToast(`↪️ ${bunk}: Moved to ${bestPick.activityName}`, 'info');
-            }
-
-            return {
-                success: true,
-                field: bestPick.field,
-                activity: bestPick.activityName,
-                cost: bestPick.cost
-            };
-        } else {
-            // Fallback to Free
-            console.warn(`[PostEdit] ⚠️ No alternative found for ${bunk}, marking as Free`);
-
-            if (!window.scheduleAssignments[bunk]) {
-                window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
-            }
-
-            slots.forEach((slotIdx, i) => {
-                window.scheduleAssignments[bunk][slotIdx] = {
-                    field: 'Free',
-                    sport: null,
-                    continuation: i > 0,
-                    _fixed: false,
-                    _activity: 'Free',
-                    _noAlternative: true,
-                    _originalActivity: originalActivity,
-                    _originalField: avoidLocation
-                };
-            });
-
-            if (window.showToast) {
-                window.showToast(`⚠️ ${bunk}: No alternative found`, 'warning');
-            }
-
-            return { success: false, reason: 'No valid alternative found' };
-        }
-    }
+    // REMOVED: Rotation Scoring Helpers (Delegated to unified_schedule_system.js)
+    // REMOVED: Build Candidate Options (Delegated to unified_schedule_system.js)
+    // REMOVED: Penalty Calculation (Delegated to unified_schedule_system.js)
+    // REMOVED: findBestActivityForBunk (Delegated to unified_schedule_system.js)
+    // REMOVED: applyPickToBunk (Delegated to unified_schedule_system.js)
+    // REMOVED: smartRegenerateConflicts (Delegated to unified_schedule_system.js)
+    // REMOVED: smartReassignBunkActivity (Delegated to unified_schedule_system.js)
+    // REMOVED: resolveConflictsAndApply (Delegated to unified_schedule_system.js)
 
     // =========================================================================
     // APPLY DIRECT EDIT
@@ -965,95 +290,6 @@
             slots.forEach(idx => {
                 window.registerLocationUsage(idx, location, activity, divName);
             });
-        }
-    }
-
-    // =========================================================================
-    // RESOLVE CONFLICTS AND APPLY
-    // =========================================================================
-
-    async function resolveConflictsAndApply(bunk, slots, activity, location, editData) {
-        const editableConflicts = editData.editableConflicts || [];
-        const nonEditableConflicts = editData.nonEditableConflicts || [];
-        const resolutionChoice = editData.resolutionChoice || 'notify';
-        
-        console.log('[PostEdit] Resolving conflicts...', {
-            editable: editableConflicts.length,
-            nonEditable: nonEditableConflicts.length,
-            resolution: resolutionChoice
-        });
-        
-        // Step 1: Apply the pinned edit
-        applyDirectEdit(bunk, slots, activity, location, false);
-        
-        // Step 2: Lock this field in GlobalFieldLocks
-        if (window.GlobalFieldLocks) {
-            // UPDATED: Use SchedulerCoreUtils
-            const divName = window.SchedulerCoreUtils.getDivisionForBunk(bunk);
-            window.GlobalFieldLocks.lockField(location, slots, {
-                lockedBy: 'post_edit_pinned',
-                division: divName,
-                activity: activity
-            });
-        }
-        
-        // Step 3: Determine conflicts to resolve
-        let conflictsToResolve = [...editableConflicts];
-        const bypassMode = resolutionChoice === 'bypass';
-        
-        if (bypassMode && nonEditableConflicts.length > 0) {
-            // ★★★ BYPASS MODE: Scheduler becomes ADMIN-like ★★★
-            console.log('[PostEdit] 🔓 BYPASS MODE - Acting as ADMIN/OWNER');
-            console.log('[PostEdit] Including non-editable bunks:', nonEditableConflicts.map(c => c.bunk));
-            conflictsToResolve = [...conflictsToResolve, ...nonEditableConflicts];
-        }
-        
-        // Step 4: Use smart regeneration
-        if (conflictsToResolve.length > 0) {
-            const result = smartRegenerateConflicts(
-                bunk,
-                slots,
-                location,
-                activity,
-                conflictsToResolve,
-                bypassMode
-            );
-
-            // Step 5: Handle bypass mode saves
-            if (bypassMode) {
-                console.log('[PostEdit] 🔓 Bypass mode - saving ALL modified bunks to cloud');
-                const modifiedBunks = [
-                    ...result.reassigned.map(r => r.bunk),
-                    ...result.failed.map(f => f.bunk)
-                ];
-                
-                // ★★★ FIX: Set protection flag BEFORE bypass save to prevent any listeners from overwriting ★★★
-                window._postEditInProgress = true;
-                window._postEditTimestamp = Date.now();
-                
-                // ★★★ FIX: Await the bypass save to prevent race conditions ★★★
-                await bypassSaveAllBunks(modifiedBunks);
-                
-                // Notify other schedulers (fire and forget - don't need to await)
-                if (nonEditableConflicts.length > 0) {
-                    const affectedBunks = [...new Set(nonEditableConflicts.map(c => c.bunk))];
-                    sendSchedulerNotification(affectedBunks, location, activity, 'bypassed');
-                    
-                    if (window.showToast) {
-                        window.showToast(`🔓 Bypassed permissions - reassigned ${affectedBunks.length} bunk(s)`, 'info');
-                    }
-                }
-            } else if (nonEditableConflicts.length > 0) {
-                // NOTIFY mode: Create double-booking and notify
-                const affectedBunks = [...new Set(nonEditableConflicts.map(c => c.bunk))];
-                console.warn(`[PostEdit] 📧 Double-booking created: ${affectedBunks.join(', ')}`);
-                
-                sendSchedulerNotification(affectedBunks, location, activity, 'conflict');
-                
-                if (window.showToast) {
-                    window.showToast(`📧 Notification sent about ${affectedBunks.length} conflict(s)`, 'warning');
-                }
-            }
         }
     }
 
@@ -1246,7 +482,13 @@
         
         // ★★★ FIX: Await conflict resolution to prevent race conditions ★★★
         if (hasConflict) {
-            await resolveConflictsAndApply(bunk, slots, activity, location, editData);
+            // UPDATED: Use window.resolveConflictsAndApply (Global call)
+            if (typeof window.resolveConflictsAndApply === 'function') {
+                await window.resolveConflictsAndApply(bunk, slots, activity, location, editData);
+            } else {
+                console.error('[PostEdit] ❌ Fatal: window.resolveConflictsAndApply is not defined! Ensure unified_schedule_system.js is loaded.');
+                alert('System Error: Conflict resolution module not loaded.');
+            }
         } else {
             applyDirectEdit(bunk, slots, activity, location, isClear);
         }
@@ -1815,6 +1057,19 @@
     // =========================================================================
 
     function initPostEditSystem() {
+        // ✅ ADD: Verify dependencies from unified_schedule_system.js
+        const missing = [];
+        if (typeof window.smartRegenerateConflicts !== 'function') missing.push('smartRegenerateConflicts');
+        if (typeof window.resolveConflictsAndApply !== 'function') missing.push('resolveConflictsAndApply');
+        if (typeof window.applyPickToBunk !== 'function') missing.push('applyPickToBunk');
+        
+        if (missing.length > 0) {
+            console.error('❌ [PostEdit] Missing dependencies from unified_schedule_system.js:', missing.join(', '));
+            console.error('   Make sure unified_schedule_system.js loads BEFORE post_edit_system.js');
+        } else {
+            console.log('✅ [PostEdit] All dependencies loaded');
+        }
+
         window.editCell = enhancedEditCell;
         setupClickInterceptor();
         
@@ -1845,11 +1100,9 @@
             document.head.appendChild(style);
         }
         
-        console.log('📝 Post-Generation Edit System v3.0 initialized');
-        console.log('   - INTEGRATED Smart Regeneration');
-        console.log('   - Full rotation penalty scoring');
+        console.log('📝 Post-Generation Edit System v3.1 initialized');
+        console.log('   - Client UI Only (Regeneration logic delegated)');
         console.log('   - GlobalFieldLocks integration');
-        console.log('   - Candidate building (sports + specials)');
         console.log('   - BYPASS mode with admin-level access');
         console.log('   - Scheduler notifications');
     }
@@ -1865,62 +1118,7 @@
     window.getEditableBunks = getEditableBunks;
     window.sendSchedulerNotification = sendSchedulerNotification;
     window.bypassSaveAllBunks = bypassSaveAllBunks;
-    window.smartReassignBunkActivity = smartReassignBunkActivity;
-    window.smartRegenerateConflicts = smartRegenerateConflicts;
-    window.findBestActivityForBunk = findBestActivityForBunk;
-    // Removed: buildFieldUsageBySlot (using Utils)
-    window.buildCandidateOptions = buildCandidateOptions;
-    window.calculateRotationPenalty = calculateRotationPenalty;
-    // Removed: isFieldAvailable (using Utils)
-    // Removed: getActivityProperties (using Utils)
-    window.applyPickToBunk = applyPickToBunk;
     
-    // SmartRegenSystem namespace for compatibility
-    window.SmartRegenSystem = {
-        smartRegenerateConflicts,
-        smartReassignBunkActivity,
-        findBestActivityForBunk,
-        // buildFieldUsageBySlot: window.SchedulerCoreUtils.buildFieldUsageBySlot,
-        buildCandidateOptions,
-        calculateRotationPenalty,
-        // isFieldAvailable: window.SchedulerCoreUtils.isFieldAvailable,
-        // getActivityProperties: window.SchedulerCoreUtils.getActivityProperties,
-        applyPickToBunk,
-        ROTATION_CONFIG
-    };
-    
-    // Debug utility
-    window.debugSmartRegen = function(bunk, slotIdx) {
-        const slots = [slotIdx];
-        const entry = window.scheduleAssignments?.[bunk]?.[slotIdx];
-        
-        console.log('\n=== SMART REGEN DEBUG ===');
-        console.log('Bunk:', bunk);
-        console.log('Slot:', slotIdx);
-        console.log('Current entry:', entry);
-        
-        // UPDATED: Use SchedulerCoreUtils
-        const activityProperties = window.SchedulerCoreUtils.getActivityProperties();
-        const fieldUsageBySlot = window.SchedulerCoreUtils.buildFieldUsageBySlot([bunk]);
-        
-        console.log('\nField Usage (excluding this bunk):');
-        console.log(fieldUsageBySlot[slotIdx] || {});
-        
-        console.log('\nCandidate Options:');
-        const candidates = buildCandidateOptions(slots, activityProperties, []);
-        candidates.slice(0, 10).forEach(c => {
-            const available = window.SchedulerCoreUtils.isFieldAvailable(c.field, slots, bunk, fieldUsageBySlot, activityProperties);
-            const penalty = calculateRotationPenalty(bunk, c.activityName, slots);
-            console.log(`  ${c.activityName} @ ${c.field}: available=${available}, penalty=${penalty === Infinity ? 'BLOCKED' : penalty}`);
-        });
-        
-        console.log('\nBest Pick:');
-        const best = findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProperties, []);
-        console.log(best || 'None found');
-        
-        return best;
-    };
-
     // =========================================================================
     // ★★★ CRITICAL PATCH: Make loadScheduleForDate respect _postEditInProgress ★★★
     // =========================================================================
