@@ -1237,14 +1237,26 @@ const slot = window.divisionTimes[divNameStr]?.[slotIdx];
         }
         
         // Method 2: Find slot that starts within the requested range
-        for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
-            const slot = divSlots[slotIdx];
-            if (slot.startMin >= startMin && slot.startMin < endMin) {
-                return { entry: bunkData[slotIdx] || null, slotIdx };
+    for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
+        const slot = divSlots[slotIdx];
+        if (slot.startMin >= startMin && slot.startMin < endMin) {
+            return { entry: bunkData[slotIdx] || null, slotIdx };
+        }
+    }
+    
+    // ★★★ NEW Method 3: Find slot that OVERLAPS the requested range ★★★
+    for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
+        const slot = divSlots[slotIdx];
+        const hasOverlap = !(slot.endMin <= startMin || slot.startMin >= endMin);
+        if (hasOverlap) {
+            const entry = bunkData[slotIdx];
+            if (entry && !entry.continuation) {
+                return { entry, slotIdx };
             }
         }
-        
-        // Method 3: Check embedded time in entry
+    }
+    
+    // Method 4: Check embedded time in entry
         for (let slotIdx = 0; slotIdx < bunkData.length; slotIdx++) {
             const entry = bunkData[slotIdx];
             if (!entry || entry.continuation) continue;
