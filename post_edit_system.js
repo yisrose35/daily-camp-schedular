@@ -1082,12 +1082,7 @@
 
 
         
-        console.log('📝 Post-Generation Edit System v3.1 initialized');
-        console.log('   - Client UI Only (Regeneration logic delegated)');
-        console.log('   - GlobalFieldLocks integration');
-        console.log('   - BYPASS mode with admin-level access');
-        console.log('   - Scheduler notifications');
-    }
+        
 
     // =========================================================================
     // EXPORTS
