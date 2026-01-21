@@ -36,8 +36,10 @@
      * @param {number} endMin - End time in minutes 
      * @returns {number} Slot index or -1 if not found 
      */
-    function findExactSlotForTimeRange(divName, startMin, endMin) {
-        const divSlots = window.divisionTimes?.[divName] || [];
+   function findExactSlotForTimeRange(divName, startMin, endMin) {
+    // ★★★ v17.10 FIX: Convert divName to string for divisionTimes lookup ★★★
+    const divNameStr = String(divName);
+    const divSlots = window.divisionTimes?.[divNameStr] || [];
         
         // Exact match
         for (let i = 0; i < divSlots.length; i++) {
