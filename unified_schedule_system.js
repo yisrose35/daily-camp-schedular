@@ -3011,6 +3011,7 @@
     window.checkLocationConflict = checkLocationConflict;
     window.checkCrossDivisionConflict = checkCrossDivisionConflict;
     window.getAllLocations = getAllLocations;
+    
 
     // Smart regeneration
     window.smartRegenerateConflicts = smartRegenerateConflicts;
@@ -3019,6 +3020,7 @@
     window.buildCandidateOptions = buildCandidateOptions;
     window.calculateRotationPenalty = calculateRotationPenalty;
     window.applyPickToBunk = applyPickToBunk;
+    window.resolveConflictsAndApply = resolveConflictsAndApply;
 
     // RBAC bypass
     window.enableBypassRBACView = enableBypassRBACView;
