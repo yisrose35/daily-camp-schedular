@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v17.8 + DIAGNOSTICS)
+// scheduler_core_main.js (FIXED v17.9 - EXACT SLOT MATCHING)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
@@ -18,6 +18,7 @@
 // v17.6: Fixed Split Tile targeting using exact slot matching vs broad range
 // v17.7: Fixed split tile fillBlock slot usage & solver pick propagation
 // v17.8: Added D2 Diagnostics & Gap Detection Type Coercion Fix
+// v17.9: ★★★ FIX: Use exact slot matching for skeleton blocks to prevent boundary overlap ★★★
 // ============================================================================
 
 (function() {
@@ -668,7 +669,7 @@
 
     window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v17.8 - D2 DIAGNOSTICS & GAP FIX) ★★★");
+        console.log("★★★ OPTIMIZER STARTED (v17.9 - EXACT SLOT MATCHING FIX) ★★★");
 
         // ★★★ SCHEDULER RESTRICTION ★★★
         if (window.AccessControl?.filterDivisionsForGeneration) {
@@ -1395,7 +1396,9 @@
             if (item.division === '2' || item.division === 2) {
                 const _diagStart = Utils.parseTimeToMinutes(item.startTime);
                 const _diagEnd = Utils.parseTimeToMinutes(item.endTime);
-                const _diagSlots = Utils.findSlotsForRange(_diagStart, _diagEnd, '2');
+                // ★★★ v17.9 FIX: Use exact slot matching in diagnostic too ★★★
+                const _exactSlot = findExactSlotForTimeRange('2', _diagStart, _diagEnd);
+                const _diagSlots = _exactSlot !== -1 ? [_exactSlot] : Utils.findSlotsForRange(_diagStart, _diagEnd, '2');
                 console.log(`[D2-TRACE] Skeleton: "${item.event}" ${item.startTime}-${item.endTime} (${_diagStart}-${_diagEnd}) type=${item.type} → slots=[${_diagSlots.join(',')}]`);
             }
 
@@ -1420,7 +1423,9 @@
                                  );
             
             if (isPinnedType && item.type !== 'split' && item.type !== 'smart') {
-                const slots = Utils.findSlotsForRange(sMin, eMin, divName);
+                // ★★★ v17.9 FIX: Use exact slot matching for pinned events too ★★★
+                const exactSlot = findExactSlotForTimeRange(divName, sMin, eMin);
+                const slots = exactSlot !== -1 ? [exactSlot] : Utils.findSlotsForRange(sMin, eMin, divName);
                 if (slots.length > 0) {
                     const eventName = item.event || item.type || 'Pinned Event';
                     
@@ -1609,7 +1614,11 @@
             // NON-SPLIT BLOCKS: Categorize into league/specialty/schedulable
             // =========================================================================
             
-            const slots = Utils.findSlotsForRange(sMin, eMin, divName);
+            // ★★★ v17.9 FIX: Use EXACT slot matching to prevent boundary overlap issues ★★★
+            // findSlotsForRange returns overlapping slots (e.g., [4,5] when slot 4 ends at 880 and slot 5 starts at 880)
+            // This causes blocks to target the wrong slot and get filtered out
+            const exactSlot = findExactSlotForTimeRange(divName, sMin, eMin);
+            const slots = exactSlot !== -1 ? [exactSlot] : Utils.findSlotsForRange(sMin, eMin, divName);
             if (slots.length === 0) return;
 
             const eventName = item.event || '';
@@ -2147,6 +2156,6 @@
 
     window.registerSingleSlotUsage = registerSingleSlotUsage;
 
-    console.log('⚙️ Scheduler Core Main v17.8 loaded (D2 DIAGNOSTICS & GAP FIX)');
+    console.log('⚙️ Scheduler Core Main v17.9 loaded (EXACT SLOT MATCHING FIX)');
 
 })();
