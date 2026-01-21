@@ -1056,49 +1056,31 @@
     // INITIALIZATION
     // =========================================================================
 
-    function initPostEditSystem() {
-        // ✅ ADD: Verify dependencies from unified_schedule_system.js
-        const missing = [];
-        if (typeof window.smartRegenerateConflicts !== 'function') missing.push('smartRegenerateConflicts');
-        if (typeof window.resolveConflictsAndApply !== 'function') missing.push('resolveConflictsAndApply');
-        if (typeof window.applyPickToBunk !== 'function') missing.push('applyPickToBunk');
-        
-        if (missing.length > 0) {
-            console.error('❌ [PostEdit] Missing dependencies from unified_schedule_system.js:', missing.join(', '));
-            console.error('   Make sure unified_schedule_system.js loads BEFORE post_edit_system.js');
-        } else {
-            console.log('✅ [PostEdit] All dependencies loaded');
-        }
+   function initPostEditSystem() {
+    // Verify dependencies
+    const missing = [];
+    if (typeof window.smartRegenerateConflicts !== 'function') missing.push('smartRegenerateConflicts');
+    if (typeof window.resolveConflictsAndApply !== 'function') missing.push('resolveConflictsAndApply');
+    if (typeof window.applyPickToBunk !== 'function') missing.push('applyPickToBunk');
+    
+    if (missing.length > 0) {
+        console.error('❌ [PostEdit] Missing dependencies:', missing.join(', '));
+    }
+    
+    // Add styles
+    if (!document.getElementById('post-edit-styles')) {
+        const style = document.createElement('style');
+        style.id = 'post-edit-styles';
+        style.textContent = `
+            @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        `;
+        document.head.appendChild(style);
+    }
+    
+    console.log('📝 Post-Edit System v4.0 initialized (consolidated)');
+}
 
-        window.editCell = enhancedEditCell;
-        setupClickInterceptor();
-        
-        if (!document.getElementById('post-edit-styles')) {
-            const style = document.createElement('style');
-            style.id = 'post-edit-styles';
-            style.textContent = `
-                @keyframes fadeIn {
-                    from { opacity: 0; }
-                    to { opacity: 1; }
-                }
-                
-                #${MODAL_ID} input:focus,
-                #${MODAL_ID} select:focus {
-                    outline: none;
-                    border-color: #2563eb;
-                    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-                }
-                
-                #${MODAL_ID} button:hover {
-                    opacity: 0.9;
-                }
-                
-                #${MODAL_ID} button:active {
-                    transform: scale(0.98);
-                }
-            `;
-            document.head.appendChild(style);
-        }
+window.initPostEditSystem = initPostEditSystem;
         
         console.log('📝 Post-Generation Edit System v3.1 initialized');
         console.log('   - Client UI Only (Regeneration logic delegated)');
