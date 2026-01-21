@@ -1,9 +1,13 @@
 // ============================================================================
-// scheduler_core_utils.js (FIXED v7 - ELECTIVE DIVISION LOCKS + DISABLED FIELDS)
+// scheduler_core_utils.js (FIXED v7.1 - TYPE COERCION FIX FOR BUNK LOOKUPS)
 //
 // PART 1 of 3: THE FOUNDATION
 //
-// CRITICAL UPDATE:
+// CRITICAL UPDATE v7.1:
+// - ★★★ FIX: getDivisionForBunk now uses type-coerced comparison ★★★
+// - ★★★ FIX: findSlotsForRange bunk lookup uses type-coerced comparison ★★★
+// - This fixes the issue where bunks stored as numbers weren't found when
+//   looked up as strings, causing getDivisionForBunk to return null
 // - Division-aware lock checking for elective tiles
 // - canBlockFit() now passes division context to GlobalFieldLocks
 // - Elective tiles can lock fields for OTHER divisions while allowing their own
@@ -101,9 +105,11 @@
             let divName = divisionOrBunk;
 
             // Check if it's a bunk name, get its division
+            // ★★★ FIX v7.1: Use type-coerced comparison for bunk lookup ★★★
             const divisions = window.divisions || {};
+            const bunkStr = String(divisionOrBunk);
             for (const [dName, dData] of Object.entries(divisions)) {
-                if (dData.bunks?.includes(divisionOrBunk)) {
+                if (dData.bunks?.some(b => String(b) === bunkStr)) {
                     divName = dName;
                     break;
                 }
@@ -148,15 +154,10 @@
     };
 
     /**
-     * NEW: Get division name for a bunk
+     * ★★★ DEPRECATED: Use the consolidated version below (kept for reference) ★★★
+     * This simpler version is overwritten by the fuller version in Section 2
      */
-    Utils.getDivisionForBunk = function(bunkName) {
-        const divisions = window.divisions || {};
-        for (const [divName, divData] of Object.entries(divisions)) {
-            if (divData.bunks?.includes(bunkName)) return divName;
-        }
-        return null;
-    };
+    // Utils.getDivisionForBunk = function(bunkName) { ... }
 
     Utils.getBlockTimeRange = function (block) {
         let blockStartMin = (typeof block.startTime === "number") ? block.startTime : null;
@@ -980,16 +981,24 @@
     /**
      * Get the division name for a bunk
      * SINGLE SOURCE OF TRUTH - remove from all other files
-     * * @param {string} bunkName - The bunk to look up
+     * 
+     * ★★★ FIX v7.1: Uses type-coerced comparison to handle number/string mismatch ★★★
+     * This fixes the issue where bunks stored as numbers (e.g., [9, 10, 11])
+     * weren't found when looked up as strings (e.g., "9")
+     * 
+     * @param {string|number} bunkName - The bunk to look up
      * @returns {string|null} Division name or null if not found
      */
     Utils.getDivisionForBunk = function(bunkName) {
-        if (!bunkName) return null;
+        if (bunkName === null || bunkName === undefined) return null;
         
+        // ★★★ FIX v7.1: Convert to string for type-safe comparison ★★★
+        const bunkStr = String(bunkName);
         const divisions = window.divisions || {};
         
         for (const [divName, divData] of Object.entries(divisions)) {
-            if (divData.bunks && divData.bunks.includes(bunkName)) {
+            // ★★★ FIX v7.1: Use .some() with string coercion instead of .includes() ★★★
+            if (divData.bunks && divData.bunks.some(b => String(b) === bunkStr)) {
                 return divName;
             }
         }
@@ -997,7 +1006,7 @@
         // Fallback: check window.app1.divisions
         const app1Divisions = window.app1?.divisions || {};
         for (const [divName, divData] of Object.entries(app1Divisions)) {
-            if (divData.bunks && divData.bunks.includes(bunkName)) {
+            if (divData.bunks && divData.bunks.some(b => String(b) === bunkStr)) {
                 return divName;
             }
         }
@@ -1408,15 +1417,6 @@
         const h = Math.floor(mins / 60);
         const m = mins % 60;
         return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-    };
-
-    /**
-     * Convert minutes to Date object (on Jan 1, 1970)
-     */
-    Utils.minutesToDate = function(mins) {
-        const d = new Date(1970, 0, 1, 0, 0, 0);
-        d.setMinutes(mins);
-        return d;
     };
 
     // =================================================================
