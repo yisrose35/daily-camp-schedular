@@ -115,7 +115,9 @@
                 }
             }
 
-            const divSlots = window.divisionTimes[divName];
+            // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
+const divNameStr = String(divName);
+const divSlots = window.divisionTimes[divNameStr];
             if (divSlots && divSlots.length > 0) {
                 for (let i = 0; i < divSlots.length; i++) {
                     const slot = divSlots[i];
@@ -1033,8 +1035,10 @@
      * @returns {Object|null} Slot object or null
      */
     Utils.getSlotAtIndex = function(divisionName, slotIndex) {
-        return window.divisionTimes?.[divisionName]?.[slotIndex] || null;
-    };
+    // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
+    const divNameStr = String(divisionName);
+    return window.divisionTimes?.[divNameStr]?.[slotIndex] || null;
+};
 
     /**
      * Get time range for a slot (DIVISION-AWARE)
@@ -1052,7 +1056,9 @@
             const possibleDiv = Utils.getDivisionForBunk(bunkOrDiv);
             if (possibleDiv) divName = possibleDiv;
             
-            const slot = window.divisionTimes[divName]?.[slotIdx];
+            // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
+const divNameStr = String(divName);
+const slot = window.divisionTimes[divNameStr]?.[slotIdx];
             if (slot) {
                 return {
                     startMin: slot.startMin,
