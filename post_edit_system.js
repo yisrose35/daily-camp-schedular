@@ -1118,6 +1118,7 @@
     window.getEditableBunks = getEditableBunks;
     window.sendSchedulerNotification = sendSchedulerNotification;
     window.bypassSaveAllBunks = bypassSaveAllBunks;
+    window.initPostEditSystem = initPostEditSystem;
     
     // =========================================================================
     // ★★★ CRITICAL PATCH: Make loadScheduleForDate respect _postEditInProgress ★★★
