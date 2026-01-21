@@ -958,7 +958,762 @@
             console.log(`  ${count} players: ${status} ${check.reason || ''}`);
         });
     };
+// ============================================================================
+// CONSOLIDATED UTILITY FUNCTIONS - ADD TO scheduler_core_utils.js
+// ============================================================================
+// 
+// These functions were duplicated across:
+// - unified_schedule_system.js
+// - post_edit_system.js  
+// - division_times_system.js
+// - division_times_integration.js
+//
+// After adding these to scheduler_core_utils.js, update the other files to use:
+//   window.SchedulerCoreUtils.functionName() or Utils.functionName()
+//
+// ============================================================================
 
+    // =================================================================
+    // 2. DIVISION-AWARE CORE FUNCTIONS (CONSOLIDATED)
+    // =================================================================
+
+    /**
+     * Get the division name for a bunk
+     * SINGLE SOURCE OF TRUTH - remove from all other files
+     * 
+     * @param {string} bunkName - The bunk to look up
+     * @returns {string|null} Division name or null if not found
+     */
+    Utils.getDivisionForBunk = function(bunkName) {
+        if (!bunkName) return null;
+        
+        const divisions = window.divisions || {};
+        
+        for (const [divName, divData] of Object.entries(divisions)) {
+            if (divData.bunks && divData.bunks.includes(bunkName)) {
+                return divName;
+            }
+        }
+        
+        // Fallback: check window.app1.divisions
+        const app1Divisions = window.app1?.divisions || {};
+        for (const [divName, divData] of Object.entries(app1Divisions)) {
+            if (divData.bunks && divData.bunks.includes(bunkName)) {
+                return divName;
+            }
+        }
+        
+        return null;
+    };
+
+    /**
+     * Get all slots for a division
+     * SINGLE SOURCE OF TRUTH - remove from division_times_system.js exports
+     * 
+     * @param {string} divisionName - Division name
+     * @returns {Array} Array of slot objects with startMin, endMin, label
+     */
+    Utils.getSlotsForDivision = function(divisionName) {
+        return window.divisionTimes?.[divisionName] || [];
+    };
+
+    /**
+     * Get slot at a specific index for a division
+     * 
+     * @param {string} divisionName - Division name
+     * @param {number} slotIndex - Slot index
+     * @returns {Object|null} Slot object or null
+     */
+    Utils.getSlotAtIndex = function(divisionName, slotIndex) {
+        return window.divisionTimes?.[divisionName]?.[slotIndex] || null;
+    };
+
+    /**
+     * Get time range for a slot (DIVISION-AWARE)
+     * SINGLE SOURCE OF TRUTH - replaces all getSlotTimeRange implementations
+     * 
+     * @param {number} slotIdx - Slot index
+     * @param {string} [bunkOrDiv] - Optional bunk name or division name for division-specific lookup
+     * @returns {Object} { startMin, endMin } or { startMin: null, endMin: null }
+     */
+    Utils.getSlotTimeRange = function(slotIdx, bunkOrDiv) {
+        // Try division-specific lookup first
+        if (bunkOrDiv && window.divisionTimes) {
+            let divName = bunkOrDiv;
+            
+            // Check if it's a bunk name, convert to division
+            const possibleDiv = Utils.getDivisionForBunk(bunkOrDiv);
+            if (possibleDiv) divName = possibleDiv;
+            
+            const slot = window.divisionTimes[divName]?.[slotIdx];
+            if (slot) {
+                return {
+                    startMin: slot.startMin,
+                    endMin: slot.endMin
+                };
+            }
+        }
+        
+        // Fallback to unifiedTimes
+        const unifiedTimes = window.unifiedTimes || [];
+        const slot = unifiedTimes[slotIdx];
+        
+        if (!slot) return { startMin: null, endMin: null };
+        
+        // Handle different slot formats
+        if (slot.startMin !== undefined && slot.endMin !== undefined) {
+            return { startMin: slot.startMin, endMin: slot.endMin };
+        }
+        
+        // Parse from Date objects
+        if (slot.start) {
+            const start = new Date(slot.start);
+            const end = slot.end ? new Date(slot.end) : null;
+            return {
+                startMin: start.getHours() * 60 + start.getMinutes(),
+                endMin: end ? end.getHours() * 60 + end.getMinutes() : null
+            };
+        }
+        
+        return { startMin: null, endMin: null };
+    };
+
+    /**
+     * Find which slot index contains a given time
+     * 
+     * @param {string} divisionName - Division name
+     * @param {number} targetMin - Target time in minutes
+     * @returns {number} Slot index or -1 if not found
+     */
+    Utils.findSlotForTime = function(divisionName, targetMin) {
+        const slots = Utils.getSlotsForDivision(divisionName);
+        
+        for (let i = 0; i < slots.length; i++) {
+            if (slots[i].startMin <= targetMin && targetMin < slots[i].endMin) {
+                return i;
+            }
+        }
+        
+        return -1;
+    };
+
+    /**
+     * Find slot index by exact time range match
+     * 
+     * @param {string} divisionName - Division name
+     * @param {number} startMin - Start time in minutes
+     * @param {number} endMin - End time in minutes
+     * @returns {number} Slot index or -1 if not found
+     */
+    Utils.findSlotForTimeRange = function(divisionName, startMin, endMin) {
+        const slots = Utils.getSlotsForDivision(divisionName);
+        
+        // Exact match first
+        for (let i = 0; i < slots.length; i++) {
+            if (slots[i].startMin === startMin && slots[i].endMin === endMin) {
+                return i;
+            }
+        }
+        
+        // Fallback: find slot that contains this range
+        for (let i = 0; i < slots.length; i++) {
+            if (slots[i].startMin <= startMin && endMin <= slots[i].endMin) {
+                return i;
+            }
+        }
+        
+        return -1;
+    };
+
+    /**
+     * Find slot index for a specific time (DIVISION-AWARE)
+     * SINGLE SOURCE OF TRUTH - replaces findSlotIndexForTime in other files
+     * 
+     * @param {number} targetMin - Target time in minutes
+     * @param {Array|string} unifiedTimesOrDivision - Either unifiedTimes array OR division/bunk name
+     * @returns {number} Slot index or -1 if not found
+     */
+    Utils.findSlotIndexForTime = function(targetMin, unifiedTimesOrDivision) {
+        if (targetMin === null || targetMin === undefined) return -1;
+        
+        // Handle division/bunk name parameter
+        if (typeof unifiedTimesOrDivision === 'string' && window.divisionTimes) {
+            let divName = unifiedTimesOrDivision;
+            
+            // Check if it's a bunk name
+            const possibleDiv = Utils.getDivisionForBunk(unifiedTimesOrDivision);
+            if (possibleDiv) divName = possibleDiv;
+            
+            return Utils.findSlotForTime(divName, targetMin);
+        }
+        
+        // Legacy: handle unifiedTimes array
+        const unifiedTimes = Array.isArray(unifiedTimesOrDivision) 
+            ? unifiedTimesOrDivision 
+            : (window.unifiedTimes || []);
+            
+        if (unifiedTimes.length === 0) return -1;
+        
+        // Exact match
+        for (let i = 0; i < unifiedTimes.length; i++) {
+            const slotStart = Utils._getSlotStartMin(unifiedTimes[i]);
+            if (slotStart === targetMin) return i;
+        }
+        
+        // Find containing slot
+        const slots = Utils.findSlotsForRange(targetMin, targetMin + 30, unifiedTimes);
+        if (slots.length > 0) return slots[0];
+        
+        // Closest match
+        let closest = -1, minDiff = Infinity;
+        for (let i = 0; i < unifiedTimes.length; i++) {
+            const slotStart = Utils._getSlotStartMin(unifiedTimes[i]);
+            if (slotStart !== null) {
+                const diff = Math.abs(slotStart - targetMin);
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    closest = i;
+                }
+            }
+        }
+        
+        return closest;
+    };
+
+    /**
+     * Internal helper: Get start time in minutes from a slot object
+     */
+    Utils._getSlotStartMin = function(slot) {
+        if (!slot) return null;
+        
+        if (slot.startMin !== undefined) return slot.startMin;
+        
+        if (slot.start) {
+            const d = new Date(slot.start);
+            return d.getHours() * 60 + d.getMinutes();
+        }
+        
+        return null;
+    };
+
+    /**
+     * Get entry for a bunk at a specific time block (DIVISION-AWARE)
+     * SINGLE SOURCE OF TRUTH - replaces getEntryForBlock in other files
+     * 
+     * @param {string} bunk - Bunk name
+     * @param {number} startMin - Start time in minutes
+     * @param {number} endMin - End time in minutes
+     * @param {Array} [unifiedTimes] - Optional legacy unifiedTimes array (ignored if divisionTimes available)
+     * @returns {Object} { entry, slotIdx }
+     */
+    Utils.getEntryForBlock = function(bunk, startMin, endMin, unifiedTimes) {
+        const assignments = window.scheduleAssignments || {};
+        
+        if (!assignments[bunk]) {
+            return { entry: null, slotIdx: -1 };
+        }
+        
+        const bunkData = assignments[bunk];
+        const divName = Utils.getDivisionForBunk(bunk);
+        const divSlots = window.divisionTimes?.[divName] || [];
+        
+        // Method 1: Find by matching time in divisionTimes
+        for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
+            const slot = divSlots[slotIdx];
+            if (slot.startMin >= startMin && slot.startMin < endMin) {
+                return { entry: bunkData[slotIdx] || null, slotIdx };
+            }
+        }
+        
+        // Method 2: Check embedded time in entry
+        for (let slotIdx = 0; slotIdx < bunkData.length; slotIdx++) {
+            const entry = bunkData[slotIdx];
+            if (!entry || entry.continuation) continue;
+            
+            const entryStartMin = entry._blockStart || entry._startMin || entry.startMin;
+            if (entryStartMin !== undefined && entryStartMin >= startMin && entryStartMin < endMin) {
+                return { entry, slotIdx };
+            }
+        }
+        
+        return { entry: null, slotIdx: -1 };
+    };
+
+    /**
+     * Get slots for a bunk (via its division)
+     * 
+     * @param {string} bunkName - Bunk name
+     * @returns {Array} Array of slot objects
+     */
+    Utils.getSlotsForBunk = function(bunkName) {
+        const divName = Utils.getDivisionForBunk(bunkName);
+        return divName ? Utils.getSlotsForDivision(divName) : [];
+    };
+
+    /**
+     * Find slot for a bunk at a given time
+     * 
+     * @param {string} bunkName - Bunk name
+     * @param {number} targetMin - Target time in minutes
+     * @returns {number} Slot index or -1
+     */
+    Utils.findSlotForBunkAtTime = function(bunkName, targetMin) {
+        const divName = Utils.getDivisionForBunk(bunkName);
+        if (!divName) return -1;
+        return Utils.findSlotForTime(divName, targetMin);
+    };
+
+    // =================================================================
+    // 3. CROSS-DIVISION CONFLICT DETECTION (CONSOLIDATED)
+    // =================================================================
+
+    /**
+     * Check if two divisions have overlapping time slots
+     * CRITICAL for cross-division field conflict detection
+     * 
+     * @param {string} div1 - First division name
+     * @param {number} slot1Idx - Slot index in first division
+     * @param {string} div2 - Second division name
+     * @param {number} slot2Idx - Slot index in second division
+     * @returns {boolean} True if time overlap exists
+     */
+    Utils.checkTimeOverlapConflict = function(div1, slot1Idx, div2, slot2Idx) {
+        const slot1 = Utils.getSlotAtIndex(div1, slot1Idx);
+        const slot2 = Utils.getSlotAtIndex(div2, slot2Idx);
+        
+        if (!slot1 || !slot2) return false;
+        
+        // Check actual time overlap
+        return !(slot1.endMin <= slot2.startMin || slot2.endMin <= slot1.startMin);
+    };
+
+    /**
+     * Find all divisions that have time slots overlapping with a given slot
+     * 
+     * @param {string} divisionName - Source division
+     * @param {number} slotIndex - Source slot index
+     * @returns {Array} Array of { division, slotIndex, overlapStart, overlapEnd }
+     */
+    Utils.findOverlappingDivisionSlots = function(divisionName, slotIndex) {
+        const slot = Utils.getSlotAtIndex(divisionName, slotIndex);
+        if (!slot) return [];
+        
+        const overlaps = [];
+        const allDivisions = Object.keys(window.divisionTimes || {});
+        
+        for (const otherDiv of allDivisions) {
+            if (otherDiv === divisionName) continue;
+            
+            const otherSlots = Utils.getSlotsForDivision(otherDiv);
+            for (let i = 0; i < otherSlots.length; i++) {
+                const other = otherSlots[i];
+                
+                // Check for time overlap
+                if (!(other.endMin <= slot.startMin || other.startMin >= slot.endMin)) {
+                    const overlapStart = Math.max(slot.startMin, other.startMin);
+                    const overlapEnd = Math.min(slot.endMin, other.endMin);
+                    
+                    overlaps.push({
+                        division: otherDiv,
+                        slotIndex: i,
+                        overlapStart,
+                        overlapEnd,
+                        overlapDuration: overlapEnd - overlapStart
+                    });
+                }
+            }
+        }
+        
+        return overlaps;
+    };
+
+    /**
+     * Check if a field assignment would conflict with other divisions
+     * Uses TIME-BASED comparison, not slot indices!
+     * 
+     * @param {string} bunk - Bunk being assigned
+     * @param {number} slotIndex - Slot index
+     * @param {string} fieldName - Field being assigned
+     * @returns {Object} { conflict: boolean, conflicts: Array }
+     */
+    Utils.checkCrossDivisionFieldConflict = function(bunk, slotIndex, fieldName) {
+        const divName = Utils.getDivisionForBunk(bunk);
+        if (!divName) return { conflict: false, conflicts: [] };
+        
+        const slot = Utils.getSlotAtIndex(divName, slotIndex);
+        if (!slot) return { conflict: false, conflicts: [] };
+        
+        const startMin = slot.startMin;
+        const endMin = slot.endMin;
+        const conflicts = [];
+        const divisions = window.divisions || {};
+        
+        for (const [otherDiv, divData] of Object.entries(divisions)) {
+            if (otherDiv === divName) continue;
+            
+            const otherSlots = Utils.getSlotsForDivision(otherDiv);
+            
+            for (let i = 0; i < otherSlots.length; i++) {
+                const otherSlot = otherSlots[i];
+                
+                // Check time overlap
+                if (otherSlot.startMin < endMin && otherSlot.endMin > startMin) {
+                    // Time overlaps - check if any bunk in this division uses the same field
+                    for (const otherBunk of (divData.bunks || [])) {
+                        const assignment = window.scheduleAssignments?.[otherBunk]?.[i];
+                        if (!assignment) continue;
+                        
+                        const assignedField = Utils.fieldLabel(assignment.field) || assignment._activity;
+                        if (assignedField && assignedField.toLowerCase() === fieldName.toLowerCase()) {
+                            conflicts.push({
+                                division: otherDiv,
+                                bunk: otherBunk,
+                                slotIndex: i,
+                                field: assignedField,
+                                activity: assignment._activity || assignment.sport,
+                                timeOverlap: {
+                                    start: Math.max(startMin, otherSlot.startMin),
+                                    end: Math.min(endMin, otherSlot.endMin)
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        return {
+            conflict: conflicts.length > 0,
+            conflicts
+        };
+    };
+
+    // =================================================================
+    // 4. TIME FORMATTING UTILITIES (CONSOLIDATED)
+    // =================================================================
+
+    /**
+     * Convert minutes to 12-hour time label (e.g., "2:30 PM")
+     * SINGLE SOURCE OF TRUTH
+     */
+    Utils.minutesToTimeLabel = function(mins) {
+        if (mins === null || mins === undefined) return '';
+        const h24 = Math.floor(mins / 60);
+        const m = mins % 60;
+        const ap = h24 >= 12 ? 'PM' : 'AM';
+        const h12 = h24 % 12 || 12;
+        return `${h12}:${String(m).padStart(2, '0')} ${ap}`;
+    };
+
+    /**
+     * Convert minutes to 24-hour time string (e.g., "14:30")
+     */
+    Utils.minutesToTimeString = function(mins) {
+        if (mins === null || mins === undefined) return '';
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    };
+
+    /**
+     * Convert minutes to Date object (on Jan 1, 1970)
+     */
+    Utils.minutesToDate = function(mins) {
+        const d = new Date(1970, 0, 1, 0, 0, 0);
+        d.setMinutes(mins);
+        return d;
+    };
+
+    // =================================================================
+    // 5. ACTIVITY PROPERTIES UTILITIES (CONSOLIDATED)
+    // =================================================================
+
+    /**
+     * Get activity properties from all sources
+     * SINGLE SOURCE OF TRUTH - consolidates from multiple files
+     */
+    Utils.getActivityProperties = function() {
+        // Return cached if available
+        if (window.activityProperties && Object.keys(window.activityProperties).length > 0) {
+            return window.activityProperties;
+        }
+        
+        const settings = window.loadGlobalSettings?.() || {};
+        const app1 = settings.app1 || {};
+        const props = {};
+        
+        // Build from fields
+        (app1.fields || window.getFields?.() || []).forEach(f => {
+            if (f.name) {
+                props[f.name] = {
+                    ...f,
+                    type: 'field',
+                    capacity: f.sharableWith?.capacity || (f.sharableWith?.type === 'all' ? 999 : 1),
+                    available: f.available !== false
+                };
+            }
+        });
+        
+        // Add sports
+        const allSports = app1.allSports || window.allSports || [];
+        allSports.forEach(sport => {
+            if (!props[sport]) {
+                props[sport] = {
+                    name: sport,
+                    type: 'sport',
+                    available: true,
+                    capacity: 1
+                };
+            }
+        });
+        
+        // Add special activities
+        (app1.activities || []).forEach(act => {
+            const name = typeof act === 'string' ? act : act.name;
+            if (name && !props[name]) {
+                props[name] = {
+                    name,
+                    type: 'special',
+                    available: true,
+                    capacity: 1,
+                    ...act
+                };
+            }
+        });
+        
+        return props;
+    };
+
+    /**
+     * Get field capacity
+     */
+    Utils.getFieldCapacity = function(fieldName, activityProperties) {
+        const props = activityProperties || Utils.getActivityProperties();
+        const fieldProps = props[fieldName];
+        
+        if (!fieldProps) return 1;
+        
+        // Check sharableWith config
+        if (fieldProps.sharableWith) {
+            if (fieldProps.sharableWith.type === 'all') return 999;
+            if (fieldProps.sharableWith.capacity) return fieldProps.sharableWith.capacity;
+        }
+        
+        return fieldProps.capacity || 1;
+    };
+
+    // =================================================================
+    // 6. FIELD USAGE TRACKING (CONSOLIDATED)
+    // =================================================================
+
+    /**
+     * Build field usage map by slot
+     * SINGLE SOURCE OF TRUTH - replaces buildFieldUsageBySlot in other files
+     * 
+     * @param {Array} excludeBunks - Bunks to exclude from usage count
+     * @returns {Object} { [slotIdx]: { [fieldName]: { count, bunks, divisions } } }
+     */
+    Utils.buildFieldUsageBySlot = function(excludeBunks = []) {
+        const map = {};
+        const excludeSet = new Set(excludeBunks.map(String));
+        const divisions = window.divisions || {};
+        
+        for (const [divName, divData] of Object.entries(divisions)) {
+            const divSlots = window.divisionTimes?.[divName] || [];
+            
+            for (const bunk of (divData.bunks || [])) {
+                if (excludeSet.has(String(bunk))) continue;
+                
+                const assignments = window.scheduleAssignments?.[bunk] || [];
+                
+                for (let idx = 0; idx < divSlots.length; idx++) {
+                    const slot = divSlots[idx];
+                    const entry = assignments[idx];
+                    
+                    if (!entry || entry.continuation || !entry.field) continue;
+                    
+                    const fieldName = Utils.fieldLabel(entry.field) || '';
+                    if (!fieldName || fieldName === 'Free') continue;
+                    
+                    if (!map[idx]) map[idx] = {};
+                    if (!map[idx][fieldName]) {
+                        map[idx][fieldName] = {
+                            count: 0,
+                            bunks: {},
+                            divisions: [],
+                            startMin: slot.startMin,
+                            endMin: slot.endMin
+                        };
+                    }
+                    
+                    map[idx][fieldName].count++;
+                    map[idx][fieldName].bunks[bunk] = entry._activity || fieldName;
+                    
+                    if (!map[idx][fieldName].divisions.includes(divName)) {
+                        map[idx][fieldName].divisions.push(divName);
+                    }
+                }
+            }
+        }
+        
+        return map;
+    };
+
+    /**
+     * Check if a field is available at given slots
+     * SINGLE SOURCE OF TRUTH
+     */
+    Utils.isFieldAvailable = function(fieldName, slots, excludeBunk, fieldUsageBySlot, activityProperties) {
+        const props = activityProperties || Utils.getActivityProperties();
+        const fieldProps = props[fieldName];
+        
+        if (!fieldProps || fieldProps.available === false) return false;
+        
+        // Check disabled fields (rainy day etc.)
+        const disabledFields = window.currentDisabledFields || [];
+        if (disabledFields.includes(fieldName)) return false;
+        
+        // Check global locks
+        if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots)) {
+            return false;
+        }
+        
+        const maxCapacity = Utils.getFieldCapacity(fieldName, props);
+        
+        for (const slotIdx of slots) {
+            const usage = fieldUsageBySlot?.[slotIdx]?.[fieldName];
+            if (!usage) continue;
+            
+            // Count excluding the target bunk
+            let count = usage.count;
+            if (excludeBunk && usage.bunks[excludeBunk]) {
+                count--;
+            }
+            
+            if (count >= maxCapacity) return false;
+        }
+        
+        return true;
+    };
+
+    // =================================================================
+    // 7. BUNKS & DIVISIONS HELPERS (CONSOLIDATED)
+    // =================================================================
+
+    /**
+     * Get all bunks for a division
+     */
+    Utils.getBunksForDivision = function(divisionName) {
+        const divisions = window.divisions || {};
+        return divisions[divisionName]?.bunks || [];
+    };
+
+    /**
+     * Get divisions the current user can edit (RBAC-aware)
+     */
+    Utils.getMyDivisions = function() {
+        if (window.PermissionsDB?.getEditableDivisions) {
+            return window.PermissionsDB.getEditableDivisions();
+        }
+        
+        // Fallback: all divisions if no RBAC
+        return Object.keys(window.divisions || {});
+    };
+
+    /**
+     * Check if user can edit a specific bunk
+     */
+    Utils.canEditBunk = function(bunkName) {
+        if (window.PermissionsDB?.canEditBunk) {
+            return window.PermissionsDB.canEditBunk(bunkName);
+        }
+        
+        // Fallback: can edit all if no RBAC
+        return true;
+    };
+
+    /**
+     * Get all editable bunks for current user
+     */
+    Utils.getEditableBunks = function() {
+        if (window.PermissionsDB?.getEditableBunks) {
+            return window.PermissionsDB.getEditableBunks();
+        }
+        
+        // Fallback: all bunks
+        const allBunks = [];
+        const divisions = window.divisions || {};
+        for (const divData of Object.values(divisions)) {
+            allBunks.push(...(divData.bunks || []));
+        }
+        return allBunks;
+    };
+
+    // =================================================================
+    // 8. ESCAPE/FORMAT HELPERS (CONSOLIDATED)
+    // =================================================================
+
+    /**
+     * Escape HTML to prevent XSS
+     */
+    Utils.escapeHtml = function(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    };
+
+    /**
+     * Format a schedule entry for display
+     */
+    Utils.formatEntry = function(entry) {
+        if (!entry) return '';
+        
+        const activity = entry._activity || entry.sport || '';
+        const field = Utils.fieldLabel(entry.field) || '';
+        
+        if (activity && field && activity !== field) {
+            return `${field} – ${activity}`;
+        }
+        
+        return activity || field || '';
+    };
+
+    // =================================================================
+    // 9. LEGACY COMPATIBILITY LAYER
+    // =================================================================
+    
+    // These ensure old code still works while we migrate
+    
+    // Global function aliases (for code that calls window.getDivisionForBunk directly)
+    window.getDivisionForBunk = Utils.getDivisionForBunk;
+    window.getSlotTimeRange = Utils.getSlotTimeRange;
+    window.findSlotIndexForTime = Utils.findSlotIndexForTime;
+    window.findSlotsForRange = Utils.findSlotsForRange;
+    window.getEntryForBlock = Utils.getEntryForBlock;
+    window.buildFieldUsageBySlot = Utils.buildFieldUsageBySlot;
+    window.isFieldAvailable = Utils.isFieldAvailable;
+    window.getActivityProperties = Utils.getActivityProperties;
+    window.getBunksForDivision = Utils.getBunksForDivision;
+    window.getMyDivisions = Utils.getMyDivisions;
+    window.canEditBunk = Utils.canEditBunk;
+    window.getEditableBunks = Utils.getEditableBunks;
+    window.minutesToTimeLabel = Utils.minutesToTimeLabel;
+    window.escapeHtml = Utils.escapeHtml;
+    window.formatEntry = Utils.formatEntry;
+
+    // DivisionTimesSystem bridge (for code using window.DivisionTimesSystem)
+    if (!window.DivisionTimesSystem) {
+        window.DivisionTimesSystem = {};
+    }
+    window.DivisionTimesSystem.getDivisionForBunk = Utils.getDivisionForBunk;
+    window.DivisionTimesSystem.getSlotsForDivision = Utils.getSlotsForDivision;
+    window.DivisionTimesSystem.getSlotAtIndex = Utils.getSlotAtIndex;
+    window.DivisionTimesSystem.findSlotForTime = Utils.findSlotForTime;
+    window.DivisionTimesSystem.findSlotForTimeRange = Utils.findSlotForTimeRange;
+    window.DivisionTimesSystem.getSlotsForBunk = Utils.getSlotsForBunk;
+    window.DivisionTimesSystem.checkTimeOverlapConflict = Utils.checkTimeOverlapConflict;
+    window.DivisionTimesSystem.findOverlappingDivisionSlots = Utils.findOverlappingDivisionSlots;
     window.SchedulerCoreUtils = Utils;
 
     // EXPOSE GLOBALLY FOR COMPATIBILITY
