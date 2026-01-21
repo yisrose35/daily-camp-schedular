@@ -102,7 +102,76 @@
     // =========================================================================
     // CORE: BUILD DIVISION TIMES FROM SKELETON
     // =========================================================================
+*/
 
+/**
+ * Expand split tiles into two separate time blocks
+ * @param {Array} blocks - Parsed skeleton blocks for a division
+ * @returns {Array} Blocks with split tiles expanded into two entries
+ */
+function expandSplitTiles(blocks) {
+    const expanded = [];
+    
+    blocks.forEach(block => {
+        if (block.type === 'split') {
+            // Calculate midpoint
+            const midMin = Math.floor((block.startMin + block.endMin) / 2);
+            
+            // Parse activity names from event or subEvents
+            let act1Name = 'Activity 1';
+            let act2Name = 'Activity 2';
+            
+            if (block.subEvents && block.subEvents.length >= 2) {
+                act1Name = block.subEvents[0]?.event || block.subEvents[0] || 'Activity 1';
+                act2Name = block.subEvents[1]?.event || block.subEvents[1] || 'Activity 2';
+            } else if (block.event && block.event.includes('/')) {
+                const parts = block.event.split('/').map(s => s.trim());
+                act1Name = parts[0] || 'Activity 1';
+                act2Name = parts[1] || 'Activity 2';
+            }
+            
+            // Create first half slot
+            expanded.push({
+                ...block,
+                id: block.id + '_half1',
+                startMin: block.startMin,
+                endMin: midMin,
+                event: act1Name,
+                type: 'split_half',
+                _splitHalf: 1,
+                _splitParentEvent: block.event,
+                _splitAct1: act1Name,
+                _splitAct2: act2Name,
+                _originalStartMin: block.startMin,
+                _originalEndMin: block.endMin
+            });
+            
+            // Create second half slot
+            expanded.push({
+                ...block,
+                id: block.id + '_half2',
+                startMin: midMin,
+                endMin: block.endMin,
+                event: act2Name,
+                type: 'split_half',
+                _splitHalf: 2,
+                _splitParentEvent: block.event,
+                _splitAct1: act1Name,
+                _splitAct2: act2Name,
+                _originalStartMin: block.startMin,
+                _originalEndMin: block.endMin
+            });
+            
+            log(`  ★ Expanded split tile "${block.event}" into two slots:`);
+            log(`    [Half 1] ${block.startMin}-${midMin}: ${act1Name}`);
+            log(`    [Half 2] ${midMin}-${block.endMin}: ${act2Name}`);
+        } else {
+            expanded.push(block);
+        }
+    });
+    
+    return expanded;
+}
     /**
      * Build per-division time slots from skeleton
      * This is the CORE function that creates the new data structure
