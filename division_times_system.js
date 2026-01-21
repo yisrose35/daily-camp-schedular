@@ -1,14 +1,8 @@
 // =============================================================================
-// division_times_system.js v1.0 — CAMPISTRY PER-DIVISION TIME SLOT SYSTEM
+// division_times_system.js v1.1 — CAMPISTRY PER-DIVISION TIME SLOT SYSTEM
 // =============================================================================
 //
 // ★★★ REPLACES THE BROKEN FIXED 30-MIN SLOT SYSTEM ★★★
-//
-// OLD SYSTEM (BROKEN):
-//   window.unifiedTimes = [30-min slots] - ALL divisions use same indices
-//   Problem: Activity 1:20-2:45 doesn't fit 30-min boundaries
-//   Problem: Division A has 11:00-12:00 lunch, Division B has 11:30-12:30 lunch
-//            - Both get different slot indices for "lunch" causing chaos
 //
 // NEW SYSTEM (THIS FILE):
 //   window.divisionTimes = {
@@ -16,19 +10,19 @@
 //       { slotIndex: 0, startMin: 660, endMin: 720, event: "GA", type: "slot" },
 //       { slotIndex: 1, startMin: 720, endMin: 740, event: "Lunch", type: "pinned" },
 //     ],
-//     "Senior Boys": [
-//       { slotIndex: 0, startMin: 660, endMin: 750, event: "GA", type: "slot" },
-//       { slotIndex: 1, startMin: 750, endMin: 770, event: "Lunch", type: "pinned" },
-//     ]
+//     ...
 //   }
 //   Each division has ITS OWN timeline with variable-length blocks!
+//
+// UPDATES v1.1:
+// - Delegated lookup/utility functions to SchedulerCoreUtils to prevent duplication.
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    const VERSION = '1.0.0';
+    const VERSION = '1.1.0';
     const DEBUG = true;
 
     function log(...args) {
@@ -112,8 +106,7 @@
     /**
      * Build per-division time slots from skeleton
      * This is the CORE function that creates the new data structure
-     * 
-     * @param {Array} skeleton - The manual skeleton array
+     * * @param {Array} skeleton - The manual skeleton array
      * @param {Object} divisions - The divisions object { "Junior Boys": { bunks: [...] }, ... }
      * @returns {Object} divisionTimes - { "Junior Boys": [slots...], "Senior Boys": [slots...] }
      */
@@ -237,162 +230,33 @@
     }
 
     // =========================================================================
-    // SLOT LOOKUP FUNCTIONS
+    // SLOT LOOKUP FUNCTIONS (MOVED TO Utils)
     // =========================================================================
-
-    /**
-     * Get all slots for a division
-     */
-    function getSlotsForDivision(divisionName) {
-        return window.divisionTimes?.[divisionName] || [];
-    }
-
-    /**
-     * Get slot at a specific index for a division
-     */
-    function getSlotAtIndex(divisionName, slotIndex) {
-        return window.divisionTimes?.[divisionName]?.[slotIndex] || null;
-    }
-
-    /**
-     * Find which slot contains a given time (in minutes)
-     * Returns slot index or -1 if not found
-     */
-    function findSlotForTime(divisionName, targetMin) {
-        const slots = getSlotsForDivision(divisionName);
-        for (let i = 0; i < slots.length; i++) {
-            if (slots[i].startMin <= targetMin && targetMin < slots[i].endMin) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    /**
-     * Find slot index by exact time range match
-     * Returns slot index or -1 if not found
-     */
-    function findSlotForTimeRange(divisionName, startMin, endMin) {
-        const slots = getSlotsForDivision(divisionName);
-        for (let i = 0; i < slots.length; i++) {
-            if (slots[i].startMin === startMin && slots[i].endMin === endMin) {
-                return i;
-            }
-        }
-        // Fallback: find slot that contains this range
-        for (let i = 0; i < slots.length; i++) {
-            if (slots[i].startMin <= startMin && endMin <= slots[i].endMin) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    /**
-     * Find all slots that overlap with a time range
-     * Returns array of slot indices
-     */
-    function findSlotsOverlappingRange(divisionName, startMin, endMin) {
-        const slots = getSlotsForDivision(divisionName);
-        const result = [];
-        for (let i = 0; i < slots.length; i++) {
-            // Check for overlap: !(endMin <= slot.startMin || startMin >= slot.endMin)
-            if (!(endMin <= slots[i].startMin || startMin >= slots[i].endMin)) {
-                result.push(i);
-            }
-        }
-        return result;
-    }
-
-    /**
-     * Get division name for a bunk
-     */
-    function getDivisionForBunk(bunkName) {
-        const divisions = window.divisions || {};
-        for (const [divName, divData] of Object.entries(divisions)) {
-            if (divData.bunks && divData.bunks.includes(bunkName)) {
-                return divName;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Get slots for a bunk (via its division)
-     */
-    function getSlotsForBunk(bunkName) {
-        const divName = getDivisionForBunk(bunkName);
-        return divName ? getSlotsForDivision(divName) : [];
-    }
-
+    
+    // REMOVED: getSlotsForDivision (use window.SchedulerCoreUtils.getSlotsForDivision)
+    // REMOVED: getSlotAtIndex (use window.SchedulerCoreUtils.getSlotAtIndex)
+    // REMOVED: findSlotForTime (use window.SchedulerCoreUtils.findSlotForTime)
+    // REMOVED: findSlotForTimeRange (use window.SchedulerCoreUtils.findSlotForTimeRange)
+    // REMOVED: findSlotsOverlappingRange (use window.SchedulerCoreUtils.findSlotsOverlappingRange)
+    // REMOVED: getDivisionForBunk (use window.SchedulerCoreUtils.getDivisionForBunk)
+    // REMOVED: getSlotsForBunk (use window.SchedulerCoreUtils.getSlotsForBunk)
+    
     /**
      * Find slot for a bunk at a given time
+     * (Kept as local helper but using Utils)
      */
     function findSlotForBunkAtTime(bunkName, targetMin) {
-        const divName = getDivisionForBunk(bunkName);
+        const divName = window.SchedulerCoreUtils?.getDivisionForBunk(bunkName);
         if (!divName) return -1;
-        return findSlotForTime(divName, targetMin);
+        return window.SchedulerCoreUtils?.findSlotForTime(divName, targetMin);
     }
 
     // =========================================================================
-    // CROSS-DIVISION CONFLICT DETECTION
+    // CROSS-DIVISION CONFLICT DETECTION (MOVED TO Utils)
     // =========================================================================
 
-    /**
-     * Check if two divisions have overlapping time slots at a field
-     * This is CRITICAL for detecting conflicts like:
-     *   Junior Boys @ Basketball 11:00-12:00
-     *   Senior Boys @ Basketball 11:30-12:30
-     * 
-     * The slot indices are different, but the TIMES overlap!
-     */
-    function checkTimeOverlapConflict(div1, slot1Idx, div2, slot2Idx) {
-        const slot1 = getSlotAtIndex(div1, slot1Idx);
-        const slot2 = getSlotAtIndex(div2, slot2Idx);
-        
-        if (!slot1 || !slot2) return false;
-        
-        // Check actual time overlap
-        return !(slot1.endMin <= slot2.startMin || slot2.endMin <= slot1.startMin);
-    }
-
-    /**
-     * Get all divisions that have time slots overlapping with a given slot
-     * Returns: [{ division, slotIndex, overlapStart, overlapEnd }, ...]
-     */
-    function findOverlappingDivisionSlots(divisionName, slotIndex) {
-        const slot = getSlotAtIndex(divisionName, slotIndex);
-        if (!slot) return [];
-
-        const overlaps = [];
-        const allDivisions = Object.keys(window.divisionTimes || {});
-
-        for (const otherDiv of allDivisions) {
-            if (otherDiv === divisionName) continue;
-
-            const otherSlots = getSlotsForDivision(otherDiv);
-            for (let i = 0; i < otherSlots.length; i++) {
-                const other = otherSlots[i];
-                
-                // Check for time overlap
-                if (!(slot.endMin <= other.startMin || other.endMin <= slot.startMin)) {
-                    const overlapStart = Math.max(slot.startMin, other.startMin);
-                    const overlapEnd = Math.min(slot.endMin, other.endMin);
-                    
-                    overlaps.push({
-                        division: otherDiv,
-                        slotIndex: i,
-                        slot: other,
-                        overlapStart,
-                        overlapEnd,
-                        overlapDuration: overlapEnd - overlapStart
-                    });
-                }
-            }
-        }
-
-        return overlaps;
-    }
+    // REMOVED: checkTimeOverlapConflict (use window.SchedulerCoreUtils.checkTimeOverlapConflict)
+    // REMOVED: findOverlappingDivisionSlots (use window.SchedulerCoreUtils.findOverlappingDivisionSlots)
 
     // =========================================================================
     // FIELD USAGE TRACKING (TIME-BASED, NOT SLOT-BASED)
@@ -401,22 +265,11 @@
     /**
      * NEW: Field usage is tracked by TIME RANGES, not slot indices
      * This properly handles cross-division conflicts
-     * 
-     * Structure:
-     * {
-     *   "Basketball Court": [
-     *     { startMin: 660, endMin: 720, division: "Junior Boys", bunk: "Bunk 1" },
-     *     { startMin: 720, endMin: 780, division: "Senior Boys", bunk: "Bunk 5" },
-     *   ]
-     * }
      */
     function createFieldUsageTracker() {
         const _usage = {};
 
         return {
-            /**
-             * Register a field usage
-             */
             register(fieldName, startMin, endMin, division, bunk, activity) {
                 if (!fieldName || startMin === null || endMin === null) return false;
                 
@@ -435,10 +288,6 @@
                 return true;
             },
 
-            /**
-             * Check if field is available at a time range
-             * Returns: { available: boolean, conflicts: [...] }
-             */
             checkAvailability(fieldName, startMin, endMin, capacity = 1, excludeBunk = null) {
                 const key = fieldName.toLowerCase().trim();
                 const usages = _usage[key] || [];
@@ -457,24 +306,15 @@
                 };
             },
 
-            /**
-             * Get all usages for a field
-             */
             getUsages(fieldName) {
                 const key = fieldName.toLowerCase().trim();
                 return _usage[key] || [];
             },
 
-            /**
-             * Clear all usages (for regeneration)
-             */
             clear() {
                 Object.keys(_usage).forEach(k => delete _usage[k]);
             },
 
-            /**
-             * Get raw data (for debugging)
-             */
             getRawData() {
                 return { ..._usage };
             }
@@ -485,13 +325,6 @@
     // BACKWARDS COMPATIBILITY: UNIFIED TIMES BRIDGE
     // =========================================================================
 
-    /**
-     * For code that still uses window.unifiedTimes, we can create a "virtual"
-     * unified times array that represents the UNION of all division times.
-     * 
-     * This is for READING ONLY during transition period.
-     * New code should use division-specific lookups.
-     */
     function buildUnifiedTimesFromDivisionTimes() {
         const divisionTimes = window.divisionTimes || {};
         const allTimePoints = new Set();
@@ -523,29 +356,23 @@
         return unifiedSlots;
     }
 
-    /**
-     * Map old-style slot index to new division-specific slot
-     * This helps during migration
-     */
     function mapUnifiedSlotToDivision(unifiedSlotIndex, divisionName) {
         const unifiedTimes = window.unifiedTimes || [];
-        const divSlots = getSlotsForDivision(divisionName);
+        // UPDATED: Use Utils
+        const divSlots = window.SchedulerCoreUtils?.getSlotsForDivision(divisionName);
         
         if (!unifiedTimes[unifiedSlotIndex]) return -1;
         
         const targetStart = unifiedTimes[unifiedSlotIndex].startMin;
         
-        // Find which division slot contains this time
-        return findSlotForTime(divisionName, targetStart);
+        // Find which division slot contains this time (Use Utils)
+        return window.SchedulerCoreUtils?.findSlotForTime(divisionName, targetStart);
     }
 
     // =========================================================================
     // SERIALIZATION FOR STORAGE
     // =========================================================================
 
-    /**
-     * Serialize divisionTimes for localStorage/Supabase storage
-     */
     function serializeDivisionTimes(divisionTimes) {
         if (!divisionTimes) return {};
         
@@ -560,10 +387,8 @@
                 event: slot.event,
                 type: slot.type,
                 label: slot.label,
-                // Date objects to ISO strings
                 start: slot.start instanceof Date ? slot.start.toISOString() : slot.start,
                 end: slot.end instanceof Date ? slot.end.toISOString() : slot.end,
-                // Preserve metadata
                 _originalId: slot._originalId,
                 _subEvents: slot._subEvents,
                 _smartData: slot._smartData
@@ -573,9 +398,6 @@
         return serialized;
     }
 
-    /**
-     * Deserialize divisionTimes from storage
-     */
     function deserializeDivisionTimes(serialized) {
         if (!serialized) return {};
         
@@ -584,10 +406,8 @@
         for (const [divName, slots] of Object.entries(serialized)) {
             divisionTimes[divName] = (slots || []).map(slot => ({
                 ...slot,
-                // ISO strings back to Date objects
                 start: new Date(slot.start),
                 end: new Date(slot.end),
-                // Ensure numeric fields
                 startMin: slot.startMin,
                 endMin: slot.endMin,
                 duration: slot.duration || (slot.endMin - slot.startMin),
@@ -602,14 +422,11 @@
     // SCHEDULE ASSIGNMENT HELPERS
     // =========================================================================
 
-    /**
-     * Initialize schedule assignments array for a bunk
-     * Uses the division's slot count, not global unifiedTimes
-     */
     function initializeBunkAssignments(bunkName) {
-        const divName = getDivisionForBunk(bunkName);
-        const slots = getSlotsForDivision(divName);
-        const slotCount = slots.length || 20; // Default fallback
+        // UPDATED: Use Utils
+        const divName = window.SchedulerCoreUtils?.getDivisionForBunk(bunkName);
+        const slots = window.SchedulerCoreUtils?.getSlotsForDivision(divName) || [];
+        const slotCount = slots.length || 20;
         
         if (!window.scheduleAssignments) {
             window.scheduleAssignments = {};
@@ -629,22 +446,16 @@
         return window.scheduleAssignments[bunkName];
     }
 
-    /**
-     * Get assignment for a bunk at a specific time
-     */
     function getAssignmentAtTime(bunkName, targetMin) {
         const slotIdx = findSlotForBunkAtTime(bunkName, targetMin);
         if (slotIdx === -1) return null;
         return window.scheduleAssignments?.[bunkName]?.[slotIdx] || null;
     }
 
-    /**
-     * Set assignment for a bunk at a slot
-     * Includes time metadata for cross-division conflict detection
-     */
     function setAssignment(bunkName, slotIndex, assignmentData) {
-        const divName = getDivisionForBunk(bunkName);
-        const slot = getSlotAtIndex(divName, slotIndex);
+        // UPDATED: Use Utils
+        const divName = window.SchedulerCoreUtils?.getDivisionForBunk(bunkName);
+        const slot = window.SchedulerCoreUtils?.getSlotAtIndex(divName, slotIndex);
         
         initializeBunkAssignments(bunkName);
         
@@ -687,8 +498,9 @@
         console.log('\n📋 Schedule Assignments:');
         const assignments = window.scheduleAssignments || {};
         Object.entries(assignments).forEach(([bunk, slots]) => {
-            const divName = getDivisionForBunk(bunk);
-            const divSlots = getSlotsForDivision(divName);
+            // UPDATED: Use Utils
+            const divName = window.SchedulerCoreUtils?.getDivisionForBunk(bunk);
+            const divSlots = window.SchedulerCoreUtils?.getSlotsForDivision(divName) || [];
             const filled = (slots || []).filter(s => s && !s.continuation).length;
             const mismatch = divSlots.length !== (slots?.length || 0);
             console.log(`   ${bunk} (${divName}): ${filled} assignments, ${slots?.length || 0} slots ${mismatch ? '⚠️ MISMATCH' : '✅'}`);
@@ -720,133 +532,17 @@
     }
 
     // =========================================================================
-    // INITIALIZATION
-    // =========================================================================
-
-    function initialize() {
-        log('Initializing Division Times System v' + VERSION);
-
-        // Create global if not exists
-        if (!window.divisionTimes) {
-            window.divisionTimes = {};
-        }
-
-        // Create field usage tracker
-        window.fieldUsageTracker = createFieldUsageTracker();
-
-        log('✅ Division Times System initialized');
-    }
-
-    // =========================================================================
-    // EXPORTS
-    // =========================================================================
-
-    window.DivisionTimesSystem = {
-        version: VERSION,
-
-        // Core building
-        buildFromSkeleton: buildDivisionTimesFromSkeleton,
-        
-        // Time parsing
-        parseTimeToMinutes,
-        minutesToTimeLabel,
-        minutesToDate,
-
-        // Slot lookups
-        getSlotsForDivision,
-        getSlotAtIndex,
-        findSlotForTime,
-        findSlotForTimeRange,
-        findSlotsOverlappingRange,
-        getDivisionForBunk,
-        getSlotsForBunk,
-        findSlotForBunkAtTime,
-
-        // Conflict detection
-        checkTimeOverlapConflict,
-        findOverlappingDivisionSlots,
-        createFieldUsageTracker,
-
-        // Backwards compatibility
-        buildUnifiedTimesFromDivisionTimes,
-        mapUnifiedSlotToDivision,
-
-        // Serialization
-        serialize: serializeDivisionTimes,
-        deserialize: deserializeDivisionTimes,
-
-        // Assignment helpers
-        initializeBunkAssignments,
-        getAssignmentAtTime,
-        setAssignment,
-
-        // Diagnostic
-        diagnose,
-
-        // Internal (for debugging)
-        _consolidateBlocks: consolidateBlocks
-    };
-
-    // Auto-initialize
-    initialize();
-
-    console.log('═══════════════════════════════════════════════════════════════════════');
-    console.log('⏰ DIVISION TIMES SYSTEM v' + VERSION + ' LOADED');
-    console.log('');
-    console.log('   NEW ARCHITECTURE: Per-division variable-length time slots');
-    console.log('   REPLACES: Fixed 30-minute grid shared across all divisions');
-    console.log('');
-    console.log('   Commands:');
-    console.log('   - DivisionTimesSystem.diagnose()        → Full diagnostic');
-    console.log('   - DivisionTimesSystem.getSlotsForDivision("Junior Boys")');
-    console.log('   - DivisionTimesSystem.findSlotForTime("Junior Boys", 720)');
-    console.log('   - DivisionTimesSystem.buildFromSkeleton(skeleton, divisions)');
-    console.log('');
-    console.log('═══════════════════════════════════════════════════════════════════════');
-// =========================================================================
-    // ENHANCED BUNK LOOKUP (from division_times_bunk_fix.js)
+    // BUNK SLOT COUNT UTILITIES (formerly division_times_bunk_fix.js)
     // =========================================================================
     
-    /**
-     * Enhanced bunk-to-division lookup with type coercion
-     * Handles string vs number mismatches, leading zeros, etc.
-     */
-    function getDivisionForBunkEnhanced(bunkName) {
-        if (!bunkName) return null;
-        
-        const divisions = window.divisions || {};
-        const bunkStr = String(bunkName).trim();
-        const bunkNum = parseInt(bunkName, 10);
-        const bunkLower = bunkStr.toLowerCase();
-        
-        for (const [divName, divData] of Object.entries(divisions)) {
-            if (!divData.bunks || !Array.isArray(divData.bunks)) continue;
-            
-            const found = divData.bunks.some(b => {
-                if (b === bunkName) return true;  // Exact match
-                if (String(b) === bunkStr) return true;  // String match
-                if (!isNaN(bunkNum) && parseInt(b, 10) === bunkNum) return true;  // Numeric match
-                if (String(b).toLowerCase() === bunkLower) return true;  // Case-insensitive
-                return false;
-            });
-            
-            if (found) return divName;
-        }
-        
-        return null;
-    }
+    // REMOVED: getDivisionForBunkEnhanced (Utils handles this)
 
-    // =========================================================================
-    // BUNK SLOT COUNT UTILITIES
-    // =========================================================================
-    
     /**
      * Fix all bunk slot counts to match their division's slot count
      */
     function fixAllBunkSlotCounts() {
         console.log('[DivisionTimes] Fixing all bunk slot counts...');
         
-        const divisions = window.divisions || {};
         const divisionTimes = window.divisionTimes || {};
         const assignments = window.scheduleAssignments || {};
         
@@ -854,7 +550,8 @@
         let errorCount = 0;
         
         Object.entries(assignments).forEach(([bunk, slots]) => {
-            const divName = getDivisionForBunkEnhanced(bunk);
+            // UPDATED: Use Utils (assumes getDivisionForBunk handles variations)
+            const divName = window.SchedulerCoreUtils?.getDivisionForBunk(bunk);
             
             if (!divName) {
                 console.warn(`   ⚠️ ${bunk}: No division found`);
@@ -904,7 +601,8 @@
         Object.entries(divisionTimes).forEach(([divName, slots]) => {
             const divBunks = (divisions[divName]?.bunks || []).map(b => String(b));
             const assignedBunks = Object.keys(assignments).filter(bunk => 
-                getDivisionForBunkEnhanced(bunk) === divName
+                // UPDATED: Use Utils
+                window.SchedulerCoreUtils?.getDivisionForBunk(bunk) === divName
             );
             const allBunks = [...new Set([...divBunks, ...assignedBunks])];
             
@@ -945,22 +643,6 @@
     }
 
     // =========================================================================
-    // GENERATION COMPLETE HOOK
-    // =========================================================================
-    
-    function setupGenerationCompleteHook() {
-        window.addEventListener('campistry-generation-complete', function(e) {
-            console.log('[DivisionTimes] Generation complete - running auto-fixes...');
-            
-            setTimeout(() => {
-                const slotFixes = fixAllBunkSlotCounts();
-                const pinnedFills = fillMissingPinnedSlots();
-                console.log(`[DivisionTimes] Post-generation: ${slotFixes.fixed} slot resizes, ${pinnedFills} pinned fills`);
-            }, 100);
-        });
-    }
-
-    // =========================================================================
     // ENHANCED DIAGNOSTIC
     // =========================================================================
     
@@ -984,7 +666,8 @@
         let correctCount = 0, fixedCount = 0, errorCount = 0;
         
         Object.entries(assignments).forEach(([bunk, slots]) => {
-            const divName = getDivisionForBunkEnhanced(bunk);
+            // UPDATED: Use Utils
+            const divName = window.SchedulerCoreUtils?.getDivisionForBunk(bunk);
             const expectedSlots = divisionTimes[divName]?.length || 0;
             const actualSlots = slots?.length || 0;
             
@@ -1008,32 +691,104 @@
     }
 
     // =========================================================================
-    // EXPORTS (add to existing DivisionTimesSystem object)
+    // GENERATION COMPLETE HOOK
     // =========================================================================
     
-    // Update getDivisionForBunk to use enhanced version
-    window.DivisionTimesSystem.getDivisionForBunk = getDivisionForBunkEnhanced;
-    
-    // Add new utilities
-    window.DivisionTimesSystem.fixAllBunkSlotCounts = fixAllBunkSlotCounts;
-    window.DivisionTimesSystem.fillMissingPinnedSlots = fillMissingPinnedSlots;
-    window.DivisionTimesSystem.diagnoseBunkSlots = diagnoseBunkSlots;
-    
-    // Global exports for convenience
+    function setupGenerationCompleteHook() {
+        window.addEventListener('campistry-generation-complete', function(e) {
+            console.log('[DivisionTimes] Generation complete - running auto-fixes...');
+            
+            setTimeout(() => {
+                const slotFixes = fixAllBunkSlotCounts();
+                const pinnedFills = fillMissingPinnedSlots();
+                console.log(`[DivisionTimes] Post-generation: ${slotFixes.fixed} slot resizes, ${pinnedFills} pinned fills`);
+            }, 100);
+        });
+    }
+
+    // =========================================================================
+    // INITIALIZATION
+    // =========================================================================
+
+    function initialize() {
+        log('Initializing Division Times System v' + VERSION);
+
+        // Create global if not exists
+        if (!window.divisionTimes) {
+            window.divisionTimes = {};
+        }
+
+        // Create field usage tracker
+        window.fieldUsageTracker = createFieldUsageTracker();
+        
+        // Setup generation hook
+        setupGenerationCompleteHook();
+
+        log('✅ Division Times System initialized');
+    }
+
+    // =========================================================================
+    // EXPORTS
+    // =========================================================================
+
+    window.DivisionTimesSystem = {
+        version: VERSION,
+
+        // Core building
+        buildFromSkeleton: buildDivisionTimesFromSkeleton,
+        
+        // Time parsing
+        parseTimeToMinutes,
+        minutesToTimeLabel,
+        minutesToDate,
+
+        // Utils (Legacy Aliases - kept for simple compat, but implemented in Utils now)
+        // Ideally we don't duplicate, but keeping the signature valid
+        getSlotsForDivision: (div) => window.SchedulerCoreUtils?.getSlotsForDivision(div) || [],
+        
+        // Conflict detection (delegated)
+        createFieldUsageTracker,
+
+        // Backwards compatibility
+        buildUnifiedTimesFromDivisionTimes,
+        mapUnifiedSlotToDivision,
+
+        // Serialization
+        serialize: serializeDivisionTimes,
+        deserialize: deserializeDivisionTimes,
+
+        // Assignment helpers
+        initializeBunkAssignments,
+        getAssignmentAtTime,
+        setAssignment,
+
+        // Utils
+        fixAllBunkSlotCounts,
+        fillMissingPinnedSlots,
+
+        // Diagnostic
+        diagnose,
+        diagnoseBunkSlots,
+
+        // Internal (for debugging)
+        _consolidateBlocks: consolidateBlocks
+    };
+
+    // Auto-initialize
+    initialize();
+
+    console.log('═══════════════════════════════════════════════════════════════════════');
+    console.log('⏰ DIVISION TIMES SYSTEM v' + VERSION + ' LOADED');
+    console.log('');
+    console.log('   UPDATED: Logic delegated to SchedulerCoreUtils');
+    console.log('   Commands:');
+    console.log('   - DivisionTimesSystem.diagnose()        → Full diagnostic');
+    console.log('   - DivisionTimesSystem.fixAllBunkSlotCounts()');
+    console.log('');
+    console.log('═══════════════════════════════════════════════════════════════════════');
+
+    // Global convenience exports
     window.fixAllBunkSlotCounts = fixAllBunkSlotCounts;
     window.fillMissingPinnedSlots = fillMissingPinnedSlots;
-    window.getDivisionForBunk = getDivisionForBunkEnhanced;
-    
-    // Legacy compatibility
-    window.BunkFix = {
-        diagnose: diagnoseBunkSlots,
-        fixSlotCounts: fixAllBunkSlotCounts,
-        getDivisionForBunk: getDivisionForBunkEnhanced,
-        version: '2.0 (integrated)'
-    };
-    
-    // Setup hooks
-    setupGenerationCompleteHook();
-    
-    console.log('[DivisionTimes] ✅ Bunk fix utilities integrated');
+
 })();
