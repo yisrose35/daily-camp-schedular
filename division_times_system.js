@@ -1,5 +1,5 @@
 // =============================================================================
-// division_times_system.js v1.1 — CAMPISTRY PER-DIVISION TIME SLOT SYSTEM
+// division_times_system.js v1.2 — CAMPISTRY PER-DIVISION TIME SLOT SYSTEM
 // =============================================================================
 //
 // ★★★ REPLACES THE BROKEN FIXED 30-MIN SLOT SYSTEM ★★★
@@ -17,12 +17,17 @@
 // UPDATES v1.1:
 // - Delegated lookup/utility functions to SchedulerCoreUtils to prevent duplication.
 //
+// UPDATES v1.2:
+// - ★★★ SPLIT TILE FIX: Split tiles now create TWO separate slots in divisionTimes ★★★
+// - Added expandSplitTiles() function
+// - Modified buildDivisionTimesFromSkeleton() to call expandSplitTiles()
+//
 // =============================================================================
 
 (function() {
     'use strict';
 
-    const VERSION = '1.1.0';
+    const VERSION = '1.2.0';
     const DEBUG = true;
 
     function log(...args) {
@@ -100,82 +105,91 @@
     }
 
     // =========================================================================
+    // ★★★ SPLIT TILE EXPANSION - v1.2 FIX ★★★
+    // =========================================================================
+
+    /**
+     * Expand split tiles into two separate time blocks
+     * This is CRITICAL - split tiles must create TWO slots, not one!
+     * 
+     * @param {Array} blocks - Parsed skeleton blocks for a division
+     * @returns {Array} Blocks with split tiles expanded into two entries
+     */
+    function expandSplitTiles(blocks) {
+        const expanded = [];
+        
+        blocks.forEach(block => {
+            if (block.type === 'split') {
+                // Calculate midpoint
+                const midMin = Math.floor((block.startMin + block.endMin) / 2);
+                
+                // Parse activity names from event or subEvents
+                let act1Name = 'Activity 1';
+                let act2Name = 'Activity 2';
+                
+                if (block.subEvents && block.subEvents.length >= 2) {
+                    act1Name = block.subEvents[0]?.event || block.subEvents[0] || 'Activity 1';
+                    act2Name = block.subEvents[1]?.event || block.subEvents[1] || 'Activity 2';
+                } else if (block.event && block.event.includes('/')) {
+                    const parts = block.event.split('/').map(s => s.trim());
+                    act1Name = parts[0] || 'Activity 1';
+                    act2Name = parts[1] || 'Activity 2';
+                }
+                
+                // Create first half slot
+                expanded.push({
+                    ...block,
+                    id: (block.id || block._originalId || Date.now()) + '_half1',
+                    startMin: block.startMin,
+                    endMin: midMin,
+                    event: act1Name,
+                    type: 'split_half',
+                    _splitHalf: 1,
+                    _splitParentEvent: block.event,
+                    _splitAct1: act1Name,
+                    _splitAct2: act2Name,
+                    _originalStartMin: block.startMin,
+                    _originalEndMin: block.endMin
+                });
+                
+                // Create second half slot
+                expanded.push({
+                    ...block,
+                    id: (block.id || block._originalId || Date.now()) + '_half2',
+                    startMin: midMin,
+                    endMin: block.endMin,
+                    event: act2Name,
+                    type: 'split_half',
+                    _splitHalf: 2,
+                    _splitParentEvent: block.event,
+                    _splitAct1: act1Name,
+                    _splitAct2: act2Name,
+                    _originalStartMin: block.startMin,
+                    _originalEndMin: block.endMin
+                });
+                
+                log(`  ★ Expanded split tile "${block.event}" into two slots:`);
+                log(`    [Half 1] ${block.startMin}-${midMin}: ${act1Name}`);
+                log(`    [Half 2] ${midMin}-${block.endMin}: ${act2Name}`);
+            } else {
+                expanded.push(block);
+            }
+        });
+        
+        return expanded;
+    }
+
+    // =========================================================================
     // CORE: BUILD DIVISION TIMES FROM SKELETON
     // =========================================================================
-*/
 
-/**
- * Expand split tiles into two separate time blocks
- * @param {Array} blocks - Parsed skeleton blocks for a division
- * @returns {Array} Blocks with split tiles expanded into two entries
- */
-function expandSplitTiles(blocks) {
-    const expanded = [];
-    
-    blocks.forEach(block => {
-        if (block.type === 'split') {
-            // Calculate midpoint
-            const midMin = Math.floor((block.startMin + block.endMin) / 2);
-            
-            // Parse activity names from event or subEvents
-            let act1Name = 'Activity 1';
-            let act2Name = 'Activity 2';
-            
-            if (block.subEvents && block.subEvents.length >= 2) {
-                act1Name = block.subEvents[0]?.event || block.subEvents[0] || 'Activity 1';
-                act2Name = block.subEvents[1]?.event || block.subEvents[1] || 'Activity 2';
-            } else if (block.event && block.event.includes('/')) {
-                const parts = block.event.split('/').map(s => s.trim());
-                act1Name = parts[0] || 'Activity 1';
-                act2Name = parts[1] || 'Activity 2';
-            }
-            
-            // Create first half slot
-            expanded.push({
-                ...block,
-                id: block.id + '_half1',
-                startMin: block.startMin,
-                endMin: midMin,
-                event: act1Name,
-                type: 'split_half',
-                _splitHalf: 1,
-                _splitParentEvent: block.event,
-                _splitAct1: act1Name,
-                _splitAct2: act2Name,
-                _originalStartMin: block.startMin,
-                _originalEndMin: block.endMin
-            });
-            
-            // Create second half slot
-            expanded.push({
-                ...block,
-                id: block.id + '_half2',
-                startMin: midMin,
-                endMin: block.endMin,
-                event: act2Name,
-                type: 'split_half',
-                _splitHalf: 2,
-                _splitParentEvent: block.event,
-                _splitAct1: act1Name,
-                _splitAct2: act2Name,
-                _originalStartMin: block.startMin,
-                _originalEndMin: block.endMin
-            });
-            
-            log(`  ★ Expanded split tile "${block.event}" into two slots:`);
-            log(`    [Half 1] ${block.startMin}-${midMin}: ${act1Name}`);
-            log(`    [Half 2] ${midMin}-${block.endMin}: ${act2Name}`);
-        } else {
-            expanded.push(block);
-        }
-    });
-    
-    return expanded;
-}
     /**
      * Build per-division time slots from skeleton
      * This is the CORE function that creates the new data structure
-     * * @param {Array} skeleton - The manual skeleton array
+     * 
+     * ★★★ v1.2 UPDATE: Now calls expandSplitTiles() to create TWO slots for split tiles ★★★
+     * 
+     * @param {Array} skeleton - The manual skeleton array
      * @param {Object} divisions - The divisions object { "Junior Boys": { bunks: [...] }, ... }
      * @returns {Object} divisionTimes - { "Junior Boys": [slots...], "Senior Boys": [slots...] }
      */
@@ -214,8 +228,14 @@ function expandSplitTiles(blocks) {
             // Sort by start time
             parsed.sort((a, b) => a.startMin - b.startMin);
 
+            // ★★★ v1.2 FIX: Expand split tiles BEFORE consolidation ★★★
+            const withExpandedSplits = expandSplitTiles(parsed);
+            
+            // Re-sort after expansion (split halves should be in order)
+            withExpandedSplits.sort((a, b) => a.startMin - b.startMin);
+
             // Handle overlapping/nested blocks by merging or splitting
-            const consolidated = consolidateBlocks(parsed);
+            const consolidated = consolidateBlocks(withExpandedSplits);
 
             // Create slot array
             divisionTimes[divName] = consolidated.map((block, idx) => ({
@@ -230,6 +250,13 @@ function expandSplitTiles(blocks) {
                 _originalId: block.id,
                 _subEvents: block.subEvents,
                 _smartData: block.smartData,
+                // ★★★ v1.2: Preserve split tile metadata ★★★
+                _splitHalf: block._splitHalf,
+                _splitParentEvent: block._splitParentEvent,
+                _splitAct1: block._splitAct1,
+                _splitAct2: block._splitAct2,
+                _originalStartMin: block._originalStartMin,
+                _originalEndMin: block._originalEndMin,
                 // For backwards compat: Date objects
                 start: minutesToDate(block.startMin),
                 end: minutesToDate(block.endMin)
@@ -238,7 +265,8 @@ function expandSplitTiles(blocks) {
             log(`  ${divName}: ${divisionTimes[divName].length} slots`);
             if (DEBUG && divisionTimes[divName].length > 0) {
                 divisionTimes[divName].forEach((slot, i) => {
-                    log(`    [${i}] ${slot.label} - ${slot.event} (${slot.type})`);
+                    const splitInfo = slot._splitHalf ? ` [SPLIT HALF ${slot._splitHalf}]` : '';
+                    log(`    [${i}] ${slot.label} - ${slot.event} (${slot.type})${splitInfo}`);
                 });
             }
         }
@@ -258,6 +286,8 @@ function expandSplitTiles(blocks) {
     /**
      * Consolidate overlapping blocks
      * If blocks overlap, we need to handle them intelligently
+     * 
+     * ★★★ v1.2 UPDATE: Split half blocks should NOT be merged with each other ★★★
      */
     function consolidateBlocks(blocks) {
         if (blocks.length === 0) return [];
@@ -275,7 +305,8 @@ function expandSplitTiles(blocks) {
                     // Exact same time - skip duplicate (keep first)
                     log(`    ⚠️ Duplicate block at ${current.startMin}-${current.endMin}, skipping`);
                     continue;
-                } else if (next.type === 'split' || current.type === 'split') {
+                } else if (next.type === 'split' || current.type === 'split' || 
+                           next.type === 'split_half' || current.type === 'split_half') {
                     // Split tiles are special - keep both as separate entries
                     result.push(current);
                     current = { ...next };
@@ -321,11 +352,36 @@ function expandSplitTiles(blocks) {
     }
 
     // =========================================================================
-    // CROSS-DIVISION CONFLICT DETECTION (MOVED TO Utils)
+    // ★★★ NEW v1.2: EXACT TIME RANGE SLOT FINDER ★★★
     // =========================================================================
-
-    // REMOVED: checkTimeOverlapConflict (use window.SchedulerCoreUtils.checkTimeOverlapConflict)
-    // REMOVED: findOverlappingDivisionSlots (use window.SchedulerCoreUtils.findOverlappingDivisionSlots)
+    
+    /**
+     * Find the exact slot index that matches a specific time range
+     * This is CRITICAL for split tiles where we need exact matches
+     * 
+     * @param {string} divisionName - Division name
+     * @param {number} startMin - Start time in minutes
+     * @param {number} endMin - End time in minutes
+     * @returns {number} Slot index or -1 if not found
+     */
+    function findExactSlotForTimeRange(divisionName, startMin, endMin) {
+        const slots = window.divisionTimes?.[divisionName] || [];
+        
+        for (let i = 0; i < slots.length; i++) {
+            if (slots[i].startMin === startMin && slots[i].endMin === endMin) {
+                return i;
+            }
+        }
+        
+        // Fallback: find slot that contains this time range
+        for (let i = 0; i < slots.length; i++) {
+            if (slots[i].startMin <= startMin && slots[i].endMin >= endMin) {
+                return i;
+            }
+        }
+        
+        return -1;
+    }
 
     // =========================================================================
     // FIELD USAGE TRACKING (TIME-BASED, NOT SLOT-BASED)
@@ -460,7 +516,14 @@ function expandSplitTiles(blocks) {
                 end: slot.end instanceof Date ? slot.end.toISOString() : slot.end,
                 _originalId: slot._originalId,
                 _subEvents: slot._subEvents,
-                _smartData: slot._smartData
+                _smartData: slot._smartData,
+                // ★★★ v1.2: Serialize split tile metadata ★★★
+                _splitHalf: slot._splitHalf,
+                _splitParentEvent: slot._splitParentEvent,
+                _splitAct1: slot._splitAct1,
+                _splitAct2: slot._splitAct2,
+                _originalStartMin: slot._originalStartMin,
+                _originalEndMin: slot._originalEndMin
             }));
         }
         
@@ -547,7 +610,7 @@ function expandSplitTiles(blocks) {
 
     function diagnose() {
         console.log('\n' + '═'.repeat(70));
-        console.log('📊 DIVISION TIMES SYSTEM DIAGNOSTIC');
+        console.log('📊 DIVISION TIMES SYSTEM DIAGNOSTIC v1.2');
         console.log('═'.repeat(70));
 
         const divisionTimes = window.divisionTimes || {};
@@ -559,7 +622,8 @@ function expandSplitTiles(blocks) {
             const slots = divisionTimes[divName];
             console.log(`\n📁 ${divName}: ${slots.length} slots`);
             slots.forEach((slot, i) => {
-                console.log(`   [${i}] ${slot.label} | ${slot.event} (${slot.type}) | ${slot.duration} min`);
+                const splitInfo = slot._splitHalf ? ` [SPLIT H${slot._splitHalf}]` : '';
+                console.log(`   [${i}] ${slot.label} | ${slot.event} (${slot.type})${splitInfo} | ${slot.duration} min`);
             });
         });
 
@@ -603,8 +667,6 @@ function expandSplitTiles(blocks) {
     // =========================================================================
     // BUNK SLOT COUNT UTILITIES (formerly division_times_bunk_fix.js)
     // =========================================================================
-    
-    // REMOVED: getDivisionForBunkEnhanced (Utils handles this)
 
     /**
      * Fix all bunk slot counts to match their division's slot count
@@ -717,7 +779,7 @@ function expandSplitTiles(blocks) {
     
     function diagnoseBunkSlots() {
         console.log('\n' + '═'.repeat(70));
-        console.log('🔧 DIVISION TIMES BUNK DIAGNOSTIC');
+        console.log('🔧 DIVISION TIMES BUNK DIAGNOSTIC v1.2');
         console.log('═'.repeat(70));
         
         const divisions = window.divisions || {};
@@ -728,7 +790,8 @@ function expandSplitTiles(blocks) {
         Object.entries(divisions).forEach(([divName, divData]) => {
             const bunks = divData.bunks || [];
             const slotCount = divisionTimes[divName]?.length || 0;
-            console.log(`Division "${divName}": ${bunks.length} bunks, ${slotCount} slots`);
+            const splitSlots = (divisionTimes[divName] || []).filter(s => s._splitHalf).length;
+            console.log(`Division "${divName}": ${bunks.length} bunks, ${slotCount} slots (${splitSlots} from split tiles)`);
         });
         
         console.log('\n=== SLOT ALIGNMENT ===');
@@ -806,14 +869,19 @@ function expandSplitTiles(blocks) {
         // Core building
         buildFromSkeleton: buildDivisionTimesFromSkeleton,
         
+        // ★★★ v1.2: Expose split tile expansion ★★★
+        expandSplitTiles: expandSplitTiles,
+        
         // Time parsing
         parseTimeToMinutes,
         minutesToTimeLabel,
         minutesToDate,
 
         // Utils (Legacy Aliases - kept for simple compat, but implemented in Utils now)
-        // Ideally we don't duplicate, but keeping the signature valid
         getSlotsForDivision: (div) => window.SchedulerCoreUtils?.getSlotsForDivision(div) || [],
+        
+        // ★★★ v1.2: New exact time range finder ★★★
+        findExactSlotForTimeRange,
         
         // Conflict detection (delegated)
         createFieldUsageTracker,
@@ -849,6 +917,7 @@ function expandSplitTiles(blocks) {
     console.log('═══════════════════════════════════════════════════════════════════════');
     console.log('⏰ DIVISION TIMES SYSTEM v' + VERSION + ' LOADED');
     console.log('');
+    console.log('   ★★★ v1.2 FIX: Split tiles now create TWO separate slots! ★★★');
     console.log('   UPDATED: Logic delegated to SchedulerCoreUtils');
     console.log('   Commands:');
     console.log('   - DivisionTimesSystem.diagnose()        → Full diagnostic');
