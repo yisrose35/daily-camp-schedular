@@ -383,9 +383,9 @@
         if (writePre) {
             const preSlots = Utils.findSlotsForRange(blockStartMin, effectiveStart, block.divName);
             preSlots.forEach((slotIndex, i) => {
-                if (window.scheduleAssignments[bunk][slotIndex]) {
-                    window.scheduleAssignments[bunk][slotIndex] = {
-                        field: TRANSITION_TYPE,
+                if (!window.scheduleAssignments[bunk][slotIndex]) {
+    window.scheduleAssignments[bunk][slotIndex] = {
+        field: TRANSITION_TYPE,
                         sport: trans.label,
                         continuation: i > 0,
                         _fixed: true,
@@ -477,10 +477,10 @@
         if (writePost) {
             const postSlots = Utils.findSlotsForRange(effectiveEnd, blockEndMin, block.divName);
             postSlots.forEach((slotIndex, i) => {
-                if (window.scheduleAssignments[bunk][slotIndex]) {
-                    window.scheduleAssignments[bunk][slotIndex] = {
-                        field: TRANSITION_TYPE,
-                        sport: trans.label,
+                if (!window.scheduleAssignments[bunk][slotIndex]) {
+    window.scheduleAssignments[bunk][slotIndex] = {
+        field: TRANSITION_TYPE,
+                sport: trans.label,
                         continuation: i > 0,
                         _fixed: true,
                         _activity: TRANSITION_TYPE,
