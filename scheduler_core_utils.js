@@ -101,23 +101,25 @@
         if (startMin == null || endMin == null) return slots;
 
         // ★★★ NEW: Division-specific lookup ★★★
-        if (divisionOrBunk && window.divisionTimes) {
-            let divName = divisionOrBunk;
+       if (divisionOrBunk && window.divisionTimes) {
+    let divName = String(divisionOrBunk);
 
-            // Check if it's a bunk name, get its division
-            // ★★★ FIX v7.1: Use type-coerced comparison for bunk lookup ★★★
-            const divisions = window.divisions || {};
-            const bunkStr = String(divisionOrBunk);
-            for (const [dName, dData] of Object.entries(divisions)) {
-                if (dData.bunks?.some(b => String(b) === bunkStr)) {
-                    divName = dName;
-                    break;
-                }
+    // ★★★ FIX: Check if it's already a DIVISION name FIRST ★★★
+    if (!window.divisionTimes[divName]) {
+        // Not a division, check if it's a bunk name
+        const divisions = window.divisions || {};
+        const bunkStr = String(divisionOrBunk);
+        for (const [dName, dData] of Object.entries(divisions)) {
+            if (dData.bunks?.some(b => String(b) === bunkStr)) {
+                divName = dName;
+                break;
             }
+        }
+    }
 
             // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-const divNameStr = String(divName);
-const divSlots = window.divisionTimes[divNameStr];
+
+const divSlots = window.divisionTimes[divName];
             if (divSlots && divSlots.length > 0) {
                 for (let i = 0; i < divSlots.length; i++) {
                     const slot = divSlots[i];
