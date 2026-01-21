@@ -1369,32 +1369,7 @@ function addField(){
     renderDetailPane();
 }
 
-function parseTimeToMinutes(str) {
-    if (!str || typeof str !== "string") return null;
 
-    let s = str.trim().toLowerCase();
-    let mer = null;
-
-    if (s.endsWith("am") || s.endsWith("pm")) {
-        mer = s.endsWith("am") ? "am" : "pm";
-        s = s.replace(/am|pm/g, "").trim();
-    }
-
-    const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-    if (!m) return null;
-
-    let hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-
-    if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-
-    if (mer) {
-        if (hh === 12) hh = mer === "am" ? 0 : 12; 
-        else if (mer === "pm") hh += 12; 
-    }
-
-    return hh * 60 + mm;
-}
 
 //------------------------------------------------------------------
 // EXPORTS
