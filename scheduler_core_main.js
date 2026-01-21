@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v17.5 - SPLIT TILE & PINNED EVENT FIXES)
+// scheduler_core_main.js (FIXED v17.6 - SPLIT TILE TARGETING)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
@@ -12,17 +12,46 @@
 // 8. Process Smart Tiles
 // 9. Run Total Solver
 //
-// v17 FIX: Fixed forEach loop that wasn't properly closed, causing Steps 4-8
-//          to be nested inside the loop instead of after it.
-// v17.4: Added DivisionTimesSystem support for division-specific slotting.
-// v17.5: Fixed split tile handling - store time metadata, fix Step 7 filter
-//        Fixed pinned events not being filled properly
+// v17 FIX: Fixed forEach loop that wasn't properly closed
+// v17.4: Added DivisionTimesSystem support
+// v17.5: Fixed split tile metadata & pinned events
+// v17.6: Fixed Split Tile targeting using exact slot matching vs broad range
 // ============================================================================
 
 (function() {
     'use strict';
 
     const TRANSITION_TYPE = window.TRANSITION_TYPE || "Transition/Buffer";
+
+    // -------------------------------------------------------------------------
+    // TIME SLOT HELPERS
+    // -------------------------------------------------------------------------
+
+    /** * Find exact slot index for a specific time range in a division 
+     * @param {string} divName - Division name 
+     * @param {number} startMin - Start time in minutes 
+     * @param {number} endMin - End time in minutes 
+     * @returns {number} Slot index or -1 if not found 
+     */
+    function findExactSlotForTimeRange(divName, startMin, endMin) {
+        const divSlots = window.divisionTimes?.[divName] || [];
+        
+        // Exact match
+        for (let i = 0; i < divSlots.length; i++) {
+            if (divSlots[i].startMin === startMin && divSlots[i].endMin === endMin) {
+                return i;
+            }
+        }
+        
+        // Containing match
+        for (let i = 0; i < divSlots.length; i++) {
+            if (divSlots[i].startMin <= startMin && endMin <= divSlots[i].endMin) {
+                return i;
+            }
+        }
+        
+        return -1;
+    }
 
     // -------------------------------------------------------------------------
     // RAINY DAY MODE HELPERS
@@ -1039,7 +1068,7 @@
 
                         if (window.registerLocationUsage) {
                             const location = activityProperties?.[fieldName]?.location || 
-                                             window.getLocationForActivity?.(activityName);
+                                                     window.getLocationForActivity?.(activityName);
                             if (location) {
                                 window.registerLocationUsage(targetIndex, location, activityName, divName);
                             }
@@ -1361,11 +1390,11 @@
 
             // ★★★ v17.5 FIX: Process PINNED events FIRST (before overlap check) ★★★
             const isPinnedType = item.type === 'pinned' || 
-                                item.pinned === true ||
-                                ['lunch', 'snacks', 'dismissal', 'regroup', 'swim'].some(
-                                    pt => (item.type || '').toLowerCase() === pt ||
-                                          (item.event || '').toLowerCase().includes(pt)
-                                );
+                                 item.pinned === true ||
+                                 ['lunch', 'snacks', 'dismissal', 'regroup', 'swim'].some(
+                                     pt => (item.type || '').toLowerCase() === pt ||
+                                           (item.event || '').toLowerCase().includes(pt)
+                                 );
             
             if (isPinnedType && item.type !== 'split' && item.type !== 'smart') {
                 const slots = Utils.findSlotsForRange(sMin, eMin, divName);
@@ -1468,24 +1497,35 @@
                 console.log(`[SPLIT] ---------------------------------------------------`);
 
                 const routeSplitActivity = (bunks, actName, start, end, groupLabel, actLabel) => {
-                    const slots = Utils.findSlotsForRange(start, end, divName);
-                    if (slots.length === 0) {
-                        console.warn(`[SPLIT] WARNING: No slots found for range ${start}-${end}`);
+                    // ★★★ FIXED: Find exact slot for this time range ★★★
+                    const exactSlot = findExactSlotForTimeRange(divName, start, end);
+                    const fallbackSlots = Utils.findSlotsForRange(start, end, divName);
+                    const targetSlots = exactSlot !== -1 ? [exactSlot] : fallbackSlots;
+                    
+                    if (targetSlots.length === 0) {
+                        console.warn(`[SPLIT] WARNING: No slots found for range ${start}-${end} in ${divName}`);
                         return;
                     }
-
+                    
+                    console.log(`[SPLIT] Using slot ${targetSlots[0]} for time range ${start}-${end}`);
                     const normName = normalizeGA(actName) || actName;
                     const isGen = isGeneratedType(normName);
 
                     bunks.forEach(b => {
-                        const existing = window.scheduleAssignments[b]?.[slots[0]];
+                        // Ensure bunk has proper slot array
+                        if (!window.scheduleAssignments[b]) {
+                            const divSlots = window.divisionTimes?.[divName] || [];
+                            window.scheduleAssignments[b] = new Array(divSlots.length).fill(null);
+                        }
+
+                        const existing = window.scheduleAssignments[b]?.[targetSlots[0]];
                         if (existing && existing._bunkOverride) {
                             console.log(`[SPLIT]    ⏭️ ${b} - skipping (has bunk override)`);
                             return;
                         }
 
-                        // ★★★ v17.5 FIX: Always fill directly, queue with time metadata ★★★
                         if (isGen) {
+                            // Queue for Total Solver with correct slot
                             schedulableSlotBlocks.push({
                                 divName,
                                 bunk: b,
@@ -1493,20 +1533,21 @@
                                 type: 'slot',
                                 startTime: start,
                                 endTime: end,
-                                slots,
+                                slots: targetSlots,
                                 fromSplitTile: true,
-                                // ★★★ v17.5: Store time range explicitly ★★★
                                 _splitTimeStart: start,
-                                _splitTimeEnd: end
+                                _splitTimeEnd: end,
+                                _splitHalf: start < end - (end - start) / 2 ? 1 : 2
                             });
-                            console.log(`[SPLIT]    📋 ${b} → QUEUED for "${normName}" (${start}-${end})`);
+                            console.log(`[SPLIT]    📋 ${b} → QUEUED for "${normName}" (${start}-${end}) @ slot ${targetSlots[0]}`);
                         } else {
+                            // Direct fill into correct slot
                             fillBlock({
                                 divName,
                                 bunk: b,
                                 startTime: start,
                                 endTime: end,
-                                slots
+                                slots: targetSlots
                             }, {
                                 field: actName,
                                 sport: null,
@@ -1516,7 +1557,7 @@
                                 _startMin: start,
                                 _endMin: end
                             }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                            console.log(`[SPLIT]    ✅ ${b} → FILLED with "${actName}" (${start}-${end})`);
+                            console.log(`[SPLIT]    ✅ ${b} → FILLED with "${actName}" (${start}-${end}) @ slot ${targetSlots[0]}`);
                         }
                     });
                 };
@@ -1875,26 +1916,14 @@
                 const existing = window.scheduleAssignments[block.bunk]?.[s[0]];
                 if (existing && existing._bunkOverride) return false;
                 
-                // ★★★ v17.5 FIX: Allow split tile items even if slot has existing data ★★★
-                // Split tiles may have both halves targeting the same slot index
+                // ★★★ FIXED: Split tile items always get processed if slot is empty ★★★
                 if (block.fromSplitTile) {
-                    // Check if existing entry is from a different time range
-                    if (existing && existing._fromSplitTile) {
-                        const existingStart = existing._startMin;
-                        const existingEnd = existing._endMin;
-                        const blockStart = block.startTime || block._splitTimeStart;
-                        const blockEnd = block.endTime || block._splitTimeEnd;
-                        
-                        // Allow if time ranges don't overlap
-                        if (blockStart >= existingEnd || blockEnd <= existingStart) {
-                            return true;
-                        }
-                    }
-                    // If no existing or existing is not from split, allow
-                    if (!existing || existing._activity === TRANSITION_TYPE) {
-                        return true;
-                    }
-                    // If existing is from split but same time range, skip (already filled)
+                    // Empty slot - allow
+                    if (!existing) return true;
+                    // Different split half - would be different slot now, shouldn't happen
+                    // Same slot but need to check if it's transition type
+                    if (existing._activity === TRANSITION_TYPE) return true;
+                    // Slot already has data from same split tile - skip
                     return false;
                 }
                 
@@ -1982,6 +2011,6 @@
 
     window.registerSingleSlotUsage = registerSingleSlotUsage;
 
-    console.log('⚙️ Scheduler Core Main v17.5 loaded (SPLIT TILE & PINNED EVENT FIXES)');
+    console.log('⚙️ Scheduler Core Main v17.6 loaded (SPLIT TILE & PINNED EVENT FIXES)');
 
 })();
