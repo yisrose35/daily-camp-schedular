@@ -508,38 +508,97 @@
     // =========================================================================
     
     function isSplitTileBlock(block, bunks, unifiedTimes) {
+        // Check if block is from an expanded split tile
+        if (block._isSplitTile || block._splitHalf || block.type === 'split_half') {
+            return true;
+        }
+        
+        // Original detection logic (for backwards compatibility)
         if (!block || !block.event || !block.event.includes('/')) return false;
         if (block.event.toLowerCase().includes('special')) return false;
+        
         const duration = block.endMin - block.startMin;
-        if (duration < 60) return false;
-        const midpoint = Math.floor((block.startMin + block.endMin) / 2);
-        const firstHalfSlots = findSlotsForRange(block.startMin, midpoint, unifiedTimes);
-        const secondHalfSlots = findSlotsForRange(midpoint, block.endMin, unifiedTimes);
-        if (firstHalfSlots.length === 0 || secondHalfSlots.length === 0) return false;
-        const assignments = window.scheduleAssignments || {};
-        for (const bunk of bunks) {
-            const bunkData = assignments[bunk];
-            if (!bunkData) continue;
-            const firstEntry = bunkData[firstHalfSlots[0]], secondEntry = bunkData[secondHalfSlots[0]];
-            if (firstEntry && secondEntry && !firstEntry.continuation && !secondEntry.continuation) {
-                const firstAct = formatEntry(firstEntry), secondAct = formatEntry(secondEntry);
-                if (firstAct && secondAct && firstAct !== secondAct) return true;
+        if (duration < 30) return false; // Changed from 60 to 30 for split halves
+        
+        // Check if divisionTimes has split data for this block
+        const divName = block.division;
+        const divSlots = window.divisionTimes?.[divName] || [];
+        
+        for (const slot of divSlots) {
+            if (slot._splitParentEvent === block.event) {
+                return true;
             }
         }
+        
         return false;
     }
     
     function expandBlocksForSplitTiles(divBlocks, bunks, unifiedTimes) {
         const expandedBlocks = [];
+        
         divBlocks.forEach(block => {
-            if (isSplitTileBlock(block, bunks, unifiedTimes)) {
-                const midpoint = Math.floor((block.startMin + block.endMin) / 2);
-                expandedBlocks.push({ ...block, endMin: midpoint, _splitHalf: 1, _originalEvent: block.event, _isSplitTile: true });
-                expandedBlocks.push({ ...block, startMin: midpoint, _splitHalf: 2, _originalEvent: block.event, _isSplitTile: true });
+            // Already expanded
+            if (block._splitHalf || block.type === 'split_half') {
+                expandedBlocks.push(block);
+                return;
+            }
+            
+            // Check if this is a split tile that needs expansion
+            if (block.type === 'split' && block.event?.includes('/')) {
+                const divName = block.division;
+                const divSlots = window.divisionTimes?.[divName] || [];
+                
+                // Look for pre-expanded slots from divisionTimes
+                const firstHalfSlot = divSlots.find(s => 
+                    s._splitParentEvent === block.event && s._splitHalf === 1
+                );
+                const secondHalfSlot = divSlots.find(s => 
+                    s._splitParentEvent === block.event && s._splitHalf === 2
+                );
+                
+                if (firstHalfSlot && secondHalfSlot) {
+                    // Use pre-expanded slots from divisionTimes
+                    expandedBlocks.push({
+                        ...block,
+                        startMin: firstHalfSlot.startMin,
+                        endMin: firstHalfSlot.endMin,
+                        event: firstHalfSlot.event,
+                        _splitHalf: 1,
+                        _originalEvent: block.event,
+                        _isSplitTile: true
+                    });
+                    expandedBlocks.push({
+                        ...block,
+                        startMin: secondHalfSlot.startMin,
+                        endMin: secondHalfSlot.endMin,
+                        event: secondHalfSlot.event,
+                        _splitHalf: 2,
+                        _originalEvent: block.event,
+                        _isSplitTile: true
+                    });
+                } else {
+                    // Fallback: manual expansion
+                    const midpoint = Math.floor((block.startMin + block.endMin) / 2);
+                    expandedBlocks.push({
+                        ...block,
+                        endMin: midpoint,
+                        _splitHalf: 1,
+                        _originalEvent: block.event,
+                        _isSplitTile: true
+                    });
+                    expandedBlocks.push({
+                        ...block,
+                        startMin: midpoint,
+                        _splitHalf: 2,
+                        _originalEvent: block.event,
+                        _isSplitTile: true
+                    });
+                }
             } else {
                 expandedBlocks.push(block);
             }
         });
+        
         return expandedBlocks;
     }
 
@@ -820,9 +879,6 @@
             if (divName && !usage.divisions.includes(divName)) usage.divisions.push(divName);
         }
     }
-
-// ... continued in Part 2
-// ... continued from Part 1
 
     // =========================================================================
     // SMART REGENERATION FOR CONFLICTS
@@ -1252,7 +1308,8 @@
         }
     }
 
-    // =========================================================================
+    // CONTINUED IN PART 2...
+ // =========================================================================
     // BYPASS SAVE - CROSS-DIVISION DIRECT UPDATE (v4.0.2)
     // =========================================================================
 
@@ -2443,7 +2500,12 @@
         } else if (result.blocked.length > 0) {
             previewArea.style.display = 'block';
             previewArea.style.cssText = 'background: #fee2e2; border: 1px solid #ef4444; border-radius: 8px; padding: 12px;';
-            previewArea.innerHTML = `<br>                <div style="color: #991b1b; font-weight: 500;">❌ Cannot complete - pinned activities blocking:</div><br>                <ul style="margin: 8px 0 0 20px; padding: 0; color: #b91c1c;"><br>                    ${result.blocked.map(b => `<li>${window.escapeHtml(b.bunk)}: ${window.escapeHtml(b.currentActivity)}</li>`).join('')}<br>                </ul><br>            `;
+            previewArea.innerHTML = `
+                <div style="color: #991b1b; font-weight: 500;">❌ Cannot complete - pinned activities blocking:</div>
+                <ul style="margin: 8px 0 0 20px; padding: 0; color: #b91c1c;">
+                    ${result.blocked.map(b => `<li>${window.escapeHtml(b.bunk)}: ${window.escapeHtml(b.currentActivity)}</li>`).join('')}
+                </ul>
+            `;
             resolutionMode.style.display = 'none';
             submitBtn.disabled = true;
         } else {
@@ -2462,7 +2524,10 @@
             let html = `<div style="color: #92400e; font-weight: 500;">⚠️ ${result.plan.length} bunk(s) will be reassigned</div><div style="margin-top: 12px; max-height: 180px; overflow-y: auto;">`;
             for (const [div, moves] of Object.entries(byDivision)) {
                 const isOther = !myDivisions.has(div);
-                html += `<div style="margin-bottom: 8px; padding: 8px; background: ${isOther ? '#fef2f2' : '#f0fdf4'}; border-radius: 6px;"><br>                    <div style="font-weight: 500; color: ${isOther ? '#991b1b' : '#166534'};">${isOther ? '🔒' : '✓'} ${window.escapeHtml(div)}</div><br>                    <ul style="margin: 4px 0 0 16px; padding: 0; font-size: 0.85rem;">${moves.map(m => `<li>${window.escapeHtml(m.bunk)}: ${window.escapeHtml(m.from.activity)} → ${window.escapeHtml(m.to.activity)}</li>`).join('')}</ul><br>                </div>`;
+                html += `<div style="margin-bottom: 8px; padding: 8px; background: ${isOther ? '#fef2f2' : '#f0fdf4'}; border-radius: 6px;">
+                    <div style="font-weight: 500; color: ${isOther ? '#991b1b' : '#166534'};">${isOther ? '🔒' : '✓'} ${window.escapeHtml(div)}</div>
+                    <ul style="margin: 4px 0 0 16px; padding: 0; font-size: 0.85rem;">${moves.map(m => `<li>${window.escapeHtml(m.bunk)}: ${window.escapeHtml(m.from.activity)} → ${window.escapeHtml(m.to.activity)}</li>`).join('')}</ul>
+                </div>`;
             }
             html += '</div>';
             previewArea.innerHTML = html;
