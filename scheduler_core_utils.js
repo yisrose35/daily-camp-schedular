@@ -980,8 +980,7 @@
     /**
      * Get the division name for a bunk
      * SINGLE SOURCE OF TRUTH - remove from all other files
-     * 
-     * @param {string} bunkName - The bunk to look up
+     * * @param {string} bunkName - The bunk to look up
      * @returns {string|null} Division name or null if not found
      */
     Utils.getDivisionForBunk = function(bunkName) {
@@ -1009,8 +1008,7 @@
     /**
      * Get all slots for a division
      * SINGLE SOURCE OF TRUTH - remove from division_times_system.js exports
-     * 
-     * @param {string} divisionName - Division name
+     * * @param {string} divisionName - Division name
      * @returns {Array} Array of slot objects with startMin, endMin, label
      */
     Utils.getSlotsForDivision = function(divisionName) {
@@ -1019,8 +1017,7 @@
 
     /**
      * Get slot at a specific index for a division
-     * 
-     * @param {string} divisionName - Division name
+     * * @param {string} divisionName - Division name
      * @param {number} slotIndex - Slot index
      * @returns {Object|null} Slot object or null
      */
@@ -1031,8 +1028,7 @@
     /**
      * Get time range for a slot (DIVISION-AWARE)
      * SINGLE SOURCE OF TRUTH - replaces all getSlotTimeRange implementations
-     * 
-     * @param {number} slotIdx - Slot index
+     * * @param {number} slotIdx - Slot index
      * @param {string} [bunkOrDiv] - Optional bunk name or division name for division-specific lookup
      * @returns {Object} { startMin, endMin } or { startMin: null, endMin: null }
      */
@@ -1080,8 +1076,7 @@
 
     /**
      * Find which slot index contains a given time
-     * 
-     * @param {string} divisionName - Division name
+     * * @param {string} divisionName - Division name
      * @param {number} targetMin - Target time in minutes
      * @returns {number} Slot index or -1 if not found
      */
@@ -1099,8 +1094,7 @@
 
     /**
      * Find slot index by exact time range match
-     * 
-     * @param {string} divisionName - Division name
+     * * @param {string} divisionName - Division name
      * @param {number} startMin - Start time in minutes
      * @param {number} endMin - End time in minutes
      * @returns {number} Slot index or -1 if not found
@@ -1128,8 +1122,7 @@
     /**
      * Find slot index for a specific time (DIVISION-AWARE)
      * SINGLE SOURCE OF TRUTH - replaces findSlotIndexForTime in other files
-     * 
-     * @param {number} targetMin - Target time in minutes
+     * * @param {number} targetMin - Target time in minutes
      * @param {Array|string} unifiedTimesOrDivision - Either unifiedTimes array OR division/bunk name
      * @returns {number} Slot index or -1 if not found
      */
@@ -1199,8 +1192,7 @@
     /**
      * Get entry for a bunk at a specific time block (DIVISION-AWARE)
      * SINGLE SOURCE OF TRUTH - replaces getEntryForBlock in other files
-     * 
-     * @param {string} bunk - Bunk name
+     * * @param {string} bunk - Bunk name
      * @param {number} startMin - Start time in minutes
      * @param {number} endMin - End time in minutes
      * @param {Array} [unifiedTimes] - Optional legacy unifiedTimes array (ignored if divisionTimes available)
@@ -1217,7 +1209,15 @@
         const divName = Utils.getDivisionForBunk(bunk);
         const divSlots = window.divisionTimes?.[divName] || [];
         
-        // Method 1: Find by matching time in divisionTimes
+        // Method 1: Find by EXACT time match in divisionTimes
+        for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
+            const slot = divSlots[slotIdx];
+            if (slot.startMin === startMin && slot.endMin === endMin) {
+                return { entry: bunkData[slotIdx] || null, slotIdx };
+            }
+        }
+        
+        // Method 2: Find slot that starts within the requested range
         for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
             const slot = divSlots[slotIdx];
             if (slot.startMin >= startMin && slot.startMin < endMin) {
@@ -1225,7 +1225,7 @@
             }
         }
         
-        // Method 2: Check embedded time in entry
+        // Method 3: Check embedded time in entry
         for (let slotIdx = 0; slotIdx < bunkData.length; slotIdx++) {
             const entry = bunkData[slotIdx];
             if (!entry || entry.continuation) continue;
@@ -1241,8 +1241,7 @@
 
     /**
      * Get slots for a bunk (via its division)
-     * 
-     * @param {string} bunkName - Bunk name
+     * * @param {string} bunkName - Bunk name
      * @returns {Array} Array of slot objects
      */
     Utils.getSlotsForBunk = function(bunkName) {
@@ -1252,8 +1251,7 @@
 
     /**
      * Find slot for a bunk at a given time
-     * 
-     * @param {string} bunkName - Bunk name
+     * * @param {string} bunkName - Bunk name
      * @param {number} targetMin - Target time in minutes
      * @returns {number} Slot index or -1
      */
@@ -1270,8 +1268,7 @@
     /**
      * Check if two divisions have overlapping time slots
      * CRITICAL for cross-division field conflict detection
-     * 
-     * @param {string} div1 - First division name
+     * * @param {string} div1 - First division name
      * @param {number} slot1Idx - Slot index in first division
      * @param {string} div2 - Second division name
      * @param {number} slot2Idx - Slot index in second division
@@ -1289,8 +1286,7 @@
 
     /**
      * Find all divisions that have time slots overlapping with a given slot
-     * 
-     * @param {string} divisionName - Source division
+     * * @param {string} divisionName - Source division
      * @param {number} slotIndex - Source slot index
      * @returns {Array} Array of { division, slotIndex, overlapStart, overlapEnd }
      */
@@ -1330,8 +1326,7 @@
     /**
      * Check if a field assignment would conflict with other divisions
      * Uses TIME-BASED comparison, not slot indices!
-     * 
-     * @param {string} bunk - Bunk being assigned
+     * * @param {string} bunk - Bunk being assigned
      * @param {number} slotIndex - Slot index
      * @param {string} fieldName - Field being assigned
      * @returns {Object} { conflict: boolean, conflicts: Array }
@@ -1509,8 +1504,7 @@
     /**
      * Build field usage map by slot
      * SINGLE SOURCE OF TRUTH - replaces buildFieldUsageBySlot in other files
-     * 
-     * @param {Array} excludeBunks - Bunks to exclude from usage count
+     * * @param {Array} excludeBunks - Bunks to exclude from usage count
      * @returns {Object} { [slotIdx]: { [fieldName]: { count, bunks, divisions } } }
      */
     Utils.buildFieldUsageBySlot = function(excludeBunks = []) {
