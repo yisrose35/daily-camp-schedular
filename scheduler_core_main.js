@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v17.7 - SPLIT TILE SLOT & SOLVER FIX)
+// scheduler_core_main.js (FIXED v17.8 - SPLIT TILE SLOT & SOLVER FIX)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
@@ -1659,7 +1659,74 @@
                 });
             }
         }); // ★★★ END OF manualSkeleton.forEach ★★★
-
+ // =========================================================================
+        // ★★★ STEP 3.5: GAP DETECTION - Fill unfilled "slot" type time ranges ★★★
+        // =========================================================================
+        
+        console.log("\n[STEP 3.5] Detecting unfilled slot gaps in divisionTimes...");
+        
+        let gapBlocksAdded = 0;
+        
+        // Process each division's divisionTimes
+        Object.entries(divisions).forEach(([divName, divData]) => {
+            // ★★★ PARTIAL GEN CHECK ★★★
+            if (allowedDivisionsSet && !allowedDivisionsSet.has(String(divName))) {
+                return;
+            }
+            
+            const bunkList = divData.bunks || [];
+            if (bunkList.length === 0) return;
+            
+            const divSlots = window.divisionTimes?.[divName] || [];
+            
+            divSlots.forEach((slot, slotIdx) => {
+                // Only process "slot" type entries (General Activity Slots)
+                if (slot.type !== 'slot') return;
+                
+                // Skip split_half slots - they're handled separately
+                if (slot._splitHalf) return;
+                
+                const slotStart = slot.startMin;
+                const slotEnd = slot.endMin;
+                
+                // Check if this slot time range already has schedulable blocks
+                const hasBlocks = schedulableSlotBlocks.some(block => 
+                    block.divName === divName &&
+                    block.startTime === slotStart &&
+                    block.endTime === slotEnd
+                );
+                
+                if (!hasBlocks) {
+                    // No blocks exist for this time range - create them
+                    console.log(`[GAP] Adding blocks for ${divName} slot ${slotIdx}: ${slot.label || slot.event} (${slotStart}-${slotEnd})`);
+                    
+                    bunkList.forEach(bunk => {
+                        // Check if bunk already has an assignment at this slot
+                        const existing = window.scheduleAssignments[bunk]?.[slotIdx];
+                        if (existing && existing._bunkOverride) return;
+                        if (existing && existing._activity && existing._activity !== TRANSITION_TYPE) return;
+                        
+                        schedulableSlotBlocks.push({
+                            divName,
+                            bunk,
+                            event: 'General Activity Slot',
+                            type: 'slot',
+                            startTime: slotStart,
+                            endTime: slotEnd,
+                            slots: [slotIdx],
+                            _fromGapDetection: true
+                        });
+                        gapBlocksAdded++;
+                    });
+                }
+            });
+        });
+        
+        if (gapBlocksAdded > 0) {
+            console.log(`[STEP 3.5] ✅ Added ${gapBlocksAdded} gap blocks for unfilled slots`);
+        } else {
+            console.log(`[STEP 3.5] No gaps detected`);
+        }
         console.log(`[SKELETON] Categorized: ${specialtyLeagueBlocks.length} specialty league, ${leagueBlocks.length} regular league, ${schedulableSlotBlocks.length} general blocks`);
         console.log(`[SKELETON] ✅ Filled ${pinnedEventCount} pinned event assignments`);
 
