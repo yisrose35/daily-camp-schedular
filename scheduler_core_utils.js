@@ -623,7 +623,29 @@ const divSlots = window.divisionTimes[divName];
             if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - not available`);
             return false;
         }
-
+// =================================================================
+// ★★★ TIME-BASED AVAILABILITY CHECK (timeRules) ★★★
+// =================================================================
+if (effectiveProps.timeRules && effectiveProps.timeRules.length > 0) {
+    const { blockStartMin, blockEndMin } = Utils.getBlockTimeRange ? 
+        Utils.getBlockTimeRange(block) : 
+        { blockStartMin: block.startTime, blockEndMin: block.endTime };
+    
+    for (const rule of effectiveProps.timeRules) {
+        const ruleStart = Utils.parseTimeToMinutes(rule.startTime || rule.start);
+        const ruleEnd = Utils.parseTimeToMinutes(rule.endTime || rule.end);
+        
+        if (ruleStart == null || ruleEnd == null) continue;
+        
+        // Check for overlap with unavailable time
+        const overlaps = !(blockEndMin <= ruleStart || blockStartMin >= ruleEnd);
+        
+        if (overlaps && rule.available === false) {
+            if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - unavailable during ${ruleStart}-${ruleEnd}`);
+            return false;
+        }
+    }
+}
         if (effectiveProps.allowedDivisions?.length && !effectiveProps.allowedDivisions.includes(block.divName)) {
             if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - division not allowed`);
             return false;
