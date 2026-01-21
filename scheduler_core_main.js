@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v17.6 - SPLIT TILE TARGETING)
+// scheduler_core_main.js (FIXED v17.7 - SPLIT TILE SLOT & SOLVER FIX)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
@@ -16,6 +16,7 @@
 // v17.4: Added DivisionTimesSystem support
 // v17.5: Fixed split tile metadata & pinned events
 // v17.6: Fixed Split Tile targeting using exact slot matching vs broad range
+// v17.7: Fixed split tile fillBlock slot usage & solver pick propagation
 // ============================================================================
 
 (function() {
@@ -290,7 +291,7 @@
     // -------------------------------------------------------------------------
     // fillBlock — Buffer/Merge-Safe Inline Writer
     // -------------------------------------------------------------------------
-    // v17.5 FIX: Added time range metadata (_startMin, _endMin) for split tiles
+    // v17.7 FIX: Split tile blocks now use explicit slots and properly propagate metadata
 
     function fillBlock(block, pick, fieldUsageBySlot, yesterdayHistory, isLeagueFill = false, activityProperties) {
         const Utils = window.SchedulerCoreUtils;
@@ -394,9 +395,19 @@
             });
         }
 
-        let mainSlots = Utils.findSlotsForRange(effectiveStart, effectiveEnd, block.divName);
-        if (mainSlots.length === 0 && block.slots && block.slots.length > 0) {
-            if (trans.preMin === 0 && trans.postMin === 0) mainSlots = block.slots;
+        // ★★★ v17.7 FIX: For split tiles, ALWAYS use explicit block.slots to avoid transition rule interference ★★★
+        const isSplitTileBlock = block.fromSplitTile || block._fromSplitTile || pick._fromSplitTile || block._splitTimeStart !== undefined;
+        
+        let mainSlots;
+        if (isSplitTileBlock && block.slots && block.slots.length > 0) {
+            // Split tiles have precise slot targeting - use them directly
+            mainSlots = block.slots;
+            console.log(`[fillBlock] ★ SPLIT TILE: Using explicit slots [${mainSlots.join(',')}] for ${bunk}`);
+        } else {
+            mainSlots = Utils.findSlotsForRange(effectiveStart, effectiveEnd, block.divName);
+            if (mainSlots.length === 0 && block.slots && block.slots.length > 0) {
+                if (trans.preMin === 0 && trans.postMin === 0) mainSlots = block.slots;
+            }
         }
 
         if (mainSlots.length === 0) {
@@ -407,9 +418,10 @@
         mainSlots.forEach((slotIndex, i) => {
             const existing = window.scheduleAssignments[bunk][slotIndex];
             
-            // ★★★ v17.5 FIX: For split tiles, check time overlap before rejecting ★★★
+            // ★★★ v17.7 FIX: Check BOTH block.fromSplitTile AND pick._fromSplitTile ★★★
             const canWrite = !existing || 
                             existing._isTransition ||
+                            isSplitTileBlock ||  // ← NEW: Allow writes for any split tile block
                             (pick._fromSplitTile && existing._fromSplitTile && 
                              block.startTime !== undefined && existing._startMin !== undefined &&
                              (block.startTime >= existing._endMin || block.endTime <= existing._startMin));
@@ -427,12 +439,14 @@
                     _zone: zone,
                     _endTime: effectiveEnd,
                     _bunkOverride: pick._bunkOverride || false,
-                    // ★★★ v17.5: Store time range for split tile disambiguation ★★★
+                    // ★★★ v17.7: Store time range AND split tile flag for proper tracking ★★★
                     _startMin: block.startTime,
                     _endMin: block.endTime,
-                    _fromSplitTile: pick._fromSplitTile || false
+                    _fromSplitTile: isSplitTileBlock || pick._fromSplitTile || false
                 };
                 window.registerSingleSlotUsage(slotIndex, fName, block.divName, bunk, pick._activity || fName, fieldUsageBySlot, activityProperties);
+            } else {
+                console.log(`[fillBlock] ⚠️ Skipped write for ${bunk} slot ${slotIndex} - existing: ${existing?._activity}`);
             }
         });
 
@@ -653,7 +667,7 @@
 
     window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v17.5 - SPLIT TILE & PINNED FIX) ★★★");
+        console.log("★★★ OPTIMIZER STARTED (v17.7 - SPLIT TILE SLOT FIX) ★★★");
 
         // ★★★ SCHEDULER RESTRICTION ★★★
         if (window.AccessControl?.filterDivisionsForGeneration) {
@@ -1525,7 +1539,7 @@
                         }
 
                         if (isGen) {
-                            // Queue for Total Solver with correct slot
+                            // ★★★ v17.7 FIX: Queue for Total Solver with ALL split tile metadata ★★★
                             schedulableSlotBlocks.push({
                                 divName,
                                 bunk: b,
@@ -1535,9 +1549,10 @@
                                 endTime: end,
                                 slots: targetSlots,
                                 fromSplitTile: true,
+                                _fromSplitTile: true,  // ★★★ ADD: Redundant flag for fillBlock compatibility ★★★
                                 _splitTimeStart: start,
                                 _splitTimeEnd: end,
-                                _splitHalf: start < end - (end - start) / 2 ? 1 : 2
+                                _splitHalf: start < midMin ? 1 : 2
                             });
                             console.log(`[SPLIT]    📋 ${b} → QUEUED for "${normName}" (${start}-${end}) @ slot ${targetSlots[0]}`);
                         } else {
@@ -1547,7 +1562,8 @@
                                 bunk: b,
                                 startTime: start,
                                 endTime: end,
-                                slots: targetSlots
+                                slots: targetSlots,
+                                fromSplitTile: true  // ★★★ ADD: Mark block as split tile ★★★
                             }, {
                                 field: actName,
                                 sport: null,
@@ -1903,7 +1919,7 @@
 
         console.log("\n[STEP 7] Running Total Solver for remaining activities...");
 
-        // ★★★ v17.5 FIX: Modified filter to allow split tile second-half items ★★★
+        // ★★★ v17.7 FIX: Improved filter to properly handle split tile blocks ★★★
         const remainingActivityBlocks = schedulableSlotBlocks
             .filter(b => {
                 const isLeague = /league/i.test(b.event) || b.type === 'league' || b.type === 'specialty_league';
@@ -1916,15 +1932,18 @@
                 const existing = window.scheduleAssignments[block.bunk]?.[s[0]];
                 if (existing && existing._bunkOverride) return false;
                 
-                // ★★★ FIXED: Split tile items always get processed if slot is empty ★★★
-                if (block.fromSplitTile) {
-                    // Empty slot - allow
+                // ★★★ v17.7 FIX: Split tile blocks ALWAYS pass filter if slot is empty/transition ★★★
+                if (block.fromSplitTile || block._fromSplitTile) {
+                    // Empty slot - always allow
                     if (!existing) return true;
-                    // Different split half - would be different slot now, shouldn't happen
-                    // Same slot but need to check if it's transition type
+                    // Transition type - allow
                     if (existing._activity === TRANSITION_TYPE) return true;
-                    // Slot already has data from same split tile - skip
-                    return false;
+                    // Already has split tile data for SAME time range - skip (duplicate)
+                    if (existing._fromSplitTile && existing._startMin === block.startTime && existing._endMin === block.endTime) {
+                        return false;
+                    }
+                    // Otherwise allow - different time range in same slot index (shouldn't happen but be safe)
+                    return true;
                 }
                 
                 return !existing || existing._activity === TRANSITION_TYPE;
@@ -2011,6 +2030,6 @@
 
     window.registerSingleSlotUsage = registerSingleSlotUsage;
 
-    console.log('⚙️ Scheduler Core Main v17.6 loaded (SPLIT TILE & PINNED EVENT FIXES)');
+    console.log('⚙️ Scheduler Core Main v17.7 loaded (SPLIT TILE SLOT & SOLVER FIX)');
 
 })();
