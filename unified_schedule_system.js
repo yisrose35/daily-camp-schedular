@@ -202,13 +202,16 @@
                 ? dateData.leagueAssignments : {};
         }
         
-        // ★ FIX: Build divisionTimes from skeleton if not present ★
-        if (!window.divisionTimes || Object.keys(window.divisionTimes).length === 0) {
+        const cloudLoaded = window._unifiedTimesFromCloud === true;
+        if (cloudLoaded && window.unifiedTimes && window.unifiedTimes.length > 0) {
+            // Keep cloud data
+        } else if (window.unifiedTimes && window.unifiedTimes.length > 0) {
+            // Keep existing
+        } else if (dateData.unifiedTimes && dateData.unifiedTimes.length > 0) {
+            window.unifiedTimes = normalizeUnifiedTimes(dateData.unifiedTimes);
+        } else {
             const skeleton = getSkeleton(dateKey);
-            const divisions = window.divisions || {};
-            if (skeleton.length > 0 && window.DivisionTimesSystem) {
-                window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(skeleton, divisions);
-            }
+            window.unifiedTimes = skeleton.length > 0 ? buildUnifiedTimesFromSkeleton(skeleton) : [];
         }
         
         if (dateData.manualSkeleton?.length > 0) window.manualSkeleton = dateData.manualSkeleton;
@@ -227,6 +230,60 @@
         const dateData = dailyData[dateKey || getDateKey()] || {};
         return dateData.manualSkeleton || dateData.skeleton || 
                window.dailyOverrideSkeleton || window.manualSkeleton || window.skeleton || [];
+    }
+
+    function normalizeUnifiedTimes(times) {
+        if (!times || !Array.isArray(times)) return [];
+        return times.map(t => {
+            const startDate = t.start instanceof Date ? t.start : new Date(t.start);
+            const endDate = t.end instanceof Date ? t.end : new Date(t.end);
+            let startMin = t.startMin, endMin = t.endMin;
+            if (startMin === undefined) startMin = startDate.getHours() * 60 + startDate.getMinutes();
+            if (endMin === undefined) endMin = endDate.getHours() * 60 + endDate.getMinutes();
+            return { start: startDate, end: endDate, startMin, endMin, label: t.label || '' };
+        });
+    }
+
+    /**
+     * Build unified times - NOW USES DIVISION TIMES SYSTEM
+     * Returns a "virtual" unified times array for backwards compatibility
+     */
+    function buildUnifiedTimesFromSkeleton(skeleton) {
+        if (!skeleton || skeleton.length === 0) return [];
+        
+        // ★★★ Use new DivisionTimesSystem if available ★★★
+        if (window.DivisionTimesSystem) {
+            const divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+            
+            // Build division-specific times
+            window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(skeleton, divisions);
+            
+            // Return virtual unified times for backwards compat
+            return window.DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes();
+        }
+        
+        // Legacy fallback (should rarely be used)
+        console.warn('[UnifiedSchedule] DivisionTimesSystem not loaded, using legacy 30-min grid');
+        const INCREMENT_MINS = 30;
+        let minTime = 540, maxTime = 960, found = false;
+        skeleton.forEach(block => {
+            const startMin = parseTimeToMinutes(block.startTime);
+            const endMin = parseTimeToMinutes(block.endTime);
+            if (startMin !== null) { minTime = Math.min(minTime, startMin); found = true; }
+            if (endMin !== null) { maxTime = Math.max(maxTime, endMin); found = true; }
+        });
+        if (!found) return [];
+        minTime = Math.floor(minTime / INCREMENT_MINS) * INCREMENT_MINS;
+        maxTime = Math.ceil(maxTime / INCREMENT_MINS) * INCREMENT_MINS;
+        const timeSlots = [];
+        const baseDate = new Date(); baseDate.setHours(0, 0, 0, 0);
+        for (let mins = minTime; mins < maxTime; mins += INCREMENT_MINS) {
+            const startDate = new Date(baseDate); startDate.setMinutes(mins);
+            const endDate = new Date(baseDate); endDate.setMinutes(mins + INCREMENT_MINS);
+            timeSlots.push({ start: startDate, end: endDate, startMin: mins, endMin: mins + INCREMENT_MINS,
+                label: `${minutesToTimeLabel(mins)} - ${minutesToTimeLabel(mins + INCREMENT_MINS)}` });
+        }
+        return timeSlots;
     }
 
     // =========================================================================
@@ -258,9 +315,47 @@
             }
         }
         
-        // No fallback - division context is required
-        console.warn(`[findFirstSlotForTime] No divisionTimes found for ${bunkOrDiv}`);
+        // Legacy fallback
+        const unifiedTimes = window.unifiedTimes || [];
+        for (let i = 0; i < unifiedTimes.length; i++) {
+            const slotStart = getSlotStartMin(unifiedTimes[i]);
+            if (slotStart === targetMin) return i;
+        }
         return -1;
+    }
+
+    // =========================================================================
+    // UNIFIED TIMES BACKWARDS COMPATIBILITY LAYER
+    // =========================================================================
+    // Auto-populates window.unifiedTimes from divisionTimes for legacy code
+    
+    let _unifiedTimesCache = null;
+    
+    // Define getter/setter for window.unifiedTimes
+    if (!Object.getOwnPropertyDescriptor(window, 'unifiedTimes')?.get) {
+        Object.defineProperty(window, 'unifiedTimes', {
+            get: function() {
+                // Return cached if available
+                if (_unifiedTimesCache && _unifiedTimesCache.length > 0) {
+                    return _unifiedTimesCache;
+                }
+                
+                // Auto-build from divisionTimes
+                if (window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
+                    const built = window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes?.(window.divisionTimes);
+                    if (built && built.length > 0) {
+                        _unifiedTimesCache = built;
+                        return built;
+                    }
+                }
+                
+                return _unifiedTimesCache || [];
+            },
+            set: function(val) {
+                _unifiedTimesCache = val;
+            },
+            configurable: true
+        });
     }
 
     // =========================================================================
@@ -756,18 +851,17 @@
 
     function applyPickToBunk(bunk, slots, pick, fieldUsageBySlot, activityProperties) {
         const divName = getDivisionForBunk(bunk);
-        // ★ FIX: Use division-specific times ★
-        const divTimes = window.divisionTimes?.[divName] || [];
+        const unifiedTimes = window.unifiedTimes || [];
         let startMin = null, endMin = null;
-        if (slots.length > 0 && divTimes[slots[0]]) {
-            startMin = divTimes[slots[0]].startMin;
-            const lastSlot = divTimes[slots[slots.length - 1]];
-            if (lastSlot) endMin = lastSlot.endMin !== undefined ? lastSlot.endMin : (startMin + 30);
+        if (slots.length > 0 && unifiedTimes[slots[0]]) {
+            startMin = getSlotStartMin(unifiedTimes[slots[0]]);
+            const lastSlot = unifiedTimes[slots[slots.length - 1]];
+            if (lastSlot) endMin = lastSlot.endMin !== undefined ? lastSlot.endMin : (getSlotStartMin(lastSlot) + 30);
         }
         const pickData = { field: pick.field, sport: pick.sport, _fixed: true, _activity: pick.activityName,
             _smartRegenerated: true, _regeneratedAt: Date.now(), _startMin: startMin, _endMin: endMin, _blockStart: startMin };
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
-        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divTimes.length || 50);
+        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
         slots.forEach((slotIdx, i) => { window.scheduleAssignments[bunk][slotIdx] = { ...pickData, continuation: i > 0 }; });
         if (typeof window.fillBlock === 'function') {
             try {
@@ -922,10 +1016,7 @@
         const assignments = window.scheduleAssignments || {};
         let restoredCount = 0;
         for (const [bunkName, pinnedSlots] of Object.entries(_pinnedSnapshot)) {
-            // ★ FIX: Use division-specific slot count ★
-            const bunkDivName = getDivisionForBunk(bunkName);
-            const bunkSlotCount = window.divisionTimes?.[bunkDivName]?.length || 50;
-            if (!assignments[bunkName]) assignments[bunkName] = new Array(bunkSlotCount);
+            if (!assignments[bunkName]) assignments[bunkName] = new Array((window.unifiedTimes || []).length);
             for (const [slotIdxStr, entry] of Object.entries(pinnedSlots)) {
                 assignments[bunkName][parseInt(slotIdxStr, 10)] = { ...entry, _restoredAt: Date.now() };
                 restoredCount++;
@@ -1204,11 +1295,9 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
     // =========================================================================
 
     function applyDirectEdit(bunk, slots, activity, location, isClear, shouldPin = true) {
-        // ★ FIX: Use division-specific slot count ★
-        const divName = window.getDivisionForBunk(bunk);
-        const divTimes = window.divisionTimes?.[divName] || [];
+        const unifiedTimes = window.unifiedTimes || [];
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
-        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divTimes.length || 50);
+        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
         const fieldValue = location ? `${location} – ${activity}` : activity;
         slots.forEach((idx, i) => {
             window.scheduleAssignments[bunk][idx] = { field: isClear ? 'Free' : fieldValue, sport: isClear ? null : activity, continuation: i > 0,
@@ -1220,7 +1309,8 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         }
     }
 
-    // =========================================================================
+    // CONTINUED IN PART 2...
+ // =========================================================================
     // BYPASS SAVE - CROSS-DIVISION DIRECT UPDATE (v4.0.2)
     // =========================================================================
 
@@ -1235,7 +1325,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             if (!allDailyData[dateKey]) allDailyData[dateKey] = {};
             allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
             allDailyData[dateKey].leagueAssignments = window.leagueAssignments || {};
-            // Change 1.9: Removed unifiedTimes localStorage save
+            allDailyData[dateKey].unifiedTimes = window.unifiedTimes || [];
             allDailyData[dateKey]._bypassSaveAt = Date.now();
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
             console.log('[UnifiedSchedule] ✅ Bypass: saved to localStorage');
@@ -1340,7 +1430,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                     leagueAssignments: leagues
                 };
                 
-                // Serialize unifiedTimes (fallback empty if not present)
+                // Serialize unifiedTimes
                 const serializedTimes = window.ScheduleDB?.serializeUnifiedTimes?.(window.unifiedTimes) 
                     || window.unifiedTimes?.map(t => ({
                         start: t.start instanceof Date ? t.start.toISOString() : t.start,
@@ -1546,16 +1636,14 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
     async function applyEdit(bunk, editData) {
         const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
-        // ★ FIX: Use division-specific times ★
-        const divName = window.getDivisionForBunk(bunk);
-        const divTimes = window.divisionTimes?.[divName] || [];
+        const unifiedTimes = window.unifiedTimes || [];
         const isClear = activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
-        // ★ FIX: Pass division name for correct slot lookup ★
-        const slots = window.findSlotsForRange(startMin, endMin, divName);
+        // Note: findSlotsForRange here uses unifiedTimes array (legacy) because we pass startMin/endMin
+        const slots = window.findSlotsForRange(startMin, endMin, unifiedTimes);
         if (slots.length === 0) { alert('Error: Could not find time slots.'); return; }
         window._postEditInProgress = true; window._postEditTimestamp = Date.now();
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
-        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divTimes.length || 50);
+        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
         if (hasConflict) await resolveConflictsAndApply(bunk, slots, activity, location, editData);
         else applyDirectEdit(bunk, slots, activity, location, isClear, true);
         const currentDate = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
@@ -1565,7 +1653,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
             allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
             allDailyData[currentDate].leagueAssignments = window.leagueAssignments || {};
-            // Change 1.9: Removed unifiedTimes from localStorage
+            allDailyData[currentDate].unifiedTimes = window.unifiedTimes || [];
             allDailyData[currentDate]._postEditAt = Date.now();
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
         } catch (e) { console.error('[UnifiedSchedule] Failed to save to localStorage:', e); }
@@ -1720,7 +1808,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                 let data = selected.schedule_data; if (typeof data === 'string') try { data = JSON.parse(data); } catch(e) {}
                 window.scheduleAssignments = data.scheduleAssignments || data;
                 if (data.leagueAssignments) window.leagueAssignments = data.leagueAssignments;
-                // Change 1.10: Removed unifiedTimes hydration
+                if (data.unifiedTimes) window.unifiedTimes = normalizeUnifiedTimes(data.unifiedTimes);
                 saveSchedule(); updateTable(); alert('✅ Version loaded!');
             } catch (err) { alert('Error: ' + err.message); }
         },
@@ -2097,8 +2185,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
         const divName = window.getDivisionForBunk(bunk);
         const bunksInDivision = window.getBunksForDivision(divName);
-        // ★ FIX: Use division-specific times ★
-        const times = window.divisionTimes?.[divName] || [];
+        const times = window.divisionTimes?.[divName] || window.unifiedTimes || [];
         const slotInfo = times[slotIdx] || {};
         const timeLabel = slotInfo.label || `${minutesToTimeStr(slotInfo.startMin)} - ${minutesToTimeStr(slotInfo.endMin)}`;
 
@@ -2112,13 +2199,23 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
     function showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, canEdit) {
         const overlay = document.createElement('div');
         overlay.id = INTEGRATED_EDIT_OVERLAY_ID;
-        overlay.style.cssText = ``            position: fixed; top: 0; left: 0; right: 0; bottom: 0;`            background: rgba(0,0,0,0.5); z-index: 9998;`            animation: fadeIn 0.2s ease-out;`        `;
+        overlay.style.cssText = `
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5); z-index: 9998;
+            animation: fadeIn 0.2s ease-out;
+        `;
         overlay.onclick = closeIntegratedEditModal;
         document.body.appendChild(overlay);
 
         const modal = document.createElement('div');
         modal.id = INTEGRATED_EDIT_MODAL_ID;
-        modal.style.cssText = ``            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);`            background: white; border-radius: 12px; padding: 24px;`            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;`            min-width: 400px; max-width: 500px;`            animation: fadeIn 0.2s ease-out;`        `;
+        modal.style.cssText = `
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: white; border-radius: 12px; padding: 24px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;
+            min-width: 400px; max-width: 500px;
+            animation: fadeIn 0.2s ease-out;
+        `;
         modal.onclick = e => e.stopPropagation();
 
         const currentActivity = _currentEditContext.existingEntry?._activity || 
@@ -2126,7 +2223,87 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                                _currentEditContext.existingEntry?.field || 'Free';
         const bunksInDiv = _currentEditContext.bunksInDivision || [];
 
-        modal.innerHTML = ``            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">`                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">✏️ Edit Schedule</h2>`                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #6b7280;">&times;</button>`            </div>``            <div style="background: #f3f4f6; border-radius: 8px; padding: 12px; margin-bottom: 20px;">`                <div style="font-size: 0.9rem; color: #6b7280;">Selected Cell</div>`                <div style="font-weight: 600; color: #1f2937; margin-top: 4px;">${window.escapeHtml(bunk)} • ${window.escapeHtml(timeLabel)}</div>`                <div style="color: #6b7280; font-size: 0.9rem; margin-top: 2px;">Current: ${window.escapeHtml(currentActivity)}</div>`            </div>``            <div style="margin-bottom: 20px;">`                <div style="font-weight: 500; color: #374151; margin-bottom: 12px;">What would you like to edit?</div>`                `                <div style="display: flex; flex-direction: column; gap: 10px;">`                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">`                        <input type="radio" name="edit-scope" value="single" checked style="margin-top: 3px;">`                        <div style="flex: 1;">`                            <div style="font-weight: 500; color: #1f2937;">🏠 Just this bunk</div>`                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Edit ${window.escapeHtml(bunk)} only</div>`                        </div>`                    </label>``                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">`                        <input type="radio" name="edit-scope" value="division" style="margin-top: 3px;">`                        <div style="flex: 1;">`                            <div style="font-weight: 500; color: #1f2937;">👥 Entire division</div>`                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">All ${bunksInDiv.length} bunks in ${window.escapeHtml(divName)}</div>`                        </div>`                    </label>``                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">`                        <input type="radio" name="edit-scope" value="select" style="margin-top: 3px;">`                        <div style="flex: 1;">`                            <div style="font-weight: 500; color: #1f2937;">☑️ Select specific bunks</div>`                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Choose which bunks to edit</div>`                        </div>`                    </label>`                </div>`            </div>``            <div id="bunk-selection-area" style="display: none; margin-bottom: 20px;">`                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Select bunks:</div>`                <div style="display: flex; gap: 8px; margin-bottom: 8px;">`                    <button onclick="document.querySelectorAll('.bunk-checkbox').forEach(cb=>cb.checked=true)" style="padding: 6px 12px; background: #e5e7eb; border: none; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">Select All</button>`                    <button onclick="document.querySelectorAll('.bunk-checkbox').forEach(cb=>cb.checked=false)" style="padding: 6px 12px; background: #e5e7eb; border: none; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">Clear</button>`                </div>`                <div id="bunk-checkboxes" style="max-height: 150px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px;">`                    ${bunksInDiv.map(b => ``                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9rem;">`                            <input type="checkbox" class="bunk-checkbox" value="${b}" ${b === bunk ? 'checked' : ''}>`                            <span>${window.escapeHtml(b)}</span>`                        </label>`                    `).join('')}`                </div>`            </div>``            <div id="time-range-area" style="display: none; margin-bottom: 20px;">`                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Time range:</div>`                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">`                    <div>`                        <label style="font-size: 0.85rem; color: #6b7280;">Start</label>`                        <select id="edit-start-slot" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;">`                            ${(window.unifiedTimes || []).map((t, i) => `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${t.label || minutesToTimeStr(t.startMin)}</option>`).join('')}`                        </select>`                    </div>`                    <div>`                        <label style="font-size: 0.85rem; color: #6b7280;">End</label>`                        <select id="edit-end-slot" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;">`                            ${(window.unifiedTimes || []).map((t, i) => `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${t.label || minutesToTimeStr(t.endMin)}</option>`).join('')}`                        </select>`                    </div>`                </div>`            </div>``            <div style="display: flex; gap: 12px;">`                <button onclick="closeIntegratedEditModal()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">Cancel</button>`                <button onclick="proceedWithScope()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">Continue →</button>`            </div>`        `;
+        modal.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">✏️ Edit Schedule</h2>
+                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #6b7280;">&times;</button>
+            </div>
+
+            <div style="background: #f3f4f6; border-radius: 8px; padding: 12px; margin-bottom: 20px;">
+                <div style="font-size: 0.9rem; color: #6b7280;">Selected Cell</div>
+                <div style="font-weight: 600; color: #1f2937; margin-top: 4px;">${window.escapeHtml(bunk)} • ${window.escapeHtml(timeLabel)}</div>
+                <div style="color: #6b7280; font-size: 0.9rem; margin-top: 2px;">Current: ${window.escapeHtml(currentActivity)}</div>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <div style="font-weight: 500; color: #374151; margin-bottom: 12px;">What would you like to edit?</div>
+                
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">
+                        <input type="radio" name="edit-scope" value="single" checked style="margin-top: 3px;">
+                        <div style="flex: 1;">
+                            <div style="font-weight: 500; color: #1f2937;">🏠 Just this bunk</div>
+                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Edit ${window.escapeHtml(bunk)} only</div>
+                        </div>
+                    </label>
+
+                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">
+                        <input type="radio" name="edit-scope" value="division" style="margin-top: 3px;">
+                        <div style="flex: 1;">
+                            <div style="font-weight: 500; color: #1f2937;">👥 Entire division</div>
+                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">All ${bunksInDiv.length} bunks in ${window.escapeHtml(divName)}</div>
+                        </div>
+                    </label>
+
+                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">
+                        <input type="radio" name="edit-scope" value="select" style="margin-top: 3px;">
+                        <div style="flex: 1;">
+                            <div style="font-weight: 500; color: #1f2937;">☑️ Select specific bunks</div>
+                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Choose which bunks to edit</div>
+                        </div>
+                    </label>
+                </div>
+            </div>
+
+            <div id="bunk-selection-area" style="display: none; margin-bottom: 20px;">
+                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Select bunks:</div>
+                <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                    <button onclick="document.querySelectorAll('.bunk-checkbox').forEach(cb=>cb.checked=true)" style="padding: 6px 12px; background: #e5e7eb; border: none; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">Select All</button>
+                    <button onclick="document.querySelectorAll('.bunk-checkbox').forEach(cb=>cb.checked=false)" style="padding: 6px 12px; background: #e5e7eb; border: none; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">Clear</button>
+                </div>
+                <div id="bunk-checkboxes" style="max-height: 150px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px;">
+                    ${bunksInDiv.map(b => `
+                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9rem;">
+                            <input type="checkbox" class="bunk-checkbox" value="${b}" ${b === bunk ? 'checked' : ''}>
+                            <span>${window.escapeHtml(b)}</span>
+                        </label>
+                    `).join('')}
+                </div>
+            </div>
+
+            <div id="time-range-area" style="display: none; margin-bottom: 20px;">
+                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Time range:</div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                    <div>
+                        <label style="font-size: 0.85rem; color: #6b7280;">Start</label>
+                        <select id="edit-start-slot" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;">
+                            ${(window.unifiedTimes || []).map((t, i) => `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${t.label || minutesToTimeStr(t.startMin)}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size: 0.85rem; color: #6b7280;">End</label>
+                        <select id="edit-end-slot" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;">
+                            ${(window.unifiedTimes || []).map((t, i) => `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${t.label || minutesToTimeStr(t.endMin)}</option>`).join('')}
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 12px;">
+                <button onclick="closeIntegratedEditModal()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">Cancel</button>
+                <button onclick="proceedWithScope()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">Continue →</button>
+            </div>
+        `;
 
         document.body.appendChild(modal);
         setupScopeModalHandlers();
@@ -2218,7 +2395,12 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
         const modal = document.createElement('div');
         modal.id = INTEGRATED_EDIT_MODAL_ID;
-        modal.style.cssText = ``            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);`            background: white; border-radius: 12px; padding: 24px;`            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;`            min-width: 500px; max-width: 620px; max-height: 85vh; overflow-y: auto;`        `;
+        modal.style.cssText = `
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: white; border-radius: 12px; padding: 24px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;
+            min-width: 500px; max-width: 620px; max-height: 85vh; overflow-y: auto;
+        `;
         modal.onclick = e => e.stopPropagation();
 
         const times = window.divisionTimes?.[divName] || window.unifiedTimes || [];
@@ -2227,7 +2409,63 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         const timeRange = `${minutesToTimeStr(startSlot?.startMin)} - ${minutesToTimeStr(endSlot?.endMin)}`;
         const allLocations = getAllLocations();
 
-        modal.innerHTML = ``            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">`                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">🎯 Multi-Bunk Edit</h2>`                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>`            </div>``            <div style="background: #eff6ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">`                <div style="font-weight: 500; color: #1e40af;">${window.escapeHtml(divName)}</div>`                <div style="font-size: 0.9rem; color: #3b82f6; margin-top: 4px;">`                    ${bunks.length} bunks: ${bunks.slice(0, 5).map(b => window.escapeHtml(b)).join(', ')}${bunks.length > 5 ? ` +${bunks.length - 5} more` : ''}`                </div>`                <div style="font-size: 0.9rem; color: #6b7280; margin-top: 4px;">Time: ${timeRange}</div>`            </div>``            <div style="display: grid; gap: 16px;">`                <div>`                    <label style="display: block; font-weight: 500; margin-bottom: 6px; color: #374151;">📍 Location/Field</label>`                    <select id="multi-edit-location" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px;">`                        <option value="">-- Select --</option>`                        ${allLocations.map(loc => `<option value="${loc.name}">${window.escapeHtml(loc.name)}</option>`).join('')}`                    </select>`                </div>``                <div>`                    <label style="display: block; font-weight: 500; margin-bottom: 6px; color: #374151;">🎪 Activity Name</label>`                    <input type="text" id="multi-edit-activity" placeholder="e.g., Carnival, Color War"`                        style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box;">`                </div>``                <div id="multi-conflict-preview" style="display: none;"></div>``                <div id="multi-resolution-mode" style="display: none;">`                    <label style="display: block; font-weight: 500; margin-bottom: 8px; color: #374151;">⚙️ How to handle other schedulers' bunks?</label>`                    <div style="display: flex; flex-direction: column; gap: 8px;">`                        <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">`                            <input type="radio" name="multi-mode" value="notify" checked style="margin-top: 3px;">`                            <div>`                                <div style="font-weight: 500; color: #374151;">📧 Notify & Request Approval</div>`                                <div style="font-size: 0.85rem; color: #6b7280;">Changes require approval first</div>`                            </div>`                        </label>`                        <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">`                            <input type="radio" name="multi-mode" value="bypass" style="margin-top: 3px;">`                            <div>`                                <div style="font-weight: 500; color: #374151;">🔓 Bypass & Apply Now</div>`                                <div style="font-size: 0.85rem; color: #6b7280;">Changes apply immediately</div>`                            </div>`                        </label>`                    </div>`                </div>`            </div>``            <div style="display: flex; gap: 12px; margin-top: 20px;">`                <button onclick="previewMultiBunkEdit()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">👁️ Preview</button>`                <button id="multi-edit-submit" onclick="submitMultiBunkEdit()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;" disabled>🎯 Apply</button>`            </div>`        `;
+        modal.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">🎯 Multi-Bunk Edit</h2>
+                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>
+            </div>
+
+            <div style="background: #eff6ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+                <div style="font-weight: 500; color: #1e40af;">${window.escapeHtml(divName)}</div>
+                <div style="font-size: 0.9rem; color: #3b82f6; margin-top: 4px;">
+                    ${bunks.length} bunks: ${bunks.slice(0, 5).map(b => window.escapeHtml(b)).join(', ')}${bunks.length > 5 ? ` +${bunks.length - 5} more` : ''}
+                </div>
+                <div style="font-size: 0.9rem; color: #6b7280; margin-top: 4px;">Time: ${timeRange}</div>
+            </div>
+
+            <div style="display: grid; gap: 16px;">
+                <div>
+                    <label style="display: block; font-weight: 500; margin-bottom: 6px; color: #374151;">📍 Location/Field</label>
+                    <select id="multi-edit-location" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px;">
+                        <option value="">-- Select --</option>
+                        ${allLocations.map(loc => `<option value="${loc.name}">${window.escapeHtml(loc.name)}</option>`).join('')}
+                    </select>
+                </div>
+
+                <div>
+                    <label style="display: block; font-weight: 500; margin-bottom: 6px; color: #374151;">🎪 Activity Name</label>
+                    <input type="text" id="multi-edit-activity" placeholder="e.g., Carnival, Color War"
+                        style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box;">
+                </div>
+
+                <div id="multi-conflict-preview" style="display: none;"></div>
+
+                <div id="multi-resolution-mode" style="display: none;">
+                    <label style="display: block; font-weight: 500; margin-bottom: 8px; color: #374151;">⚙️ How to handle other schedulers' bunks?</label>
+                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">
+                            <input type="radio" name="multi-mode" value="notify" checked style="margin-top: 3px;">
+                            <div>
+                                <div style="font-weight: 500; color: #374151;">📧 Notify & Request Approval</div>
+                                <div style="font-size: 0.85rem; color: #6b7280;">Changes require approval first</div>
+                            </div>
+                        </label>
+                        <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">
+                            <input type="radio" name="multi-mode" value="bypass" style="margin-top: 3px;">
+                            <div>
+                                <div style="font-weight: 500; color: #374151;">🔓 Bypass & Apply Now</div>
+                                <div style="font-size: 0.85rem; color: #6b7280;">Changes apply immediately</div>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 12px; margin-top: 20px;">
+                <button onclick="previewMultiBunkEdit()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">👁️ Preview</button>
+                <button id="multi-edit-submit" onclick="submitMultiBunkEdit()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;" disabled>🎯 Apply</button>
+            </div>
+        `;
 
         document.body.appendChild(modal);
 
@@ -2263,7 +2501,12 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         } else if (result.blocked.length > 0) {
             previewArea.style.display = 'block';
             previewArea.style.cssText = 'background: #fee2e2; border: 1px solid #ef4444; border-radius: 8px; padding: 12px;';
-            previewArea.innerHTML = ``                <div style="color: #991b1b; font-weight: 500;">❌ Cannot complete - pinned activities blocking:</div>`                <ul style="margin: 8px 0 0 20px; padding: 0; color: #b91c1c;">`                    ${result.blocked.map(b => `<li>${window.escapeHtml(b.bunk)}: ${window.escapeHtml(b.currentActivity)}</li>`).join('')}`                </ul>`            `;
+            previewArea.innerHTML = `
+                <div style="color: #991b1b; font-weight: 500;">❌ Cannot complete - pinned activities blocking:</div>
+                <ul style="margin: 8px 0 0 20px; padding: 0; color: #b91c1c;">
+                    ${result.blocked.map(b => `<li>${window.escapeHtml(b.bunk)}: ${window.escapeHtml(b.currentActivity)}</li>`).join('')}
+                </ul>
+            `;
             resolutionMode.style.display = 'none';
             submitBtn.disabled = true;
         } else {
@@ -2282,7 +2525,10 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             let html = `<div style="color: #92400e; font-weight: 500;">⚠️ ${result.plan.length} bunk(s) will be reassigned</div><div style="margin-top: 12px; max-height: 180px; overflow-y: auto;">`;
             for (const [div, moves] of Object.entries(byDivision)) {
                 const isOther = !myDivisions.has(div);
-                html += `<div style="margin-bottom: 8px; padding: 8px; background: ${isOther ? '#fef2f2' : '#f0fdf4'}; border-radius: 6px;">`                    <div style="font-weight: 500; color: ${isOther ? '#991b1b' : '#166534'};">${isOther ? '🔒' : '✓'} ${window.escapeHtml(div)}</div>`                    <ul style="margin: 4px 0 0 16px; padding: 0; font-size: 0.85rem;">${moves.map(m => `<li>${window.escapeHtml(m.bunk)}: ${window.escapeHtml(m.from.activity)} → ${window.escapeHtml(m.to.activity)}</li>`).join('')}</ul>`                </div>`;
+                html += `<div style="margin-bottom: 8px; padding: 8px; background: ${isOther ? '#fef2f2' : '#f0fdf4'}; border-radius: 6px;">
+                    <div style="font-weight: 500; color: ${isOther ? '#991b1b' : '#166534'};">${isOther ? '🔒' : '✓'} ${window.escapeHtml(div)}</div>
+                    <ul style="margin: 4px 0 0 16px; padding: 0; font-size: 0.85rem;">${moves.map(m => `<li>${window.escapeHtml(m.bunk)}: ${window.escapeHtml(m.from.activity)} → ${window.escapeHtml(m.to.activity)}</li>`).join('')}</ul>
+                </div>`;
             }
             html += '</div>';
             previewArea.innerHTML = html;
@@ -2591,13 +2837,58 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
         const modal = document.createElement('div');
         modal.id = PROPOSAL_MODAL_ID;
-        modal.style.cssText = ``            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);`            background: white; border-radius: 12px; padding: 24px;`            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;`            min-width: 500px; max-width: 600px; max-height: 80vh; overflow-y: auto;`        `;
+        modal.style.cssText = `
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: white; border-radius: 12px; padding: 24px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;
+            min-width: 500px; max-width: 600px; max-height: 80vh; overflow-y: auto;
+        `;
 
         const myDivisions = new Set(window.getMyDivisions());
         const myMoves = (proposal.reassignments || []).filter(r => myDivisions.has(r.division));
         const claim = proposal.claim || {};
 
-        modal.innerHTML = ``            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">`                <h2 style="margin: 0; color: #1e40af;">📋 Proposal Review</h2>`                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>`            </div>``            <div style="background: #eff6ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">`                <div style="font-weight: 500; color: #1e40af;">Claim Request</div>`                <div style="color: #3b82f6; margin-top: 4px;">`                    <strong>${window.escapeHtml(claim.division || 'Unknown')}</strong> wants `                    <strong>${window.escapeHtml(claim.field || 'Unknown')}</strong> `                    for <strong>${window.escapeHtml(claim.activity || 'Unknown')}</strong>`                </div>`                <div style="color: #6b7280; font-size: 0.9rem; margin-top: 4px;">`                    Date: ${proposal.date_key || 'Unknown'}`                </div>`            </div>``            <div style="margin-bottom: 16px;">`                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Changes to your bunks:</div>`                <div style="background: ${myMoves.length > 0 ? '#fef3c7' : '#f0fdf4'}; border-radius: 8px; padding: 12px;">`                    ${myMoves.length === 0 ? `                        '<div style="color: #166534;">✓ No direct changes to your bunks</div>' :`                        `<ul style="margin: 0; padding-left: 20px; color: #92400e;">`                            ${myMoves.map(m => `<li><strong>${window.escapeHtml(m.bunk)}</strong>: ${window.escapeHtml(m.from?.activity || '?')} → ${window.escapeHtml(m.to?.activity || '?')}</li>`).join('')}`                        </ul>``                    }`                </div>`            </div>``            <div style="display: flex; gap: 12px;">`                <button onclick="respondToProposal('${proposal.id}', 'approved')" `                    style="flex: 1; padding: 12px; background: #10b981; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">`                    ✅ Approve`                </button>`                <button onclick="respondToProposal('${proposal.id}', 'rejected')" `                    style="flex: 1; padding: 12px; background: #ef4444; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">`                    ❌ Reject`                </button>`            </div>`        `;
+        modal.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h2 style="margin: 0; color: #1e40af;">📋 Proposal Review</h2>
+                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>
+            </div>
+
+            <div style="background: #eff6ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+                <div style="font-weight: 500; color: #1e40af;">Claim Request</div>
+                <div style="color: #3b82f6; margin-top: 4px;">
+                    <strong>${window.escapeHtml(claim.division || 'Unknown')}</strong> wants 
+                    <strong>${window.escapeHtml(claim.field || 'Unknown')}</strong> 
+                    for <strong>${window.escapeHtml(claim.activity || 'Unknown')}</strong>
+                </div>
+                <div style="color: #6b7280; font-size: 0.9rem; margin-top: 4px;">
+                    Date: ${proposal.date_key || 'Unknown'}
+                </div>
+            </div>
+
+            <div style="margin-bottom: 16px;">
+                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Changes to your bunks:</div>
+                <div style="background: ${myMoves.length > 0 ? '#fef3c7' : '#f0fdf4'}; border-radius: 8px; padding: 12px;">
+                    ${myMoves.length === 0 ? 
+                        '<div style="color: #166534;">✓ No direct changes to your bunks</div>' :
+                        `<ul style="margin: 0; padding-left: 20px; color: #92400e;">
+                            ${myMoves.map(m => `<li><strong>${window.escapeHtml(m.bunk)}</strong>: ${window.escapeHtml(m.from?.activity || '?')} → ${window.escapeHtml(m.to?.activity || '?')}</li>`).join('')}
+                        </ul>`
+                    }
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 12px;">
+                <button onclick="respondToProposal('${proposal.id}', 'approved')" 
+                    style="flex: 1; padding: 12px; background: #10b981; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">
+                    ✅ Approve
+                </button>
+                <button onclick="respondToProposal('${proposal.id}', 'rejected')" 
+                    style="flex: 1; padding: 12px; background: #ef4444; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">
+                    ❌ Reject
+                </button>
+            </div>
+        `;
 
         document.body.appendChild(modal);
     }
@@ -2751,7 +3042,12 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
     function showIntegratedToast(message, type = 'info') {
         if (window.showToast) { window.showToast(message, type); return; }
         const toast = document.createElement('div');
-        toast.style.cssText = ``            position: fixed; bottom: 20px; right: 20px;`            background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'};`            color: white; padding: 12px 20px; border-radius: 8px;`            box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 10000;`        `;
+        toast.style.cssText = `
+            position: fixed; bottom: 20px; right: 20px;
+            background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'};
+            color: white; padding: 12px 20px; border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 10000;
+        `;
         toast.textContent = message;
         document.body.appendChild(toast);
         setTimeout(() => toast.remove(), 4000);
@@ -2867,7 +3163,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         getEntryForBlock: window.getEntryForBlock, // From Utils
         getDivisionForBunk: window.getDivisionForBunk, // From Utils
         getSlotTimeRange: window.getSlotTimeRange, // From Utils
-        isSplitTileBlock, expandBlocksForSplitTiles,
+        buildUnifiedTimesFromSkeleton, isSplitTileBlock, expandBlocksForSplitTiles,
         
         // Conflict detection
         checkLocationConflict, checkCrossDivisionConflict, 
