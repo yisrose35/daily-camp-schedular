@@ -1,5 +1,5 @@
 // =============================================================================
-// schedule_orchestrator.js v1.0 — CAMPISTRY SCHEDULE ORCHESTRATOR
+// schedule_orchestrator.js v1.1 — CAMPISTRY SCHEDULE ORCHESTRATOR
 // =============================================================================
 //
 // ★★★ THE SINGLE SOURCE OF TRUTH FOR ALL SCHEDULE OPERATIONS ★★★
@@ -16,32 +16,32 @@
 //
 // DATA FLOW:
 // ┌─────────────────────────────────────────────────────────────────┐
-// │  LOAD:   Cloud → localStorage → window globals → UI            │
-// │  SAVE:   window globals → localStorage → Cloud                 │
-// │  DELETE: Cloud (all records) → localStorage → window → UI      │
+// │  LOAD:   Cloud → localStorage → window globals → UI             │
+// │  SAVE:   window globals → localStorage → Cloud                  │
+// │  DELETE: Cloud (all records) → localStorage → window → UI       │
 // └─────────────────────────────────────────────────────────────────┘
 //
 // EVENTS DISPATCHED:
-// - campistry-orchestrator-ready     : Orchestrator initialized
-// - campistry-schedule-loading       : Starting to load data
-// - campistry-schedule-loaded        : Data loaded and hydrated
-// - campistry-schedule-saved         : Data saved to cloud
-// - campistry-schedule-deleted       : Data deleted
-// - campistry-schedule-error         : An error occurred
+// - campistry-orchestrator-ready      : Orchestrator initialized
+// - campistry-schedule-loading        : Starting to load data
+// - campistry-schedule-loaded         : Data loaded and hydrated
+// - campistry-schedule-saved          : Data saved to cloud
+// - campistry-schedule-deleted        : Data deleted
+// - campistry-schedule-error          : An error occurred
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('🎯 Campistry Schedule Orchestrator v1.0 loading...');
+    console.log('🎯 Campistry Schedule Orchestrator v1.1 loading...');
 
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
 
     const CONFIG = {
-        VERSION: '1.0.0',
+        VERSION: '1.1.0',
         DEBUG: true,
         LOCAL_STORAGE_KEY: 'campDailyData_v1',
         
@@ -196,11 +196,10 @@
             window.leagueAssignments = {};
         }
 
-        // Hydrate unified times
-        if (data.unifiedTimes && data.unifiedTimes.length > 0) {
-            window.unifiedTimes = normalizeUnifiedTimes(data.unifiedTimes);
-            window._unifiedTimesFromCloud = true;
-            log('Hydrated unifiedTimes:', window.unifiedTimes.length, 'slots');
+        // ★ Hydrate divisionTimes (unifiedTimes removed) ★
+        if (data.divisionTimes) {
+            window.divisionTimes = window.DivisionTimesSystem?.deserialize(data.divisionTimes) || data.divisionTimes;
+            log('Hydrated divisionTimes:', Object.keys(window.divisionTimes).length, 'divisions');
         }
 
         // Hydrate rainy day flag
@@ -213,7 +212,7 @@
         return {
             scheduleAssignments: window.scheduleAssignments || {},
             leagueAssignments: window.leagueAssignments || {},
-            unifiedTimes: window.unifiedTimes || [],
+            divisionTimes: window.divisionTimes || {},
             isRainyDay: window.isRainyDay || false
         };
     }
@@ -226,49 +225,15 @@
     }
 
     // =========================================================================
-    // UNIFIED TIMES NORMALIZATION
-    // =========================================================================
-
-    function normalizeUnifiedTimes(times) {
-        if (!times || !Array.isArray(times)) return [];
-        
-        return times.map(t => {
-            // Handle both serialized ISO strings and minute values
-            let startMin = t.startMin;
-            let endMin = t.endMin;
-
-            if (t.start && typeof t.start === 'string' && t.start.includes('T')) {
-                const startDate = new Date(t.start);
-                startMin = startDate.getHours() * 60 + startDate.getMinutes();
-            }
-
-            if (t.end && typeof t.end === 'string' && t.end.includes('T')) {
-                const endDate = new Date(t.end);
-                endMin = endDate.getHours() * 60 + endDate.getMinutes();
-            }
-
-            return {
-                start: t.start,
-                end: t.end,
-                startMin: startMin ?? t.startMin,
-                endMin: endMin ?? t.endMin,
-                label: t.label || ''
-            };
-        });
-    }
-
-    // =========================================================================
     // CORE: LOAD SCHEDULE
     // =========================================================================
 
     /**
      * Load schedule for a date.
-     * 
-     * Priority:
+     * * Priority:
      * 1. Cloud (daily_schedules table) - merges all scheduler records
      * 2. localStorage (fallback if cloud unavailable)
-     * 
-     * After loading, hydrates window globals and updates UI.
+     * * After loading, hydrates window globals and updates UI.
      */
     async function loadSchedule(dateKey, options = {}) {
         if (!dateKey) dateKey = getCurrentDateKey();
@@ -406,8 +371,7 @@
 
     /**
      * Save current schedule to cloud.
-     * 
-     * Flow:
+     * * Flow:
      * 1. Get data from window globals
      * 2. Filter to user's editable divisions
      * 3. Save to localStorage immediately
@@ -482,19 +446,17 @@
 
     /**
      * Delete schedule data.
-     * 
-     * For schedulers: Removes their bunks from ALL records (not just their own)
+     * * For schedulers: Removes their bunks from ALL records (not just their own)
      * For owners/admins: Deletes all records for the date
-     * 
-     * This is the CRITICAL fix - we must remove bunks from other people's records
+     * * This is the CRITICAL fix - we must remove bunks from other people's records
      * because the owner may have saved data that includes everyone's bunks.
      */
     async function deleteSchedule(dateKey, options = {}) {
         if (!dateKey) dateKey = getCurrentDateKey();
 
         const isFullAccess = window.PermissionsDB?.hasFullAccess?.() || 
-                            window.AccessControl?.getCurrentRole?.() === 'owner' ||
-                            window.AccessControl?.getCurrentRole?.() === 'admin';
+                             window.AccessControl?.getCurrentRole?.() === 'owner' ||
+                             window.AccessControl?.getCurrentRole?.() === 'admin';
 
         log('═══════════════════════════════════════════════════════');
         log('DELETE SCHEDULE:', dateKey, isFullAccess ? '(FULL DELETE)' : '(MY DIVISIONS ONLY)');
@@ -564,10 +526,8 @@
 
     /**
      * ★★★ CRITICAL FIX ★★★
-     * 
-     * Delete MY bunks from ALL schedule records.
-     * 
-     * This is necessary because:
+     * * Delete MY bunks from ALL schedule records.
+     * * This is necessary because:
      * - The owner might have saved a record that contains MY bunks
      * - Simply deleting my own record won't remove my bunks from the owner's record
      * - We must iterate through ALL records and surgically remove my bunks
@@ -996,6 +956,6 @@
         setTimeout(initialize, 200);
     }
 
-    console.log('🎯 Campistry Schedule Orchestrator v1.0 loaded');
+    console.log('🎯 Campistry Schedule Orchestrator v1.1 loaded');
 
 })();
