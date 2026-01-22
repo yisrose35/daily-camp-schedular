@@ -569,11 +569,11 @@
                 if (!dateKey) return;
 
                 const data = {
-                    scheduleAssignments: window.scheduleAssignments || {},
-                    leagueAssignments: window.leagueAssignments || {},
-                    unifiedTimes: window.unifiedTimes || [],
-                    isRainyDay: window.isRainyDay || false
-                };
+                scheduleAssignments: window.scheduleAssignments || {},
+                leagueAssignments: window.leagueAssignments || {},
+                unifiedTimes: window.unifiedTimes || [],
+                isRainyDay: window.isRainyDay || false
+            };
 
                 if (window.ScheduleSync?.queueSave) {
                     window.ScheduleSync.queueSave(dateKey, data);
@@ -1029,11 +1029,11 @@
         await new Promise(r => setTimeout(r, 1000));
 
         const data = {
-            scheduleAssignments: window.scheduleAssignments || {},
-            leagueAssignments: window.leagueAssignments || {},
-            unifiedTimes: window.unifiedTimes || [],
-            isRainyDay: window.isRainyDay || false
-        };
+                scheduleAssignments: window.scheduleAssignments || {},
+                leagueAssignments: window.leagueAssignments || {},
+                unifiedTimes: window.unifiedTimes || [],
+                isRainyDay: window.isRainyDay || false
+            };
 
         // Use verified save
         await verifiedScheduleSave(dateKey, data);
