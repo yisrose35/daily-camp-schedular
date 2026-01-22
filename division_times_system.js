@@ -450,35 +450,9 @@
     // BACKWARDS COMPATIBILITY: UNIFIED TIMES BRIDGE
     // =========================================================================
 
-    function buildUnifiedTimesFromDivisionTimes() {
-        const divisionTimes = window.divisionTimes || {};
-        const allTimePoints = new Set();
-
-        // Collect all unique time points
-        Object.values(divisionTimes).forEach(slots => {
-            slots.forEach(slot => {
-                allTimePoints.add(slot.startMin);
-                allTimePoints.add(slot.endMin);
-            });
-        });
-
-        // Sort time points
-        const sorted = [...allTimePoints].sort((a, b) => a - b);
-        
-        // Build unified slots from consecutive time points
-        const unifiedSlots = [];
-        for (let i = 0; i < sorted.length - 1; i++) {
-            unifiedSlots.push({
-                start: minutesToDate(sorted[i]),
-                end: minutesToDate(sorted[i + 1]),
-                startMin: sorted[i],
-                endMin: sorted[i + 1],
-                label: `${minutesToTimeLabel(sorted[i])} - ${minutesToTimeLabel(sorted[i + 1])}`,
-                _isVirtualUnified: true
-            });
-        }
-
-        return unifiedSlots;
+   function mapUnifiedSlotToDivision(unifiedSlotIndex, divisionName) {
+        console.warn('[DEPRECATED] mapUnifiedSlotToDivision - use divisionTimes directly');
+        return -1;
     }
 
     function mapUnifiedSlotToDivision(unifiedSlotIndex, divisionName) {
