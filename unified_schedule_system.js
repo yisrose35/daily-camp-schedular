@@ -2912,13 +2912,15 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         _currentEditContext = null;
     }
 
-    function showIntegratedToast(message, type = 'info') {
+   function showIntegratedToast(message, type) {
+        type = type || 'info';
         if (window.showToast) { window.showToast(message, type); return; }
-        const toast = document.createElement('div');
-        toast.style.cssText = ``            position: fixed; bottom: 20px; right: 20px;`            background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'};`            color: white; padding: 12px 20px; border-radius: 8px;`            box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 10000;`        `;
+        var bgColor = type === 'success' ? '#10b981' : (type === 'error' ? '#ef4444' : '#3b82f6');
+        var toast = document.createElement('div');
+        toast.style.cssText = 'position: fixed; bottom: 20px; right: 20px; background: ' + bgColor + '; color: white; padding: 12px 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 10000;';
         toast.textContent = message;
         document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 4000);
+        setTimeout(function() { toast.remove(); }, 4000);
     }
 
     // =========================================================================
