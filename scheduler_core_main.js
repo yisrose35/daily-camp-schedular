@@ -893,10 +893,8 @@
         
         if (window.DivisionTimesSystem) {
             window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
-            // ★★★ v17.5 FIX: Build proper unifiedTimes (not empty) ★★★
-            window.unifiedTimes = window.DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes(window.divisionTimes);
             console.log(`[STEP 1] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
-            console.log(`[STEP 1] Virtual unifiedTimes: ${window.unifiedTimes.length} slots`);
+        }
         } else {
             console.warn('[STEP 1] DivisionTimesSystem not loaded, using legacy grid');
             const timePoints = new Set([540, 960]);
