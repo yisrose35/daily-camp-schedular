@@ -690,7 +690,43 @@
         
         return { fixed: fixedCount, errors: errorCount };
     }
-
+function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
+    if (!divisionTimes || Object.keys(divisionTimes).length === 0) {
+        return [];
+    }
+    
+    const timePoints = new Set();
+    
+    Object.values(divisionTimes).forEach(slots => {
+        (slots || []).forEach(slot => {
+            if (slot.startMin !== undefined) timePoints.add(slot.startMin);
+            if (slot.endMin !== undefined) timePoints.add(slot.endMin);
+        });
+    });
+    
+    const sortedTimes = [...timePoints].sort((a, b) => a - b);
+    const unifiedTimes = [];
+    
+    for (let i = 0; i < sortedTimes.length - 1; i++) {
+        const startMin = sortedTimes[i];
+        const endMin = sortedTimes[i + 1];
+        
+        if (endMin - startMin < 5) continue;
+        
+        unifiedTimes.push({
+            slotIndex: unifiedTimes.length,
+            startMin: startMin,
+            endMin: endMin,
+            duration: endMin - startMin,
+            label: `${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}`,
+            start: minutesToDate(startMin),
+            end: minutesToDate(endMin)
+        });
+    }
+    
+    log(`Built unified times: ${unifiedTimes.length} slots`);
+    return unifiedTimes;
+}
     /**
      * Fill missing pinned slots with their event data
      */
