@@ -202,12 +202,14 @@
                 ? dateData.leagueAssignments : {};
         }
         
-        // ★ FIX: Build divisionTimes from skeleton if not present ★
+       // ★ FIX: Build divisionTimes from skeleton if not present ★
         if (!window.divisionTimes || Object.keys(window.divisionTimes).length === 0) {
-            const skeleton = getSkeleton(dateKey);
+            // Check all possible skeleton sources
+            const skeleton = window.dailyOverrideSkeleton || getSkeleton(dateKey);
             const divisions = window.divisions || {};
             if (skeleton.length > 0 && window.DivisionTimesSystem) {
                 window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(skeleton, divisions);
+                console.log(`[loadScheduleForDate] Built divisionTimes: ${Object.keys(window.divisionTimes).length} divisions`);
             }
         }
         
