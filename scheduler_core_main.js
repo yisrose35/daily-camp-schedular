@@ -894,7 +894,7 @@
         if (window.DivisionTimesSystem) {
             window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
             console.log(`[STEP 1] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
-        }
+        
         } else {
             console.warn('[STEP 1] DivisionTimesSystem not loaded, using legacy grid');
             const timePoints = new Set([540, 960]);
