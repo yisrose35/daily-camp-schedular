@@ -377,7 +377,7 @@
         if (!records || records.length === 0) return null;
         const mergedAssignments = {};
         const mergedLeagues = {};
-        let masterUnifiedTimes = [];
+       
         let mergedDivisionTimes = {};
         let maxSlots = 0;
         let isRainyDay = false;
@@ -400,12 +400,7 @@
                     mergedLeagues[div] = slots;
                 });
             }
-            // Use longest unifiedTimes
-            const times = data.unifiedTimes || [];
-            if (times.length > maxSlots) {
-                maxSlots = times.length;
-                masterUnifiedTimes = times;
-            }
+            
 
             // ★★★ NEW: Merge divisionTimes ★★★
             if (data.divisionTimes && Object.keys(data.divisionTimes).length > 0) {
@@ -426,7 +421,7 @@
         return {
             scheduleAssignments: mergedAssignments,
             leagueAssignments: mergedLeagues,
-            unifiedTimes: deserializeUnifiedTimes(masterUnifiedTimes),
+           
             divisionTimes: window.DivisionTimesSystem?.deserialize(mergedDivisionTimes) || {}, // ★★★ NEW ★★★
             slotCount: maxSlots,
             isRainyDay,
