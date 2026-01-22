@@ -2707,26 +2707,64 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         });
     }
 
-    function showProposalReviewUI(proposal) {
+   function showProposalReviewUI(proposal) {
         closeIntegratedEditModal();
 
         const overlay = document.createElement('div');
         overlay.id = INTEGRATED_EDIT_OVERLAY_ID;
-        overlay.style.cssText = `position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9998;`;
+        overlay.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9998;';
         document.body.appendChild(overlay);
 
         const modal = document.createElement('div');
         modal.id = PROPOSAL_MODAL_ID;
-        modal.style.cssText = ``            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);`            background: white; border-radius: 12px; padding: 24px;`            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;`            min-width: 500px; max-width: 600px; max-height: 80vh; overflow-y: auto;`        `;
+        modal.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999; min-width: 500px; max-width: 600px; max-height: 80vh; overflow-y: auto;';
 
         const myDivisions = new Set(window.getMyDivisions());
-        const myMoves = (proposal.reassignments || []).filter(r => myDivisions.has(r.division));
+        const myMoves = (proposal.reassignments || []).filter(function(r) { return myDivisions.has(r.division); });
         const claim = proposal.claim || {};
 
-        modal.innerHTML = ``            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">`                <h2 style="margin: 0; color: #1e40af;">📋 Proposal Review</h2>`                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>`            </div>``            <div style="background: #eff6ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">`                <div style="font-weight: 500; color: #1e40af;">Claim Request</div>`                <div style="color: #3b82f6; margin-top: 4px;">`                    <strong>${window.escapeHtml(claim.division || 'Unknown')}</strong> wants `                    <strong>${window.escapeHtml(claim.field || 'Unknown')}</strong> `                    for <strong>${window.escapeHtml(claim.activity || 'Unknown')}</strong>`                </div>`                <div style="color: #6b7280; font-size: 0.9rem; margin-top: 4px;">`                    Date: ${proposal.date_key || 'Unknown'}`                </div>`            </div>``            <div style="margin-bottom: 16px;">`                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Changes to your bunks:</div>`                <div style="background: ${myMoves.length > 0 ? '#fef3c7' : '#f0fdf4'}; border-radius: 8px; padding: 12px;">`                    ${myMoves.length === 0 ? `                        '<div style="color: #166534;">✓ No direct changes to your bunks</div>' :`                        `<ul style="margin: 0; padding-left: 20px; color: #92400e;">`                            ${myMoves.map(m => `<li><strong>${window.escapeHtml(m.bunk)}</strong>: ${window.escapeHtml(m.from?.activity || '?')} → ${window.escapeHtml(m.to?.activity || '?')}</li>`).join('')}`                        </ul>``                    }`                </div>`            </div>``            <div style="display: flex; gap: 12px;">`                <button onclick="respondToProposal('${proposal.id}', 'approved')" `                    style="flex: 1; padding: 12px; background: #10b981; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">`                    ✅ Approve`                </button>`                <button onclick="respondToProposal('${proposal.id}', 'rejected')" `                    style="flex: 1; padding: 12px; background: #ef4444; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">`                    ❌ Reject`                </button>`            </div>`        `;
+        var myMovesHtml;
+        if (myMoves.length === 0) {
+            myMovesHtml = '<div style="color: #166534;">✓ No direct changes to your bunks</div>';
+        } else {
+            myMovesHtml = '<ul style="margin: 0; padding-left: 20px; color: #92400e;">' +
+                myMoves.map(function(m) {
+                    return '<li><strong>' + window.escapeHtml(m.bunk) + '</strong>: ' + 
+                           window.escapeHtml(m.from?.activity || '?') + ' → ' + 
+                           window.escapeHtml(m.to?.activity || '?') + '</li>';
+                }).join('') +
+            '</ul>';
+        }
+
+        modal.innerHTML = '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">' +
+            '<h2 style="margin: 0; color: #1e40af;">📋 Proposal Review</h2>' +
+            '<button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>' +
+        '</div>' +
+        '<div style="background: #eff6ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">' +
+            '<div style="font-weight: 500; color: #1e40af;">Claim Request</div>' +
+            '<div style="color: #3b82f6; margin-top: 4px;">' +
+                '<strong>' + window.escapeHtml(claim.division || 'Unknown') + '</strong> wants ' +
+                '<strong>' + window.escapeHtml(claim.field || 'Unknown') + '</strong> ' +
+                'for <strong>' + window.escapeHtml(claim.activity || 'Unknown') + '</strong>' +
+            '</div>' +
+            '<div style="color: #6b7280; font-size: 0.9rem; margin-top: 4px;">' +
+                'Date: ' + (proposal.date_key || 'Unknown') +
+            '</div>' +
+        '</div>' +
+        '<div style="margin-bottom: 16px;">' +
+            '<div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Changes to your bunks:</div>' +
+            '<div style="background: ' + (myMoves.length > 0 ? '#fef3c7' : '#f0fdf4') + '; border-radius: 8px; padding: 12px;">' +
+                myMovesHtml +
+            '</div>' +
+        '</div>' +
+        '<div style="display: flex; gap: 12px;">' +
+            '<button onclick="respondToProposal(\'' + proposal.id + '\', \'approved\')" style="flex: 1; padding: 12px; background: #10b981; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">✅ Approve</button>' +
+            '<button onclick="respondToProposal(\'' + proposal.id + '\', \'rejected\')" style="flex: 1; padding: 12px; background: #ef4444; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">❌ Reject</button>' +
+        '</div>';
 
         document.body.appendChild(modal);
     }
+
 
     async function respondToProposal(proposalId, response) {
         const supabase = window.CampistryDB?.getClient?.() || window.supabase;
