@@ -450,10 +450,7 @@
     // BACKWARDS COMPATIBILITY: UNIFIED TIMES BRIDGE
     // =========================================================================
 
-   function mapUnifiedSlotToDivision(unifiedSlotIndex, divisionName) {
-        console.warn('[DEPRECATED] mapUnifiedSlotToDivision - use divisionTimes directly');
-        return -1;
-    }
+  
 
     function mapUnifiedSlotToDivision(unifiedSlotIndex, divisionName) {
         const unifiedTimes = window.unifiedTimes || [];
