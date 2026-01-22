@@ -1,17 +1,13 @@
 // ============================================================================
-// scheduler_core_utils.js (FIXED v7.1 - TYPE COERCION FIX FOR BUNK LOOKUPS)
+// scheduler_core_utils.js (FIXED v7.3 - RBAC & TYPE COERCION)
 //
-// PART 1 of 3: THE FOUNDATION
+// PART 1: THE FOUNDATION & CONSOLIDATED UTILITIES
 //
-// CRITICAL UPDATE v7.1:
-// - ★★★ FIX: getDivisionForBunk now uses type-coerced comparison ★★★
-// - ★★★ FIX: findSlotsForRange bunk lookup uses type-coerced comparison ★★★
-// - This fixes the issue where bunks stored as numbers weren't found when
-//   looked up as strings, causing getDivisionForBunk to return null
-// - Division-aware lock checking for elective tiles
-// - canBlockFit() now passes division context to GlobalFieldLocks
-// - Elective tiles can lock fields for OTHER divisions while allowing their own
-// - Added disabled fields check (e.g. Rainy Day) to core fit functions
+// CRITICAL UPDATES:
+// - v7.1: Type-coerced comparisons for bunk lookups (fixes number/string mismatch)
+// - v7.2: Division-aware lock checking & string coercion for division lookups
+// - v7.3: RBAC FIX - Uses window.AccessControl instead of PermissionsDB
+//         for canEditBunk and getEditableBunks.
 // ============================================================================
 
 (function () {
@@ -101,25 +97,24 @@
         if (startMin == null || endMin == null) return slots;
 
         // ★★★ NEW: Division-specific lookup ★★★
-       if (divisionOrBunk && window.divisionTimes) {
-    let divName = String(divisionOrBunk);
+        if (divisionOrBunk && window.divisionTimes) {
+            let divName = String(divisionOrBunk);
 
-    // ★★★ FIX: Check if it's already a DIVISION name FIRST ★★★
-    if (!window.divisionTimes[divName]) {
-        // Not a division, check if it's a bunk name
-        const divisions = window.divisions || {};
-        const bunkStr = String(divisionOrBunk);
-        for (const [dName, dData] of Object.entries(divisions)) {
-            if (dData.bunks?.some(b => String(b) === bunkStr)) {
-                divName = dName;
-                break;
+            // ★★★ FIX: Check if it's already a DIVISION name FIRST ★★★
+            if (!window.divisionTimes[divName]) {
+                // Not a division, check if it's a bunk name
+                const divisions = window.divisions || {};
+                const bunkStr = String(divisionOrBunk);
+                for (const [dName, dData] of Object.entries(divisions)) {
+                    if (dData.bunks?.some(b => String(b) === bunkStr)) {
+                        divName = dName;
+                        break;
+                    }
+                }
             }
-        }
-    }
 
             // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-
-const divSlots = window.divisionTimes[divName];
+            const divSlots = window.divisionTimes[divName];
             if (divSlots && divSlots.length > 0) {
                 for (let i = 0; i < divSlots.length; i++) {
                     const slot = divSlots[i];
@@ -156,12 +151,6 @@ const divSlots = window.divisionTimes[divName];
     Utils.getDivisionSlots = function(divisionName) {
         return window.divisionTimes?.[divisionName] || [];
     };
-
-    /**
-     * ★★★ DEPRECATED: Use the consolidated version below (kept for reference) ★★★
-     * This simpler version is overwritten by the fuller version in Section 2
-     */
-    // Utils.getDivisionForBunk = function(bunkName) { ... }
 
     Utils.getBlockTimeRange = function (block) {
         let blockStartMin = (typeof block.startTime === "number") ? block.startTime : null;
@@ -982,34 +971,22 @@ const divSlots = window.divisionTimes[divName];
             console.log(`  ${count} players: ${status} ${check.reason || ''}`);
         });
     };
-// ============================================================================
-// CONSOLIDATED UTILITY FUNCTIONS - ADD TO scheduler_core_utils.js
-// ============================================================================
-// 
-// These functions were duplicated across:
-// - unified_schedule_system.js
-// - post_edit_system.js  
-// - division_times_system.js
-// - division_times_integration.js
-//
-// After adding these to scheduler_core_utils.js, update the other files to use:
-//   window.SchedulerCoreUtils.functionName() or Utils.functionName()
-//
-// ============================================================================
 
+    // ============================================================================
+    // CONSOLIDATED UTILITY FUNCTIONS (INTEGRATED)
+    // ============================================================================
+    
     // =================================================================
-    // 2. DIVISION-AWARE CORE FUNCTIONS (CONSOLIDATED)
+    // 9. DIVISION-AWARE CORE FUNCTIONS (CONSOLIDATED)
     // =================================================================
 
     /**
      * Get the division name for a bunk
      * SINGLE SOURCE OF TRUTH - remove from all other files
-     * 
-     * ★★★ FIX v7.1: Uses type-coerced comparison to handle number/string mismatch ★★★
+     * * ★★★ FIX v7.1: Uses type-coerced comparison to handle number/string mismatch ★★★
      * This fixes the issue where bunks stored as numbers (e.g., [9, 10, 11])
      * weren't found when looked up as strings (e.g., "9")
-     * 
-     * @param {string|number} bunkName - The bunk to look up
+     * * @param {string|number} bunkName - The bunk to look up
      * @returns {string|null} Division name or null if not found
      */
     Utils.getDivisionForBunk = function(bunkName) {
@@ -1043,11 +1020,11 @@ const divSlots = window.divisionTimes[divName];
      * * @param {string} divisionName - Division name
      * @returns {Array} Array of slot objects with startMin, endMin, label
      */
-   Utils.getSlotsForDivision = function(divisionName) {
-    // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-    const divNameStr = String(divisionName);
-    return window.divisionTimes?.[divNameStr] || [];
-};
+    Utils.getSlotsForDivision = function(divisionName) {
+        // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
+        const divNameStr = String(divisionName);
+        return window.divisionTimes?.[divNameStr] || [];
+    };
 
     /**
      * Get slot at a specific index for a division
@@ -1056,10 +1033,10 @@ const divSlots = window.divisionTimes[divName];
      * @returns {Object|null} Slot object or null
      */
     Utils.getSlotAtIndex = function(divisionName, slotIndex) {
-    // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-    const divNameStr = String(divisionName);
-    return window.divisionTimes?.[divNameStr]?.[slotIndex] || null;
-};
+        // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
+        const divNameStr = String(divisionName);
+        return window.divisionTimes?.[divNameStr]?.[slotIndex] || null;
+    };
 
     /**
      * Get time range for a slot (DIVISION-AWARE)
@@ -1078,8 +1055,8 @@ const divSlots = window.divisionTimes[divName];
             if (possibleDiv) divName = possibleDiv;
             
             // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-const divNameStr = String(divName);
-const slot = window.divisionTimes[divNameStr]?.[slotIdx];
+            const divNameStr = String(divName);
+            const slot = window.divisionTimes[divNameStr]?.[slotIdx];
             if (slot) {
                 return {
                     startMin: slot.startMin,
@@ -1256,26 +1233,26 @@ const slot = window.divisionTimes[divNameStr]?.[slotIdx];
         }
         
         // Method 2: Find slot that starts within the requested range
-    for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
-        const slot = divSlots[slotIdx];
-        if (slot.startMin >= startMin && slot.startMin < endMin) {
-            return { entry: bunkData[slotIdx] || null, slotIdx };
-        }
-    }
-    
-    // ★★★ NEW Method 3: Find slot that OVERLAPS the requested range ★★★
-    for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
-        const slot = divSlots[slotIdx];
-        const hasOverlap = !(slot.endMin <= startMin || slot.startMin >= endMin);
-        if (hasOverlap) {
-            const entry = bunkData[slotIdx];
-            if (entry && !entry.continuation) {
-                return { entry, slotIdx };
+        for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
+            const slot = divSlots[slotIdx];
+            if (slot.startMin >= startMin && slot.startMin < endMin) {
+                return { entry: bunkData[slotIdx] || null, slotIdx };
             }
         }
-    }
-    
-    // Method 4: Check embedded time in entry
+
+        // ★★★ NEW Method 3: Find slot that OVERLAPS the requested range ★★★
+        for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
+            const slot = divSlots[slotIdx];
+            const hasOverlap = !(slot.endMin <= startMin || slot.startMin >= endMin);
+            if (hasOverlap) {
+                const entry = bunkData[slotIdx];
+                if (entry && !entry.continuation) {
+                    return { entry, slotIdx };
+                }
+            }
+        }
+
+        // Method 4: Check embedded time in entry
         for (let slotIdx = 0; slotIdx < bunkData.length; slotIdx++) {
             const entry = bunkData[slotIdx];
             if (!entry || entry.continuation) continue;
@@ -1312,7 +1289,7 @@ const slot = window.divisionTimes[divNameStr]?.[slotIdx];
     };
 
     // =================================================================
-    // 3. CROSS-DIVISION CONFLICT DETECTION (CONSOLIDATED)
+    // 10. CROSS-DIVISION CONFLICT DETECTION (CONSOLIDATED)
     // =================================================================
 
     /**
@@ -1434,7 +1411,7 @@ const slot = window.divisionTimes[divNameStr]?.[slotIdx];
     };
 
     // =================================================================
-    // 4. TIME FORMATTING UTILITIES (CONSOLIDATED)
+    // 11. TIME FORMATTING UTILITIES (CONSOLIDATED)
     // =================================================================
 
     /**
@@ -1461,7 +1438,7 @@ const slot = window.divisionTimes[divNameStr]?.[slotIdx];
     };
 
     // =================================================================
-    // 5. ACTIVITY PROPERTIES UTILITIES (CONSOLIDATED)
+    // 12. ACTIVITY PROPERTIES UTILITIES (CONSOLIDATED)
     // =================================================================
 
     /**
@@ -1539,7 +1516,7 @@ const slot = window.divisionTimes[divNameStr]?.[slotIdx];
     };
 
     // =================================================================
-    // 6. FIELD USAGE TRACKING (CONSOLIDATED)
+    // 13. FIELD USAGE TRACKING (CONSOLIDATED)
     // =================================================================
 
     /**
@@ -1632,7 +1609,7 @@ const slot = window.divisionTimes[divNameStr]?.[slotIdx];
     };
 
     // =================================================================
-    // 7. BUNKS & DIVISIONS HELPERS (CONSOLIDATED)
+    // 14. BUNKS & DIVISIONS HELPERS (CONSOLIDATED)
     // =================================================================
 
     /**
@@ -1657,35 +1634,69 @@ const slot = window.divisionTimes[divNameStr]?.[slotIdx];
 
     /**
      * Check if user can edit a specific bunk
+     * ★★★ FIX v7.3: Use AccessControl instead of deprecated PermissionsDB ★★★
      */
     Utils.canEditBunk = function(bunkName) {
+        // Delegate to AccessControl (the correct RBAC system)
+        if (window.AccessControl?.canEditBunk) {
+            return window.AccessControl.canEditBunk(bunkName);
+        }
+        
+        // Fallback: owner/admin can edit all
+        const role = window.AccessControl?.getCurrentRole?.();
+        if (role === 'owner' || role === 'admin') return true;
+        
+        // Fallback check for old PermissionsDB
         if (window.PermissionsDB?.canEditBunk) {
             return window.PermissionsDB.canEditBunk(bunkName);
         }
         
-        // Fallback: can edit all if no RBAC
+        // No RBAC = allow all
         return true;
     };
 
     /**
      * Get all editable bunks for current user
+     * ★★★ FIX v7.3: Use AccessControl instead of deprecated PermissionsDB ★★★
      */
     Utils.getEditableBunks = function() {
+        // Delegate to AccessControl
+        const editableDivisions = window.AccessControl?.getEditableDivisions?.() || [];
+        
+        // If we have editable divisions, get bunks from them
+        if (editableDivisions.length > 0) {
+            const divisions = window.divisions || {};
+            const bunks = [];
+            for (const divName of editableDivisions) {
+                const divInfo = divisions[divName] || divisions[String(divName)];
+                if (divInfo?.bunks) {
+                    bunks.push(...divInfo.bunks.map(String));
+                }
+            }
+            return bunks;
+        }
+        
+        // Fallback check for old PermissionsDB
         if (window.PermissionsDB?.getEditableBunks) {
             return window.PermissionsDB.getEditableBunks();
         }
         
-        // Fallback: all bunks
-        const allBunks = [];
-        const divisions = window.divisions || {};
-        for (const divData of Object.values(divisions)) {
-            allBunks.push(...(divData.bunks || []));
+        // Fallback: owner/admin or no RBAC -> all bunks
+        const role = window.AccessControl?.getCurrentRole?.();
+        if (!window.AccessControl || role === 'owner' || role === 'admin') {
+            const allBunks = [];
+            const divisions = window.divisions || {};
+            for (const divData of Object.values(divisions)) {
+                allBunks.push(...(divData.bunks || []).map(String));
+            }
+            return allBunks;
         }
-        return allBunks;
+        
+        return [];
     };
 
     // =================================================================
-    // 8. ESCAPE/FORMAT HELPERS (CONSOLIDATED)
+    // 15. ESCAPE/FORMAT HELPERS (CONSOLIDATED)
     // =================================================================
 
     /**
@@ -1715,7 +1726,7 @@ const slot = window.divisionTimes[divNameStr]?.[slotIdx];
     };
 
     // =================================================================
-    // 9. LEGACY COMPATIBILITY LAYER
+    // 16. LEGACY COMPATIBILITY LAYER
     // =================================================================
     
     // These ensure old code still works while we migrate
@@ -1736,6 +1747,9 @@ const slot = window.divisionTimes[divNameStr]?.[slotIdx];
     window.minutesToTimeLabel = Utils.minutesToTimeLabel;
     window.escapeHtml = Utils.escapeHtml;
     window.formatEntry = Utils.formatEntry;
+    
+    // ★★★ FIX v7.3: Add minutesToTimeString to exports ★★★
+    window.minutesToTimeString = Utils.minutesToTimeString;
 
     // DivisionTimesSystem bridge (for code using window.DivisionTimesSystem)
     if (!window.DivisionTimesSystem) {
@@ -1757,5 +1771,7 @@ const slot = window.divisionTimes[divNameStr]?.[slotIdx];
         isReserved: Utils.isFieldReserved,
         parseTimeToMinutes: Utils.parseTimeToMinutes
     };
+
+    console.log("✅ SchedulerCoreUtils v7.3 Loaded (RBAC Fixed)");
 
 })();
