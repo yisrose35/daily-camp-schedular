@@ -1,16 +1,6 @@
 // =============================================================================
-// unified_schedule_system.js v5.0.0 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
+// unified_schedule_system.js v4.0.5 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
 // =============================================================================
-//
-// COMPLETE REWRITE - Fixed all identified issues:
-// ✅ Fixed broken template literals in HTML generation
-// ✅ Fixed missing null safety checks throughout
-// ✅ Fixed utility function references (consistent window.* pattern)
-// ✅ Fixed race conditions in edit operations
-// ✅ Fixed divisionTimes/unifiedTimes confusion
-// ✅ Fixed modal HTML string concatenation
-// ✅ Added comprehensive error handling
-// ✅ Consolidated redundant code
 //
 // This file REPLACES ALL of the following:
 // ❌ scheduler_ui.js
@@ -21,41 +11,41 @@
 // ❌ post_generation_edit_system.js (NOW INTEGRATED)
 // ❌ pinned_activity_preservation.js (NOW INTEGRATED)
 //
+// CRITICAL FIXES & FEATURES:
+// ✅ v4.0.2: CROSS-DIVISION BYPASS SAVE - updates correct scheduler records directly
+// ✅ v4.0.3: INTEGRATED EDIT SYSTEM with multi-bunk support
+// ✅ v4.0.3: CASCADE RESOLUTION for field priority claims
+// ✅ v4.0.3: PROPOSAL SYSTEM for cross-division changes
+// ✅ v4.0.3: AUTO-BACKUP before complex operations
+// ✅ v4.0.4: DIVISION TIMES SUPPORT in time mapping utilities
+// ✅ v4.0.5: REFACTOR - Core utilities moved to Shared Utils
+//
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('📅 Unified Schedule System v5.0.0 loading...');
+    console.log('📅 Unified Schedule System v4.0.5 loading...');
 
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
     
-    const VERSION = '5.0.0';
     const RENDER_DEBOUNCE_MS = 150;
     let DEBUG = false;
     const HIDE_VERSION_TOOLBAR = true;
-    
-    // Modal IDs
     const MODAL_ID = 'post-edit-modal';
     const OVERLAY_ID = 'post-edit-overlay';
+    const TRANSITION_TYPE = window.TRANSITION_TYPE || "Transition/Buffer";
+    
+    // v4.0.3 New Configs
     const CLAIM_MODAL_ID = 'field-claim-modal';
     const CLAIM_OVERLAY_ID = 'field-claim-overlay';
     const INTEGRATED_EDIT_MODAL_ID = 'integrated-edit-modal';
     const INTEGRATED_EDIT_OVERLAY_ID = 'integrated-edit-overlay';
     const PROPOSAL_MODAL_ID = 'proposal-review-modal';
-    
-    // Auto-backup
     const AUTO_BACKUP_PREFIX = 'Auto-backup before';
     const MAX_AUTO_BACKUPS_PER_DATE = 10;
-    
-    // Transition type
-    const TRANSITION_TYPE = window.TRANSITION_TYPE || "Transition/Buffer";
-    
-    // =========================================================================
-    // STATE
-    // =========================================================================
     
     let _lastRenderTime = 0;
     let _renderQueued = false;
@@ -63,7 +53,7 @@
     let _initialized = false;
     let _cloudHydrated = false;
 
-    // Edit state
+    // v4.0.3 State
     let _pendingProposals = [];
     let _claimInProgress = false;
     let _currentEditContext = null;
@@ -71,269 +61,12 @@
     let _multiBunkPreviewResult = null;
     let _lastPreviewResult = null;
 
-    // RBAC bypass state
+    // =========================================================================
+    // RBAC VIEW BYPASS FOR SMART REGENERATION
+    // =========================================================================
+
     let _bypassRBACViewEnabled = false;
     let _bypassHighlightBunks = new Set();
-
-    // Pinned activity state
-    let _pinnedSnapshot = {};
-    let _pinnedFieldLocks = [];
-
-    // =========================================================================
-    // ROTATION CONFIGURATION
-    // =========================================================================
-    
-    const ROTATION_CONFIG = {
-        SAME_DAY_PENALTY: Infinity,
-        YESTERDAY_PENALTY: 5000,
-        TWO_DAYS_AGO_PENALTY: 3000,
-        THREE_DAYS_AGO_PENALTY: 2000,
-        FOUR_TO_SEVEN_DAYS_PENALTY: 800,
-        WEEK_PLUS_PENALTY: 200,
-        HIGH_FREQUENCY_PENALTY: 1500,
-        ABOVE_AVERAGE_PENALTY: 500,
-        NEVER_DONE_BONUS: -1500,
-        UNDER_UTILIZED_BONUS: -800,
-        ADJACENT_BUNK_BONUS: -100,
-        NEARBY_BUNK_BONUS: -30
-    };
-
-    // =========================================================================
-    // UTILITY FUNCTIONS
-    // =========================================================================
-
-    function debugLog(...args) {
-        if (DEBUG) console.log('[UnifiedSchedule]', ...args);
-    }
-
-    function escapeHtml(str) {
-        if (!str) return '';
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-    }
-
-    function minutesToTimeStr(minutes) {
-        if (minutes == null || isNaN(minutes)) return '--:--';
-        const hours = Math.floor(minutes / 60);
-        const mins = minutes % 60;
-        const h12 = hours > 12 ? hours - 12 : (hours === 0 ? 12 : hours);
-        const ampm = hours >= 12 ? 'PM' : 'AM';
-        return `${h12}:${mins.toString().padStart(2, '0')} ${ampm}`;
-    }
-
-    function parseTimeToMinutes(str) {
-        if (typeof str === 'number') return str;
-        if (!str || typeof str !== 'string') return null;
-        
-        let s = str.trim().toLowerCase();
-        let meridian = null;
-        
-        if (s.endsWith('am') || s.endsWith('pm')) {
-            meridian = s.slice(-2);
-            s = s.slice(0, -2).trim();
-        } else if (s.includes(' am') || s.includes(' pm')) {
-            meridian = s.includes(' am') ? 'am' : 'pm';
-            s = s.replace(/ (am|pm)/i, '').trim();
-        }
-        
-        const parts = s.split(':');
-        let hours = parseInt(parts[0], 10);
-        const minutes = parts[1] ? parseInt(parts[1], 10) : 0;
-        
-        if (isNaN(hours)) return null;
-        
-        if (meridian === 'pm' && hours < 12) hours += 12;
-        if (meridian === 'am' && hours === 12) hours = 0;
-        
-        return hours * 60 + minutes;
-    }
-
-    function fieldLabel(field) {
-        if (!field) return '';
-        if (typeof field === 'object') return field.name || '';
-        return String(field);
-    }
-
-    function getDateKey() {
-        return window.currentScheduleDate || 
-               window.currentDate || 
-               document.getElementById('datePicker')?.value ||
-               new Date().toISOString().split('T')[0];
-    }
-
-    // =========================================================================
-    // DIVISION & BUNK UTILITIES
-    // =========================================================================
-
-    function getDivisionForBunk(bunk) {
-        // First check if SchedulerCoreUtils has this function
-        if (window.SchedulerCoreUtils?.getDivisionForBunk) {
-            return window.SchedulerCoreUtils.getDivisionForBunk(bunk);
-        }
-        
-        const divisions = window.divisions || {};
-        for (const [divName, divData] of Object.entries(divisions)) {
-            if (divData.bunks?.includes(bunk)) {
-                return divName;
-            }
-        }
-        return null;
-    }
-
-    function getEditableBunks() {
-        const myDivisions = window.getMyDivisions?.() || 
-                           window.AccessControl?.getMyDivisions?.() || 
-                           Object.keys(window.divisions || {});
-        const editableBunks = new Set();
-        const divisions = window.divisions || {};
-        
-        for (const divName of myDivisions) {
-            const divData = divisions[divName];
-            if (divData?.bunks) {
-                divData.bunks.forEach(b => editableBunks.add(b));
-            }
-        }
-        return editableBunks;
-    }
-
-    function canEditBunk(bunk) {
-        if (window.canEditBunk) return window.canEditBunk(bunk);
-        return getEditableBunks().has(bunk);
-    }
-
-    function getMyDivisions() {
-        return window.getMyDivisions?.() || 
-               window.AccessControl?.getMyDivisions?.() || 
-               Object.keys(window.divisions || {});
-    }
-
-    // =========================================================================
-    // SLOT UTILITIES
-    // =========================================================================
-
-    function findSlotsForRange(startMin, endMin, bunkOrDivOrTimes) {
-        // Use SchedulerCoreUtils if available
-        if (window.SchedulerCoreUtils?.findSlotsForRange) {
-            return window.SchedulerCoreUtils.findSlotsForRange(startMin, endMin, bunkOrDivOrTimes);
-        }
-        
-        // Fallback implementation
-        let times = [];
-        
-        if (typeof bunkOrDivOrTimes === 'string') {
-            // It's a division name or bunk name
-            const divName = window.divisions?.[bunkOrDivOrTimes] ? bunkOrDivOrTimes : getDivisionForBunk(bunkOrDivOrTimes);
-            times = window.divisionTimes?.[divName] || window.unifiedTimes || [];
-        } else if (Array.isArray(bunkOrDivOrTimes)) {
-            times = bunkOrDivOrTimes;
-        } else {
-            times = window.unifiedTimes || [];
-        }
-        
-        const slots = [];
-        for (let i = 0; i < times.length; i++) {
-            const slot = times[i];
-            const slotStart = slot.startMin ?? getSlotStartMin(slot);
-            const slotEnd = slot.endMin ?? getSlotEndMin(slot);
-            
-            if (slotStart != null && slotEnd != null) {
-                // Overlap check
-                if (slotStart < endMin && slotEnd > startMin) {
-                    slots.push(i);
-                }
-            }
-        }
-        return slots;
-    }
-
-    function getSlotStartMin(slot) {
-        if (!slot) return null;
-        if (slot.startMin !== undefined) return slot.startMin;
-        if (slot.start instanceof Date) return slot.start.getHours() * 60 + slot.start.getMinutes();
-        if (slot.start) {
-            const d = new Date(slot.start);
-            return d.getHours() * 60 + d.getMinutes();
-        }
-        return null;
-    }
-
-    function getSlotEndMin(slot) {
-        if (!slot) return null;
-        if (slot.endMin !== undefined) return slot.endMin;
-        if (slot.end instanceof Date) return slot.end.getHours() * 60 + slot.end.getMinutes();
-        if (slot.end) {
-            const d = new Date(slot.end);
-            return d.getHours() * 60 + d.getMinutes();
-        }
-        return null;
-    }
-
-    function getSlotTimeRange(slotIdx, bunkOrDiv) {
-        if (window.SchedulerCoreUtils?.getSlotTimeRange) {
-            return window.SchedulerCoreUtils.getSlotTimeRange(slotIdx, bunkOrDiv);
-        }
-        
-        const divName = typeof bunkOrDiv === 'string' && window.divisions?.[bunkOrDiv] 
-            ? bunkOrDiv 
-            : getDivisionForBunk(bunkOrDiv);
-        const divSlots = window.divisionTimes?.[divName] || window.unifiedTimes || [];
-        const slot = divSlots[slotIdx];
-        
-        if (!slot) return { startMin: 0, endMin: 0, label: '' };
-        
-        return {
-            startMin: slot.startMin ?? getSlotStartMin(slot),
-            endMin: slot.endMin ?? getSlotEndMin(slot),
-            label: slot.label || `${minutesToTimeStr(slot.startMin)} - ${minutesToTimeStr(slot.endMin)}`
-        };
-    }
-
-    function getEntryForBlock(bunk, startMin, endMin, unifiedTimes) {
-        if (window.SchedulerCoreUtils?.getEntryForBlock) {
-            return window.SchedulerCoreUtils.getEntryForBlock(bunk, startMin, endMin, unifiedTimes);
-        }
-        
-        const assignments = window.scheduleAssignments || {};
-        if (!assignments[bunk]) {
-            return { entry: null, slotIdx: -1 };
-        }
-        
-        const bunkData = assignments[bunk];
-        const divName = getDivisionForBunk(bunk);
-        const divSlots = window.divisionTimes?.[divName] || unifiedTimes || [];
-        
-        // Method 1: Exact time match
-        for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
-            const slot = divSlots[slotIdx];
-            if (slot.startMin === startMin && slot.endMin === endMin) {
-                return { entry: bunkData[slotIdx] || null, slotIdx };
-            }
-        }
-        
-        // Method 2: Slot starts within range
-        for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
-            const slot = divSlots[slotIdx];
-            if (slot.startMin >= startMin && slot.startMin < endMin) {
-                return { entry: bunkData[slotIdx] || null, slotIdx };
-            }
-        }
-        
-        // Method 3: Overlap
-        for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
-            const slot = divSlots[slotIdx];
-            const hasOverlap = !(slot.endMin <= startMin || slot.startMin >= endMin);
-            if (hasOverlap) {
-                return { entry: bunkData[slotIdx] || null, slotIdx };
-            }
-        }
-        
-        return { entry: null, slotIdx: -1 };
-    }
-
-    // =========================================================================
-    // RBAC VIEW BYPASS
-    // =========================================================================
 
     function enableBypassRBACView(modifiedBunks = []) {
         console.log('[UnifiedSchedule] 👁️ RBAC view bypass ENABLED');
@@ -376,69 +109,110 @@
     }
 
     // =========================================================================
-    // DATA LOADING & STORAGE
+    // ROTATION CONFIGURATION (for smart regeneration)
     // =========================================================================
+    
+    const ROTATION_CONFIG = {
+        SAME_DAY_PENALTY: Infinity,
+        YESTERDAY_PENALTY: 5000,
+        TWO_DAYS_AGO_PENALTY: 3000,
+        THREE_DAYS_AGO_PENALTY: 2000,
+        FOUR_TO_SEVEN_DAYS_PENALTY: 800,
+        WEEK_PLUS_PENALTY: 200,
+        HIGH_FREQUENCY_PENALTY: 1500,
+        ABOVE_AVERAGE_PENALTY: 500,
+        NEVER_DONE_BONUS: -1500,
+        UNDER_UTILIZED_BONUS: -800,
+        ADJACENT_BUNK_BONUS: -100,
+        NEARBY_BUNK_BONUS: -30
+    };
+
+    // =========================================================================
+    // PINNED ACTIVITY STORAGE
+    // =========================================================================
+    
+    let _pinnedSnapshot = {};
+    let _pinnedFieldLocks = [];
+
+    // =========================================================================
+    // UTILITIES
+    // =========================================================================
+
+    function debugLog(...args) {
+        if (DEBUG) console.log('[UnifiedSchedule]', ...args);
+    }
+
+    // =========================================================================
+    // HIDE VERSION TOOLBAR
+    // =========================================================================
+    
+    function hideVersionToolbar() {
+        if (!HIDE_VERSION_TOOLBAR) return;
+        const toolbar = document.getElementById('version-toolbar-container');
+        if (toolbar) {
+            toolbar.style.display = 'none';
+            const parent = toolbar.parentElement;
+            if (parent && parent.children.length === 1) parent.style.display = 'none';
+            debugLog('Hidden version toolbar');
+        }
+    }
+
+    // =========================================================================
+    // DATA LOADING - CLOUD-AWARE
+    // =========================================================================
+
+    function getDateKey() {
+        return window.currentScheduleDate || new Date().toISOString().split('T')[0];
+    }
 
     function loadDailyData() {
         try {
             const raw = localStorage.getItem('campDailyData_v1');
-            return raw ? JSON.parse(raw) : {};
+            if (raw) return JSON.parse(raw);
         } catch (e) {
             console.error('[UnifiedSchedule] Error loading daily data:', e);
-            return {};
         }
+        return {};
     }
 
     function loadScheduleForDate(dateKey) {
-        // Skip if post-edit in progress
         if (window._postEditInProgress) {
-            debugLog('Skipping load - post-edit in progress');
-            return {
-                scheduleAssignments: window.scheduleAssignments || {},
-                leagueAssignments: window.leagueAssignments || {},
-                unifiedTimes: window.unifiedTimes || [],
-                skeleton: window.manualSkeleton || window.skeleton || []
-            };
+            console.log('[UnifiedSchedule] 🛡️ Skipping loadScheduleForDate - post-edit in progress');
+            return;
         }
-        
+        if (!dateKey) dateKey = getDateKey();
+        debugLog(`Loading data for: ${dateKey}`);
         const dailyData = loadDailyData();
         const dateData = dailyData[dateKey] || {};
         
-        // Load schedule assignments
-        if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
+        let loadedAssignments = false;
+        if (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0) {
+            loadedAssignments = true;
+        } else if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
             window.scheduleAssignments = dateData.scheduleAssignments;
-        } else if (!window.scheduleAssignments) {
-            window.scheduleAssignments = {};
+            loadedAssignments = true;
+        } else if (dailyData.scheduleAssignments && Object.keys(dailyData.scheduleAssignments).length > 0) {
+            window.scheduleAssignments = dailyData.scheduleAssignments;
+            loadedAssignments = true;
+        }
+        if (!loadedAssignments) window.scheduleAssignments = window.scheduleAssignments || {};
+        
+        if (!window.leagueAssignments || Object.keys(window.leagueAssignments).length === 0) {
+            window.leagueAssignments = dateData.leagueAssignments && Object.keys(dateData.leagueAssignments).length > 0 
+                ? dateData.leagueAssignments : {};
         }
         
-        // Load league assignments
-        if (dateData.leagueAssignments && Object.keys(dateData.leagueAssignments).length > 0) {
-            window.leagueAssignments = dateData.leagueAssignments;
-        } else if (!window.leagueAssignments) {
-            window.leagueAssignments = {};
-        }
-        
-        // Load unified times
-        if (dateData.unifiedTimes?.length > 0) {
-            window.unifiedTimes = dateData.unifiedTimes;
-        }
-        
-        // Build divisionTimes from skeleton if needed
+        // ★ FIX: Build divisionTimes from skeleton if not present ★
         if (!window.divisionTimes || Object.keys(window.divisionTimes).length === 0) {
-            const skeleton = window.dailyOverrideSkeleton || getSkeleton(dateKey);
+            const skeleton = getSkeleton(dateKey);
             const divisions = window.divisions || {};
             if (skeleton.length > 0 && window.DivisionTimesSystem) {
                 window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(skeleton, divisions);
-                console.log(`[loadScheduleForDate] Built divisionTimes: ${Object.keys(window.divisionTimes).length} divisions`);
             }
         }
         
-        // Load skeleton
-        if (dateData.manualSkeleton?.length > 0) {
-            window.manualSkeleton = dateData.manualSkeleton;
-        } else if (dateData.skeleton?.length > 0) {
-            window.manualSkeleton = dateData.skeleton;
-        }
+        if (dateData.manualSkeleton?.length > 0) window.manualSkeleton = dateData.manualSkeleton;
+        else if (dateData.skeleton?.length > 0) window.manualSkeleton = dateData.skeleton;
         
         return {
             scheduleAssignments: window.scheduleAssignments || {},
@@ -451,322 +225,186 @@
     function getSkeleton(dateKey) {
         const dailyData = loadDailyData();
         const dateData = dailyData[dateKey || getDateKey()] || {};
-        return dateData.manualSkeleton || 
-               dateData.skeleton || 
-               window.dailyOverrideSkeleton || 
-               window.manualSkeleton || 
-               window.skeleton || 
-               [];
+        return dateData.manualSkeleton || dateData.skeleton || 
+               window.dailyOverrideSkeleton || window.manualSkeleton || window.skeleton || [];
     }
 
-    function saveSchedule() {
-        const silent = window._postEditInProgress;
-        if (window.saveCurrentDailyData) {
-            window.saveCurrentDailyData('scheduleAssignments', window.scheduleAssignments, { silent });
-            window.saveCurrentDailyData('leagueAssignments', window.leagueAssignments, { silent });
-            if (window.DivisionTimesSystem?.serialize) {
-                window.saveCurrentDailyData('divisionTimes', window.DivisionTimesSystem.serialize(window.divisionTimes) || {}, { silent });
+    // =========================================================================
+    // SLOT INDEX MAPPING
+    // =========================================================================
+    
+    function getSlotStartMin(slot) {
+        if (!slot) return null;
+        if (slot.startMin !== undefined) return slot.startMin;
+        if (slot.start instanceof Date) return slot.start.getHours() * 60 + slot.start.getMinutes();
+        if (slot.start) { const d = new Date(slot.start); return d.getHours() * 60 + d.getMinutes(); }
+        return null;
+    }
+
+    // =========================================================================
+    // DIVISION-AWARE FIND FIRST SLOT FOR TIME
+    // =========================================================================
+    
+    function findFirstSlotForTime(targetMin, bunkOrDiv) {
+        if (bunkOrDiv && window.divisionTimes) {
+            let divName = bunkOrDiv;
+            const possibleDiv = getDivisionForBunk(bunkOrDiv);
+            if (possibleDiv) divName = possibleDiv;
+            
+            const divSlots = window.divisionTimes[divName] || [];
+            for (let i = 0; i < divSlots.length; i++) {
+                if (divSlots[i].startMin === targetMin) return i;
+                if (divSlots[i].startMin <= targetMin && divSlots[i].endMin > targetMin) return i;
             }
         }
+        
+        // No fallback - division context is required
+        console.warn(`[findFirstSlotForTime] No divisionTimes found for ${bunkOrDiv}`);
+        return -1;
     }
 
     // =========================================================================
-    // ACTIVITY PROPERTIES & LOCATIONS
+    // TIME-BASED FIELD USAGE SYSTEM
     // =========================================================================
-
-    function getActivityProperties() {
-        if (window.getActivityProperties) return window.getActivityProperties();
-        
-        const settings = window.loadGlobalSettings?.() || {};
-        const app1 = settings.app1 || {};
-        const props = {};
-        
-        (app1.fields || []).forEach(f => {
-            if (f.name) props[f.name] = f;
-        });
-        (app1.specialActivities || []).forEach(s => {
-            if (s.name) props[s.name] = s;
-        });
-        
-        return props;
-    }
-
-    function getAllLocations() {
-        const settings = window.loadGlobalSettings?.() || {};
-        const app1 = settings.app1 || {};
-        const locations = [];
-        
-        (app1.fields || []).forEach(f => {
-            if (f.name && f.available !== false) {
-                locations.push({ 
-                    name: f.name, 
-                    type: 'field', 
-                    capacity: f.sharableWith?.capacity || 1 
-                });
-            }
-        });
-        
-        (app1.specialActivities || []).forEach(s => {
-            if (s.name) {
-                locations.push({ 
-                    name: s.name, 
-                    type: 'special', 
-                    capacity: s.sharableWith?.capacity || 1 
-                });
-            }
-        });
-        
-        return locations;
-    }
-
-    // =========================================================================
-    // ENTRY FORMATTING
-    // =========================================================================
-
-    function getEntry(bunk, slotIndex) {
-        const assignments = window.scheduleAssignments || {};
-        if (!assignments[bunk]) return null;
-        return assignments[bunk][slotIndex] || null;
-    }
-
-    function formatEntry(entry) {
-        if (!entry) return '';
-        if (entry._isDismissal) return 'Dismissal';
-        if (entry._isSnack) return 'Snacks';
-        if (entry._isTransition || entry.continuation) return '';
-        
-        const activity = entry._activity || '';
-        const field = typeof entry.field === 'object' ? entry.field?.name : (entry.field || '');
-        const sport = entry.sport || '';
-        
-        if (entry._h2h) return entry._gameLabel || sport || 'League Game';
-        if (entry._fixed) return activity || field;
-        if (field && sport && field !== sport) return `${field} – ${sport}`;
-        
-        return activity || field || '';
-    }
-
-    function getEntryBackground(entry, blockEvent) {
-        if (!entry) return blockEvent && isFixedBlockType(blockEvent) ? '#fff8e1' : '#f9fafb';
-        if (entry._isDismissal) return '#ffebee';
-        if (entry._isSnack) return '#fff3e0';
-        if (entry._isTransition) return '#e8eaf6';
-        if (entry._isTrip) return '#e8f5e9';
-        if (entry._h2h || entry._isSpecialtyLeague) return '#e3f2fd';
-        if (entry._fixed) return '#fff8e1';
-        if (entry._fromBackground) return '#f3e5f5';
-        if (entry._pinned) return '#fef3c7';
-        return '#f0f9ff';
-    }
-
-    function isFixedBlockType(eventName) {
-        if (!eventName) return false;
-        const lower = eventName.toLowerCase();
-        return lower.includes('lunch') || 
-               lower.includes('snack') || 
-               lower.includes('swim') || 
-               lower.includes('dismissal') || 
-               lower.includes('rest') || 
-               lower.includes('free');
-    }
-
-    function isLeagueBlockType(eventName) {
-        return eventName && eventName.toLowerCase().includes('league');
-    }
-
-    // =========================================================================
-    // CONFLICT DETECTION
-    // =========================================================================
-
-    function checkLocationConflict(locationName, slots, excludeBunk) {
-        const assignments = window.scheduleAssignments || {};
-        const activityProperties = getActivityProperties();
-        const locationInfo = activityProperties[locationName] || {};
-        
-        let maxCapacity = locationInfo.sharableWith?.capacity 
-            ? parseInt(locationInfo.sharableWith.capacity) || 1 
-            : (locationInfo.sharable ? 2 : 1);
-        
-        const editableBunks = getEditableBunks();
-        const conflicts = [];
-        const usageBySlot = {};
-        
-        for (const slotIdx of slots) {
-            usageBySlot[slotIdx] = [];
+    // Real time-based cross-division conflict detection
+    
+    window.TimeBasedFieldUsage = {
+        getUsageAtTime: function(fieldName, startMin, endMin, excludeBunk = null) {
+            const usage = [];
+            const divisions = window.divisions || {};
+            const fieldLower = fieldName.toLowerCase();
             
-            for (const [bunkName, bunkSlots] of Object.entries(assignments)) {
-                if (bunkName === excludeBunk) continue;
+            for (const [divName, divData] of Object.entries(divisions)) {
+                const divSlots = window.divisionTimes?.[divName] || [];
                 
-                const entry = bunkSlots?.[slotIdx];
-                if (!entry) continue;
-                
-                const entryField = fieldLabel(entry.field);
-                const entryActivity = entry._activity || entryField;
-                const entryLocation = entry._location || entryField;
-                
-                const matchesLocation = 
-                    entryField?.toLowerCase() === locationName.toLowerCase() ||
-                    entryLocation?.toLowerCase() === locationName.toLowerCase() ||
-                    entryActivity?.toLowerCase() === locationName.toLowerCase();
-                
-                if (matchesLocation) {
-                    usageBySlot[slotIdx].push({
-                        bunk: bunkName,
-                        activity: entryActivity || entryField,
-                        field: entryField,
-                        canEdit: editableBunks.has(bunkName)
-                    });
+                for (const bunk of (divData.bunks || [])) {
+                    if (excludeBunk && String(bunk) === String(excludeBunk)) continue;
+                    
+                    const assignments = window.scheduleAssignments?.[bunk] || [];
+                    
+                    for (let idx = 0; idx < divSlots.length; idx++) {
+                        const slot = divSlots[idx];
+                        
+                        // Time overlap check
+                        if (slot.startMin < endMin && slot.endMin > startMin) {
+                            const entry = assignments[idx];
+                            if (!entry || entry.continuation) continue;
+                            
+                            const entryField = (typeof entry.field === 'object' ? entry.field?.name : entry.field) || '';
+                            
+                            if (entryField.toLowerCase() === fieldLower) {
+                                usage.push({
+                                    bunk,
+                                    division: divName,
+                                    slotIndex: idx,
+                                    timeStart: slot.startMin,
+                                    timeEnd: slot.endMin,
+                                    activity: entry._activity || entryField,
+                                    field: entryField
+                                });
+                            }
+                        }
+                    }
                 }
             }
-        }
+            return usage;
+        },
         
-        // Check GlobalFieldLocks
-        let globalLock = null;
-        if (window.GlobalFieldLocks) {
-            const divName = getDivisionForBunk(excludeBunk);
-            const lockInfo = window.GlobalFieldLocks.isFieldLocked(locationName, slots, divName);
-            if (lockInfo) globalLock = lockInfo;
-        }
-        
-        let hasConflict = !!globalLock;
-        let currentUsage = 0;
-        
-        for (const slotIdx of slots) {
-            const slotUsage = usageBySlot[slotIdx] || [];
-            currentUsage = Math.max(currentUsage, slotUsage.length);
+        checkAvailability: function(fieldName, startMin, endMin, capacity = 1, excludeBunk = null) {
+            const usage = this.getUsageAtTime(fieldName, startMin, endMin, excludeBunk);
             
-            if (slotUsage.length >= maxCapacity) {
-                hasConflict = true;
-                slotUsage.forEach(u => {
-                    if (!conflicts.find(c => c.bunk === u.bunk && c.slot === slotIdx)) {
-                        conflicts.push({ ...u, slot: slotIdx });
-                    }
-                });
+            // Find max concurrent usage
+            let maxConcurrent = 0;
+            const timePoints = new Set();
+            usage.forEach(u => {
+                timePoints.add(u.timeStart);
+                timePoints.add(u.timeEnd);
+            });
+            
+            for (const t of timePoints) {
+                const concurrent = usage.filter(u => u.timeStart <= t && u.timeEnd > t).length;
+                maxConcurrent = Math.max(maxConcurrent, concurrent);
             }
+            
+            return {
+                available: maxConcurrent < capacity,
+                currentUsage: maxConcurrent,
+                capacity,
+                conflicts: usage
+            };
+        },
+        
+        buildUsageMap: function(excludeBunks = []) {
+            const map = {};
+            const excludeSet = new Set(excludeBunks.map(String));
+            const divisions = window.divisions || {};
+            
+            for (const [divName, divData] of Object.entries(divisions)) {
+                const divSlots = window.divisionTimes?.[divName] || [];
+                
+                for (const bunk of (divData.bunks || [])) {
+                    if (excludeSet.has(String(bunk))) continue;
+                    
+                    const assignments = window.scheduleAssignments?.[bunk] || [];
+                    
+                    for (let idx = 0; idx < divSlots.length; idx++) {
+                        const slot = divSlots[idx];
+                        const entry = assignments[idx];
+                        
+                        if (!entry || entry.continuation || !entry.field) continue;
+                        
+                        const fieldName = (typeof entry.field === 'object' ? entry.field?.name : entry.field) || '';
+                        if (!fieldName || fieldName === 'Free') continue;
+                        
+                        if (!map[fieldName]) map[fieldName] = [];
+                        
+                        map[fieldName].push({
+                            startMin: slot.startMin,
+                            endMin: slot.endMin,
+                            division: divName,
+                            bunk,
+                            activity: entry._activity || fieldName
+                        });
+                    }
+                }
+            }
+            return map;
         }
-        
-        return {
-            hasConflict,
-            conflicts,
-            editableConflicts: conflicts.filter(c => c.canEdit),
-            nonEditableConflicts: conflicts.filter(c => !c.canEdit),
-            globalLock,
-            canShare: maxCapacity > 1 && currentUsage < maxCapacity,
-            currentUsage,
-            maxCapacity
-        };
-    }
+    };
 
-    function checkCrossDivisionConflict(bunk, slotIndex, fieldName) {
+    // =========================================================================
+    // CROSS-DIVISION CONFLICT CHECK (TIME-BASED)
+    // =========================================================================
+    
+    function checkCrossDivisionConflict(bunk, fieldName, slotIndex) {
         const divName = getDivisionForBunk(bunk);
-        if (!divName) return { conflict: false, conflicts: [] };
-        
-        const divSlots = window.divisionTimes?.[divName] || [];
-        const slot = divSlots[slotIndex];
+        const slot = window.divisionTimes?.[divName]?.[slotIndex];
         if (!slot) return { conflict: false, conflicts: [] };
         
         const startMin = slot.startMin;
         const endMin = slot.endMin;
         
         // Get capacity
-        const activityProperties = getActivityProperties();
+        const activityProperties = window.activityProperties || window.getActivityProperties?.() || {};
         const fieldInfo = activityProperties[fieldName] || {};
         let maxCapacity = 1;
-        
         if (fieldInfo.sharableWith?.capacity) {
             maxCapacity = parseInt(fieldInfo.sharableWith.capacity) || 1;
         } else if (fieldInfo.sharable) {
             maxCapacity = 2;
         }
         
-        if (window.TimeBasedFieldUsage?.checkAvailability) {
-            const availability = window.TimeBasedFieldUsage.checkAvailability(
-                fieldName, startMin, endMin, maxCapacity, bunk
-            );
-            
-            return {
-                conflict: !availability.available,
-                conflicts: availability.conflicts,
-                startMin,
-                endMin,
-                capacity: maxCapacity,
-                currentUsage: availability.currentUsage
-            };
-        }
+        const availability = window.TimeBasedFieldUsage.checkAvailability(
+            fieldName, startMin, endMin, maxCapacity, bunk
+        );
         
-        return { conflict: false, conflicts: [] };
-    }
-
-    // =========================================================================
-    // TIME-BASED FIELD USAGE (Fallback if not defined elsewhere)
-    // =========================================================================
-
-    if (!window.TimeBasedFieldUsage) {
-        window.TimeBasedFieldUsage = {
-            getUsageAtTime: function(fieldName, startMin, endMin, excludeBunk = null) {
-                const usage = [];
-                const fieldLower = fieldName.toLowerCase();
-                const divisions = window.divisions || {};
-                const assignments = window.scheduleAssignments || {};
-                
-                for (const [divName, divData] of Object.entries(divisions)) {
-                    const divSlots = window.divisionTimes?.[divName] || [];
-                    
-                    for (const bunk of (divData.bunks || [])) {
-                        if (excludeBunk && bunk === excludeBunk) continue;
-                        
-                        const bunkAssignments = assignments[bunk] || [];
-                        
-                        for (let idx = 0; idx < divSlots.length; idx++) {
-                            const slot = divSlots[idx];
-                            
-                            // Time overlap check
-                            if (slot.startMin < endMin && slot.endMin > startMin) {
-                                const entry = bunkAssignments[idx];
-                                if (!entry || entry.continuation) continue;
-                                
-                                const entryField = fieldLabel(entry.field);
-                                
-                                if (entryField.toLowerCase() === fieldLower) {
-                                    usage.push({
-                                        bunk,
-                                        division: divName,
-                                        slotIndex: idx,
-                                        timeStart: slot.startMin,
-                                        timeEnd: slot.endMin,
-                                        activity: entry._activity || entryField,
-                                        field: entryField
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-                return usage;
-            },
-            
-            checkAvailability: function(fieldName, startMin, endMin, capacity = 1, excludeBunk = null) {
-                const usage = this.getUsageAtTime(fieldName, startMin, endMin, excludeBunk);
-                
-                let maxConcurrent = 0;
-                const timePoints = new Set();
-                usage.forEach(u => {
-                    timePoints.add(u.timeStart);
-                    timePoints.add(u.timeEnd);
-                });
-                
-                for (const t of timePoints) {
-                    const concurrent = usage.filter(u => u.timeStart <= t && u.timeEnd > t).length;
-                    maxConcurrent = Math.max(maxConcurrent, concurrent);
-                }
-                
-                return {
-                    available: maxConcurrent < capacity,
-                    currentUsage: maxConcurrent,
-                    capacity,
-                    conflicts: usage
-                };
-            }
+        return {
+            conflict: !availability.available,
+            conflicts: availability.conflicts,
+            startMin,
+            endMin,
+            capacity: maxCapacity,
+            currentUsage: availability.currentUsage
         };
     }
 
@@ -774,17 +412,20 @@
     // SPLIT TILE DETECTION
     // =========================================================================
     
-    function isSplitTileBlock(block) {
-        if (!block) return false;
+    function isSplitTileBlock(block, bunks, unifiedTimes) {
+        // Check if block is from an expanded split tile
         if (block._isSplitTile || block._splitHalf || block.type === 'split_half') {
             return true;
         }
-        if (!block.event || !block.event.includes('/')) return false;
+        
+        // Original detection logic (for backwards compatibility)
+        if (!block || !block.event || !block.event.includes('/')) return false;
         if (block.event.toLowerCase().includes('special')) return false;
         
         const duration = block.endMin - block.startMin;
-        if (duration < 30) return false;
+        if (duration < 30) return false; // Changed from 60 to 30 for split halves
         
+        // Check if divisionTimes has split data for this block
         const divName = block.division;
         const divSlots = window.divisionTimes?.[divName] || [];
         
@@ -797,19 +438,22 @@
         return false;
     }
     
-    function expandBlocksForSplitTiles(divBlocks) {
+    function expandBlocksForSplitTiles(divBlocks, bunks, unifiedTimes) {
         const expandedBlocks = [];
         
         divBlocks.forEach(block => {
+            // Already expanded
             if (block._splitHalf || block.type === 'split_half') {
                 expandedBlocks.push(block);
                 return;
             }
             
+            // Check if this is a split tile that needs expansion
             if (block.type === 'split' && block.event?.includes('/')) {
                 const divName = block.division;
                 const divSlots = window.divisionTimes?.[divName] || [];
                 
+                // Look for pre-expanded slots from divisionTimes
                 const firstHalfSlot = divSlots.find(s => 
                     s._splitParentEvent === block.event && s._splitHalf === 1
                 );
@@ -818,6 +462,7 @@
                 );
                 
                 if (firstHalfSlot && secondHalfSlot) {
+                    // Use pre-expanded slots from divisionTimes
                     expandedBlocks.push({
                         ...block,
                         startMin: firstHalfSlot.startMin,
@@ -863,31 +508,497 @@
     }
 
     // =========================================================================
-    // LEAGUE MATCHUP RETRIEVAL
+    // ENTRY ACCESS & FORMATTING
     // =========================================================================
 
-    function getLeagueMatchups(bunk, startMin, endMin) {
-        const leagues = window.leagueAssignments || {};
-        
-        for (const [leagueName, league] of Object.entries(leagues)) {
-            if (!league.schedule) continue;
-            
-            for (const game of league.schedule) {
-                const isInGame = game.team1?.includes(bunk) || game.team2?.includes(bunk);
-                const gameStart = game.startMin || parseTimeToMinutes(game.startTime);
-                const gameEnd = game.endMin || parseTimeToMinutes(game.endTime);
-                
-                const overlaps = gameStart != null && gameEnd != null &&
-                    gameStart < endMin && gameEnd > startMin;
-                
-                if (isInGame && overlaps) {
-                    return {
-                        matchups: [game],
-                        gameLabel: game.label || `${game.team1?.join(', ')} vs ${game.team2?.join(', ')}`,
-                        sport: league.sport || 'League',
-                        leagueName: league.name
-                    };
+    function getEntry(bunk, slotIndex) {
+        const assignments = window.scheduleAssignments || {};
+        if (!assignments[bunk]) return null;
+        return assignments[bunk][slotIndex] || null;
+    }
+
+    function formatEntry(entry) {
+        if (!entry) return '';
+        if (entry._isDismissal) return 'Dismissal';
+        if (entry._isSnack) return 'Snacks';
+        if (entry._isTransition || entry.continuation) return '';
+        const activity = entry._activity || '';
+        const field = typeof entry.field === 'object' ? entry.field.name : (entry.field || '');
+        const sport = entry.sport || '';
+        if (entry._h2h) return entry._gameLabel || sport || 'League Game';
+        if (entry._fixed) return activity || field;
+        if (field && sport && field !== sport) return `${field} – ${sport}`;
+        return activity || field || '';
+    }
+
+    function getEntryBackground(entry, blockEvent) {
+        if (!entry) return blockEvent && isFixedBlockType(blockEvent) ? '#fff8e1' : '#f9fafb';
+        if (entry._isDismissal) return '#ffebee';
+        if (entry._isSnack) return '#fff3e0';
+        if (entry._isTransition) return '#e8eaf6';
+        if (entry._isTrip) return '#e8f5e9';
+        if (entry._h2h || entry._isSpecialtyLeague) return '#e3f2fd';
+        if (entry._fixed) return '#fff8e1';
+        if (entry._fromBackground) return '#f3e5f5';
+        if (entry._pinned) return '#fef3c7';
+        return '#f0f9ff';
+    }
+
+    function isFixedBlockType(eventName) {
+        if (!eventName) return false;
+        const lower = eventName.toLowerCase();
+        return lower.includes('lunch') || lower.includes('snack') || lower.includes('swim') || 
+               lower.includes('dismissal') || lower.includes('rest') || lower.includes('free');
+    }
+
+    function isLeagueBlockType(eventName) {
+        return eventName && eventName.toLowerCase().includes('league');
+    }
+
+    // =========================================================================
+    // ACTIVITY PROPERTIES & LOCATIONS
+    // =========================================================================
+
+    function getAllLocations() {
+        const settings = window.loadGlobalSettings?.() || {};
+        const app1 = settings.app1 || {};
+        const locations = [];
+        (app1.fields || []).forEach(f => {
+            if (f.name && f.available !== false) locations.push({ name: f.name, type: 'field', capacity: f.sharableWith?.capacity || 1 });
+        });
+        (app1.specialActivities || []).forEach(s => {
+            if (s.name) locations.push({ name: s.name, type: 'special', capacity: s.sharableWith?.capacity || 1 });
+        });
+        return locations;
+    }
+
+    // =========================================================================
+    // CONFLICT DETECTION
+    // =========================================================================
+
+    function checkLocationConflict(locationName, slots, excludeBunk) {
+        const assignments = window.scheduleAssignments || {};
+        const activityProperties = getActivityProperties();
+        const locationInfo = activityProperties[locationName] || {};
+        let maxCapacity = locationInfo.sharableWith?.capacity ? parseInt(locationInfo.sharableWith.capacity) || 1 : (locationInfo.sharable ? 2 : 1);
+        const editableBunks = getEditableBunks();
+        const conflicts = [], usageBySlot = {};
+        for (const slotIdx of slots) {
+            usageBySlot[slotIdx] = [];
+            for (const [bunkName, bunkSlots] of Object.entries(assignments)) {
+                if (bunkName === excludeBunk) continue;
+                const entry = bunkSlots?.[slotIdx];
+                if (!entry) continue;
+                const entryField = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                const entryActivity = entry._activity || entryField;
+                const entryLocation = entry._location || entryField;
+                const matchesLocation = entryField?.toLowerCase() === locationName.toLowerCase() ||
+                    entryLocation?.toLowerCase() === locationName.toLowerCase() ||
+                    entryActivity?.toLowerCase() === locationName.toLowerCase();
+                if (matchesLocation) {
+                    usageBySlot[slotIdx].push({ bunk: bunkName, activity: entryActivity || entryField, field: entryField, canEdit: editableBunks.has(bunkName) });
                 }
+            }
+        }
+        let globalLock = null;
+        if (window.GlobalFieldLocks) {
+            const divName = getDivisionForBunk(excludeBunk);
+            const lockInfo = window.GlobalFieldLocks.isFieldLocked(locationName, slots, divName);
+            if (lockInfo) globalLock = lockInfo;
+        }
+        let hasConflict = !!globalLock, currentUsage = 0;
+        for (const slotIdx of slots) {
+            const slotUsage = usageBySlot[slotIdx] || [];
+            currentUsage = Math.max(currentUsage, slotUsage.length);
+            if (slotUsage.length >= maxCapacity) {
+                hasConflict = true;
+                slotUsage.forEach(u => { if (!conflicts.find(c => c.bunk === u.bunk && c.slot === slotIdx)) conflicts.push({ ...u, slot: slotIdx }); });
+            }
+        }
+        return {
+            hasConflict, conflicts,
+            editableConflicts: conflicts.filter(c => c.canEdit),
+            nonEditableConflicts: conflicts.filter(c => !c.canEdit),
+            globalLock, canShare: maxCapacity > 1 && currentUsage < maxCapacity, currentUsage, maxCapacity
+        };
+    }
+
+    // =========================================================================
+    // ROTATION SCORING
+    // =========================================================================
+
+    function getActivitiesDoneToday(bunk, beforeSlot) {
+        const done = new Set();
+        const bunkData = window.scheduleAssignments?.[bunk];
+        if (!bunkData) return done;
+        for (let i = 0; i < beforeSlot; i++) {
+            const entry = bunkData[i];
+            if (entry) {
+                const actName = entry._activity || entry.sport || fieldLabel(entry.field);
+                if (actName && actName.toLowerCase() !== 'free' && !actName.toLowerCase().includes('transition')) done.add(actName.toLowerCase().trim());
+            }
+        }
+        return done;
+    }
+
+    function getActivityCount(bunk, activityName) {
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        return globalSettings.historicalCounts?.[bunk]?.[activityName] || 0;
+    }
+
+    function getDaysSinceActivity(bunk, activityName) {
+        const rotationHistory = window.loadRotationHistory?.() || {};
+        const lastDone = rotationHistory.bunks?.[bunk]?.[activityName];
+        if (!lastDone) return null;
+        return Math.floor((Date.now() - lastDone) / (24 * 60 * 60 * 1000));
+    }
+
+    function calculateRotationPenalty(bunk, activityName, slots) {
+        if (!activityName || activityName === 'Free') return 0;
+        const firstSlot = slots[0];
+        const doneToday = getActivitiesDoneToday(bunk, firstSlot);
+        if (doneToday.has(activityName.toLowerCase().trim())) return ROTATION_CONFIG.SAME_DAY_PENALTY;
+        const daysSince = getDaysSinceActivity(bunk, activityName);
+        let recencyPenalty = 0;
+        if (daysSince === null) recencyPenalty = ROTATION_CONFIG.NEVER_DONE_BONUS;
+        else if (daysSince === 0) return ROTATION_CONFIG.SAME_DAY_PENALTY;
+        else if (daysSince === 1) recencyPenalty = ROTATION_CONFIG.YESTERDAY_PENALTY;
+        else if (daysSince === 2) recencyPenalty = ROTATION_CONFIG.TWO_DAYS_AGO_PENALTY;
+        else if (daysSince === 3) recencyPenalty = ROTATION_CONFIG.THREE_DAYS_AGO_PENALTY;
+        else if (daysSince <= 7) recencyPenalty = ROTATION_CONFIG.FOUR_TO_SEVEN_DAYS_PENALTY;
+        else recencyPenalty = ROTATION_CONFIG.WEEK_PLUS_PENALTY;
+        const count = getActivityCount(bunk, activityName);
+        let frequencyPenalty = 0;
+        if (count > 5) frequencyPenalty = ROTATION_CONFIG.HIGH_FREQUENCY_PENALTY;
+        else if (count > 3) frequencyPenalty = ROTATION_CONFIG.ABOVE_AVERAGE_PENALTY;
+        else if (count === 0) frequencyPenalty = ROTATION_CONFIG.UNDER_UTILIZED_BONUS;
+        return recencyPenalty + frequencyPenalty;
+    }
+
+    function buildCandidateOptions(slots, activityProperties, disabledFields = []) {
+        const options = [], seenKeys = new Set();
+        const settings = window.loadGlobalSettings?.() || {};
+        const app1 = settings.app1 || {};
+        const fieldsBySport = settings.fieldsBySport || {};
+        for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
+            (sportFields || []).forEach(fieldName => {
+                if (disabledFields.includes(fieldName) || window.GlobalFieldLocks?.isFieldLocked(fieldName, slots)) return;
+                const key = `${fieldName}|${sport}`;
+                if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: fieldName, sport, activityName: sport, type: 'sport' }); }
+            });
+        }
+        for (const special of (app1.specialActivities || [])) {
+            if (!special.name || disabledFields.includes(special.name) || window.GlobalFieldLocks?.isFieldLocked(special.name, slots)) continue;
+            const key = `special|${special.name}`;
+            if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: special.name, sport: null, activityName: special.name, type: 'special' }); }
+        }
+        for (const field of (app1.fields || [])) {
+            if (!field.name || field.available === false || disabledFields.includes(field.name) || window.GlobalFieldLocks?.isFieldLocked(field.name, slots)) continue;
+            (field.activities || []).forEach(activity => {
+                const key = `${field.name}|${activity}`;
+                if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: field.name, sport: activity, activityName: activity, type: 'sport' }); }
+            });
+        }
+        return options;
+    }
+
+    function calculatePenaltyCost(bunk, slots, pick, fieldUsageBySlot, activityProperties) {
+        let penalty = 0;
+        const activityName = pick.activityName || pick._activity || pick.sport;
+        const fieldName = pick.field;
+        const divName = getDivisionForBunk(bunk);
+        const rotationPenalty = calculateRotationPenalty(bunk, activityName, slots);
+        if (rotationPenalty === Infinity) return Infinity;
+        penalty += rotationPenalty;
+        const props = activityProperties[fieldName] || {};
+        if (props.preferences?.enabled && props.preferences?.list) {
+            const idx = props.preferences.list.indexOf(divName);
+            if (idx !== -1) penalty -= (50 - idx * 5);
+            else if (props.preferences.exclusive) return Infinity;
+            else penalty += 500;
+        }
+        const myNum = parseInt((bunk.match(/\d+/) || [])[0]) || 0;
+        for (const slotIdx of slots) {
+            const slotUsage = fieldUsageBySlot[slotIdx]?.[fieldName];
+            if (slotUsage?.bunks) {
+                for (const otherBunk of Object.keys(slotUsage.bunks)) {
+                    if (otherBunk === bunk) continue;
+                    const otherNum = parseInt((otherBunk.match(/\d+/) || [])[0]) || 0;
+                    const distance = Math.abs(myNum - otherNum);
+                    if (distance === 1) penalty += ROTATION_CONFIG.ADJACENT_BUNK_BONUS;
+                    else if (distance <= 3) penalty += ROTATION_CONFIG.NEARBY_BUNK_BONUS;
+                }
+            }
+        }
+        const maxUsage = props.maxUsage || 0;
+        if (maxUsage > 0) {
+            const hist = getActivityCount(bunk, activityName);
+            if (hist >= maxUsage) return Infinity;
+            if (hist >= maxUsage - 1) penalty += 2000;
+        }
+        return penalty;
+    }
+
+    function findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProperties, avoidFields = []) {
+        const disabledFields = window.currentDisabledFields || [];
+        const avoidSet = new Set(avoidFields.map(f => f.toLowerCase()));
+        const candidates = buildCandidateOptions(slots, activityProperties, disabledFields);
+        const scoredPicks = [];
+        for (const cand of candidates) {
+            if (avoidSet.has(cand.field.toLowerCase()) || avoidSet.has(cand.activityName?.toLowerCase())) continue;
+            if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProperties)) continue;
+            const cost = calculatePenaltyCost(bunk, slots, cand, fieldUsageBySlot, activityProperties);
+            if (cost < Infinity) scoredPicks.push({ ...cand, cost });
+        }
+        scoredPicks.sort((a, b) => a.cost - b.cost);
+        return scoredPicks.length > 0 ? scoredPicks[0] : null;
+    }
+
+    function applyPickToBunk(bunk, slots, pick, fieldUsageBySlot, activityProperties) {
+        const divName = getDivisionForBunk(bunk);
+        // ★ FIX: Use division-specific times ★
+        const divTimes = window.divisionTimes?.[divName] || [];
+        let startMin = null, endMin = null;
+        if (slots.length > 0 && divTimes[slots[0]]) {
+            startMin = divTimes[slots[0]].startMin;
+            const lastSlot = divTimes[slots[slots.length - 1]];
+            if (lastSlot) endMin = lastSlot.endMin !== undefined ? lastSlot.endMin : (startMin + 30);
+        }
+        const pickData = { field: pick.field, sport: pick.sport, _fixed: true, _activity: pick.activityName,
+            _smartRegenerated: true, _regeneratedAt: Date.now(), _startMin: startMin, _endMin: endMin, _blockStart: startMin };
+        if (!window.scheduleAssignments) window.scheduleAssignments = {};
+        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divTimes.length || 50);
+        slots.forEach((slotIdx, i) => { window.scheduleAssignments[bunk][slotIdx] = { ...pickData, continuation: i > 0 }; });
+        if (typeof window.fillBlock === 'function') {
+            try {
+                const firstSlotTime = getSlotTimeRange(slots[0]), lastSlotTime = getSlotTimeRange(slots[slots.length - 1]);
+                const block = { divName, bunk, startTime: firstSlotTime.startMin, endTime: lastSlotTime.endMin, slots };
+                window.fillBlock(block, pickData, fieldUsageBySlot, window.yesterdayHistory || {}, false, activityProperties);
+            } catch (e) { console.warn(`[UnifiedSchedule] fillBlock error for ${bunk}:`, e); }
+        }
+        const fieldName = pick.field;
+        for (const slotIdx of slots) {
+            if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
+            if (!fieldUsageBySlot[slotIdx][fieldName]) fieldUsageBySlot[slotIdx][fieldName] = { count: 0, bunks: {}, divisions: [] };
+            const usage = fieldUsageBySlot[slotIdx][fieldName];
+            usage.count++; usage.bunks[bunk] = pick.activityName;
+            if (divName && !usage.divisions.includes(divName)) usage.divisions.push(divName);
+        }
+    }
+
+    // =========================================================================
+    // SMART REGENERATION FOR CONFLICTS
+    // =========================================================================
+
+    function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedActivity, conflicts, bypassMode = false) {
+        console.log('[SmartRegen] ★★★ SMART REGENERATION STARTED ★★★');
+        if (bypassMode) console.log('[SmartRegen] 🔓 BYPASS MODE ACTIVE');
+        const activityProperties = window.getActivityProperties();
+        const results = { success: true, reassigned: [], failed: [], pinnedLock: null, bypassMode };
+        if (window.GlobalFieldLocks) {
+            const pinnedDivName = window.getDivisionForBunk(pinnedBunk);
+            window.GlobalFieldLocks.lockField(pinnedField, pinnedSlots, { lockedBy: 'smart_regen_pinned', division: pinnedDivName, activity: pinnedActivity, bunk: pinnedBunk });
+            results.pinnedLock = { field: pinnedField, slots: pinnedSlots };
+        }
+        const conflictsByBunk = {};
+        for (const conflict of conflicts) {
+            if (!conflictsByBunk[conflict.bunk]) conflictsByBunk[conflict.bunk] = new Set();
+            conflictsByBunk[conflict.bunk].add(conflict.slot);
+        }
+        const bunksToReassign = Object.keys(conflictsByBunk);
+        const fieldUsageBySlot = window.buildFieldUsageBySlot(bunksToReassign);
+        for (const slotIdx of pinnedSlots) {
+            if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
+            if (!fieldUsageBySlot[slotIdx][pinnedField]) fieldUsageBySlot[slotIdx][pinnedField] = { count: 0, bunks: {}, divisions: [] };
+            fieldUsageBySlot[slotIdx][pinnedField].count++;
+            fieldUsageBySlot[slotIdx][pinnedField].bunks[pinnedBunk] = pinnedActivity;
+        }
+        bunksToReassign.sort((a, b) => { const numA = parseInt((a.match(/\d+/) || [])[0]) || 0, numB = parseInt((b.match(/\d+/) || [])[0]) || 0; return numA - numB; });
+        for (const bunk of bunksToReassign) {
+            const slots = [...conflictsByBunk[bunk]].sort((a, b) => a - b);
+            const originalEntry = window.scheduleAssignments?.[bunk]?.[slots[0]];
+            const originalActivity = originalEntry?._activity || originalEntry?.sport || window.fieldLabel(originalEntry?.field);
+            console.log(`[SmartRegen] Processing ${bunk}: slots=${slots.join(',')}, original=${originalActivity}`);
+            const bestPick = findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProperties, [pinnedField]);
+            if (bestPick) {
+                console.log(`[SmartRegen] ✅ ${bunk}: ${originalActivity} → ${bestPick.activityName} (field: ${bestPick.field})`);
+                applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProperties);
+                results.reassigned.push({ bunk, slots, from: originalActivity || 'unknown', to: bestPick.activityName, field: bestPick.field, cost: bestPick.cost });
+                if (window.showToast) window.showToast(`↪️ ${bunk}: ${originalActivity} → ${bestPick.activityName}`, 'info');
+            } else {
+                if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
+                slots.forEach((slotIdx, i) => {
+                    window.scheduleAssignments[bunk][slotIdx] = { field: 'Free', sport: null, continuation: i > 0, _fixed: false, _activity: 'Free', _smartRegenFailed: true, _originalActivity: originalActivity, _failedAt: Date.now() };
+                });
+                results.failed.push({ bunk, slots, originalActivity, reason: 'No valid alternative found' });
+                results.success = false;
+                if (window.showToast) window.showToast(`⚠️ ${bunk}: No alternative found`, 'warning');
+            }
+        }
+        console.log(`[SmartRegen] ★★★ COMPLETE: ${results.reassigned.length} reassigned, ${results.failed.length} failed ★★★`);
+        return results;
+    }
+
+    function smartReassignBunkActivity(bunk, slots, avoidLocation) {
+        const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
+        if (!entry) return { success: false };
+        const originalActivity = entry._activity || entry.sport || window.fieldLabel(entry.field);
+        const activityProperties = window.getActivityProperties();
+        const fieldUsageBySlot = window.buildFieldUsageBySlot([bunk]);
+        const bestPick = findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProperties, [avoidLocation]);
+        if (bestPick) {
+            applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProperties);
+            if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.activityName}`, 'info');
+            return { success: true, field: bestPick.field, activity: bestPick.activityName, cost: bestPick.cost };
+        } else {
+            if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
+            slots.forEach((slotIdx, i) => {
+                window.scheduleAssignments[bunk][slotIdx] = { field: 'Free', sport: null, continuation: i > 0, _fixed: false, _activity: 'Free', _noAlternative: true, _originalActivity: originalActivity, _originalField: avoidLocation };
+            });
+            if (window.showToast) window.showToast(`⚠️ ${bunk}: No alternative found`, 'warning');
+            return { success: false, reason: 'No valid alternative found' };
+        }
+    }
+
+    // =========================================================================
+    // PINNED ACTIVITY PRESERVATION
+    // =========================================================================
+
+    function capturePinnedActivities(allowedDivisions) {
+        const assignments = window.scheduleAssignments || {};
+        const divisions = window.divisions || {};
+        _pinnedSnapshot = {}; _pinnedFieldLocks = [];
+        let capturedCount = 0;
+        let allowedBunks = null;
+        if (allowedDivisions && allowedDivisions.length > 0) {
+            allowedBunks = new Set();
+            for (const divName of allowedDivisions) {
+                const divInfo = divisions[divName];
+                if (divInfo?.bunks) divInfo.bunks.forEach(b => allowedBunks.add(b));
+            }
+        }
+        for (const [bunkName, slots] of Object.entries(assignments)) {
+            if (allowedBunks && !allowedBunks.has(bunkName)) continue;
+            if (!slots || !Array.isArray(slots)) continue;
+            for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
+                const entry = slots[slotIdx];
+                if (entry && entry._pinned === true) {
+                    if (!_pinnedSnapshot[bunkName]) _pinnedSnapshot[bunkName] = {};
+                    _pinnedSnapshot[bunkName][slotIdx] = { ...entry, _preservedAt: Date.now() };
+                    capturedCount++;
+                    const fieldName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                    if (fieldName && fieldName !== 'Free') _pinnedFieldLocks.push({ field: fieldName, slot: slotIdx, bunk: bunkName, activity: entry._activity || fieldName });
+                }
+            }
+        }
+        console.log(`[PinnedPreserve] 📌 Captured ${capturedCount} pinned activities`);
+        return _pinnedSnapshot;
+    }
+
+    function registerPinnedFieldLocks() {
+        if (!window.GlobalFieldLocks) return;
+        const divisions = window.divisions || {};
+        for (const lockInfo of _pinnedFieldLocks) {
+            const divName = Object.keys(divisions).find(d => divisions[d]?.bunks?.includes(lockInfo.bunk));
+            window.GlobalFieldLocks.lockField(lockInfo.field, [lockInfo.slot], { lockedBy: 'pinned_activity', division: divName || 'unknown', activity: lockInfo.activity, bunk: lockInfo.bunk, _pinnedLock: true });
+        }
+    }
+
+    function registerPinnedFieldUsage(fieldUsageBySlot, activityProperties) {
+        if (!fieldUsageBySlot) return;
+        const divisions = window.divisions || {};
+        for (const lockInfo of _pinnedFieldLocks) {
+            const slotIdx = lockInfo.slot, fieldName = lockInfo.field;
+            if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
+            if (!fieldUsageBySlot[slotIdx][fieldName]) fieldUsageBySlot[slotIdx][fieldName] = { count: 0, divisions: [], bunks: {}, _locked: true, _fromPinned: true };
+            const usage = fieldUsageBySlot[slotIdx][fieldName];
+            usage.count++; usage.bunks[lockInfo.bunk] = lockInfo.activity;
+            const divName = Object.keys(divisions).find(d => divisions[d]?.bunks?.includes(lockInfo.bunk));
+            if (divName && !usage.divisions.includes(divName)) usage.divisions.push(divName);
+        }
+    }
+
+    function restorePinnedActivities() {
+        const assignments = window.scheduleAssignments || {};
+        let restoredCount = 0;
+        for (const [bunkName, pinnedSlots] of Object.entries(_pinnedSnapshot)) {
+            // ★ FIX: Use division-specific slot count ★
+            const bunkDivName = getDivisionForBunk(bunkName);
+            const bunkSlotCount = window.divisionTimes?.[bunkDivName]?.length || 50;
+            if (!assignments[bunkName]) assignments[bunkName] = new Array(bunkSlotCount);
+            for (const [slotIdxStr, entry] of Object.entries(pinnedSlots)) {
+                assignments[bunkName][parseInt(slotIdxStr, 10)] = { ...entry, _restoredAt: Date.now() };
+                restoredCount++;
+            }
+        }
+        console.log(`[PinnedPreserve] ✅ Restored ${restoredCount} pinned activities`);
+        return restoredCount;
+    }
+
+    function getPinnedActivities() {
+        const assignments = window.scheduleAssignments || {};
+        const pinned = [];
+        for (const [bunkName, slots] of Object.entries(assignments)) {
+            if (!slots || !Array.isArray(slots)) continue;
+            for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
+                const entry = slots[slotIdx];
+                if (entry && entry._pinned === true) {
+                    pinned.push({ bunk: bunkName, slot: slotIdx, activity: entry._activity || entry.field, field: typeof entry.field === 'object' ? entry.field?.name : entry.field, editedAt: entry._editedAt || entry._preservedAt });
+                }
+            }
+        }
+        return pinned;
+    }
+
+    function unpinActivity(bunk, slotIdx) {
+        const entry = window.scheduleAssignments?.[bunk]?.[slotIdx];
+        if (entry) { delete entry._pinned; delete entry._postEdit; entry._unpinnedAt = Date.now(); saveSchedule(); updateTable(); return true; }
+        return false;
+    }
+
+    function unpinAllActivities() {
+        const assignments = window.scheduleAssignments || {};
+        let unpinnedCount = 0;
+        for (const [bunkName, slots] of Object.entries(assignments)) {
+            if (!slots || !Array.isArray(slots)) continue;
+            for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
+                const entry = slots[slotIdx];
+                if (entry && entry._pinned === true) { delete entry._pinned; delete entry._postEdit; entry._unpinnedAt = Date.now(); unpinnedCount++; }
+            }
+        }
+        saveSchedule(); updateTable();
+        return unpinnedCount;
+    }
+
+    // =========================================================================
+    // LEAGUE MATCHUPS RETRIEVAL
+    // =========================================================================
+
+    function getLeagueMatchups(divName, slotIdx) {
+        const leagues = window.leagueAssignments || {};
+        if (leagues[divName]?.[slotIdx]) {
+            const data = leagues[divName][slotIdx];
+            return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
+        }
+        if (leagues[divName]) {
+            const divSlots = Object.keys(leagues[divName]).map(Number).sort((a, b) => a - b);
+            for (const storedSlot of divSlots) {
+                if (Math.abs(storedSlot - slotIdx) <= 2) {
+                    const data = leagues[divName][storedSlot];
+                    if (data && (data.matchups?.length > 0 || data.gameLabel)) return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
+                }
+            }
+        }
+        const rawMasterLeagues = window.masterLeagues || window.loadGlobalSettings?.()?.app1?.leagues || [];
+        let masterLeaguesList = Array.isArray(rawMasterLeagues) ? rawMasterLeagues : Object.values(rawMasterLeagues);
+        const applicableLeagues = masterLeaguesList.filter(l => l?.name && l?.divisions?.includes(divName));
+        if (applicableLeagues.length > 0) {
+            const league = applicableLeagues[0], teams = league.teams || [];
+            if (teams.length >= 2) {
+                const displayMatchups = [];
+                for (let i = 0; i < teams.length - 1; i += 2) { if (teams[i + 1]) displayMatchups.push({ teamA: teams[i], teamB: teams[i + 1], display: `${teams[i]} vs ${teams[i + 1]}` }); }
+                if (teams.length % 2 === 1) displayMatchups.push({ teamA: teams[teams.length - 1], teamB: 'BYE', display: `${teams[teams.length - 1]} (BYE)` });
+                return { matchups: displayMatchups, gameLabel: `${league.name} Game`, sport: league.sports?.[0] || 'League', leagueName: league.name };
             }
         }
         return { matchups: [], gameLabel: '', sport: '', leagueName: '' };
@@ -898,278 +1009,678 @@
     // =========================================================================
 
     function renderStaggeredView(container) {
-        if (!container) {
-            container = document.getElementById('scheduleTable');
-            if (!container) return;
-        }
-        
-        const dateKey = getDateKey();
-        
-        if (!window._postEditInProgress) {
-            loadScheduleForDate(dateKey);
-        } else {
-            console.log('[UnifiedSchedule] 🛡️ RENDER: Using in-memory data (post-edit in progress)');
-        }
-        
+        if (!container) { container = document.getElementById('scheduleTable'); if (!container) return; }
+        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        if (!window._postEditInProgress) loadScheduleForDate(dateKey);
+        else console.log('[UnifiedSchedule] 🛡️ RENDER: Using in-memory data (post-edit in progress)');
         const skeleton = getSkeleton(dateKey);
         const unifiedTimes = window.unifiedTimes || [];
         const divisions = window.divisions || {};
-        
-        console.log('[UnifiedSchedule] RENDER STATE:', {
-            dateKey,
-            skeletonBlocks: skeleton.length,
-            unifiedTimesSlots: unifiedTimes.length,
-            scheduleAssignmentsBunks: Object.keys(window.scheduleAssignments || {}).length,
-            divisionsCount: Object.keys(divisions).length,
-            bypassRBACView: _bypassRBACViewEnabled || window._bypassRBACViewEnabled
-        });
-        
+        console.log('[UnifiedSchedule] RENDER STATE:', { dateKey, skeletonBlocks: skeleton.length, unifiedTimesSlots: unifiedTimes.length,
+            scheduleAssignmentsBunks: Object.keys(window.scheduleAssignments || {}).length, divisionsCount: Object.keys(divisions).length,
+            bypassRBACView: _bypassRBACViewEnabled || window._bypassRBACViewEnabled });
         container.innerHTML = '';
-        
         if (!skeleton || skeleton.length === 0) {
-            container.innerHTML = `
-                <div style="padding: 40px; text-align: center; color: #6b7280;">
-                    <p>No daily schedule structure found for this date.</p>
-                    <p style="font-size: 0.9rem;">Use <strong>"Build Day"</strong> in the Master Schedule Builder to create a schedule structure.</p>
-                </div>
-            `;
+            container.innerHTML = `<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No daily schedule structure found for this date.</p><p style="font-size: 0.9rem;">Use <strong>"Build Day"</strong> in the Master Schedule Builder to create a schedule structure.</p></div>`;
             return;
         }
-        
         let divisionsToShow = Object.keys(divisions);
-        if (divisionsToShow.length === 0 && window.availableDivisions) {
-            divisionsToShow = window.availableDivisions;
-        }
-        
-        divisionsToShow.sort((a, b) => {
-            const numA = parseInt(a);
-            const numB = parseInt(b);
-            if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-            return String(a).localeCompare(String(b));
-        });
-        
-        if (divisionsToShow.length === 0) {
-            container.innerHTML = `
-                <div style="padding: 40px; text-align: center; color: #6b7280;">
-                    <p>No divisions configured.</p>
-                </div>
-            `;
-            return;
-        }
-        
+        if (divisionsToShow.length === 0 && window.availableDivisions) divisionsToShow = window.availableDivisions;
+        divisionsToShow.sort((a, b) => { const numA = parseInt(a), numB = parseInt(b); if (!isNaN(numA) && !isNaN(numB)) return numA - numB; return String(a).localeCompare(String(b)); });
+        if (divisionsToShow.length === 0) { container.innerHTML = `<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No divisions configured.</p></div>`; return; }
         const wrapper = document.createElement('div');
         wrapper.className = 'schedule-view-wrapper';
         wrapper.style.cssText = 'display: flex; flex-direction: column; gap: 24px;';
-        
-        const editableDivisions = window.AccessControl?.getEditableDivisions?.() || 
-                                  new Set(getMyDivisions());
-        
+        const editableDivisions = window.AccessControl?.getEditableDivisions?.() || divisionsToShow;
         divisionsToShow.forEach(divName => {
+            // ★★★ RBAC VIEW BYPASS CHECK ★★★
             if (!shouldShowDivision(divName)) return;
-            
-            const divData = divisions[divName];
-            if (!divData) return;
-            
-            const bunks = divData.bunks || [];
+            const divInfo = divisions[divName];
+            if (!divInfo) return;
+            let bunks = divInfo.bunks || [];
             if (bunks.length === 0) return;
-            
-            // Get blocks for this division
-            const divBlocks = skeleton
-                .filter(b => b.division === divName || !b.division)
-                .map(b => ({
-                    ...b,
-                    division: divName,
-                    startMin: parseTimeToMinutes(b.startTime) ?? b.startMin,
-                    endMin: parseTimeToMinutes(b.endTime) ?? b.endMin
-                }))
-                .filter(b => b.startMin != null && b.endMin != null);
-            
-            if (divBlocks.length === 0) return;
-            
-            // Expand split tiles
-            const expandedBlocks = expandBlocksForSplitTiles(divBlocks);
-            
-            const isEditable = editableDivisions instanceof Set 
-                ? editableDivisions.has(divName) 
-                : editableDivisions?.includes?.(divName) ?? true;
-            
-            const divSection = renderDivisionSection(divName, bunks, expandedBlocks, unifiedTimes, isEditable);
-            wrapper.appendChild(divSection);
+            bunks = bunks.slice().sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }));
+            const isEditable = editableDivisions.includes(divName);
+            const table = renderDivisionTable(divName, divInfo, bunks, skeleton, unifiedTimes, isEditable);
+            if (table) wrapper.appendChild(table);
         });
-        
         container.appendChild(wrapper);
+        if (window.MultiSchedulerAutonomous?.applyBlockingToGrid) setTimeout(() => window.MultiSchedulerAutonomous.applyBlockingToGrid(), 50);
+        window.dispatchEvent(new CustomEvent('campistry-schedule-rendered', { detail: { dateKey } }));
     }
 
-    function renderDivisionSection(divName, bunks, blocks, unifiedTimes, isEditable) {
-        const section = document.createElement('div');
-        section.className = 'division-section';
-        section.dataset.division = divName;
-        section.style.cssText = 'background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden;';
-        
-        // Header
-        const header = document.createElement('div');
-        header.style.cssText = 'background: #1e40af; color: white; padding: 12px 16px; font-weight: 600; display: flex; justify-content: space-between; align-items: center;';
-        header.innerHTML = `
-            <span>${escapeHtml(divName)}</span>
-            <span style="font-size: 0.85rem; opacity: 0.8;">${bunks.length} bunks</span>
-        `;
-        section.appendChild(header);
-        
-        // Table
+    function renderDivisionTable(divName, divInfo, bunks, skeleton, unifiedTimes, isEditable) {
+        let divBlocks = skeleton.filter(b => b.division === divName).map(b => ({ ...b, startMin: window.parseTimeToMinutes(b.startTime), endMin: window.parseTimeToMinutes(b.endTime) }))
+            .filter(b => b.startMin !== null && b.endMin !== null).sort((a, b) => a.startMin - b.startMin);
+        if (divBlocks.length === 0) return null;
+        divBlocks = expandBlocksForSplitTiles(divBlocks, bunks, unifiedTimes);
         const table = document.createElement('table');
-        table.style.cssText = 'width: 100%; border-collapse: collapse;';
-        
-        // Header row
+        table.className = 'schedule-division-table';
+        table.style.cssText = 'width: 100%; border-collapse: collapse; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden; background: #fff; margin-bottom: 8px;';
+        const divColor = divInfo.color || '#4b5563';
         const thead = document.createElement('thead');
-        const headerRow = document.createElement('tr');
-        headerRow.innerHTML = '<th style="padding: 10px; text-align: left; border-bottom: 2px solid #e5e7eb; background: #f9fafb; min-width: 100px;">Bunk</th>';
-        
-        blocks.forEach(block => {
-            const th = document.createElement('th');
-            th.style.cssText = 'padding: 10px; text-align: center; border-bottom: 2px solid #e5e7eb; background: #f9fafb; min-width: 120px;';
-            th.innerHTML = `
-                <div style="font-weight: 600;">${escapeHtml(block.event || block.type || '')}</div>
-                <div style="font-size: 0.75rem; color: #6b7280;">${minutesToTimeStr(block.startMin)} - ${minutesToTimeStr(block.endMin)}</div>
-            `;
-            headerRow.appendChild(th);
-        });
-        
-        thead.appendChild(headerRow);
-        table.appendChild(thead);
-        
-        // Body
+        const tr1 = document.createElement('tr');
+        const th = document.createElement('th');
+        th.colSpan = 1 + bunks.length;
+        th.innerHTML = window.escapeHtml(divName) + (isEditable ? '' : ' <span style="opacity:0.7">🔒</span>');
+        th.style.cssText = `background: ${divColor}; color: #fff; padding: 12px 16px; font-size: 1.1rem; font-weight: 600; text-align: left;`;
+        tr1.appendChild(th); thead.appendChild(tr1);
+        const tr2 = document.createElement('tr'); tr2.style.background = '#f9fafb';
+        const thTime = document.createElement('th'); thTime.textContent = 'Time';
+        thTime.style.cssText = 'padding: 10px 12px; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; min-width: 140px;';
+        tr2.appendChild(thTime);
+        bunks.forEach(bunk => { const thB = document.createElement('th'); thB.textContent = bunk; thB.style.cssText = 'padding: 10px 12px; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; min-width: 100px; text-align: center;'; tr2.appendChild(thB); });
+        thead.appendChild(tr2); table.appendChild(thead);
         const tbody = document.createElement('tbody');
-        
-        bunks.forEach(bunk => {
-            const row = document.createElement('tr');
-            
-            // Bunk name cell
-            const bunkCell = document.createElement('td');
-            bunkCell.style.cssText = 'padding: 8px 10px; font-weight: 500; border: 1px solid #e5e7eb; background: #f9fafb;';
-            bunkCell.textContent = bunk;
-            
-            if (shouldHighlightBunk(bunk)) {
-                bunkCell.style.background = 'linear-gradient(135deg, #fef3c7, #fde68a)';
-            }
-            
-            row.appendChild(bunkCell);
-            
-            // Activity cells
-            blocks.forEach(block => {
-                const td = renderBunkCell(block, bunk, divName, unifiedTimes, isEditable);
-                row.appendChild(td);
-            });
-            
-            tbody.appendChild(row);
+        divBlocks.forEach((block, blockIdx) => {
+            const timeLabel = `${window.minutesToTimeLabel(block.startMin)} - ${window.minutesToTimeLabel(block.endMin)}`;
+            const tr = document.createElement('tr');
+            tr.style.background = blockIdx % 2 === 0 ? '#fff' : '#fafafa';
+            if (block._isSplitTile) tr.style.background = block._splitHalf === 1 ? (blockIdx % 2 === 0 ? '#f0fdf4' : '#ecfdf5') : (blockIdx % 2 === 0 ? '#fef3c7' : '#fef9c3');
+            const tdTime = document.createElement('td'); tdTime.textContent = timeLabel;
+            tdTime.style.cssText = 'padding: 10px 12px; font-weight: 500; color: #4b5563; border-right: 1px solid #e5e7eb; white-space: nowrap;';
+            if (block._isSplitTile) { const halfLabel = block._splitHalf === 1 ? '①' : '②'; tdTime.innerHTML = `${window.escapeHtml(timeLabel)} <span style="color: #6b7280; font-size: 0.8rem;">${halfLabel}</span>`; }
+            tr.appendChild(tdTime);
+            if (isLeagueBlockType(block.event)) { tr.appendChild(renderLeagueCell(block, bunks, divName, unifiedTimes, isEditable)); tbody.appendChild(tr); return; }
+            bunks.forEach(bunk => tr.appendChild(renderBunkCell(block, bunk, divName, unifiedTimes, isEditable)));
+            tbody.appendChild(tr);
         });
-        
         table.appendChild(tbody);
-        section.appendChild(table);
-        
-        return section;
+        return table;
     }
 
-    function renderBunkCell(block, bunk, divName, unifiedTimes, isEditable) {
+    function renderLeagueCell(block, bunks, divName, unifiedTimes, isEditable) {
         const td = document.createElement('td');
-        td.style.cssText = 'padding: 8px 10px; text-align: center; border: 1px solid #e5e7eb;';
+        td.colSpan = bunks.length;
+        td.style.cssText = 'padding: 12px 16px; background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border-left: 4px solid #0284c7; vertical-align: top;';
         
-        const { entry, slotIdx } = getEntryForBlock(bunk, block.startMin, block.endMin, unifiedTimes);
-        
-        // Check if blocked by another scheduler
-        let isBlocked = false;
-        let blockedReason = '';
-        if (window.MultiSchedulerAutonomous?.isBunkSlotBlocked) {
-            const blockCheck = window.MultiSchedulerAutonomous.isBunkSlotBlocked(bunk, slotIdx);
-            if (blockCheck.blocked) {
-                isBlocked = true;
-                blockedReason = blockCheck.reason;
-            }
+       // ★★★ FIX v4.0.6: Use division-specific slot lookup for league matchups ★★★
+const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block.endMin, divName) || [];
+        let leagueInfo = { matchups: [], gameLabel: '', sport: '', leagueName: '' };
+        for (const idx of slots) { 
+            const info = getLeagueMatchups(divName, idx); 
+            if (info.matchups.length > 0 || info.gameLabel) { leagueInfo = info; break; } 
         }
         
-        let displayText = '';
-        let bgColor = '#fff';
+        let title = leagueInfo.gameLabel || block.event;
+        if (leagueInfo.sport && !title.toLowerCase().includes(leagueInfo.sport.toLowerCase())) title += ` - ${leagueInfo.sport}`;
         
-        if (entry && !entry.continuation) {
-            displayText = formatEntry(entry);
-            bgColor = getEntryBackground(entry, block.event);
-            if (entry._pinned) displayText = '📌 ' + displayText;
-        } else if (!entry) {
-            if (isFixedBlockType(block.event)) {
-                displayText = block.event;
-                bgColor = '#fff8e1';
-            } else {
-                bgColor = '#f9fafb';
-            }
+        let html = `<div style="font-weight: 600; font-size: 1rem; color: #0369a1; margin-bottom: 8px;">🏆 ${window.escapeHtml(title)}</div>`;
+        
+        if (leagueInfo.matchups?.length > 0) {
+            html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
+            leagueInfo.matchups.forEach(m => {
+                let matchText = typeof m === 'string' ? m : m.display || (m.teamA && m.teamB ? `${m.teamA} vs ${m.teamB}${m.field ? ` @ ${m.field}` : ''}` : (m.team1 && m.team2 ? `${m.team1} vs ${m.team2}` : (m.matchup || JSON.stringify(m))));
+                html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${window.escapeHtml(matchText)}</div>`;
+            });
+            html += '</div>';
+        } else {
+            html += '<div style="color: #64748b; font-size: 0.875rem; font-style: italic;">No matchups scheduled yet</div>';
         }
         
-        td.textContent = displayText;
-        td.style.background = bgColor;
+        td.innerHTML = html;
         
-        // Highlight bypassed bunks
-        if (shouldHighlightBunk(bunk)) {
-            td.style.background = 'linear-gradient(135deg, #fef3c7, #fde68a)';
-            td.style.boxShadow = 'inset 0 0 0 3px #f59e0b';
-        }
-        
-        td.dataset.slot = slotIdx;
-        td.dataset.slotIndex = slotIdx;
-        td.dataset.bunk = bunk;
-        td.dataset.division = divName;
-        td.dataset.startMin = block.startMin;
-        td.dataset.endMin = block.endMin;
-        
-        if (isBlocked) {
-            td.style.cursor = 'not-allowed';
+        // ★★★ UPDATED: Use Integrated Edit Modal ★★★
+        if (isEditable && bunks.length > 0) { 
+            td.style.cursor = 'pointer'; 
             td.onclick = () => {
-                if (window.showToast) window.showToast(`🔒 Cannot edit: ${blockedReason}`, 'error');
-                else alert(`🔒 Cannot edit: ${blockedReason}`);
-            };
-        } else if (isEditable) {
-            td.style.cursor = 'pointer';
-            td.onclick = () => {
-                const existingEntry = window.scheduleAssignments?.[bunk]?.[slotIdx];
-                openIntegratedEditModal(bunk, slotIdx, existingEntry);
+                const firstBunk = bunks[0];
+                const slotIdx = slots[0] || 0;
+                const existingEntry = window.scheduleAssignments?.[firstBunk]?.[slotIdx];
+                if (typeof openIntegratedEditModal === 'function') {
+                    openIntegratedEditModal(firstBunk, slotIdx, existingEntry);
+                } else {
+                    // Fallback to old behavior
+                    enhancedEditCell(firstBunk, block.startMin, block.endMin, block.event);
+                }
             };
         }
         
         return td;
     }
 
+    function renderBunkCell(block, bunk, divName, unifiedTimes, isEditable) {
+        const td = document.createElement('td');
+        td.style.cssText = 'padding: 8px 10px; text-align: center; border: 1px solid #e5e7eb;';
+        const { entry, slotIdx } = window.getEntryForBlock(bunk, block.startMin, block.endMin, unifiedTimes);
+        
+        let isBlocked = false, blockedReason = '';
+        if (window.MultiSchedulerAutonomous?.isBunkSlotBlocked) { 
+            const blockCheck = window.MultiSchedulerAutonomous.isBunkSlotBlocked(bunk, slotIdx); 
+            if (blockCheck.blocked) { isBlocked = true; blockedReason = blockCheck.reason; } 
+        }
+        
+        let displayText = '', bgColor = '#fff';
+        if (entry && !entry.continuation) { 
+            displayText = formatEntry(entry); 
+            bgColor = getEntryBackground(entry, block.event); 
+            if (entry._pinned) displayText = '📌 ' + displayText; 
+        }
+        else if (!entry) { 
+            if (isFixedBlockType(block.event)) { displayText = block.event; bgColor = '#fff8e1'; } 
+            else bgColor = '#f9fafb'; 
+        }
+        
+        td.textContent = displayText;
+        td.style.background = bgColor;
+        
+        // Highlight bypassed bunks
+        if (shouldHighlightBunk(bunk)) { 
+            td.style.background = 'linear-gradient(135deg, #fef3c7, #fde68a)'; 
+            td.style.boxShadow = 'inset 0 0 0 3px #f59e0b'; 
+        }
+        
+        td.dataset.slot = slotIdx; 
+        td.dataset.slotIndex = slotIdx; 
+        td.dataset.bunk = bunk; 
+        td.dataset.division = divName; 
+        td.dataset.startMin = block.startMin; 
+        td.dataset.endMin = block.endMin;
+        
+        if (isBlocked) { 
+            td.style.cursor = 'not-allowed'; 
+            td.onclick = () => { 
+                if (window.showToast) window.showToast(`🔒 Cannot edit: ${blockedReason}`, 'error'); 
+                else alert(`🔒 Cannot edit: ${blockedReason}`); 
+            }; 
+        }
+        else if (isEditable) { 
+            td.style.cursor = 'pointer'; 
+            // ★★★ UPDATED: Use Integrated Edit Modal ★★★
+            td.onclick = () => {
+                const existingEntry = window.scheduleAssignments?.[bunk]?.[slotIdx];
+                if (typeof openIntegratedEditModal === 'function') {
+                    openIntegratedEditModal(bunk, slotIdx, existingEntry);
+                } else {
+                    // Fallback to old behavior if integrated modal not loaded
+                    enhancedEditCell(bunk, block.startMin, block.endMin, displayText.replace('📌 ', ''));
+                }
+            };
+        }
+        return td;
+    }
     // =========================================================================
-    // UPDATE TABLE (with debouncing)
+    // APPLY DIRECT EDIT
     // =========================================================================
+
+    function applyDirectEdit(bunk, slots, activity, location, isClear, shouldPin = true) {
+        // ★ FIX: Use division-specific slot count ★
+        const divName = window.getDivisionForBunk(bunk);
+        const divTimes = window.divisionTimes?.[divName] || [];
+        if (!window.scheduleAssignments) window.scheduleAssignments = {};
+        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divTimes.length || 50);
+        const fieldValue = location ? `${location} – ${activity}` : activity;
+        slots.forEach((idx, i) => {
+            window.scheduleAssignments[bunk][idx] = { field: isClear ? 'Free' : fieldValue, sport: isClear ? null : activity, continuation: i > 0,
+                _fixed: !isClear, _activity: isClear ? 'Free' : activity, _location: location, _postEdit: true, _pinned: shouldPin && !isClear, _editedAt: Date.now() };
+        });
+        if (location && !isClear && window.registerLocationUsage) {
+            const divName = window.getDivisionForBunk(bunk);
+            slots.forEach(idx => window.registerLocationUsage(idx, location, activity, divName));
+        }
+    }
+
+    // =========================================================================
+    // BYPASS SAVE - CROSS-DIVISION DIRECT UPDATE (v4.0.2)
+    // =========================================================================
+
+    async function bypassSaveAllBunks(modifiedBunks) {
+        console.log('[UnifiedSchedule] 🔓 BYPASS SAVE for bunks:', modifiedBunks);
+        const dateKey = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
+        
+        // Step 1: Save to localStorage first (immediate backup)
+        try {
+            localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
+            const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+            if (!allDailyData[dateKey]) allDailyData[dateKey] = {};
+            allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
+            allDailyData[dateKey].leagueAssignments = window.leagueAssignments || {};
+            // Change 1.9: Removed unifiedTimes localStorage save
+            allDailyData[dateKey]._bypassSaveAt = Date.now();
+            localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
+            console.log('[UnifiedSchedule] ✅ Bypass: saved to localStorage');
+        } catch (e) { 
+            console.error('[UnifiedSchedule] Bypass localStorage save error:', e); 
+        }
+        
+        // Step 2: Get Supabase client
+        const client = window.CampistryDB?.getClient?.() || window.supabase;
+        const campId = window.CampistryDB?.getCampId?.();
+        
+        if (!client || !campId) {
+            console.warn('[UnifiedSchedule] No client/campId - local save only');
+            return { success: true, target: 'local' };
+        }
+        
+        try {
+            // Step 3: Load ALL records for this date
+            console.log('[UnifiedSchedule] 🔓 Loading all scheduler records for cross-division update...');
+            const { data: allRecords, error: loadError } = await client
+                .from('daily_schedules')
+                .select('*')
+                .eq('camp_id', campId)
+                .eq('date_key', dateKey);
+            
+            if (loadError) {
+                console.error('[UnifiedSchedule] Failed to load records:', loadError);
+                // Fallback to old method
+                return await fallbackBypassSave(dateKey, modifiedBunks);
+            }
+            
+            console.log(`[UnifiedSchedule] 🔓 Found ${allRecords?.length || 0} scheduler records`);
+            
+            if (!allRecords || allRecords.length === 0) {
+                // No existing records - use standard save
+                console.log('[UnifiedSchedule] 🔓 No existing records, using standard save');
+                return await fallbackBypassSave(dateKey, modifiedBunks);
+            }
+            
+            // Step 4: Build a map of bunk -> record
+            const bunkToRecord = {};
+            (allRecords || []).forEach(record => {
+                const assignments = record.schedule_data?.scheduleAssignments || {};
+                Object.keys(assignments).forEach(bunk => {
+                    bunkToRecord[bunk] = record;
+                });
+            });
+            
+            // Step 5: Group modified bunks by their owning record
+            const recordUpdates = new Map(); // record.id -> { record, bunksToUpdate }
+            const orphanBunks = []; // Bunks not in any record (will go to current user)
+            
+            modifiedBunks.forEach(bunk => {
+                const bunkStr = String(bunk);
+                const owningRecord = bunkToRecord[bunkStr];
+                
+                if (owningRecord) {
+                    if (!recordUpdates.has(owningRecord.id)) {
+                        recordUpdates.set(owningRecord.id, { 
+                            record: owningRecord, 
+                            bunksToUpdate: [] 
+                        });
+                    }
+                    recordUpdates.get(owningRecord.id).bunksToUpdate.push(bunkStr);
+                } else {
+                    orphanBunks.push(bunkStr);
+                }
+            });
+            
+            console.log(`[UnifiedSchedule] 🔓 Updates needed:`, 
+                [...recordUpdates.entries()].map(([id, data]) => 
+                    `${data.record.scheduler_name || 'unknown'}: bunks ${data.bunksToUpdate.join(', ')}`
+                )
+            );
+            if (orphanBunks.length > 0) {
+                console.log(`[UnifiedSchedule] 🔓 Orphan bunks (will add to your record): ${orphanBunks.join(', ')}`);
+            }
+            
+            // Step 6: Update each record directly
+            let successCount = 0;
+            let failCount = 0;
+            const updatedSchedulers = [];
+            
+            for (const [recordId, { record, bunksToUpdate }] of recordUpdates) {
+                const scheduleData = record.schedule_data || {};
+                const assignments = { ...(scheduleData.scheduleAssignments || {}) };
+                const leagues = { ...(scheduleData.leagueAssignments || {}) };
+                
+                // Apply updates from window globals
+                bunksToUpdate.forEach(bunk => {
+                    if (window.scheduleAssignments[bunk]) {
+                        assignments[bunk] = window.scheduleAssignments[bunk];
+                    }
+                    if (window.leagueAssignments?.[bunk]) {
+                        leagues[bunk] = window.leagueAssignments[bunk];
+                    }
+                });
+                
+                const updatedData = {
+                    ...scheduleData,
+                    scheduleAssignments: assignments,
+                    leagueAssignments: leagues
+                };
+                
+                // Serialize unifiedTimes (fallback empty if not present)
+                const serializedTimes = window.ScheduleDB?.serializeUnifiedTimes?.(window.unifiedTimes) 
+                    || window.unifiedTimes?.map(t => ({
+                        start: t.start instanceof Date ? t.start.toISOString() : t.start,
+                        end: t.end instanceof Date ? t.end.toISOString() : t.end,
+                        startMin: t.startMin,
+                        endMin: t.endMin,
+                        label: t.label
+                    })) || [];
+                
+                const { error: updateError } = await client
+                    .from('daily_schedules')
+                    .update({
+                        schedule_data: updatedData,
+                        unified_times: serializedTimes,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('id', recordId);
+                
+                if (updateError) {
+                    console.error(`[UnifiedSchedule] ❌ Failed to update ${record.scheduler_name || 'unknown'}:`, updateError);
+                    failCount++;
+                } else {
+                    console.log(`[UnifiedSchedule] ✅ Updated ${record.scheduler_name || 'unknown'} with bunks: ${bunksToUpdate.join(', ')}`);
+                    successCount++;
+                    updatedSchedulers.push(record.scheduler_name || record.scheduler_id);
+                }
+            }
+            
+            // Step 7: Handle orphan bunks (add to current user's record via standard save)
+            if (orphanBunks.length > 0) {
+                console.log(`[UnifiedSchedule] 🔓 Saving orphan bunks via standard method...`);
+                if (window.ScheduleDB?.saveSchedule) {
+                    try {
+                        await window.ScheduleDB.saveSchedule(dateKey, {
+                            scheduleAssignments: window.scheduleAssignments,
+                            leagueAssignments: window.leagueAssignments || {},
+                            unifiedTimes: window.unifiedTimes
+                        }, { skipFilter: true, immediate: true });
+                        successCount++;
+                    } catch (e) {
+                        console.error('[UnifiedSchedule] Orphan save error:', e);
+                        failCount++;
+                    }
+                }
+            }
+            
+            // Step 8: Sync and dispatch events
+            try {
+                if (window.ScheduleSync?.forceSave) await window.ScheduleSync.forceSave();
+                if (window.forceSyncToCloud) await window.forceSyncToCloud();
+                window.dispatchEvent(new CustomEvent('campistry-bypass-save-complete', { 
+                    detail: { 
+                        dateKey, 
+                        modifiedBunks, 
+                        successCount, 
+                        failCount,
+                        updatedSchedulers,
+                        timestamp: Date.now() 
+                    } 
+                }));
+            } catch (e) { 
+                console.warn('[UnifiedSchedule] Bypass sync broadcast warning:', e); 
+            }
+            
+            // Step 9: Show toast
+            if (window.showToast) {
+                const divisions = window.divisions || {};
+                const divisionNames = new Set();
+                modifiedBunks.forEach(bunk => { 
+                    for (const [divName, divData] of Object.entries(divisions)) { 
+                        if (divData.bunks?.includes(bunk) || divData.bunks?.includes(String(bunk))) 
+                            divisionNames.add(divName); 
+                    } 
+                });
+                const schedulerInfo = updatedSchedulers.length > 0 ? ` (updated: ${updatedSchedulers.join(', ')})` : '';
+                window.showToast(
+                    `🔓 Cross-division bypass: ${modifiedBunks.length} bunk(s) in Div ${[...divisionNames].join(', ')}${schedulerInfo}`, 
+                    failCount === 0 ? 'success' : 'warning'
+                );
+            }
+            
+            return { 
+                success: failCount === 0, 
+                successCount, 
+                failCount, 
+                updatedSchedulers,
+                target: 'cloud-direct' 
+            };
+            
+        } catch (e) {
+            console.error('[UnifiedSchedule] Bypass save exception:', e);
+            // Fallback to old method
+            return await fallbackBypassSave(dateKey, modifiedBunks);
+        }
+    }
+    
+    // Fallback method (original behavior)
+    async function fallbackBypassSave(dateKey, modifiedBunks) {
+        console.log('[UnifiedSchedule] 🔓 Using fallback bypass save (skipFilter)');
+        let cloudResult = { success: false };
+        if (window.ScheduleDB?.saveSchedule) {
+            try {
+                cloudResult = await window.ScheduleDB.saveSchedule(dateKey, { 
+                    scheduleAssignments: window.scheduleAssignments, 
+                    leagueAssignments: window.leagueAssignments || {}, 
+                    unifiedTimes: window.unifiedTimes, 
+                    _bypassSaveAt: Date.now(), 
+                    _modifiedBunks: modifiedBunks 
+                }, { skipFilter: true, immediate: true, forceSync: true });
+            } catch (e) { 
+                console.error('[UnifiedSchedule] Fallback bypass save exception:', e); 
+            }
+        }
+        
+        try {
+            if (window.ScheduleSync?.forceSave) await window.ScheduleSync.forceSave();
+            if (window.forceSyncToCloud) await window.forceSyncToCloud();
+            window.dispatchEvent(new CustomEvent('campistry-bypass-save-complete', { 
+                detail: { dateKey, modifiedBunks, timestamp: Date.now() } 
+            }));
+        } catch (e) { 
+            console.warn('[UnifiedSchedule] Fallback sync warning:', e); 
+        }
+        
+        if (window.showToast) {
+            const divisions = window.divisions || {};
+            const divisionNames = new Set();
+            modifiedBunks.forEach(bunk => { 
+                for (const [divName, divData] of Object.entries(divisions)) { 
+                    if (divData.bunks?.includes(bunk) || divData.bunks?.includes(String(bunk))) 
+                        divisionNames.add(divName); 
+                } 
+            });
+            window.showToast(
+                `🔓 Bypass saved: ${modifiedBunks.length} bunk(s)${[...divisionNames].length ? ` in Div ${[...divisionNames].join(', ')}` : ''} - synced`, 
+                'success'
+            );
+        }
+        return cloudResult;
+    }
+
+    // =========================================================================
+    // SCHEDULER NOTIFICATION
+    // =========================================================================
+
+    async function sendSchedulerNotification(affectedBunks, location, activity, notificationType) {
+        const supabase = window.CampistryDB?.getClient?.() || window.supabase;
+        if (!supabase) return;
+        const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
+        const userId = window.CampistryDB?.getUserId?.() || null;
+        const dateKey = window.currentDate || new Date().toISOString().split('T')[0];
+        if (!campId) return;
+        try {
+            const affectedDivisions = new Set();
+            const divisions = window.divisions || {};
+            for (const bunk of affectedBunks) { for (const [divName, divData] of Object.entries(divisions)) { if (divData.bunks?.includes(bunk)) affectedDivisions.add(divName); } }
+            const { data: schedulers } = await supabase.from('camp_users').select('user_id, divisions').eq('camp_id', campId).neq('user_id', userId);
+            if (!schedulers) return;
+            const notifyUsers = schedulers.filter(s => (s.divisions || []).some(d => affectedDivisions.has(d))).map(s => s.user_id);
+            if (notifyUsers.length === 0) return;
+            const notifications = notifyUsers.map(targetUserId => ({
+                camp_id: campId, user_id: targetUserId,
+                type: notificationType === 'bypassed' ? 'schedule_bypassed' : 'schedule_conflict',
+                title: notificationType === 'bypassed' ? '🔓 Your schedule was modified' : '⚠️ Schedule conflict detected',
+                message: notificationType === 'bypassed' ? `Another scheduler reassigned bunks (${affectedBunks.join(', ')}) for ${location} - ${activity} on ${dateKey}` : `Conflict at ${location} for ${activity} on ${dateKey}. Affected bunks: ${affectedBunks.join(', ')}`,
+                metadata: { dateKey, bunks: affectedBunks, location, activity, initiatedBy: userId },
+                read: false, created_at: new Date().toISOString()
+            }));
+            await supabase.from('notifications').insert(notifications);
+        } catch (e) { console.error('[UnifiedSchedule] Notification error:', e); }
+    }
+
+    // =========================================================================
+    // RESOLVE CONFLICTS AND APPLY
+    // =========================================================================
+
+    async function resolveConflictsAndApply(bunk, slots, activity, location, editData) {
+        const editableConflicts = editData.editableConflicts || [];
+        const nonEditableConflicts = editData.nonEditableConflicts || [];
+        const resolutionChoice = editData.resolutionChoice || 'notify';
+        applyDirectEdit(bunk, slots, activity, location, false, true);
+        if (window.GlobalFieldLocks) { const divName = window.getDivisionForBunk(bunk); window.GlobalFieldLocks.lockField(location, slots, { lockedBy: 'post_edit_pinned', division: divName, activity }); }
+        let conflictsToResolve = [...editableConflicts];
+        const bypassMode = resolutionChoice === 'bypass';
+        if (bypassMode && nonEditableConflicts.length > 0) { console.log('[UnifiedSchedule] 🔓 BYPASS MODE'); conflictsToResolve = [...conflictsToResolve, ...nonEditableConflicts]; }
+        if (conflictsToResolve.length > 0) {
+            const result = smartRegenerateConflicts(bunk, slots, location, activity, conflictsToResolve, bypassMode);
+            if (bypassMode) {
+                const modifiedBunks = [...result.reassigned.map(r => r.bunk), ...result.failed.map(f => f.bunk)];
+                window._postEditInProgress = true; window._postEditTimestamp = Date.now();
+                await bypassSaveAllBunks(modifiedBunks);
+                // ★★★ Enable bypass view to show reassigned bunks ★★★
+                const reassignedBunks = result.reassigned.map(r => r.bunk);
+                if (reassignedBunks.length > 0) enableBypassRBACView(reassignedBunks);
+                if (nonEditableConflicts.length > 0) { sendSchedulerNotification([...new Set(nonEditableConflicts.map(c => c.bunk))], location, activity, 'bypassed'); if (window.showToast) window.showToast(`🔓 Bypassed permissions - reassigned ${nonEditableConflicts.length} bunk(s)`, 'info'); }
+            } else if (nonEditableConflicts.length > 0) { sendSchedulerNotification([...new Set(nonEditableConflicts.map(c => c.bunk))], location, activity, 'conflict'); if (window.showToast) window.showToast(`📧 Notification sent about ${nonEditableConflicts.length} conflict(s)`, 'warning'); }
+        }
+    }
+
+    // =========================================================================
+    // APPLY EDIT
+    // =========================================================================
+
+    async function applyEdit(bunk, editData) {
+        const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
+        // ★ FIX: Use division-specific times ★
+        const divName = window.getDivisionForBunk(bunk);
+        const divTimes = window.divisionTimes?.[divName] || [];
+        const isClear = activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
+        // ★ FIX: Pass division name for correct slot lookup ★
+        const slots = window.findSlotsForRange(startMin, endMin, divName);
+        if (slots.length === 0) { alert('Error: Could not find time slots.'); return; }
+        window._postEditInProgress = true; window._postEditTimestamp = Date.now();
+        if (!window.scheduleAssignments) window.scheduleAssignments = {};
+        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divTimes.length || 50);
+        if (hasConflict) await resolveConflictsAndApply(bunk, slots, activity, location, editData);
+        else applyDirectEdit(bunk, slots, activity, location, isClear, true);
+        const currentDate = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
+        try {
+            localStorage.setItem(`scheduleAssignments_${currentDate}`, JSON.stringify(window.scheduleAssignments));
+            const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+            if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
+            allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
+            allDailyData[currentDate].leagueAssignments = window.leagueAssignments || {};
+            // Change 1.9: Removed unifiedTimes from localStorage
+            allDailyData[currentDate]._postEditAt = Date.now();
+            localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
+        } catch (e) { console.error('[UnifiedSchedule] Failed to save to localStorage:', e); }
+        setTimeout(() => { window._postEditInProgress = false; }, 8000);
+        document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', { detail: { bunk, slots, activity, location, date: currentDate } }));
+        saveSchedule(); updateTable();
+        setTimeout(() => updateTable(), 300);
+    }
+
+    // =========================================================================
+    // MODAL UI (LEGACY / DIRECT EDIT FALLBACK)
+    // =========================================================================
+
+    function createModal() {
+        document.getElementById(OVERLAY_ID)?.remove(); document.getElementById(MODAL_ID)?.remove();
+        const overlay = document.createElement('div'); overlay.id = OVERLAY_ID;
+        overlay.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); z-index: 10000; display: flex; align-items: center; justify-content: center;';
+        const modal = document.createElement('div'); modal.id = MODAL_ID;
+        modal.style.cssText = 'background: white; border-radius: 12px; padding: 24px; min-width: 400px; max-width: 500px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-height: 90vh; overflow-y: auto;';
+        overlay.appendChild(modal); document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+        document.addEventListener('keydown', function escHandler(e) { if (e.key === 'Escape') { closeModal(); document.removeEventListener('keydown', escHandler); } });
+        return modal;
+    }
+
+    function closeModal() { document.getElementById(OVERLAY_ID)?.remove(); }
+
+    function showEditModal(bunk, startMin, endMin, currentValue, onSave) {
+        const modal = createModal();
+        const locations = getAllLocations();
+        const unifiedTimes = window.unifiedTimes || [];
+        let currentActivity = currentValue || '', currentField = '', resolutionChoice = 'notify';
+        const slots = window.findSlotsForRange(startMin, endMin, unifiedTimes);
+        if (slots.length > 0) {
+            const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
+            if (entry) { currentField = typeof entry.field === 'object' ? entry.field?.name : (entry.field || ''); currentActivity = entry._activity || currentField || currentValue; }
+        }
+        modal.innerHTML = `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;"><h2 style="margin: 0; font-size: 1.25rem; color: #1f2937;">Edit Schedule Cell</h2><button id="post-edit-close" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #9ca3af;">&times;</button></div><div style="background: #f3f4f6; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;"><div style="font-weight: 600; color: #374151;">${bunk}</div><div style="font-size: 0.875rem; color: #6b7280;" id="post-edit-time-display">${window.minutesToTimeLabel(startMin)} - ${window.minutesToTimeLabel(endMin)}</div></div><div style="display: flex; flex-direction: column; gap: 16px;"><div><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">Activity Name</label><input type="text" id="post-edit-activity" value="${window.escapeHtml(currentActivity)}" placeholder="e.g., Basketball" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box;"><div style="font-size: 0.75rem; color: #9ca3af; margin-top: 4px;">Enter CLEAR or FREE to empty</div></div><div><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">Location / Field</label><select id="post-edit-location" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box; background: white;"><option value="">-- No specific location --</option><optgroup label="Fields">${locations.filter(l => l.type === 'field').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}${l.capacity > 1 ? ` (capacity: ${l.capacity})` : ''}</option>`).join('')}</optgroup><optgroup label="Special Activities">${locations.filter(l => l.type === 'special').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}</option>`).join('')}</optgroup></select></div><div><button type="button" id="post-edit-time-toggle" style="background: none; border: none; color: #2563eb; font-size: 0.875rem; cursor: pointer; padding: 0; display: flex; align-items: center; gap: 4px;"><span id="post-edit-time-arrow">▶</span> Change time</button><div id="post-edit-time-section" style="display: none; margin-top: 12px;"><div style="display: flex; gap: 12px;"><div style="flex: 1;"><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px; font-size: 0.875rem;">Start Time</label><input type="time" id="post-edit-start" value="${window.minutesToTimeString(startMin)}" style="width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.9rem; box-sizing: border-box;"></div><div style="flex: 1;"><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px; font-size: 0.875rem;">End Time</label><input type="time" id="post-edit-end" value="${window.minutesToTimeString(endMin)}" style="width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.9rem; box-sizing: border-box;"></div></div></div></div><div id="post-edit-conflict" style="display: none;"></div><div style="display: flex; gap: 12px; margin-top: 8px;"><button id="post-edit-cancel" style="flex: 1; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; background: white; color: #374151; font-size: 1rem; cursor: pointer; font-weight: 500;">Cancel</button><button id="post-edit-save" style="flex: 1; padding: 12px; border: none; border-radius: 8px; background: #2563eb; color: white; font-size: 1rem; cursor: pointer; font-weight: 500;">Save Changes</button></div></div>`;
+        let useOriginalTime = true;
+        const originalStartMin = startMin, originalEndMin = endMin;
+        document.getElementById('post-edit-close').onclick = closeModal;
+        document.getElementById('post-edit-cancel').onclick = closeModal;
+        const timeToggle = document.getElementById('post-edit-time-toggle'), timeSection = document.getElementById('post-edit-time-section'), timeArrow = document.getElementById('post-edit-time-arrow'), timeDisplay = document.getElementById('post-edit-time-display');
+        timeToggle.onclick = () => { const isHidden = timeSection.style.display === 'none'; timeSection.style.display = isHidden ? 'block' : 'none'; timeArrow.textContent = isHidden ? '▼' : '▶'; useOriginalTime = !isHidden; };
+        const locationSelect = document.getElementById('post-edit-location'), conflictArea = document.getElementById('post-edit-conflict'), startInput = document.getElementById('post-edit-start'), endInput = document.getElementById('post-edit-end');
+        function getEffectiveTimes() { return useOriginalTime ? { startMin: originalStartMin, endMin: originalEndMin } : { startMin: window.parseTimeToMinutes(startInput.value) || originalStartMin, endMin: window.parseTimeToMinutes(endInput.value) || originalEndMin }; }
+        function updateTimeDisplay() { const times = getEffectiveTimes(); timeDisplay.textContent = `${window.minutesToTimeLabel(times.startMin)} - ${window.minutesToTimeLabel(times.endMin)}`; }
+        function checkAndShowConflicts() {
+            const location = locationSelect.value; const times = getEffectiveTimes();
+            if (!location) { conflictArea.style.display = 'none'; return null; }
+            const targetSlots = window.findSlotsForRange(times.startMin, times.endMin, unifiedTimes);
+            const conflictCheck = checkLocationConflict(location, targetSlots, bunk);
+            if (conflictCheck.hasConflict) {
+                const editableBunks = [...new Set(conflictCheck.editableConflicts.map(c => c.bunk))];
+                const nonEditableBunks = [...new Set(conflictCheck.nonEditableConflicts.map(c => c.bunk))];
+                conflictArea.style.display = 'block';
+                let html = `<div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;"><div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"><span style="font-size: 1.25rem;">⚠️</span><strong style="color: #92400e;">Location Conflict Detected</strong></div><p style="margin: 0 0 8px 0; color: #78350f; font-size: 0.875rem;"><strong>${location}</strong> is already in use:</p>`;
+                if (editableBunks.length > 0) html += `<div style="margin-bottom: 8px; padding: 8px; background: #d1fae5; border-radius: 6px;"><div style="font-size: 0.8rem; color: #065f46;"><strong>✓ Can auto-reassign:</strong> ${editableBunks.join(', ')}</div></div>`;
+                if (nonEditableBunks.length > 0) html += `<div style="margin-bottom: 8px; padding: 8px; background: #fee2e2; border-radius: 6px;"><div style="font-size: 0.8rem; color: #991b1b;"><strong>✗ Other scheduler's bunks:</strong> ${nonEditableBunks.join(', ')}</div></div><div style="margin-top: 12px;"><div style="font-weight: 500; color: #374151; margin-bottom: 8px; font-size: 0.875rem;">How to handle their bunks?</div><div style="display: flex; flex-direction: column; gap: 8px;"><label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="notify" checked style="margin-top: 2px;"><div><div style="font-weight: 500; color: #374151;">📧 Notify other scheduler</div><div style="font-size: 0.75rem; color: #6b7280;">Create double-booking & send them a warning</div></div></label><label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="bypass" style="margin-top: 2px;"><div><div style="font-weight: 500; color: #374151;">🔓 Bypass & reassign (Admin mode)</div><div style="font-size: 0.75rem; color: #6b7280;">Override permissions and use smart regeneration</div></div></label></div></div>`;
+                html += `</div>`; conflictArea.innerHTML = html;
+                conflictArea.querySelectorAll('input[name="conflict-resolution"]').forEach(radio => { radio.addEventListener('change', (e) => { resolutionChoice = e.target.value; }); });
+                return conflictCheck;
+            } else { conflictArea.style.display = 'none'; return null; }
+        }
+        locationSelect.addEventListener('change', checkAndShowConflicts);
+        startInput.addEventListener('change', () => { updateTimeDisplay(); checkAndShowConflicts(); });
+        endInput.addEventListener('change', () => { updateTimeDisplay(); checkAndShowConflicts(); });
+        checkAndShowConflicts();
+        document.getElementById('post-edit-save').onclick = () => {
+            const activity = document.getElementById('post-edit-activity').value.trim();
+            const location = locationSelect.value; const times = getEffectiveTimes();
+            if (!activity) { alert('Please enter an activity name.'); return; }
+            if (times.endMin <= times.startMin) { alert('End time must be after start time.'); return; }
+            const targetSlots = window.findSlotsForRange(times.startMin, times.endMin, unifiedTimes);
+            const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
+            if (conflictCheck?.hasConflict) onSave({ activity, location, startMin: times.startMin, endMin: times.endMin, hasConflict: true, conflicts: conflictCheck.conflicts, editableConflicts: conflictCheck.editableConflicts || [], nonEditableConflicts: conflictCheck.nonEditableConflicts || [], resolutionChoice });
+            else onSave({ activity, location, startMin: times.startMin, endMin: times.endMin, hasConflict: false, conflicts: [] });
+            closeModal();
+        };
+        document.getElementById('post-edit-activity').focus(); document.getElementById('post-edit-activity').select();
+    }
+
+    function enhancedEditCell(bunk, startMin, endMin, current) {
+        if (!window.canEditBunk(bunk)) { alert('You do not have permission to edit this schedule.'); return; }
+        showEditModal(bunk, startMin, endMin, current, (editData) => applyEdit(bunk, editData));
+    }
+
+    function editCell(bunk, startMin, endMin, current) { enhancedEditCell(bunk, startMin, endMin, current); }
+
+    // =========================================================================
+    // SAVE & UPDATE
+    // =========================================================================
+
+    function saveSchedule() {
+        const silent = window._postEditInProgress;
+        if (window.saveCurrentDailyData) {
+            window.saveCurrentDailyData('scheduleAssignments', window.scheduleAssignments, { silent });
+            window.saveCurrentDailyData('leagueAssignments', window.leagueAssignments, { silent });
+            // Save divisionTimes instead of unifiedTimes (unifiedTimes is deprecated)
+            window.saveCurrentDailyData('divisionTimes', window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || {}, { silent });
+        }
+    }
 
     function updateTable() {
         const now = Date.now();
-        
-        // Force immediate render during post-edit
         if (window._postEditInProgress) {
-            _lastRenderTime = now;
-            _renderQueued = false;
-            if (_renderTimeout) {
-                clearTimeout(_renderTimeout);
-                _renderTimeout = null;
-            }
+            _lastRenderTime = now; _renderQueued = false; if (_renderTimeout) { clearTimeout(_renderTimeout); _renderTimeout = null; }
             const container = document.getElementById('scheduleTable');
             if (container) renderStaggeredView(container);
             return;
         }
-        
-        // Debounce normal renders
         if (now - _lastRenderTime < RENDER_DEBOUNCE_MS) {
-            if (!_renderQueued) {
-                _renderQueued = true;
-                if (_renderTimeout) clearTimeout(_renderTimeout);
-                _renderTimeout = setTimeout(() => {
-                    _renderQueued = false;
-                    _lastRenderTime = Date.now();
-                    const container = document.getElementById('scheduleTable');
-                    if (container) renderStaggeredView(container);
-                }, RENDER_DEBOUNCE_MS);
-            }
+            if (!_renderQueued) { _renderQueued = true; if (_renderTimeout) clearTimeout(_renderTimeout); _renderTimeout = setTimeout(() => { _renderQueued = false; _lastRenderTime = Date.now(); const container = document.getElementById('scheduleTable'); if (container) renderStaggeredView(container); }, RENDER_DEBOUNCE_MS); }
             return;
         }
-        
         _lastRenderTime = now;
         const container = document.getElementById('scheduleTable');
         if (container) renderStaggeredView(container);
@@ -1182,149 +1693,623 @@
     const VersionManager = {
         async saveVersion(name) {
             const dateKey = getDateKey();
-            if (!dateKey) {
-                alert('Please select a date first.');
-                return { success: false };
-            }
-            
-            if (!name) {
-                name = prompt('Enter a name for this version:');
-                if (!name) return { success: false };
-            }
-            
-            const dailyData = loadDailyData();
-            const dateData = dailyData[dateKey] || {};
-            
-            const payload = {
-                scheduleAssignments: window.scheduleAssignments || dateData.scheduleAssignments || {},
-                leagueAssignments: window.leagueAssignments || dateData.leagueAssignments || {},
-                unifiedTimes: window.unifiedTimes || dateData.unifiedTimes || []
-            };
-            
-            if (Object.keys(payload.scheduleAssignments).length === 0) {
-                alert('No schedule data to save.');
-                return { success: false };
-            }
-            
-            if (!window.ScheduleVersionsDB) {
-                alert('Version database not available.');
-                return { success: false };
-            }
-            
+            if (!dateKey) { alert('Please select a date first.'); return { success: false }; }
+            if (!name) { name = prompt('Enter a name for this version:'); if (!name) return { success: false }; }
+            const dailyData = loadDailyData(); const dateData = dailyData[dateKey] || {};
+            const payload = { scheduleAssignments: window.scheduleAssignments || dateData.scheduleAssignments || {}, leagueAssignments: window.leagueAssignments || dateData.leagueAssignments || {}, unifiedTimes: window.unifiedTimes || dateData.unifiedTimes || [] };
+            if (Object.keys(payload.scheduleAssignments).length === 0) { alert('No schedule data to save.'); return { success: false }; }
+            if (!window.ScheduleVersionsDB) { alert('Version database not available.'); return { success: false }; }
             try {
                 const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
                 const existing = versions.find(v => v.name.toLowerCase() === name.toLowerCase());
-                
-                if (existing) {
-                    if (!confirm(`Version "${existing.name}" already exists. Overwrite?`)) {
-                        return { success: false };
-                    }
-                    if (window.ScheduleVersionsDB.updateVersion) {
-                        const result = await window.ScheduleVersionsDB.updateVersion(existing.id, payload);
-                        if (result.success) {
-                            alert('✅ Version updated!');
-                            return { success: true };
-                        } else {
-                            alert('❌ Error: ' + result.error);
-                            return { success: false };
-                        }
-                    }
-                }
-                
+                if (existing) { if (!confirm(`Version "${existing.name}" already exists. Overwrite?`)) return { success: false }; if (window.ScheduleVersionsDB.updateVersion) { const result = await window.ScheduleVersionsDB.updateVersion(existing.id, payload); if (result.success) { alert('✅ Version updated!'); return { success: true }; } else { alert('❌ Error: ' + result.error); return { success: false }; } } }
                 const result = await window.ScheduleVersionsDB.createVersion(dateKey, name, payload);
-                if (result.success) {
-                    alert('✅ Version saved!');
-                    return { success: true };
-                } else {
-                    alert('❌ Error: ' + result.error);
-                    return { success: false };
-                }
-            } catch (e) {
-                console.error('[VersionManager] Error saving version:', e);
-                alert('❌ Error saving version');
-                return { success: false };
-            }
+                if (result.success) { alert('✅ Version saved!'); return { success: true }; } else { alert('❌ Error: ' + result.error); return { success: false }; }
+            } catch (err) { alert('Error: ' + err.message); return { success: false }; }
         },
-        
-        async loadVersion(versionId) {
-            if (!window.ScheduleVersionsDB) {
-                alert('Version database not available.');
-                return { success: false };
-            }
-            
+        async loadVersion() {
+            const dateKey = getDateKey();
+            if (!dateKey || !window.ScheduleVersionsDB) { alert('Not available.'); return; }
             try {
-                const version = await window.ScheduleVersionsDB.getVersion(versionId);
-                if (!version) {
-                    alert('Version not found.');
-                    return { success: false };
-                }
-                
-                const data = version.schedule_data || version.data || {};
-                
-                if (data.scheduleAssignments) {
-                    window.scheduleAssignments = data.scheduleAssignments;
-                }
-                if (data.leagueAssignments) {
-                    window.leagueAssignments = data.leagueAssignments;
-                }
-                if (data.unifiedTimes) {
-                    window.unifiedTimes = data.unifiedTimes;
-                }
-                
-                saveSchedule();
-                updateTable();
-                
-                alert(`✅ Loaded version: ${version.name}`);
-                return { success: true };
-            } catch (e) {
-                console.error('[VersionManager] Error loading version:', e);
-                alert('❌ Error loading version');
-                return { success: false };
-            }
+                const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
+                if (!versions?.length) { alert('No saved versions.'); return; }
+                let msg = 'Select a version:\n\n'; versions.forEach((v, i) => { msg += `${i + 1}. ${v.name} (${new Date(v.created_at).toLocaleTimeString()})\n`; });
+                const choice = prompt(msg); if (!choice) return;
+                const index = parseInt(choice) - 1; if (isNaN(index) || !versions[index]) { alert('Invalid selection'); return; }
+                const selected = versions[index]; if (!confirm(`Load "${selected.name}"?`)) return;
+                let data = selected.schedule_data; if (typeof data === 'string') try { data = JSON.parse(data); } catch(e) {}
+                window.scheduleAssignments = data.scheduleAssignments || data;
+                if (data.leagueAssignments) window.leagueAssignments = data.leagueAssignments;
+                // Change 1.10: Removed unifiedTimes hydration
+                saveSchedule(); updateTable(); alert('✅ Version loaded!');
+            } catch (err) { alert('Error: ' + err.message); }
         },
-        
-        async listVersions(dateKey) {
-            if (!window.ScheduleVersionsDB) return [];
-            
-            try {
-                return await window.ScheduleVersionsDB.listVersions(dateKey || getDateKey());
-            } catch (e) {
-                console.error('[VersionManager] Error listing versions:', e);
-                return [];
-            }
-        },
-        
-        async deleteVersion(versionId) {
-            if (!window.ScheduleVersionsDB?.deleteVersion) {
-                alert('Delete not supported.');
-                return { success: false };
-            }
-            
-            if (!confirm('Are you sure you want to delete this version?')) {
-                return { success: false };
-            }
-            
-            try {
-                await window.ScheduleVersionsDB.deleteVersion(versionId);
-                alert('✅ Version deleted');
-                return { success: true };
-            } catch (e) {
-                console.error('[VersionManager] Error deleting version:', e);
-                alert('❌ Error deleting version');
-                return { success: false };
-            }
-        },
-        
         async mergeVersions() {
-            // Placeholder for merge functionality
-            console.log('[VersionManager] Merge not yet implemented');
-            return { success: false, reason: 'Not implemented' };
+            const dateKey = getDateKey();
+            if (!dateKey || !window.ScheduleVersionsDB) { alert('Not available.'); return { success: false }; }
+            if (!confirm(`Merge ALL versions for ${dateKey}?`)) return { success: false };
+            try {
+                const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
+                if (!versions?.length) { alert('No versions to merge.'); return { success: false }; }
+                const mergedAssignments = {}; const bunksTouched = new Set(); let latestLeagueData = null;
+                versions.forEach(ver => {
+                    let scheduleData = ver.schedule_data || ver.data || ver.payload;
+                    if (typeof scheduleData === 'string') try { scheduleData = JSON.parse(scheduleData); } catch(e) {}
+                    if (!scheduleData) return;
+                    const assignments = scheduleData.scheduleAssignments || scheduleData;
+                    if (assignments && typeof assignments === 'object') Object.entries(assignments).forEach(([bunkId, slots]) => { mergedAssignments[bunkId] = slots; bunksTouched.add(bunkId); });
+                    if (scheduleData.leagueAssignments) latestLeagueData = scheduleData.leagueAssignments;
+                });
+                window.scheduleAssignments = mergedAssignments;
+                if (latestLeagueData) window.leagueAssignments = latestLeagueData;
+                saveSchedule(); updateTable();
+                alert(`✅ Merged ${versions.length} versions (${bunksTouched.size} bunks).`);
+                return { success: true, count: versions.length, bunks: bunksTouched.size };
+            } catch (err) { alert('Error: ' + err.message); return { success: false }; }
         }
     };
 
     // =========================================================================
-    // AUTO-BACKUP SYSTEM
+    // SCHEDULER HOOKS FOR PINNED ACTIVITIES
     // =========================================================================
+
+    function hookSchedulerGeneration() {
+        if (typeof window.runScheduler === 'function' && !window.runScheduler._pinnedHooked) {
+            const originalRunScheduler = window.runScheduler;
+            window.runScheduler = async function(...args) {
+                capturePinnedActivities(args[0]?.allowedDivisions || null);
+                const result = await originalRunScheduler.apply(this, args);
+                if (Object.keys(_pinnedSnapshot).length > 0) { restorePinnedActivities(); saveSchedule(); }
+                return result;
+            };
+            window.runScheduler._pinnedHooked = true;
+        }
+        if (typeof window.generateSchedule === 'function' && !window.generateSchedule._pinnedHooked) {
+            const originalGenerateSchedule = window.generateSchedule;
+            window.generateSchedule = async function(...args) {
+                capturePinnedActivities(args[0]?.allowedDivisions || window.selectedDivisionsForGeneration || null);
+                const result = await originalGenerateSchedule.apply(this, args);
+                if (Object.keys(_pinnedSnapshot).length > 0) { restorePinnedActivities(); saveSchedule(); updateTable(); }
+                return result;
+            };
+            window.generateSchedule._pinnedHooked = true;
+        }
+    }
+
+    // =========================================================================
+    // INITIALIZATION
+    // =========================================================================
+
+    function initScheduleSystem() {
+        if (_initialized) return;
+        loadScheduleForDate(getDateKey());
+        if (!document.getElementById('unified-schedule-styles')) {
+            const style = document.createElement('style'); style.id = 'unified-schedule-styles';
+            style.textContent = `@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } } #${MODAL_ID} input:focus, #${MODAL_ID} select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); } #${MODAL_ID} button:hover { opacity: 0.9; }`;
+            document.head.appendChild(style);
+        }
+        hookSchedulerGeneration();
+        setTimeout(hookSchedulerGeneration, 1000);
+        setTimeout(hookSchedulerGeneration, 3000);
+        _initialized = true;
+    }
+
+    function reconcileOrRenderSaved() { loadScheduleForDate(getDateKey()); updateTable(); }
+
+    // =========================================================================
+    // EVENT LISTENERS
+    // =========================================================================
+
+    window.addEventListener('campistry-cloud-hydrated', () => { if (window._postEditInProgress) return; _cloudHydrated = true; setTimeout(() => { if (!window._postEditInProgress) { loadScheduleForDate(getDateKey()); updateTable(); } }, 100); });
+    window.addEventListener('campistry-cloud-schedule-loaded', () => { if (window._postEditInProgress) return; _cloudHydrated = true; setTimeout(() => { if (!window._postEditInProgress) updateTable(); }, 100); });
+    window.addEventListener('campistry-daily-data-updated', () => { if (window._postEditInProgress) return; loadScheduleForDate(getDateKey()); updateTable(); });
+    window.addEventListener('campistry-date-changed', (e) => { if (window._postEditInProgress) return; if (window.UnifiedCloudSchedule?.load) window.UnifiedCloudSchedule.load().then(result => { if (!window._postEditInProgress) { if (!result.merged) loadScheduleForDate(e.detail?.dateKey || getDateKey()); updateTable(); } }); else { loadScheduleForDate(e.detail?.dateKey || getDateKey()); updateTable(); } });
+    window.addEventListener('campistry-generation-complete', () => { if (window.UnifiedCloudSchedule?.save) setTimeout(() => window.UnifiedCloudSchedule.save(), 500); updateTable(); });
+    window.addEventListener('campistry-generation-starting', (e) => { capturePinnedActivities(e.detail?.allowedDivisions || null); });
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hideVersionToolbar);
+    else hideVersionToolbar();
+    setTimeout(hideVersionToolbar, 500); setTimeout(hideVersionToolbar, 1500); setTimeout(hideVersionToolbar, 3000);
+
+    // =========================================================================
+    // FIELD PRIORITY CLAIM & INTEGRATED EDIT SYSTEM (v4.0.3)
+    // =========================================================================
+
+    // --- HELPER FUNCTIONS ---
+
+    function minutesToTimeStr(minutes) {
+        if (minutes === null || minutes === undefined) return '';
+        const hours = Math.floor(minutes / 60);
+        const mins = minutes % 60;
+        const h12 = hours > 12 ? hours - 12 : (hours === 0 ? 12 : hours);
+        const ampm = hours >= 12 ? 'PM' : 'AM';
+        return `${h12}:${mins.toString().padStart(2, '0')} ${ampm}`;
+    }
+
+    // --- CORE: FIND ALL CONFLICTS FOR A FIELD CLAIM ---
+
+    function findAllConflictsForClaim(fieldName, slots, excludeBunks = []) {
+        const conflicts = [];
+        const assignments = window.scheduleAssignments || {};
+        const excludeSet = new Set(excludeBunks);
+
+        for (const [bunkName, bunkSlots] of Object.entries(assignments)) {
+            if (excludeSet.has(bunkName)) continue;
+            if (!bunkSlots || !Array.isArray(bunkSlots)) continue;
+
+            for (const slotIdx of slots) {
+                const entry = bunkSlots[slotIdx];
+                if (!entry) continue;
+                
+                const entryField = window.fieldLabel(entry.field);
+                if (entryField !== fieldName) continue;
+                
+                const divName = window.getDivisionForBunk(bunkName);
+                const isPinned = entry._fixed || entry._pinned || entry._bunkOverride;
+                
+                conflicts.push({
+                    bunk: bunkName,
+                    slot: slotIdx,
+                    division: divName,
+                    currentActivity: entry._activity || entry.sport || entryField,
+                    currentField: entryField,
+                    isPinned: isPinned,
+                    entry: entry
+                });
+            }
+        }
+
+        return conflicts;
+    }
+
+    // --- CORE: CASCADE RESOLUTION ENGINE ---
+
+    function buildCascadeResolutionPlan(fieldName, slots, claimingDivision, claimingActivity) {
+        console.log('[CascadeClaim] ★★★ BUILDING RESOLUTION PLAN ★★★');
+        console.log(`[CascadeClaim] Claiming ${fieldName} for ${claimingDivision} (${claimingActivity})`);
+        console.log(`[CascadeClaim] Slots: ${slots.join(', ')}`);
+
+        const plan = [];
+        const blocked = [];
+        const processedConflicts = new Set();
+        const fieldUsageBySlot = window.buildFieldUsageBySlot([]);
+        
+        // Simulate the claim
+        const simulatedUsage = JSON.parse(JSON.stringify(fieldUsageBySlot));
+        for (const slotIdx of slots) {
+            if (!simulatedUsage[slotIdx]) simulatedUsage[slotIdx] = {};
+            simulatedUsage[slotIdx][fieldName] = {
+                count: 999,
+                bunks: { '_CLAIMED_': claimingActivity },
+                divisions: [claimingDivision]
+            };
+        }
+
+        let conflictQueue = findAllConflictsForClaim(fieldName, slots, []);
+        let iteration = 0;
+        const MAX_ITERATIONS = 50;
+
+        while (conflictQueue.length > 0 && iteration < MAX_ITERATIONS) {
+            iteration++;
+            const conflict = conflictQueue.shift();
+            const conflictKey = `${conflict.bunk}:${conflict.slot}`;
+            
+            if (processedConflicts.has(conflictKey)) continue;
+            processedConflicts.add(conflictKey);
+
+            console.log(`[CascadeClaim] Processing conflict #${iteration}: ${conflict.bunk} @ slot ${conflict.slot}`);
+
+            // PINNED ALWAYS WINS
+            if (conflict.isPinned) {
+                console.log(`[CascadeClaim] ❌ BLOCKED: ${conflict.bunk} has PINNED activity`);
+                blocked.push(conflict);
+                continue;
+            }
+
+            const alternative = findAlternativeForBunk(
+                conflict.bunk,
+                [conflict.slot],
+                conflict.division,
+                simulatedUsage,
+                [conflict.currentField]
+            );
+
+            if (!alternative) {
+                console.log(`[CascadeClaim] ❌ BLOCKED: No alternative for ${conflict.bunk}`);
+                blocked.push({ ...conflict, reason: 'No alternative activity available' });
+                continue;
+            }
+
+            console.log(`[CascadeClaim] ✓ Found alternative: ${alternative.activityName} @ ${alternative.field}`);
+
+            plan.push({
+                bunk: conflict.bunk,
+                slot: conflict.slot,
+                division: conflict.division,
+                from: { activity: conflict.currentActivity, field: conflict.currentField },
+                to: { activity: alternative.activityName, field: alternative.field }
+            });
+
+            // Update simulated usage
+            if (simulatedUsage[conflict.slot]?.[conflict.currentField]) {
+                simulatedUsage[conflict.slot][conflict.currentField].count--;
+                delete simulatedUsage[conflict.slot][conflict.currentField].bunks[conflict.bunk];
+            }
+
+            if (!simulatedUsage[conflict.slot]) simulatedUsage[conflict.slot] = {};
+            if (!simulatedUsage[conflict.slot][alternative.field]) {
+                simulatedUsage[conflict.slot][alternative.field] = { count: 0, bunks: {}, divisions: [] };
+            }
+            simulatedUsage[conflict.slot][alternative.field].count++;
+            simulatedUsage[conflict.slot][alternative.field].bunks[conflict.bunk] = alternative.activityName;
+
+            // Check for ripple effects
+            const newConflicts = checkIfMoveCreatesConflict(
+                conflict.bunk, conflict.slot, alternative.field, simulatedUsage, processedConflicts
+            );
+
+            if (newConflicts.length > 0) {
+                console.log(`[CascadeClaim] Ripple: ${newConflicts.length} new conflicts`);
+                conflictQueue.push(...newConflicts);
+            }
+        }
+
+        const success = blocked.length === 0;
+        console.log(`[CascadeClaim] Plan complete: ${plan.length} moves, ${blocked.length} blocked`);
+
+        return { success, plan, blocked };
+    }
+
+    // --- HELPER: FIND ALTERNATIVE ACTIVITY FOR A BUNK ---
+
+   function findAlternativeForBunk(bunk, slots, divName, simulatedUsage, excludeFields = []) {
+        const activityProperties = window.getActivityProperties();
+        const excludeSet = new Set(excludeFields.map(f => window.fieldLabel(f)));
+        
+        // Use the SAME data sources as buildCandidateOptions
+        const settings = window.loadGlobalSettings?.() || {};
+        const app1 = settings.app1 || {};
+        const fieldsBySport = settings.fieldsBySport || {};
+        const disabledFields = window.currentDisabledFields || [];
+
+        const candidates = [];
+        
+        // Sports from fieldsBySport (same as buildCandidateOptions)
+        for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
+            (sportFields || []).forEach(fieldName => {
+                if (excludeSet.has(fieldName)) return;
+                if (disabledFields.includes(fieldName)) return;
+                if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots, divName)) return;
+
+                // Check simulated usage
+                let available = true;
+                const props = activityProperties[fieldName] || {};
+                const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
+
+                for (const slotIdx of slots) {
+                    const usage = simulatedUsage[slotIdx]?.[fieldName];
+                    if (usage && usage.count >= maxCapacity) { available = false; break; }
+                }
+
+                if (available) {
+                    const penalty = calculateRotationPenalty(bunk, sport, slots);
+                    if (penalty !== Infinity) {
+                        candidates.push({ field: fieldName, activityName: sport, type: 'sport', penalty });
+                    }
+                }
+            });
+        }
+
+        // Specials from app1.specialActivities
+        (app1.specialActivities || []).forEach(special => {
+            if (!special.name) return;
+            if (excludeSet.has(special.name)) return;
+            if (disabledFields.includes(special.name)) return;
+            if (window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) return;
+
+            let available = true;
+            const props = activityProperties[special.name] || {};
+            const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
+
+            for (const slotIdx of slots) {
+                const usage = simulatedUsage[slotIdx]?.[special.name];
+                if (usage && usage.count >= maxCapacity) { available = false; break; }
+            }
+
+            if (available) {
+                const penalty = calculateRotationPenalty(bunk, special.name, slots);
+                if (penalty !== Infinity) {
+                    candidates.push({ field: special.name, activityName: special.name, type: 'special', penalty });
+                }
+            }
+        });
+
+        // Fields from app1.fields with their activities
+        (app1.fields || []).forEach(field => {
+            if (!field.name || field.available === false) return;
+            if (excludeSet.has(field.name)) return;
+            if (disabledFields.includes(field.name)) return;
+            if (window.GlobalFieldLocks?.isFieldLocked(field.name, slots, divName)) return;
+
+            let available = true;
+            const props = activityProperties[field.name] || {};
+            const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
+
+            for (const slotIdx of slots) {
+                const usage = simulatedUsage[slotIdx]?.[field.name];
+                if (usage && usage.count >= maxCapacity) { available = false; break; }
+            }
+
+            if (available) {
+                (field.activities || []).forEach(activity => {
+                    const penalty = calculateRotationPenalty(bunk, activity, slots);
+                    if (penalty !== Infinity) {
+                        candidates.push({ field: field.name, activityName: activity, type: 'sport', penalty });
+                    }
+                });
+            }
+        });
+
+        // Sort by penalty (lowest first) and return best
+        candidates.sort((a, b) => a.penalty - b.penalty);
+        
+        console.log(`[findAlternative] ${bunk}: Found ${candidates.length} candidates, best: ${candidates[0]?.activityName || 'none'}`);
+        
+        return candidates[0] || null;
+    }
+    // --- HELPER: CHECK IF MOVE CREATES NEW CONFLICTS ---
+
+    function checkIfMoveCreatesConflict(bunk, slot, newField, simulatedUsage, alreadyProcessed) {
+        const newConflicts = [];
+        const activityProperties = window.getActivityProperties();
+        const props = activityProperties[newField] || {};
+        const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
+
+        const usage = simulatedUsage[slot]?.[newField];
+        if (!usage) return [];
+
+        if (usage.count > maxCapacity) {
+            for (const [otherBunk, activity] of Object.entries(usage.bunks)) {
+                if (otherBunk === bunk || otherBunk === '_CLAIMED_') continue;
+                
+                const conflictKey = `${otherBunk}:${slot}`;
+                if (alreadyProcessed.has(conflictKey)) continue;
+
+                const divName = window.getDivisionForBunk(otherBunk);
+                const entry = window.scheduleAssignments?.[otherBunk]?.[slot];
+                const isPinned = entry?._fixed || entry?._pinned || entry?._bunkOverride;
+
+                newConflicts.push({
+                    bunk: otherBunk, slot, division: divName,
+                    currentActivity: activity, currentField: newField,
+                    isPinned, entry
+                });
+            }
+        }
+
+        return newConflicts;
+    }
+
+    // --- INTEGRATED EDIT MODAL - ENTRY POINT ---
+
+    function openIntegratedEditModal(bunk, slotIdx, existingEntry = null) {
+        closeIntegratedEditModal();
+
+        const divName = window.getDivisionForBunk(bunk);
+        const bunksInDivision = window.getBunksForDivision(divName);
+        // ★ FIX: Use division-specific times ★
+        const times = window.divisionTimes?.[divName] || [];
+        const slotInfo = times[slotIdx] || {};
+        const timeLabel = slotInfo.label || `${minutesToTimeStr(slotInfo.startMin)} - ${minutesToTimeStr(slotInfo.endMin)}`;
+
+        _currentEditContext = { bunk, slotIdx, divName, bunksInDivision, existingEntry, slotInfo };
+
+        showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, window.canEditBunk(bunk));
+    }
+
+    // --- SCOPE SELECTION MODAL ---
+
+    function showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, canEdit) {
+        const overlay = document.createElement('div');
+        overlay.id = INTEGRATED_EDIT_OVERLAY_ID;
+        overlay.style.cssText = ``            position: fixed; top: 0; left: 0; right: 0; bottom: 0;`            background: rgba(0,0,0,0.5); z-index: 9998;`            animation: fadeIn 0.2s ease-out;`        `;
+        overlay.onclick = closeIntegratedEditModal;
+        document.body.appendChild(overlay);
+
+        const modal = document.createElement('div');
+        modal.id = INTEGRATED_EDIT_MODAL_ID;
+        modal.style.cssText = ``            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);`            background: white; border-radius: 12px; padding: 24px;`            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;`            min-width: 400px; max-width: 500px;`            animation: fadeIn 0.2s ease-out;`        `;
+        modal.onclick = e => e.stopPropagation();
+
+        const currentActivity = _currentEditContext.existingEntry?._activity || 
+                               _currentEditContext.existingEntry?.sport || 
+                               _currentEditContext.existingEntry?.field || 'Free';
+        const bunksInDiv = _currentEditContext.bunksInDivision || [];
+
+        modal.innerHTML = ``            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">`                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">✏️ Edit Schedule</h2>`                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #6b7280;">&times;</button>`            </div>``            <div style="background: #f3f4f6; border-radius: 8px; padding: 12px; margin-bottom: 20px;">`                <div style="font-size: 0.9rem; color: #6b7280;">Selected Cell</div>`                <div style="font-weight: 600; color: #1f2937; margin-top: 4px;">${window.escapeHtml(bunk)} • ${window.escapeHtml(timeLabel)}</div>`                <div style="color: #6b7280; font-size: 0.9rem; margin-top: 2px;">Current: ${window.escapeHtml(currentActivity)}</div>`            </div>``            <div style="margin-bottom: 20px;">`                <div style="font-weight: 500; color: #374151; margin-bottom: 12px;">What would you like to edit?</div>`                `                <div style="display: flex; flex-direction: column; gap: 10px;">`                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">`                        <input type="radio" name="edit-scope" value="single" checked style="margin-top: 3px;">`                        <div style="flex: 1;">`                            <div style="font-weight: 500; color: #1f2937;">🏠 Just this bunk</div>`                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Edit ${window.escapeHtml(bunk)} only</div>`                        </div>`                    </label>``                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">`                        <input type="radio" name="edit-scope" value="division" style="margin-top: 3px;">`                        <div style="flex: 1;">`                            <div style="font-weight: 500; color: #1f2937;">👥 Entire division</div>`                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">All ${bunksInDiv.length} bunks in ${window.escapeHtml(divName)}</div>`                        </div>`                    </label>``                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">`                        <input type="radio" name="edit-scope" value="select" style="margin-top: 3px;">`                        <div style="flex: 1;">`                            <div style="font-weight: 500; color: #1f2937;">☑️ Select specific bunks</div>`                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Choose which bunks to edit</div>`                        </div>`                    </label>`                </div>`            </div>``            <div id="bunk-selection-area" style="display: none; margin-bottom: 20px;">`                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Select bunks:</div>`                <div style="display: flex; gap: 8px; margin-bottom: 8px;">`                    <button onclick="document.querySelectorAll('.bunk-checkbox').forEach(cb=>cb.checked=true)" style="padding: 6px 12px; background: #e5e7eb; border: none; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">Select All</button>`                    <button onclick="document.querySelectorAll('.bunk-checkbox').forEach(cb=>cb.checked=false)" style="padding: 6px 12px; background: #e5e7eb; border: none; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">Clear</button>`                </div>`                <div id="bunk-checkboxes" style="max-height: 150px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px;">`                    ${bunksInDiv.map(b => ``                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9rem;">`                            <input type="checkbox" class="bunk-checkbox" value="${b}" ${b === bunk ? 'checked' : ''}>`                            <span>${window.escapeHtml(b)}</span>`                        </label>`                    `).join('')}`                </div>`            </div>``            <div id="time-range-area" style="display: none; margin-bottom: 20px;">`                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Time range:</div>`                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">`                    <div>`                        <label style="font-size: 0.85rem; color: #6b7280;">Start</label>`                        <select id="edit-start-slot" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;">`                            ${(window.unifiedTimes || []).map((t, i) => `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${t.label || minutesToTimeStr(t.startMin)}</option>`).join('')}`                        </select>`                    </div>`                    <div>`                        <label style="font-size: 0.85rem; color: #6b7280;">End</label>`                        <select id="edit-end-slot" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;">`                            ${(window.unifiedTimes || []).map((t, i) => `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${t.label || minutesToTimeStr(t.endMin)}</option>`).join('')}`                        </select>`                    </div>`                </div>`            </div>``            <div style="display: flex; gap: 12px;">`                <button onclick="closeIntegratedEditModal()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">Cancel</button>`                <button onclick="proceedWithScope()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">Continue →</button>`            </div>`        `;
+
+        document.body.appendChild(modal);
+        setupScopeModalHandlers();
+    }
+
+    function setupScopeModalHandlers() {
+        const radios = document.querySelectorAll('input[name="edit-scope"]');
+        const bunkArea = document.getElementById('bunk-selection-area');
+        const timeArea = document.getElementById('time-range-area');
+
+        radios.forEach(radio => {
+            radio.addEventListener('change', () => {
+                const scope = radio.value;
+                bunkArea.style.display = scope === 'select' ? 'block' : 'none';
+                timeArea.style.display = (scope === 'division' || scope === 'select') ? 'block' : 'none';
+
+                document.querySelectorAll('.edit-scope-option').forEach(opt => {
+                    opt.style.borderColor = '#e5e7eb';
+                    opt.style.background = '#f9fafb';
+                });
+                radio.closest('.edit-scope-option').style.borderColor = '#2563eb';
+                radio.closest('.edit-scope-option').style.background = '#eff6ff';
+            });
+        });
+
+        document.querySelector('input[name="edit-scope"]:checked')?.dispatchEvent(new Event('change'));
+    }
+
+    function proceedWithScope() {
+    const scope = document.querySelector('input[name="edit-scope"]:checked')?.value;
+    
+    // ★★★ FIX: Save context BEFORE closing modal ★★★
+    const ctx = _currentEditContext;
+    if (!ctx) {
+        alert('Edit context lost. Please try again.');
+        closeIntegratedEditModal();
+        return;
+    }
+    
+    if (scope === 'single') {
+        closeIntegratedEditModal();
+        // Use saved ctx instead of _currentEditContext
+        enhancedEditCell(
+            ctx.bunk,
+            ctx.slotInfo?.startMin ?? ctx.slotInfo?.start,
+            ctx.slotInfo?.endMin ?? ctx.slotInfo?.end,
+            ctx.existingEntry?._activity || ''
+        );
+    } else if (scope === 'division') {
+        const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
+        const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
+        
+        if (endSlot < startSlot) { alert('End time must be after start time'); return; }
+
+        const slots = [];
+        for (let i = startSlot; i <= endSlot; i++) slots.push(i);
+
+        closeIntegratedEditModal();
+        openMultiBunkEditModal(ctx.bunksInDivision, slots, ctx.divName);
+    } else if (scope === 'select') {
+        const selectedBunks = Array.from(document.querySelectorAll('.bunk-checkbox:checked')).map(cb => cb.value);
+        
+        if (selectedBunks.length === 0) { alert('Please select at least one bunk'); return; }
+
+        const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
+        const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
+        
+        if (endSlot < startSlot) { alert('End time must be after start time'); return; }
+
+        const slots = [];
+        for (let i = startSlot; i <= endSlot; i++) slots.push(i);
+
+        closeIntegratedEditModal();
+        openMultiBunkEditModal(selectedBunks, slots, ctx.divName);
+    }
+}
+
+    // --- MULTI-BUNK EDIT MODAL ---
+
+    function openMultiBunkEditModal(bunks, slots, divName) {
+        _multiBunkEditContext = { bunks, slots, divName };
+        _multiBunkPreviewResult = null;
+
+        const overlay = document.createElement('div');
+        overlay.id = INTEGRATED_EDIT_OVERLAY_ID;
+        overlay.style.cssText = `position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9998;`;
+        overlay.onclick = closeIntegratedEditModal;
+        document.body.appendChild(overlay);
+
+        const modal = document.createElement('div');
+        modal.id = INTEGRATED_EDIT_MODAL_ID;
+        modal.style.cssText = ``            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);`            background: white; border-radius: 12px; padding: 24px;`            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;`            min-width: 500px; max-width: 620px; max-height: 85vh; overflow-y: auto;`        `;
+        modal.onclick = e => e.stopPropagation();
+
+        const times = window.divisionTimes?.[divName] || window.unifiedTimes || [];
+        const startSlot = times[slots[0]];
+        const endSlot = times[slots[slots.length - 1]];
+        const timeRange = `${minutesToTimeStr(startSlot?.startMin)} - ${minutesToTimeStr(endSlot?.endMin)}`;
+        const allLocations = getAllLocations();
+
+        modal.innerHTML = ``            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">`                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">🎯 Multi-Bunk Edit</h2>`                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>`            </div>``            <div style="background: #eff6ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">`                <div style="font-weight: 500; color: #1e40af;">${window.escapeHtml(divName)}</div>`                <div style="font-size: 0.9rem; color: #3b82f6; margin-top: 4px;">`                    ${bunks.length} bunks: ${bunks.slice(0, 5).map(b => window.escapeHtml(b)).join(', ')}${bunks.length > 5 ? ` +${bunks.length - 5} more` : ''}`                </div>`                <div style="font-size: 0.9rem; color: #6b7280; margin-top: 4px;">Time: ${timeRange}</div>`            </div>``            <div style="display: grid; gap: 16px;">`                <div>`                    <label style="display: block; font-weight: 500; margin-bottom: 6px; color: #374151;">📍 Location/Field</label>`                    <select id="multi-edit-location" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px;">`                        <option value="">-- Select --</option>`                        ${allLocations.map(loc => `<option value="${loc.name}">${window.escapeHtml(loc.name)}</option>`).join('')}`                    </select>`                </div>``                <div>`                    <label style="display: block; font-weight: 500; margin-bottom: 6px; color: #374151;">🎪 Activity Name</label>`                    <input type="text" id="multi-edit-activity" placeholder="e.g., Carnival, Color War"`                        style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box;">`                </div>``                <div id="multi-conflict-preview" style="display: none;"></div>``                <div id="multi-resolution-mode" style="display: none;">`                    <label style="display: block; font-weight: 500; margin-bottom: 8px; color: #374151;">⚙️ How to handle other schedulers' bunks?</label>`                    <div style="display: flex; flex-direction: column; gap: 8px;">`                        <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">`                            <input type="radio" name="multi-mode" value="notify" checked style="margin-top: 3px;">`                            <div>`                                <div style="font-weight: 500; color: #374151;">📧 Notify & Request Approval</div>`                                <div style="font-size: 0.85rem; color: #6b7280;">Changes require approval first</div>`                            </div>`                        </label>`                        <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">`                            <input type="radio" name="multi-mode" value="bypass" style="margin-top: 3px;">`                            <div>`                                <div style="font-weight: 500; color: #374151;">🔓 Bypass & Apply Now</div>`                                <div style="font-size: 0.85rem; color: #6b7280;">Changes apply immediately</div>`                            </div>`                        </label>`                    </div>`                </div>`            </div>``            <div style="display: flex; gap: 12px; margin-top: 20px;">`                <button onclick="previewMultiBunkEdit()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">👁️ Preview</button>`                <button id="multi-edit-submit" onclick="submitMultiBunkEdit()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;" disabled>🎯 Apply</button>`            </div>`        `;
+
+        document.body.appendChild(modal);
+
+        document.getElementById('multi-edit-location')?.addEventListener('change', () => {
+            document.getElementById('multi-edit-submit').disabled = true;
+            document.getElementById('multi-conflict-preview').style.display = 'none';
+        });
+    }
+
+    // --- PREVIEW & SUBMIT MULTI-BUNK EDIT ---
+
+    function previewMultiBunkEdit() {
+        const location = document.getElementById('multi-edit-location')?.value;
+        const activity = document.getElementById('multi-edit-activity')?.value?.trim();
+        const { bunks, slots, divName } = _multiBunkEditContext;
+
+        if (!location) { alert('Please select a location'); return; }
+        if (!activity) { alert('Please enter an activity name'); return; }
+
+        const result = buildCascadeResolutionPlan(location, slots, divName, activity);
+        _multiBunkPreviewResult = { ...result, location, slots, divName, activity, bunks };
+
+        const previewArea = document.getElementById('multi-conflict-preview');
+        const resolutionMode = document.getElementById('multi-resolution-mode');
+        const submitBtn = document.getElementById('multi-edit-submit');
+
+        if (result.plan.length === 0 && result.blocked.length === 0) {
+            previewArea.style.display = 'block';
+            previewArea.style.cssText = 'background: #d1fae5; border: 1px solid #10b981; border-radius: 8px; padding: 12px;';
+            previewArea.innerHTML = `<div style="color: #065f46; font-weight: 500;">✅ No conflicts! Ready to assign.</div>`;
+            resolutionMode.style.display = 'none';
+            submitBtn.disabled = false;
+        } else if (result.blocked.length > 0) {
+            previewArea.style.display = 'block';
+            previewArea.style.cssText = 'background: #fee2e2; border: 1px solid #ef4444; border-radius: 8px; padding: 12px;';
+            previewArea.innerHTML = ``                <div style="color: #991b1b; font-weight: 500;">❌ Cannot complete - pinned activities blocking:</div>`                <ul style="margin: 8px 0 0 20px; padding: 0; color: #b91c1c;">`                    ${result.blocked.map(b => `<li>${window.escapeHtml(b.bunk)}: ${window.escapeHtml(b.currentActivity)}</li>`).join('')}`                </ul>`            `;
+            resolutionMode.style.display = 'none';
+            submitBtn.disabled = true;
+        } else {
+            const myDivisions = new Set(window.getMyDivisions());
+            const byDivision = {};
+            result.plan.forEach(p => {
+                if (!byDivision[p.division]) byDivision[p.division] = [];
+                byDivision[p.division].push(p);
+            });
+
+            const otherDivisions = Object.keys(byDivision).filter(d => !myDivisions.has(d));
+
+            previewArea.style.display = 'block';
+            previewArea.style.cssText = 'background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;';
+            
+            let html = `<div style="color: #92400e; font-weight: 500;">⚠️ ${result.plan.length} bunk(s) will be reassigned</div><div style="margin-top: 12px; max-height: 180px; overflow-y: auto;">`;
+            for (const [div, moves] of Object.entries(byDivision)) {
+                const isOther = !myDivisions.has(div);
+                html += `<div style="margin-bottom: 8px; padding: 8px; background: ${isOther ? '#fef2f2' : '#f0fdf4'}; border-radius: 6px;">`                    <div style="font-weight: 500; color: ${isOther ? '#991b1b' : '#166534'};">${isOther ? '🔒' : '✓'} ${window.escapeHtml(div)}</div>`                    <ul style="margin: 4px 0 0 16px; padding: 0; font-size: 0.85rem;">${moves.map(m => `<li>${window.escapeHtml(m.bunk)}: ${window.escapeHtml(m.from.activity)} → ${window.escapeHtml(m.to.activity)}</li>`).join('')}</ul>`                </div>`;
+            }
+            html += '</div>';
+            previewArea.innerHTML = html;
+
+            resolutionMode.style.display = otherDivisions.length > 0 ? 'block' : 'none';
+            submitBtn.disabled = false;
+        }
+    }
+
+    async function submitMultiBunkEdit() {
+        if (!_multiBunkPreviewResult) { alert('Please preview first'); return; }
+
+        const result = _multiBunkPreviewResult;
+        const mode = document.querySelector('input[name="multi-mode"]:checked')?.value || 'notify';
+        const myDivisions = new Set(window.getMyDivisions());
+        const otherMoves = result.plan.filter(p => !myDivisions.has(p.division));
+
+        if (mode === 'bypass' || otherMoves.length === 0) {
+            await applyMultiBunkEdit(result, mode === 'bypass');
+        } else {
+            await createMultiBunkProposal(result);
+        }
+
+        closeIntegratedEditModal();
+    }
+
+    // --- AUTO-BACKUP SYSTEM ---
 
     async function createAutoBackup(activityName, divisionName) {
         if (!VersionManager?.saveVersion) {
@@ -1341,7 +2326,7 @@
             if (result?.success) {
                 console.log(`[AutoBackup] ✅ Backup created successfully`);
                 
-                // Trigger cleanup in background
+                // Trigger cleanup in background (don't await)
                 cleanupOldAutoBackups().catch(e => 
                     console.warn('[AutoBackup] Cleanup error (non-critical):', e)
                 );
@@ -1358,25 +2343,27 @@
     }
 
     async function cleanupOldAutoBackups(dateKey = null) {
-        if (!window.ScheduleVersionsDB) {
+        if (!VersionManager?.saveVersion || !window.ScheduleVersionsDB) {
             return { cleaned: 0 };
         }
 
-        const targetDate = dateKey || getDateKey();
+        const targetDate = dateKey || window.currentDate || new Date().toISOString().split('T')[0];
         
         try {
             const versions = await window.ScheduleVersionsDB.listVersions(targetDate);
             if (!versions || !Array.isArray(versions)) return { cleaned: 0 };
 
+            // Filter to only auto-backups, sorted newest first (they come from DB that way)
             const autoBackups = versions.filter(v => 
                 v.name && v.name.startsWith(AUTO_BACKUP_PREFIX)
             );
 
             if (autoBackups.length <= MAX_AUTO_BACKUPS_PER_DATE) {
-                console.log(`[AutoBackup] ${autoBackups.length} auto-backups exist, within limit`);
+                console.log(`[AutoBackup] ${autoBackups.length} auto-backups exist, within limit of ${MAX_AUTO_BACKUPS_PER_DATE}`);
                 return { cleaned: 0 };
             }
 
+            // Delete oldest ones (keep the first MAX_AUTO_BACKUPS_PER_DATE)
             const toDelete = autoBackups.slice(MAX_AUTO_BACKUPS_PER_DATE);
             let cleaned = 0;
 
@@ -1403,7 +2390,7 @@
     async function listAutoBackups(dateKey = null) {
         if (!window.ScheduleVersionsDB) return [];
         
-        const targetDate = dateKey || getDateKey();
+        const targetDate = dateKey || window.currentDate || new Date().toISOString().split('T')[0];
         
         try {
             const versions = await window.ScheduleVersionsDB.listVersions(targetDate);
@@ -1414,537 +2401,12 @@
         }
     }
 
-    // =========================================================================
-    // MODAL UI SYSTEM
-    // =========================================================================
-
-    function createModal(modalId, overlayId) {
-        // Remove existing
-        document.getElementById(overlayId)?.remove();
-        document.getElementById(modalId)?.remove();
-        
-        const overlay = document.createElement('div');
-        overlay.id = overlayId;
-        overlay.style.cssText = `
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.5);
-            z-index: 10000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            animation: fadeIn 0.2s ease;
-        `;
-        
-        const modal = document.createElement('div');
-        modal.id = modalId;
-        modal.style.cssText = `
-            background: white;
-            border-radius: 12px;
-            padding: 24px;
-            min-width: 400px;
-            max-width: 500px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-height: 90vh;
-            overflow-y: auto;
-        `;
-        
-        overlay.appendChild(modal);
-        document.body.appendChild(overlay);
-        
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) closeModal(overlayId);
-        });
-        
-        const escHandler = (e) => {
-            if (e.key === 'Escape') {
-                closeModal(overlayId);
-                document.removeEventListener('keydown', escHandler);
-            }
-        };
-        document.addEventListener('keydown', escHandler);
-        
-        return modal;
-    }
-
-    function closeModal(overlayId) {
-        document.getElementById(overlayId)?.remove();
-    }
-
-    // =========================================================================
-    // INTEGRATED EDIT MODAL
-    // =========================================================================
-
-    function openIntegratedEditModal(bunk, slotIdx, existingEntry) {
-        const divName = getDivisionForBunk(bunk);
-        const bunksInDivision = window.divisions?.[divName]?.bunks || [];
-        const times = window.divisionTimes?.[divName] || window.unifiedTimes || [];
-        const slotInfo = times[slotIdx] || {};
-        const timeLabel = slotInfo.label || 
-            `${minutesToTimeStr(slotInfo.startMin)} - ${minutesToTimeStr(slotInfo.endMin)}`;
-
-        _currentEditContext = { bunk, slotIdx, divName, bunksInDivision, existingEntry, slotInfo };
-
-        showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, canEditBunk(bunk));
-    }
-
-    function showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, canEdit) {
-        const overlay = document.createElement('div');
-        overlay.id = INTEGRATED_EDIT_OVERLAY_ID;
-        overlay.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9998; animation: fadeIn 0.2s ease-out;';
-        overlay.onclick = closeIntegratedEditModal;
-        document.body.appendChild(overlay);
-
-        const modal = document.createElement('div');
-        modal.id = INTEGRATED_EDIT_MODAL_ID;
-        modal.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999; min-width: 400px; max-width: 500px; animation: fadeIn 0.2s ease-out;';
-        modal.onclick = e => e.stopPropagation();
-
-        const currentActivity = _currentEditContext.existingEntry?._activity || 
-                               _currentEditContext.existingEntry?.sport || 
-                               _currentEditContext.existingEntry?.field || 'Free';
-        const bunksInDiv = _currentEditContext.bunksInDivision || [];
-
-        modal.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">✏️ Edit Schedule</h2>
-                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #6b7280;">&times;</button>
-            </div>
-            <div style="background: #f3f4f6; border-radius: 8px; padding: 12px; margin-bottom: 20px;">
-                <div style="font-size: 0.9rem; color: #6b7280;">Selected Cell</div>
-                <div style="font-weight: 600; color: #1f2937; margin-top: 4px;">${escapeHtml(bunk)} • ${escapeHtml(timeLabel)}</div>
-                <div style="color: #6b7280; font-size: 0.9rem; margin-top: 2px;">Current: ${escapeHtml(currentActivity)}</div>
-            </div>
-            <div style="margin-bottom: 20px;">
-                <div style="font-weight: 500; color: #374151; margin-bottom: 12px;">What would you like to edit?</div>
-                <div style="display: flex; flex-direction: column; gap: 10px;">
-                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">
-                        <input type="radio" name="edit-scope" value="single" checked style="margin-top: 3px;">
-                        <div>
-                            <div style="font-weight: 500; color: #1f2937;">Just this cell</div>
-                            <div style="font-size: 0.85rem; color: #6b7280;">${escapeHtml(bunk)} only</div>
-                        </div>
-                    </label>
-                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">
-                        <input type="radio" name="edit-scope" value="division" style="margin-top: 3px;">
-                        <div>
-                            <div style="font-weight: 500; color: #1f2937;">Entire division</div>
-                            <div style="font-size: 0.85rem; color: #6b7280;">All ${bunksInDiv.length} bunks in ${escapeHtml(divName)}</div>
-                        </div>
-                    </label>
-                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">
-                        <input type="radio" name="edit-scope" value="select" style="margin-top: 3px;">
-                        <div>
-                            <div style="font-weight: 500; color: #1f2937;">Select specific bunks</div>
-                            <div style="font-size: 0.85rem; color: #6b7280;">Choose which bunks to edit</div>
-                        </div>
-                    </label>
-                </div>
-            </div>
-            <div id="bunk-select-area" style="display: none; margin-bottom: 16px; max-height: 150px; overflow-y: auto; background: #f9fafb; border-radius: 8px; padding: 12px;">
-                ${bunksInDiv.map(b => `
-                    <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer;">
-                        <input type="checkbox" class="bunk-checkbox" value="${escapeHtml(b)}" ${b === bunk ? 'checked' : ''}>
-                        <span>${escapeHtml(b)}</span>
-                    </label>
-                `).join('')}
-            </div>
-            <div id="time-range-area" style="display: none; margin-bottom: 16px; background: #f9fafb; border-radius: 8px; padding: 12px;">
-                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Time Range</div>
-                <div style="display: flex; gap: 12px; align-items: center;">
-                    <select id="edit-start-slot" style="flex: 1; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;">
-                        ${(_currentEditContext.bunksInDivision?.length > 0 ? 
-                            (window.divisionTimes?.[divName] || []).map((s, i) => 
-                                `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${minutesToTimeStr(s.startMin)}</option>`
-                            ).join('') : ''
-                        )}
-                    </select>
-                    <span>to</span>
-                    <select id="edit-end-slot" style="flex: 1; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;">
-                        ${(_currentEditContext.bunksInDivision?.length > 0 ? 
-                            (window.divisionTimes?.[divName] || []).map((s, i) => 
-                                `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${minutesToTimeStr(s.endMin)}</option>`
-                            ).join('') : ''
-                        )}
-                    </select>
-                </div>
-            </div>
-            <div style="display: flex; justify-content: flex-end; gap: 12px;">
-                <button onclick="closeIntegratedEditModal()" style="padding: 10px 20px; border: 1px solid #d1d5db; background: white; border-radius: 8px; cursor: pointer; font-weight: 500;">Cancel</button>
-                <button id="proceed-scope-btn" style="padding: 10px 20px; background: #2563eb; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">Continue</button>
-            </div>
-        `;
-
-        document.body.appendChild(modal);
-
-        // Event handlers
-        const scopeRadios = modal.querySelectorAll('input[name="edit-scope"]');
-        const bunkSelectArea = document.getElementById('bunk-select-area');
-        const timeRangeArea = document.getElementById('time-range-area');
-
-        scopeRadios.forEach(radio => {
-            radio.addEventListener('change', (e) => {
-                bunkSelectArea.style.display = e.target.value === 'select' ? 'block' : 'none';
-                timeRangeArea.style.display = e.target.value !== 'single' ? 'block' : 'none';
-            });
-        });
-
-        document.getElementById('proceed-scope-btn').onclick = () => {
-            const scope = document.querySelector('input[name="edit-scope"]:checked')?.value;
-            proceedWithScope(scope);
-        };
-    }
-
-    function closeIntegratedEditModal() {
-        document.getElementById(INTEGRATED_EDIT_OVERLAY_ID)?.remove();
-        document.getElementById(INTEGRATED_EDIT_MODAL_ID)?.remove();
-    }
-
-    function proceedWithScope(scope) {
-        const ctx = _currentEditContext;
-        if (!ctx) {
-            console.error('[IntegratedEdit] No edit context');
-            closeIntegratedEditModal();
-            return;
-        }
-        
-        if (scope === 'single') {
-            closeIntegratedEditModal();
-            enhancedEditCell(
-                ctx.bunk,
-                ctx.slotInfo?.startMin ?? ctx.slotInfo?.start,
-                ctx.slotInfo?.endMin ?? ctx.slotInfo?.end,
-                ctx.existingEntry?._activity || ''
-            );
-        } else if (scope === 'division') {
-            const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
-            const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
-            
-            if (endSlot < startSlot) {
-                alert('End time must be after start time');
-                return;
-            }
-
-            const slots = [];
-            for (let i = startSlot; i <= endSlot; i++) slots.push(i);
-
-            closeIntegratedEditModal();
-            openMultiBunkEditModal(ctx.bunksInDivision, slots, ctx.divName);
-        } else if (scope === 'select') {
-            const selectedBunks = Array.from(document.querySelectorAll('.bunk-checkbox:checked')).map(cb => cb.value);
-            
-            if (selectedBunks.length === 0) {
-                alert('Please select at least one bunk');
-                return;
-            }
-
-            const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
-            const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
-            
-            if (endSlot < startSlot) {
-                alert('End time must be after start time');
-                return;
-            }
-
-            const slots = [];
-            for (let i = startSlot; i <= endSlot; i++) slots.push(i);
-
-            closeIntegratedEditModal();
-            openMultiBunkEditModal(selectedBunks, slots, ctx.divName);
-        }
-    }
-
-    // =========================================================================
-    // MULTI-BUNK EDIT MODAL
-    // =========================================================================
-
-    function openMultiBunkEditModal(bunks, slots, divName) {
-        _multiBunkEditContext = { bunks, slots, divName };
-        _multiBunkPreviewResult = null;
-
-        const overlay = document.createElement('div');
-        overlay.id = INTEGRATED_EDIT_OVERLAY_ID;
-        overlay.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9998;';
-        overlay.onclick = closeIntegratedEditModal;
-        document.body.appendChild(overlay);
-
-        const modal = document.createElement('div');
-        modal.id = INTEGRATED_EDIT_MODAL_ID;
-        modal.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999; min-width: 500px; max-width: 620px; max-height: 85vh; overflow-y: auto;';
-        modal.onclick = function(e) { e.stopPropagation(); };
-
-        const times = window.divisionTimes?.[divName] || window.unifiedTimes || [];
-        const locations = getAllLocations();
-
-        modal.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">📋 Multi-Bunk Edit</h2>
-                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #6b7280;">&times;</button>
-            </div>
-            <div style="background: #f3f4f6; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
-                <div style="font-size: 0.9rem; color: #6b7280;">Editing ${bunks.length} bunks • ${slots.length} slot(s)</div>
-                <div style="font-weight: 600; color: #1f2937; margin-top: 4px;">${escapeHtml(divName)}</div>
-            </div>
-            <div style="margin-bottom: 16px;">
-                <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 8px;">Activity</label>
-                <input type="text" id="multi-activity" placeholder="Enter activity name" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box;">
-            </div>
-            <div style="margin-bottom: 16px;">
-                <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 8px;">Location / Field</label>
-                <select id="multi-location" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px;">
-                    <option value="">-- Select location --</option>
-                    ${locations.map(l => `<option value="${escapeHtml(l.name)}">${escapeHtml(l.name)}</option>`).join('')}
-                </select>
-            </div>
-            <div id="multi-preview-area" style="display: none; margin-bottom: 16px;"></div>
-            <div id="multi-resolution-mode" style="display: none; margin-bottom: 16px; padding: 12px; background: #f9fafb; border-radius: 8px;">
-                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">How to handle conflicts?</div>
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 8px;">
-                    <input type="radio" name="multi-mode" value="notify" checked>
-                    <span>📧 Create proposal (requires approval)</span>
-                </label>
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                    <input type="radio" name="multi-mode" value="bypass">
-                    <span>🔓 Bypass & reassign (Admin mode)</span>
-                </label>
-            </div>
-            <div style="display: flex; justify-content: flex-end; gap: 12px;">
-                <button onclick="closeIntegratedEditModal()" style="padding: 10px 20px; border: 1px solid #d1d5db; background: white; border-radius: 8px; cursor: pointer; font-weight: 500;">Cancel</button>
-                <button id="multi-preview-btn" style="padding: 10px 20px; background: #6b7280; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">Preview</button>
-                <button id="multi-submit-btn" disabled style="padding: 10px 20px; background: #2563eb; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; opacity: 0.5;">Apply</button>
-            </div>
-        `;
-
-        document.body.appendChild(modal);
-
-        document.getElementById('multi-preview-btn').onclick = previewMultiBunkEdit;
-        document.getElementById('multi-submit-btn').onclick = submitMultiBunkEdit;
-    }
-
-    function previewMultiBunkEdit() {
-        const ctx = _multiBunkEditContext;
-        if (!ctx) return;
-
-        const activity = document.getElementById('multi-activity')?.value.trim();
-        const location = document.getElementById('multi-location')?.value;
-        const previewArea = document.getElementById('multi-preview-area');
-        const resolutionMode = document.getElementById('multi-resolution-mode');
-        const submitBtn = document.getElementById('multi-submit-btn');
-
-        if (!activity || !location) {
-            alert('Please enter an activity and select a location');
-            return;
-        }
-
-        const result = buildCascadeResolutionPlan(location, ctx.slots, ctx.divName, activity);
-        result.location = location;
-        result.activity = activity;
-        result.bunks = ctx.bunks;
-        result.slots = ctx.slots;
-        result.divName = ctx.divName;
-
-        _multiBunkPreviewResult = result;
-
-        if (result.plan.length === 0 && result.blocked.length === 0) {
-            previewArea.style.display = 'block';
-            previewArea.style.cssText = 'background: #d1fae5; border: 1px solid #10b981; border-radius: 8px; padding: 12px;';
-            previewArea.innerHTML = '<div style="color: #065f46; font-weight: 500;">✅ No conflicts detected. Ready to assign.</div>';
-            resolutionMode.style.display = 'none';
-            submitBtn.disabled = false;
-            submitBtn.style.opacity = '1';
-        } else if (result.blocked.length > 0) {
-            previewArea.style.display = 'block';
-            previewArea.style.cssText = 'background: #fee2e2; border: 1px solid #ef4444; border-radius: 8px; padding: 12px;';
-            previewArea.innerHTML = `
-                <div style="color: #991b1b; font-weight: 500;">❌ Cannot complete - pinned activities blocking:</div>
-                <ul style="margin: 8px 0 0 20px; padding: 0; color: #b91c1c;">
-                    ${result.blocked.map(b => `<li>${escapeHtml(b.bunk)}: ${escapeHtml(b.currentActivity)}</li>`).join('')}
-                </ul>
-            `;
-            resolutionMode.style.display = 'none';
-            submitBtn.disabled = true;
-        } else {
-            const myDivisions = new Set(getMyDivisions());
-            const byDivision = {};
-            result.plan.forEach(p => {
-                if (!byDivision[p.division]) byDivision[p.division] = [];
-                byDivision[p.division].push(p);
-            });
-
-            const otherDivisions = Object.keys(byDivision).filter(d => !myDivisions.has(d));
-
-            previewArea.style.display = 'block';
-            previewArea.style.cssText = 'background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;';
-            
-            let html = `<div style="color: #92400e; font-weight: 500;">⚠️ ${result.plan.length} bunk(s) will be reassigned</div><div style="margin-top: 12px; max-height: 180px; overflow-y: auto;">`;
-            
-            for (const [div, moves] of Object.entries(byDivision)) {
-                const isOther = !myDivisions.has(div);
-                html += `
-                    <div style="margin-bottom: 8px; padding: 8px; background: ${isOther ? '#fef2f2' : '#f0fdf4'}; border-radius: 6px;">
-                        <div style="font-weight: 500; color: ${isOther ? '#991b1b' : '#166534'};">${isOther ? '🔒' : '✓'} ${escapeHtml(div)}</div>
-                        <ul style="margin: 4px 0 0 16px; padding: 0; font-size: 0.85rem;">
-                            ${moves.map(m => `<li>${escapeHtml(m.bunk)}: ${escapeHtml(m.from.activity)} → ${escapeHtml(m.to.activity)}</li>`).join('')}
-                        </ul>
-                    </div>
-                `;
-            }
-            html += '</div>';
-            previewArea.innerHTML = html;
-
-            resolutionMode.style.display = otherDivisions.length > 0 ? 'block' : 'none';
-            submitBtn.disabled = false;
-            submitBtn.style.opacity = '1';
-        }
-    }
-
-    async function submitMultiBunkEdit() {
-        if (!_multiBunkPreviewResult) {
-            alert('Please preview first');
-            return;
-        }
-
-        const result = _multiBunkPreviewResult;
-        const mode = document.querySelector('input[name="multi-mode"]:checked')?.value || 'notify';
-        const myDivisions = new Set(getMyDivisions());
-        const otherMoves = result.plan.filter(p => !myDivisions.has(p.division));
-
-        if (mode === 'bypass' || otherMoves.length === 0) {
-            await applyMultiBunkEdit(result, mode === 'bypass');
-        } else {
-            await createMultiBunkProposal(result);
-        }
-
-        closeIntegratedEditModal();
-    }
-
-    // =========================================================================
-    // CASCADE RESOLUTION ENGINE
-    // =========================================================================
-
-    function findAllConflictsForClaim(fieldName, slots, excludeBunks = []) {
-        const conflicts = [];
-        const assignments = window.scheduleAssignments || {};
-        const excludeSet = new Set(excludeBunks);
-
-        for (const [bunkName, bunkSlots] of Object.entries(assignments)) {
-            if (excludeSet.has(bunkName)) continue;
-            if (!bunkSlots || !Array.isArray(bunkSlots)) continue;
-
-            for (const slotIdx of slots) {
-                const entry = bunkSlots[slotIdx];
-                if (!entry) continue;
-                
-                const entryField = fieldLabel(entry.field);
-                if (entryField !== fieldName) continue;
-                
-                const divName = getDivisionForBunk(bunkName);
-                const isPinned = entry._fixed || entry._pinned || entry._bunkOverride;
-                
-                conflicts.push({
-                    bunk: bunkName,
-                    slot: slotIdx,
-                    division: divName,
-                    currentActivity: entry._activity || entry.sport || entryField,
-                    currentField: entryField,
-                    isPinned: isPinned,
-                    entry: entry
-                });
-            }
-        }
-
-        return conflicts;
-    }
-
-    function buildCascadeResolutionPlan(fieldName, slots, claimingDivision, claimingActivity) {
-        console.log('[CascadeClaim] ★★★ BUILDING RESOLUTION PLAN ★★★');
-        console.log(`[CascadeClaim] Claiming ${fieldName} for ${claimingDivision} (${claimingActivity})`);
-
-        const plan = [];
-        const blocked = [];
-        const processedConflicts = new Set();
-        
-        let conflictQueue = findAllConflictsForClaim(fieldName, slots, []);
-        let iteration = 0;
-        const MAX_ITERATIONS = 50;
-
-        while (conflictQueue.length > 0 && iteration < MAX_ITERATIONS) {
-            iteration++;
-            const conflict = conflictQueue.shift();
-            const conflictKey = `${conflict.bunk}:${conflict.slot}`;
-            
-            if (processedConflicts.has(conflictKey)) continue;
-            processedConflicts.add(conflictKey);
-
-            if (conflict.isPinned) {
-                blocked.push(conflict);
-                continue;
-            }
-
-            const alternative = findAlternativeForBunk(conflict.bunk, conflict.slot, fieldName);
-            
-            if (alternative) {
-                plan.push({
-                    bunk: conflict.bunk,
-                    slot: conflict.slot,
-                    division: conflict.division,
-                    from: {
-                        activity: conflict.currentActivity,
-                        field: conflict.currentField
-                    },
-                    to: {
-                        activity: alternative.activity,
-                        field: alternative.field
-                    }
-                });
-
-                // Check if the alternative creates new conflicts
-                if (alternative.field !== fieldName) {
-                    const newConflicts = findAllConflictsForClaim(alternative.field, [conflict.slot], [conflict.bunk]);
-                    conflictQueue.push(...newConflicts.filter(c => !processedConflicts.has(`${c.bunk}:${c.slot}`)));
-                }
-            } else {
-                blocked.push(conflict);
-            }
-        }
-
-        return { plan, blocked };
-    }
-
-    function findAlternativeForBunk(bunk, slotIdx, excludeField) {
-        const activityProperties = getActivityProperties();
-        const available = Object.keys(activityProperties).filter(name => {
-            if (name === excludeField) return false;
-            const info = activityProperties[name];
-            if (info.available === false) return false;
-            return true;
-        });
-
-        // Simple selection - in production, would use rotation scoring
-        for (const fieldName of available) {
-            const info = activityProperties[fieldName];
-            const capacity = info.sharableWith?.capacity || (info.sharable ? 2 : 1);
-            
-            const conflictCheck = checkCrossDivisionConflict(bunk, slotIdx, fieldName);
-            if (!conflictCheck.conflict || conflictCheck.currentUsage < capacity) {
-                return {
-                    activity: fieldName,
-                    field: fieldName
-                };
-            }
-        }
-
-        return null;
-    }
-
-    // =========================================================================
-    // APPLY MULTI-BUNK EDIT
-    // =========================================================================
+    // --- APPLY MULTI-BUNK EDIT ---
 
     async function applyMultiBunkEdit(result, notifyAfter = false) {
         const { location, slots, divName, activity, bunks, plan } = result;
 
+        // ★★★ AUTO-BACKUP BEFORE ANY CHANGES ★★★
         await createAutoBackup(activity, divName);
 
         // Assign to target bunks
@@ -1952,13 +2414,8 @@
             if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
             for (let i = 0; i < slots.length; i++) {
                 window.scheduleAssignments[bunk][slots[i]] = {
-                    field: location,
-                    sport: null,
-                    _activity: activity,
-                    _fixed: true,
-                    _pinned: true,
-                    _multiBunkEdit: true,
-                    continuation: i > 0
+                    field: location, sport: null, _activity: activity,
+                    _fixed: true, _pinned: true, _multiBunkEdit: true, continuation: i > 0
                 };
             }
         }
@@ -1969,39 +2426,29 @@
             modifiedBunks.add(move.bunk);
             if (!window.scheduleAssignments[move.bunk]) window.scheduleAssignments[move.bunk] = [];
             window.scheduleAssignments[move.bunk][move.slot] = {
-                field: move.to.field,
-                sport: move.to.activity,
-                _activity: move.to.activity,
-                _cascadeReassigned: true
+                field: move.to.field, sport: move.to.activity,
+                _activity: move.to.activity, _cascadeReassigned: true
             };
         }
 
         // Lock field
         if (window.GlobalFieldLocks) {
             window.GlobalFieldLocks.lockField(location, slots, {
-                lockedBy: 'multi_bunk_edit',
-                division: divName,
-                activity,
-                bunks
+                lockedBy: 'multi_bunk_edit', division: divName, activity, bunks
             });
         }
 
         // Save
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
-        
-        if (typeof bypassSaveAllBunks === 'function') {
-            await bypassSaveAllBunks([...modifiedBunks]);
-        }
+        if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
 
-        // Highlight modified bunks
-        if (plan.length > 0) {
-            enableBypassRBACView(plan.map(p => p.bunk));
-        }
+        // Highlight
+        if (plan.length > 0) enableBypassRBACView(plan.map(p => p.bunk));
 
         // Notify
         if (notifyAfter && plan.length > 0) {
-            const myDivisions = new Set(getMyDivisions());
+            const myDivisions = new Set(window.getMyDivisions());
             const otherMoves = plan.filter(p => !myDivisions.has(p.division));
             if (otherMoves.length > 0) {
                 await sendSchedulerNotification(otherMoves.map(p => p.bunk), location, activity, 'bypassed');
@@ -2009,214 +2456,216 @@
         }
 
         // Re-render
-        renderStaggeredView();
-        showIntegratedToast(`✅ ${bunks.length} bunks assigned to ${location}` + 
-            (plan.length > 0 ? ` - ${plan.length} reassigned` : ''), 'success');
+        if (typeof renderStaggeredView === 'function') renderStaggeredView();
+        showIntegratedToast(`✅ ${bunks.length} bunks assigned to ${location}` + (plan.length > 0 ? ` - ${plan.length} reassigned` : ''), 'success');
     }
 
-    // =========================================================================
-    // PROPOSAL SYSTEM
-    // =========================================================================
+    // --- CREATE PROPOSAL ---
 
     async function createMultiBunkProposal(result) {
         const { location, slots, divName, activity, bunks, plan } = result;
-        const dateKey = getDateKey();
+        const dateKey = window.currentDate || new Date().toISOString().split('T')[0];
         const userId = window.CampistryDB?.getUserId?.() || null;
-        const campId = window.CampistryDB?.getCampId?.() || null;
+        const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
 
-        const affectedDivisions = [...new Set(plan.map(p => p.division))];
-        
+        const myDivisions = new Set(window.getMyDivisions());
+        const affectedDivisions = [...new Set(plan.filter(p => !myDivisions.has(p.division)).map(p => p.division))];
+
         const proposal = {
-            camp_id: campId,
+            id: `proposal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            type: 'multi_bunk_edit',
+            status: 'pending',
+            created_at: new Date().toISOString(),
             created_by: userId,
+            camp_id: campId,
             date_key: dateKey,
-            claim: {
-                field: location,
-                slots,
-                division: divName,
-                activity,
-                bunks
-            },
+            claim: { field: location, slots, division: divName, activity, bunks },
             reassignments: plan,
             affected_divisions: affectedDivisions,
-            responses: {},
-            status: 'pending',
-            created_at: new Date().toISOString()
+            approvals: {},
+            applied: false
         };
 
+        affectedDivisions.forEach(div => proposal.approvals[div] = 'pending');
+
         const supabase = window.CampistryDB?.getClient?.() || window.supabase;
+        if (supabase && campId) {
+            try {
+                await supabase.from('schedule_proposals').insert(proposal);
+                await notifySchedulersOfProposal(proposal);
+            } catch (e) { console.error('[CreateProposal] Error:', e); }
+        }
+
+        showIntegratedToast(`📧 Proposal sent to ${affectedDivisions.length} scheduler(s)`, 'info');
+    }
+
+    async function notifySchedulersOfProposal(proposal) {
+        const supabase = window.CampistryDB?.getClient?.() || window.supabase;
+        if (!supabase) return;
+
+        try {
+            const { data: schedulers } = await supabase
+                .from('camp_users')
+                .select('user_id, divisions')
+                .eq('camp_id', proposal.camp_id)
+                .neq('user_id', proposal.created_by);
+
+            if (!schedulers) return;
+
+            const notifyUsers = schedulers.filter(s => 
+                (s.divisions || []).some(d => proposal.affected_divisions.includes(d))
+            ).map(s => s.user_id);
+
+            if (notifyUsers.length === 0) return;
+
+            const notifications = notifyUsers.map(uid => ({
+                camp_id: proposal.camp_id, user_id: uid,
+                type: 'schedule_proposal',
+                title: '📋 Schedule Change Proposal',
+                message: `Request to claim ${proposal.claim.field} for ${proposal.claim.division}`,
+                metadata: { proposal_id: proposal.id },
+                read: false,
+                created_at: new Date().toISOString()
+            }));
+
+            await supabase.from('notifications').insert(notifications);
+        } catch (e) { console.error('[NotifyProposal] Error:', e); }
+    }
+
+    // --- PROPOSAL REVIEW & APPROVAL SYSTEM ---
+
+    async function loadProposal(proposalId) {
+        const supabase = window.CampistryDB?.getClient?.() || window.supabase;
+        if (supabase) {
+            const { data } = await supabase
+                .from('schedule_proposals')
+                .select('*')
+                .eq('id', proposalId)
+                .single();
+            return data;
+        }
+        return _pendingProposals.find(p => p.id === proposalId);
+    }
+
+    async function loadMyPendingProposals() {
+        const supabase = window.CampistryDB?.getClient?.() || window.supabase;
+        const myDivisions = window.getMyDivisions();
+        const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
+
+        if (supabase && campId) {
+            try {
+                const { data } = await supabase
+                    .from('schedule_proposals')
+                    .select('*')
+                    .eq('camp_id', campId)
+                    .eq('status', 'pending');
+                
+                return (data || []).filter(p => 
+                    p.affected_divisions?.some(d => myDivisions.includes(d))
+                );
+            } catch (e) {
+                console.error('[LoadProposals] Error:', e);
+                return [];
+            }
+        }
+        return _pendingProposals.filter(p => 
+            p.status === 'pending' && 
+            p.affected_divisions?.some(d => myDivisions.includes(d))
+        );
+    }
+
+    function openProposalReviewModal(proposalId) {
+        loadProposal(proposalId).then(proposal => {
+            if (!proposal) { alert('Proposal not found'); return; }
+            showProposalReviewUI(proposal);
+        });
+    }
+
+    function showProposalReviewUI(proposal) {
+        closeIntegratedEditModal();
+
+        const overlay = document.createElement('div');
+        overlay.id = INTEGRATED_EDIT_OVERLAY_ID;
+        overlay.style.cssText = `position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9998;`;
+        document.body.appendChild(overlay);
+
+        const modal = document.createElement('div');
+        modal.id = PROPOSAL_MODAL_ID;
+        modal.style.cssText = ``            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);`            background: white; border-radius: 12px; padding: 24px;`            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;`            min-width: 500px; max-width: 600px; max-height: 80vh; overflow-y: auto;`        `;
+
+        const myDivisions = new Set(window.getMyDivisions());
+        const myMoves = (proposal.reassignments || []).filter(r => myDivisions.has(r.division));
+        const claim = proposal.claim || {};
+
+        modal.innerHTML = ``            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">`                <h2 style="margin: 0; color: #1e40af;">📋 Proposal Review</h2>`                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>`            </div>``            <div style="background: #eff6ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">`                <div style="font-weight: 500; color: #1e40af;">Claim Request</div>`                <div style="color: #3b82f6; margin-top: 4px;">`                    <strong>${window.escapeHtml(claim.division || 'Unknown')}</strong> wants `                    <strong>${window.escapeHtml(claim.field || 'Unknown')}</strong> `                    for <strong>${window.escapeHtml(claim.activity || 'Unknown')}</strong>`                </div>`                <div style="color: #6b7280; font-size: 0.9rem; margin-top: 4px;">`                    Date: ${proposal.date_key || 'Unknown'}`                </div>`            </div>``            <div style="margin-bottom: 16px;">`                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Changes to your bunks:</div>`                <div style="background: ${myMoves.length > 0 ? '#fef3c7' : '#f0fdf4'}; border-radius: 8px; padding: 12px;">`                    ${myMoves.length === 0 ? `                        '<div style="color: #166534;">✓ No direct changes to your bunks</div>' :`                        `<ul style="margin: 0; padding-left: 20px; color: #92400e;">`                            ${myMoves.map(m => `<li><strong>${window.escapeHtml(m.bunk)}</strong>: ${window.escapeHtml(m.from?.activity || '?')} → ${window.escapeHtml(m.to?.activity || '?')}</li>`).join('')}`                        </ul>``                    }`                </div>`            </div>``            <div style="display: flex; gap: 12px;">`                <button onclick="respondToProposal('${proposal.id}', 'approved')" `                    style="flex: 1; padding: 12px; background: #10b981; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">`                    ✅ Approve`                </button>`                <button onclick="respondToProposal('${proposal.id}', 'rejected')" `                    style="flex: 1; padding: 12px; background: #ef4444; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">`                    ❌ Reject`                </button>`            </div>`        `;
+
+        document.body.appendChild(modal);
+    }
+
+    async function respondToProposal(proposalId, response) {
+        const supabase = window.CampistryDB?.getClient?.() || window.supabase;
+        const myDivisions = window.getMyDivisions();
+
         if (!supabase) {
             alert('Database not available');
             return;
         }
 
         try {
-            const { data, error } = await supabase
-                .from('schedule_proposals')
-                .insert([proposal])
-                .select()
-                .single();
-
-            if (error) throw error;
-
-            console.log('[Proposal] Created:', data);
-            showIntegratedToast('📨 Proposal sent! Awaiting approval from other schedulers.', 'info');
-            
-            // Send notifications to affected schedulers
-            await notifyAffectedSchedulers(data, affectedDivisions);
-            
-        } catch (e) {
-            console.error('[Proposal] Error creating proposal:', e);
-            alert('Error creating proposal');
-        }
-    }
-
-    async function notifyAffectedSchedulers(proposal, divisions) {
-        const supabase = window.CampistryDB?.getClient?.() || window.supabase;
-        if (!supabase) return;
-
-        const campId = window.CampistryDB?.getCampId?.();
-        const userId = window.CampistryDB?.getUserId?.();
-
-        try {
-            // Get schedulers for affected divisions
-            const { data: schedulers } = await supabase
-                .from('camp_team_members')
-                .select('user_id, subdivision_ids')
-                .eq('camp_id', campId)
-                .in('role', ['scheduler', 'admin', 'owner']);
-
-            if (!schedulers) return;
-
-            const notifications = [];
-            for (const scheduler of schedulers) {
-                if (scheduler.user_id === userId) continue;
-                
-                // Check if scheduler manages any affected division
-                const manages = scheduler.subdivision_ids?.some(id => {
-                    // This would need to map subdivision IDs to division names
-                    return true; // Simplified
-                });
-
-                if (manages) {
-                    notifications.push({
-                        camp_id: campId,
-                        user_id: scheduler.user_id,
-                        type: 'proposal_pending',
-                        title: '📋 Schedule proposal awaiting your approval',
-                        message: `A proposal for ${proposal.claim?.field} requires your approval`,
-                        metadata: { proposalId: proposal.id },
-                        read: false,
-                        created_at: new Date().toISOString()
-                    });
-                }
-            }
-
-            if (notifications.length > 0) {
-                await supabase.from('notifications').insert(notifications);
-            }
-        } catch (e) {
-            console.error('[Proposal] Error notifying schedulers:', e);
-        }
-    }
-
-    async function loadProposal(proposalId) {
-        const supabase = window.CampistryDB?.getClient?.() || window.supabase;
-        if (!supabase) return null;
-
-        try {
-            const { data, error } = await supabase
+            const { data: proposal, error } = await supabase
                 .from('schedule_proposals')
                 .select('*')
                 .eq('id', proposalId)
                 .single();
 
-            if (error) throw error;
-            return data;
-        } catch (e) {
-            console.error('[Proposal] Error loading:', e);
-            return null;
-        }
-    }
-
-    async function loadMyPendingProposals() {
-        const supabase = window.CampistryDB?.getClient?.() || window.supabase;
-        if (!supabase) return [];
-
-        const campId = window.CampistryDB?.getCampId?.();
-        const dateKey = getDateKey();
-
-        try {
-            const { data, error } = await supabase
-                .from('schedule_proposals')
-                .select('*')
-                .eq('camp_id', campId)
-                .eq('date_key', dateKey)
-                .eq('status', 'pending');
-
-            if (error) throw error;
-            return data || [];
-        } catch (e) {
-            console.error('[Proposal] Error loading pending:', e);
-            return [];
-        }
-    }
-
-    function openProposalReviewModal(proposal) {
-        // Simplified - would render a full review UI
-        console.log('[Proposal] Opening review for:', proposal);
-        alert('Proposal review UI would open here');
-    }
-
-    async function respondToProposal(proposalId, response, divisions) {
-        const supabase = window.CampistryDB?.getClient?.() || window.supabase;
-        if (!supabase) return;
-
-        const userId = window.CampistryDB?.getUserId?.();
-
-        try {
-            const proposal = await loadProposal(proposalId);
-            if (!proposal) return;
-
-            const responses = proposal.responses || {};
-            for (const div of divisions) {
-                responses[div] = { response, userId, at: new Date().toISOString() };
+            if (error || !proposal) {
+                alert('Proposal not found');
+                return;
             }
 
-            // Check if all affected divisions have responded
-            const allResponded = proposal.affected_divisions?.every(d => responses[d]);
-            const allApproved = allResponded && proposal.affected_divisions?.every(d => responses[d]?.response === 'approved');
+            const approvals = proposal.approvals || {};
+            myDivisions.forEach(div => {
+                if (proposal.affected_divisions?.includes(div)) {
+                    approvals[div] = response;
+                }
+            });
 
-            const newStatus = allApproved ? 'approved' : (allResponded ? 'rejected' : 'pending');
+            const allApproved = (proposal.affected_divisions || []).every(d => approvals[d] === 'approved');
+            const anyRejected = (proposal.affected_divisions || []).some(d => approvals[d] === 'rejected');
+
+            let newStatus = 'pending';
+            if (allApproved) newStatus = 'approved';
+            if (anyRejected) newStatus = 'rejected';
 
             await supabase
                 .from('schedule_proposals')
-                .update({ 
-                    responses, 
-                    status: newStatus,
-                    updated_at: new Date().toISOString()
-                })
+                .update({ approvals, status: newStatus })
                 .eq('id', proposalId);
 
-            if (newStatus === 'approved') {
+            if (allApproved && !proposal.applied) {
                 await applyApprovedProposal(proposal);
             }
 
+            await notifyProposerOfResponse(proposal, response, myDivisions);
+
+            closeIntegratedEditModal();
             showIntegratedToast(
                 response === 'approved' ? '✅ Proposal approved' : '❌ Proposal rejected',
                 response === 'approved' ? 'success' : 'info'
             );
 
         } catch (e) {
-            console.error('[Proposal] Error responding:', e);
+            console.error('[RespondProposal] Error:', e);
             alert('Error responding to proposal');
         }
     }
 
     async function applyApprovedProposal(proposal) {
-        console.log('[ApplyProposal] Applying approved proposal...');
+        console.log('[ApplyProposal] ★ All approvals received, applying...');
 
         const claim = proposal.claim || {};
+        
+        // ★★★ AUTO-BACKUP BEFORE APPLYING ★★★
         await createAutoBackup(claim.activity || 'Approved Proposal', claim.division || 'Unknown');
 
         const { field: location, slots, division: divName, activity, bunks } = claim;
@@ -2227,13 +2676,8 @@
             if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
             for (let i = 0; i < (slots || []).length; i++) {
                 window.scheduleAssignments[bunk][slots[i]] = {
-                    field: location,
-                    sport: null,
-                    _activity: activity,
-                    _fixed: true,
-                    _pinned: true,
-                    _fromProposal: true,
-                    continuation: i > 0
+                    field: location, sport: null, _activity: activity,
+                    _fixed: true, _pinned: true, _fromProposal: true, continuation: i > 0
                 };
             }
         }
@@ -2244,33 +2688,23 @@
             modifiedBunks.add(move.bunk);
             if (!window.scheduleAssignments[move.bunk]) window.scheduleAssignments[move.bunk] = [];
             window.scheduleAssignments[move.bunk][move.slot] = {
-                field: move.to.field,
-                sport: move.to.activity,
-                _activity: move.to.activity,
-                _fromProposal: true
+                field: move.to.field, sport: move.to.activity,
+                _activity: move.to.activity, _fromProposal: true
             };
         }
 
-        // Lock field
+        // Lock & save
         if (window.GlobalFieldLocks && location && slots) {
             window.GlobalFieldLocks.lockField(location, slots, {
-                lockedBy: 'approved_proposal',
-                division: divName,
-                activity,
-                bunks
+                lockedBy: 'approved_proposal', division: divName, activity, bunks
             });
         }
 
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
-        
-        if (typeof bypassSaveAllBunks === 'function') {
-            await bypassSaveAllBunks([...modifiedBunks]);
-        }
+        if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
 
-        if (plan.length > 0) {
-            enableBypassRBACView(plan.map(p => p.bunk));
-        }
+        if (plan.length > 0) enableBypassRBACView(plan.map(p => p.bunk));
 
         // Mark applied
         const supabase = window.CampistryDB?.getClient?.() || window.supabase;
@@ -2281,906 +2715,47 @@
                 .eq('id', proposal.id);
         }
 
-        renderStaggeredView();
+        if (typeof renderStaggeredView === 'function') renderStaggeredView();
         showIntegratedToast(`✅ Proposal applied: ${(bunks || []).length} bunks → ${location}`, 'success');
     }
 
-    // =========================================================================
-    // SIMPLE EDIT (SINGLE CELL)
-    // =========================================================================
-
-    function showEditModal(bunk, startMin, endMin, currentValue, onSave) {
-        const modal = createModal(MODAL_ID, OVERLAY_ID);
-        const locations = getAllLocations();
-        const unifiedTimes = window.unifiedTimes || [];
-        
-        let currentActivity = currentValue || '';
-        let currentField = '';
-        let resolutionChoice = 'notify';
-        
-        const slots = findSlotsForRange(startMin, endMin, bunk);
-        if (slots.length > 0) {
-            const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
-            if (entry) {
-                currentField = fieldLabel(entry.field);
-                currentActivity = entry._activity || entry.sport || currentField;
-            }
-        }
-
-        modal.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">✏️ Edit: ${escapeHtml(bunk)}</h2>
-                <button id="post-edit-close" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #6b7280;">&times;</button>
-            </div>
-            <div style="background: #f3f4f6; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
-                <div style="font-weight: 600; color: #1f2937;">${minutesToTimeStr(startMin)} - ${minutesToTimeStr(endMin)}</div>
-            </div>
-            <div style="margin-bottom: 16px;">
-                <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 8px;">Activity</label>
-                <input type="text" id="post-edit-activity" value="${escapeHtml(currentActivity)}" placeholder="Enter activity" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box;">
-            </div>
-            <div style="margin-bottom: 16px;">
-                <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 8px;">Location / Field</label>
-                <select id="post-edit-location" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px;">
-                    <option value="">-- None --</option>
-                    ${locations.map(l => `<option value="${escapeHtml(l.name)}" ${l.name === currentField ? 'selected' : ''}>${escapeHtml(l.name)}</option>`).join('')}
-                </select>
-            </div>
-            <div id="post-edit-conflict" style="display: none; margin-bottom: 16px;"></div>
-            <div style="display: flex; justify-content: flex-end; gap: 12px;">
-                <button id="post-edit-clear" style="padding: 10px 20px; border: 1px solid #ef4444; background: white; color: #ef4444; border-radius: 8px; cursor: pointer; font-weight: 500;">Clear</button>
-                <button id="post-edit-save" style="padding: 10px 20px; background: #2563eb; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">Save</button>
-            </div>
-        `;
-
-        const locationSelect = document.getElementById('post-edit-location');
-        const conflictArea = document.getElementById('post-edit-conflict');
-
-        function checkAndShowConflicts() {
-            const location = locationSelect.value;
-            if (!location) {
-                conflictArea.style.display = 'none';
-                return null;
-            }
-
-            const conflictCheck = checkLocationConflict(location, slots, bunk);
-            if (conflictCheck.hasConflict) {
-                conflictArea.style.display = 'block';
-                conflictArea.style.cssText = 'background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;';
-                
-                const editableBunks = conflictCheck.editableConflicts.map(c => c.bunk);
-                const nonEditableBunks = conflictCheck.nonEditableConflicts.map(c => c.bunk);
-
-                let html = `<div style="color: #92400e; font-weight: 500; margin-bottom: 8px;">⚠️ Conflict Detected</div>`;
-                html += `<p style="margin: 0 0 8px 0; color: #78350f; font-size: 0.875rem;"><strong>${escapeHtml(location)}</strong> is already in use.</p>`;
-                
-                if (editableBunks.length > 0) {
-                    html += `<div style="margin-bottom: 8px; padding: 8px; background: #d1fae5; border-radius: 6px;"><div style="font-size: 0.8rem; color: #065f46;"><strong>✓ Can auto-reassign:</strong> ${editableBunks.join(', ')}</div></div>`;
-                }
-                
-                if (nonEditableBunks.length > 0) {
-                    html += `
-                        <div style="margin-bottom: 8px; padding: 8px; background: #fee2e2; border-radius: 6px;">
-                            <div style="font-size: 0.8rem; color: #991b1b;"><strong>✗ Other scheduler's bunks:</strong> ${nonEditableBunks.join(', ')}</div>
-                        </div>
-                        <div style="margin-top: 12px;">
-                            <div style="font-weight: 500; color: #374151; margin-bottom: 8px; font-size: 0.875rem;">How to handle?</div>
-                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 8px;">
-                                <input type="radio" name="conflict-resolution" value="notify" checked>
-                                <span style="font-size: 0.875rem;">📧 Notify other scheduler</span>
-                            </label>
-                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                                <input type="radio" name="conflict-resolution" value="bypass">
-                                <span style="font-size: 0.875rem;">🔓 Bypass & reassign</span>
-                            </label>
-                        </div>
-                    `;
-                }
-
-                conflictArea.innerHTML = html;
-                
-                conflictArea.querySelectorAll('input[name="conflict-resolution"]').forEach(radio => {
-                    radio.addEventListener('change', (e) => {
-                        resolutionChoice = e.target.value;
-                    });
-                });
-                
-                return conflictCheck;
-            } else {
-                conflictArea.style.display = 'none';
-                return null;
-            }
-        }
-
-        locationSelect.addEventListener('change', checkAndShowConflicts);
-        checkAndShowConflicts();
-
-        document.getElementById('post-edit-close').onclick = () => closeModal(OVERLAY_ID);
-        
-        document.getElementById('post-edit-clear').onclick = () => {
-            onSave({ 
-                activity: '', 
-                location: '', 
-                startMin, 
-                endMin, 
-                isClear: true,
-                hasConflict: false, 
-                conflicts: [] 
-            });
-            closeModal(OVERLAY_ID);
-        };
-        
-        document.getElementById('post-edit-save').onclick = () => {
-            const activity = document.getElementById('post-edit-activity').value.trim();
-            const location = locationSelect.value;
-            
-            if (!activity) {
-                alert('Please enter an activity name.');
-                return;
-            }
-
-            const conflictCheck = location ? checkAndShowConflicts() : null;
-            
-            onSave({
-                activity,
-                location,
-                startMin,
-                endMin,
-                hasConflict: conflictCheck?.hasConflict || false,
-                conflicts: conflictCheck?.conflicts || [],
-                editableConflicts: conflictCheck?.editableConflicts || [],
-                nonEditableConflicts: conflictCheck?.nonEditableConflicts || [],
-                resolutionChoice
-            });
-            
-            closeModal(OVERLAY_ID);
-        };
-
-        document.getElementById('post-edit-activity').focus();
-        document.getElementById('post-edit-activity').select();
-    }
-
-    function enhancedEditCell(bunk, startMin, endMin, current) {
-        if (!canEditBunk(bunk)) {
-            alert('You do not have permission to edit this schedule.');
-            return;
-        }
-        showEditModal(bunk, startMin, endMin, current, (editData) => applyEdit(bunk, editData));
-    }
-
-    function editCell(bunk, startMin, endMin, current) {
-        enhancedEditCell(bunk, startMin, endMin, current);
-    }
-
-    // =========================================================================
-    // APPLY EDIT
-    // =========================================================================
-
-    async function applyEdit(bunk, editData) {
-        const { activity, location, startMin, endMin, hasConflict, isClear, resolutionChoice } = editData;
-        const unifiedTimes = window.unifiedTimes || [];
-        const slots = findSlotsForRange(startMin, endMin, bunk);
-
-        if (slots.length === 0) {
-            console.warn('[ApplyEdit] No slots found for time range');
-            return;
-        }
-
-        console.log(`[ApplyEdit] Applying edit for ${bunk}:`, { 
-            activity, location, startMin, endMin, slots, hasConflict, resolutionChoice, isClear
-        });
-
-        if (!window.scheduleAssignments) {
-            window.scheduleAssignments = {};
-        }
-        if (!window.scheduleAssignments[bunk]) {
-            const divName = getDivisionForBunk(bunk);
-            const slotCount = window.divisionTimes?.[divName]?.length || unifiedTimes.length || 20;
-            window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
-        }
-
-        // Set protection flag
-        window._postEditInProgress = true;
-        window._postEditTimestamp = Date.now();
-
-        if (hasConflict) {
-            await resolveConflictsAndApply(bunk, slots, activity, location, editData);
-        } else {
-            applyDirectEdit(bunk, slots, activity, location, isClear);
-        }
-
-        // Save
-        const currentDate = getDateKey();
-        
-        try {
-            localStorage.setItem(`scheduleAssignments_${currentDate}`, JSON.stringify(window.scheduleAssignments));
-            
-            const allDailyData = loadDailyData();
-            if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
-            allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
-            allDailyData[currentDate]._postEditAt = Date.now();
-            localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
-        } catch (e) {
-            console.error('[ApplyEdit] Failed to save:', e);
-        }
-
-        // Clear protection after delay
-        setTimeout(() => {
-            window._postEditInProgress = false;
-        }, 8000);
-
-        // Dispatch event
-        document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
-            detail: { bunk, slots, activity, location, date: currentDate }
-        }));
-
-        saveSchedule();
-        updateTable();
-        setTimeout(() => updateTable(), 300);
-    }
-
-    function applyDirectEdit(bunk, slots, activity, location, isClear, isPinned = false) {
-        if (isClear) {
-            for (const slotIdx of slots) {
-                window.scheduleAssignments[bunk][slotIdx] = null;
-            }
-        } else {
-            for (let i = 0; i < slots.length; i++) {
-                window.scheduleAssignments[bunk][slots[i]] = {
-                    field: location || activity,
-                    sport: null,
-                    _activity: activity,
-                    _fixed: true,
-                    _pinned: isPinned,
-                    continuation: i > 0
-                };
-            }
-        }
-    }
-
-    async function resolveConflictsAndApply(bunk, slots, activity, location, editData) {
-        const { editableConflicts = [], nonEditableConflicts = [], resolutionChoice = 'notify' } = editData;
-        
-        // Apply the primary edit first
-        applyDirectEdit(bunk, slots, activity, location, false, true);
-        
-        // Lock the field
-        if (window.GlobalFieldLocks) {
-            const divName = getDivisionForBunk(bunk);
-            window.GlobalFieldLocks.lockField(location, slots, {
-                lockedBy: 'post_edit_pinned',
-                division: divName,
-                activity
-            });
-        }
-
-        let conflictsToResolve = [...editableConflicts];
-        const bypassMode = resolutionChoice === 'bypass';
-        
-        if (bypassMode && nonEditableConflicts.length > 0) {
-            console.log('[ResolveConflicts] 🔓 BYPASS MODE');
-            conflictsToResolve = [...conflictsToResolve, ...nonEditableConflicts];
-        }
-
-        if (conflictsToResolve.length > 0) {
-            const result = smartRegenerateConflicts(bunk, slots, location, activity, conflictsToResolve, bypassMode);
-            
-            if (bypassMode) {
-                const modifiedBunks = [...result.reassigned.map(r => r.bunk), ...result.failed.map(f => f.bunk)];
-                window._postEditInProgress = true;
-                window._postEditTimestamp = Date.now();
-                await bypassSaveAllBunks(modifiedBunks);
-                
-                const reassignedBunks = result.reassigned.map(r => r.bunk);
-                if (reassignedBunks.length > 0) {
-                    enableBypassRBACView(reassignedBunks);
-                }
-            }
-        }
-
-        // Notify non-editable bunks if not bypassing
-        if (!bypassMode && nonEditableConflicts.length > 0) {
-            await sendSchedulerNotification(
-                nonEditableConflicts.map(c => c.bunk),
-                location,
-                activity,
-                'conflict'
-            );
-        }
-    }
-
-    // =========================================================================
-    // SMART REGENERATION
-    // =========================================================================
-
-    function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedActivity, conflicts, bypassMode = false) {
-        console.log('[SmartRegen] ★★★ SMART REGENERATION STARTED ★★★');
-        if (bypassMode) console.log('[SmartRegen] 🔓 BYPASS MODE ACTIVE');
-
-        const activityProperties = getActivityProperties();
-        const results = { success: true, reassigned: [], failed: [], pinnedLock: null, bypassMode };
-
-        // Lock the pinned field
-        if (window.GlobalFieldLocks) {
-            const pinnedDivName = getDivisionForBunk(pinnedBunk);
-            window.GlobalFieldLocks.lockField(pinnedField, pinnedSlots, {
-                lockedBy: 'smart_regen_pinned',
-                division: pinnedDivName,
-                activity: pinnedActivity,
-                bunk: pinnedBunk
-            });
-            results.pinnedLock = { field: pinnedField, slots: pinnedSlots };
-        }
-
-        // Group conflicts by bunk
-        const conflictsByBunk = {};
-        for (const conflict of conflicts) {
-            if (!conflictsByBunk[conflict.bunk]) conflictsByBunk[conflict.bunk] = new Set();
-            conflictsByBunk[conflict.bunk].add(conflict.slot);
-        }
-
-        const bunksToReassign = Object.keys(conflictsByBunk);
-        
-        // Build field usage map
-        const fieldUsageBySlot = buildFieldUsageBySlot(bunksToReassign);
-        
-        // Add pinned field to usage
-        for (const slotIdx of pinnedSlots) {
-            if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
-            if (!fieldUsageBySlot[slotIdx][pinnedField]) {
-                fieldUsageBySlot[slotIdx][pinnedField] = { count: 0, bunks: {}, divisions: [] };
-            }
-            fieldUsageBySlot[slotIdx][pinnedField].count++;
-            fieldUsageBySlot[slotIdx][pinnedField].bunks[pinnedBunk] = pinnedActivity;
-        }
-
-        // Sort bunks for consistent ordering
-        bunksToReassign.sort((a, b) => {
-            const numA = parseInt((a.match(/\d+/) || [])[0]) || 0;
-            const numB = parseInt((b.match(/\d+/) || [])[0]) || 0;
-            return numA - numB;
-        });
-
-        // Reassign each bunk
-        for (const bunk of bunksToReassign) {
-            const slots = [...conflictsByBunk[bunk]].sort((a, b) => a - b);
-            const originalEntry = window.scheduleAssignments?.[bunk]?.[slots[0]];
-
-            const alternative = findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProperties, [pinnedField]);
-            
-            if (alternative) {
-                // Apply the reassignment
-                for (let i = 0; i < slots.length; i++) {
-                    window.scheduleAssignments[bunk][slots[i]] = {
-                        field: alternative.field,
-                        sport: alternative.activity,
-                        _activity: alternative.activity,
-                        _reassignedFrom: originalEntry?._activity,
-                        _smartRegen: true,
-                        continuation: i > 0
-                    };
-                }
-
-                // Update field usage
-                for (const slotIdx of slots) {
-                    if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
-                    if (!fieldUsageBySlot[slotIdx][alternative.field]) {
-                        fieldUsageBySlot[slotIdx][alternative.field] = { count: 0, bunks: {}, divisions: [] };
-                    }
-                    fieldUsageBySlot[slotIdx][alternative.field].count++;
-                    fieldUsageBySlot[slotIdx][alternative.field].bunks[bunk] = alternative.activity;
-                }
-
-                results.reassigned.push({
-                    bunk,
-                    slots,
-                    from: originalEntry?._activity,
-                    to: alternative.activity,
-                    field: alternative.field
-                });
-            } else {
-                results.failed.push({
-                    bunk,
-                    slots,
-                    original: originalEntry?._activity,
-                    reason: 'No available alternative'
-                });
-            }
-        }
-
-        console.log('[SmartRegen] Complete:', results);
-        return results;
-    }
-
-    function buildFieldUsageBySlot(excludeBunks = []) {
-        if (window.buildFieldUsageBySlot) {
-            return window.buildFieldUsageBySlot(excludeBunks);
-        }
-
-        const usage = {};
-        const excludeSet = new Set(excludeBunks);
-        const assignments = window.scheduleAssignments || {};
-
-        for (const [bunk, slots] of Object.entries(assignments)) {
-            if (excludeSet.has(bunk)) continue;
-            if (!Array.isArray(slots)) continue;
-
-            for (let i = 0; i < slots.length; i++) {
-                const entry = slots[i];
-                if (!entry || entry.continuation) continue;
-
-                const field = fieldLabel(entry.field);
-                if (!field) continue;
-
-                if (!usage[i]) usage[i] = {};
-                if (!usage[i][field]) {
-                    usage[i][field] = { count: 0, bunks: {}, divisions: [] };
-                }
-
-                usage[i][field].count++;
-                usage[i][field].bunks[bunk] = entry._activity || field;
-
-                const div = getDivisionForBunk(bunk);
-                if (div && !usage[i][field].divisions.includes(div)) {
-                    usage[i][field].divisions.push(div);
-                }
-            }
-        }
-
-        return usage;
-    }
-
-    function findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProperties, excludeFields = []) {
-        const candidates = buildCandidateOptions(bunk, slots, fieldUsageBySlot, activityProperties, excludeFields);
-        
-        if (candidates.length === 0) return null;
-        
-        // Sort by penalty (lower is better)
-        candidates.sort((a, b) => a.penalty - b.penalty);
-        
-        return candidates[0];
-    }
-
-    function buildCandidateOptions(bunk, slots, fieldUsageBySlot, activityProperties, excludeFields = []) {
-        const excludeSet = new Set(excludeFields.map(f => f.toLowerCase()));
-        const candidates = [];
-
-        for (const [fieldName, info] of Object.entries(activityProperties)) {
-            if (excludeSet.has(fieldName.toLowerCase())) continue;
-            if (info.available === false) continue;
-
-            const capacity = info.sharableWith?.capacity || (info.sharable ? 2 : 1);
-            
-            // Check availability across all slots
-            let available = true;
-            for (const slotIdx of slots) {
-                const slotUsage = fieldUsageBySlot[slotIdx]?.[fieldName];
-                if (slotUsage && slotUsage.count >= capacity) {
-                    available = false;
-                    break;
-                }
-            }
-
-            if (available) {
-                const penalty = calculateRotationPenalty(bunk, fieldName, slots[0]);
-                candidates.push({
-                    activity: fieldName,
-                    field: fieldName,
-                    penalty
-                });
-            }
-        }
-
-        return candidates;
-    }
-
-    function calculateRotationPenalty(bunk, activity, slotIdx) {
-        // Simplified penalty calculation
-        let penalty = 0;
-        
-        // Check if done today
-        const todayActivities = getActivitiesDoneToday(bunk, slotIdx);
-        if (todayActivities.has(activity)) {
-            penalty += ROTATION_CONFIG.SAME_DAY_PENALTY;
-        }
-
-        return penalty;
-    }
-
-    function getActivitiesDoneToday(bunk, beforeSlot) {
-        const done = new Set();
-        const bunkData = window.scheduleAssignments?.[bunk];
-        if (!bunkData) return done;
-
-        for (let i = 0; i < beforeSlot && i < bunkData.length; i++) {
-            const entry = bunkData[i];
-            if (entry && entry._activity) {
-                done.add(entry._activity);
-            }
-        }
-
-        return done;
-    }
-
-    function applyPickToBunk(pick, bunk, slotIdx, fieldUsageBySlot) {
-        if (!window.scheduleAssignments[bunk]) {
-            const divName = getDivisionForBunk(bunk);
-            const slotCount = window.divisionTimes?.[divName]?.length || 20;
-            window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
-        }
-
-        window.scheduleAssignments[bunk][slotIdx] = {
-            field: pick.field || pick.activityName,
-            sport: pick.activityName,
-            _activity: pick.activityName,
-            _fixed: pick.fixed || false
-        };
-
-        // Update field usage
-        const fieldName = pick.field || pick.activityName;
-        if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
-        if (!fieldUsageBySlot[slotIdx][fieldName]) {
-            fieldUsageBySlot[slotIdx][fieldName] = { count: 0, bunks: {}, divisions: [] };
-        }
-        
-        const usage = fieldUsageBySlot[slotIdx][fieldName];
-        usage.count++;
-        usage.bunks[bunk] = pick.activityName;
-        
-        const divName = getDivisionForBunk(bunk);
-        if (divName && !usage.divisions.includes(divName)) {
-            usage.divisions.push(divName);
-        }
-    }
-
-    // =========================================================================
-    // BYPASS SAVE & NOTIFICATIONS
-    // =========================================================================
-
-    async function bypassSaveAllBunks(bunks) {
-        console.log('[BypassSave] Saving bunks:', bunks);
-        
-        const currentDate = getDateKey();
-        const assignments = window.scheduleAssignments || {};
-
-        // Save to localStorage
-        try {
-            const allDailyData = loadDailyData();
-            if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
-            allDailyData[currentDate].scheduleAssignments = assignments;
-            allDailyData[currentDate]._bypassSaveAt = Date.now();
-            localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
-        } catch (e) {
-            console.error('[BypassSave] localStorage error:', e);
-        }
-
-        // Save to cloud
-        if (window.saveCurrentDailyData) {
-            window.saveCurrentDailyData('scheduleAssignments', assignments, { silent: true, bypass: true });
-        }
-
-        return { success: true, savedBunks: bunks.length };
-    }
-
-    async function sendSchedulerNotification(affectedBunks, location, activity, notificationType = 'conflict') {
+    async function notifyProposerOfResponse(proposal, response, respondingDivisions) {
         const supabase = window.CampistryDB?.getClient?.() || window.supabase;
-        if (!supabase) return;
-
-        const campId = window.CampistryDB?.getCampId?.();
-        const userId = window.CampistryDB?.getUserId?.();
-        const dateKey = getDateKey();
+        if (!supabase || !proposal.created_by) return;
 
         try {
-            // Get schedulers for affected bunks
-            const affectedDivisions = new Set(affectedBunks.map(b => getDivisionForBunk(b)).filter(Boolean));
-            
-            const { data: schedulers } = await supabase
-                .from('camp_team_members')
-                .select('user_id')
-                .eq('camp_id', campId)
-                .neq('user_id', userId);
-
-            if (!schedulers) return;
-
-            const notifications = schedulers.map(s => ({
-                camp_id: campId,
-                user_id: s.user_id,
-                type: notificationType === 'bypassed' ? 'schedule_bypassed' : 'schedule_conflict',
-                title: notificationType === 'bypassed' 
-                    ? '🔓 Your schedule was modified' 
-                    : '⚠️ Schedule conflict detected',
-                message: notificationType === 'bypassed'
-                    ? `Another scheduler reassigned bunks (${affectedBunks.join(', ')}) for ${location} - ${activity} on ${dateKey}`
-                    : `Conflict at ${location} for ${activity} on ${dateKey}. Affected bunks: ${affectedBunks.join(', ')}`,
-                metadata: { dateKey, bunks: affectedBunks, location, activity, initiatedBy: userId },
+            await supabase.from('notifications').insert({
+                camp_id: proposal.camp_id,
+                user_id: proposal.created_by,
+                type: 'proposal_response',
+                title: response === 'approved' ? '✅ Proposal Approved' : '❌ Proposal Rejected',
+                message: `${respondingDivisions.join(', ')} ${response} your claim for ${proposal.claim?.field || 'field'}`,
+                metadata: { proposal_id: proposal.id, response },
                 read: false,
                 created_at: new Date().toISOString()
-            }));
-
-            await supabase.from('notifications').insert(notifications);
-        } catch (e) {
-            console.error('[Notification] Error:', e);
-        }
+            });
+        } catch (e) { console.error('[NotifyProposer] Error:', e); }
     }
 
-    // =========================================================================
-    // PINNED ACTIVITY SYSTEM
-    // =========================================================================
+    // --- CLOSE MODAL & TOAST ---
 
-    function capturePinnedActivities(allowedDivisions = null) {
-        _pinnedSnapshot = {};
-        _pinnedFieldLocks = [];
-        
-        const assignments = window.scheduleAssignments || {};
-        const divisions = window.divisions || {};
-        const allowedSet = allowedDivisions ? new Set(allowedDivisions) : null;
-
-        for (const [bunk, slots] of Object.entries(assignments)) {
-            if (!Array.isArray(slots)) continue;
-            
-            const divName = getDivisionForBunk(bunk);
-            if (allowedSet && allowedSet.has(divName)) continue; // Skip allowed divisions
-            
-            for (let i = 0; i < slots.length; i++) {
-                const entry = slots[i];
-                if (!entry || entry.continuation) continue;
-                if (!entry._pinned && !entry._fixed && !entry._bunkOverride) continue;
-                
-                if (!_pinnedSnapshot[bunk]) _pinnedSnapshot[bunk] = {};
-                _pinnedSnapshot[bunk][i] = { ...entry };
-            }
-        }
-
-        console.log('[PinnedCapture] Captured:', Object.keys(_pinnedSnapshot).length, 'bunks');
+    function closeIntegratedEditModal() {
+        document.getElementById(INTEGRATED_EDIT_MODAL_ID)?.remove();
+        document.getElementById(INTEGRATED_EDIT_OVERLAY_ID)?.remove();
+        document.getElementById(CLAIM_MODAL_ID)?.remove();
+        document.getElementById(CLAIM_OVERLAY_ID)?.remove();
+        document.getElementById(PROPOSAL_MODAL_ID)?.remove();
+        _currentEditContext = null;
     }
-
-    function registerPinnedFieldLocks() {
-        if (!window.GlobalFieldLocks) return;
-        
-        for (const [bunk, slots] of Object.entries(_pinnedSnapshot)) {
-            for (const [slotIdx, entry] of Object.entries(slots)) {
-                const field = fieldLabel(entry.field);
-                if (!field) continue;
-                
-                const divName = getDivisionForBunk(bunk);
-                window.GlobalFieldLocks.lockField(field, [parseInt(slotIdx)], {
-                    lockedBy: 'pinned_preservation',
-                    division: divName,
-                    bunk
-                });
-            }
-        }
-    }
-
-    function registerPinnedFieldUsage(fieldUsageBySlot) {
-        for (const [bunk, slots] of Object.entries(_pinnedSnapshot)) {
-            for (const [slotIdxStr, entry] of Object.entries(slots)) {
-                const slotIdx = parseInt(slotIdxStr);
-                const field = fieldLabel(entry.field);
-                if (!field) continue;
-                
-                if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
-                if (!fieldUsageBySlot[slotIdx][field]) {
-                    fieldUsageBySlot[slotIdx][field] = { count: 0, bunks: {}, divisions: [] };
-                }
-                
-                const usage = fieldUsageBySlot[slotIdx][field];
-                usage.count++;
-                usage.bunks[bunk] = entry._activity || field;
-                
-                const divName = getDivisionForBunk(bunk);
-                if (divName && !usage.divisions.includes(divName)) {
-                    usage.divisions.push(divName);
-                }
-            }
-        }
-    }
-
-    function restorePinnedActivities() {
-        let restored = 0;
-        
-        for (const [bunk, slots] of Object.entries(_pinnedSnapshot)) {
-            if (!window.scheduleAssignments[bunk]) {
-                const divName = getDivisionForBunk(bunk);
-                const slotCount = window.divisionTimes?.[divName]?.length || 20;
-                window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
-            }
-            
-            for (const [slotIdxStr, entry] of Object.entries(slots)) {
-                const slotIdx = parseInt(slotIdxStr);
-                window.scheduleAssignments[bunk][slotIdx] = { ...entry, _restoredPin: true };
-                restored++;
-            }
-        }
-        
-        console.log('[PinnedRestore] Restored:', restored, 'entries');
-        return restored;
-    }
-
-    function getPinnedActivities() {
-        const pinned = [];
-        const assignments = window.scheduleAssignments || {};
-        
-        for (const [bunk, slots] of Object.entries(assignments)) {
-            if (!Array.isArray(slots)) continue;
-            
-            for (let i = 0; i < slots.length; i++) {
-                const entry = slots[i];
-                if (!entry || entry.continuation) continue;
-                if (entry._pinned || entry._fixed || entry._bunkOverride) {
-                    pinned.push({
-                        bunk,
-                        slotIndex: i,
-                        activity: entry._activity,
-                        field: fieldLabel(entry.field),
-                        entry
-                    });
-                }
-            }
-        }
-        
-        return pinned;
-    }
-
-    function unpinActivity(bunk, slotIndex) {
-        const entry = window.scheduleAssignments?.[bunk]?.[slotIndex];
-        if (entry) {
-            delete entry._pinned;
-            delete entry._fixed;
-            delete entry._bunkOverride;
-        }
-    }
-
-    function unpinAllActivities() {
-        const assignments = window.scheduleAssignments || {};
-        
-        for (const [bunk, slots] of Object.entries(assignments)) {
-            if (!Array.isArray(slots)) continue;
-            
-            for (const entry of slots) {
-                if (entry) {
-                    delete entry._pinned;
-                    delete entry._fixed;
-                    delete entry._bunkOverride;
-                }
-            }
-        }
-    }
-
-    // =========================================================================
-    // HOOK SCHEDULER GENERATION
-    // =========================================================================
-
-    function hookSchedulerGeneration() {
-        if (typeof window.runScheduler === 'function' && !window.runScheduler._pinnedHooked) {
-            const originalRunScheduler = window.runScheduler;
-            window.runScheduler = async function(...args) {
-                capturePinnedActivities(args[0]?.allowedDivisions || null);
-                const result = await originalRunScheduler.apply(this, args);
-                if (Object.keys(_pinnedSnapshot).length > 0) {
-                    restorePinnedActivities();
-                    saveSchedule();
-                }
-                return result;
-            };
-            window.runScheduler._pinnedHooked = true;
-        }
-        
-        if (typeof window.generateSchedule === 'function' && !window.generateSchedule._pinnedHooked) {
-            const originalGenerateSchedule = window.generateSchedule;
-            window.generateSchedule = async function(...args) {
-                capturePinnedActivities(args[0]?.allowedDivisions || window.selectedDivisionsForGeneration || null);
-                const result = await originalGenerateSchedule.apply(this, args);
-                if (Object.keys(_pinnedSnapshot).length > 0) {
-                    restorePinnedActivities();
-                    saveSchedule();
-                    updateTable();
-                }
-                return result;
-            };
-            window.generateSchedule._pinnedHooked = true;
-        }
-    }
-
-    // =========================================================================
-    // TOAST NOTIFICATIONS
-    // =========================================================================
 
     function showIntegratedToast(message, type = 'info') {
-        if (window.showToast) {
-            window.showToast(message, type);
-            return;
-        }
-        
-        const bgColor = type === 'success' ? '#10b981' : (type === 'error' ? '#ef4444' : '#3b82f6');
+        if (window.showToast) { window.showToast(message, type); return; }
         const toast = document.createElement('div');
-        toast.style.cssText = `
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            background: ${bgColor};
-            color: white;
-            padding: 12px 20px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-            z-index: 10000;
-            animation: fadeIn 0.2s ease;
-        `;
+        toast.style.cssText = ``            position: fixed; bottom: 20px; right: 20px;`            background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'};`            color: white; padding: 12px 20px; border-radius: 8px;`            box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 10000;`        `;
         toast.textContent = message;
         document.body.appendChild(toast);
         setTimeout(() => toast.remove(), 4000);
     }
-
-    // =========================================================================
-    // INITIALIZATION
-    // =========================================================================
-
-    function initScheduleSystem() {
-        if (_initialized) return;
-        
-        loadScheduleForDate(getDateKey());
-        
-        // Add styles
-        if (!document.getElementById('unified-schedule-styles')) {
-            const style = document.createElement('style');
-            style.id = 'unified-schedule-styles';
-            style.textContent = `
-                @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-                #${MODAL_ID} input:focus, #${MODAL_ID} select:focus {
-                    outline: none;
-                    border-color: #2563eb;
-                    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-                }
-                #${MODAL_ID} button:hover { opacity: 0.9; }
-            `;
-            document.head.appendChild(style);
-        }
-        
-        hookSchedulerGeneration();
-        setTimeout(hookSchedulerGeneration, 1000);
-        setTimeout(hookSchedulerGeneration, 3000);
-        
-        _initialized = true;
-        console.log('📅 Unified Schedule System v5.0.0 initialized');
-    }
-
-    function reconcileOrRenderSaved() {
-        loadScheduleForDate(getDateKey());
-        updateTable();
-    }
-
-    // =========================================================================
-    // EVENT LISTENERS
-    // =========================================================================
-
-    window.addEventListener('campistry-cloud-hydrated', () => {
-        if (window._postEditInProgress) return;
-        _cloudHydrated = true;
-        setTimeout(() => {
-            if (!window._postEditInProgress) {
-                loadScheduleForDate(getDateKey());
-                updateTable();
-            }
-        }, 100);
-    });
-
-    window.addEventListener('campistry-cloud-schedule-loaded', () => {
-        if (window._postEditInProgress) return;
-        _cloudHydrated = true;
-        setTimeout(() => {
-            if (!window._postEditInProgress) updateTable();
-        }, 100);
-    });
-
-    window.addEventListener('campistry-daily-data-updated', () => {
-        if (window._postEditInProgress) return;
-        setTimeout(() => {
-            if (!window._postEditInProgress) {
-                loadScheduleForDate(getDateKey());
-                updateTable();
-            }
-        }, 100);
-    });
 
     // =========================================================================
     // EXPORTS
@@ -3201,28 +2776,18 @@
     // Entry/Bunk functions
     window.getEntry = getEntry;
     window.formatEntry = formatEntry;
-    window.getEntryForBlock = getEntryForBlock;
-    window.getDivisionForBunk = getDivisionForBunk;
-    window.getEditableBunks = getEditableBunks;
-    window.canEditBunk = canEditBunk;
-    window.getMyDivisions = getMyDivisions;
 
-    // Slot utilities
-    window.findSlotsForRange = findSlotsForRange;
-    window.getSlotTimeRange = getSlotTimeRange;
-
-    // Conflict detection
+    // Conflict detection (time-based, division-aware)
     window.checkLocationConflict = checkLocationConflict;
     window.checkCrossDivisionConflict = checkCrossDivisionConflict;
     window.getAllLocations = getAllLocations;
-    window.getActivityProperties = getActivityProperties;
+    
 
     // Smart regeneration
     window.smartRegenerateConflicts = smartRegenerateConflicts;
-    window.smartReassignBunkActivity = findBestActivityForBunk;
+    window.smartReassignBunkActivity = smartReassignBunkActivity;
     window.findBestActivityForBunk = findBestActivityForBunk;
     window.buildCandidateOptions = buildCandidateOptions;
-    window.buildFieldUsageBySlot = buildFieldUsageBySlot;
     window.calculateRotationPenalty = calculateRotationPenalty;
     window.applyPickToBunk = applyPickToBunk;
     window.resolveConflictsAndApply = resolveConflictsAndApply;
@@ -3239,16 +2804,8 @@
     window.getPinnedActivities = getPinnedActivities;
     window.unpinActivity = unpinActivity;
     window.unpinAllActivities = unpinAllActivities;
-    window.preservePinnedForRegeneration = (allowedDivisions) => {
-        capturePinnedActivities(allowedDivisions);
-        registerPinnedFieldLocks();
-    };
-    window.restorePinnedAfterRegeneration = () => {
-        const count = restorePinnedActivities();
-        saveSchedule();
-        updateTable();
-        return count;
-    };
+    window.preservePinnedForRegeneration = (allowedDivisions) => { capturePinnedActivities(allowedDivisions); registerPinnedFieldLocks(); };
+    window.restorePinnedAfterRegeneration = () => { const count = restorePinnedActivities(); saveSchedule(); updateTable(); return count; };
 
     // Integrated Edit Modal
     window.openIntegratedEditModal = openIntegratedEditModal;
@@ -3277,75 +2834,50 @@
 
     // Utility
     window.showIntegratedToast = showIntegratedToast;
-    window.escapeHtml = escapeHtml;
-    window.fieldLabel = fieldLabel;
 
     // Legacy compatibility
     window.ScheduleVersionManager = VersionManager;
-    window.ScheduleVersionMerger = {
-        mergeAndPush: async (dateKey) => {
-            window.currentScheduleDate = dateKey;
-            return await VersionManager.mergeVersions();
-        }
-    };
+    window.ScheduleVersionMerger = { mergeAndPush: async (dateKey) => { window.currentScheduleDate = dateKey; return await VersionManager.mergeVersions(); } };
 
     // System objects
-    window.SmartRegenSystem = {
-        smartRegenerateConflicts,
-        smartReassignBunkActivity: findBestActivityForBunk,
-        findBestActivityForBunk,
-        buildFieldUsageBySlot,
-        buildCandidateOptions,
-        calculateRotationPenalty,
-        isFieldAvailable: (field, slot, capacity) => {
-            const usage = buildFieldUsageBySlot([]);
-            const slotUsage = usage[slot]?.[field];
-            return !slotUsage || slotUsage.count < capacity;
-        },
-        getActivityProperties,
-        applyPickToBunk,
-        ROTATION_CONFIG
+    window.SmartRegenSystem = { 
+        smartRegenerateConflicts, smartReassignBunkActivity, findBestActivityForBunk, 
+        buildFieldUsageBySlot: window.buildFieldUsageBySlot, // From Utils
+        buildCandidateOptions, calculateRotationPenalty, 
+        isFieldAvailable: window.isFieldAvailable, // From Utils
+        getActivityProperties: window.getActivityProperties, // From Utils
+        applyPickToBunk, ROTATION_CONFIG 
     };
-
-    window.PinnedActivitySystem = {
-        capture: capturePinnedActivities,
-        registerLocks: registerPinnedFieldLocks,
-        registerUsage: registerPinnedFieldUsage,
-        restore: restorePinnedActivities,
-        getAll: getPinnedActivities,
-        unpin: unpinActivity,
-        unpinAll: unpinAllActivities,
-        debug: () => ({ snapshot: _pinnedSnapshot, locks: _pinnedFieldLocks })
+    
+    window.PinnedActivitySystem = { 
+        capture: capturePinnedActivities, registerLocks: registerPinnedFieldLocks, 
+        registerUsage: registerPinnedFieldUsage, restore: restorePinnedActivities, 
+        getAll: getPinnedActivities, unpin: unpinActivity, unpinAll: unpinAllActivities, 
+        debug: () => ({ snapshot: _pinnedSnapshot, locks: _pinnedFieldLocks }) 
     };
 
     window.UnifiedScheduleSystem = {
-        version: VERSION,
+        version: '4.0.5',
         
         // Core functions
-        loadScheduleForDate,
-        renderStaggeredView,
-        findSlotIndexForTime: (min, bunkOrDiv) => {
-            const slots = findSlotsForRange(min, min + 1, bunkOrDiv);
-            return slots[0] ?? -1;
-        },
-        findSlotsForRange,
-        getLeagueMatchups,
-        getEntryForBlock,
-        getDivisionForBunk,
-        getSlotTimeRange,
-        isSplitTileBlock,
-        expandBlocksForSplitTiles,
+        loadScheduleForDate, renderStaggeredView, 
+        findSlotIndexForTime: window.findSlotIndexForTime, // From Utils
+        findSlotsForRange: window.findSlotsForRange, // From Utils
+        getLeagueMatchups, 
+        getEntryForBlock: window.getEntryForBlock, // From Utils
+        getDivisionForBunk: window.getDivisionForBunk, // From Utils
+        getSlotTimeRange: window.getSlotTimeRange, // From Utils
+        isSplitTileBlock, expandBlocksForSplitTiles,
         
         // Conflict detection
-        checkLocationConflict,
-        checkCrossDivisionConflict,
-        buildFieldUsageBySlot,
+        checkLocationConflict, checkCrossDivisionConflict, 
+        buildFieldUsageBySlot: window.buildFieldUsageBySlot, // From Utils
         TimeBasedFieldUsage: window.TimeBasedFieldUsage,
         
         // Sub-systems
         VersionManager,
-        SmartRegenSystem: window.SmartRegenSystem,
-        PinnedActivitySystem: window.PinnedActivitySystem,
+        SmartRegenSystem: window.SmartRegenSystem, 
+        PinnedActivitySystem: window.PinnedActivitySystem, 
         ROTATION_CONFIG,
         
         IntegratedEditSystem: {
@@ -3374,48 +2906,42 @@
         DEBUG_ON: () => { DEBUG = true; console.log('[UnifiedSchedule] Debug enabled'); },
         DEBUG_OFF: () => { DEBUG = false; console.log('[UnifiedSchedule] Debug disabled'); },
         
-        diagnose: () => {
-            console.log('=== UNIFIED SCHEDULE SYSTEM v5.0.0 DIAGNOSTIC ===');
-            console.log(`Date: ${getDateKey()}`);
-            console.log(`window.scheduleAssignments: ${Object.keys(window.scheduleAssignments || {}).length} bunks`);
+        diagnose: () => { 
+            console.log('=== UNIFIED SCHEDULE SYSTEM v4.0.5 DIAGNOSTIC ==='); 
+            console.log(`Date: ${getDateKey()}`); 
+            console.log(`window.scheduleAssignments: ${Object.keys(window.scheduleAssignments || {}).length} bunks`); 
             console.log(`window.unifiedTimes: ${(window.unifiedTimes || []).length} slots`);
             console.log(`window.divisionTimes: ${Object.keys(window.divisionTimes || {}).length} divisions`);
             console.log(`TimeBasedFieldUsage: ${window.TimeBasedFieldUsage ? '✅' : '❌'}`);
-            console.log(`Pinned activities: ${getPinnedActivities().length}`);
-            console.log(`RBAC bypass view: ${_bypassRBACViewEnabled}`);
-            console.log(`Highlighted bunks: ${[..._bypassHighlightBunks].join(', ') || 'none'}`);
+            console.log(`Pinned activities: ${getPinnedActivities().length}`); 
+            console.log(`RBAC bypass view: ${_bypassRBACViewEnabled}`); 
+            console.log(`Highlighted bunks: ${[..._bypassHighlightBunks].join(', ') || 'none'}`); 
         },
         
-        getState: () => ({
-            dateKey: getDateKey(),
-            assignments: Object.keys(window.scheduleAssignments || {}).length,
-            leagues: Object.keys(window.leagueAssignments || {}).length,
+        getState: () => ({ 
+            dateKey: getDateKey(), 
+            assignments: Object.keys(window.scheduleAssignments || {}).length, 
+            leagues: Object.keys(window.leagueAssignments || {}).length, 
             times: (window.unifiedTimes || []).length,
             divisionTimes: Object.keys(window.divisionTimes || {}).length,
-            cloudHydrated: _cloudHydrated,
-            initialized: _initialized,
-            pinnedCount: getPinnedActivities().length,
-            postEditInProgress: !!window._postEditInProgress,
-            bypassRBACViewEnabled: _bypassRBACViewEnabled,
-            highlightedBunks: [..._bypassHighlightBunks]
+            cloudHydrated: _cloudHydrated, 
+            initialized: _initialized, 
+            pinnedCount: getPinnedActivities().length, 
+            postEditInProgress: !!window._postEditInProgress, 
+            bypassRBACViewEnabled: _bypassRBACViewEnabled, 
+            highlightedBunks: [..._bypassHighlightBunks] 
         })
     };
 
     // Initialize on DOM ready
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initScheduleSystem);
-    } else {
-        setTimeout(initScheduleSystem, 100);
-    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initScheduleSystem);
+    else setTimeout(initScheduleSystem, 100);
 
-    console.log('📅 Unified Schedule System v5.0.0 loaded successfully');
-    console.log('   ✅ Fixed template literal HTML generation');
-    console.log('   ✅ Fixed null safety throughout');
-    console.log('   ✅ Fixed utility function references');
-    console.log('   ✅ Fixed race conditions in edit operations');
+    console.log('📅 Unified Schedule System v4.0.5 loaded successfully');
     console.log('   ✅ Division-aware time slot management');
     console.log('   ✅ TimeBasedFieldUsage for cross-division conflicts');
     console.log('   ✅ Integrated Edit with multi-bunk support');
     console.log('   ✅ Proposal system for cross-division changes');
+    console.log('   ✅ Shared Utils Integration');
 
 })();
