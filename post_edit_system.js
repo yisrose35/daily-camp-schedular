@@ -258,13 +258,16 @@
     // =========================================================================
 
     function applyDirectEdit(bunk, slots, activity, location, isClear) {
-        const unifiedTimes = window.unifiedTimes || [];
+        // ★ FIX: Use division-specific slot count ★
+        const divName = window.SchedulerCoreUtils?.getDivisionForBunk(bunk) || 
+                        window.getDivisionForBunk?.(bunk);
+        const divTimes = window.divisionTimes?.[divName] || [];
         
         if (!window.scheduleAssignments) {
             window.scheduleAssignments = {};
         }
         if (!window.scheduleAssignments[bunk]) {
-            window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
+            window.scheduleAssignments[bunk] = new Array(divTimes.length || 50);
         }
 
         const fieldValue = location ? `${location} – ${activity}` : activity;
