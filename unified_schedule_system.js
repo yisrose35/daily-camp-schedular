@@ -2185,7 +2185,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
         const divName = window.getDivisionForBunk(bunk);
         const bunksInDivision = window.getBunksForDivision(divName);
-        const times = window.unifiedTimes || [];
+        const times = window.divisionTimes?.[divName] || window.unifiedTimes || [];
         const slotInfo = times[slotIdx] || {};
         const timeLabel = slotInfo.label || `${minutesToTimeStr(slotInfo.startMin)} - ${minutesToTimeStr(slotInfo.endMin)}`;
 
@@ -2403,7 +2403,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         `;
         modal.onclick = e => e.stopPropagation();
 
-        const times = window.unifiedTimes || [];
+        const times = window.divisionTimes?.[divName] || window.unifiedTimes || [];
         const startSlot = times[slots[0]];
         const endSlot = times[slots[slots.length - 1]];
         const timeRange = `${minutesToTimeStr(startSlot?.startMin)} - ${minutesToTimeStr(endSlot?.endMin)}`;
