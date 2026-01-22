@@ -2289,30 +2289,79 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
         const overlay = document.createElement('div');
         overlay.id = INTEGRATED_EDIT_OVERLAY_ID;
-        overlay.style.cssText = `position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9998;`;
+        overlay.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9998;';
         overlay.onclick = closeIntegratedEditModal;
         document.body.appendChild(overlay);
 
         const modal = document.createElement('div');
         modal.id = INTEGRATED_EDIT_MODAL_ID;
-        modal.style.cssText = ``            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);`            background: white; border-radius: 12px; padding: 24px;`            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;`            min-width: 500px; max-width: 620px; max-height: 85vh; overflow-y: auto;`        `;
-        modal.onclick = e => e.stopPropagation();
+        modal.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999; min-width: 500px; max-width: 620px; max-height: 85vh; overflow-y: auto;';
+        modal.onclick = function(e) { e.stopPropagation(); };
 
         const times = window.divisionTimes?.[divName] || window.unifiedTimes || [];
         const startSlot = times[slots[0]];
         const endSlot = times[slots[slots.length - 1]];
-        const timeRange = `${minutesToTimeStr(startSlot?.startMin)} - ${minutesToTimeStr(endSlot?.endMin)}`;
+        const timeRange = minutesToTimeStr(startSlot?.startMin) + ' - ' + minutesToTimeStr(endSlot?.endMin);
         const allLocations = getAllLocations();
 
-        modal.innerHTML = ``            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">`                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">🎯 Multi-Bunk Edit</h2>`                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>`            </div>``            <div style="background: #eff6ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">`                <div style="font-weight: 500; color: #1e40af;">${window.escapeHtml(divName)}</div>`                <div style="font-size: 0.9rem; color: #3b82f6; margin-top: 4px;">`                    ${bunks.length} bunks: ${bunks.slice(0, 5).map(b => window.escapeHtml(b)).join(', ')}${bunks.length > 5 ? ` +${bunks.length - 5} more` : ''}`                </div>`                <div style="font-size: 0.9rem; color: #6b7280; margin-top: 4px;">Time: ${timeRange}</div>`            </div>``            <div style="display: grid; gap: 16px;">`                <div>`                    <label style="display: block; font-weight: 500; margin-bottom: 6px; color: #374151;">📍 Location/Field</label>`                    <select id="multi-edit-location" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px;">`                        <option value="">-- Select --</option>`                        ${allLocations.map(loc => `<option value="${loc.name}">${window.escapeHtml(loc.name)}</option>`).join('')}`                    </select>`                </div>``                <div>`                    <label style="display: block; font-weight: 500; margin-bottom: 6px; color: #374151;">🎪 Activity Name</label>`                    <input type="text" id="multi-edit-activity" placeholder="e.g., Carnival, Color War"`                        style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box;">`                </div>``                <div id="multi-conflict-preview" style="display: none;"></div>``                <div id="multi-resolution-mode" style="display: none;">`                    <label style="display: block; font-weight: 500; margin-bottom: 8px; color: #374151;">⚙️ How to handle other schedulers' bunks?</label>`                    <div style="display: flex; flex-direction: column; gap: 8px;">`                        <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">`                            <input type="radio" name="multi-mode" value="notify" checked style="margin-top: 3px;">`                            <div>`                                <div style="font-weight: 500; color: #374151;">📧 Notify & Request Approval</div>`                                <div style="font-size: 0.85rem; color: #6b7280;">Changes require approval first</div>`                            </div>`                        </label>`                        <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">`                            <input type="radio" name="multi-mode" value="bypass" style="margin-top: 3px;">`                            <div>`                                <div style="font-weight: 500; color: #374151;">🔓 Bypass & Apply Now</div>`                                <div style="font-size: 0.85rem; color: #6b7280;">Changes apply immediately</div>`                            </div>`                        </label>`                    </div>`                </div>`            </div>``            <div style="display: flex; gap: 12px; margin-top: 20px;">`                <button onclick="previewMultiBunkEdit()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">👁️ Preview</button>`                <button id="multi-edit-submit" onclick="submitMultiBunkEdit()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;" disabled>🎯 Apply</button>`            </div>`        `;
+        var bunkListText = bunks.slice(0, 5).map(function(b) { return window.escapeHtml(b); }).join(', ');
+        if (bunks.length > 5) bunkListText += ' +' + (bunks.length - 5) + ' more';
+
+        modal.innerHTML = '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">' +
+            '<h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">🎯 Multi-Bunk Edit</h2>' +
+            '<button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>' +
+        '</div>' +
+        '<div style="background: #eff6ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">' +
+            '<div style="font-weight: 500; color: #1e40af;">' + window.escapeHtml(divName) + '</div>' +
+            '<div style="font-size: 0.9rem; color: #3b82f6; margin-top: 4px;">' + bunks.length + ' bunks: ' + bunkListText + '</div>' +
+            '<div style="font-size: 0.9rem; color: #6b7280; margin-top: 4px;">Time: ' + timeRange + '</div>' +
+        '</div>' +
+        '<div style="display: grid; gap: 16px;">' +
+            '<div>' +
+                '<label style="display: block; font-weight: 500; margin-bottom: 6px; color: #374151;">📍 Location/Field</label>' +
+                '<select id="multi-edit-location" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px;">' +
+                    '<option value="">-- Select --</option>' +
+                    allLocations.map(function(loc) { return '<option value="' + loc.name + '">' + window.escapeHtml(loc.name) + '</option>'; }).join('') +
+                '</select>' +
+            '</div>' +
+            '<div>' +
+                '<label style="display: block; font-weight: 500; margin-bottom: 6px; color: #374151;">🎪 Activity Name</label>' +
+                '<input type="text" id="multi-edit-activity" placeholder="e.g., Carnival, Color War" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box;">' +
+            '</div>' +
+            '<div id="multi-conflict-preview" style="display: none;"></div>' +
+            '<div id="multi-resolution-mode" style="display: none;">' +
+                '<label style="display: block; font-weight: 500; margin-bottom: 8px; color: #374151;">⚙️ How to handle other schedulers\' bunks?</label>' +
+                '<div style="display: flex; flex-direction: column; gap: 8px;">' +
+                    '<label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">' +
+                        '<input type="radio" name="multi-mode" value="notify" checked style="margin-top: 3px;">' +
+                        '<div>' +
+                            '<div style="font-weight: 500; color: #374151;">📧 Notify & Request Approval</div>' +
+                            '<div style="font-size: 0.85rem; color: #6b7280;">Changes require approval first</div>' +
+                        '</div>' +
+                    '</label>' +
+                    '<label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">' +
+                        '<input type="radio" name="multi-mode" value="bypass" style="margin-top: 3px;">' +
+                        '<div>' +
+                            '<div style="font-weight: 500; color: #374151;">🔓 Bypass & Apply Now</div>' +
+                            '<div style="font-size: 0.85rem; color: #6b7280;">Changes apply immediately</div>' +
+                        '</div>' +
+                    '</label>' +
+                '</div>' +
+            '</div>' +
+        '</div>' +
+        '<div style="display: flex; gap: 12px; margin-top: 20px;">' +
+            '<button onclick="previewMultiBunkEdit()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">👁️ Preview</button>' +
+            '<button id="multi-edit-submit" onclick="submitMultiBunkEdit()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;" disabled>🎯 Apply</button>' +
+        '</div>';
 
         document.body.appendChild(modal);
 
-        document.getElementById('multi-edit-location')?.addEventListener('change', () => {
+        document.getElementById('multi-edit-location')?.addEventListener('change', function() {
             document.getElementById('multi-edit-submit').disabled = true;
             document.getElementById('multi-conflict-preview').style.display = 'none';
         });
     }
+
 
     // --- PREVIEW & SUBMIT MULTI-BUNK EDIT ---
 
