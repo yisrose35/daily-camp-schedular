@@ -2111,16 +2111,16 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
     // --- SCOPE SELECTION MODAL ---
 
-    function showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, canEdit) {
+     function showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, canEdit) {
         const overlay = document.createElement('div');
         overlay.id = INTEGRATED_EDIT_OVERLAY_ID;
-        overlay.style.cssText = ``            position: fixed; top: 0; left: 0; right: 0; bottom: 0;`            background: rgba(0,0,0,0.5); z-index: 9998;`            animation: fadeIn 0.2s ease-out;`        `;
+        overlay.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9998; animation: fadeIn 0.2s ease-out;';
         overlay.onclick = closeIntegratedEditModal;
         document.body.appendChild(overlay);
 
         const modal = document.createElement('div');
         modal.id = INTEGRATED_EDIT_MODAL_ID;
-        modal.style.cssText = ``            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);`            background: white; border-radius: 12px; padding: 24px;`            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;`            min-width: 400px; max-width: 500px;`            animation: fadeIn 0.2s ease-out;`        `;
+        modal.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999; min-width: 400px; max-width: 500px; animation: fadeIn 0.2s ease-out;';
         modal.onclick = e => e.stopPropagation();
 
         const currentActivity = _currentEditContext.existingEntry?._activity || 
@@ -2128,11 +2128,86 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                                _currentEditContext.existingEntry?.field || 'Free';
         const bunksInDiv = _currentEditContext.bunksInDivision || [];
 
-        modal.innerHTML = ``            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">`                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">✏️ Edit Schedule</h2>`                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #6b7280;">&times;</button>`            </div>``            <div style="background: #f3f4f6; border-radius: 8px; padding: 12px; margin-bottom: 20px;">`                <div style="font-size: 0.9rem; color: #6b7280;">Selected Cell</div>`                <div style="font-weight: 600; color: #1f2937; margin-top: 4px;">${window.escapeHtml(bunk)} • ${window.escapeHtml(timeLabel)}</div>`                <div style="color: #6b7280; font-size: 0.9rem; margin-top: 2px;">Current: ${window.escapeHtml(currentActivity)}</div>`            </div>``            <div style="margin-bottom: 20px;">`                <div style="font-weight: 500; color: #374151; margin-bottom: 12px;">What would you like to edit?</div>`                `                <div style="display: flex; flex-direction: column; gap: 10px;">`                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">`                        <input type="radio" name="edit-scope" value="single" checked style="margin-top: 3px;">`                        <div style="flex: 1;">`                            <div style="font-weight: 500; color: #1f2937;">🏠 Just this bunk</div>`                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Edit ${window.escapeHtml(bunk)} only</div>`                        </div>`                    </label>``                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">`                        <input type="radio" name="edit-scope" value="division" style="margin-top: 3px;">`                        <div style="flex: 1;">`                            <div style="font-weight: 500; color: #1f2937;">👥 Entire division</div>`                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">All ${bunksInDiv.length} bunks in ${window.escapeHtml(divName)}</div>`                        </div>`                    </label>``                    <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">`                        <input type="radio" name="edit-scope" value="select" style="margin-top: 3px;">`                        <div style="flex: 1;">`                            <div style="font-weight: 500; color: #1f2937;">☑️ Select specific bunks</div>`                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Choose which bunks to edit</div>`                        </div>`                    </label>`                </div>`            </div>``            <div id="bunk-selection-area" style="display: none; margin-bottom: 20px;">`                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Select bunks:</div>`                <div style="display: flex; gap: 8px; margin-bottom: 8px;">`                    <button onclick="document.querySelectorAll('.bunk-checkbox').forEach(cb=>cb.checked=true)" style="padding: 6px 12px; background: #e5e7eb; border: none; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">Select All</button>`                    <button onclick="document.querySelectorAll('.bunk-checkbox').forEach(cb=>cb.checked=false)" style="padding: 6px 12px; background: #e5e7eb; border: none; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">Clear</button>`                </div>`                <div id="bunk-checkboxes" style="max-height: 150px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px;">`                    ${bunksInDiv.map(b => ``                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9rem;">`                            <input type="checkbox" class="bunk-checkbox" value="${b}" ${b === bunk ? 'checked' : ''}>`                            <span>${window.escapeHtml(b)}</span>`                        </label>`                    `).join('')}`                </div>`            </div>``            <div id="time-range-area" style="display: none; margin-bottom: 20px;">`                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Time range:</div>`                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">`                    <div>`                        <label style="font-size: 0.85rem; color: #6b7280;">Start</label>`                        <select id="edit-start-slot" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;">`                            ${(window.unifiedTimes || []).map((t, i) => `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${t.label || minutesToTimeStr(t.startMin)}</option>`).join('')}`                        </select>`                    </div>`                    <div>`                        <label style="font-size: 0.85rem; color: #6b7280;">End</label>`                        <select id="edit-end-slot" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;">`                            ${(window.unifiedTimes || []).map((t, i) => `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${t.label || minutesToTimeStr(t.endMin)}</option>`).join('')}`                        </select>`                    </div>`                </div>`            </div>``            <div style="display: flex; gap: 12px;">`                <button onclick="closeIntegratedEditModal()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">Cancel</button>`                <button onclick="proceedWithScope()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">Continue →</button>`            </div>`        `;
+        modal.innerHTML = '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">' +
+            '<h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">✏️ Edit Schedule</h2>' +
+            '<button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #6b7280;">&times;</button>' +
+        '</div>' +
+        '<div style="background: #f3f4f6; border-radius: 8px; padding: 12px; margin-bottom: 20px;">' +
+            '<div style="font-size: 0.9rem; color: #6b7280;">Selected Cell</div>' +
+            '<div style="font-weight: 600; color: #1f2937; margin-top: 4px;">' + window.escapeHtml(bunk) + ' • ' + window.escapeHtml(timeLabel) + '</div>' +
+            '<div style="color: #6b7280; font-size: 0.9rem; margin-top: 2px;">Current: ' + window.escapeHtml(currentActivity) + '</div>' +
+        '</div>' +
+        '<div style="margin-bottom: 20px;">' +
+            '<div style="font-weight: 500; color: #374151; margin-bottom: 12px;">What would you like to edit?</div>' +
+            '<div style="display: flex; flex-direction: column; gap: 10px;">' +
+                '<label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">' +
+                    '<input type="radio" name="edit-scope" value="single" checked style="margin-top: 3px;">' +
+                    '<div style="flex: 1;">' +
+                        '<div style="font-weight: 500; color: #1f2937;">🏠 Just this bunk</div>' +
+                        '<div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Edit ' + window.escapeHtml(bunk) + ' only</div>' +
+                    '</div>' +
+                '</label>' +
+                '<label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">' +
+                    '<input type="radio" name="edit-scope" value="division" style="margin-top: 3px;">' +
+                    '<div style="flex: 1;">' +
+                        '<div style="font-weight: 500; color: #1f2937;">👥 Entire division</div>' +
+                        '<div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">All ' + bunksInDiv.length + ' bunks in ' + window.escapeHtml(divName) + '</div>' +
+                    '</div>' +
+                '</label>' +
+                '<label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">' +
+                    '<input type="radio" name="edit-scope" value="select" style="margin-top: 3px;">' +
+                    '<div style="flex: 1;">' +
+                        '<div style="font-weight: 500; color: #1f2937;">☑️ Select specific bunks</div>' +
+                        '<div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Choose which bunks to edit</div>' +
+                    '</div>' +
+                '</label>' +
+            '</div>' +
+        '</div>' +
+        '<div id="bunk-selection-area" style="display: none; margin-bottom: 20px;">' +
+            '<div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Select bunks:</div>' +
+            '<div style="display: flex; gap: 8px; margin-bottom: 8px;">' +
+                '<button onclick="document.querySelectorAll(\'.bunk-checkbox\').forEach(cb=>cb.checked=true)" style="padding: 6px 12px; background: #e5e7eb; border: none; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">Select All</button>' +
+                '<button onclick="document.querySelectorAll(\'.bunk-checkbox\').forEach(cb=>cb.checked=false)" style="padding: 6px 12px; background: #e5e7eb; border: none; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">Clear</button>' +
+            '</div>' +
+            '<div id="bunk-checkboxes" style="max-height: 150px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px;">' +
+                bunksInDiv.map(function(b) {
+                    return '<label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9rem;">' +
+                        '<input type="checkbox" class="bunk-checkbox" value="' + b + '"' + (b === bunk ? ' checked' : '') + '>' +
+                        '<span>' + window.escapeHtml(b) + '</span>' +
+                    '</label>';
+                }).join('') +
+            '</div>' +
+        '</div>' +
+        '<div id="time-range-area" style="display: none; margin-bottom: 20px;">' +
+            '<div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Time range:</div>' +
+            '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">' +
+                '<div>' +
+                    '<label style="font-size: 0.85rem; color: #6b7280;">Start</label>' +
+                    '<select id="edit-start-slot" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;">' +
+                        (window.unifiedTimes || []).map(function(t, i) {
+                            return '<option value="' + i + '"' + (i === slotIdx ? ' selected' : '') + '>' + (t.label || minutesToTimeStr(t.startMin)) + '</option>';
+                        }).join('') +
+                    '</select>' +
+                '</div>' +
+                '<div>' +
+                    '<label style="font-size: 0.85rem; color: #6b7280;">End</label>' +
+                    '<select id="edit-end-slot" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;">' +
+                        (window.unifiedTimes || []).map(function(t, i) {
+                            return '<option value="' + i + '"' + (i === slotIdx ? ' selected' : '') + '>' + (t.label || minutesToTimeStr(t.endMin)) + '</option>';
+                        }).join('') +
+                    '</select>' +
+                '</div>' +
+            '</div>' +
+        '</div>' +
+        '<div style="display: flex; gap: 12px;">' +
+            '<button onclick="closeIntegratedEditModal()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">Cancel</button>' +
+            '<button onclick="proceedWithScope()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">Continue →</button>' +
+        '</div>';
 
         document.body.appendChild(modal);
         setupScopeModalHandlers();
     }
+
 
     function setupScopeModalHandlers() {
         const radios = document.querySelectorAll('input[name="edit-scope"]');
