@@ -1,8 +1,9 @@
 // =============================================================================
-// division_times_integration.js v1.2 — INTEGRATION LAYER
+// division_times_integration.js v1.3 — INTEGRATION LAYER
 // =============================================================================
 //
-// v1.2 CHANGES:
+// v1.3 CHANGES:
+// - REMOVED unifiedTimes build (fully division-aware)
 // - REMOVED patches for Utils, fillBlock, and ScheduleDB (now handled natively)
 // - Retained scheduler core patch for skeleton optimization
 // - Retained localStorage patch for division times persistence
@@ -17,7 +18,7 @@
 (function() {
     'use strict';
 
-    const VERSION = '1.2.0';
+    const VERSION = '1.3.0';
     const DEBUG = true;
 
     function log(...args) {
@@ -121,11 +122,6 @@
             log('Building division-specific time slots...');
             window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
             
-            // ★★★ ALSO BUILD UNIFIED TIMES FOR BACKWARDS COMPAT ★★★
-            // This creates a "virtual" unified times from the union of all division times
-            window.unifiedTimes = window.DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes();
-            log(`Built virtual unifiedTimes: ${window.unifiedTimes.length} slots`);
-
             // ★★★ INITIALIZE SCHEDULE ASSIGNMENTS PER DIVISION ★★★
             window.scheduleAssignments = window.scheduleAssignments || {};
             
@@ -262,7 +258,6 @@
                     
                     if (skeleton.length > 0) {
                         window.divisionTimes = window.DivisionTimesSystem?.buildFromSkeleton(skeleton, divisions) || {};
-                        window.unifiedTimes = window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes() || [];
                     }
                 }
 
@@ -381,7 +376,6 @@
                 });
 
                 console.log('\n=== BACKWARDS COMPAT:');
-                console.log(`   window.unifiedTimes: ${(window.unifiedTimes || []).length} virtual slots`);
                 console.log(`   window.divisionTimes: ${Object.keys(window.divisionTimes || {}).length} divisions`);
 
                 console.log('\n' + '═'.repeat(70));
