@@ -324,7 +324,7 @@
             }
             allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
             allDailyData[dateKey].leagueAssignments = window.leagueAssignments || {};
-            allDailyData[dateKey].unifiedTimes = window.unifiedTimes || [];
+            
             allDailyData[dateKey]._bypassSaveAt = Date.now();
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
             
