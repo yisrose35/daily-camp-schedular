@@ -1,5 +1,5 @@
 // =============================================================================
-// unified_schedule_system.js v4.0.5 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
+// unified_schedule_system.js v4.1.0 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
 // =============================================================================
 //
 // This file REPLACES ALL of the following:
@@ -19,13 +19,18 @@
 // ✅ v4.0.3: AUTO-BACKUP before complex operations
 // ✅ v4.0.4: DIVISION TIMES SUPPORT in time mapping utilities
 // ✅ v4.0.5: REFACTOR - Core utilities moved to Shared Utils
+// ✅ v4.1.0: ★★★ FULL DIVISIONTIMES INTEGRATION ★★★
+//            - Removed window.unifiedTimes dependency
+//            - All slot lookups now use window.divisionTimes via SchedulerCoreUtils
+//            - Time-based field usage is canonical conflict detection
+//            - Data persistence uses divisionTimes directly
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('📅 Unified Schedule System v4.0.5 loading...');
+    console.log('📅 Unified Schedule System v4.1.0 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -60,6 +65,64 @@
     let _multiBunkEditContext = null;
     let _multiBunkPreviewResult = null;
     let _lastPreviewResult = null;
+
+    // =========================================================================
+    // UTILITY ALIASES (from SchedulerCoreUtils)
+    // =========================================================================
+    
+    const Utils = () => window.SchedulerCoreUtils || {};
+    
+    function getDivisionForBunk(bunk) {
+        return Utils()?.getDivisionForBunk?.(bunk) || window.getDivisionForBunk?.(bunk);
+    }
+    
+    function getSlotsForDivision(divName) {
+        return Utils()?.getSlotsForDivision?.(divName) || window.divisionTimes?.[divName] || [];
+    }
+    
+    function findSlotsForRange(startMin, endMin, divisionOrBunk) {
+        return Utils()?.findSlotsForRange?.(startMin, endMin, divisionOrBunk) || [];
+    }
+    
+    function getEntryForBlock(bunk, startMin, endMin) {
+        return Utils()?.getEntryForBlock?.(bunk, startMin, endMin) || { entry: null, slotIdx: -1 };
+    }
+    
+    function getSlotTimeRange(slotIdx, bunkOrDiv) {
+        return Utils()?.getSlotTimeRange?.(slotIdx, bunkOrDiv) || { startMin: null, endMin: null };
+    }
+    
+    function parseTimeToMinutes(str) {
+        return Utils()?.parseTimeToMinutes?.(str) || window.DivisionTimesSystem?.parseTimeToMinutes?.(str);
+    }
+    
+    function minutesToTimeLabel(mins) {
+        return Utils()?.minutesToTimeLabel?.(mins) || window.DivisionTimesSystem?.minutesToTimeLabel?.(mins);
+    }
+    
+    function fieldLabel(f) {
+        return Utils()?.fieldLabel?.(f) || (typeof f === 'string' ? f : f?.name || '');
+    }
+    
+    function getActivityProperties() {
+        return Utils()?.getActivityProperties?.() || window.activityProperties || {};
+    }
+    
+    function getBunksForDivision(divName) {
+        return Utils()?.getBunksForDivision?.(divName) || window.divisions?.[divName]?.bunks || [];
+    }
+    
+    function getMyDivisions() {
+        return Utils()?.getMyDivisions?.() || window.AccessControl?.getEditableDivisions?.() || Object.keys(window.divisions || {});
+    }
+    
+    function canEditBunk(bunk) {
+        return Utils()?.canEditBunk?.(bunk) ?? true;
+    }
+    
+    function getEditableBunks() {
+        return Utils()?.getEditableBunks?.() || new Set();
+    }
 
     // =========================================================================
     // RBAC VIEW BYPASS FOR SMART REGENERATION
@@ -158,7 +221,7 @@
     }
 
     // =========================================================================
-    // DATA LOADING - CLOUD-AWARE
+    // DATA LOADING - DIVISION TIMES AWARE
     // =========================================================================
 
     function getDateKey() {
@@ -185,6 +248,7 @@
         const dailyData = loadDailyData();
         const dateData = dailyData[dateKey] || {};
         
+        // Load schedule assignments
         let loadedAssignments = false;
         if (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0) {
             loadedAssignments = true;
@@ -197,21 +261,30 @@
         }
         if (!loadedAssignments) window.scheduleAssignments = window.scheduleAssignments || {};
         
+        // Load league assignments
         if (!window.leagueAssignments || Object.keys(window.leagueAssignments).length === 0) {
             window.leagueAssignments = dateData.leagueAssignments && Object.keys(dateData.leagueAssignments).length > 0 
                 ? dateData.leagueAssignments : {};
         }
         
-        const cloudLoaded = window._unifiedTimesFromCloud === true;
-        if (cloudLoaded && window.unifiedTimes && window.unifiedTimes.length > 0) {
+        // ★★★ v4.1.0: LOAD DIVISION TIMES (PRIMARY) ★★★
+        const cloudLoaded = window._divisionTimesFromCloud === true;
+        if (cloudLoaded && window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
             // Keep cloud data
-        } else if (window.unifiedTimes && window.unifiedTimes.length > 0) {
+            debugLog('Using divisionTimes from cloud');
+        } else if (window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
             // Keep existing
-        } else if (dateData.unifiedTimes && dateData.unifiedTimes.length > 0) {
-            window.unifiedTimes = normalizeUnifiedTimes(dateData.unifiedTimes);
+            debugLog('Using existing divisionTimes');
+        } else if (dateData.divisionTimes && Object.keys(dateData.divisionTimes).length > 0) {
+            // Deserialize from storage
+            window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(dateData.divisionTimes) || dateData.divisionTimes;
+            debugLog('Loaded divisionTimes from storage');
         } else {
+            // Build from skeleton
             const skeleton = getSkeleton(dateKey);
-            window.unifiedTimes = skeleton.length > 0 ? buildUnifiedTimesFromSkeleton(skeleton) : [];
+            if (skeleton.length > 0) {
+                buildDivisionTimesFromSkeleton(skeleton);
+            }
         }
         
         if (dateData.manualSkeleton?.length > 0) window.manualSkeleton = dateData.manualSkeleton;
@@ -220,7 +293,7 @@
         return {
             scheduleAssignments: window.scheduleAssignments || {},
             leagueAssignments: window.leagueAssignments || {},
-            unifiedTimes: window.unifiedTimes || [],
+            divisionTimes: window.divisionTimes || {},
             skeleton: window.manualSkeleton || window.skeleton || []
         };
     }
@@ -232,64 +305,47 @@
                window.dailyOverrideSkeleton || window.manualSkeleton || window.skeleton || [];
     }
 
-    function normalizeUnifiedTimes(times) {
-        if (!times || !Array.isArray(times)) return [];
-        return times.map(t => {
-            const startDate = t.start instanceof Date ? t.start : new Date(t.start);
-            const endDate = t.end instanceof Date ? t.end : new Date(t.end);
-            let startMin = t.startMin, endMin = t.endMin;
-            if (startMin === undefined) startMin = startDate.getHours() * 60 + startDate.getMinutes();
-            if (endMin === undefined) endMin = endDate.getHours() * 60 + endDate.getMinutes();
-            return { start: startDate, end: endDate, startMin, endMin, label: t.label || '' };
-        });
-    }
-
     /**
-     * Build unified times - NOW USES DIVISION TIMES SYSTEM
-     * Returns a "virtual" unified times array for backwards compatibility
+     * Build division times from skeleton
+     * ★★★ v4.1.0: This is the CANONICAL way to build time slots ★★★
      */
-    function buildUnifiedTimesFromSkeleton(skeleton) {
-        if (!skeleton || skeleton.length === 0) return [];
+    function buildDivisionTimesFromSkeleton(skeleton) {
+        if (!skeleton || skeleton.length === 0) return {};
         
-        // ★★★ Use new DivisionTimesSystem if available ★★★
-        if (window.DivisionTimesSystem) {
-            const divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
-            
-            // Build division-specific times
+        const divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+        
+        if (window.DivisionTimesSystem?.buildFromSkeleton) {
             window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(skeleton, divisions);
-            
-            // Return virtual unified times for backwards compat
-            return window.DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes();
+            console.log(`[UnifiedSchedule] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
+            return window.divisionTimes;
         }
         
-        // Legacy fallback (should rarely be used)
-        console.warn('[UnifiedSchedule] DivisionTimesSystem not loaded, using legacy 30-min grid');
-        const INCREMENT_MINS = 30;
-        let minTime = 540, maxTime = 960, found = false;
-        skeleton.forEach(block => {
-            const startMin = parseTimeToMinutes(block.startTime);
-            const endMin = parseTimeToMinutes(block.endTime);
-            if (startMin !== null) { minTime = Math.min(minTime, startMin); found = true; }
-            if (endMin !== null) { maxTime = Math.max(maxTime, endMin); found = true; }
-        });
-        if (!found) return [];
-        minTime = Math.floor(minTime / INCREMENT_MINS) * INCREMENT_MINS;
-        maxTime = Math.ceil(maxTime / INCREMENT_MINS) * INCREMENT_MINS;
-        const timeSlots = [];
-        const baseDate = new Date(); baseDate.setHours(0, 0, 0, 0);
-        for (let mins = minTime; mins < maxTime; mins += INCREMENT_MINS) {
-            const startDate = new Date(baseDate); startDate.setMinutes(mins);
-            const endDate = new Date(baseDate); endDate.setMinutes(mins + INCREMENT_MINS);
-            timeSlots.push({ start: startDate, end: endDate, startMin: mins, endMin: mins + INCREMENT_MINS,
-                label: `${minutesToTimeLabel(mins)} - ${minutesToTimeLabel(mins + INCREMENT_MINS)}` });
+        // Fallback: Build minimal divisionTimes structure
+        console.warn('[UnifiedSchedule] DivisionTimesSystem not loaded, using fallback');
+        window.divisionTimes = {};
+        
+        for (const [divName, divData] of Object.entries(divisions)) {
+            const divBlocks = skeleton.filter(b => b.division === divName);
+            window.divisionTimes[divName] = divBlocks.map((block, idx) => ({
+                slotIndex: idx,
+                startMin: parseTimeToMinutes(block.startTime),
+                endMin: parseTimeToMinutes(block.endTime),
+                event: block.event || 'GA',
+                type: block.type || 'slot',
+                label: `${minutesToTimeLabel(parseTimeToMinutes(block.startTime))} - ${minutesToTimeLabel(parseTimeToMinutes(block.endTime))}`
+            })).filter(s => s.startMin !== null && s.endMin !== null);
         }
-        return timeSlots;
+        
+        return window.divisionTimes;
     }
 
     // =========================================================================
-    // SLOT INDEX MAPPING
+    // SLOT INDEX MAPPING - ALL DIVISION-AWARE
     // =========================================================================
     
+    /**
+     * Get start time in minutes from a slot
+     */
     function getSlotStartMin(slot) {
         if (!slot) return null;
         if (slot.startMin !== undefined) return slot.startMin;
@@ -298,70 +354,33 @@
         return null;
     }
 
-    // =========================================================================
-    // DIVISION-AWARE FIND FIRST SLOT FOR TIME
-    // =========================================================================
-    
+    /**
+     * ★★★ v4.1.0: DIVISION-AWARE slot finder ★★★
+     * @param {number} targetMin - Target time in minutes
+     * @param {string} bunkOrDiv - Bunk name or division name
+     * @returns {number} Slot index or -1
+     */
     function findFirstSlotForTime(targetMin, bunkOrDiv) {
-        if (bunkOrDiv && window.divisionTimes) {
-            let divName = bunkOrDiv;
-            const possibleDiv = getDivisionForBunk(bunkOrDiv);
-            if (possibleDiv) divName = possibleDiv;
-            
-            const divSlots = window.divisionTimes[divName] || [];
-            for (let i = 0; i < divSlots.length; i++) {
-                if (divSlots[i].startMin === targetMin) return i;
-                if (divSlots[i].startMin <= targetMin && divSlots[i].endMin > targetMin) return i;
-            }
+        if (!bunkOrDiv) return -1;
+        
+        let divName = bunkOrDiv;
+        const possibleDiv = getDivisionForBunk(bunkOrDiv);
+        if (possibleDiv) divName = possibleDiv;
+        
+        const divSlots = window.divisionTimes?.[divName] || [];
+        
+        for (let i = 0; i < divSlots.length; i++) {
+            if (divSlots[i].startMin === targetMin) return i;
+            if (divSlots[i].startMin <= targetMin && divSlots[i].endMin > targetMin) return i;
         }
         
-        // Legacy fallback
-        const unifiedTimes = window.unifiedTimes || [];
-        for (let i = 0; i < unifiedTimes.length; i++) {
-            const slotStart = getSlotStartMin(unifiedTimes[i]);
-            if (slotStart === targetMin) return i;
-        }
         return -1;
-    }
-
-    // =========================================================================
-    // UNIFIED TIMES BACKWARDS COMPATIBILITY LAYER
-    // =========================================================================
-    // Auto-populates window.unifiedTimes from divisionTimes for legacy code
-    
-    let _unifiedTimesCache = null;
-    
-    // Define getter/setter for window.unifiedTimes
-    if (!Object.getOwnPropertyDescriptor(window, 'unifiedTimes')?.get) {
-        Object.defineProperty(window, 'unifiedTimes', {
-            get: function() {
-                // Return cached if available
-                if (_unifiedTimesCache && _unifiedTimesCache.length > 0) {
-                    return _unifiedTimesCache;
-                }
-                
-                // Auto-build from divisionTimes
-                if (window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
-                    const built = window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes?.(window.divisionTimes);
-                    if (built && built.length > 0) {
-                        _unifiedTimesCache = built;
-                        return built;
-                    }
-                }
-                
-                return _unifiedTimesCache || [];
-            },
-            set: function(val) {
-                _unifiedTimesCache = val;
-            },
-            configurable: true
-        });
     }
 
     // =========================================================================
     // TIME-BASED FIELD USAGE SYSTEM
     // =========================================================================
-    // Real time-based cross-division conflict detection
+    // ★★★ v4.1.0: CANONICAL cross-division conflict detection ★★★
     
     window.TimeBasedFieldUsage = {
         getUsageAtTime: function(fieldName, startMin, endMin, excludeBunk = null) {
@@ -385,7 +404,7 @@
                             const entry = assignments[idx];
                             if (!entry || entry.continuation) continue;
                             
-                            const entryField = (typeof entry.field === 'object' ? entry.field?.name : entry.field) || '';
+                            const entryField = fieldLabel(entry.field);
                             
                             if (entryField.toLowerCase() === fieldLower) {
                                 usage.push({
@@ -448,17 +467,17 @@
                         
                         if (!entry || entry.continuation || !entry.field) continue;
                         
-                        const fieldName = (typeof entry.field === 'object' ? entry.field?.name : entry.field) || '';
-                        if (!fieldName || fieldName === 'Free') continue;
+                        const fName = fieldLabel(entry.field);
+                        if (!fName || fName === 'Free') continue;
                         
-                        if (!map[fieldName]) map[fieldName] = [];
+                        if (!map[fName]) map[fName] = [];
                         
-                        map[fieldName].push({
+                        map[fName].push({
                             startMin: slot.startMin,
                             endMin: slot.endMin,
                             division: divName,
                             bunk,
-                            activity: entry._activity || fieldName
+                            activity: entry._activity || fName
                         });
                     }
                 }
@@ -480,8 +499,8 @@
         const endMin = slot.endMin;
         
         // Get capacity
-        const activityProperties = window.activityProperties || window.getActivityProperties?.() || {};
-        const fieldInfo = activityProperties[fieldName] || {};
+        const activityProps = getActivityProperties();
+        const fieldInfo = activityProps[fieldName] || {};
         let maxCapacity = 1;
         if (fieldInfo.sharableWith?.capacity) {
             maxCapacity = parseInt(fieldInfo.sharableWith.capacity) || 1;
@@ -504,23 +523,20 @@
     }
 
     // =========================================================================
-    // SPLIT TILE DETECTION
+    // SPLIT TILE DETECTION & EXPANSION
     // =========================================================================
     
-    function isSplitTileBlock(block, bunks, unifiedTimes) {
-        // Check if block is from an expanded split tile
+    function isSplitTileBlock(block) {
         if (block._isSplitTile || block._splitHalf || block.type === 'split_half') {
             return true;
         }
-        
-        // Original detection logic (for backwards compatibility)
         if (!block || !block.event || !block.event.includes('/')) return false;
         if (block.event.toLowerCase().includes('special')) return false;
         
         const duration = block.endMin - block.startMin;
-        if (duration < 30) return false; // Changed from 60 to 30 for split halves
+        if (duration < 30) return false;
         
-        // Check if divisionTimes has split data for this block
+        // Check if divisionTimes has split data
         const divName = block.division;
         const divSlots = window.divisionTimes?.[divName] || [];
         
@@ -533,8 +549,9 @@
         return false;
     }
     
-    function expandBlocksForSplitTiles(divBlocks, bunks, unifiedTimes) {
+    function expandBlocksForSplitTiles(divBlocks, divName) {
         const expandedBlocks = [];
+        const divSlots = window.divisionTimes?.[divName] || [];
         
         divBlocks.forEach(block => {
             // Already expanded
@@ -545,9 +562,6 @@
             
             // Check if this is a split tile that needs expansion
             if (block.type === 'split' && block.event?.includes('/')) {
-                const divName = block.division;
-                const divSlots = window.divisionTimes?.[divName] || [];
-                
                 // Look for pre-expanded slots from divisionTimes
                 const firstHalfSlot = divSlots.find(s => 
                     s._splitParentEvent === block.event && s._splitHalf === 1
@@ -557,7 +571,6 @@
                 );
                 
                 if (firstHalfSlot && secondHalfSlot) {
-                    // Use pre-expanded slots from divisionTimes
                     expandedBlocks.push({
                         ...block,
                         startMin: firstHalfSlot.startMin,
@@ -618,7 +631,7 @@
         if (entry._isSnack) return 'Snacks';
         if (entry._isTransition || entry.continuation) return '';
         const activity = entry._activity || '';
-        const field = typeof entry.field === 'object' ? entry.field.name : (entry.field || '');
+        const field = fieldLabel(entry.field);
         const sport = entry.sport || '';
         if (entry._h2h) return entry._gameLabel || sport || 'League Game';
         if (entry._fixed) return activity || field;
@@ -673,34 +686,37 @@
 
     function checkLocationConflict(locationName, slots, excludeBunk) {
         const assignments = window.scheduleAssignments || {};
-        const activityProperties = getActivityProperties();
-        const locationInfo = activityProperties[locationName] || {};
+        const activityProps = getActivityProperties();
+        const locationInfo = activityProps[locationName] || {};
         let maxCapacity = locationInfo.sharableWith?.capacity ? parseInt(locationInfo.sharableWith.capacity) || 1 : (locationInfo.sharable ? 2 : 1);
-        const editableBunks = getEditableBunks();
+        const editBunks = getEditableBunks();
         const conflicts = [], usageBySlot = {};
+        
         for (const slotIdx of slots) {
             usageBySlot[slotIdx] = [];
             for (const [bunkName, bunkSlots] of Object.entries(assignments)) {
                 if (bunkName === excludeBunk) continue;
                 const entry = bunkSlots?.[slotIdx];
                 if (!entry) continue;
-                const entryField = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                const entryField = fieldLabel(entry.field);
                 const entryActivity = entry._activity || entryField;
                 const entryLocation = entry._location || entryField;
                 const matchesLocation = entryField?.toLowerCase() === locationName.toLowerCase() ||
                     entryLocation?.toLowerCase() === locationName.toLowerCase() ||
                     entryActivity?.toLowerCase() === locationName.toLowerCase();
                 if (matchesLocation) {
-                    usageBySlot[slotIdx].push({ bunk: bunkName, activity: entryActivity || entryField, field: entryField, canEdit: editableBunks.has(bunkName) });
+                    usageBySlot[slotIdx].push({ bunk: bunkName, activity: entryActivity || entryField, field: entryField, canEdit: editBunks.has(bunkName) });
                 }
             }
         }
+        
         let globalLock = null;
         if (window.GlobalFieldLocks) {
             const divName = getDivisionForBunk(excludeBunk);
             const lockInfo = window.GlobalFieldLocks.isFieldLocked(locationName, slots, divName);
             if (lockInfo) globalLock = lockInfo;
         }
+        
         let hasConflict = !!globalLock, currentUsage = 0;
         for (const slotIdx of slots) {
             const slotUsage = usageBySlot[slotIdx] || [];
@@ -710,6 +726,7 @@
                 slotUsage.forEach(u => { if (!conflicts.find(c => c.bunk === u.bunk && c.slot === slotIdx)) conflicts.push({ ...u, slot: slotIdx }); });
             }
         }
+        
         return {
             hasConflict, conflicts,
             editableConflicts: conflicts.filter(c => c.canEdit),
@@ -770,25 +787,26 @@
         return recencyPenalty + frequencyPenalty;
     }
 
-    function buildCandidateOptions(slots, activityProperties, disabledFields = []) {
+    function buildCandidateOptions(slots, activityProps, disabledFields = [], divName = null) {
         const options = [], seenKeys = new Set();
         const settings = window.loadGlobalSettings?.() || {};
         const app1 = settings.app1 || {};
         const fieldsBySport = settings.fieldsBySport || {};
+        
         for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
-            (sportFields || []).forEach(fieldName => {
-                if (disabledFields.includes(fieldName) || window.GlobalFieldLocks?.isFieldLocked(fieldName, slots)) return;
-                const key = `${fieldName}|${sport}`;
-                if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: fieldName, sport, activityName: sport, type: 'sport' }); }
+            (sportFields || []).forEach(fName => {
+                if (disabledFields.includes(fName) || window.GlobalFieldLocks?.isFieldLocked(fName, slots, divName)) return;
+                const key = `${fName}|${sport}`;
+                if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: fName, sport, activityName: sport, type: 'sport' }); }
             });
         }
         for (const special of (app1.specialActivities || [])) {
-            if (!special.name || disabledFields.includes(special.name) || window.GlobalFieldLocks?.isFieldLocked(special.name, slots)) continue;
+            if (!special.name || disabledFields.includes(special.name) || window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) continue;
             const key = `special|${special.name}`;
             if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: special.name, sport: null, activityName: special.name, type: 'special' }); }
         }
         for (const field of (app1.fields || [])) {
-            if (!field.name || field.available === false || disabledFields.includes(field.name) || window.GlobalFieldLocks?.isFieldLocked(field.name, slots)) continue;
+            if (!field.name || field.available === false || disabledFields.includes(field.name) || window.GlobalFieldLocks?.isFieldLocked(field.name, slots, divName)) continue;
             (field.activities || []).forEach(activity => {
                 const key = `${field.name}|${activity}`;
                 if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: field.name, sport: activity, activityName: activity, type: 'sport' }); }
@@ -797,15 +815,39 @@
         return options;
     }
 
-    function calculatePenaltyCost(bunk, slots, pick, fieldUsageBySlot, activityProperties) {
+    function isFieldAvailable(fName, slots, bunk, fieldUsageBySlot, activityProps) {
+        const divName = getDivisionForBunk(bunk);
+        if (!divName || slots.length === 0) return false;
+        
+        // Get time range for these slots
+        const divSlots = window.divisionTimes?.[divName] || [];
+        if (slots[0] >= divSlots.length) return false;
+        
+        const startMin = divSlots[slots[0]]?.startMin;
+        const endMin = divSlots[slots[slots.length - 1]]?.endMin;
+        
+        if (startMin === undefined || endMin === undefined) return false;
+        
+        // Use time-based availability check
+        const props = activityProps[fName] || {};
+        const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
+        
+        const availability = window.TimeBasedFieldUsage.checkAvailability(
+            fName, startMin, endMin, maxCapacity, bunk
+        );
+        
+        return availability.available;
+    }
+
+    function calculatePenaltyCost(bunk, slots, pick, fieldUsageBySlot, activityProps) {
         let penalty = 0;
         const activityName = pick.activityName || pick._activity || pick.sport;
-        const fieldName = pick.field;
+        const fName = pick.field;
         const divName = getDivisionForBunk(bunk);
         const rotationPenalty = calculateRotationPenalty(bunk, activityName, slots);
         if (rotationPenalty === Infinity) return Infinity;
         penalty += rotationPenalty;
-        const props = activityProperties[fieldName] || {};
+        const props = activityProps[fName] || {};
         if (props.preferences?.enabled && props.preferences?.list) {
             const idx = props.preferences.list.indexOf(divName);
             if (idx !== -1) penalty -= (50 - idx * 5);
@@ -814,7 +856,7 @@
         }
         const myNum = parseInt((bunk.match(/\d+/) || [])[0]) || 0;
         for (const slotIdx of slots) {
-            const slotUsage = fieldUsageBySlot[slotIdx]?.[fieldName];
+            const slotUsage = fieldUsageBySlot[slotIdx]?.[fName];
             if (slotUsage?.bunks) {
                 for (const otherBunk of Object.keys(slotUsage.bunks)) {
                     if (otherBunk === bunk) continue;
@@ -834,48 +876,57 @@
         return penalty;
     }
 
-    function findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProperties, avoidFields = []) {
+    function findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProps, avoidFields = []) {
         const disabledFields = window.currentDisabledFields || [];
         const avoidSet = new Set(avoidFields.map(f => f.toLowerCase()));
-        const candidates = buildCandidateOptions(slots, activityProperties, disabledFields);
+        const divName = getDivisionForBunk(bunk);
+        const candidates = buildCandidateOptions(slots, activityProps, disabledFields, divName);
         const scoredPicks = [];
+        
         for (const cand of candidates) {
             if (avoidSet.has(cand.field.toLowerCase()) || avoidSet.has(cand.activityName?.toLowerCase())) continue;
-            if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProperties)) continue;
-            const cost = calculatePenaltyCost(bunk, slots, cand, fieldUsageBySlot, activityProperties);
+            if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProps)) continue;
+            const cost = calculatePenaltyCost(bunk, slots, cand, fieldUsageBySlot, activityProps);
             if (cost < Infinity) scoredPicks.push({ ...cand, cost });
         }
         scoredPicks.sort((a, b) => a.cost - b.cost);
         return scoredPicks.length > 0 ? scoredPicks[0] : null;
     }
 
-    function applyPickToBunk(bunk, slots, pick, fieldUsageBySlot, activityProperties) {
+    function applyPickToBunk(bunk, slots, pick, fieldUsageBySlot, activityProps) {
         const divName = getDivisionForBunk(bunk);
-        const unifiedTimes = window.unifiedTimes || [];
+        const divSlots = window.divisionTimes?.[divName] || [];
+        
         let startMin = null, endMin = null;
-        if (slots.length > 0 && unifiedTimes[slots[0]]) {
-            startMin = getSlotStartMin(unifiedTimes[slots[0]]);
-            const lastSlot = unifiedTimes[slots[slots.length - 1]];
-            if (lastSlot) endMin = lastSlot.endMin !== undefined ? lastSlot.endMin : (getSlotStartMin(lastSlot) + 30);
+        if (slots.length > 0 && divSlots[slots[0]]) {
+            startMin = divSlots[slots[0]].startMin;
+            const lastSlot = divSlots[slots[slots.length - 1]];
+            if (lastSlot) endMin = lastSlot.endMin;
         }
-        const pickData = { field: pick.field, sport: pick.sport, _fixed: true, _activity: pick.activityName,
-            _smartRegenerated: true, _regeneratedAt: Date.now(), _startMin: startMin, _endMin: endMin, _blockStart: startMin };
+        
+        const pickData = { 
+            field: pick.field, sport: pick.sport, _fixed: true, _activity: pick.activityName,
+            _smartRegenerated: true, _regeneratedAt: Date.now(), _startMin: startMin, _endMin: endMin, _blockStart: startMin 
+        };
+        
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
-        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
-        slots.forEach((slotIdx, i) => { window.scheduleAssignments[bunk][slotIdx] = { ...pickData, continuation: i > 0 }; });
-        if (typeof window.fillBlock === 'function') {
-            try {
-                const firstSlotTime = getSlotTimeRange(slots[0]), lastSlotTime = getSlotTimeRange(slots[slots.length - 1]);
-                const block = { divName, bunk, startTime: firstSlotTime.startMin, endTime: lastSlotTime.endMin, slots };
-                window.fillBlock(block, pickData, fieldUsageBySlot, window.yesterdayHistory || {}, false, activityProperties);
-            } catch (e) { console.warn(`[UnifiedSchedule] fillBlock error for ${bunk}:`, e); }
+        if (!window.scheduleAssignments[bunk]) {
+            const slotCount = divSlots.length || 50;
+            window.scheduleAssignments[bunk] = new Array(slotCount);
         }
-        const fieldName = pick.field;
+        
+        slots.forEach((slotIdx, i) => { 
+            window.scheduleAssignments[bunk][slotIdx] = { ...pickData, continuation: i > 0 }; 
+        });
+        
+        // Update field usage
+        const fName = pick.field;
         for (const slotIdx of slots) {
             if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
-            if (!fieldUsageBySlot[slotIdx][fieldName]) fieldUsageBySlot[slotIdx][fieldName] = { count: 0, bunks: {}, divisions: [] };
-            const usage = fieldUsageBySlot[slotIdx][fieldName];
-            usage.count++; usage.bunks[bunk] = pick.activityName;
+            if (!fieldUsageBySlot[slotIdx][fName]) fieldUsageBySlot[slotIdx][fName] = { count: 0, bunks: {}, divisions: [] };
+            const usage = fieldUsageBySlot[slotIdx][fName];
+            usage.count++; 
+            usage.bunks[bunk] = pick.activityName;
             if (divName && !usage.divisions.includes(divName)) usage.divisions.push(divName);
         }
     }
@@ -887,48 +938,68 @@
     function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedActivity, conflicts, bypassMode = false) {
         console.log('[SmartRegen] ★★★ SMART REGENERATION STARTED ★★★');
         if (bypassMode) console.log('[SmartRegen] 🔓 BYPASS MODE ACTIVE');
-        const activityProperties = window.getActivityProperties();
+        const activityProps = getActivityProperties();
         const results = { success: true, reassigned: [], failed: [], pinnedLock: null, bypassMode };
+        
         if (window.GlobalFieldLocks) {
-            const pinnedDivName = window.getDivisionForBunk(pinnedBunk);
+            const pinnedDivName = getDivisionForBunk(pinnedBunk);
             window.GlobalFieldLocks.lockField(pinnedField, pinnedSlots, { lockedBy: 'smart_regen_pinned', division: pinnedDivName, activity: pinnedActivity, bunk: pinnedBunk });
             results.pinnedLock = { field: pinnedField, slots: pinnedSlots };
         }
+        
         const conflictsByBunk = {};
         for (const conflict of conflicts) {
             if (!conflictsByBunk[conflict.bunk]) conflictsByBunk[conflict.bunk] = new Set();
             conflictsByBunk[conflict.bunk].add(conflict.slot);
         }
+        
         const bunksToReassign = Object.keys(conflictsByBunk);
-        const fieldUsageBySlot = window.buildFieldUsageBySlot(bunksToReassign);
+        const fieldUsageBySlot = window.buildFieldUsageBySlot?.(bunksToReassign) || {};
+        
         for (const slotIdx of pinnedSlots) {
             if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
             if (!fieldUsageBySlot[slotIdx][pinnedField]) fieldUsageBySlot[slotIdx][pinnedField] = { count: 0, bunks: {}, divisions: [] };
             fieldUsageBySlot[slotIdx][pinnedField].count++;
             fieldUsageBySlot[slotIdx][pinnedField].bunks[pinnedBunk] = pinnedActivity;
         }
-        bunksToReassign.sort((a, b) => { const numA = parseInt((a.match(/\d+/) || [])[0]) || 0, numB = parseInt((b.match(/\d+/) || [])[0]) || 0; return numA - numB; });
+        
+        bunksToReassign.sort((a, b) => { 
+            const numA = parseInt((a.match(/\d+/) || [])[0]) || 0;
+            const numB = parseInt((b.match(/\d+/) || [])[0]) || 0; 
+            return numA - numB; 
+        });
+        
         for (const bunk of bunksToReassign) {
             const slots = [...conflictsByBunk[bunk]].sort((a, b) => a - b);
             const originalEntry = window.scheduleAssignments?.[bunk]?.[slots[0]];
-            const originalActivity = originalEntry?._activity || originalEntry?.sport || window.fieldLabel(originalEntry?.field);
+            const originalActivity = originalEntry?._activity || originalEntry?.sport || fieldLabel(originalEntry?.field);
             console.log(`[SmartRegen] Processing ${bunk}: slots=${slots.join(',')}, original=${originalActivity}`);
-            const bestPick = findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProperties, [pinnedField]);
+            
+            const bestPick = findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProps, [pinnedField]);
+            
             if (bestPick) {
                 console.log(`[SmartRegen] ✅ ${bunk}: ${originalActivity} → ${bestPick.activityName} (field: ${bestPick.field})`);
-                applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProperties);
+                applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProps);
                 results.reassigned.push({ bunk, slots, from: originalActivity || 'unknown', to: bestPick.activityName, field: bestPick.field, cost: bestPick.cost });
                 if (window.showToast) window.showToast(`↪️ ${bunk}: ${originalActivity} → ${bestPick.activityName}`, 'info');
             } else {
-                if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
+                const divName = getDivisionForBunk(bunk);
+                const divSlots = window.divisionTimes?.[divName] || [];
+                if (!window.scheduleAssignments[bunk]) {
+                    window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
+                }
                 slots.forEach((slotIdx, i) => {
-                    window.scheduleAssignments[bunk][slotIdx] = { field: 'Free', sport: null, continuation: i > 0, _fixed: false, _activity: 'Free', _smartRegenFailed: true, _originalActivity: originalActivity, _failedAt: Date.now() };
+                    window.scheduleAssignments[bunk][slotIdx] = { 
+                        field: 'Free', sport: null, continuation: i > 0, _fixed: false, _activity: 'Free', 
+                        _smartRegenFailed: true, _originalActivity: originalActivity, _failedAt: Date.now() 
+                    };
                 });
                 results.failed.push({ bunk, slots, originalActivity, reason: 'No valid alternative found' });
                 results.success = false;
                 if (window.showToast) window.showToast(`⚠️ ${bunk}: No alternative found`, 'warning');
             }
         }
+        
         console.log(`[SmartRegen] ★★★ COMPLETE: ${results.reassigned.length} reassigned, ${results.failed.length} failed ★★★`);
         return results;
     }
@@ -936,18 +1007,26 @@
     function smartReassignBunkActivity(bunk, slots, avoidLocation) {
         const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
         if (!entry) return { success: false };
-        const originalActivity = entry._activity || entry.sport || window.fieldLabel(entry.field);
-        const activityProperties = window.getActivityProperties();
-        const fieldUsageBySlot = window.buildFieldUsageBySlot([bunk]);
-        const bestPick = findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProperties, [avoidLocation]);
+        const originalActivity = entry._activity || entry.sport || fieldLabel(entry.field);
+        const activityProps = getActivityProperties();
+        const fieldUsageBySlot = window.buildFieldUsageBySlot?.([bunk]) || {};
+        const bestPick = findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProps, [avoidLocation]);
+        
         if (bestPick) {
-            applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProperties);
+            applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProps);
             if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.activityName}`, 'info');
             return { success: true, field: bestPick.field, activity: bestPick.activityName, cost: bestPick.cost };
         } else {
-            if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(window.unifiedTimes?.length || 50);
+            const divName = getDivisionForBunk(bunk);
+            const divSlots = window.divisionTimes?.[divName] || [];
+            if (!window.scheduleAssignments[bunk]) {
+                window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
+            }
             slots.forEach((slotIdx, i) => {
-                window.scheduleAssignments[bunk][slotIdx] = { field: 'Free', sport: null, continuation: i > 0, _fixed: false, _activity: 'Free', _noAlternative: true, _originalActivity: originalActivity, _originalField: avoidLocation };
+                window.scheduleAssignments[bunk][slotIdx] = { 
+                    field: 'Free', sport: null, continuation: i > 0, _fixed: false, _activity: 'Free', 
+                    _noAlternative: true, _originalActivity: originalActivity, _originalField: avoidLocation 
+                };
             });
             if (window.showToast) window.showToast(`⚠️ ${bunk}: No alternative found`, 'warning');
             return { success: false, reason: 'No valid alternative found' };
@@ -961,18 +1040,21 @@
     function capturePinnedActivities(allowedDivisions) {
         const assignments = window.scheduleAssignments || {};
         const divisions = window.divisions || {};
-        _pinnedSnapshot = {}; _pinnedFieldLocks = [];
+        _pinnedSnapshot = {}; 
+        _pinnedFieldLocks = [];
         let capturedCount = 0;
+        
         let allowedBunks = null;
         if (allowedDivisions && allowedDivisions.length > 0) {
             allowedBunks = new Set();
             for (const divName of allowedDivisions) {
                 const divInfo = divisions[divName];
-                if (divInfo?.bunks) divInfo.bunks.forEach(b => allowedBunks.add(b));
+                if (divInfo?.bunks) divInfo.bunks.forEach(b => allowedBunks.add(String(b)));
             }
         }
+        
         for (const [bunkName, slots] of Object.entries(assignments)) {
-            if (allowedBunks && !allowedBunks.has(bunkName)) continue;
+            if (allowedBunks && !allowedBunks.has(String(bunkName))) continue;
             if (!slots || !Array.isArray(slots)) continue;
             for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
                 const entry = slots[slotIdx];
@@ -980,8 +1062,10 @@
                     if (!_pinnedSnapshot[bunkName]) _pinnedSnapshot[bunkName] = {};
                     _pinnedSnapshot[bunkName][slotIdx] = { ...entry, _preservedAt: Date.now() };
                     capturedCount++;
-                    const fieldName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
-                    if (fieldName && fieldName !== 'Free') _pinnedFieldLocks.push({ field: fieldName, slot: slotIdx, bunk: bunkName, activity: entry._activity || fieldName });
+                    const fName = fieldLabel(entry.field);
+                    if (fName && fName !== 'Free') {
+                        _pinnedFieldLocks.push({ field: fName, slot: slotIdx, bunk: bunkName, activity: entry._activity || fName });
+                    }
                 }
             }
         }
@@ -993,21 +1077,24 @@
         if (!window.GlobalFieldLocks) return;
         const divisions = window.divisions || {};
         for (const lockInfo of _pinnedFieldLocks) {
-            const divName = Object.keys(divisions).find(d => divisions[d]?.bunks?.includes(lockInfo.bunk));
-            window.GlobalFieldLocks.lockField(lockInfo.field, [lockInfo.slot], { lockedBy: 'pinned_activity', division: divName || 'unknown', activity: lockInfo.activity, bunk: lockInfo.bunk, _pinnedLock: true });
+            const divName = Object.keys(divisions).find(d => divisions[d]?.bunks?.some(b => String(b) === String(lockInfo.bunk)));
+            window.GlobalFieldLocks.lockField(lockInfo.field, [lockInfo.slot], { 
+                lockedBy: 'pinned_activity', division: divName || 'unknown', activity: lockInfo.activity, bunk: lockInfo.bunk, _pinnedLock: true 
+            });
         }
     }
 
-    function registerPinnedFieldUsage(fieldUsageBySlot, activityProperties) {
+    function registerPinnedFieldUsage(fieldUsageBySlot, activityProps) {
         if (!fieldUsageBySlot) return;
         const divisions = window.divisions || {};
         for (const lockInfo of _pinnedFieldLocks) {
-            const slotIdx = lockInfo.slot, fieldName = lockInfo.field;
+            const slotIdx = lockInfo.slot, fName = lockInfo.field;
             if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
-            if (!fieldUsageBySlot[slotIdx][fieldName]) fieldUsageBySlot[slotIdx][fieldName] = { count: 0, divisions: [], bunks: {}, _locked: true, _fromPinned: true };
-            const usage = fieldUsageBySlot[slotIdx][fieldName];
-            usage.count++; usage.bunks[lockInfo.bunk] = lockInfo.activity;
-            const divName = Object.keys(divisions).find(d => divisions[d]?.bunks?.includes(lockInfo.bunk));
+            if (!fieldUsageBySlot[slotIdx][fName]) fieldUsageBySlot[slotIdx][fName] = { count: 0, divisions: [], bunks: {}, _locked: true, _fromPinned: true };
+            const usage = fieldUsageBySlot[slotIdx][fName];
+            usage.count++; 
+            usage.bunks[lockInfo.bunk] = lockInfo.activity;
+            const divName = Object.keys(divisions).find(d => divisions[d]?.bunks?.some(b => String(b) === String(lockInfo.bunk)));
             if (divName && !usage.divisions.includes(divName)) usage.divisions.push(divName);
         }
     }
@@ -1016,7 +1103,9 @@
         const assignments = window.scheduleAssignments || {};
         let restoredCount = 0;
         for (const [bunkName, pinnedSlots] of Object.entries(_pinnedSnapshot)) {
-            if (!assignments[bunkName]) assignments[bunkName] = new Array((window.unifiedTimes || []).length);
+            const divName = getDivisionForBunk(bunkName);
+            const divSlots = window.divisionTimes?.[divName] || [];
+            if (!assignments[bunkName]) assignments[bunkName] = new Array(divSlots.length || 50);
             for (const [slotIdxStr, entry] of Object.entries(pinnedSlots)) {
                 assignments[bunkName][parseInt(slotIdxStr, 10)] = { ...entry, _restoredAt: Date.now() };
                 restoredCount++;
@@ -1034,7 +1123,10 @@
             for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
                 const entry = slots[slotIdx];
                 if (entry && entry._pinned === true) {
-                    pinned.push({ bunk: bunkName, slot: slotIdx, activity: entry._activity || entry.field, field: typeof entry.field === 'object' ? entry.field?.name : entry.field, editedAt: entry._editedAt || entry._preservedAt });
+                    pinned.push({ 
+                        bunk: bunkName, slot: slotIdx, activity: entry._activity || entry.field, 
+                        field: fieldLabel(entry.field), editedAt: entry._editedAt || entry._preservedAt 
+                    });
                 }
             }
         }
@@ -1043,7 +1135,14 @@
 
     function unpinActivity(bunk, slotIdx) {
         const entry = window.scheduleAssignments?.[bunk]?.[slotIdx];
-        if (entry) { delete entry._pinned; delete entry._postEdit; entry._unpinnedAt = Date.now(); saveSchedule(); updateTable(); return true; }
+        if (entry) { 
+            delete entry._pinned; 
+            delete entry._postEdit; 
+            entry._unpinnedAt = Date.now(); 
+            saveSchedule(); 
+            updateTable(); 
+            return true; 
+        }
         return false;
     }
 
@@ -1054,10 +1153,16 @@
             if (!slots || !Array.isArray(slots)) continue;
             for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
                 const entry = slots[slotIdx];
-                if (entry && entry._pinned === true) { delete entry._pinned; delete entry._postEdit; entry._unpinnedAt = Date.now(); unpinnedCount++; }
+                if (entry && entry._pinned === true) { 
+                    delete entry._pinned; 
+                    delete entry._postEdit; 
+                    entry._unpinnedAt = Date.now(); 
+                    unpinnedCount++; 
+                }
             }
         }
-        saveSchedule(); updateTable();
+        saveSchedule(); 
+        updateTable();
         return unpinnedCount;
     }
 
@@ -1072,8 +1177,8 @@
             return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
         }
         if (leagues[divName]) {
-            const divSlots = Object.keys(leagues[divName]).map(Number).sort((a, b) => a - b);
-            for (const storedSlot of divSlots) {
+            const divSlotKeys = Object.keys(leagues[divName]).map(Number).sort((a, b) => a - b);
+            for (const storedSlot of divSlotKeys) {
                 if (Math.abs(storedSlot - slotIdx) <= 2) {
                     const data = leagues[divName][storedSlot];
                     if (data && (data.matchups?.length > 0 || data.gameLabel)) return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
@@ -1087,7 +1192,9 @@
             const league = applicableLeagues[0], teams = league.teams || [];
             if (teams.length >= 2) {
                 const displayMatchups = [];
-                for (let i = 0; i < teams.length - 1; i += 2) { if (teams[i + 1]) displayMatchups.push({ teamA: teams[i], teamB: teams[i + 1], display: `${teams[i]} vs ${teams[i + 1]}` }); }
+                for (let i = 0; i < teams.length - 1; i += 2) { 
+                    if (teams[i + 1]) displayMatchups.push({ teamA: teams[i], teamB: teams[i + 1], display: `${teams[i]} vs ${teams[i + 1]}` }); 
+                }
                 if (teams.length % 2 === 1) displayMatchups.push({ teamA: teams[teams.length - 1], teamB: 'BYE', display: `${teams[teams.length - 1]} (BYE)` });
                 return { matchups: displayMatchups, gameLabel: `${league.name} Game`, sport: league.sports?.[0] || 'League', leagueName: league.name };
             }
@@ -1104,27 +1211,45 @@
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         if (!window._postEditInProgress) loadScheduleForDate(dateKey);
         else console.log('[UnifiedSchedule] 🛡️ RENDER: Using in-memory data (post-edit in progress)');
+        
         const skeleton = getSkeleton(dateKey);
-        const unifiedTimes = window.unifiedTimes || [];
         const divisions = window.divisions || {};
-        console.log('[UnifiedSchedule] RENDER STATE:', { dateKey, skeletonBlocks: skeleton.length, unifiedTimesSlots: unifiedTimes.length,
-            scheduleAssignmentsBunks: Object.keys(window.scheduleAssignments || {}).length, divisionsCount: Object.keys(divisions).length,
-            bypassRBACView: _bypassRBACViewEnabled || window._bypassRBACViewEnabled });
+        
+        console.log('[UnifiedSchedule] RENDER STATE:', { 
+            dateKey, 
+            skeletonBlocks: skeleton.length, 
+            divisionTimesCount: Object.keys(window.divisionTimes || {}).length,
+            scheduleAssignmentsBunks: Object.keys(window.scheduleAssignments || {}).length, 
+            divisionsCount: Object.keys(divisions).length,
+            bypassRBACView: _bypassRBACViewEnabled || window._bypassRBACViewEnabled 
+        });
+        
         container.innerHTML = '';
         if (!skeleton || skeleton.length === 0) {
             container.innerHTML = `<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No daily schedule structure found for this date.</p><p style="font-size: 0.9rem;">Use <strong>"Build Day"</strong> in the Master Schedule Builder to create a schedule structure.</p></div>`;
             return;
         }
+        
         let divisionsToShow = Object.keys(divisions);
         if (divisionsToShow.length === 0 && window.availableDivisions) divisionsToShow = window.availableDivisions;
-        divisionsToShow.sort((a, b) => { const numA = parseInt(a), numB = parseInt(b); if (!isNaN(numA) && !isNaN(numB)) return numA - numB; return String(a).localeCompare(String(b)); });
-        if (divisionsToShow.length === 0) { container.innerHTML = `<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No divisions configured.</p></div>`; return; }
+        divisionsToShow.sort((a, b) => { 
+            const numA = parseInt(a), numB = parseInt(b); 
+            if (!isNaN(numA) && !isNaN(numB)) return numA - numB; 
+            return String(a).localeCompare(String(b)); 
+        });
+        
+        if (divisionsToShow.length === 0) { 
+            container.innerHTML = `<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No divisions configured.</p></div>`; 
+            return; 
+        }
+        
         const wrapper = document.createElement('div');
         wrapper.className = 'schedule-view-wrapper';
         wrapper.style.cssText = 'display: flex; flex-direction: column; gap: 24px;';
+        
         const editableDivisions = window.AccessControl?.getEditableDivisions?.() || divisionsToShow;
+        
         divisionsToShow.forEach(divName => {
-            // ★★★ RBAC VIEW BYPASS CHECK ★★★
             if (!shouldShowDivision(divName)) return;
             const divInfo = divisions[divName];
             if (!divInfo) return;
@@ -1132,77 +1257,121 @@
             if (bunks.length === 0) return;
             bunks = bunks.slice().sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }));
             const isEditable = editableDivisions.includes(divName);
-            const table = renderDivisionTable(divName, divInfo, bunks, skeleton, unifiedTimes, isEditable);
+            const table = renderDivisionTable(divName, divInfo, bunks, skeleton, isEditable);
             if (table) wrapper.appendChild(table);
         });
+        
         container.appendChild(wrapper);
         if (window.MultiSchedulerAutonomous?.applyBlockingToGrid) setTimeout(() => window.MultiSchedulerAutonomous.applyBlockingToGrid(), 50);
         window.dispatchEvent(new CustomEvent('campistry-schedule-rendered', { detail: { dateKey } }));
     }
 
-    function renderDivisionTable(divName, divInfo, bunks, skeleton, unifiedTimes, isEditable) {
-        let divBlocks = skeleton.filter(b => b.division === divName).map(b => ({ ...b, startMin: window.parseTimeToMinutes(b.startTime), endMin: window.parseTimeToMinutes(b.endTime) }))
-            .filter(b => b.startMin !== null && b.endMin !== null).sort((a, b) => a.startMin - b.startMin);
+    function renderDivisionTable(divName, divInfo, bunks, skeleton, isEditable) {
+        // ★★★ v4.1.0: Use divisionTimes directly ★★★
+        const divSlots = window.divisionTimes?.[divName] || [];
+        
+        // Fallback: build from skeleton if divisionTimes not available
+        let divBlocks;
+        if (divSlots.length > 0) {
+            divBlocks = divSlots.map((slot, idx) => ({
+                slotIndex: idx,
+                startMin: slot.startMin,
+                endMin: slot.endMin,
+                event: slot.event || 'GA',
+                type: slot.type || 'slot',
+                division: divName,
+                _splitHalf: slot._splitHalf,
+                _splitParentEvent: slot._splitParentEvent,
+                _isSplitTile: !!slot._splitHalf
+            }));
+        } else {
+            divBlocks = skeleton.filter(b => b.division === divName).map(b => ({ 
+                ...b, 
+                startMin: parseTimeToMinutes(b.startTime), 
+                endMin: parseTimeToMinutes(b.endTime) 
+            })).filter(b => b.startMin !== null && b.endMin !== null).sort((a, b) => a.startMin - b.startMin);
+            divBlocks = expandBlocksForSplitTiles(divBlocks, divName);
+        }
+        
         if (divBlocks.length === 0) return null;
-        divBlocks = expandBlocksForSplitTiles(divBlocks, bunks, unifiedTimes);
+        
         const table = document.createElement('table');
         table.className = 'schedule-division-table';
         table.style.cssText = 'width: 100%; border-collapse: collapse; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden; background: #fff; margin-bottom: 8px;';
+        
         const divColor = divInfo.color || '#4b5563';
         const thead = document.createElement('thead');
         const tr1 = document.createElement('tr');
         const th = document.createElement('th');
         th.colSpan = 1 + bunks.length;
-        th.innerHTML = window.escapeHtml(divName) + (isEditable ? '' : ' <span style="opacity:0.7">🔒</span>');
+        th.innerHTML = escapeHtml(divName) + (isEditable ? '' : ' <span style="opacity:0.7">🔒</span>');
         th.style.cssText = `background: ${divColor}; color: #fff; padding: 12px 16px; font-size: 1.1rem; font-weight: 600; text-align: left;`;
-        tr1.appendChild(th); thead.appendChild(tr1);
-        const tr2 = document.createElement('tr'); tr2.style.background = '#f9fafb';
-        const thTime = document.createElement('th'); thTime.textContent = 'Time';
+        tr1.appendChild(th); 
+        thead.appendChild(tr1);
+        
+        const tr2 = document.createElement('tr'); 
+        tr2.style.background = '#f9fafb';
+        const thTime = document.createElement('th'); 
+        thTime.textContent = 'Time';
         thTime.style.cssText = 'padding: 10px 12px; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; min-width: 140px;';
         tr2.appendChild(thTime);
-        bunks.forEach(bunk => { const thB = document.createElement('th'); thB.textContent = bunk; thB.style.cssText = 'padding: 10px 12px; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; min-width: 100px; text-align: center;'; tr2.appendChild(thB); });
-        thead.appendChild(tr2); table.appendChild(thead);
+        bunks.forEach(bunk => { 
+            const thB = document.createElement('th'); 
+            thB.textContent = bunk; 
+            thB.style.cssText = 'padding: 10px 12px; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; min-width: 100px; text-align: center;'; 
+            tr2.appendChild(thB); 
+        });
+        thead.appendChild(tr2); 
+        table.appendChild(thead);
+        
         const tbody = document.createElement('tbody');
         divBlocks.forEach((block, blockIdx) => {
-            const timeLabel = `${window.minutesToTimeLabel(block.startMin)} - ${window.minutesToTimeLabel(block.endMin)}`;
+            const timeLabel = `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(block.endMin)}`;
             const tr = document.createElement('tr');
             tr.style.background = blockIdx % 2 === 0 ? '#fff' : '#fafafa';
             if (block._isSplitTile) tr.style.background = block._splitHalf === 1 ? (blockIdx % 2 === 0 ? '#f0fdf4' : '#ecfdf5') : (blockIdx % 2 === 0 ? '#fef3c7' : '#fef9c3');
-            const tdTime = document.createElement('td'); tdTime.textContent = timeLabel;
+            
+            const tdTime = document.createElement('td'); 
+            tdTime.textContent = timeLabel;
             tdTime.style.cssText = 'padding: 10px 12px; font-weight: 500; color: #4b5563; border-right: 1px solid #e5e7eb; white-space: nowrap;';
-            if (block._isSplitTile) { const halfLabel = block._splitHalf === 1 ? '①' : '②'; tdTime.innerHTML = `${window.escapeHtml(timeLabel)} <span style="color: #6b7280; font-size: 0.8rem;">${halfLabel}</span>`; }
+            if (block._isSplitTile) { 
+                const halfLabel = block._splitHalf === 1 ? '①' : '②'; 
+                tdTime.innerHTML = `${escapeHtml(timeLabel)} <span style="color: #6b7280; font-size: 0.8rem;">${halfLabel}</span>`; 
+            }
             tr.appendChild(tdTime);
-            if (isLeagueBlockType(block.event)) { tr.appendChild(renderLeagueCell(block, bunks, divName, unifiedTimes, isEditable)); tbody.appendChild(tr); return; }
-            bunks.forEach(bunk => tr.appendChild(renderBunkCell(block, bunk, divName, unifiedTimes, isEditable)));
+            
+            if (isLeagueBlockType(block.event)) { 
+                tr.appendChild(renderLeagueCell(block, bunks, divName, isEditable)); 
+                tbody.appendChild(tr); 
+                return; 
+            }
+            
+            bunks.forEach(bunk => tr.appendChild(renderBunkCell(block, bunk, divName, isEditable)));
             tbody.appendChild(tr);
         });
         table.appendChild(tbody);
         return table;
     }
 
-    function renderLeagueCell(block, bunks, divName, unifiedTimes, isEditable) {
+    function renderLeagueCell(block, bunks, divName, isEditable) {
         const td = document.createElement('td');
         td.colSpan = bunks.length;
         td.style.cssText = 'padding: 12px 16px; background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border-left: 4px solid #0284c7; vertical-align: top;';
         
-       // ★★★ FIX v4.0.6: Use division-specific slot lookup for league matchups ★★★
-const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block.endMin, divName) || [];
-        let leagueInfo = { matchups: [], gameLabel: '', sport: '', leagueName: '' };
-        for (const idx of slots) { 
-            const info = getLeagueMatchups(divName, idx); 
-            if (info.matchups.length > 0 || info.gameLabel) { leagueInfo = info; break; } 
-        }
+        // ★★★ v4.1.0: Use division-specific slot lookup ★★★
+        const slotIdx = block.slotIndex !== undefined ? block.slotIndex : findFirstSlotForTime(block.startMin, divName);
+        let leagueInfo = getLeagueMatchups(divName, slotIdx);
         
         let title = leagueInfo.gameLabel || block.event;
         if (leagueInfo.sport && !title.toLowerCase().includes(leagueInfo.sport.toLowerCase())) title += ` - ${leagueInfo.sport}`;
         
-        let html = `<div style="font-weight: 600; font-size: 1rem; color: #0369a1; margin-bottom: 8px;">🏆 ${window.escapeHtml(title)}</div>`;
+        let html = `<div style="font-weight: 600; font-size: 1rem; color: #0369a1; margin-bottom: 8px;">🏆 ${escapeHtml(title)}</div>`;
         
         if (leagueInfo.matchups?.length > 0) {
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
             leagueInfo.matchups.forEach(m => {
                 let matchText = typeof m === 'string' ? m : m.display || (m.teamA && m.teamB ? `${m.teamA} vs ${m.teamB}${m.field ? ` @ ${m.field}` : ''}` : (m.team1 && m.team2 ? `${m.team1} vs ${m.team2}` : (m.matchup || JSON.stringify(m))));
-                html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${window.escapeHtml(matchText)}</div>`;
+                html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${escapeHtml(matchText)}</div>`;
             });
             html += '</div>';
         } else {
@@ -1211,17 +1380,14 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         
         td.innerHTML = html;
         
-        // ★★★ UPDATED: Use Integrated Edit Modal ★★★
         if (isEditable && bunks.length > 0) { 
             td.style.cursor = 'pointer'; 
             td.onclick = () => {
                 const firstBunk = bunks[0];
-                const slotIdx = slots[0] || 0;
                 const existingEntry = window.scheduleAssignments?.[firstBunk]?.[slotIdx];
                 if (typeof openIntegratedEditModal === 'function') {
                     openIntegratedEditModal(firstBunk, slotIdx, existingEntry);
                 } else {
-                    // Fallback to old behavior
                     enhancedEditCell(firstBunk, block.startMin, block.endMin, block.event);
                 }
             };
@@ -1230,10 +1396,13 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         return td;
     }
 
-    function renderBunkCell(block, bunk, divName, unifiedTimes, isEditable) {
+    function renderBunkCell(block, bunk, divName, isEditable) {
         const td = document.createElement('td');
         td.style.cssText = 'padding: 8px 10px; text-align: center; border: 1px solid #e5e7eb;';
-        const { entry, slotIdx } = window.getEntryForBlock(bunk, block.startMin, block.endMin, unifiedTimes);
+        
+        // ★★★ v4.1.0: Use division-specific slot index ★★★
+        const slotIdx = block.slotIndex !== undefined ? block.slotIndex : findFirstSlotForTime(block.startMin, divName);
+        const entry = getEntry(bunk, slotIdx);
         
         let isBlocked = false, blockedReason = '';
         if (window.MultiSchedulerAutonomous?.isBunkSlotBlocked) { 
@@ -1277,41 +1446,105 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         }
         else if (isEditable) { 
             td.style.cursor = 'pointer'; 
-            // ★★★ UPDATED: Use Integrated Edit Modal ★★★
             td.onclick = () => {
                 const existingEntry = window.scheduleAssignments?.[bunk]?.[slotIdx];
                 if (typeof openIntegratedEditModal === 'function') {
                     openIntegratedEditModal(bunk, slotIdx, existingEntry);
                 } else {
-                    // Fallback to old behavior if integrated modal not loaded
                     enhancedEditCell(bunk, block.startMin, block.endMin, displayText.replace('📌 ', ''));
                 }
             };
         }
         return td;
     }
+
     // =========================================================================
     // APPLY DIRECT EDIT
     // =========================================================================
 
     function applyDirectEdit(bunk, slots, activity, location, isClear, shouldPin = true) {
-        const unifiedTimes = window.unifiedTimes || [];
+        const divName = getDivisionForBunk(bunk);
+        const divSlots = window.divisionTimes?.[divName] || [];
+        
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
-        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
+        if (!window.scheduleAssignments[bunk]) {
+            window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
+        }
+        
         const fieldValue = location ? `${location} – ${activity}` : activity;
         slots.forEach((idx, i) => {
-            window.scheduleAssignments[bunk][idx] = { field: isClear ? 'Free' : fieldValue, sport: isClear ? null : activity, continuation: i > 0,
-                _fixed: !isClear, _activity: isClear ? 'Free' : activity, _location: location, _postEdit: true, _pinned: shouldPin && !isClear, _editedAt: Date.now() };
+            window.scheduleAssignments[bunk][idx] = { 
+                field: isClear ? 'Free' : fieldValue, 
+                sport: isClear ? null : activity, 
+                continuation: i > 0,
+                _fixed: !isClear, 
+                _activity: isClear ? 'Free' : activity, 
+                _location: location, 
+                _postEdit: true, 
+                _pinned: shouldPin && !isClear, 
+                _editedAt: Date.now() 
+            };
         });
+        
         if (location && !isClear && window.registerLocationUsage) {
-            const divName = window.getDivisionForBunk(bunk);
             slots.forEach(idx => window.registerLocationUsage(idx, location, activity, divName));
         }
     }
 
-    // CONTINUED IN PART 2...
- // =========================================================================
-    // BYPASS SAVE - CROSS-DIVISION DIRECT UPDATE (v4.0.2)
+    // =========================================================================
+    // SAVE & UPDATE
+    // =========================================================================
+
+    function saveSchedule() {
+        const silent = window._postEditInProgress;
+        if (window.saveCurrentDailyData) {
+            window.saveCurrentDailyData('scheduleAssignments', window.scheduleAssignments, { silent });
+            window.saveCurrentDailyData('leagueAssignments', window.leagueAssignments, { silent });
+            // ★★★ v4.1.0: Save divisionTimes (serialized) ★★★
+            const serialized = window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes;
+            window.saveCurrentDailyData('divisionTimes', serialized, { silent });
+        }
+    }
+
+    function updateTable() {
+        const now = Date.now();
+        if (window._postEditInProgress) {
+            _lastRenderTime = now; 
+            _renderQueued = false; 
+            if (_renderTimeout) { clearTimeout(_renderTimeout); _renderTimeout = null; }
+            const container = document.getElementById('scheduleTable');
+            if (container) renderStaggeredView(container);
+            return;
+        }
+        if (now - _lastRenderTime < RENDER_DEBOUNCE_MS) {
+            if (!_renderQueued) { 
+                _renderQueued = true; 
+                if (_renderTimeout) clearTimeout(_renderTimeout); 
+                _renderTimeout = setTimeout(() => { 
+                    _renderQueued = false; 
+                    _lastRenderTime = Date.now(); 
+                    const container = document.getElementById('scheduleTable'); 
+                    if (container) renderStaggeredView(container); 
+                }, RENDER_DEBOUNCE_MS); 
+            }
+            return;
+        }
+        _lastRenderTime = now;
+        const container = document.getElementById('scheduleTable');
+        if (container) renderStaggeredView(container);
+    }
+
+    // =========================================================================
+    // UTILITY: ESCAPE HTML
+    // =========================================================================
+    
+    function escapeHtml(str) {
+        if (!str) return '';
+        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // =========================================================================
+    // BYPASS SAVE - CROSS-DIVISION DIRECT UPDATE
     // =========================================================================
 
     async function bypassSaveAllBunks(modifiedBunks) {
@@ -1325,7 +1558,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             if (!allDailyData[dateKey]) allDailyData[dateKey] = {};
             allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
             allDailyData[dateKey].leagueAssignments = window.leagueAssignments || {};
-            allDailyData[dateKey].unifiedTimes = window.unifiedTimes || [];
+            allDailyData[dateKey].divisionTimes = window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes;
             allDailyData[dateKey]._bypassSaveAt = Date.now();
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
             console.log('[UnifiedSchedule] ✅ Bypass: saved to localStorage');
@@ -1353,14 +1586,12 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             
             if (loadError) {
                 console.error('[UnifiedSchedule] Failed to load records:', loadError);
-                // Fallback to old method
                 return await fallbackBypassSave(dateKey, modifiedBunks);
             }
             
             console.log(`[UnifiedSchedule] 🔓 Found ${allRecords?.length || 0} scheduler records`);
             
             if (!allRecords || allRecords.length === 0) {
-                // No existing records - use standard save
                 console.log('[UnifiedSchedule] 🔓 No existing records, using standard save');
                 return await fallbackBypassSave(dateKey, modifiedBunks);
             }
@@ -1375,8 +1606,8 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             });
             
             // Step 5: Group modified bunks by their owning record
-            const recordUpdates = new Map(); // record.id -> { record, bunksToUpdate }
-            const orphanBunks = []; // Bunks not in any record (will go to current user)
+            const recordUpdates = new Map();
+            const orphanBunks = [];
             
             modifiedBunks.forEach(bunk => {
                 const bunkStr = String(bunk);
@@ -1384,10 +1615,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                 
                 if (owningRecord) {
                     if (!recordUpdates.has(owningRecord.id)) {
-                        recordUpdates.set(owningRecord.id, { 
-                            record: owningRecord, 
-                            bunksToUpdate: [] 
-                        });
+                        recordUpdates.set(owningRecord.id, { record: owningRecord, bunksToUpdate: [] });
                     }
                     recordUpdates.get(owningRecord.id).bunksToUpdate.push(bunkStr);
                 } else {
@@ -1400,9 +1628,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                     `${data.record.scheduler_name || 'unknown'}: bunks ${data.bunksToUpdate.join(', ')}`
                 )
             );
-            if (orphanBunks.length > 0) {
-                console.log(`[UnifiedSchedule] 🔓 Orphan bunks (will add to your record): ${orphanBunks.join(', ')}`);
-            }
             
             // Step 6: Update each record directly
             let successCount = 0;
@@ -1414,7 +1639,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                 const assignments = { ...(scheduleData.scheduleAssignments || {}) };
                 const leagues = { ...(scheduleData.leagueAssignments || {}) };
                 
-                // Apply updates from window globals
                 bunksToUpdate.forEach(bunk => {
                     if (window.scheduleAssignments[bunk]) {
                         assignments[bunk] = window.scheduleAssignments[bunk];
@@ -1427,24 +1651,14 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                 const updatedData = {
                     ...scheduleData,
                     scheduleAssignments: assignments,
-                    leagueAssignments: leagues
+                    leagueAssignments: leagues,
+                    divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes
                 };
-                
-                // Serialize unifiedTimes
-                const serializedTimes = window.ScheduleDB?.serializeUnifiedTimes?.(window.unifiedTimes) 
-                    || window.unifiedTimes?.map(t => ({
-                        start: t.start instanceof Date ? t.start.toISOString() : t.start,
-                        end: t.end instanceof Date ? t.end.toISOString() : t.end,
-                        startMin: t.startMin,
-                        endMin: t.endMin,
-                        label: t.label
-                    })) || [];
                 
                 const { error: updateError } = await client
                     .from('daily_schedules')
                     .update({
                         schedule_data: updatedData,
-                        unified_times: serializedTimes,
                         updated_at: new Date().toISOString()
                     })
                     .eq('id', recordId);
@@ -1459,7 +1673,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                 }
             }
             
-            // Step 7: Handle orphan bunks (add to current user's record via standard save)
+            // Step 7: Handle orphan bunks
             if (orphanBunks.length > 0) {
                 console.log(`[UnifiedSchedule] 🔓 Saving orphan bunks via standard method...`);
                 if (window.ScheduleDB?.saveSchedule) {
@@ -1467,7 +1681,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                         await window.ScheduleDB.saveSchedule(dateKey, {
                             scheduleAssignments: window.scheduleAssignments,
                             leagueAssignments: window.leagueAssignments || {},
-                            unifiedTimes: window.unifiedTimes
+                            divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes
                         }, { skipFilter: true, immediate: true });
                         successCount++;
                     } catch (e) {
@@ -1482,27 +1696,18 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                 if (window.ScheduleSync?.forceSave) await window.ScheduleSync.forceSave();
                 if (window.forceSyncToCloud) await window.forceSyncToCloud();
                 window.dispatchEvent(new CustomEvent('campistry-bypass-save-complete', { 
-                    detail: { 
-                        dateKey, 
-                        modifiedBunks, 
-                        successCount, 
-                        failCount,
-                        updatedSchedulers,
-                        timestamp: Date.now() 
-                    } 
+                    detail: { dateKey, modifiedBunks, successCount, failCount, updatedSchedulers, timestamp: Date.now() } 
                 }));
             } catch (e) { 
                 console.warn('[UnifiedSchedule] Bypass sync broadcast warning:', e); 
             }
             
-            // Step 9: Show toast
             if (window.showToast) {
                 const divisions = window.divisions || {};
                 const divisionNames = new Set();
                 modifiedBunks.forEach(bunk => { 
                     for (const [divName, divData] of Object.entries(divisions)) { 
-                        if (divData.bunks?.includes(bunk) || divData.bunks?.includes(String(bunk))) 
-                            divisionNames.add(divName); 
+                        if (divData.bunks?.some(b => String(b) === String(bunk))) divisionNames.add(divName); 
                     } 
                 });
                 const schedulerInfo = updatedSchedulers.length > 0 ? ` (updated: ${updatedSchedulers.join(', ')})` : '';
@@ -1512,22 +1717,14 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                 );
             }
             
-            return { 
-                success: failCount === 0, 
-                successCount, 
-                failCount, 
-                updatedSchedulers,
-                target: 'cloud-direct' 
-            };
+            return { success: failCount === 0, successCount, failCount, updatedSchedulers, target: 'cloud-direct' };
             
         } catch (e) {
             console.error('[UnifiedSchedule] Bypass save exception:', e);
-            // Fallback to old method
             return await fallbackBypassSave(dateKey, modifiedBunks);
         }
     }
     
-    // Fallback method (original behavior)
     async function fallbackBypassSave(dateKey, modifiedBunks) {
         console.log('[UnifiedSchedule] 🔓 Using fallback bypass save (skipFilter)');
         let cloudResult = { success: false };
@@ -1536,7 +1733,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                 cloudResult = await window.ScheduleDB.saveSchedule(dateKey, { 
                     scheduleAssignments: window.scheduleAssignments, 
                     leagueAssignments: window.leagueAssignments || {}, 
-                    unifiedTimes: window.unifiedTimes, 
+                    divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes,
                     _bypassSaveAt: Date.now(), 
                     _modifiedBunks: modifiedBunks 
                 }, { skipFilter: true, immediate: true, forceSync: true });
@@ -1560,8 +1757,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             const divisionNames = new Set();
             modifiedBunks.forEach(bunk => { 
                 for (const [divName, divData] of Object.entries(divisions)) { 
-                    if (divData.bunks?.includes(bunk) || divData.bunks?.includes(String(bunk))) 
-                        divisionNames.add(divName); 
+                    if (divData.bunks?.some(b => String(b) === String(bunk))) divisionNames.add(divName); 
                 } 
             });
             window.showToast(
@@ -1570,6 +1766,65 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             );
         }
         return cloudResult;
+    }
+
+    // =========================================================================
+    // EDIT MODAL (LEGACY FALLBACK)
+    // =========================================================================
+
+    function createModal() {
+        document.getElementById(OVERLAY_ID)?.remove(); 
+        document.getElementById(MODAL_ID)?.remove();
+        const overlay = document.createElement('div'); 
+        overlay.id = OVERLAY_ID;
+        overlay.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); z-index: 10000; display: flex; align-items: center; justify-content: center;';
+        const modal = document.createElement('div'); 
+        modal.id = MODAL_ID;
+        modal.style.cssText = 'background: white; border-radius: 12px; padding: 24px; min-width: 400px; max-width: 500px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-height: 90vh; overflow-y: auto;';
+        overlay.appendChild(modal); 
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+        document.addEventListener('keydown', function escHandler(e) { if (e.key === 'Escape') { closeModal(); document.removeEventListener('keydown', escHandler); } });
+        return modal;
+    }
+
+    function closeModal() { 
+        document.getElementById(OVERLAY_ID)?.remove(); 
+    }
+
+    function enhancedEditCell(bunk, startMin, endMin, current) {
+        if (!canEditBunk(bunk)) { 
+            alert('You do not have permission to edit this schedule.'); 
+            return; 
+        }
+        
+        const divName = getDivisionForBunk(bunk);
+        const slots = findSlotsForRange(startMin, endMin, divName);
+        
+        if (slots.length === 0) {
+            alert('Error: Could not find time slots for this block.');
+            return;
+        }
+        
+        const slotIdx = slots[0];
+        const existingEntry = window.scheduleAssignments?.[bunk]?.[slotIdx];
+        
+        // Try to use integrated edit modal if available
+        if (typeof openIntegratedEditModal === 'function') {
+            openIntegratedEditModal(bunk, slotIdx, existingEntry);
+        } else {
+            // Fallback to simple prompt
+            const newActivity = prompt(`Edit activity for ${bunk}:`, current || '');
+            if (newActivity !== null) {
+                applyDirectEdit(bunk, slots, newActivity, null, newActivity.toUpperCase() === 'CLEAR' || newActivity === '', true);
+                saveSchedule();
+                updateTable();
+            }
+        }
+    }
+
+    function editCell(bunk, startMin, endMin, current) { 
+        enhancedEditCell(bunk, startMin, endMin, current); 
     }
 
     // =========================================================================
@@ -1586,7 +1841,11 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         try {
             const affectedDivisions = new Set();
             const divisions = window.divisions || {};
-            for (const bunk of affectedBunks) { for (const [divName, divData] of Object.entries(divisions)) { if (divData.bunks?.includes(bunk)) affectedDivisions.add(divName); } }
+            for (const bunk of affectedBunks) { 
+                for (const [divName, divData] of Object.entries(divisions)) { 
+                    if (divData.bunks?.some(b => String(b) === String(bunk))) affectedDivisions.add(divName); 
+                } 
+            }
             const { data: schedulers } = await supabase.from('camp_users').select('user_id, divisions').eq('camp_id', campId).neq('user_id', userId);
             if (!schedulers) return;
             const notifyUsers = schedulers.filter(s => (s.divisions || []).some(d => affectedDivisions.has(d))).map(s => s.user_id);
@@ -1612,21 +1871,33 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         const nonEditableConflicts = editData.nonEditableConflicts || [];
         const resolutionChoice = editData.resolutionChoice || 'notify';
         applyDirectEdit(bunk, slots, activity, location, false, true);
-        if (window.GlobalFieldLocks) { const divName = window.getDivisionForBunk(bunk); window.GlobalFieldLocks.lockField(location, slots, { lockedBy: 'post_edit_pinned', division: divName, activity }); }
+        if (window.GlobalFieldLocks) { 
+            const divName = getDivisionForBunk(bunk); 
+            window.GlobalFieldLocks.lockField(location, slots, { lockedBy: 'post_edit_pinned', division: divName, activity }); 
+        }
         let conflictsToResolve = [...editableConflicts];
         const bypassMode = resolutionChoice === 'bypass';
-        if (bypassMode && nonEditableConflicts.length > 0) { console.log('[UnifiedSchedule] 🔓 BYPASS MODE'); conflictsToResolve = [...conflictsToResolve, ...nonEditableConflicts]; }
+        if (bypassMode && nonEditableConflicts.length > 0) { 
+            console.log('[UnifiedSchedule] 🔓 BYPASS MODE'); 
+            conflictsToResolve = [...conflictsToResolve, ...nonEditableConflicts]; 
+        }
         if (conflictsToResolve.length > 0) {
             const result = smartRegenerateConflicts(bunk, slots, location, activity, conflictsToResolve, bypassMode);
             if (bypassMode) {
                 const modifiedBunks = [...result.reassigned.map(r => r.bunk), ...result.failed.map(f => f.bunk)];
-                window._postEditInProgress = true; window._postEditTimestamp = Date.now();
+                window._postEditInProgress = true; 
+                window._postEditTimestamp = Date.now();
                 await bypassSaveAllBunks(modifiedBunks);
-                // ★★★ Enable bypass view to show reassigned bunks ★★★
                 const reassignedBunks = result.reassigned.map(r => r.bunk);
                 if (reassignedBunks.length > 0) enableBypassRBACView(reassignedBunks);
-                if (nonEditableConflicts.length > 0) { sendSchedulerNotification([...new Set(nonEditableConflicts.map(c => c.bunk))], location, activity, 'bypassed'); if (window.showToast) window.showToast(`🔓 Bypassed permissions - reassigned ${nonEditableConflicts.length} bunk(s)`, 'info'); }
-            } else if (nonEditableConflicts.length > 0) { sendSchedulerNotification([...new Set(nonEditableConflicts.map(c => c.bunk))], location, activity, 'conflict'); if (window.showToast) window.showToast(`📧 Notification sent about ${nonEditableConflicts.length} conflict(s)`, 'warning'); }
+                if (nonEditableConflicts.length > 0) { 
+                    sendSchedulerNotification([...new Set(nonEditableConflicts.map(c => c.bunk))], location, activity, 'bypassed'); 
+                    if (window.showToast) window.showToast(`🔓 Bypassed permissions - reassigned ${nonEditableConflicts.length} bunk(s)`, 'info'); 
+                }
+            } else if (nonEditableConflicts.length > 0) { 
+                sendSchedulerNotification([...new Set(nonEditableConflicts.map(c => c.bunk))], location, activity, 'conflict'); 
+                if (window.showToast) window.showToast(`📧 Notification sent about ${nonEditableConflicts.length} conflict(s)`, 'warning'); 
+            }
         }
     }
 
@@ -1636,14 +1907,15 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
     async function applyEdit(bunk, editData) {
         const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
-        const unifiedTimes = window.unifiedTimes || [];
+        const divName = getDivisionForBunk(bunk);
         const isClear = activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
-        // Note: findSlotsForRange here uses unifiedTimes array (legacy) because we pass startMin/endMin
-        const slots = window.findSlotsForRange(startMin, endMin, unifiedTimes);
+        const slots = findSlotsForRange(startMin, endMin, divName);
         if (slots.length === 0) { alert('Error: Could not find time slots.'); return; }
-        window._postEditInProgress = true; window._postEditTimestamp = Date.now();
+        window._postEditInProgress = true; 
+        window._postEditTimestamp = Date.now();
+        const divSlots = window.divisionTimes?.[divName] || [];
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
-        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
+        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
         if (hasConflict) await resolveConflictsAndApply(bunk, slots, activity, location, editData);
         else applyDirectEdit(bunk, slots, activity, location, isClear, true);
         const currentDate = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
@@ -1653,257 +1925,95 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
             allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
             allDailyData[currentDate].leagueAssignments = window.leagueAssignments || {};
-            allDailyData[currentDate].unifiedTimes = window.unifiedTimes || [];
+            allDailyData[currentDate].divisionTimes = window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes;
             allDailyData[currentDate]._postEditAt = Date.now();
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
         } catch (e) { console.error('[UnifiedSchedule] Failed to save to localStorage:', e); }
         setTimeout(() => { window._postEditInProgress = false; }, 8000);
         document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', { detail: { bunk, slots, activity, location, date: currentDate } }));
-        saveSchedule(); updateTable();
+        saveSchedule(); 
+        updateTable();
         setTimeout(() => updateTable(), 300);
     }
 
     // =========================================================================
-    // MODAL UI (LEGACY / DIRECT EDIT FALLBACK)
+    // MODAL UI (LEGACY / DIRECT EDIT)
     // =========================================================================
-
-    function createModal() {
-        document.getElementById(OVERLAY_ID)?.remove(); document.getElementById(MODAL_ID)?.remove();
-        const overlay = document.createElement('div'); overlay.id = OVERLAY_ID;
-        overlay.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); z-index: 10000; display: flex; align-items: center; justify-content: center;';
-        const modal = document.createElement('div'); modal.id = MODAL_ID;
-        modal.style.cssText = 'background: white; border-radius: 12px; padding: 24px; min-width: 400px; max-width: 500px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-height: 90vh; overflow-y: auto;';
-        overlay.appendChild(modal); document.body.appendChild(overlay);
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
-        document.addEventListener('keydown', function escHandler(e) { if (e.key === 'Escape') { closeModal(); document.removeEventListener('keydown', escHandler); } });
-        return modal;
-    }
-
-    function closeModal() { document.getElementById(OVERLAY_ID)?.remove(); }
 
     function showEditModal(bunk, startMin, endMin, currentValue, onSave) {
         const modal = createModal();
         const locations = getAllLocations();
-        const unifiedTimes = window.unifiedTimes || [];
+        const divName = getDivisionForBunk(bunk);
         let currentActivity = currentValue || '', currentField = '', resolutionChoice = 'notify';
-        const slots = window.findSlotsForRange(startMin, endMin, unifiedTimes);
+        const slots = findSlotsForRange(startMin, endMin, divName);
         if (slots.length > 0) {
             const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
-            if (entry) { currentField = typeof entry.field === 'object' ? entry.field?.name : (entry.field || ''); currentActivity = entry._activity || currentField || currentValue; }
+            if (entry) { 
+                currentField = fieldLabel(entry.field); 
+                currentActivity = entry._activity || currentField || currentValue; 
+            }
         }
-        modal.innerHTML = `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;"><h2 style="margin: 0; font-size: 1.25rem; color: #1f2937;">Edit Schedule Cell</h2><button id="post-edit-close" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #9ca3af;">&times;</button></div><div style="background: #f3f4f6; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;"><div style="font-weight: 600; color: #374151;">${bunk}</div><div style="font-size: 0.875rem; color: #6b7280;" id="post-edit-time-display">${window.minutesToTimeLabel(startMin)} - ${window.minutesToTimeLabel(endMin)}</div></div><div style="display: flex; flex-direction: column; gap: 16px;"><div><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">Activity Name</label><input type="text" id="post-edit-activity" value="${window.escapeHtml(currentActivity)}" placeholder="e.g., Basketball" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box;"><div style="font-size: 0.75rem; color: #9ca3af; margin-top: 4px;">Enter CLEAR or FREE to empty</div></div><div><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">Location / Field</label><select id="post-edit-location" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box; background: white;"><option value="">-- No specific location --</option><optgroup label="Fields">${locations.filter(l => l.type === 'field').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}${l.capacity > 1 ? ` (capacity: ${l.capacity})` : ''}</option>`).join('')}</optgroup><optgroup label="Special Activities">${locations.filter(l => l.type === 'special').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}</option>`).join('')}</optgroup></select></div><div><button type="button" id="post-edit-time-toggle" style="background: none; border: none; color: #2563eb; font-size: 0.875rem; cursor: pointer; padding: 0; display: flex; align-items: center; gap: 4px;"><span id="post-edit-time-arrow">▶</span> Change time</button><div id="post-edit-time-section" style="display: none; margin-top: 12px;"><div style="display: flex; gap: 12px;"><div style="flex: 1;"><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px; font-size: 0.875rem;">Start Time</label><input type="time" id="post-edit-start" value="${window.minutesToTimeString(startMin)}" style="width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.9rem; box-sizing: border-box;"></div><div style="flex: 1;"><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px; font-size: 0.875rem;">End Time</label><input type="time" id="post-edit-end" value="${window.minutesToTimeString(endMin)}" style="width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.9rem; box-sizing: border-box;"></div></div></div></div><div id="post-edit-conflict" style="display: none;"></div><div style="display: flex; gap: 12px; margin-top: 8px;"><button id="post-edit-cancel" style="flex: 1; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; background: white; color: #374151; font-size: 1rem; cursor: pointer; font-weight: 500;">Cancel</button><button id="post-edit-save" style="flex: 1; padding: 12px; border: none; border-radius: 8px; background: #2563eb; color: white; font-size: 1rem; cursor: pointer; font-weight: 500;">Save Changes</button></div></div>`;
-        let useOriginalTime = true;
-        const originalStartMin = startMin, originalEndMin = endMin;
+        modal.innerHTML = `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;"><h2 style="margin: 0; font-size: 1.25rem; color: #1f2937;">Edit Schedule Cell</h2><button id="post-edit-close" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #9ca3af;">&times;</button></div><div style="background: #f3f4f6; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;"><div style="font-weight: 600; color: #374151;">${escapeHtml(bunk)}</div><div style="font-size: 0.875rem; color: #6b7280;" id="post-edit-time-display">${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}</div></div><div style="display: flex; flex-direction: column; gap: 16px;"><div><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">Activity Name</label><input type="text" id="post-edit-activity" value="${escapeHtml(currentActivity)}" placeholder="e.g., Basketball" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box;"><div style="font-size: 0.75rem; color: #9ca3af; margin-top: 4px;">Enter CLEAR or FREE to empty</div></div><div><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">Location / Field</label><select id="post-edit-location" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box; background: white;"><option value="">-- No specific location --</option><optgroup label="Fields">${locations.filter(l => l.type === 'field').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}${l.capacity > 1 ? ` (capacity: ${l.capacity})` : ''}</option>`).join('')}</optgroup><optgroup label="Special Activities">${locations.filter(l => l.type === 'special').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}</option>`).join('')}</optgroup></select></div><div id="post-edit-conflict" style="display: none;"></div><div style="display: flex; gap: 12px; margin-top: 8px;"><button id="post-edit-cancel" style="flex: 1; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; background: white; color: #374151; font-size: 1rem; cursor: pointer; font-weight: 500;">Cancel</button><button id="post-edit-save" style="flex: 1; padding: 12px; border: none; border-radius: 8px; background: #2563eb; color: white; font-size: 1rem; cursor: pointer; font-weight: 500;">Save Changes</button></div></div>`;
+        
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
-        const timeToggle = document.getElementById('post-edit-time-toggle'), timeSection = document.getElementById('post-edit-time-section'), timeArrow = document.getElementById('post-edit-time-arrow'), timeDisplay = document.getElementById('post-edit-time-display');
-        timeToggle.onclick = () => { const isHidden = timeSection.style.display === 'none'; timeSection.style.display = isHidden ? 'block' : 'none'; timeArrow.textContent = isHidden ? '▼' : '▶'; useOriginalTime = !isHidden; };
-        const locationSelect = document.getElementById('post-edit-location'), conflictArea = document.getElementById('post-edit-conflict'), startInput = document.getElementById('post-edit-start'), endInput = document.getElementById('post-edit-end');
-        function getEffectiveTimes() { return useOriginalTime ? { startMin: originalStartMin, endMin: originalEndMin } : { startMin: window.parseTimeToMinutes(startInput.value) || originalStartMin, endMin: window.parseTimeToMinutes(endInput.value) || originalEndMin }; }
-        function updateTimeDisplay() { const times = getEffectiveTimes(); timeDisplay.textContent = `${window.minutesToTimeLabel(times.startMin)} - ${window.minutesToTimeLabel(times.endMin)}`; }
+        
+        const locationSelect = document.getElementById('post-edit-location');
+        const conflictArea = document.getElementById('post-edit-conflict');
+        
         function checkAndShowConflicts() {
-            const location = locationSelect.value; const times = getEffectiveTimes();
+            const location = locationSelect.value;
             if (!location) { conflictArea.style.display = 'none'; return null; }
-            const targetSlots = window.findSlotsForRange(times.startMin, times.endMin, unifiedTimes);
+            const targetSlots = findSlotsForRange(startMin, endMin, divName);
             const conflictCheck = checkLocationConflict(location, targetSlots, bunk);
             if (conflictCheck.hasConflict) {
                 const editableBunks = [...new Set(conflictCheck.editableConflicts.map(c => c.bunk))];
                 const nonEditableBunks = [...new Set(conflictCheck.nonEditableConflicts.map(c => c.bunk))];
                 conflictArea.style.display = 'block';
-                let html = `<div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;"><div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"><span style="font-size: 1.25rem;">⚠️</span><strong style="color: #92400e;">Location Conflict Detected</strong></div><p style="margin: 0 0 8px 0; color: #78350f; font-size: 0.875rem;"><strong>${location}</strong> is already in use:</p>`;
+                let html = `<div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;"><div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"><span style="font-size: 1.25rem;">⚠️</span><strong style="color: #92400e;">Location Conflict Detected</strong></div><p style="margin: 0 0 8px 0; color: #78350f; font-size: 0.875rem;"><strong>${escapeHtml(location)}</strong> is already in use:</p>`;
                 if (editableBunks.length > 0) html += `<div style="margin-bottom: 8px; padding: 8px; background: #d1fae5; border-radius: 6px;"><div style="font-size: 0.8rem; color: #065f46;"><strong>✓ Can auto-reassign:</strong> ${editableBunks.join(', ')}</div></div>`;
                 if (nonEditableBunks.length > 0) html += `<div style="margin-bottom: 8px; padding: 8px; background: #fee2e2; border-radius: 6px;"><div style="font-size: 0.8rem; color: #991b1b;"><strong>✗ Other scheduler's bunks:</strong> ${nonEditableBunks.join(', ')}</div></div><div style="margin-top: 12px;"><div style="font-weight: 500; color: #374151; margin-bottom: 8px; font-size: 0.875rem;">How to handle their bunks?</div><div style="display: flex; flex-direction: column; gap: 8px;"><label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="notify" checked style="margin-top: 2px;"><div><div style="font-weight: 500; color: #374151;">📧 Notify other scheduler</div><div style="font-size: 0.75rem; color: #6b7280;">Create double-booking & send them a warning</div></div></label><label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="bypass" style="margin-top: 2px;"><div><div style="font-weight: 500; color: #374151;">🔓 Bypass & reassign (Admin mode)</div><div style="font-size: 0.75rem; color: #6b7280;">Override permissions and use smart regeneration</div></div></label></div></div>`;
-                html += `</div>`; conflictArea.innerHTML = html;
-                conflictArea.querySelectorAll('input[name="conflict-resolution"]').forEach(radio => { radio.addEventListener('change', (e) => { resolutionChoice = e.target.value; }); });
+                html += `</div>`; 
+                conflictArea.innerHTML = html;
+                conflictArea.querySelectorAll('input[name="conflict-resolution"]').forEach(radio => { 
+                    radio.addEventListener('change', (e) => { resolutionChoice = e.target.value; }); 
+                });
                 return conflictCheck;
-            } else { conflictArea.style.display = 'none'; return null; }
+            } else { 
+                conflictArea.style.display = 'none'; 
+                return null; 
+            }
         }
+        
         locationSelect.addEventListener('change', checkAndShowConflicts);
-        startInput.addEventListener('change', () => { updateTimeDisplay(); checkAndShowConflicts(); });
-        endInput.addEventListener('change', () => { updateTimeDisplay(); checkAndShowConflicts(); });
         checkAndShowConflicts();
+        
         document.getElementById('post-edit-save').onclick = () => {
             const activity = document.getElementById('post-edit-activity').value.trim();
-            const location = locationSelect.value; const times = getEffectiveTimes();
+            const location = locationSelect.value;
             if (!activity) { alert('Please enter an activity name.'); return; }
-            if (times.endMin <= times.startMin) { alert('End time must be after start time.'); return; }
-            const targetSlots = window.findSlotsForRange(times.startMin, times.endMin, unifiedTimes);
+            const targetSlots = findSlotsForRange(startMin, endMin, divName);
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
-            if (conflictCheck?.hasConflict) onSave({ activity, location, startMin: times.startMin, endMin: times.endMin, hasConflict: true, conflicts: conflictCheck.conflicts, editableConflicts: conflictCheck.editableConflicts || [], nonEditableConflicts: conflictCheck.nonEditableConflicts || [], resolutionChoice });
-            else onSave({ activity, location, startMin: times.startMin, endMin: times.endMin, hasConflict: false, conflicts: [] });
+            if (conflictCheck?.hasConflict) {
+                onSave({ 
+                    activity, location, startMin, endMin, hasConflict: true, 
+                    conflicts: conflictCheck.conflicts, 
+                    editableConflicts: conflictCheck.editableConflicts || [], 
+                    nonEditableConflicts: conflictCheck.nonEditableConflicts || [], 
+                    resolutionChoice 
+                });
+            } else {
+                onSave({ activity, location, startMin, endMin, hasConflict: false, conflicts: [] });
+            }
             closeModal();
         };
-        document.getElementById('post-edit-activity').focus(); document.getElementById('post-edit-activity').select();
+        document.getElementById('post-edit-activity').focus(); 
+        document.getElementById('post-edit-activity').select();
     }
-
-    function enhancedEditCell(bunk, startMin, endMin, current) {
-        if (!window.canEditBunk(bunk)) { alert('You do not have permission to edit this schedule.'); return; }
-        showEditModal(bunk, startMin, endMin, current, (editData) => applyEdit(bunk, editData));
-    }
-
-    function editCell(bunk, startMin, endMin, current) { enhancedEditCell(bunk, startMin, endMin, current); }
-
-    // =========================================================================
-    // SAVE & UPDATE
-    // =========================================================================
-
-    function saveSchedule() {
-        const silent = window._postEditInProgress;
-        if (window.saveCurrentDailyData) {
-            window.saveCurrentDailyData('scheduleAssignments', window.scheduleAssignments, { silent });
-            window.saveCurrentDailyData('leagueAssignments', window.leagueAssignments, { silent });
-            // Save divisionTimes instead of unifiedTimes (unifiedTimes is deprecated)
-            window.saveCurrentDailyData('divisionTimes', window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || {}, { silent });
-        }
-    }
-
-    function updateTable() {
-        const now = Date.now();
-        if (window._postEditInProgress) {
-            _lastRenderTime = now; _renderQueued = false; if (_renderTimeout) { clearTimeout(_renderTimeout); _renderTimeout = null; }
-            const container = document.getElementById('scheduleTable');
-            if (container) renderStaggeredView(container);
-            return;
-        }
-        if (now - _lastRenderTime < RENDER_DEBOUNCE_MS) {
-            if (!_renderQueued) { _renderQueued = true; if (_renderTimeout) clearTimeout(_renderTimeout); _renderTimeout = setTimeout(() => { _renderQueued = false; _lastRenderTime = Date.now(); const container = document.getElementById('scheduleTable'); if (container) renderStaggeredView(container); }, RENDER_DEBOUNCE_MS); }
-            return;
-        }
-        _lastRenderTime = now;
-        const container = document.getElementById('scheduleTable');
-        if (container) renderStaggeredView(container);
-    }
-
-    // =========================================================================
-    // VERSION MANAGEMENT
-    // =========================================================================
-    
-    const VersionManager = {
-        async saveVersion(name) {
-            const dateKey = getDateKey();
-            if (!dateKey) { alert('Please select a date first.'); return { success: false }; }
-            if (!name) { name = prompt('Enter a name for this version:'); if (!name) return { success: false }; }
-            const dailyData = loadDailyData(); const dateData = dailyData[dateKey] || {};
-            const payload = { scheduleAssignments: window.scheduleAssignments || dateData.scheduleAssignments || {}, leagueAssignments: window.leagueAssignments || dateData.leagueAssignments || {}, unifiedTimes: window.unifiedTimes || dateData.unifiedTimes || [] };
-            if (Object.keys(payload.scheduleAssignments).length === 0) { alert('No schedule data to save.'); return { success: false }; }
-            if (!window.ScheduleVersionsDB) { alert('Version database not available.'); return { success: false }; }
-            try {
-                const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
-                const existing = versions.find(v => v.name.toLowerCase() === name.toLowerCase());
-                if (existing) { if (!confirm(`Version "${existing.name}" already exists. Overwrite?`)) return { success: false }; if (window.ScheduleVersionsDB.updateVersion) { const result = await window.ScheduleVersionsDB.updateVersion(existing.id, payload); if (result.success) { alert('✅ Version updated!'); return { success: true }; } else { alert('❌ Error: ' + result.error); return { success: false }; } } }
-                const result = await window.ScheduleVersionsDB.createVersion(dateKey, name, payload);
-                if (result.success) { alert('✅ Version saved!'); return { success: true }; } else { alert('❌ Error: ' + result.error); return { success: false }; }
-            } catch (err) { alert('Error: ' + err.message); return { success: false }; }
-        },
-        async loadVersion() {
-            const dateKey = getDateKey();
-            if (!dateKey || !window.ScheduleVersionsDB) { alert('Not available.'); return; }
-            try {
-                const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
-                if (!versions?.length) { alert('No saved versions.'); return; }
-                let msg = 'Select a version:\n\n'; versions.forEach((v, i) => { msg += `${i + 1}. ${v.name} (${new Date(v.created_at).toLocaleTimeString()})\n`; });
-                const choice = prompt(msg); if (!choice) return;
-                const index = parseInt(choice) - 1; if (isNaN(index) || !versions[index]) { alert('Invalid selection'); return; }
-                const selected = versions[index]; if (!confirm(`Load "${selected.name}"?`)) return;
-                let data = selected.schedule_data; if (typeof data === 'string') try { data = JSON.parse(data); } catch(e) {}
-                window.scheduleAssignments = data.scheduleAssignments || data;
-                if (data.leagueAssignments) window.leagueAssignments = data.leagueAssignments;
-                if (data.unifiedTimes) window.unifiedTimes = normalizeUnifiedTimes(data.unifiedTimes);
-                saveSchedule(); updateTable(); alert('✅ Version loaded!');
-            } catch (err) { alert('Error: ' + err.message); }
-        },
-        async mergeVersions() {
-            const dateKey = getDateKey();
-            if (!dateKey || !window.ScheduleVersionsDB) { alert('Not available.'); return { success: false }; }
-            if (!confirm(`Merge ALL versions for ${dateKey}?`)) return { success: false };
-            try {
-                const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
-                if (!versions?.length) { alert('No versions to merge.'); return { success: false }; }
-                const mergedAssignments = {}; const bunksTouched = new Set(); let latestLeagueData = null;
-                versions.forEach(ver => {
-                    let scheduleData = ver.schedule_data || ver.data || ver.payload;
-                    if (typeof scheduleData === 'string') try { scheduleData = JSON.parse(scheduleData); } catch(e) {}
-                    if (!scheduleData) return;
-                    const assignments = scheduleData.scheduleAssignments || scheduleData;
-                    if (assignments && typeof assignments === 'object') Object.entries(assignments).forEach(([bunkId, slots]) => { mergedAssignments[bunkId] = slots; bunksTouched.add(bunkId); });
-                    if (scheduleData.leagueAssignments) latestLeagueData = scheduleData.leagueAssignments;
-                });
-                window.scheduleAssignments = mergedAssignments;
-                if (latestLeagueData) window.leagueAssignments = latestLeagueData;
-                saveSchedule(); updateTable();
-                alert(`✅ Merged ${versions.length} versions (${bunksTouched.size} bunks).`);
-                return { success: true, count: versions.length, bunks: bunksTouched.size };
-            } catch (err) { alert('Error: ' + err.message); return { success: false }; }
-        }
-    };
-
-    // =========================================================================
-    // SCHEDULER HOOKS FOR PINNED ACTIVITIES
-    // =========================================================================
-
-    function hookSchedulerGeneration() {
-        if (typeof window.runScheduler === 'function' && !window.runScheduler._pinnedHooked) {
-            const originalRunScheduler = window.runScheduler;
-            window.runScheduler = async function(...args) {
-                capturePinnedActivities(args[0]?.allowedDivisions || null);
-                const result = await originalRunScheduler.apply(this, args);
-                if (Object.keys(_pinnedSnapshot).length > 0) { restorePinnedActivities(); saveSchedule(); }
-                return result;
-            };
-            window.runScheduler._pinnedHooked = true;
-        }
-        if (typeof window.generateSchedule === 'function' && !window.generateSchedule._pinnedHooked) {
-            const originalGenerateSchedule = window.generateSchedule;
-            window.generateSchedule = async function(...args) {
-                capturePinnedActivities(args[0]?.allowedDivisions || window.selectedDivisionsForGeneration || null);
-                const result = await originalGenerateSchedule.apply(this, args);
-                if (Object.keys(_pinnedSnapshot).length > 0) { restorePinnedActivities(); saveSchedule(); updateTable(); }
-                return result;
-            };
-            window.generateSchedule._pinnedHooked = true;
-        }
-    }
-
-    // =========================================================================
-    // INITIALIZATION
-    // =========================================================================
-
-    function initScheduleSystem() {
-        if (_initialized) return;
-        loadScheduleForDate(getDateKey());
-        if (!document.getElementById('unified-schedule-styles')) {
-            const style = document.createElement('style'); style.id = 'unified-schedule-styles';
-            style.textContent = `@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } } #${MODAL_ID} input:focus, #${MODAL_ID} select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); } #${MODAL_ID} button:hover { opacity: 0.9; }`;
-            document.head.appendChild(style);
-        }
-        hookSchedulerGeneration();
-        setTimeout(hookSchedulerGeneration, 1000);
-        setTimeout(hookSchedulerGeneration, 3000);
-        _initialized = true;
-    }
-
-    function reconcileOrRenderSaved() { loadScheduleForDate(getDateKey()); updateTable(); }
-
-    // =========================================================================
-    // EVENT LISTENERS
-    // =========================================================================
-
-    window.addEventListener('campistry-cloud-hydrated', () => { if (window._postEditInProgress) return; _cloudHydrated = true; setTimeout(() => { if (!window._postEditInProgress) { loadScheduleForDate(getDateKey()); updateTable(); } }, 100); });
-    window.addEventListener('campistry-cloud-schedule-loaded', () => { if (window._postEditInProgress) return; _cloudHydrated = true; setTimeout(() => { if (!window._postEditInProgress) updateTable(); }, 100); });
-    window.addEventListener('campistry-daily-data-updated', () => { if (window._postEditInProgress) return; loadScheduleForDate(getDateKey()); updateTable(); });
-    window.addEventListener('campistry-date-changed', (e) => { if (window._postEditInProgress) return; if (window.UnifiedCloudSchedule?.load) window.UnifiedCloudSchedule.load().then(result => { if (!window._postEditInProgress) { if (!result.merged) loadScheduleForDate(e.detail?.dateKey || getDateKey()); updateTable(); } }); else { loadScheduleForDate(e.detail?.dateKey || getDateKey()); updateTable(); } });
-    window.addEventListener('campistry-generation-complete', () => { if (window.UnifiedCloudSchedule?.save) setTimeout(() => window.UnifiedCloudSchedule.save(), 500); updateTable(); });
-    window.addEventListener('campistry-generation-starting', (e) => { capturePinnedActivities(e.detail?.allowedDivisions || null); });
-
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hideVersionToolbar);
-    else hideVersionToolbar();
-    setTimeout(hideVersionToolbar, 500); setTimeout(hideVersionToolbar, 1500); setTimeout(hideVersionToolbar, 3000);
 
     // =========================================================================
     // FIELD PRIORITY CLAIM & INTEGRATED EDIT SYSTEM (v4.0.3)
     // =========================================================================
-
-    // --- HELPER FUNCTIONS ---
 
     function minutesToTimeStr(minutes) {
         if (minutes === null || minutes === undefined) return '';
@@ -1913,8 +2023,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         const ampm = hours >= 12 ? 'PM' : 'AM';
         return `${h12}:${mins.toString().padStart(2, '0')} ${ampm}`;
     }
-
-    // --- CORE: FIND ALL CONFLICTS FOR A FIELD CLAIM ---
 
     function findAllConflictsForClaim(fieldName, slots, excludeBunks = []) {
         const conflicts = [];
@@ -1929,10 +2037,10 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                 const entry = bunkSlots[slotIdx];
                 if (!entry) continue;
                 
-                const entryField = window.fieldLabel(entry.field);
+                const entryField = fieldLabel(entry.field);
                 if (entryField !== fieldName) continue;
                 
-                const divName = window.getDivisionForBunk(bunkName);
+                const divName = getDivisionForBunk(bunkName);
                 const isPinned = entry._fixed || entry._pinned || entry._bunkOverride;
                 
                 conflicts.push({
@@ -1950,8 +2058,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         return conflicts;
     }
 
-    // --- CORE: CASCADE RESOLUTION ENGINE ---
-
     function buildCascadeResolutionPlan(fieldName, slots, claimingDivision, claimingActivity) {
         console.log('[CascadeClaim] ★★★ BUILDING RESOLUTION PLAN ★★★');
         console.log(`[CascadeClaim] Claiming ${fieldName} for ${claimingDivision} (${claimingActivity})`);
@@ -1960,9 +2066,8 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         const plan = [];
         const blocked = [];
         const processedConflicts = new Set();
-        const fieldUsageBySlot = window.buildFieldUsageBySlot([]);
+        const fieldUsageBySlot = window.buildFieldUsageBySlot?.([]) || {};
         
-        // Simulate the claim
         const simulatedUsage = JSON.parse(JSON.stringify(fieldUsageBySlot));
         for (const slotIdx of slots) {
             if (!simulatedUsage[slotIdx]) simulatedUsage[slotIdx] = {};
@@ -1987,7 +2092,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
             console.log(`[CascadeClaim] Processing conflict #${iteration}: ${conflict.bunk} @ slot ${conflict.slot}`);
 
-            // PINNED ALWAYS WINS
             if (conflict.isPinned) {
                 console.log(`[CascadeClaim] ❌ BLOCKED: ${conflict.bunk} has PINNED activity`);
                 blocked.push(conflict);
@@ -2018,7 +2122,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                 to: { activity: alternative.activityName, field: alternative.field }
             });
 
-            // Update simulated usage
             if (simulatedUsage[conflict.slot]?.[conflict.currentField]) {
                 simulatedUsage[conflict.slot][conflict.currentField].count--;
                 delete simulatedUsage[conflict.slot][conflict.currentField].bunks[conflict.bunk];
@@ -2031,7 +2134,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             simulatedUsage[conflict.slot][alternative.field].count++;
             simulatedUsage[conflict.slot][alternative.field].bunks[conflict.bunk] = alternative.activityName;
 
-            // Check for ripple effects
             const newConflicts = checkIfMoveCreatesConflict(
                 conflict.bunk, conflict.slot, alternative.field, simulatedUsage, processedConflicts
             );
@@ -2048,13 +2150,9 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         return { success, plan, blocked };
     }
 
-    // --- HELPER: FIND ALTERNATIVE ACTIVITY FOR A BUNK ---
-
-   function findAlternativeForBunk(bunk, slots, divName, simulatedUsage, excludeFields = []) {
-        const activityProperties = window.getActivityProperties();
-        const excludeSet = new Set(excludeFields.map(f => window.fieldLabel(f)));
-        
-        // Use the SAME data sources as buildCandidateOptions
+    function findAlternativeForBunk(bunk, slots, divName, simulatedUsage, excludeFields = []) {
+        const activityProps = getActivityProperties();
+        const excludeSet = new Set(excludeFields.map(f => fieldLabel(f)));
         const settings = window.loadGlobalSettings?.() || {};
         const app1 = settings.app1 || {};
         const fieldsBySport = settings.fieldsBySport || {};
@@ -2062,33 +2160,30 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
         const candidates = [];
         
-        // Sports from fieldsBySport (same as buildCandidateOptions)
         for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
-            (sportFields || []).forEach(fieldName => {
-                if (excludeSet.has(fieldName)) return;
-                if (disabledFields.includes(fieldName)) return;
-                if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots, divName)) return;
+            (sportFields || []).forEach(fName => {
+                if (excludeSet.has(fName)) return;
+                if (disabledFields.includes(fName)) return;
+                if (window.GlobalFieldLocks?.isFieldLocked(fName, slots, divName)) return;
 
-                // Check simulated usage
                 let available = true;
-                const props = activityProperties[fieldName] || {};
+                const props = activityProps[fName] || {};
                 const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
 
                 for (const slotIdx of slots) {
-                    const usage = simulatedUsage[slotIdx]?.[fieldName];
+                    const usage = simulatedUsage[slotIdx]?.[fName];
                     if (usage && usage.count >= maxCapacity) { available = false; break; }
                 }
 
                 if (available) {
                     const penalty = calculateRotationPenalty(bunk, sport, slots);
                     if (penalty !== Infinity) {
-                        candidates.push({ field: fieldName, activityName: sport, type: 'sport', penalty });
+                        candidates.push({ field: fName, activityName: sport, type: 'sport', penalty });
                     }
                 }
             });
         }
 
-        // Specials from app1.specialActivities
         (app1.specialActivities || []).forEach(special => {
             if (!special.name) return;
             if (excludeSet.has(special.name)) return;
@@ -2096,7 +2191,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             if (window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) return;
 
             let available = true;
-            const props = activityProperties[special.name] || {};
+            const props = activityProps[special.name] || {};
             const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
 
             for (const slotIdx of slots) {
@@ -2112,7 +2207,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             }
         });
 
-        // Fields from app1.fields with their activities
         (app1.fields || []).forEach(field => {
             if (!field.name || field.available === false) return;
             if (excludeSet.has(field.name)) return;
@@ -2120,7 +2214,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             if (window.GlobalFieldLocks?.isFieldLocked(field.name, slots, divName)) return;
 
             let available = true;
-            const props = activityProperties[field.name] || {};
+            const props = activityProps[field.name] || {};
             const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
 
             for (const slotIdx of slots) {
@@ -2138,19 +2232,17 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             }
         });
 
-        // Sort by penalty (lowest first) and return best
         candidates.sort((a, b) => a.penalty - b.penalty);
         
         console.log(`[findAlternative] ${bunk}: Found ${candidates.length} candidates, best: ${candidates[0]?.activityName || 'none'}`);
         
         return candidates[0] || null;
     }
-    // --- HELPER: CHECK IF MOVE CREATES NEW CONFLICTS ---
 
     function checkIfMoveCreatesConflict(bunk, slot, newField, simulatedUsage, alreadyProcessed) {
         const newConflicts = [];
-        const activityProperties = window.getActivityProperties();
-        const props = activityProperties[newField] || {};
+        const activityProps = getActivityProperties();
+        const props = activityProps[newField] || {};
         const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
 
         const usage = simulatedUsage[slot]?.[newField];
@@ -2163,7 +2255,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                 const conflictKey = `${otherBunk}:${slot}`;
                 if (alreadyProcessed.has(conflictKey)) continue;
 
-                const divName = window.getDivisionForBunk(otherBunk);
+                const divName = getDivisionForBunk(otherBunk);
                 const entry = window.scheduleAssignments?.[otherBunk]?.[slot];
                 const isPinned = entry?._fixed || entry?._pinned || entry?._bunkOverride;
 
@@ -2178,83 +2270,65 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         return newConflicts;
     }
 
-    // --- INTEGRATED EDIT MODAL - ENTRY POINT ---
-
     function openIntegratedEditModal(bunk, slotIdx, existingEntry = null) {
         closeIntegratedEditModal();
 
-        const divName = window.getDivisionForBunk(bunk);
-        const bunksInDivision = window.getBunksForDivision(divName);
-        const times = window.divisionTimes?.[divName] || window.unifiedTimes || [];
+        const divName = getDivisionForBunk(bunk);
+        const bunksInDivision = getBunksForDivision(divName);
+        const times = window.divisionTimes?.[divName] || [];
         const slotInfo = times[slotIdx] || {};
         const timeLabel = slotInfo.label || `${minutesToTimeStr(slotInfo.startMin)} - ${minutesToTimeStr(slotInfo.endMin)}`;
 
         _currentEditContext = { bunk, slotIdx, divName, bunksInDivision, existingEntry, slotInfo };
 
-        showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, window.canEditBunk(bunk));
+        showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, canEditBunk(bunk));
     }
-
-    // --- SCOPE SELECTION MODAL ---
 
     function showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, canEdit) {
         const overlay = document.createElement('div');
         overlay.id = INTEGRATED_EDIT_OVERLAY_ID;
-        overlay.style.cssText = `
-            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.5); z-index: 9998;
-            animation: fadeIn 0.2s ease-out;
-        `;
+        overlay.style.cssText = `position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9998; animation: fadeIn 0.2s ease-out;`;
         overlay.onclick = closeIntegratedEditModal;
         document.body.appendChild(overlay);
 
         const modal = document.createElement('div');
         modal.id = INTEGRATED_EDIT_MODAL_ID;
-        modal.style.cssText = `
-            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: white; border-radius: 12px; padding: 24px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;
-            min-width: 400px; max-width: 500px;
-            animation: fadeIn 0.2s ease-out;
-        `;
+        modal.style.cssText = `position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999; min-width: 400px; max-width: 500px; animation: fadeIn 0.2s ease-out;`;
         modal.onclick = e => e.stopPropagation();
 
         const currentActivity = _currentEditContext.existingEntry?._activity || 
                                _currentEditContext.existingEntry?.sport || 
                                _currentEditContext.existingEntry?.field || 'Free';
         const bunksInDiv = _currentEditContext.bunksInDivision || [];
+        const divSlots = window.divisionTimes?.[divName] || [];
 
         modal.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                 <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">✏️ Edit Schedule</h2>
                 <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #6b7280;">&times;</button>
             </div>
-
             <div style="background: #f3f4f6; border-radius: 8px; padding: 12px; margin-bottom: 20px;">
                 <div style="font-size: 0.9rem; color: #6b7280;">Selected Cell</div>
-                <div style="font-weight: 600; color: #1f2937; margin-top: 4px;">${window.escapeHtml(bunk)} • ${window.escapeHtml(timeLabel)}</div>
-                <div style="color: #6b7280; font-size: 0.9rem; margin-top: 2px;">Current: ${window.escapeHtml(currentActivity)}</div>
+                <div style="font-weight: 600; color: #1f2937; margin-top: 4px;">${escapeHtml(bunk)} • ${escapeHtml(timeLabel)}</div>
+                <div style="color: #6b7280; font-size: 0.9rem; margin-top: 2px;">Current: ${escapeHtml(currentActivity)}</div>
             </div>
-
             <div style="margin-bottom: 20px;">
                 <div style="font-weight: 500; color: #374151; margin-bottom: 12px;">What would you like to edit?</div>
-                
                 <div style="display: flex; flex-direction: column; gap: 10px;">
                     <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">
                         <input type="radio" name="edit-scope" value="single" checked style="margin-top: 3px;">
                         <div style="flex: 1;">
                             <div style="font-weight: 500; color: #1f2937;">🏠 Just this bunk</div>
-                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Edit ${window.escapeHtml(bunk)} only</div>
+                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Edit ${escapeHtml(bunk)} only</div>
                         </div>
                     </label>
-
                     <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">
                         <input type="radio" name="edit-scope" value="division" style="margin-top: 3px;">
                         <div style="flex: 1;">
                             <div style="font-weight: 500; color: #1f2937;">👥 Entire division</div>
-                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">All ${bunksInDiv.length} bunks in ${window.escapeHtml(divName)}</div>
+                            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">All ${bunksInDiv.length} bunks in ${escapeHtml(divName)}</div>
                         </div>
                     </label>
-
                     <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">
                         <input type="radio" name="edit-scope" value="select" style="margin-top: 3px;">
                         <div style="flex: 1;">
@@ -2264,7 +2338,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                     </label>
                 </div>
             </div>
-
             <div id="bunk-selection-area" style="display: none; margin-bottom: 20px;">
                 <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Select bunks:</div>
                 <div style="display: flex; gap: 8px; margin-bottom: 8px;">
@@ -2275,30 +2348,28 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                     ${bunksInDiv.map(b => `
                         <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9rem;">
                             <input type="checkbox" class="bunk-checkbox" value="${b}" ${b === bunk ? 'checked' : ''}>
-                            <span>${window.escapeHtml(b)}</span>
+                            <span>${escapeHtml(b)}</span>
                         </label>
                     `).join('')}
                 </div>
             </div>
-
             <div id="time-range-area" style="display: none; margin-bottom: 20px;">
                 <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Time range:</div>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
                     <div>
                         <label style="font-size: 0.85rem; color: #6b7280;">Start</label>
                         <select id="edit-start-slot" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;">
-                            ${(window.unifiedTimes || []).map((t, i) => `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${t.label || minutesToTimeStr(t.startMin)}</option>`).join('')}
+                            ${divSlots.map((t, i) => `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${t.label || minutesToTimeStr(t.startMin)}</option>`).join('')}
                         </select>
                     </div>
                     <div>
                         <label style="font-size: 0.85rem; color: #6b7280;">End</label>
                         <select id="edit-end-slot" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;">
-                            ${(window.unifiedTimes || []).map((t, i) => `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${t.label || minutesToTimeStr(t.endMin)}</option>`).join('')}
+                            ${divSlots.map((t, i) => `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${t.label || minutesToTimeStr(t.endMin)}</option>`).join('')}
                         </select>
                     </div>
                 </div>
             </div>
-
             <div style="display: flex; gap: 12px;">
                 <button onclick="closeIntegratedEditModal()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">Cancel</button>
                 <button onclick="proceedWithScope()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">Continue →</button>
@@ -2333,55 +2404,51 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
     }
 
     function proceedWithScope() {
-    const scope = document.querySelector('input[name="edit-scope"]:checked')?.value;
-    
-    // ★★★ FIX: Save context BEFORE closing modal ★★★
-    const ctx = _currentEditContext;
-    if (!ctx) {
-        alert('Edit context lost. Please try again.');
-        closeIntegratedEditModal();
-        return;
+        const scope = document.querySelector('input[name="edit-scope"]:checked')?.value;
+        const ctx = _currentEditContext;
+        if (!ctx) {
+            alert('Edit context lost. Please try again.');
+            closeIntegratedEditModal();
+            return;
+        }
+        
+        if (scope === 'single') {
+            closeIntegratedEditModal();
+            showEditModal(
+                ctx.bunk,
+                ctx.slotInfo?.startMin,
+                ctx.slotInfo?.endMin,
+                ctx.existingEntry?._activity || '',
+                (editData) => applyEdit(ctx.bunk, editData)
+            );
+        } else if (scope === 'division') {
+            const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
+            const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
+            
+            if (endSlot < startSlot) { alert('End time must be after start time'); return; }
+
+            const slots = [];
+            for (let i = startSlot; i <= endSlot; i++) slots.push(i);
+
+            closeIntegratedEditModal();
+            openMultiBunkEditModal(ctx.bunksInDivision, slots, ctx.divName);
+        } else if (scope === 'select') {
+            const selectedBunks = Array.from(document.querySelectorAll('.bunk-checkbox:checked')).map(cb => cb.value);
+            
+            if (selectedBunks.length === 0) { alert('Please select at least one bunk'); return; }
+
+            const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
+            const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
+            
+            if (endSlot < startSlot) { alert('End time must be after start time'); return; }
+
+            const slots = [];
+            for (let i = startSlot; i <= endSlot; i++) slots.push(i);
+
+            closeIntegratedEditModal();
+            openMultiBunkEditModal(selectedBunks, slots, ctx.divName);
+        }
     }
-    
-    if (scope === 'single') {
-        closeIntegratedEditModal();
-        // Use saved ctx instead of _currentEditContext
-        enhancedEditCell(
-            ctx.bunk,
-            ctx.slotInfo?.startMin ?? ctx.slotInfo?.start,
-            ctx.slotInfo?.endMin ?? ctx.slotInfo?.end,
-            ctx.existingEntry?._activity || ''
-        );
-    } else if (scope === 'division') {
-        const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
-        const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
-        
-        if (endSlot < startSlot) { alert('End time must be after start time'); return; }
-
-        const slots = [];
-        for (let i = startSlot; i <= endSlot; i++) slots.push(i);
-
-        closeIntegratedEditModal();
-        openMultiBunkEditModal(ctx.bunksInDivision, slots, ctx.divName);
-    } else if (scope === 'select') {
-        const selectedBunks = Array.from(document.querySelectorAll('.bunk-checkbox:checked')).map(cb => cb.value);
-        
-        if (selectedBunks.length === 0) { alert('Please select at least one bunk'); return; }
-
-        const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
-        const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
-        
-        if (endSlot < startSlot) { alert('End time must be after start time'); return; }
-
-        const slots = [];
-        for (let i = startSlot; i <= endSlot; i++) slots.push(i);
-
-        closeIntegratedEditModal();
-        openMultiBunkEditModal(selectedBunks, slots, ctx.divName);
-    }
-}
-
-    // --- MULTI-BUNK EDIT MODAL ---
 
     function openMultiBunkEditModal(bunks, slots, divName) {
         _multiBunkEditContext = { bunks, slots, divName };
@@ -2395,15 +2462,10 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
         const modal = document.createElement('div');
         modal.id = INTEGRATED_EDIT_MODAL_ID;
-        modal.style.cssText = `
-            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: white; border-radius: 12px; padding: 24px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;
-            min-width: 500px; max-width: 620px; max-height: 85vh; overflow-y: auto;
-        `;
+        modal.style.cssText = `position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999; min-width: 500px; max-width: 620px; max-height: 85vh; overflow-y: auto;`;
         modal.onclick = e => e.stopPropagation();
 
-        const times = window.divisionTimes?.[divName] || window.unifiedTimes || [];
+        const times = window.divisionTimes?.[divName] || [];
         const startSlot = times[slots[0]];
         const endSlot = times[slots[slots.length - 1]];
         const timeRange = `${minutesToTimeStr(startSlot?.startMin)} - ${minutesToTimeStr(endSlot?.endMin)}`;
@@ -2414,32 +2476,27 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                 <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">🎯 Multi-Bunk Edit</h2>
                 <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>
             </div>
-
             <div style="background: #eff6ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
-                <div style="font-weight: 500; color: #1e40af;">${window.escapeHtml(divName)}</div>
+                <div style="font-weight: 500; color: #1e40af;">${escapeHtml(divName)}</div>
                 <div style="font-size: 0.9rem; color: #3b82f6; margin-top: 4px;">
-                    ${bunks.length} bunks: ${bunks.slice(0, 5).map(b => window.escapeHtml(b)).join(', ')}${bunks.length > 5 ? ` +${bunks.length - 5} more` : ''}
+                    ${bunks.length} bunks: ${bunks.slice(0, 5).map(b => escapeHtml(b)).join(', ')}${bunks.length > 5 ? ` +${bunks.length - 5} more` : ''}
                 </div>
                 <div style="font-size: 0.9rem; color: #6b7280; margin-top: 4px;">Time: ${timeRange}</div>
             </div>
-
             <div style="display: grid; gap: 16px;">
                 <div>
                     <label style="display: block; font-weight: 500; margin-bottom: 6px; color: #374151;">📍 Location/Field</label>
                     <select id="multi-edit-location" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px;">
                         <option value="">-- Select --</option>
-                        ${allLocations.map(loc => `<option value="${loc.name}">${window.escapeHtml(loc.name)}</option>`).join('')}
+                        ${allLocations.map(loc => `<option value="${loc.name}">${escapeHtml(loc.name)}</option>`).join('')}
                     </select>
                 </div>
-
                 <div>
                     <label style="display: block; font-weight: 500; margin-bottom: 6px; color: #374151;">🎪 Activity Name</label>
                     <input type="text" id="multi-edit-activity" placeholder="e.g., Carnival, Color War"
                         style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box;">
                 </div>
-
                 <div id="multi-conflict-preview" style="display: none;"></div>
-
                 <div id="multi-resolution-mode" style="display: none;">
                     <label style="display: block; font-weight: 500; margin-bottom: 8px; color: #374151;">⚙️ How to handle other schedulers' bunks?</label>
                     <div style="display: flex; flex-direction: column; gap: 8px;">
@@ -2460,7 +2517,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                     </div>
                 </div>
             </div>
-
             <div style="display: flex; gap: 12px; margin-top: 20px;">
                 <button onclick="previewMultiBunkEdit()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">👁️ Preview</button>
                 <button id="multi-edit-submit" onclick="submitMultiBunkEdit()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;" disabled>🎯 Apply</button>
@@ -2474,8 +2530,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             document.getElementById('multi-conflict-preview').style.display = 'none';
         });
     }
-
-    // --- PREVIEW & SUBMIT MULTI-BUNK EDIT ---
 
     function previewMultiBunkEdit() {
         const location = document.getElementById('multi-edit-location')?.value;
@@ -2504,13 +2558,13 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             previewArea.innerHTML = `
                 <div style="color: #991b1b; font-weight: 500;">❌ Cannot complete - pinned activities blocking:</div>
                 <ul style="margin: 8px 0 0 20px; padding: 0; color: #b91c1c;">
-                    ${result.blocked.map(b => `<li>${window.escapeHtml(b.bunk)}: ${window.escapeHtml(b.currentActivity)}</li>`).join('')}
+                    ${result.blocked.map(b => `<li>${escapeHtml(b.bunk)}: ${escapeHtml(b.currentActivity)}</li>`).join('')}
                 </ul>
             `;
             resolutionMode.style.display = 'none';
             submitBtn.disabled = true;
         } else {
-            const myDivisions = new Set(window.getMyDivisions());
+            const myDivisions = new Set(getMyDivisions());
             const byDivision = {};
             result.plan.forEach(p => {
                 if (!byDivision[p.division]) byDivision[p.division] = [];
@@ -2526,8 +2580,8 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             for (const [div, moves] of Object.entries(byDivision)) {
                 const isOther = !myDivisions.has(div);
                 html += `<div style="margin-bottom: 8px; padding: 8px; background: ${isOther ? '#fef2f2' : '#f0fdf4'}; border-radius: 6px;">
-                    <div style="font-weight: 500; color: ${isOther ? '#991b1b' : '#166534'};">${isOther ? '🔒' : '✓'} ${window.escapeHtml(div)}</div>
-                    <ul style="margin: 4px 0 0 16px; padding: 0; font-size: 0.85rem;">${moves.map(m => `<li>${window.escapeHtml(m.bunk)}: ${window.escapeHtml(m.from.activity)} → ${window.escapeHtml(m.to.activity)}</li>`).join('')}</ul>
+                    <div style="font-weight: 500; color: ${isOther ? '#991b1b' : '#166534'};">${isOther ? '🔒' : '✓'} ${escapeHtml(div)}</div>
+                    <ul style="margin: 4px 0 0 16px; padding: 0; font-size: 0.85rem;">${moves.map(m => `<li>${escapeHtml(m.bunk)}: ${escapeHtml(m.from.activity)} → ${escapeHtml(m.to.activity)}</li>`).join('')}</ul>
                 </div>`;
             }
             html += '</div>';
@@ -2543,7 +2597,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
         const result = _multiBunkPreviewResult;
         const mode = document.querySelector('input[name="multi-mode"]:checked')?.value || 'notify';
-        const myDivisions = new Set(window.getMyDivisions());
+        const myDivisions = new Set(getMyDivisions());
         const otherMoves = result.plan.filter(p => !myDivisions.has(p.division));
 
         if (mode === 'bypass' || otherMoves.length === 0) {
@@ -2555,7 +2609,9 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         closeIntegratedEditModal();
     }
 
-    // --- AUTO-BACKUP SYSTEM ---
+    // =========================================================================
+    // AUTO-BACKUP SYSTEM
+    // =========================================================================
 
     async function createAutoBackup(activityName, divisionName) {
         if (!VersionManager?.saveVersion) {
@@ -2571,12 +2627,9 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             
             if (result?.success) {
                 console.log(`[AutoBackup] ✅ Backup created successfully`);
-                
-                // Trigger cleanup in background (don't await)
                 cleanupOldAutoBackups().catch(e => 
                     console.warn('[AutoBackup] Cleanup error (non-critical):', e)
                 );
-                
                 return { success: true, name: backupName };
             } else {
                 console.warn('[AutoBackup] Backup may have failed:', result);
@@ -2599,7 +2652,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             const versions = await window.ScheduleVersionsDB.listVersions(targetDate);
             if (!versions || !Array.isArray(versions)) return { cleaned: 0 };
 
-            // Filter to only auto-backups, sorted newest first (they come from DB that way)
             const autoBackups = versions.filter(v => 
                 v.name && v.name.startsWith(AUTO_BACKUP_PREFIX)
             );
@@ -2609,7 +2661,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                 return { cleaned: 0 };
             }
 
-            // Delete oldest ones (keep the first MAX_AUTO_BACKUPS_PER_DATE)
             const toDelete = autoBackups.slice(MAX_AUTO_BACKUPS_PER_DATE);
             let cleaned = 0;
 
@@ -2647,17 +2698,19 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         }
     }
 
-    // --- APPLY MULTI-BUNK EDIT ---
+    // =========================================================================
+    // APPLY MULTI-BUNK EDIT
+    // =========================================================================
 
     async function applyMultiBunkEdit(result, notifyAfter = false) {
         const { location, slots, divName, activity, bunks, plan } = result;
 
-        // ★★★ AUTO-BACKUP BEFORE ANY CHANGES ★★★
         await createAutoBackup(activity, divName);
 
-        // Assign to target bunks
+        const divSlots = window.divisionTimes?.[divName] || [];
+        
         for (const bunk of bunks) {
-            if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
+            if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
             for (let i = 0; i < slots.length; i++) {
                 window.scheduleAssignments[bunk][slots[i]] = {
                     field: location, sport: null, _activity: activity,
@@ -2666,47 +2719,45 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             }
         }
 
-        // Apply cascade reassignments
         const modifiedBunks = new Set(bunks);
         for (const move of plan) {
             modifiedBunks.add(move.bunk);
-            if (!window.scheduleAssignments[move.bunk]) window.scheduleAssignments[move.bunk] = [];
+            const moveDivName = getDivisionForBunk(move.bunk);
+            const moveDivSlots = window.divisionTimes?.[moveDivName] || [];
+            if (!window.scheduleAssignments[move.bunk]) window.scheduleAssignments[move.bunk] = new Array(moveDivSlots.length || 50);
             window.scheduleAssignments[move.bunk][move.slot] = {
                 field: move.to.field, sport: move.to.activity,
                 _activity: move.to.activity, _cascadeReassigned: true
             };
         }
 
-        // Lock field
         if (window.GlobalFieldLocks) {
             window.GlobalFieldLocks.lockField(location, slots, {
                 lockedBy: 'multi_bunk_edit', division: divName, activity, bunks
             });
         }
 
-        // Save
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
         if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
 
-        // Highlight
         if (plan.length > 0) enableBypassRBACView(plan.map(p => p.bunk));
 
-        // Notify
         if (notifyAfter && plan.length > 0) {
-            const myDivisions = new Set(window.getMyDivisions());
+            const myDivisions = new Set(getMyDivisions());
             const otherMoves = plan.filter(p => !myDivisions.has(p.division));
             if (otherMoves.length > 0) {
                 await sendSchedulerNotification(otherMoves.map(p => p.bunk), location, activity, 'bypassed');
             }
         }
 
-        // Re-render
         if (typeof renderStaggeredView === 'function') renderStaggeredView();
         showIntegratedToast(`✅ ${bunks.length} bunks assigned to ${location}` + (plan.length > 0 ? ` - ${plan.length} reassigned` : ''), 'success');
     }
 
-    // --- CREATE PROPOSAL ---
+    // =========================================================================
+    // PROPOSAL SYSTEM
+    // =========================================================================
 
     async function createMultiBunkProposal(result) {
         const { location, slots, divName, activity, bunks, plan } = result;
@@ -2714,7 +2765,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         const userId = window.CampistryDB?.getUserId?.() || null;
         const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
 
-        const myDivisions = new Set(window.getMyDivisions());
+        const myDivisions = new Set(getMyDivisions());
         const affectedDivisions = [...new Set(plan.filter(p => !myDivisions.has(p.division)).map(p => p.division))];
 
         const proposal = {
@@ -2778,8 +2829,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         } catch (e) { console.error('[NotifyProposal] Error:', e); }
     }
 
-    // --- PROPOSAL REVIEW & APPROVAL SYSTEM ---
-
     async function loadProposal(proposalId) {
         const supabase = window.CampistryDB?.getClient?.() || window.supabase;
         if (supabase) {
@@ -2795,7 +2844,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
     async function loadMyPendingProposals() {
         const supabase = window.CampistryDB?.getClient?.() || window.supabase;
-        const myDivisions = window.getMyDivisions();
+        const myDivisions = getMyDivisions();
         const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
 
         if (supabase && campId) {
@@ -2837,14 +2886,9 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
         const modal = document.createElement('div');
         modal.id = PROPOSAL_MODAL_ID;
-        modal.style.cssText = `
-            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: white; border-radius: 12px; padding: 24px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999;
-            min-width: 500px; max-width: 600px; max-height: 80vh; overflow-y: auto;
-        `;
+        modal.style.cssText = `position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999; min-width: 500px; max-width: 600px; max-height: 80vh; overflow-y: auto;`;
 
-        const myDivisions = new Set(window.getMyDivisions());
+        const myDivisions = new Set(getMyDivisions());
         const myMoves = (proposal.reassignments || []).filter(r => myDivisions.has(r.division));
         const claim = proposal.claim || {};
 
@@ -2853,31 +2897,26 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
                 <h2 style="margin: 0; color: #1e40af;">📋 Proposal Review</h2>
                 <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>
             </div>
-
             <div style="background: #eff6ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
                 <div style="font-weight: 500; color: #1e40af;">Claim Request</div>
                 <div style="color: #3b82f6; margin-top: 4px;">
-                    <strong>${window.escapeHtml(claim.division || 'Unknown')}</strong> wants 
-                    <strong>${window.escapeHtml(claim.field || 'Unknown')}</strong> 
-                    for <strong>${window.escapeHtml(claim.activity || 'Unknown')}</strong>
+                    <strong>${escapeHtml(claim.division || 'Unknown')}</strong> wants 
+                    <strong>${escapeHtml(claim.field || 'Unknown')}</strong> 
+                    for <strong>${escapeHtml(claim.activity || 'Unknown')}</strong>
                 </div>
-                <div style="color: #6b7280; font-size: 0.9rem; margin-top: 4px;">
-                    Date: ${proposal.date_key || 'Unknown'}
-                </div>
+                <div style="color: #6b7280; font-size: 0.9rem; margin-top: 4px;">Date: ${proposal.date_key || 'Unknown'}</div>
             </div>
-
             <div style="margin-bottom: 16px;">
                 <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Changes to your bunks:</div>
                 <div style="background: ${myMoves.length > 0 ? '#fef3c7' : '#f0fdf4'}; border-radius: 8px; padding: 12px;">
                     ${myMoves.length === 0 ? 
                         '<div style="color: #166534;">✓ No direct changes to your bunks</div>' :
                         `<ul style="margin: 0; padding-left: 20px; color: #92400e;">
-                            ${myMoves.map(m => `<li><strong>${window.escapeHtml(m.bunk)}</strong>: ${window.escapeHtml(m.from?.activity || '?')} → ${window.escapeHtml(m.to?.activity || '?')}</li>`).join('')}
+                            ${myMoves.map(m => `<li><strong>${escapeHtml(m.bunk)}</strong>: ${escapeHtml(m.from?.activity || '?')} → ${escapeHtml(m.to?.activity || '?')}</li>`).join('')}
                         </ul>`
                     }
                 </div>
             </div>
-
             <div style="display: flex; gap: 12px;">
                 <button onclick="respondToProposal('${proposal.id}', 'approved')" 
                     style="flex: 1; padding: 12px; background: #10b981; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">
@@ -2895,7 +2934,7 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
     async function respondToProposal(proposalId, response) {
         const supabase = window.CampistryDB?.getClient?.() || window.supabase;
-        const myDivisions = window.getMyDivisions();
+        const myDivisions = getMyDivisions();
 
         if (!supabase) {
             alert('Database not available');
@@ -2956,15 +2995,15 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
         const claim = proposal.claim || {};
         
-        // ★★★ AUTO-BACKUP BEFORE APPLYING ★★★
         await createAutoBackup(claim.activity || 'Approved Proposal', claim.division || 'Unknown');
 
         const { field: location, slots, division: divName, activity, bunks } = claim;
         const plan = proposal.reassignments || [];
 
-        // Assign to target bunks
+        const divSlots = window.divisionTimes?.[divName] || [];
+        
         for (const bunk of (bunks || [])) {
-            if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
+            if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
             for (let i = 0; i < (slots || []).length; i++) {
                 window.scheduleAssignments[bunk][slots[i]] = {
                     field: location, sport: null, _activity: activity,
@@ -2973,18 +3012,18 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             }
         }
 
-        // Apply cascade
         const modifiedBunks = new Set(bunks || []);
         for (const move of plan) {
             modifiedBunks.add(move.bunk);
-            if (!window.scheduleAssignments[move.bunk]) window.scheduleAssignments[move.bunk] = [];
+            const moveDivName = getDivisionForBunk(move.bunk);
+            const moveDivSlots = window.divisionTimes?.[moveDivName] || [];
+            if (!window.scheduleAssignments[move.bunk]) window.scheduleAssignments[move.bunk] = new Array(moveDivSlots.length || 50);
             window.scheduleAssignments[move.bunk][move.slot] = {
                 field: move.to.field, sport: move.to.activity,
                 _activity: move.to.activity, _fromProposal: true
             };
         }
 
-        // Lock & save
         if (window.GlobalFieldLocks && location && slots) {
             window.GlobalFieldLocks.lockField(location, slots, {
                 lockedBy: 'approved_proposal', division: divName, activity, bunks
@@ -2997,7 +3036,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
 
         if (plan.length > 0) enableBypassRBACView(plan.map(p => p.bunk));
 
-        // Mark applied
         const supabase = window.CampistryDB?.getClient?.() || window.supabase;
         if (supabase) {
             await supabase
@@ -3028,8 +3066,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         } catch (e) { console.error('[NotifyProposer] Error:', e); }
     }
 
-    // --- CLOSE MODAL & TOAST ---
-
     function closeIntegratedEditModal() {
         document.getElementById(INTEGRATED_EDIT_MODAL_ID)?.remove();
         document.getElementById(INTEGRATED_EDIT_OVERLAY_ID)?.remove();
@@ -3042,16 +3078,222 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
     function showIntegratedToast(message, type = 'info') {
         if (window.showToast) { window.showToast(message, type); return; }
         const toast = document.createElement('div');
-        toast.style.cssText = `
-            position: fixed; bottom: 20px; right: 20px;
-            background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'};
-            color: white; padding: 12px 20px; border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 10000;
-        `;
+        toast.style.cssText = `position: fixed; bottom: 20px; right: 20px; background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'}; color: white; padding: 12px 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 10000;`;
         toast.textContent = message;
         document.body.appendChild(toast);
         setTimeout(() => toast.remove(), 4000);
     }
+
+    // =========================================================================
+    // VERSION MANAGEMENT
+    // =========================================================================
+    
+    const VersionManager = {
+        async saveVersion(name) {
+            const dateKey = getDateKey();
+            if (!dateKey) { alert('Please select a date first.'); return { success: false }; }
+            if (!name) { name = prompt('Enter a name for this version:'); if (!name) return { success: false }; }
+            const dailyData = loadDailyData(); 
+            const dateData = dailyData[dateKey] || {};
+            const payload = { 
+                scheduleAssignments: window.scheduleAssignments || dateData.scheduleAssignments || {}, 
+                leagueAssignments: window.leagueAssignments || dateData.leagueAssignments || {}, 
+                divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes || {}
+            };
+            if (Object.keys(payload.scheduleAssignments).length === 0) { alert('No schedule data to save.'); return { success: false }; }
+            if (!window.ScheduleVersionsDB) { alert('Version database not available.'); return { success: false }; }
+            try {
+                const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
+                const existing = versions.find(v => v.name.toLowerCase() === name.toLowerCase());
+                if (existing) { 
+                    if (!confirm(`Version "${existing.name}" already exists. Overwrite?`)) return { success: false }; 
+                    if (window.ScheduleVersionsDB.updateVersion) { 
+                        const result = await window.ScheduleVersionsDB.updateVersion(existing.id, payload); 
+                        if (result.success) { alert('✅ Version updated!'); return { success: true }; } 
+                        else { alert('❌ Error: ' + result.error); return { success: false }; } 
+                    } 
+                }
+                const result = await window.ScheduleVersionsDB.createVersion(dateKey, name, payload);
+                if (result.success) { alert('✅ Version saved!'); return { success: true }; } 
+                else { alert('❌ Error: ' + result.error); return { success: false }; }
+            } catch (err) { alert('Error: ' + err.message); return { success: false }; }
+        },
+        async loadVersion() {
+            const dateKey = getDateKey();
+            if (!dateKey || !window.ScheduleVersionsDB) { alert('Not available.'); return; }
+            try {
+                const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
+                if (!versions?.length) { alert('No saved versions.'); return; }
+                let msg = 'Select a version:\n\n'; 
+                versions.forEach((v, i) => { msg += `${i + 1}. ${v.name} (${new Date(v.created_at).toLocaleTimeString()})\n`; });
+                const choice = prompt(msg); 
+                if (!choice) return;
+                const index = parseInt(choice) - 1; 
+                if (isNaN(index) || !versions[index]) { alert('Invalid selection'); return; }
+                const selected = versions[index]; 
+                if (!confirm(`Load "${selected.name}"?`)) return;
+                let data = selected.schedule_data; 
+                if (typeof data === 'string') try { data = JSON.parse(data); } catch(e) {}
+                window.scheduleAssignments = data.scheduleAssignments || data;
+                if (data.leagueAssignments) window.leagueAssignments = data.leagueAssignments;
+                if (data.divisionTimes) window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(data.divisionTimes) || data.divisionTimes;
+                saveSchedule(); 
+                updateTable(); 
+                alert('✅ Version loaded!');
+            } catch (err) { alert('Error: ' + err.message); }
+        },
+        async mergeVersions() {
+            const dateKey = getDateKey();
+            if (!dateKey || !window.ScheduleVersionsDB) { alert('Not available.'); return { success: false }; }
+            if (!confirm(`Merge ALL versions for ${dateKey}?`)) return { success: false };
+            try {
+                const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
+                if (!versions?.length) { alert('No versions to merge.'); return { success: false }; }
+                const mergedAssignments = {}; 
+                const bunksTouched = new Set(); 
+                let latestLeagueData = null;
+                let latestDivisionTimes = null;
+                versions.forEach(ver => {
+                    let scheduleData = ver.schedule_data || ver.data || ver.payload;
+                    if (typeof scheduleData === 'string') try { scheduleData = JSON.parse(scheduleData); } catch(e) {}
+                    if (!scheduleData) return;
+                    const assignments = scheduleData.scheduleAssignments || scheduleData;
+                    if (assignments && typeof assignments === 'object') {
+                        Object.entries(assignments).forEach(([bunkId, slots]) => { 
+                            mergedAssignments[bunkId] = slots; 
+                            bunksTouched.add(bunkId); 
+                        });
+                    }
+                    if (scheduleData.leagueAssignments) latestLeagueData = scheduleData.leagueAssignments;
+                    if (scheduleData.divisionTimes) latestDivisionTimes = scheduleData.divisionTimes;
+                });
+                window.scheduleAssignments = mergedAssignments;
+                if (latestLeagueData) window.leagueAssignments = latestLeagueData;
+                if (latestDivisionTimes) window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(latestDivisionTimes) || latestDivisionTimes;
+                saveSchedule(); 
+                updateTable();
+                alert(`✅ Merged ${versions.length} versions (${bunksTouched.size} bunks).`);
+                return { success: true, count: versions.length, bunks: bunksTouched.size };
+            } catch (err) { alert('Error: ' + err.message); return { success: false }; }
+        }
+    };
+
+    // =========================================================================
+    // SCHEDULER HOOKS FOR PINNED ACTIVITIES
+    // =========================================================================
+
+    function hookSchedulerGeneration() {
+        if (typeof window.runScheduler === 'function' && !window.runScheduler._pinnedHooked) {
+            const originalRunScheduler = window.runScheduler;
+            window.runScheduler = async function(...args) {
+                capturePinnedActivities(args[0]?.allowedDivisions || null);
+                const result = await originalRunScheduler.apply(this, args);
+                if (Object.keys(_pinnedSnapshot).length > 0) { 
+                    restorePinnedActivities(); 
+                    saveSchedule(); 
+                }
+                return result;
+            };
+            window.runScheduler._pinnedHooked = true;
+        }
+        if (typeof window.generateSchedule === 'function' && !window.generateSchedule._pinnedHooked) {
+            const originalGenerateSchedule = window.generateSchedule;
+            window.generateSchedule = async function(...args) {
+                capturePinnedActivities(args[0]?.allowedDivisions || window.selectedDivisionsForGeneration || null);
+                const result = await originalGenerateSchedule.apply(this, args);
+                if (Object.keys(_pinnedSnapshot).length > 0) { 
+                    restorePinnedActivities(); 
+                    saveSchedule(); 
+                    updateTable(); 
+                }
+                return result;
+            };
+            window.generateSchedule._pinnedHooked = true;
+        }
+    }
+
+    // =========================================================================
+    // INITIALIZATION
+    // =========================================================================
+
+    function initScheduleSystem() {
+        if (_initialized) return;
+        loadScheduleForDate(getDateKey());
+        if (!document.getElementById('unified-schedule-styles')) {
+            const style = document.createElement('style'); 
+            style.id = 'unified-schedule-styles';
+            style.textContent = `@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } } #${MODAL_ID} input:focus, #${MODAL_ID} select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); } #${MODAL_ID} button:hover { opacity: 0.9; }`;
+            document.head.appendChild(style);
+        }
+        hookSchedulerGeneration();
+        setTimeout(hookSchedulerGeneration, 1000);
+        setTimeout(hookSchedulerGeneration, 3000);
+        _initialized = true;
+    }
+
+    function reconcileOrRenderSaved() { 
+        loadScheduleForDate(getDateKey()); 
+        updateTable(); 
+    }
+
+    // =========================================================================
+    // EVENT LISTENERS
+    // =========================================================================
+
+    window.addEventListener('campistry-cloud-hydrated', () => { 
+        if (window._postEditInProgress) return; 
+        _cloudHydrated = true; 
+        setTimeout(() => { 
+            if (!window._postEditInProgress) { 
+                loadScheduleForDate(getDateKey()); 
+                updateTable(); 
+            } 
+        }, 100); 
+    });
+    
+    window.addEventListener('campistry-cloud-schedule-loaded', () => { 
+        if (window._postEditInProgress) return; 
+        _cloudHydrated = true; 
+        setTimeout(() => { 
+            if (!window._postEditInProgress) updateTable(); 
+        }, 100); 
+    });
+    
+    window.addEventListener('campistry-daily-data-updated', () => { 
+        if (window._postEditInProgress) return; 
+        loadScheduleForDate(getDateKey()); 
+        updateTable(); 
+    });
+    
+    window.addEventListener('campistry-date-changed', (e) => { 
+        if (window._postEditInProgress) return; 
+        if (window.UnifiedCloudSchedule?.load) {
+            window.UnifiedCloudSchedule.load().then(result => { 
+                if (!window._postEditInProgress) { 
+                    if (!result.merged) loadScheduleForDate(e.detail?.dateKey || getDateKey()); 
+                    updateTable(); 
+                } 
+            }); 
+        } else { 
+            loadScheduleForDate(e.detail?.dateKey || getDateKey()); 
+            updateTable(); 
+        } 
+    });
+    
+    window.addEventListener('campistry-generation-complete', () => { 
+        if (window.UnifiedCloudSchedule?.save) setTimeout(() => window.UnifiedCloudSchedule.save(), 500); 
+        updateTable(); 
+    });
+    
+    window.addEventListener('campistry-generation-starting', (e) => { 
+        capturePinnedActivities(e.detail?.allowedDivisions || null); 
+    });
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hideVersionToolbar);
+    else hideVersionToolbar();
+    setTimeout(hideVersionToolbar, 500); 
+    setTimeout(hideVersionToolbar, 1500); 
+    setTimeout(hideVersionToolbar, 3000);
 
     // =========================================================================
     // EXPORTS
@@ -3077,7 +3319,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
     window.checkLocationConflict = checkLocationConflict;
     window.checkCrossDivisionConflict = checkCrossDivisionConflict;
     window.getAllLocations = getAllLocations;
-    
 
     // Smart regeneration
     window.smartRegenerateConflicts = smartRegenerateConflicts;
@@ -3086,7 +3327,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
     window.buildCandidateOptions = buildCandidateOptions;
     window.calculateRotationPenalty = calculateRotationPenalty;
     window.applyPickToBunk = applyPickToBunk;
-    window.resolveConflictsAndApply = resolveConflictsAndApply;
 
     // RBAC bypass
     window.enableBypassRBACView = enableBypassRBACView;
@@ -3094,80 +3334,76 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
     window.shouldShowDivision = shouldShowDivision;
     window.shouldHighlightBunk = shouldHighlightBunk;
     window.bypassSaveAllBunks = bypassSaveAllBunks;
-    window.sendSchedulerNotification = sendSchedulerNotification;
 
     // Pinned activities
     window.getPinnedActivities = getPinnedActivities;
     window.unpinActivity = unpinActivity;
     window.unpinAllActivities = unpinAllActivities;
-    window.preservePinnedForRegeneration = (allowedDivisions) => { capturePinnedActivities(allowedDivisions); registerPinnedFieldLocks(); };
-    window.restorePinnedAfterRegeneration = () => { const count = restorePinnedActivities(); saveSchedule(); updateTable(); return count; };
-
-    // Integrated Edit Modal
-    window.openIntegratedEditModal = openIntegratedEditModal;
-    window.closeIntegratedEditModal = closeIntegratedEditModal;
-    window.openMultiBunkEditModal = openMultiBunkEditModal;
-    window.previewMultiBunkEdit = previewMultiBunkEdit;
-    window.submitMultiBunkEdit = submitMultiBunkEdit;
-    window.proceedWithScope = proceedWithScope;
-    window.applyMultiBunkEdit = applyMultiBunkEdit;
-    window.buildCascadeResolutionPlan = buildCascadeResolutionPlan;
-    window.findAllConflictsForClaim = findAllConflictsForClaim;
-    window.findAlternativeForBunk = findAlternativeForBunk;
-
-    // Proposal system
-    window.createMultiBunkProposal = createMultiBunkProposal;
-    window.loadProposal = loadProposal;
-    window.loadMyPendingProposals = loadMyPendingProposals;
-    window.openProposalReviewModal = openProposalReviewModal;
-    window.respondToProposal = respondToProposal;
-    window.applyApprovedProposal = applyApprovedProposal;
-
-    // Backup system
-    window.createAutoBackup = createAutoBackup;
-    window.cleanupOldAutoBackups = cleanupOldAutoBackups;
-    window.listAutoBackups = listAutoBackups;
-
-    // Utility
-    window.showIntegratedToast = showIntegratedToast;
+    window.preservePinnedForRegeneration = (allowedDivisions) => { 
+        capturePinnedActivities(allowedDivisions); 
+        registerPinnedFieldLocks(); 
+    };
+    window.restorePinnedAfterRegeneration = () => { 
+        const count = restorePinnedActivities(); 
+        saveSchedule(); 
+        updateTable(); 
+        return count; 
+    };
 
     // Legacy compatibility
     window.ScheduleVersionManager = VersionManager;
-    window.ScheduleVersionMerger = { mergeAndPush: async (dateKey) => { window.currentScheduleDate = dateKey; return await VersionManager.mergeVersions(); } };
+    window.ScheduleVersionMerger = { 
+        mergeAndPush: async (dateKey) => { 
+            window.currentScheduleDate = dateKey; 
+            return await VersionManager.mergeVersions(); 
+        } 
+    };
 
     // System objects
     window.SmartRegenSystem = { 
-        smartRegenerateConflicts, smartReassignBunkActivity, findBestActivityForBunk, 
-        buildFieldUsageBySlot: window.buildFieldUsageBySlot, // From Utils
-        buildCandidateOptions, calculateRotationPenalty, 
-        isFieldAvailable: window.isFieldAvailable, // From Utils
-        getActivityProperties: window.getActivityProperties, // From Utils
-        applyPickToBunk, ROTATION_CONFIG 
+        smartRegenerateConflicts, 
+        smartReassignBunkActivity, 
+        findBestActivityForBunk, 
+        buildFieldUsageBySlot: window.buildFieldUsageBySlot,
+        buildCandidateOptions, 
+        calculateRotationPenalty, 
+        isFieldAvailable,
+        getActivityProperties,
+        applyPickToBunk, 
+        ROTATION_CONFIG 
     };
     
     window.PinnedActivitySystem = { 
-        capture: capturePinnedActivities, registerLocks: registerPinnedFieldLocks, 
-        registerUsage: registerPinnedFieldUsage, restore: restorePinnedActivities, 
-        getAll: getPinnedActivities, unpin: unpinActivity, unpinAll: unpinAllActivities, 
+        capture: capturePinnedActivities, 
+        registerLocks: registerPinnedFieldLocks, 
+        registerUsage: registerPinnedFieldUsage, 
+        restore: restorePinnedActivities, 
+        getAll: getPinnedActivities, 
+        unpin: unpinActivity, 
+        unpinAll: unpinAllActivities, 
         debug: () => ({ snapshot: _pinnedSnapshot, locks: _pinnedFieldLocks }) 
     };
 
     window.UnifiedScheduleSystem = {
-        version: '4.0.5',
+        version: '4.1.0',
         
         // Core functions
-        loadScheduleForDate, renderStaggeredView, 
-        findSlotIndexForTime: window.findSlotIndexForTime, // From Utils
-        findSlotsForRange: window.findSlotsForRange, // From Utils
+        loadScheduleForDate, 
+        renderStaggeredView, 
+        findFirstSlotForTime,
+        findSlotsForRange,
         getLeagueMatchups, 
-        getEntryForBlock: window.getEntryForBlock, // From Utils
-        getDivisionForBunk: window.getDivisionForBunk, // From Utils
-        getSlotTimeRange: window.getSlotTimeRange, // From Utils
-        buildUnifiedTimesFromSkeleton, isSplitTileBlock, expandBlocksForSplitTiles,
+        getEntryForBlock,
+        getDivisionForBunk,
+        getSlotTimeRange,
+        buildDivisionTimesFromSkeleton, 
+        isSplitTileBlock, 
+        expandBlocksForSplitTiles,
         
         // Conflict detection
-        checkLocationConflict, checkCrossDivisionConflict, 
-        buildFieldUsageBySlot: window.buildFieldUsageBySlot, // From Utils
+        checkLocationConflict, 
+        checkCrossDivisionConflict, 
+        buildFieldUsageBySlot: window.buildFieldUsageBySlot,
         TimeBasedFieldUsage: window.TimeBasedFieldUsage,
         
         // Sub-systems
@@ -3176,38 +3412,18 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
         PinnedActivitySystem: window.PinnedActivitySystem, 
         ROTATION_CONFIG,
         
-        IntegratedEditSystem: {
-            open: openIntegratedEditModal,
-            close: closeIntegratedEditModal,
-            openMulti: openMultiBunkEditModal,
-            buildPlan: buildCascadeResolutionPlan,
-            apply: applyMultiBunkEdit
-        },
-        
-        ProposalSystem: {
-            create: createMultiBunkProposal,
-            load: loadProposal,
-            loadPending: loadMyPendingProposals,
-            openReview: openProposalReviewModal,
-            respond: respondToProposal
-        },
-        
-        AutoBackup: {
-            create: createAutoBackup,
-            cleanup: cleanupOldAutoBackups,
-            list: listAutoBackups
-        },
-        
         // Debug utilities
         DEBUG_ON: () => { DEBUG = true; console.log('[UnifiedSchedule] Debug enabled'); },
         DEBUG_OFF: () => { DEBUG = false; console.log('[UnifiedSchedule] Debug disabled'); },
         
         diagnose: () => { 
-            console.log('=== UNIFIED SCHEDULE SYSTEM v4.0.5 DIAGNOSTIC ==='); 
+            console.log('=== UNIFIED SCHEDULE SYSTEM v4.1.0 DIAGNOSTIC ==='); 
             console.log(`Date: ${getDateKey()}`); 
             console.log(`window.scheduleAssignments: ${Object.keys(window.scheduleAssignments || {}).length} bunks`); 
-            console.log(`window.unifiedTimes: ${(window.unifiedTimes || []).length} slots`);
             console.log(`window.divisionTimes: ${Object.keys(window.divisionTimes || {}).length} divisions`);
+            Object.entries(window.divisionTimes || {}).forEach(([div, slots]) => {
+                console.log(`  ${div}: ${slots.length} slots`);
+            });
             console.log(`TimeBasedFieldUsage: ${window.TimeBasedFieldUsage ? '✅' : '❌'}`);
             console.log(`Pinned activities: ${getPinnedActivities().length}`); 
             console.log(`RBAC bypass view: ${_bypassRBACViewEnabled}`); 
@@ -3218,7 +3434,6 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
             dateKey: getDateKey(), 
             assignments: Object.keys(window.scheduleAssignments || {}).length, 
             leagues: Object.keys(window.leagueAssignments || {}).length, 
-            times: (window.unifiedTimes || []).length,
             divisionTimes: Object.keys(window.divisionTimes || {}).length,
             cloudHydrated: _cloudHydrated, 
             initialized: _initialized, 
@@ -3233,11 +3448,11 @@ const slots = window.SchedulerCoreUtils?.findSlotsForRange(block.startMin, block
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initScheduleSystem);
     else setTimeout(initScheduleSystem, 100);
 
-    console.log('📅 Unified Schedule System v4.0.5 loaded successfully');
+    console.log('📅 Unified Schedule System v4.1.0 loaded successfully');
+    console.log('   ★★★ FULL DIVISIONTIMES INTEGRATION ★★★');
     console.log('   ✅ Division-aware time slot management');
     console.log('   ✅ TimeBasedFieldUsage for cross-division conflicts');
-    console.log('   ✅ Integrated Edit with multi-bunk support');
-    console.log('   ✅ Proposal system for cross-division changes');
-    console.log('   ✅ Shared Utils Integration');
+    console.log('   ✅ Removed unifiedTimes dependency');
+    console.log('   ✅ Data persistence uses divisionTimes');
 
 })();
