@@ -1,13 +1,14 @@
 // ============================================================================
-// scheduler_core_utils.js (FIXED v7.3 - RBAC & TYPE COERCION)
+// scheduler_core_utils.js (FIXED v7.4 - REMOVED LEGACY FALLBACKS)
 //
 // PART 1: THE FOUNDATION & CONSOLIDATED UTILITIES
 //
 // CRITICAL UPDATES:
-// - v7.1: Type-coerced comparisons for bunk lookups (fixes number/string mismatch)
-// - v7.2: Division-aware lock checking & string coercion for division lookups
-// - v7.3: RBAC FIX - Uses window.AccessControl instead of PermissionsDB
-//         for canEditBunk and getEditableBunks.
+// - v7.1: Type-coerced comparisons for bunk lookups
+// - v7.2: Division-aware lock checking & string coercion
+// - v7.3: RBAC FIX - Uses window.AccessControl
+// - v7.4: REMOVED LEGACY UNIFIED TIMES FALLBACKS. Added robust cross-division
+//         conflict detection and division-aware time helpers.
 // ============================================================================
 
 (function () {
@@ -127,13 +128,9 @@
             }
         }
 
-        // Fallback to legacy unifiedTimes
-        if (!window.unifiedTimes) return slots;
-
-        for (let i = 0; i < window.unifiedTimes.length; i++) {
-            const slot = window.unifiedTimes[i];
-            const slotStart = slot.startMin ?? (new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes());
-            if (slotStart >= startMin && slotStart < endMin) slots.push(i);
+        // No fallback - division context is required
+        if (divisionOrBunk) {
+            console.warn(`[findSlotsForRange] No divisionTimes for: ${divisionOrBunk}`);
         }
         return slots;
     };
@@ -156,17 +153,20 @@
         let blockStartMin = (typeof block.startTime === "number") ? block.startTime : null;
         let blockEndMin = (typeof block.endTime === "number") ? block.endTime : null;
 
-        if ((!blockStartMin || !blockEndMin) && window.unifiedTimes && block.slots?.length) {
-            const minIndex = Math.min(...block.slots);
-            const maxIndex = Math.max(...block.slots);
-            const firstSlot = window.unifiedTimes[minIndex];
-            const lastSlot = window.unifiedTimes[maxIndex];
+        // ★ FIX: Use divisionTimes instead of unifiedTimes ★
+        if ((!blockStartMin || !blockEndMin) && block.slots?.length) {
+            const divName = block.divName || (block.bunk ? Utils.getDivisionForBunk(block.bunk) : null);
+            const divTimes = divName ? window.divisionTimes?.[divName] : null;
 
-            if (firstSlot && lastSlot) {
-                const firstStart = new Date(firstSlot.start);
-                const lastEnd = new Date(lastSlot.end);
-                blockStartMin = firstStart.getHours() * 60 + firstStart.getMinutes();
-                blockEndMin = lastEnd.getHours() * 60 + lastEnd.getMinutes();
+            if (divTimes && divTimes.length > 0) {
+                const minIndex = Math.min(...block.slots);
+                const maxIndex = Math.max(...block.slots);
+                const firstSlot = divTimes[minIndex];
+                const lastSlot = divTimes[maxIndex];
+                if (firstSlot && lastSlot) {
+                    blockStartMin = firstSlot.startMin;
+                    blockEndMin = lastSlot.endMin;
+                }
             }
         }
         return { blockStartMin, blockEndMin };
@@ -1065,27 +1065,7 @@
             }
         }
         
-        // Fallback to unifiedTimes
-        const unifiedTimes = window.unifiedTimes || [];
-        const slot = unifiedTimes[slotIdx];
-        
-        if (!slot) return { startMin: null, endMin: null };
-        
-        // Handle different slot formats
-        if (slot.startMin !== undefined && slot.endMin !== undefined) {
-            return { startMin: slot.startMin, endMin: slot.endMin };
-        }
-        
-        // Parse from Date objects
-        if (slot.start) {
-            const start = new Date(slot.start);
-            const end = slot.end ? new Date(slot.end) : null;
-            return {
-                startMin: start.getHours() * 60 + start.getMinutes(),
-                endMin: end ? end.getHours() * 60 + end.getMinutes() : null
-            };
-        }
-        
+        // No fallback - division context is required
         return { startMin: null, endMin: null };
     };
 
@@ -1155,37 +1135,15 @@
             return Utils.findSlotForTime(divName, targetMin);
         }
         
-        // Legacy: handle unifiedTimes array
-        const unifiedTimes = Array.isArray(unifiedTimesOrDivision) 
-            ? unifiedTimesOrDivision 
-            : (window.unifiedTimes || []);
-            
-        if (unifiedTimes.length === 0) return -1;
-        
-        // Exact match
-        for (let i = 0; i < unifiedTimes.length; i++) {
-            const slotStart = Utils._getSlotStartMin(unifiedTimes[i]);
-            if (slotStart === targetMin) return i;
-        }
-        
-        // Find containing slot
-        const slots = Utils.findSlotsForRange(targetMin, targetMin + 30, unifiedTimes);
-        if (slots.length > 0) return slots[0];
-        
-        // Closest match
-        let closest = -1, minDiff = Infinity;
-        for (let i = 0; i < unifiedTimes.length; i++) {
-            const slotStart = Utils._getSlotStartMin(unifiedTimes[i]);
-            if (slotStart !== null) {
-                const diff = Math.abs(slotStart - targetMin);
-                if (diff < minDiff) {
-                    minDiff = diff;
-                    closest = i;
-                }
+        // Legacy array support (deprecated)
+        if (Array.isArray(unifiedTimesOrDivision)) {
+            console.warn('[findSlotIndexForTime] Array param is deprecated - pass division name');
+            for (let i = 0; i < unifiedTimesOrDivision.length; i++) {
+                const slotStart = Utils._getSlotStartMin(unifiedTimesOrDivision[i]);
+                if (slotStart === targetMin) return i;
             }
         }
-        
-        return closest;
+        return -1;
     };
 
     /**
@@ -1725,6 +1683,65 @@
         return activity || field || '';
     };
 
+    // =========================================================================
+    // NEW: Division-aware helpers
+    // =========================================================================
+    
+    Utils.getSlotCountForBunk = function(bunkName) {
+        const divName = Utils.getDivisionForBunk(bunkName);
+        return window.divisionTimes?.[divName]?.length || 0;
+    };
+    
+    Utils.checkTimeOverlap = function(start1, end1, start2, end2) {
+        return !(end1 <= start2 || start1 >= end2);
+    };
+    
+    Utils.checkCrossDivisionFieldConflict = function(fieldName, startMin, endMin, excludeBunk = null, maxCapacity = 1) {
+        const conflicts = [];
+        const divisions = window.divisions || {};
+        const fieldLower = fieldName.toLowerCase();
+        
+        for (const [divName, divData] of Object.entries(divisions)) {
+            const divSlots = window.divisionTimes?.[divName] || [];
+            
+            for (const bunk of (divData.bunks || [])) {
+                if (excludeBunk && String(bunk) === String(excludeBunk)) continue;
+                
+                const assignments = window.scheduleAssignments?.[bunk] || [];
+                
+                for (let idx = 0; idx < divSlots.length; idx++) {
+                    const slot = divSlots[idx];
+                    
+                    if (Utils.checkTimeOverlap(startMin, endMin, slot.startMin, slot.endMin)) {
+                        const entry = assignments[idx];
+                        if (!entry || entry.continuation) continue;
+                        
+                        const entryField = typeof entry.field === 'object' 
+                            ? entry.field?.name 
+                            : entry.field;
+                        
+                        if (entryField?.toLowerCase() === fieldLower) {
+                            conflicts.push({
+                                bunk,
+                                division: divName,
+                                slotIndex: idx,
+                                timeStart: slot.startMin,
+                                timeEnd: slot.endMin,
+                                activity: entry._activity || entryField
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        return {
+            hasConflict: conflicts.length >= maxCapacity,
+            count: conflicts.length,
+            conflicts
+        };
+    };
+
     // =================================================================
     // 16. LEGACY COMPATIBILITY LAYER
     // =================================================================
@@ -1772,6 +1789,6 @@
         parseTimeToMinutes: Utils.parseTimeToMinutes
     };
 
-    console.log("✅ SchedulerCoreUtils v7.3 Loaded (RBAC Fixed)");
+    console.log("✅ SchedulerCoreUtils v7.4 Loaded (RBAC Fixed & Legacy Fallbacks Removed)");
 
 })();
