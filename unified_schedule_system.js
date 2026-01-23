@@ -1282,13 +1282,20 @@ function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedAc
                 window.scheduleAssignments[bunk] = new Array(conflictDivSlots.length || 50);
             }
             
-            actualSlots.forEach((slotIdx, i) => {
-                window.scheduleAssignments[bunk][slotIdx] = {
-                    field: 'Free', sport: null, continuation: i > 0,
-                    _fixed: false, _activity: 'Free',
-                    _smartRegenFailed: true, _originalActivity: originalActivity, _failedAt: Date.now()
-                };
-            });
+            const currentUserId = window.AccessControl?.getCurrentUserId?.() || 'unknown';
+const currentUserName = window.AccessControl?.getCurrentUserName?.() || 'Another scheduler';
+
+actualSlots.forEach((slotIdx, i) => {
+    window.scheduleAssignments[bunk][slotIdx] = {
+        field: 'Free', sport: null, continuation: i > 0,
+        _fixed: false, _activity: 'Free',
+        _smartRegenFailed: true, _originalActivity: originalActivity, _failedAt: Date.now(),
+        _bypassModified: bypassMode,
+        _bypassedBy: bypassMode ? currentUserId : null,
+        _bypassedByName: bypassMode ? currentUserName : null,
+        _bypassedAt: bypassMode ? Date.now() : null
+    };
+});
             
             results.failed.push({ 
                 bunk, slots: actualSlots, division: conflictDiv,
