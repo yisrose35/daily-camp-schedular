@@ -143,38 +143,89 @@
     return editableBunks;  // Always returns a Set
 }
 
-    // =========================================================================
-    // RBAC VIEW BYPASS FOR SMART REGENERATION
-    // =========================================================================
+   
 
-    let _bypassRBACViewEnabled = false;
-    let _bypassHighlightBunks = new Set();
+    // =========================================================================
+// BYPASS CELL HIGHLIGHTING (Cell-specific, User-aware)
+// =========================================================================
 
-    function enableBypassRBACView(modifiedBunks = []) {
-        console.log('[UnifiedSchedule] 👁️ RBAC view bypass ENABLED');
-        _bypassRBACViewEnabled = true;
-        window._bypassRBACViewEnabled = true;
-        
-        if (modifiedBunks.length > 0) {
-            modifiedBunks.forEach(b => _bypassHighlightBunks.add(String(b)));
-            window._bypassHighlightBunks = _bypassHighlightBunks;
+let _myBypassedCells = new Map();
+const BYPASS_HIGHLIGHT_DURATION = 30000;
+
+function markCellsAsBypassed(cellKeys) {
+    const now = Date.now();
+    cellKeys.forEach(key => _myBypassedCells.set(key, now));
+    
+    setTimeout(() => {
+        const expireTime = Date.now() - BYPASS_HIGHLIGHT_DURATION;
+        for (const [key, timestamp] of _myBypassedCells.entries()) {
+            if (timestamp < expireTime) {
+                _myBypassedCells.delete(key);
+            }
         }
+        if (typeof updateTable === 'function') updateTable();
+    }, BYPASS_HIGHLIGHT_DURATION + 100);
+}
+
+function getCellBypassStatus(bunk, slotIdx) {
+    const entry = window.scheduleAssignments?.[bunk]?.[slotIdx];
+    const cellKey = `${bunk}:${slotIdx}`;
+    const currentUserId = window.AccessControl?.getCurrentUserId?.();
+    
+    if (_myBypassedCells.has(cellKey)) {
+        return { highlight: true, isMyBypass: true, bypassedByName: 'You' };
+    }
+    
+    if (entry?._bypassModified && entry._bypassedBy && entry._bypassedBy !== currentUserId) {
+        return { 
+            highlight: true, 
+            isMyBypass: false, 
+            bypassedByName: entry._bypassedByName || 'Another scheduler'
+        };
+    }
+    
+    return { highlight: false, isMyBypass: false, bypassedByName: null };
+}
+
+function acknowledgeBypassChanges() {
+    const currentUserId = window.AccessControl?.getCurrentUserId?.();
+    const assignments = window.scheduleAssignments || {};
+    let clearedCount = 0;
+    
+    for (const [bunk, slots] of Object.entries(assignments)) {
+        if (!slots || !Array.isArray(slots)) continue;
         
-        updateTable();
-        
-        if (window.showToast) {
-            window.showToast(`👁️ Bypass view: showing ${modifiedBunks.length} reassigned bunk(s)`, 'info');
+        for (let i = 0; i < slots.length; i++) {
+            const entry = slots[i];
+            if (entry?._bypassModified && entry._bypassedBy !== currentUserId) {
+                entry._bypassModified = false;
+                entry._bypassAcknowledgedAt = Date.now();
+                clearedCount++;
+            }
         }
     }
-
-    function disableBypassRBACView() {
-        console.log('[UnifiedSchedule] 👁️ RBAC view bypass DISABLED');
-        _bypassRBACViewEnabled = false;
-        window._bypassRBACViewEnabled = false;
-        _bypassHighlightBunks.clear();
-        window._bypassHighlightBunks = new Set();
-        updateTable();
+    
+    if (clearedCount > 0) {
+        console.log(`[BypassHighlight] Acknowledged ${clearedCount} bypass changes`);
+        window.saveSchedule?.();
+        if (typeof updateTable === 'function') updateTable();
     }
+    
+    return clearedCount;
+}
+
+function clearMyBypassHighlights() {
+    _myBypassedCells.clear();
+    if (typeof updateTable === 'function') updateTable();
+}
+
+function enableBypassRBACView(bunks) {
+    // Legacy - does nothing now
+}
+
+function disableBypassRBACView() {
+    clearMyBypassHighlights();
+}
 
     function shouldShowDivision(divName) {
         if (_bypassRBACViewEnabled || window._bypassRBACViewEnabled) {
