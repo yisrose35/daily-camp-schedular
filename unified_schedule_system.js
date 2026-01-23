@@ -121,8 +121,27 @@
     }
     
     function getEditableBunks() {
-        return Utils()?.getEditableBunks?.() || new Set();
+    const editableBunks = new Set();
+    const editableDivisions = window.AccessControl?.getEditableDivisions?.() || [];
+    const divisions = window.divisions || {};
+    
+    for (const divName of editableDivisions) {
+        const divInfo = divisions[divName];
+        if (divInfo?.bunks) {
+            divInfo.bunks.forEach(b => editableBunks.add(String(b)));
+        }
     }
+    
+    // If no RBAC or owner/admin, all bunks are editable
+    if (editableBunks.size === 0) {
+        const role = window.AccessControl?.getCurrentRole?.();
+        if (!window.AccessControl || role === 'owner' || role === 'admin') {
+            Object.keys(window.scheduleAssignments || {}).forEach(b => editableBunks.add(b));
+        }
+    }
+    
+    return editableBunks;  // Always returns a Set
+}
 
     // =========================================================================
     // RBAC VIEW BYPASS FOR SMART REGENERATION
