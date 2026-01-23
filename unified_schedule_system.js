@@ -1021,74 +1021,7 @@ function checkLocationConflict(locationName, slots, excludeBunk) {
     // SMART REGENERATION FOR CONFLICTS
     // =========================================================================
 
-    function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedActivity, conflicts, bypassMode = false) {
-        console.log('[SmartRegen] ★★★ SMART REGENERATION STARTED ★★★');
-        if (bypassMode) console.log('[SmartRegen] 🔓 BYPASS MODE ACTIVE');
-        const activityProps = getActivityProperties();
-        const results = { success: true, reassigned: [], failed: [], pinnedLock: null, bypassMode };
-        
-        if (window.GlobalFieldLocks) {
-            const pinnedDivName = getDivisionForBunk(pinnedBunk);
-            window.GlobalFieldLocks.lockField(pinnedField, pinnedSlots, { lockedBy: 'smart_regen_pinned', division: pinnedDivName, activity: pinnedActivity, bunk: pinnedBunk });
-            results.pinnedLock = { field: pinnedField, slots: pinnedSlots };
-        }
-        
-        const conflictsByBunk = {};
-        for (const conflict of conflicts) {
-            if (!conflictsByBunk[conflict.bunk]) conflictsByBunk[conflict.bunk] = new Set();
-            conflictsByBunk[conflict.bunk].add(conflict.slot);
-        }
-        
-        const bunksToReassign = Object.keys(conflictsByBunk);
-        const fieldUsageBySlot = window.buildFieldUsageBySlot?.(bunksToReassign) || {};
-        
-        for (const slotIdx of pinnedSlots) {
-            if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
-            if (!fieldUsageBySlot[slotIdx][pinnedField]) fieldUsageBySlot[slotIdx][pinnedField] = { count: 0, bunks: {}, divisions: [] };
-            fieldUsageBySlot[slotIdx][pinnedField].count++;
-            fieldUsageBySlot[slotIdx][pinnedField].bunks[pinnedBunk] = pinnedActivity;
-        }
-        
-        bunksToReassign.sort((a, b) => { 
-            const numA = parseInt((a.match(/\d+/) || [])[0]) || 0;
-            const numB = parseInt((b.match(/\d+/) || [])[0]) || 0; 
-            return numA - numB; 
-        });
-        
-        for (const bunk of bunksToReassign) {
-            const slots = [...conflictsByBunk[bunk]].sort((a, b) => a - b);
-            const originalEntry = window.scheduleAssignments?.[bunk]?.[slots[0]];
-            const originalActivity = originalEntry?._activity || originalEntry?.sport || fieldLabel(originalEntry?.field);
-            console.log(`[SmartRegen] Processing ${bunk}: slots=${slots.join(',')}, original=${originalActivity}`);
-            
-            const bestPick = findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProps, [pinnedField]);
-            
-            if (bestPick) {
-                console.log(`[SmartRegen] ✅ ${bunk}: ${originalActivity} → ${bestPick.activityName} (field: ${bestPick.field})`);
-                applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProps);
-                results.reassigned.push({ bunk, slots, from: originalActivity || 'unknown', to: bestPick.activityName, field: bestPick.field, cost: bestPick.cost });
-                if (window.showToast) window.showToast(`↪️ ${bunk}: ${originalActivity} → ${bestPick.activityName}`, 'info');
-            } else {
-                const divName = getDivisionForBunk(bunk);
-                const divSlots = window.divisionTimes?.[divName] || [];
-                if (!window.scheduleAssignments[bunk]) {
-                    window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
-                }
-                slots.forEach((slotIdx, i) => {
-                    window.scheduleAssignments[bunk][slotIdx] = { 
-                        field: 'Free', sport: null, continuation: i > 0, _fixed: false, _activity: 'Free', 
-                        _smartRegenFailed: true, _originalActivity: originalActivity, _failedAt: Date.now() 
-                    };
-                });
-                results.failed.push({ bunk, slots, originalActivity, reason: 'No valid alternative found' });
-                results.success = false;
-                if (window.showToast) window.showToast(`⚠️ ${bunk}: No alternative found`, 'warning');
-            }
-        }
-        
-        console.log(`[SmartRegen] ★★★ COMPLETE: ${results.reassigned.length} reassigned, ${results.failed.length} failed ★★★`);
-        return results;
-    }
+   
 
     function smartReassignBunkActivity(bunk, slots, avoidLocation) {
         const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
