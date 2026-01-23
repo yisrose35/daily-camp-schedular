@@ -929,7 +929,11 @@
 
             console.log(`[STEP 1] Initialized ${divName} bunks with ${slotCount} slots`);
         });
-
+// ★★★ v17.10 FIX: Rebuild unifiedTimes from divisionTimes for legacy compatibility ★★★
+if (window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes) {
+    window.unifiedTimes = window.DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes(window.divisionTimes);
+    console.log(`[STEP 1] Rebuilt unifiedTimes: ${window.unifiedTimes.length} slots for legacy compatibility`);
+}
         // =========================================================================
         // ★★★ STEP 1.5: RESTORE EXISTING SCHEDULE FOR LOCKED DIVISIONS ★★★
         // =========================================================================
