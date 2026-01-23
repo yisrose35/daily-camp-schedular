@@ -1948,44 +1948,7 @@ function checkLocationConflict(locationName, slots, excludeBunk) {
         } catch (e) { console.error('[UnifiedSchedule] Notification error:', e); }
     }
 
-    // =========================================================================
-    // RESOLVE CONFLICTS AND APPLY
-    // =========================================================================
-
-    async function resolveConflictsAndApply(bunk, slots, activity, location, editData) {
-        const editableConflicts = editData.editableConflicts || [];
-        const nonEditableConflicts = editData.nonEditableConflicts || [];
-        const resolutionChoice = editData.resolutionChoice || 'notify';
-        applyDirectEdit(bunk, slots, activity, location, false, true);
-        if (window.GlobalFieldLocks) { 
-            const divName = getDivisionForBunk(bunk); 
-            window.GlobalFieldLocks.lockField(location, slots, { lockedBy: 'post_edit_pinned', division: divName, activity }); 
-        }
-        let conflictsToResolve = [...editableConflicts];
-        const bypassMode = resolutionChoice === 'bypass';
-        if (bypassMode && nonEditableConflicts.length > 0) { 
-            console.log('[UnifiedSchedule] 🔓 BYPASS MODE'); 
-            conflictsToResolve = [...conflictsToResolve, ...nonEditableConflicts]; 
-        }
-        if (conflictsToResolve.length > 0) {
-            const result = smartRegenerateConflicts(bunk, slots, location, activity, conflictsToResolve, bypassMode);
-            if (bypassMode) {
-                const modifiedBunks = [...result.reassigned.map(r => r.bunk), ...result.failed.map(f => f.bunk)];
-                window._postEditInProgress = true; 
-                window._postEditTimestamp = Date.now();
-                await bypassSaveAllBunks(modifiedBunks);
-                const reassignedBunks = result.reassigned.map(r => r.bunk);
-                if (reassignedBunks.length > 0) enableBypassRBACView(reassignedBunks);
-                if (nonEditableConflicts.length > 0) { 
-                    sendSchedulerNotification([...new Set(nonEditableConflicts.map(c => c.bunk))], location, activity, 'bypassed'); 
-                    if (window.showToast) window.showToast(`🔓 Bypassed permissions - reassigned ${nonEditableConflicts.length} bunk(s)`, 'info'); 
-                }
-            } else if (nonEditableConflicts.length > 0) { 
-                sendSchedulerNotification([...new Set(nonEditableConflicts.map(c => c.bunk))], location, activity, 'conflict'); 
-                if (window.showToast) window.showToast(`📧 Notification sent about ${nonEditableConflicts.length} conflict(s)`, 'warning'); 
-            }
-        }
-    }
+   
 
     // =========================================================================
     // APPLY EDIT
