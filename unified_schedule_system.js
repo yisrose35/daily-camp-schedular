@@ -3927,8 +3927,7 @@ window.clearMyBypassHighlights = clearMyBypassHighlights;
             });
             console.log(`TimeBasedFieldUsage: ${window.TimeBasedFieldUsage ? '✅' : '❌'}`);
             console.log(`Pinned activities: ${getPinnedActivities().length}`); 
-            console.log(`RBAC bypass view: ${_bypassRBACViewEnabled}`); 
-            console.log(`Highlighted bunks: ${[..._bypassHighlightBunks].join(', ') || 'none'}`); 
+           console.log(`Bypass cells tracked: ${_myBypassedCells?.size || 0}`);
         },
         
         getState: () => ({ 
