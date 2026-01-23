@@ -1445,7 +1445,8 @@ function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySl
         
         if (bestPick) {
             applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProps);
-            if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.activityName}`, 'info');
+           
+if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.activityName}`, 'info');
             return { success: true, field: bestPick.field, activity: bestPick.activityName, cost: bestPick.cost };
         } else {
             const divName = getDivisionForBunk(bunk);
