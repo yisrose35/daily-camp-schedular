@@ -3718,6 +3718,9 @@ function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySl
     window.smartRegenerateConflicts = smartRegenerateConflicts;
     window.smartReassignBunkActivity = smartReassignBunkActivity;
     window.findBestActivityForBunk = findBestActivityForBunk;
+    window.findBestActivityForBunkDivisionAware = findBestActivityForBunkDivisionAware;
+window.checkFieldAvailableByTime = checkFieldAvailableByTime;
+window.applyPickToBunkDivisionAware = applyPickToBunkDivisionAware;
     window.buildCandidateOptions = buildCandidateOptions;
     window.calculateRotationPenalty = calculateRotationPenalty;
     window.applyPickToBunk = applyPickToBunk;
