@@ -689,7 +689,8 @@ function checkLocationConflict(locationName, slots, excludeBunk) {
     const activityProps = getActivityProperties();
     const locationInfo = activityProps[locationName] || {};
     let maxCapacity = locationInfo.sharableWith?.capacity ? parseInt(locationInfo.sharableWith.capacity) || 1 : (locationInfo.sharable ? 2 : 1);
-    const editBunks = getEditableBunks();
+   const editBunksResult = getEditableBunks();
+const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(editBunksResult || []);
     const conflicts = [], usageBySlot = {};
     
     // ★★★ FIX: Get the ACTUAL time range from the editing bunk's division ★★★
