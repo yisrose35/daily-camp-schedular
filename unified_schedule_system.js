@@ -1262,7 +1262,7 @@ function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedAc
         if (bestPick) {
             console.log(`[SmartRegen] ✅ ${bunk}: ${originalActivity} → ${bestPick.activityName} @ ${bestPick.field}`);
             
-            applyPickToBunkDivisionAware(bunk, actualSlots, conflictDiv, bestPick, fieldUsageBySlot, activityProperties);
+            applyPickToBunkDivisionAware(bunk, actualSlots, conflictDiv, bestPick, fieldUsageBySlot, activityProperties, { isBypass: bypassMode });
             
             results.reassigned.push({ 
                 bunk, slots: actualSlots, division: conflictDiv,
@@ -1402,7 +1402,7 @@ function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, act
 // =========================================================================
 // HELPER: Apply Pick To Bunk (DIVISION-AWARE)
 // =========================================================================
-function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySlot, activityProperties) {
+function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySlot, activityProperties, bypassInfo = {}) {
     const divSlots = window.divisionTimes?.[divName] || [];
     
     let startMin = null, endMin = null;
@@ -1411,6 +1411,9 @@ function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySl
         const lastSlot = divSlots[slots[slots.length - 1]];
         endMin = lastSlot ? lastSlot.endMin : (startMin + 30);
     }
+    
+    const currentUserId = window.AccessControl?.getCurrentUserId?.() || 'unknown';
+    const currentUserName = window.AccessControl?.getCurrentUserName?.() || 'Another scheduler';
     
     const pickData = {
         field: pick.field,
@@ -1422,7 +1425,11 @@ function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySl
         _startMin: startMin,
         _endMin: endMin,
         _blockStart: startMin,
-        _division: divName
+        _division: divName,
+        _bypassModified: bypassInfo.isBypass || false,
+        _bypassedBy: bypassInfo.isBypass ? currentUserId : null,
+        _bypassedByName: bypassInfo.isBypass ? currentUserName : null,
+        _bypassedAt: bypassInfo.isBypass ? Date.now() : null
     };
     
     if (!window.scheduleAssignments) window.scheduleAssignments = {};
@@ -1434,7 +1441,6 @@ function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySl
         window.scheduleAssignments[bunk][slotIdx] = { ...pickData, continuation: i > 0 };
     });
     
-    // Update field usage
     const fieldName = pick.field;
     for (const slotIdx of slots) {
         if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
@@ -1448,7 +1454,6 @@ function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySl
         }
     }
     
-    // Register with TimeBasedFieldUsage if available
     if (window.TimeBasedFieldUsage?.register && startMin !== null && endMin !== null) {
         window.TimeBasedFieldUsage.register(fieldName, startMin, endMin, divName, bunk, pick.activityName);
     }
