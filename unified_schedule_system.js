@@ -3931,17 +3931,16 @@ window.clearMyBypassHighlights = clearMyBypassHighlights;
         },
         
         getState: () => ({ 
-            dateKey: getDateKey(), 
-            assignments: Object.keys(window.scheduleAssignments || {}).length, 
-            leagues: Object.keys(window.leagueAssignments || {}).length, 
-            divisionTimes: Object.keys(window.divisionTimes || {}).length,
-            cloudHydrated: _cloudHydrated, 
-            initialized: _initialized, 
-            pinnedCount: getPinnedActivities().length, 
-            postEditInProgress: !!window._postEditInProgress, 
-            bypassRBACViewEnabled: _bypassRBACViewEnabled, 
-            highlightedBunks: [..._bypassHighlightBunks] 
-        })
+    dateKey: getDateKey(), 
+    assignments: Object.keys(window.scheduleAssignments || {}).length, 
+    leagues: Object.keys(window.leagueAssignments || {}).length, 
+    divisionTimes: Object.keys(window.divisionTimes || {}).length,
+    cloudHydrated: _cloudHydrated, 
+    initialized: _initialized, 
+    pinnedCount: getPinnedActivities().length, 
+    postEditInProgress: !!window._postEditInProgress, 
+    bypassCellsTracked: _myBypassedCells?.size || 0
+})
     };
 
     // Initialize on DOM ready
