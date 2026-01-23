@@ -1020,7 +1020,419 @@ function checkLocationConflict(locationName, slots, excludeBunk) {
     // =========================================================================
     // SMART REGENERATION FOR CONFLICTS
     // =========================================================================
+// =========================================================================
+// RESOLVE CONFLICTS AND APPLY (CROSS-DIVISION COMPATIBLE)
+// =========================================================================
+async function resolveConflictsAndApply(bunk, slots, activity, location, editData) {
+    const editableConflicts = editData.editableConflicts || [];
+    const nonEditableConflicts = editData.nonEditableConflicts || [];
+    const resolutionChoice = editData.resolutionChoice || 'notify';
+    
+    // Get the editing bunk's division and time range
+    const editingDiv = getDivisionForBunk(bunk);
+    const editingDivSlots = window.divisionTimes?.[editingDiv] || [];
+    
+    // ★ Capture the actual TIME RANGE being claimed ★
+    let claimedStartMin = null, claimedEndMin = null;
+    if (slots.length > 0 && editingDivSlots[slots[0]]) {
+        claimedStartMin = editingDivSlots[slots[0]].startMin;
+        claimedEndMin = editingDivSlots[slots[slots.length - 1]].endMin;
+    }
+    
+    console.log(`[resolveConflictsAndApply] Claiming ${location} for ${bunk} (${editingDiv}) at ${claimedStartMin}-${claimedEndMin}min`);
+    
+    // Apply the primary edit first
+    applyDirectEdit(bunk, slots, activity, location, false, true);
+    
+    // Lock the field
+    if (window.GlobalFieldLocks) {
+        window.GlobalFieldLocks.lockField(location, slots, { 
+            lockedBy: 'post_edit_pinned', 
+            division: editingDiv, 
+            activity,
+            startMin: claimedStartMin,
+            endMin: claimedEndMin
+        });
+    }
+    
+    // Determine which conflicts to resolve
+    let conflictsToResolve = [...editableConflicts];
+    const bypassMode = resolutionChoice === 'bypass';
+    
+    if (bypassMode && nonEditableConflicts.length > 0) {
+        console.log('[resolveConflictsAndApply] 🔓 BYPASS MODE - including non-editable conflicts');
+        conflictsToResolve = [...conflictsToResolve, ...nonEditableConflicts];
+    }
+    
+    let result = { success: true, reassigned: [], failed: [] };
+    
+    if (conflictsToResolve.length > 0) {
+        // Pass time context for cross-division slot mapping
+        result = smartRegenerateConflicts(
+            bunk, slots, location, activity, 
+            conflictsToResolve, bypassMode,
+            { claimedStartMin, claimedEndMin, claimingDivision: editingDiv }
+        );
+        
+        if (bypassMode) {
+            const modifiedBunks = [
+                ...result.reassigned.map(r => r.bunk), 
+                ...result.failed.map(f => f.bunk)
+            ];
+            
+            window._postEditInProgress = true;
+            window._postEditTimestamp = Date.now();
+            
+            await bypassSaveAllBunks(modifiedBunks);
+            
+            const reassignedBunks = result.reassigned.map(r => r.bunk);
+            if (reassignedBunks.length > 0) {
+                enableBypassRBACView(reassignedBunks);
+            }
+            
+            if (nonEditableConflicts.length > 0) {
+                sendSchedulerNotification(
+                    [...new Set(nonEditableConflicts.map(c => c.bunk))], 
+                    location, activity, 'bypassed'
+                );
+                if (window.showToast) {
+                    window.showToast(`🔓 Bypassed ${nonEditableConflicts.length} bunk(s) from other schedulers`, 'warning');
+                }
+            }
+        }
+    }
+    
+    return result;
+}
 
+
+// =========================================================================
+// SMART REGENERATION FOR CONFLICTS (CROSS-DIVISION COMPATIBLE)
+// =========================================================================
+function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedActivity, conflicts, bypassMode = false, timeContext = {}) {
+    console.log('[SmartRegen] ★★★ SMART REGENERATION STARTED ★★★');
+    console.log(`[SmartRegen] Pinned: ${pinnedBunk} claiming ${pinnedField}`);
+    if (bypassMode) console.log('[SmartRegen] 🔓 BYPASS MODE ACTIVE');
+    
+    const { claimedStartMin, claimedEndMin, claimingDivision } = timeContext;
+    const activityProperties = window.getActivityProperties();
+    const results = { success: true, reassigned: [], failed: [], pinnedLock: null, bypassMode };
+    
+    // Lock the pinned field
+    if (window.GlobalFieldLocks) {
+        const pinnedDivName = getDivisionForBunk(pinnedBunk);
+        window.GlobalFieldLocks.lockField(pinnedField, pinnedSlots, { 
+            lockedBy: 'smart_regen_pinned', 
+            division: pinnedDivName, 
+            activity: pinnedActivity, 
+            bunk: pinnedBunk,
+            startMin: claimedStartMin,
+            endMin: claimedEndMin
+        });
+        results.pinnedLock = { field: pinnedField, slots: pinnedSlots };
+    }
+    
+    // Group conflicts by bunk with TIME information
+    const conflictsByBunk = {};
+    for (const conflict of conflicts) {
+        const conflictBunk = conflict.bunk;
+        if (!conflictsByBunk[conflictBunk]) {
+            conflictsByBunk[conflictBunk] = {
+                rawSlots: new Set(),
+                division: conflict.division || getDivisionForBunk(conflictBunk),
+                timeOverlaps: []
+            };
+        }
+        conflictsByBunk[conflictBunk].rawSlots.add(conflict.slot);
+        
+        // Store time overlap info if available
+        if (conflict.overlapStart !== undefined && conflict.overlapEnd !== undefined) {
+            conflictsByBunk[conflictBunk].timeOverlaps.push({
+                start: conflict.overlapStart,
+                end: conflict.overlapEnd,
+                theirSlot: conflict.theirSlot
+            });
+        }
+    }
+    
+    const bunksToReassign = Object.keys(conflictsByBunk);
+    console.log(`[SmartRegen] Bunks to reassign: ${bunksToReassign.join(', ')}`);
+    
+    // Build field usage map
+    const fieldUsageBySlot = window.buildFieldUsageBySlot ? 
+        window.buildFieldUsageBySlot(bunksToReassign) : {};
+    
+    // Register the pinned field usage
+    for (const slotIdx of pinnedSlots) {
+        if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
+        if (!fieldUsageBySlot[slotIdx][pinnedField]) {
+            fieldUsageBySlot[slotIdx][pinnedField] = { count: 0, bunks: {}, divisions: [] };
+        }
+        fieldUsageBySlot[slotIdx][pinnedField].count++;
+        fieldUsageBySlot[slotIdx][pinnedField].bunks[pinnedBunk] = pinnedActivity;
+    }
+    
+    // Sort bunks for consistent processing
+    bunksToReassign.sort((a, b) => {
+        const numA = parseInt((a.match(/\d+/) || [])[0]) || 0;
+        const numB = parseInt((b.match(/\d+/) || [])[0]) || 0;
+        return numA - numB;
+    });
+    
+    // Process each conflicting bunk
+    for (const bunk of bunksToReassign) {
+        const conflictInfo = conflictsByBunk[bunk];
+        const conflictDiv = conflictInfo.division;
+        const conflictDivSlots = window.divisionTimes?.[conflictDiv] || [];
+        
+        console.log(`[SmartRegen] Processing ${bunk} (Division: ${conflictDiv})`);
+        
+        // ★ Find the CORRECT slot indices for THIS bunk's division ★
+        let actualSlots = [];
+        
+        if (conflictInfo.timeOverlaps.length > 0) {
+            // Method 1: Use time overlap info (most accurate)
+            for (const tr of conflictInfo.timeOverlaps) {
+                if (tr.theirSlot !== undefined) {
+                    actualSlots.push(tr.theirSlot);
+                } else {
+                    for (let i = 0; i < conflictDivSlots.length; i++) {
+                        const slot = conflictDivSlots[i];
+                        if (slot.startMin < tr.end && slot.endMin > tr.start) {
+                            actualSlots.push(i);
+                        }
+                    }
+                }
+            }
+        } else if (claimedStartMin !== null && claimedEndMin !== null) {
+            // Method 2: Find slots by claimed time range
+            for (let i = 0; i < conflictDivSlots.length; i++) {
+                const slot = conflictDivSlots[i];
+                if (slot && slot.startMin < claimedEndMin && slot.endMin > claimedStartMin) {
+                    actualSlots.push(i);
+                }
+            }
+        } else {
+            // Method 3: Fallback - use raw slot indices
+            actualSlots = [...conflictInfo.rawSlots];
+            console.warn(`[SmartRegen] ⚠️ No time info for ${bunk}, using raw slots`);
+        }
+        
+        actualSlots = [...new Set(actualSlots)].sort((a, b) => a - b);
+        
+        if (actualSlots.length === 0) {
+            console.warn(`[SmartRegen] No valid slots found for ${bunk}, skipping`);
+            continue;
+        }
+        
+        console.log(`[SmartRegen] ${bunk}: Actual slots in ${conflictDiv} = [${actualSlots.join(', ')}]`);
+        
+        // Get the original entry
+        const originalEntry = window.scheduleAssignments?.[bunk]?.[actualSlots[0]];
+        const originalActivity = originalEntry?._activity || originalEntry?.sport || fieldLabel(originalEntry?.field);
+        
+        console.log(`[SmartRegen] ${bunk}: Original activity = ${originalActivity}`);
+        
+        // Find best alternative
+        const bestPick = findBestActivityForBunkDivisionAware(
+            bunk, actualSlots, conflictDiv,
+            fieldUsageBySlot, activityProperties, [pinnedField]
+        );
+        
+        if (bestPick) {
+            console.log(`[SmartRegen] ✅ ${bunk}: ${originalActivity} → ${bestPick.activityName} @ ${bestPick.field}`);
+            
+            applyPickToBunkDivisionAware(bunk, actualSlots, conflictDiv, bestPick, fieldUsageBySlot, activityProperties);
+            
+            results.reassigned.push({ 
+                bunk, slots: actualSlots, division: conflictDiv,
+                from: originalActivity || 'unknown', 
+                to: bestPick.activityName, 
+                field: bestPick.field, 
+                cost: bestPick.cost 
+            });
+            
+            if (window.showToast) {
+                window.showToast(`↪️ ${bunk}: ${originalActivity} → ${bestPick.activityName}`, 'info');
+            }
+        } else {
+            console.log(`[SmartRegen] ❌ ${bunk}: No alternative found`);
+            
+            if (!window.scheduleAssignments[bunk]) {
+                window.scheduleAssignments[bunk] = new Array(conflictDivSlots.length || 50);
+            }
+            
+            actualSlots.forEach((slotIdx, i) => {
+                window.scheduleAssignments[bunk][slotIdx] = {
+                    field: 'Free', sport: null, continuation: i > 0,
+                    _fixed: false, _activity: 'Free',
+                    _smartRegenFailed: true, _originalActivity: originalActivity, _failedAt: Date.now()
+                };
+            });
+            
+            results.failed.push({ 
+                bunk, slots: actualSlots, division: conflictDiv,
+                originalActivity, reason: 'No valid alternative found' 
+            });
+            results.success = false;
+            
+            if (window.showToast) {
+                window.showToast(`⚠️ ${bunk}: No alternative found`, 'warning');
+            }
+        }
+    }
+    
+    console.log(`[SmartRegen] ★★★ COMPLETE: ${results.reassigned.length} reassigned, ${results.failed.length} failed ★★★`);
+    return results;
+}
+
+
+// =========================================================================
+// HELPER: Find Best Activity (DIVISION-AWARE)
+// =========================================================================
+function findBestActivityForBunkDivisionAware(bunk, slots, divName, fieldUsageBySlot, activityProperties, avoidFields = []) {
+    const disabledFields = window.currentDisabledFields || [];
+    const avoidSet = new Set(avoidFields.map(f => (f || '').toLowerCase()));
+    
+    // Get time range for these slots
+    const divSlots = window.divisionTimes?.[divName] || [];
+    let startMin = null, endMin = null;
+    
+    if (slots.length > 0 && divSlots[slots[0]]) {
+        startMin = divSlots[slots[0]].startMin;
+        endMin = divSlots[slots[slots.length - 1]]?.endMin || (startMin + 30);
+    }
+    
+    const candidates = buildCandidateOptions(slots, activityProperties, disabledFields);
+    const scoredPicks = [];
+    
+    for (const cand of candidates) {
+        const fieldLower = (cand.field || '').toLowerCase();
+        const actLower = (cand.activityName || '').toLowerCase();
+        
+        if (avoidSet.has(fieldLower) || avoidSet.has(actLower)) continue;
+        
+        // Check field availability by TIME
+        if (!checkFieldAvailableByTime(cand.field, startMin, endMin, bunk, activityProperties)) continue;
+        
+        // Also check slot-based for backwards compat
+        if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProperties)) continue;
+        
+        const cost = calculatePenaltyCost(bunk, slots, cand, fieldUsageBySlot, activityProperties);
+        if (cost < Infinity) {
+            scoredPicks.push({ ...cand, cost });
+        }
+    }
+    
+    scoredPicks.sort((a, b) => a.cost - b.cost);
+    return scoredPicks.length > 0 ? scoredPicks[0] : null;
+}
+
+
+// =========================================================================
+// HELPER: Check Field Available By Time (CROSS-DIVISION SAFE)
+// =========================================================================
+function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, activityProperties) {
+    if (startMin === null || endMin === null) return true;
+    
+    const props = activityProperties?.[fieldName] || {};
+    let maxCapacity = props.sharableWith?.capacity ? parseInt(props.sharableWith.capacity) || 1 : (props.sharable ? 2 : 1);
+    
+    // Use TimeBasedFieldUsage if available
+    if (window.TimeBasedFieldUsage?.checkAvailability) {
+        const result = window.TimeBasedFieldUsage.checkAvailability(fieldName, startMin, endMin, maxCapacity, excludeBunk);
+        return result.available;
+    }
+    
+    // Fallback: manual check across all divisions
+    const divisions = window.divisions || {};
+    let usageCount = 0;
+    
+    for (const [dName, divData] of Object.entries(divisions)) {
+        const dSlots = window.divisionTimes?.[dName] || [];
+        
+        for (const b of (divData.bunks || [])) {
+            if (String(b) === String(excludeBunk)) continue;
+            
+            const assignments = window.scheduleAssignments?.[b] || [];
+            
+            for (let idx = 0; idx < dSlots.length; idx++) {
+                const slot = dSlots[idx];
+                if (!slot || slot.startMin === undefined) continue;
+                
+                // Check TIME overlap
+                if (slot.startMin < endMin && slot.endMin > startMin) {
+                    const entry = assignments[idx];
+                    if (!entry || entry.continuation) continue;
+                    
+                    const entryField = fieldLabel(entry.field) || entry._activity;
+                    if (entryField?.toLowerCase() === fieldName.toLowerCase()) {
+                        usageCount++;
+                        if (usageCount >= maxCapacity) return false;
+                    }
+                }
+            }
+        }
+    }
+    
+    return true;
+}
+
+
+// =========================================================================
+// HELPER: Apply Pick To Bunk (DIVISION-AWARE)
+// =========================================================================
+function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySlot, activityProperties) {
+    const divSlots = window.divisionTimes?.[divName] || [];
+    
+    let startMin = null, endMin = null;
+    if (slots.length > 0 && divSlots[slots[0]]) {
+        startMin = divSlots[slots[0]].startMin;
+        const lastSlot = divSlots[slots[slots.length - 1]];
+        endMin = lastSlot ? lastSlot.endMin : (startMin + 30);
+    }
+    
+    const pickData = {
+        field: pick.field,
+        sport: pick.sport || pick.activityName,
+        _fixed: true,
+        _activity: pick.activityName,
+        _smartRegenerated: true,
+        _regeneratedAt: Date.now(),
+        _startMin: startMin,
+        _endMin: endMin,
+        _blockStart: startMin,
+        _division: divName
+    };
+    
+    if (!window.scheduleAssignments) window.scheduleAssignments = {};
+    if (!window.scheduleAssignments[bunk]) {
+        window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
+    }
+    
+    slots.forEach((slotIdx, i) => {
+        window.scheduleAssignments[bunk][slotIdx] = { ...pickData, continuation: i > 0 };
+    });
+    
+    // Update field usage
+    const fieldName = pick.field;
+    for (const slotIdx of slots) {
+        if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
+        if (!fieldUsageBySlot[slotIdx][fieldName]) {
+            fieldUsageBySlot[slotIdx][fieldName] = { count: 0, bunks: {}, divisions: [] };
+        }
+        fieldUsageBySlot[slotIdx][fieldName].count++;
+        fieldUsageBySlot[slotIdx][fieldName].bunks[bunk] = pick.activityName;
+        if (divName && !fieldUsageBySlot[slotIdx][fieldName].divisions.includes(divName)) {
+            fieldUsageBySlot[slotIdx][fieldName].divisions.push(divName);
+        }
+    }
+    
+    // Register with TimeBasedFieldUsage if available
+    if (window.TimeBasedFieldUsage?.register && startMin !== null && endMin !== null) {
+        window.TimeBasedFieldUsage.register(fieldName, startMin, endMin, divName, bunk, pick.activityName);
+    }
+}
    
 
     function smartReassignBunkActivity(bunk, slots, avoidLocation) {
