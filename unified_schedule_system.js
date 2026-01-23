@@ -1739,13 +1739,13 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
         const divisions = window.divisions || {};
         
         console.log('[UnifiedSchedule] RENDER STATE:', { 
-            dateKey, 
-            skeletonBlocks: skeleton.length, 
-            divisionTimesCount: Object.keys(window.divisionTimes || {}).length,
-            scheduleAssignmentsBunks: Object.keys(window.scheduleAssignments || {}).length, 
-            divisionsCount: Object.keys(divisions).length,
-            bypassRBACView: _bypassRBACViewEnabled || window._bypassRBACViewEnabled 
-        });
+    dateKey, 
+    skeletonBlocks: skeleton.length, 
+    divisionTimesCount: Object.keys(window.divisionTimes || {}).length,
+    scheduleAssignmentsBunks: Object.keys(window.scheduleAssignments || {}).length, 
+    divisionsCount: Object.keys(divisions).length,
+    bypassCellsTracked: _myBypassedCells?.size || 0
+});
         
         container.innerHTML = '';
         if (!skeleton || skeleton.length === 0) {
