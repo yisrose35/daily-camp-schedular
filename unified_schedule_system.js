@@ -1951,11 +1951,18 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
         td.textContent = displayText;
         td.style.background = bgColor;
         
-        // Highlight bypassed bunks
-        if (shouldHighlightBunk(bunk)) { 
-            td.style.background = 'linear-gradient(135deg, #fef3c7, #fde68a)'; 
-            td.style.boxShadow = 'inset 0 0 0 3px #f59e0b'; 
-        }
+        // Cell-specific bypass highlighting
+const bypassStatus = getCellBypassStatus(bunk, slotIdx);
+if (bypassStatus.highlight) {
+    if (bypassStatus.isMyBypass) {
+        td.style.background = 'linear-gradient(135deg, #ccfbf1, #99f6e4)';
+        td.style.boxShadow = 'inset 0 0 0 2px #14b8a6';
+    } else {
+        td.style.background = 'linear-gradient(135deg, #ede9fe, #ddd6fe)';
+        td.style.boxShadow = 'inset 0 0 0 2px #8b5cf6';
+        td.title = `Modified by ${bypassStatus.bypassedByName}`;
+    }
+}
         
         td.dataset.slot = slotIdx; 
         td.dataset.slotIndex = slotIdx; 
@@ -3828,6 +3835,10 @@ window.applyPickToBunkDivisionAware = applyPickToBunkDivisionAware;
     window.shouldShowDivision = shouldShowDivision;
     window.shouldHighlightBunk = shouldHighlightBunk;
     window.bypassSaveAllBunks = bypassSaveAllBunks;
+    window.getCellBypassStatus = getCellBypassStatus;
+window.markCellsAsBypassed = markCellsAsBypassed;
+window.acknowledgeBypassChanges = acknowledgeBypassChanges;
+window.clearMyBypassHighlights = clearMyBypassHighlights;
 
     // Pinned activities
     window.getPinnedActivities = getPinnedActivities;
