@@ -3700,6 +3700,7 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
     window.initScheduleSystem = initScheduleSystem;
     window.editCell = editCell;
     window.enhancedEditCell = enhancedEditCell;
+    window.proceedWithScope = proceedWithScope;
 
     // Save/Load functions
     window.saveSchedule = saveSchedule;
