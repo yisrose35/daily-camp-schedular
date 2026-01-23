@@ -680,24 +680,41 @@
         return locations;
     }
 
+    
     // =========================================================================
-    // CONFLICT DETECTION
-    // =========================================================================
-
-    function checkLocationConflict(locationName, slots, excludeBunk) {
-        const assignments = window.scheduleAssignments || {};
-        const activityProps = getActivityProperties();
-        const locationInfo = activityProps[locationName] || {};
-        let maxCapacity = locationInfo.sharableWith?.capacity ? parseInt(locationInfo.sharableWith.capacity) || 1 : (locationInfo.sharable ? 2 : 1);
-        const editBunks = getEditableBunks();
-        const conflicts = [], usageBySlot = {};
-        
+// CONFLICT DETECTION (TIME-BASED - CROSS-DIVISION COMPATIBLE)
+// =========================================================================
+function checkLocationConflict(locationName, slots, excludeBunk) {
+    const assignments = window.scheduleAssignments || {};
+    const activityProps = getActivityProperties();
+    const locationInfo = activityProps[locationName] || {};
+    let maxCapacity = locationInfo.sharableWith?.capacity ? parseInt(locationInfo.sharableWith.capacity) || 1 : (locationInfo.sharable ? 2 : 1);
+    const editBunks = getEditableBunks();
+    const conflicts = [], usageBySlot = {};
+    
+    // ★★★ FIX: Get the ACTUAL time range from the editing bunk's division ★★★
+    const excludeBunkDiv = getDivisionForBunk(excludeBunk);
+    const excludeBunkSlots = window.divisionTimes?.[excludeBunkDiv] || [];
+    
+    // Build time ranges for the slots being claimed
+    const claimedTimeRanges = [];
+    for (const slotIdx of slots) {
+        const slotInfo = excludeBunkSlots[slotIdx];
+        if (slotInfo && slotInfo.startMin !== undefined && slotInfo.endMin !== undefined) {
+            claimedTimeRanges.push({ slotIdx, startMin: slotInfo.startMin, endMin: slotInfo.endMin });
+        }
+    }
+    
+    // Fallback to legacy slot-based check if no time info available
+    if (claimedTimeRanges.length === 0) {
+        console.warn('[checkLocationConflict] No divisionTimes available, using legacy slot-based check');
+        // Legacy behavior - slot index based (same as before)
         for (const slotIdx of slots) {
             usageBySlot[slotIdx] = [];
             for (const [bunkName, bunkSlots] of Object.entries(assignments)) {
                 if (bunkName === excludeBunk) continue;
                 const entry = bunkSlots?.[slotIdx];
-                if (!entry) continue;
+                if (!entry || entry.continuation) continue;
                 const entryField = fieldLabel(entry.field);
                 const entryActivity = entry._activity || entryField;
                 const entryLocation = entry._location || entryField;
@@ -709,31 +726,100 @@
                 }
             }
         }
+    } else {
+        // ★★★ NEW: Time-based conflict detection across ALL divisions ★★★
+        const divisions = window.divisions || {};
         
-        let globalLock = null;
-        if (window.GlobalFieldLocks) {
-            const divName = getDivisionForBunk(excludeBunk);
-            const lockInfo = window.GlobalFieldLocks.isFieldLocked(locationName, slots, divName);
-            if (lockInfo) globalLock = lockInfo;
-        }
-        
-        let hasConflict = !!globalLock, currentUsage = 0;
-        for (const slotIdx of slots) {
-            const slotUsage = usageBySlot[slotIdx] || [];
-            currentUsage = Math.max(currentUsage, slotUsage.length);
-            if (slotUsage.length >= maxCapacity) {
-                hasConflict = true;
-                slotUsage.forEach(u => { if (!conflicts.find(c => c.bunk === u.bunk && c.slot === slotIdx)) conflicts.push({ ...u, slot: slotIdx }); });
+        for (const [divName, divData] of Object.entries(divisions)) {
+            const divSlots = window.divisionTimes?.[divName] || [];
+            const divBunks = divData.bunks || [];
+            
+            for (const bunkName of divBunks) {
+                if (String(bunkName) === String(excludeBunk)) continue;
+                
+                const bunkAssignments = assignments[bunkName];
+                if (!bunkAssignments) continue;
+                
+                // Check each slot in THIS bunk's division for time overlap
+                for (let idx = 0; idx < divSlots.length; idx++) {
+                    const entry = bunkAssignments[idx];
+                    if (!entry || entry.continuation) continue;
+                    
+                    const entryField = fieldLabel(entry.field);
+                    const entryActivity = entry._activity || entryField;
+                    const entryLocation = entry._location || entryField;
+                    
+                    // Check if this entry uses the same location
+                    const matchesLocation = entryField?.toLowerCase() === locationName.toLowerCase() ||
+                        entryLocation?.toLowerCase() === locationName.toLowerCase() ||
+                        entryActivity?.toLowerCase() === locationName.toLowerCase();
+                    
+                    if (!matchesLocation) continue;
+                    
+                    // ★★★ KEY FIX: Check TIME OVERLAP, not slot index ★★★
+                    const slotInfo = divSlots[idx];
+                    if (!slotInfo || slotInfo.startMin === undefined) continue;
+                    
+                    for (const claimed of claimedTimeRanges) {
+                        // Time overlap: NOT (end1 <= start2 OR start1 >= end2)
+                        const hasOverlap = !(slotInfo.endMin <= claimed.startMin || slotInfo.startMin >= claimed.endMin);
+                        
+                        if (hasOverlap) {
+                            if (!usageBySlot[claimed.slotIdx]) usageBySlot[claimed.slotIdx] = [];
+                            
+                            // Avoid duplicate entries for same bunk in same claimed slot
+                            if (!usageBySlot[claimed.slotIdx].find(u => u.bunk === String(bunkName))) {
+                                usageBySlot[claimed.slotIdx].push({
+                                    bunk: String(bunkName),
+                                    division: divName,
+                                    activity: entryActivity || entryField,
+                                    field: entryField,
+                                    canEdit: editBunks.has(String(bunkName)),
+                                    theirSlot: idx,
+                                    overlapStart: Math.max(slotInfo.startMin, claimed.startMin),
+                                    overlapEnd: Math.min(slotInfo.endMin, claimed.endMin)
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
-        
-        return {
-            hasConflict, conflicts,
-            editableConflicts: conflicts.filter(c => c.canEdit),
-            nonEditableConflicts: conflicts.filter(c => !c.canEdit),
-            globalLock, canShare: maxCapacity > 1 && currentUsage < maxCapacity, currentUsage, maxCapacity
-        };
     }
+    
+    // Check GlobalFieldLocks
+    let globalLock = null;
+    if (window.GlobalFieldLocks) {
+        const lockInfo = window.GlobalFieldLocks.isFieldLocked(locationName, slots, excludeBunkDiv);
+        if (lockInfo) globalLock = lockInfo;
+    }
+    
+    // Determine conflicts based on capacity
+    let hasConflict = !!globalLock, currentUsage = 0;
+    for (const slotIdx of slots) {
+        const slotUsage = usageBySlot[slotIdx] || [];
+        currentUsage = Math.max(currentUsage, slotUsage.length);
+        if (slotUsage.length >= maxCapacity) {
+            hasConflict = true;
+            slotUsage.forEach(u => { 
+                if (!conflicts.find(c => c.bunk === u.bunk && c.slot === slotIdx)) {
+                    conflicts.push({ ...u, slot: slotIdx }); 
+                }
+            });
+        }
+    }
+    
+    if (conflicts.length > 0) {
+        console.log(`[checkLocationConflict] ${locationName}: ${conflicts.length} time-based conflicts found`);
+    }
+    
+    return {
+        hasConflict, conflicts,
+        editableConflicts: conflicts.filter(c => c.canEdit),
+        nonEditableConflicts: conflicts.filter(c => !c.canEdit),
+        globalLock, canShare: maxCapacity > 1 && currentUsage < maxCapacity, currentUsage, maxCapacity
+    };
+}
 
     // =========================================================================
     // ROTATION SCORING
