@@ -228,18 +228,14 @@ function disableBypassRBACView() {
 }
 
     function shouldShowDivision(divName) {
-        if (_bypassRBACViewEnabled || window._bypassRBACViewEnabled) {
-            return true;
-        }
-        const role = window.AccessControl?.getCurrentRole?.();
-        if (role === 'owner' || role === 'admin') return true;
-        return window.AccessControl?.canAccessDivision?.(divName) ?? true;
-    }
+    const role = window.AccessControl?.getCurrentRole?.();
+    if (role === 'owner' || role === 'admin') return true;
+    return window.AccessControl?.canAccessDivision?.(divName) ?? true;
+}
 
-    function shouldHighlightBunk(bunkName) {
-        return _bypassHighlightBunks.has(String(bunkName)) || 
-               window._bypassHighlightBunks?.has(String(bunkName));
-    }
+function shouldHighlightBunk(bunkName) {
+    return false; // Now handled by getCellBypassStatus in renderBunkCell
+}
 
     // =========================================================================
     // ROTATION CONFIGURATION (for smart regeneration)
