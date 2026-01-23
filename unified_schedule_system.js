@@ -1095,31 +1095,43 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
         );
         
         if (bypassMode) {
-            const modifiedBunks = [
-                ...result.reassigned.map(r => r.bunk), 
-                ...result.failed.map(f => f.bunk)
-            ];
-            
-            window._postEditInProgress = true;
-            window._postEditTimestamp = Date.now();
-            
-            await bypassSaveAllBunks(modifiedBunks);
-            
-            const reassignedBunks = result.reassigned.map(r => r.bunk);
-            if (reassignedBunks.length > 0) {
-                enableBypassRBACView(reassignedBunks);
-            }
-            
-            if (nonEditableConflicts.length > 0) {
-                sendSchedulerNotification(
-                    [...new Set(nonEditableConflicts.map(c => c.bunk))], 
-                    location, activity, 'bypassed'
-                );
-                if (window.showToast) {
-                    window.showToast(`🔓 Bypassed ${nonEditableConflicts.length} bunk(s) from other schedulers`, 'warning');
-                }
-            }
+    const modifiedBunks = [
+        ...result.reassigned.map(r => r.bunk), 
+        ...result.failed.map(f => f.bunk)
+    ];
+    
+    window._postEditInProgress = true;
+    window._postEditTimestamp = Date.now();
+    
+    await bypassSaveAllBunks(modifiedBunks);
+    
+    // Track specific cells for temporary highlight
+    const bypassedCellKeys = [];
+    result.reassigned.forEach(r => {
+        (r.slots || []).forEach(slotIdx => {
+            bypassedCellKeys.push(`${r.bunk}:${slotIdx}`);
+        });
+    });
+    result.failed.forEach(f => {
+        (f.slots || []).forEach(slotIdx => {
+            bypassedCellKeys.push(`${f.bunk}:${slotIdx}`);
+        });
+    });
+    
+    if (bypassedCellKeys.length > 0) {
+        markCellsAsBypassed(bypassedCellKeys);
+    }
+    
+    if (nonEditableConflicts.length > 0) {
+        sendSchedulerNotification(
+            [...new Set(nonEditableConflicts.map(c => c.bunk))], 
+            location, activity, 'bypassed'
+        );
+        if (window.showToast) {
+            window.showToast(`🔓 Bypassed ${nonEditableConflicts.length} bunk(s) from other schedulers`, 'warning');
         }
+    }
+}
     }
     
     return result;
