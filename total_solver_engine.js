@@ -1,5 +1,5 @@
 // ============================================================================
-// total_solver_engine.js (ENHANCED v9.0 - DELEGATES TO ROTATION ENGINE)
+// total_solver_engine.js (ENHANCED v9.1 - UNIFIED ROTATION SCORING)
 // Backtracking Constraint Solver + League Engine
 // ----------------------------------------------------------------------------
 // ★★★ NOW DELEGATES ALL ROTATION LOGIC TO rotation_engine.js ★★★
@@ -16,6 +16,11 @@
 // - Field availability and capacity
 // - League game handling
 // - Penalty cost calculation (delegates rotation to RotationEngine)
+//
+// KEY FIXES IN v9.1:
+// - Clears rotation cache at solver start
+// - Property checks for both field AND activity names
+// - Better integration with RotationEngine
 // ============================================================================
 
 (function () {
@@ -315,7 +320,8 @@
                 }
             }
 
-            const props = activityProperties[fieldName] || {};
+            // ★★★ FIX: Check both field AND activity name for properties ★★★
+            const props = activityProperties[fieldName] || activityProperties[act] || {};
             let maxCapacity = 1;
             if (props.sharableWith?.capacity) {
                 maxCapacity = parseInt(props.sharableWith.capacity) || 1;
@@ -379,13 +385,13 @@
             if (hist + todayCount >= specialRule.maxUsage) penalty += 20000;
         }
 
-        // Division preference
-        const props = activityProperties[fieldName];
-        if (props?.preferences?.enabled) {
-            const idx = (props.preferences.list || []).indexOf(block.divName);
+        // Division preference - check both field and activity properties
+        const prefProps = activityProperties[fieldName] || activityProperties[act];
+        if (prefProps?.preferences?.enabled) {
+            const idx = (prefProps.preferences.list || []).indexOf(block.divName);
             if (idx !== -1) {
                 penalty -= (50 - idx * 5);
-            } else if (props.preferences.exclusive) {
+            } else if (prefProps.preferences.exclusive) {
                 return 999999;
             } else {
                 penalty += 2000;
@@ -554,6 +560,14 @@
                 continue;
             }
 
+            // ★★★ FIX: Verify activity properties exist (check both field and activity name) ★★★
+            const hasFieldProps = !!activityProperties[cand.field];
+            const hasActivityProps = !!activityProperties[cand.activityName];
+            if (!hasFieldProps && !hasActivityProps && cand.type !== 'special') {
+                // Skip sports without proper field configuration
+                continue;
+            }
+
             // ★★★ PRE-CHECK ROTATION - Skip activities done today ★★★
             const rotationPenalty = calculateRotationPenalty(bunk, cand.activityName, block);
             if (rotationPenalty === Infinity) {
@@ -573,7 +587,8 @@
                 const pick = {
                     field: cand.field,
                     sport: cand.sport,
-                    _activity: cand.activityName
+                    _activity: cand.activityName,
+                    _type: cand.type
                 };
                 const cost = calculatePenaltyCost(block, pick);
 
@@ -646,13 +661,14 @@
         const sorted = Solver.sortBlocksByDifficulty(allBlocks, config);
         const activityBlocks = sorted.filter(b => !b._isLeague);
         
-        console.log(`[SOLVER] Processing ${activityBlocks.length} activity blocks`);
-        console.log(`[SOLVER] ★ Using ${window.RotationEngine ? 'SUPERCHARGED RotationEngine v2.0' : 'FALLBACK scoring'}`);
-        
-        // Clear rotation cache for fresh scoring
+        // ★★★ FIX: Clear rotation cache for fresh scoring ★★★
         if (window.RotationEngine?.clearHistoryCache) {
             window.RotationEngine.clearHistoryCache();
+            console.log('[SOLVER] Rotation history cache cleared for fresh scoring');
         }
+        
+        console.log(`[SOLVER] Processing ${activityBlocks.length} activity blocks`);
+        console.log(`[SOLVER] ★ Using ${window.RotationEngine ? 'SUPERCHARGED RotationEngine v2.2' : 'FALLBACK scoring'}`);
         
         let bestSchedule = [];
         let maxDepthReached = 0;
@@ -863,6 +879,6 @@
     window.debugActivityRecommendations = Solver.debugActivityRecommendations;
     window.debugRotationConfig = Solver.debugRotationConfig;
 
-    console.log('[SOLVER] v9.0 loaded - ★ DELEGATES TO RotationEngine ★');
+    console.log('[SOLVER] v9.1 loaded - ★ UNIFIED ROTATION SCORING ★');
 
 })();
