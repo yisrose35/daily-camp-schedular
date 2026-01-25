@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_logic_fillers.js (v6.0 - DELEGATES TO ROTATION ENGINE)
+// scheduler_logic_fillers.js (v6.1 - UNIFIED ROTATION SCORING)
 // ============================================================================
 // ★★★ THIS FILE NOW DELEGATES ALL ROTATION LOGIC TO rotation_engine.js ★★★
 //
@@ -9,6 +9,12 @@
 // - Field sharing logic
 // - Preference scoring
 // - All scoring is delegated to window.RotationEngine
+//
+// KEY FIXES IN v6.1:
+// - findBestGeneralActivity now uses UNIFIED scoring (no type bias)
+// - Case-insensitive type filtering throughout
+// - Dual property lookup (checks both field AND activity names)
+// - Sports and specials compete fairly based on rotation scores
 //
 // ============================================================================
 
@@ -153,7 +159,8 @@
 
         if (state.count === 0) return true;
 
-        const props = activityProperties[fieldName] || {};
+        // ★★★ FIX: Check both field AND activity name for properties ★★★
+        const props = activityProperties[fieldName] || activityProperties[activityName] || {};
         let maxCapacity = 1;
         if (props.sharableWith?.capacity) {
             maxCapacity = parseInt(props.sharableWith.capacity) || 1;
@@ -256,7 +263,8 @@
                 return { ...pick, _rotationScore: Infinity, _blocked: true };
             }
 
-            const fieldProps = activityProperties[fieldName] || {};
+            // ★★★ FIX: Check both field AND activity name for properties ★★★
+            const fieldProps = activityProperties[fieldName] || activityProperties[actName] || {};
             const preferenceScore = calculatePreferenceScore(fieldProps, divName);
             const sharingBonus = calculateSharingBonus(fieldName, block, activityProperties);
 
@@ -292,12 +300,17 @@
         const currentSlotIndex = block.slots[0];
         const doneToday = getActivitiesDoneToday(block.bunk, currentSlotIndex);
 
+        // ★★★ FIX: Case-insensitive type filtering ★★★
         const specials = allActivities
-            .filter(a => a.type === 'Special' || a.type === 'special')
+            .filter(a => {
+                const t = (a.type || '').toLowerCase();
+                return t === 'special';
+            })
             .map(a => ({
                 field: a.name,
                 sport: null,
-                _activity: a.name
+                _activity: a.name,
+                _type: 'special'
             }));
 
         const available = specials.filter(pick => {
@@ -350,14 +363,19 @@
         const currentSlotIndex = block.slots[0];
         const doneToday = getActivitiesDoneToday(block.bunk, currentSlotIndex);
 
+        // ★★★ FIX: Case-insensitive type filtering ★★★
         const sports = allActivities
-            .filter(a => a.type === 'field' || a.type === 'sport')
+            .filter(a => {
+                const t = (a.type || '').toLowerCase();
+                return t === 'field' || t === 'sport';
+            })
             .flatMap(a => {
                 const fields = fieldsBySport[a.name] || a.allowedFields || [a.name];
                 return fields.map(f => ({
                     field: f,
                     sport: a.name,
-                    _activity: a.name
+                    _activity: a.name,
+                    _type: 'sport'
                 }));
             });
 
@@ -377,7 +395,8 @@
                 return false;
             }
 
-            if (!activityProperties[fieldName]) return false;
+            // ★★★ FIX: Check both field AND activity name for properties ★★★
+            if (!activityProperties[fieldName] && !activityProperties[pick._activity]) return false;
 
             if (!window.SchedulerCoreUtils?.canBlockFit?.(
                 block,
@@ -406,9 +425,11 @@
         const currentSlotIndex = block.slots[0];
         const doneToday = getActivitiesDoneToday(block.bunk, currentSlotIndex);
 
-        const sports = allActivities.filter(a =>
-            a.type === 'field' || a.type === 'sport'
-        );
+        // ★★★ FIX: Case-insensitive type filtering ★★★
+        const sports = allActivities.filter(a => {
+            const t = (a.type || '').toLowerCase();
+            return t === 'field' || t === 'sport';
+        });
 
         const picks = [];
         sports.forEach(sport => {
@@ -419,7 +440,8 @@
                 picks.push({
                     field: fieldName,
                     sport: sportName,
-                    _activity: sportName
+                    _activity: sportName,
+                    _type: 'sport'
                 });
             });
         });
@@ -436,7 +458,8 @@
                 return false;
             }
 
-            if (!activityProperties[fieldName]) return false;
+            // ★★★ FIX: Check both field AND activity name for properties ★★★
+            if (!activityProperties[fieldName] && !activityProperties[actName]) return false;
 
             if (!canShareWithActivity(fieldName, block, actName, activityProperties)) {
                 return false;
@@ -460,7 +483,11 @@
     }
 
     // =========================================================================
-    // GENERAL ACTIVITY SELECTOR (MASTER SELECTOR)
+    // GENERAL ACTIVITY SELECTOR (MASTER SELECTOR) - UNIFIED SCORING v2.0
+    // =========================================================================
+    // ★★★ FIXED: Now uses unified scoring for BOTH sports and specials ★★★
+    // Instead of prioritizing one type over another, all available options
+    // compete fairly based on their rotation scores.
     // =========================================================================
 
     window.findBestGeneralActivity = function (
@@ -473,44 +500,108 @@
         rotationHistory,
         historicalCounts
     ) {
-        // 1) Try SPECIALS FIRST
-        const specialPick = window.findBestSpecial(
-            block,
-            allActivities,
-            fieldUsageBySlot,
-            yesterdayHistory,
-            activityProperties,
-            rotationHistory,
-            historicalCounts
-        );
-        if (specialPick) return specialPick;
+        const currentSlotIndex = block.slots?.[0] || 0;
+        const doneToday = getActivitiesDoneToday(block.bunk, currentSlotIndex);
+        const fieldsBySport = window.SchedulerCoreUtils?.loadAndFilterData?.()?.fieldsBySport || {};
 
-        // 2) Try SPORTS SLOT
-        const sportSlotPick = findBestSportsSlot(
-            block,
-            allActivities,
-            fieldUsageBySlot,
-            yesterdayHistory,
-            activityProperties,
-            rotationHistory,
-            historicalCounts
-        );
-        if (sportSlotPick) return sportSlotPick;
+        // ★★★ UNIFIED POOL: Collect ALL available options (specials + sports) ★★★
+        const allPicks = [];
 
-        // 3) Try specific sport fallback
-        const sportPick = window.findBestSportActivity(
-            block,
-            allActivities,
-            fieldUsageBySlot,
-            yesterdayHistory,
-            activityProperties,
-            rotationHistory,
-            historicalCounts
-        );
-        if (sportPick) return sportPick;
+        // 1) Collect SPECIAL activities
+        const specials = allActivities.filter(a => {
+            const t = (a.type || '').toLowerCase();
+            return t === 'special';
+        });
 
-        // 4) NOTHING FITS → Free
-        return {
+        specials.forEach(special => {
+            const actName = special.name;
+            const fieldName = fieldLabel(actName);
+
+            // Skip if unavailable
+            if (isFieldUnavailable(fieldName, block)) return;
+            if (doneToday.has((actName || '').toLowerCase().trim())) return;
+
+            // Check sharing and capacity
+            if (!canShareWithActivity(fieldName, block, actName, activityProperties)) return;
+
+            // Check canBlockFit - look up properties by activity name
+            const props = activityProperties[fieldName] || activityProperties[actName] || {};
+            if (props.available === false) return;
+
+            if (!window.SchedulerCoreUtils?.canBlockFit?.(
+                block,
+                fieldName,
+                activityProperties,
+                fieldUsageBySlot,
+                actName,
+                false
+            )) return;
+
+            allPicks.push({
+                field: fieldName,
+                sport: null,
+                _activity: actName,
+                _type: 'special'
+            });
+        });
+
+        // 2) Collect SPORT activities
+        const sports = allActivities.filter(a => {
+            const t = (a.type || '').toLowerCase();
+            return t === 'field' || t === 'sport';
+        });
+
+        sports.forEach(sport => {
+            const sportName = sport.name;
+            const fields = fieldsBySport[sportName] || sport.allowedFields || [sportName];
+
+            fields.forEach(f => {
+                const fieldName = fieldLabel(f);
+                const actName = sportName;
+
+                // Skip if unavailable
+                if (isFieldUnavailable(fieldName, block)) return;
+                if (doneToday.has((actName || '').toLowerCase().trim())) return;
+
+                // Check if field has activity properties (check both field AND sport)
+                const fieldProps = activityProperties[fieldName];
+                const sportProps = activityProperties[sportName];
+                if (!fieldProps && !sportProps) return;
+
+                if (!canShareWithActivity(fieldName, block, actName, activityProperties)) return;
+
+                if (!window.SchedulerCoreUtils?.canBlockFit?.(
+                    block,
+                    fieldName,
+                    activityProperties,
+                    fieldUsageBySlot,
+                    actName,
+                    false
+                )) return;
+
+                allPicks.push({
+                    field: fieldName,
+                    sport: sportName,
+                    _activity: actName,
+                    _type: 'sport'
+                });
+            });
+        });
+
+        // 3) If no picks available, return Free
+        if (allPicks.length === 0) {
+            return {
+                field: "Free",
+                sport: null,
+                _activity: "Free"
+            };
+        }
+
+        // 4) ★★★ UNIFIED SCORING: Sort ALL picks by rotation score ★★★
+        const sorted = sortPicksByRotationScore(allPicks, block, activityProperties);
+
+        // 5) Return the best pick (lowest score wins)
+        return sorted[0] || {
             field: "Free",
             sport: null,
             _activity: "Free"
@@ -551,6 +642,6 @@
         return 0;
     };
 
-    console.log('[FILLERS] v6.0 loaded - DELEGATING to RotationEngine');
+    console.log('[FILLERS] v6.1 loaded - UNIFIED SCORING, DELEGATING to RotationEngine');
 
 })();
