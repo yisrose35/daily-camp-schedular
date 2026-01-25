@@ -1365,6 +1365,10 @@
         // Diagnostics
         diagnose,
         
+        // ★ EXPOSED FOR VERIFICATION - Fix 7
+        CONFIG,
+        get _loadAbortController() { return _loadAbortController; },
+        
         // Status
         get isInitialized() { return _isInitialized; },
         get isLoading() { return _isLoading; },
