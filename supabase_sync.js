@@ -1054,6 +1054,10 @@
         // Toast
         showToast: showSyncToast,
         
+        // ★ EXPOSED FOR VERIFICATION - Fix 6
+        scheduleReconnect,
+        get _reconnectAttempts() { return _reconnectAttempts; },
+        
         // State
         get isInitialized() { return _isInitialized; },
         get currentDateKey() { return _currentDateKey; },
