@@ -1,8 +1,14 @@
 // =============================================================================
-// schedule_orchestrator.js v1.2 — CAMPISTRY SCHEDULE ORCHESTRATOR
+// schedule_orchestrator.js v1.3 — CAMPISTRY SCHEDULE ORCHESTRATOR
 // =============================================================================
 //
 // ★★★ THE SINGLE SOURCE OF TRUTH FOR ALL SCHEDULE OPERATIONS ★★★
+//
+// v1.3 FIXES:
+// - ★ IMPROVED TIMEOUT - Uses AbortController for proper cancellation
+// - ★ EXPONENTIAL BACKOFF VERIFICATION - 500ms, 1s, 2s delays
+// - ★ BETTER MERGE - Properly handles unifiedTimes from all records
+// - ★ NETWORK AWARENESS - Graceful offline handling
 //
 // v1.2 FIXES:
 // - ★ SAVE VERIFICATION - confirms data actually reached Supabase
@@ -32,21 +38,21 @@
 (function() {
     'use strict';
 
-    console.log('🎯 Campistry Schedule Orchestrator v1.2 loading...');
+    console.log('🎯 Campistry Schedule Orchestrator v1.3 loading...');
 
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
 
     const CONFIG = {
-        VERSION: '1.2.0',
+        VERSION: '1.3.0',
         DEBUG: true,
         LOCAL_STORAGE_KEY: 'campDailyData_v1',
         
         // Timing
         DEBOUNCE_SAVE_MS: 1000,       // Debounce saves to prevent rapid-fire
         LOAD_TIMEOUT_MS: 10000,       // Max wait for cloud load
-        SAVE_VERIFY_DELAY_MS: 500,    // Wait before verifying save
+        SAVE_VERIFY_BASE_DELAY_MS: 500,  // ★ Exponential backoff base
         MAX_SAVE_RETRIES: 3,          // Retry failed saves
         SAVE_RETRY_DELAY_MS: 2000,    // Delay between retries
         
@@ -76,6 +82,7 @@
     let _saveQueue = [];
     let _lastLoadResult = null;
     let _lastSaveTime = 0;
+    let _loadAbortController = null;  // ★ NEW: For cancellable loads
 
     // =========================================================================
     // LOGGING
@@ -276,7 +283,7 @@
             window.leagueAssignments = {};
         }
 
-        // Hydrate unifiedTimes if present
+        // ★★★ FIX: Hydrate unifiedTimes if present ★★★
         if (data.unifiedTimes?.length > 0) {
             window.unifiedTimes = JSON.parse(JSON.stringify(data.unifiedTimes));
             log('Hydrated unifiedTimes:', window.unifiedTimes.length, 'slots');
@@ -311,13 +318,10 @@
     }
 
     // =========================================================================
-    // CLOUD VERIFICATION
+    // ★★★ IMPROVED: CLOUD VERIFICATION WITH EXPONENTIAL BACKOFF ★★★
     // =========================================================================
 
-    /**
-     * Verify that data actually reached Supabase.
-     */
-    async function verifyCloudSave(dateKey, expectedBunkCount) {
+    async function verifyCloudSave(dateKey, expectedBunkCount, maxAttempts = 3) {
         const client = window.CampistryDB?.getClient?.();
         const campId = window.CampistryDB?.getCampId?.();
         const userId = window.CampistryDB?.getUserId?.();
@@ -326,53 +330,55 @@
             return { verified: false, reason: 'Not authenticated' };
         }
 
-        try {
-            const { data, error } = await client
-                .from('daily_schedules')
-                .select('schedule_data, updated_at')
-                .eq('camp_id', campId)
-                .eq('date_key', dateKey)
-                .eq('scheduler_id', userId)
-                .single();
-
-            if (error) {
-                log('Verify query error:', error.message);
-                return { verified: false, reason: error.message };
-            }
-
-            if (!data) {
-                return { verified: false, reason: 'No record found' };
-            }
-
-            const cloudBunkCount = Object.keys(data.schedule_data?.scheduleAssignments || {}).length;
-            log(`Verification: Expected ~${expectedBunkCount} bunks, found ${cloudBunkCount} in cloud`);
-
-            // Allow some variance for filtering (user may not have all divisions)
-            const verified = cloudBunkCount > 0;
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            // Exponential backoff: 500ms, 1000ms, 2000ms
+            const delay = Math.min(CONFIG.SAVE_VERIFY_BASE_DELAY_MS * Math.pow(2, attempt - 1), 2000);
+            log(`Verification attempt ${attempt}/${maxAttempts}, waiting ${delay}ms...`);
+            await new Promise(r => setTimeout(r, delay));
             
-            return { 
-                verified, 
-                cloudBunkCount,
-                updatedAt: data.updated_at
-            };
+            try {
+                const { data, error } = await client
+                    .from('daily_schedules')
+                    .select('schedule_data, updated_at')
+                    .eq('camp_id', campId)
+                    .eq('date_key', dateKey)
+                    .eq('scheduler_id', userId)
+                    .single();
 
-        } catch (e) {
-            logError('Verify exception:', e);
-            return { verified: false, reason: e.message };
+                if (error) {
+                    log(`Verify attempt ${attempt} error:`, error.message);
+                    continue;
+                }
+
+                if (!data) {
+                    log(`Verify attempt ${attempt}: No record found`);
+                    continue;
+                }
+
+                const cloudBunkCount = Object.keys(data.schedule_data?.scheduleAssignments || {}).length;
+                log(`Verification attempt ${attempt}: Found ${cloudBunkCount} bunks in cloud`);
+
+                // Allow some variance for filtering (user may not have all divisions)
+                if (cloudBunkCount > 0) {
+                    return { 
+                        verified: true, 
+                        cloudBunkCount,
+                        updatedAt: data.updated_at,
+                        attempt
+                    };
+                }
+            } catch (e) {
+                log(`Verify attempt ${attempt} exception:`, e.message);
+            }
         }
+        
+        return { verified: false, reason: `Failed after ${maxAttempts} attempts` };
     }
 
     // =========================================================================
-    // CORE: LOAD SCHEDULE (FORCE CLOUD)
+    // ★★★ IMPROVED: LOAD SCHEDULE WITH ABORTCONTROLLER TIMEOUT ★★★
     // =========================================================================
 
-    /**
-     * Load schedule for a date.
-     * Priority:
-     * 1. Cloud (daily_schedules table) - DIRECT QUERY, merges all scheduler records
-     * 2. localStorage (fallback if cloud unavailable)
-     * After loading, hydrates window globals and updates UI.
-     */
     async function loadSchedule(dateKey, options = {}) {
         if (!dateKey) dateKey = getCurrentDateKey();
         
@@ -384,6 +390,12 @@
             log('Already loading, skipping...');
             return _lastLoadResult;
         }
+
+        // Cancel any previous load
+        if (_loadAbortController) {
+            _loadAbortController.abort();
+        }
+        _loadAbortController = new AbortController();
 
         _isLoading = true;
         setCurrentDateKey(dateKey);
@@ -399,26 +411,29 @@
 
         try {
             // ═══════════════════════════════════════════════════════════════
-            // STEP 1: DIRECT CLOUD QUERY (bypass ScheduleDB caching)
+            // STEP 1: DIRECT CLOUD QUERY WITH PROPER TIMEOUT
             // ═══════════════════════════════════════════════════════════════
             
             const client = window.CampistryDB?.getClient?.();
             const campId = window.CampistryDB?.getCampId?.();
 
-            if (client && campId) {
+            if (client && campId && navigator.onLine) {
                 log('Step 1: Direct cloud query...');
                 
                 try {
-                    const { data: records, error } = await Promise.race([
-                        client
-                            .from('daily_schedules')
-                            .select('*')
-                            .eq('camp_id', campId)
-                            .eq('date_key', dateKey),
-                        new Promise((_, reject) => 
-                            setTimeout(() => reject(new Error('Cloud timeout')), CONFIG.LOAD_TIMEOUT_MS)
-                        )
-                    ]);
+                    // ★★★ IMPROVED: Use AbortController for proper timeout ★★★
+                    const timeoutId = setTimeout(() => {
+                        _loadAbortController.abort();
+                    }, CONFIG.LOAD_TIMEOUT_MS);
+                    
+                    const { data: records, error } = await client
+                        .from('daily_schedules')
+                        .select('*')
+                        .eq('camp_id', campId)
+                        .eq('date_key', dateKey)
+                        .abortSignal(_loadAbortController.signal);
+                    
+                    clearTimeout(timeoutId);
 
                     if (!error && records && records.length > 0) {
                         // Merge all scheduler records
@@ -434,17 +449,28 @@
                         };
 
                         log('✅ Cloud load success:', result.bunkCount, 'bunks from', records.length, 'records');
+                        log('   unifiedTimes:', merged.unifiedTimes?.length || 0, 'slots');
 
                         // Update localStorage cache
                         setLocalData(dateKey, merged);
                     } else if (error) {
-                        logWarn('Cloud query error:', error.message);
+                        if (error.name === 'AbortError') {
+                            logWarn('Cloud query timed out');
+                        } else {
+                            logWarn('Cloud query error:', error.message);
+                        }
                     } else {
                         log('No cloud records for', dateKey);
                     }
                 } catch (cloudErr) {
-                    logWarn('Cloud load failed:', cloudErr.message);
+                    if (cloudErr.name === 'AbortError') {
+                        logWarn('Cloud load aborted (timeout or cancelled)');
+                    } else {
+                        logWarn('Cloud load failed:', cloudErr.message);
+                    }
                 }
+            } else if (!navigator.onLine) {
+                logWarn('Offline - using localStorage only');
             } else {
                 logWarn('Not authenticated, using localStorage only');
             }
@@ -514,13 +540,14 @@
             dispatch(CONFIG.EVENTS.ERROR, { operation: 'load', error: e.message, dateKey });
         } finally {
             _isLoading = false;
+            _loadAbortController = null;
         }
 
         return result;
     }
 
     /**
-     * Merge multiple scheduler records into one.
+     * ★★★ IMPROVED: Merge multiple scheduler records with proper unifiedTimes handling ★★★
      */
     function mergeCloudRecords(records) {
         const merged = {
@@ -544,14 +571,27 @@
                 Object.assign(merged.leagueAssignments, data.leagueAssignments);
             }
 
-            // Use longest unifiedTimes array
-            if (data.unifiedTimes?.length > merged.unifiedTimes.length) {
-                merged.unifiedTimes = data.unifiedTimes;
+            // ★★★ FIX: Use longest unifiedTimes array from schedule_data ★★★
+            if (data.unifiedTimes && Array.isArray(data.unifiedTimes)) {
+                if (data.unifiedTimes.length > merged.unifiedTimes.length) {
+                    merged.unifiedTimes = data.unifiedTimes;
+                }
+            }
+            
+            // ★★★ FIX: Also check record.unified_times (separate column) ★★★
+            if (record.unified_times && Array.isArray(record.unified_times)) {
+                if (record.unified_times.length > merged.unifiedTimes.length) {
+                    merged.unifiedTimes = record.unified_times;
+                }
             }
 
             // Merge division times
             if (data.divisionTimes) {
-                Object.assign(merged.divisionTimes, data.divisionTimes);
+                Object.entries(data.divisionTimes).forEach(([divName, slots]) => {
+                    if (!merged.divisionTimes[divName] || slots.length > merged.divisionTimes[divName].length) {
+                        merged.divisionTimes[divName] = slots;
+                    }
+                });
             }
 
             // Rainy day flag
@@ -559,6 +599,12 @@
                 merged.isRainyDay = true;
             }
         }
+
+        log('Merged records:', {
+            bunks: Object.keys(merged.scheduleAssignments).length,
+            unifiedTimes: merged.unifiedTimes.length,
+            divisionTimes: Object.keys(merged.divisionTimes).length
+        });
 
         return merged;
     }
@@ -585,6 +631,13 @@
 
         // Always save to localStorage immediately
         setLocalData(dateKey, data);
+
+        // Check if offline
+        if (!navigator.onLine) {
+            log('Offline - saved to localStorage only');
+            showNotification('📴 Saved locally (offline)', 'warning');
+            return { success: true, target: 'localStorage', offline: true };
+        }
 
         // Debounce cloud saves unless immediate
         if (options.immediate) {
@@ -654,7 +707,7 @@
                 throw new Error(result?.error || 'Save failed');
             }
 
-            if (result.target !== 'cloud') {
+            if (result.target !== 'cloud' && result.target !== 'cloud-verified' && result.target !== 'cloud-unverified') {
                 // Saved to local only - retry for cloud
                 if (attempt < CONFIG.MAX_SAVE_RETRIES) {
                     log('Saved to local only, retrying for cloud...');
@@ -669,11 +722,19 @@
             }
 
             // ═══════════════════════════════════════════════════════════════
-            // STEP 2: VERIFY the save reached cloud
+            // STEP 2: VERIFY the save reached cloud (if not already verified)
             // ═══════════════════════════════════════════════════════════════
             
-            await new Promise(r => setTimeout(r, CONFIG.SAVE_VERIFY_DELAY_MS));
+            if (result.verified) {
+                log('✅ Save already verified by ScheduleDB');
+                _lastSaveTime = Date.now();
+                showNotification(`Saved ${bunkCount} bunks`, 'success');
+                dispatch(CONFIG.EVENTS.SAVED, { dateKey, target: 'cloud-verified', bunkCount });
+                _isSaving = false;
+                return { success: true, target: 'cloud-verified', bunkCount, verified: true };
+            }
             
+            // ★★★ IMPROVED: Verify with exponential backoff ★★★
             const verification = await verifyCloudSave(dateKey, bunkCount);
             
             if (verification.verified) {
@@ -1177,12 +1238,13 @@
         const dateKey = getCurrentDateKey();
         
         console.log('═══════════════════════════════════════════════════════');
-        console.log('🎯 ORCHESTRATOR DIAGNOSIS v1.2');
+        console.log('🎯 ORCHESTRATOR DIAGNOSIS v1.3');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Version:', CONFIG.VERSION);
         console.log('Initialized:', _isInitialized);
         console.log('Is Loading:', _isLoading);
         console.log('Is Saving:', _isSaving);
+        console.log('Online:', navigator.onLine);
         console.log('Current Date Key:', dateKey);
         console.log('Last Save Time:', _lastSaveTime ? new Date(_lastSaveTime).toISOString() : 'Never');
         console.log('');
@@ -1200,6 +1262,7 @@
         if (localData) {
             const localBunks = Object.keys(localData.scheduleAssignments || {}).length;
             console.log('scheduleAssignments:', localBunks, 'bunks');
+            console.log('unifiedTimes:', (localData.unifiedTimes || []).length, 'slots');
             console.log('Updated at:', localData._updatedAt || 'Unknown');
         } else {
             console.log('No data for', dateKey);
@@ -1219,7 +1282,7 @@
             try {
                 const { data, error } = await client
                     .from('daily_schedules')
-                    .select('scheduler_id, scheduler_name, divisions, updated_at, schedule_data')
+                    .select('scheduler_id, scheduler_name, divisions, updated_at, schedule_data, unified_times')
                     .eq('camp_id', campId)
                     .eq('date_key', dateKey);
 
@@ -1232,11 +1295,12 @@
                     let totalCloudBunks = 0;
                     data.forEach((r, i) => {
                         const bunks = Object.keys(r.schedule_data?.scheduleAssignments || {}).length;
+                        const slots = r.schedule_data?.unifiedTimes?.length || r.unified_times?.length || 0;
                         totalCloudBunks += bunks;
                         const isMe = r.scheduler_id === userId ? ' (YOU)' : '';
                         console.log(`  [${i + 1}] ${r.scheduler_name || 'Unknown'}${isMe}`);
                         console.log(`      Divisions: ${JSON.stringify(r.divisions)}`);
-                        console.log(`      Bunks: ${bunks}`);
+                        console.log(`      Bunks: ${bunks}, Slots: ${slots}`);
                         console.log(`      Updated: ${r.updated_at}`);
                     });
                     console.log('Total cloud bunks (merged):', totalCloudBunks);
@@ -1249,7 +1313,7 @@
         
         console.log('=== Consistency Check ===');
         if (client && campId && windowBunks > 0) {
-            const verification = await verifyCloudSave(dateKey, windowBunks);
+            const verification = await verifyCloudSave(dateKey, windowBunks, 1);
             if (verification.verified) {
                 console.log('✅ Your data is in the cloud');
             } else {
@@ -1320,6 +1384,6 @@
         setTimeout(initialize, 200);
     }
 
-    console.log('🎯 Campistry Schedule Orchestrator v1.2 loaded');
+    console.log('🎯 Campistry Schedule Orchestrator v1.3 loaded');
 
 })();
