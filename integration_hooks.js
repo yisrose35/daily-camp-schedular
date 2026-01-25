@@ -1,6 +1,11 @@
 // =============================================================================
-// integration_hooks.js v6.2 — CAMPISTRY SCHEDULER INTEGRATION
+// integration_hooks.js v6.3 — CAMPISTRY SCHEDULER INTEGRATION
 // =============================================================================
+//
+// v6.3 FIXES:
+// - ★ NEW: CloudPermissions unified permission helper
+// - ★ IMPROVED: Better network awareness in save operations
+// - ★ IMPROVED: unifiedTimes hydration from cloud
 //
 // v6.2 FIXES:
 // - ★ FIXED DUPLICATE saveGlobalSettings - single authoritative handler
@@ -22,7 +27,7 @@
 (function() {
     'use strict';
 
-    console.log('🔗 Campistry Integration Hooks v6.2 loading...');
+    console.log('🔗 Campistry Integration Hooks v6.3 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -66,6 +71,172 @@
     function logError(...args) {
         console.error('🔗 [Hooks] ERROR:', ...args);
     }
+
+    // =========================================================================
+    // ★★★ NEW: UNIFIED CLOUDPERMISSIONS HELPER ★★★
+    // =========================================================================
+    
+    /**
+     * CloudPermissions - Unified permission checking across all systems.
+     * Provides consistent role and permission access regardless of which
+     * permission system is initialized.
+     */
+    window.CloudPermissions = {
+        /**
+         * Get current user's role with priority chain.
+         */
+        getRole() {
+            // Priority: AccessControl > CampistryDB > localStorage
+            return window.AccessControl?.getCurrentRole?.() ||
+                   window.CampistryDB?.getRole?.() ||
+                   localStorage.getItem('campistry_role') || 
+                   'viewer';
+        },
+        
+        /**
+         * Check if user has owner or admin access.
+         */
+        hasFullAccess() {
+            const role = this.getRole();
+            return role === 'owner' || role === 'admin';
+        },
+        
+        /**
+         * Check if user is the camp owner.
+         */
+        isOwner() {
+            return this.getRole() === 'owner';
+        },
+        
+        /**
+         * Check if user is an admin (includes owner).
+         */
+        isAdmin() {
+            const role = this.getRole();
+            return role === 'owner' || role === 'admin';
+        },
+        
+        /**
+         * Get editable bunks with proper fallback chain.
+         */
+        getEditableBunks() {
+            // Priority: AccessControl > PermissionsDB > compute from divisions
+            const acDivisions = window.AccessControl?.getEditableDivisions?.() || [];
+            if (acDivisions.length > 0) {
+                const bunks = [];
+                const divisions = window.divisions || {};
+                acDivisions.forEach(divName => {
+                    const divData = divisions[divName] || divisions[String(divName)];
+                    if (divData?.bunks) {
+                        bunks.push(...divData.bunks);
+                    }
+                });
+                return bunks.map(String);
+            }
+            
+            // Fallback to PermissionsDB
+            const permBunks = window.PermissionsDB?.getEditableBunks?.() || [];
+            if (permBunks.length > 0) {
+                return permBunks.map(String);
+            }
+            
+            // Full access fallback
+            if (this.hasFullAccess()) {
+                const allBunks = [];
+                const divisions = window.divisions || {};
+                Object.values(divisions).forEach(div => {
+                    if (div.bunks) allBunks.push(...div.bunks);
+                });
+                return allBunks.map(String);
+            }
+            
+            return [];
+        },
+        
+        /**
+         * Get editable divisions with proper fallback chain.
+         */
+        getEditableDivisions() {
+            // Full access gets everything
+            if (this.hasFullAccess()) {
+                return Object.keys(window.divisions || {});
+            }
+            
+            // Priority: AccessControl > PermissionsDB
+            const acDivisions = window.AccessControl?.getEditableDivisions?.() || [];
+            if (acDivisions.length > 0) {
+                return acDivisions;
+            }
+            
+            return window.PermissionsDB?.getEditableDivisions?.() || [];
+        },
+        
+        /**
+         * Check if user can edit a specific division.
+         */
+        canEditDivision(divisionName) {
+            if (this.hasFullAccess()) return true;
+            return this.getEditableDivisions().includes(divisionName);
+        },
+        
+        /**
+         * Check if user can edit a specific bunk.
+         */
+        canEditBunk(bunkName) {
+            if (this.hasFullAccess()) return true;
+            return this.getEditableBunks().includes(String(bunkName));
+        },
+        
+        /**
+         * Get current user info with fallback chain.
+         */
+        getUserInfo() {
+            // Priority: AccessControl > CampistryDB > membership
+            const acInfo = window.AccessControl?.getCurrentUserInfo?.();
+            if (acInfo) return acInfo;
+            
+            const membership = window._campistryMembership;
+            if (membership) {
+                return {
+                    userId: window.CampistryDB?.getUserId?.(),
+                    name: membership.name,
+                    email: window.CampistryDB?.getSession?.()?.user?.email
+                };
+            }
+            
+            const session = window.CampistryDB?.getSession?.();
+            if (session?.user) {
+                return {
+                    userId: session.user.id,
+                    email: session.user.email,
+                    name: session.user.email?.split('@')[0] || 'Unknown'
+                };
+            }
+            
+            return null;
+        },
+        
+        /**
+         * Diagnostic function.
+         */
+        diagnose() {
+            console.log('═══════════════════════════════════════════════════════');
+            console.log('🔐 CLOUDPERMISSIONS DIAGNOSTIC');
+            console.log('═══════════════════════════════════════════════════════');
+            console.log('Role:', this.getRole());
+            console.log('Has Full Access:', this.hasFullAccess());
+            console.log('Is Owner:', this.isOwner());
+            console.log('Editable Divisions:', this.getEditableDivisions());
+            console.log('Editable Bunks:', this.getEditableBunks().length);
+            console.log('User Info:', this.getUserInfo());
+            console.log('');
+            console.log('Sources:');
+            console.log('  AccessControl role:', window.AccessControl?.getCurrentRole?.());
+            console.log('  CampistryDB role:', window.CampistryDB?.getRole?.());
+            console.log('  localStorage role:', localStorage.getItem('campistry_role'));
+            console.log('═══════════════════════════════════════════════════════');
+        }
+    };
 
     // =========================================================================
     // USER NOTIFICATIONS
@@ -201,6 +372,13 @@
             return;
         }
 
+        // ★★★ NEW: Check if online before attempting cloud sync ★★★
+        if (!navigator.onLine) {
+            log('Offline - changes saved locally only');
+            _pendingChanges = {};
+            return;
+        }
+
         const client = window.CampistryDB?.getClient?.();
         const campId = window.CampistryDB?.getCampId?.();
         
@@ -315,6 +493,19 @@
             return { success: true, target: 'empty' };
         }
 
+        // ★★★ NEW: Check if online ★★★
+        if (!navigator.onLine) {
+            log('[VERIFIED SAVE] Offline - saved to localStorage only');
+            showNotification('📴 Saved locally (offline)', 'warning');
+            
+            // Queue for later via ScheduleSync if available
+            if (window.ScheduleSync?.queueSave) {
+                window.ScheduleSync.queueSave(dateKey, data);
+            }
+            
+            return { success: true, target: 'localStorage', offline: true };
+        }
+
         if (!window.ScheduleDB?.saveSchedule) {
             log('[VERIFIED SAVE] ScheduleDB not ready, waiting...');
             if (attempt < CONFIG.SAVE_MAX_RETRIES) {
@@ -341,7 +532,7 @@
         try {
             const result = await window.ScheduleDB.saveSchedule(dateKey, data);
             
-            if (result?.success && result?.target === 'cloud') {
+            if (result?.success && (result?.target === 'cloud' || result?.target === 'cloud-verified')) {
                 console.log('🔗 ✅ Schedule saved to cloud:', bunkCount, 'bunks');
                 showNotification(`Saved ${bunkCount} bunks`, 'success');
                 return result;
@@ -401,9 +592,13 @@
                 if (result.data.leagueAssignments) {
                     window.leagueAssignments = result.data.leagueAssignments;
                 }
+                
+                // ★★★ FIX: Properly hydrate unifiedTimes ★★★
                 if (result.data.unifiedTimes?.length > 0) {
                     window.unifiedTimes = result.data.unifiedTimes;
+                    log('[CLOUD LOAD] Hydrated unifiedTimes:', window.unifiedTimes.length, 'slots');
                 }
+                
                 if (result.data.divisionTimes) {
                     window.divisionTimes = result.data.divisionTimes;
                 }
@@ -695,6 +890,7 @@
                     window.scheduleAssignments = result.data.scheduleAssignments || {};
                     window.leagueAssignments = result.data.leagueAssignments || {};
                     
+                    // ★★★ FIX: Properly hydrate unifiedTimes ★★★
                     if (result.data.unifiedTimes?.length > 0) {
                         window.unifiedTimes = result.data.unifiedTimes;
                     }
@@ -708,6 +904,7 @@
 
                     console.log('🔗 Loaded schedule for', newDateKey, {
                         bunks: Object.keys(window.scheduleAssignments).length,
+                        slots: window.unifiedTimes?.length || 0,
                         source: result.source
                     });
                 }
@@ -817,7 +1014,17 @@
                     }
                     
                     if (result?.success && result.data) {
-                        const myAssignments = window.PermissionsDB?.filterToMyDivisions?.(window.scheduleAssignments) || {};
+                        // Use CloudPermissions for filtering
+                        const myBunks = new Set(window.CloudPermissions?.getEditableBunks?.() || []);
+                        const myAssignments = {};
+                        
+                        // Keep my current assignments
+                        Object.entries(window.scheduleAssignments || {}).forEach(([bunk, data]) => {
+                            if (myBunks.has(String(bunk))) {
+                                myAssignments[bunk] = data;
+                            }
+                        });
+                        
                         const remoteAssignments = result.data.scheduleAssignments || {};
 
                         window.scheduleAssignments = {
@@ -826,6 +1033,11 @@
                         };
 
                         window.leagueAssignments = result.data.leagueAssignments || window.leagueAssignments;
+                        
+                        // ★★★ FIX: Also update unifiedTimes from remote ★★★
+                        if (result.data.unifiedTimes?.length > (window.unifiedTimes?.length || 0)) {
+                            window.unifiedTimes = result.data.unifiedTimes;
+                        }
 
                         if (window.updateTable) {
                             window.updateTable();
@@ -858,15 +1070,16 @@
     }
 
     function applyBlockedCellStyles() {
-        if (!window.PermissionsDB?.hasFullAccess || window.PermissionsDB.hasFullAccess()) {
+        // Use CloudPermissions for consistent permission checking
+        if (window.CloudPermissions?.hasFullAccess?.()) {
             return;
         }
 
-        const editableBunks = new Set(window.PermissionsDB?.getEditableBunks?.() || []);
+        const editableBunks = new Set(window.CloudPermissions?.getEditableBunks?.() || []);
         
         document.querySelectorAll('.schedule-cell').forEach(cell => {
             const bunkId = cell.dataset?.bunkId;
-            if (bunkId && !editableBunks.has(bunkId)) {
+            if (bunkId && !editableBunks.has(String(bunkId))) {
                 cell.classList.add('blocked-cell');
                 cell.title = 'View only - assigned to another scheduler';
             }
@@ -911,7 +1124,8 @@
             const original = window.eraseAllSchedules;
             
             window.eraseAllSchedules = async function(dateKey) {
-                const hasFullAccess = window.PermissionsDB?.hasFullAccess?.() || false;
+                // Use CloudPermissions for consistent permission checking
+                const hasFullAccess = window.CloudPermissions?.hasFullAccess?.() || false;
                 
                 if (hasFullAccess) {
                     if (!confirm(`Delete ALL schedules for ${dateKey}?\n\nThis will delete data from all schedulers.`)) {
@@ -1085,9 +1299,10 @@
         const client = window.CampistryDB?.getClient?.();
 
         console.log('═══════════════════════════════════════════════════════');
-        console.log('SCHEDULE SYNC DIAGNOSTIC v6.2');
+        console.log('SCHEDULE SYNC DIAGNOSTIC v6.3');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Date:', dateKey);
+        console.log('Online:', navigator.onLine);
         console.log('Camp ID:', campId || 'MISSING');
         console.log('User ID:', userId?.substring(0, 8) + '...' || 'MISSING');
         console.log('');
@@ -1096,12 +1311,18 @@
         console.log('  unifiedTimes:', (window.unifiedTimes || []).length, 'slots');
         console.log('  divisionTimes:', Object.keys(window.divisionTimes || {}).length, 'divisions');
         console.log('');
+        console.log('CloudPermissions:');
+        console.log('  Role:', window.CloudPermissions?.getRole?.());
+        console.log('  Has Full Access:', window.CloudPermissions?.hasFullAccess?.());
+        console.log('  Editable Divisions:', window.CloudPermissions?.getEditableDivisions?.()?.length || 0);
+        console.log('  Editable Bunks:', window.CloudPermissions?.getEditableBunks?.()?.length || 0);
+        console.log('');
 
         if (client && campId) {
             try {
                 const { data, error } = await client
                     .from('daily_schedules')
-                    .select('scheduler_id, scheduler_name, divisions, updated_at, schedule_data')
+                    .select('scheduler_id, scheduler_name, divisions, updated_at, schedule_data, unified_times')
                     .eq('camp_id', campId)
                     .eq('date_key', dateKey);
 
@@ -1110,11 +1331,12 @@
                     let totalCloudBunks = 0;
                     data.forEach((r, i) => {
                         const bunks = Object.keys(r.schedule_data?.scheduleAssignments || {}).length;
+                        const slots = r.schedule_data?.unifiedTimes?.length || r.unified_times?.length || 0;
                         totalCloudBunks += bunks;
                         const isMe = r.scheduler_id === userId ? ' ★YOU★' : '';
                         console.log(`  [${i + 1}] ${r.scheduler_name || 'Unknown'}${isMe}`);
                         console.log(`      Divisions: ${JSON.stringify(r.divisions)}`);
-                        console.log(`      Bunks: ${bunks}`);
+                        console.log(`      Bunks: ${bunks}, Slots: ${slots}`);
                         console.log(`      Updated: ${r.updated_at}`);
                     });
                     console.log('');
@@ -1131,6 +1353,7 @@
         console.log('Quick Actions:');
         console.log('  await verifiedScheduleSave()        // Save with retry');
         console.log('  await forceLoadScheduleFromCloud()  // Load from cloud');
+        console.log('  CloudPermissions.diagnose()         // Check permissions');
         console.log('═══════════════════════════════════════════════════════');
     };
 
@@ -1144,7 +1367,8 @@
         setTimeout(waitForSystems, 300);
     }
 
-    console.log('🔗 Campistry Integration Hooks v6.2 loaded');
+    console.log('🔗 Campistry Integration Hooks v6.3 loaded');
     console.log('   Commands: diagnoseScheduleSync(), verifiedScheduleSave(), forceLoadScheduleFromCloud()');
+    console.log('   New: CloudPermissions.diagnose() for unified permission checking');
 
 })();
