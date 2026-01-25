@@ -898,15 +898,12 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
     }
 
     function getActivityCount(bunk, activityName) {
-        const globalSettings = window.loadGlobalSettings?.() || {};
-        return globalSettings.historicalCounts?.[bunk]?.[activityName] || 0;
+        return window.SchedulerCoreUtils?.getActivityCount?.(bunk, activityName) 
+            || 0;
     }
-
     function getDaysSinceActivity(bunk, activityName) {
-        const rotationHistory = window.loadRotationHistory?.() || {};
-        const lastDone = rotationHistory.bunks?.[bunk]?.[activityName];
-        if (!lastDone) return null;
-        return Math.floor((Date.now() - lastDone) / (24 * 60 * 60 * 1000));
+        return window.SchedulerCoreUtils?.getDaysSinceActivity?.(bunk, activityName, 999) 
+            ?? null;
     }
 
     function calculateRotationPenalty(bunk, activityName, slots) {
