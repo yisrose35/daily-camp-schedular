@@ -1,19 +1,21 @@
 // ============================================================================
-// total_solver_engine.js (ENHANCED v8 - SMART ROTATION INTEGRATION)
+// total_solver_engine.js (ENHANCED v9.0 - DELEGATES TO ROTATION ENGINE)
 // Backtracking Constraint Solver + League Engine
 // ----------------------------------------------------------------------------
-// MAJOR UPDATE: Smart Activity Rotation System
-// - Tracks detailed activity history (when each bunk last did each activity)
-// - Calculates "staleness scores" - prioritizes activities bunks haven't done
-// - Enforces variety - strong penalties for repeating, bonuses for variety
-// - Balances distribution - ensures fair access across all bunks
+// ★★★ NOW DELEGATES ALL ROTATION LOGIC TO rotation_engine.js ★★★
 //
-// SCORING PHILOSOPHY:
-// - Lower penalty = BETTER
-// - Same day repeat = BLOCKED (Infinity)
-// - Yesterday repeat = Heavy penalty (+5000)
-// - Recent repeat (2-3 days) = Moderate penalty (+2000-3000)
-// - Never done before = BONUS (-1500)
+// The RotationEngine is the SINGLE SOURCE OF TRUTH for:
+// - Activity history tracking
+// - Recency/frequency/variety scoring
+// - Streak detection
+// - Distribution fairness
+//
+// This file handles:
+// - Backtracking constraint solver
+// - Block sorting and scheduling
+// - Field availability and capacity
+// - League game handling
+// - Penalty cost calculation (delegates rotation to RotationEngine)
 // ============================================================================
 
 (function () {
@@ -23,7 +25,7 @@
     const MAX_MATCHUP_ITERATIONS = 2000;
 
     const DEBUG_MODE = false;
-    const DEBUG_ROTATION = false; // Set to true to see rotation scoring
+    const DEBUG_ROTATION = false;
 
     let globalConfig = null;
     let activityProperties = {};
@@ -31,33 +33,40 @@
     let fieldAvailabilityCache = {};
 
     // ============================================================================
-    // ROTATION CONFIGURATION
+    // ★★★ ROTATION CONFIG - DELEGATES TO ROTATION ENGINE ★★★
     // ============================================================================
-    const ROTATION_CONFIG = {
-        // Hard rules
-        SAME_DAY_PENALTY: Infinity,            // NEVER allow same activity twice in one day
-
-        // Recency penalties (days ago)
-        YESTERDAY_PENALTY: 5000,              // Did it yesterday
-        TWO_DAYS_AGO_PENALTY: 3000,           // Did it 2 days ago
-        THREE_DAYS_AGO_PENALTY: 2000,         // Did it 3 days ago
-        FOUR_TO_SEVEN_DAYS_PENALTY: 800,      // Did it 4-7 days ago
-        WEEK_PLUS_PENALTY: 200,               // Did it more than a week ago
-
-        // Frequency penalties
-        HIGH_FREQUENCY_PENALTY: 1500,         // Bunk has done this much more than others
-        ABOVE_AVERAGE_PENALTY: 500,           // Bunk has done this more than average
-
-        // Variety bonuses (negative = good)
-        NEVER_DONE_BONUS: -1500,              // Bunk has NEVER done this activity
-        UNDER_UTILIZED_BONUS: -800,           // Activity is under-utilized by this bunk
-        GOOD_VARIETY_BONUS: -300,             // General variety bonus
-
-        // Weights
-        RECENCY_WEIGHT: 1.0,
-        FREQUENCY_WEIGHT: 0.8,
-        VARIETY_WEIGHT: 1.2
-    };
+    
+    // Use RotationEngine.CONFIG as the single source of truth
+    // This proxy provides fallback values if RotationEngine isn't loaded yet
+    const ROTATION_CONFIG = new Proxy({}, {
+        get: function(target, prop) {
+            // Try to get from RotationEngine first
+            if (window.RotationEngine?.CONFIG?.[prop] !== undefined) {
+                return window.RotationEngine.CONFIG[prop];
+            }
+            // Fallback defaults (should match RotationEngine)
+            const fallbacks = {
+                SAME_DAY_PENALTY: Infinity,
+                YESTERDAY_PENALTY: 12000,
+                TWO_DAYS_AGO_PENALTY: 8000,
+                THREE_DAYS_AGO_PENALTY: 5000,
+                FOUR_DAYS_AGO_PENALTY: 3000,
+                FIVE_DAYS_AGO_PENALTY: 1500,
+                SIX_SEVEN_DAYS_PENALTY: 800,
+                FOUR_TO_SEVEN_DAYS_PENALTY: 800,
+                WEEK_PLUS_PENALTY: 200,
+                HIGH_FREQUENCY_PENALTY: 3000,
+                ABOVE_AVERAGE_PENALTY: 1200,
+                NEVER_DONE_BONUS: -5000,
+                UNDER_UTILIZED_BONUS: -2000,
+                GOOD_VARIETY_BONUS: -400,
+                RECENCY_WEIGHT: 1.0,
+                FREQUENCY_WEIGHT: 1.0,
+                VARIETY_WEIGHT: 1.2
+            };
+            return fallbacks[prop];
+        }
+    });
 
     // ============================================================================
     // HELPERS
@@ -93,222 +102,91 @@
     }
 
     // ============================================================================
-    // ★★★ SMART ROTATION SCORING SYSTEM ★★★
+    // ★★★ DELEGATED ROTATION SCORING SYSTEM ★★★
+    // All scoring now goes through window.RotationEngine
     // ============================================================================
 
     /**
      * Get all activities done by a bunk TODAY (before current slot)
+     * Delegates to RotationEngine if available
      */
     function getActivitiesDoneToday(bunkName, beforeSlotIndex) {
+        if (window.RotationEngine?.getActivitiesDoneToday) {
+            return window.RotationEngine.getActivitiesDoneToday(bunkName, beforeSlotIndex);
+        }
+        // Fallback
         const activities = new Set();
         const schedule = window.scheduleAssignments?.[bunkName] || [];
-
         for (let i = 0; i < beforeSlotIndex && i < schedule.length; i++) {
             const entry = schedule[i];
             if (entry && entry._activity && !entry._isTransition && !entry.continuation) {
                 activities.add(entry._activity.toLowerCase().trim());
             }
         }
-
         return activities;
     }
 
     /**
      * Get the last time a bunk did a specific activity (days ago)
-     * Returns null if never done, 0 if done today, 1 if yesterday, etc.
+     * Delegates to RotationEngine if available
      */
     function getDaysSinceActivity(bunkName, activityName, beforeSlotIndex) {
-        const actLower = activityName.toLowerCase().trim();
-
-        // Check today first
+        if (window.RotationEngine?.getDaysSinceActivity) {
+            return window.RotationEngine.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+        }
+        // Fallback
+        const actLower = (activityName || '').toLowerCase().trim();
         const todayActivities = getActivitiesDoneToday(bunkName, beforeSlotIndex);
         if (todayActivities.has(actLower)) {
-            return 0; // Done today
+            return 0;
         }
-
-        // Check rotation history
         const rotationHistory = globalConfig?.rotationHistory || window.loadRotationHistory?.() || { bunks: {} };
         const bunkHistory = rotationHistory.bunks?.[bunkName] || {};
         const lastTimestamp = bunkHistory[activityName];
-
         if (!lastTimestamp) {
-            // Check historical counts - if count > 0, they've done it but we don't know when
             const historicalCounts = globalConfig?.historicalCounts || {};
             if (historicalCounts[bunkName]?.[activityName] > 0) {
-                return 14; // Assume 2 weeks ago if we have count but no timestamp
+                return 14;
             }
-            return null; // Never done
+            return null;
         }
-
         const now = Date.now();
         const daysSince = Math.floor((now - lastTimestamp) / (1000 * 60 * 60 * 24));
-        return Math.max(1, daysSince); // At least 1 day if it's in history
+        return Math.max(1, daysSince);
     }
 
     /**
      * Get total count of how many times a bunk has done an activity
+     * Delegates to RotationEngine if available
      */
     function getActivityCount(bunkName, activityName) {
+        if (window.RotationEngine?.getActivityCount) {
+            return window.RotationEngine.getActivityCount(bunkName, activityName);
+        }
+        // Fallback
         const globalSettings = window.loadGlobalSettings?.() || {};
         const historicalCounts = globalConfig?.historicalCounts || globalSettings.historicalCounts || {};
         const manualOffsets = globalSettings.manualUsageOffsets || {};
-
         const baseCount = historicalCounts[bunkName]?.[activityName] || 0;
         const offset = manualOffsets[bunkName]?.[activityName] || 0;
-
         return Math.max(0, baseCount + offset);
-    }
-
-    /**
-     * Get average activity count for a bunk across all activities
-     */
-    function getBunkAverageActivityCount(bunkName, allActivities) {
-        if (!allActivities || allActivities.length === 0) return 0;
-
-        let total = 0;
-        for (const act of allActivities) {
-            total += getActivityCount(bunkName, act);
-        }
-
-        return total / allActivities.length;
-    }
-
-    /**
-     * Calculate RECENCY penalty - how recently did they do this?
-     * Higher = worse (more recent = higher penalty)
-     */
-    function calculateRecencyPenalty(bunkName, activityName, beforeSlotIndex) {
-        const daysSince = getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
-
-        if (daysSince === null) {
-            // Never done - this is GREAT!
-            return ROTATION_CONFIG.NEVER_DONE_BONUS;
-        }
-
-        if (daysSince === 0) {
-            // Same day - FORBIDDEN
-            return ROTATION_CONFIG.SAME_DAY_PENALTY;
-        }
-
-        if (daysSince === 1) {
-            return ROTATION_CONFIG.YESTERDAY_PENALTY;
-        }
-
-        if (daysSince === 2) {
-            return ROTATION_CONFIG.TWO_DAYS_AGO_PENALTY;
-        }
-
-        if (daysSince === 3) {
-            return ROTATION_CONFIG.THREE_DAYS_AGO_PENALTY;
-        }
-
-        if (daysSince <= 7) {
-            return ROTATION_CONFIG.FOUR_TO_SEVEN_DAYS_PENALTY;
-        }
-
-        // More than a week ago - small penalty that decreases over time
-        const weeksAgo = Math.floor(daysSince / 7);
-        return Math.max(50, ROTATION_CONFIG.WEEK_PLUS_PENALTY * Math.pow(0.7, weeksAgo));
-    }
-
-    /**
-     * Calculate FREQUENCY penalty - how often have they done this compared to others?
-     */
-    function calculateFrequencyPenalty(bunkName, activityName) {
-        // Get all activities for comparison
-        const allActivities = getAllActivityNames();
-        if (allActivities.length === 0) return 0;
-
-        const count = getActivityCount(bunkName, activityName);
-        const average = getBunkAverageActivityCount(bunkName, allActivities);
-        const deviation = count - average;
-
-        if (deviation <= -2) {
-            // Significantly under-utilized - bonus!
-            return ROTATION_CONFIG.UNDER_UTILIZED_BONUS;
-        }
-
-        if (deviation < 0) {
-            // Slightly under-utilized
-            return ROTATION_CONFIG.GOOD_VARIETY_BONUS;
-        }
-
-        if (deviation === 0) {
-            // Average usage
-            return 0;
-        }
-
-        if (deviation <= 2) {
-            // Slightly over-used
-            return ROTATION_CONFIG.ABOVE_AVERAGE_PENALTY;
-        }
-
-        // Significantly over-used
-        return ROTATION_CONFIG.HIGH_FREQUENCY_PENALTY + (deviation - 2) * 200;
-    }
-
-    /**
-     * Calculate VARIETY penalty - how much variety does this add to today?
-     */
-    function calculateVarietyPenalty(bunkName, activityName, beforeSlotIndex) {
-        const todayActivities = getActivitiesDoneToday(bunkName, beforeSlotIndex);
-        const actLower = activityName.toLowerCase().trim();
-
-        // Already done today - FORBIDDEN
-        if (todayActivities.has(actLower)) {
-            return ROTATION_CONFIG.SAME_DAY_PENALTY;
-        }
-
-        // Check activity type balance (sports vs specials)
-        const globalSettings = window.loadGlobalSettings?.() || {};
-        const specialNames = new Set(
-            (globalSettings.app1?.specialActivities || []).map(s => s.name.toLowerCase().trim())
-        );
-
-        let todaySports = 0;
-        let todaySpecials = 0;
-
-        for (const act of todayActivities) {
-            if (specialNames.has(act)) {
-                todaySpecials++;
-            } else {
-                todaySports++;
-            }
-        }
-
-        const isSpecial = specialNames.has(actLower);
-
-        // Bonus if this balances the day's activities
-        if (isSpecial && todaySports > todaySpecials) {
-            return -200; // Bonus for adding a special when they've done more sports
-        }
-
-        if (!isSpecial && todaySpecials > todaySports) {
-            return -200; // Bonus for adding a sport when they've done more specials
-        }
-
-        // General variety bonus based on unique activities today
-        const uniqueToday = todayActivities.size;
-        return -50 * uniqueToday; // More bonus for early variety
     }
 
     /**
      * Get all activity names from config
      */
     function getAllActivityNames() {
+        if (window.RotationEngine?.getAllActivityNames) {
+            return window.RotationEngine.getAllActivityNames();
+        }
+        // Fallback
         const names = new Set();
-
-        // From masterFields
         globalConfig?.masterFields?.forEach(f => {
             (f.activities || []).forEach(sport => names.add(sport));
         });
-
-        // From masterSpecials
         globalConfig?.masterSpecials?.forEach(s => {
             if (s.name) names.add(s.name);
         });
-
-        // From activityProperties
         if (activityProperties) {
             for (const name of Object.keys(activityProperties)) {
                 if (name && name !== 'Free' && !name.includes('Transition')) {
@@ -316,12 +194,12 @@
                 }
             }
         }
-
         return [...names];
     }
 
     /**
      * ★★★ MASTER ROTATION SCORE CALCULATOR ★★★
+     * Delegates to RotationEngine for all scoring
      * Returns total rotation penalty for an activity choice
      * LOWER IS BETTER, Infinity means blocked
      */
@@ -330,38 +208,58 @@
 
         const beforeSlotIndex = block.slots?.[0] || 0;
 
-        // Calculate individual penalties
-        const recencyPenalty = calculateRecencyPenalty(bunkName, activityName, beforeSlotIndex);
+        // ★★★ DELEGATE TO ROTATION ENGINE ★★★
+        if (window.RotationEngine?.calculateRotationScore) {
+            const score = window.RotationEngine.calculateRotationScore({
+                bunkName: bunkName,
+                activityName: activityName,
+                divisionName: block.divName || block.division,
+                beforeSlotIndex: beforeSlotIndex,
+                allActivities: null,  // RotationEngine will use getAllActivityNames()
+                activityProperties: activityProperties
+            });
+            
+            rotationLog(`${bunkName} - ${activityName}: RotationEngine score = ${score}`);
+            return score;
+        }
 
-        // If recency returns Infinity (same day), stop immediately
-        if (recencyPenalty === Infinity || recencyPenalty === ROTATION_CONFIG.SAME_DAY_PENALTY) {
+        // Fallback if RotationEngine not loaded
+        console.warn('[SOLVER] RotationEngine not available, using basic scoring');
+        
+        const todayActivities = getActivitiesDoneToday(bunkName, beforeSlotIndex);
+        const actLower = (activityName || '').toLowerCase().trim();
+        
+        if (todayActivities.has(actLower)) {
             rotationLog(`${bunkName} - ${activityName}: BLOCKED (same day)`);
             return Infinity;
         }
-
-        const frequencyPenalty = calculateFrequencyPenalty(bunkName, activityName);
-        const varietyPenalty = calculateVarietyPenalty(bunkName, activityName, beforeSlotIndex);
-
-        // If variety returns Infinity, stop
-        if (varietyPenalty === Infinity) {
-            rotationLog(`${bunkName} - ${activityName}: BLOCKED (variety check)`);
+        
+        const daysSince = getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+        
+        if (daysSince === null) {
+            return ROTATION_CONFIG.NEVER_DONE_BONUS;
+        }
+        if (daysSince === 0) {
             return Infinity;
         }
-
-        // Combine penalties with weights
-        const totalPenalty = (
-            recencyPenalty * ROTATION_CONFIG.RECENCY_WEIGHT +
-            frequencyPenalty * ROTATION_CONFIG.FREQUENCY_WEIGHT +
-            varietyPenalty * ROTATION_CONFIG.VARIETY_WEIGHT
-        );
-
-        rotationLog(`${bunkName} - ${activityName}: recency=${recencyPenalty}, freq=${frequencyPenalty}, variety=${varietyPenalty}, TOTAL=${totalPenalty}`);
-
-        return totalPenalty;
+        if (daysSince === 1) {
+            return ROTATION_CONFIG.YESTERDAY_PENALTY;
+        }
+        if (daysSince === 2) {
+            return ROTATION_CONFIG.TWO_DAYS_AGO_PENALTY;
+        }
+        if (daysSince === 3) {
+            return ROTATION_CONFIG.THREE_DAYS_AGO_PENALTY;
+        }
+        if (daysSince <= 7) {
+            return ROTATION_CONFIG.FOUR_TO_SEVEN_DAYS_PENALTY;
+        }
+        
+        return ROTATION_CONFIG.WEEK_PLUS_PENALTY;
     }
 
     // ============================================================================
-    // PENALTY ENGINE (ENHANCED WITH SMART ROTATION)
+    // PENALTY ENGINE (ENHANCED WITH DELEGATED ROTATION)
     // ============================================================================
 
     function calculatePenaltyCost(block, pick) {
@@ -370,7 +268,7 @@
         const act = pick._activity;
         const fieldName = pick.field;
 
-        // ★★★ SMART ROTATION PENALTY (PRIMARY FACTOR) ★★★
+        // ★★★ SMART ROTATION PENALTY (via RotationEngine) ★★★
         const rotationPenalty = calculateRotationPenalty(bunk, act, block);
 
         if (rotationPenalty === Infinity) {
@@ -476,7 +374,7 @@
         // Usage limit check (for special activities with maxUsage)
         const specialRule = globalConfig.masterSpecials?.find(s => isSameActivity(s.name, act));
         if (specialRule && specialRule.maxUsage > 0) {
-            const hist = globalConfig.historicalCounts?.[bunk]?.[act] || 0;
+            const hist = getActivityCount(bunk, act);
             const todayCount = getActivitiesDoneToday(bunk, block.slots?.[0] || 999).has((act || '').toLowerCase().trim()) ? 1 : 0;
             if (hist + todayCount >= specialRule.maxUsage) penalty += 20000;
         }
@@ -635,7 +533,7 @@
     }
 
     /**
-     * ★★★ GET VALID PICKS - WITH SMART ROTATION SCORING ★★★
+     * ★★★ GET VALID PICKS - WITH DELEGATED ROTATION SCORING ★★★
      */
     Solver.getValidActivityPicks = function (block) {
         const picks = [];
@@ -740,12 +638,22 @@
         if (allCandidateOptions.length === 0) {
             console.warn('[SOLVER] Warning: Limited candidate options available');
         }
+        
         if (!window.leagueRoundState) window.leagueRoundState = {};
         if (!globalConfig.rotationHistory) globalConfig.rotationHistory = {};
         if (!globalConfig.rotationHistory.leagues) globalConfig.rotationHistory.leagues = {};
+        
         const sorted = Solver.sortBlocksByDifficulty(allBlocks, config);
         const activityBlocks = sorted.filter(b => !b._isLeague);
-        console.log(`[SOLVER] Processing ${activityBlocks.length} activity blocks with SMART ROTATION`);
+        
+        console.log(`[SOLVER] Processing ${activityBlocks.length} activity blocks`);
+        console.log(`[SOLVER] ★ Using ${window.RotationEngine ? 'SUPERCHARGED RotationEngine v2.0' : 'FALLBACK scoring'}`);
+        
+        // Clear rotation cache for fresh scoring
+        if (window.RotationEngine?.clearHistoryCache) {
+            window.RotationEngine.clearHistoryCache();
+        }
+        
         let bestSchedule = [];
         let maxDepthReached = 0;
 
@@ -773,9 +681,11 @@
             }
             return null;
         }
+        
         const final = backtrack(0, []);
+        
         if (final) {
-            console.log(`[SOLVER] Solution found after ${iterations} iterations`);
+            console.log(`[SOLVER] ✅ Solution found after ${iterations} iterations`);
             return final.map(a => ({
                 bunk: a.block.bunk,
                 divName: a.block.divName,
@@ -784,7 +694,7 @@
                 solution: a.solution
             }));
         } else {
-            console.warn("[SOLVER] Optimal solution not found. Using best partial.");
+            console.warn("[SOLVER] ⚠️ Optimal solution not found. Using best partial.");
             const solvedBlocksSet = new Set(bestSchedule.map(s => s.block));
             const missingBlocks = activityBlocks.filter(b => !solvedBlocksSet.has(b));
 
@@ -834,65 +744,91 @@
     };
 
     /**
-     * ★★★ DEBUG: Rotation Analysis for a bunk ★★★
+     * ★★★ DEBUG: Rotation Analysis - Delegates to RotationEngine ★★★
      */
-    Solver.debugBunkRotation = function(bunkName) {
-        console.log('\n' + '='.repeat(60));
-        console.log(`ROTATION ANALYSIS: ${bunkName}`);
-        console.log('='.repeat(60));
+    Solver.debugBunkRotation = function(bunkName, slotIndex = 0) {
+        if (window.RotationEngine?.debugBunkRotation) {
+            window.RotationEngine.debugBunkRotation(bunkName, slotIndex);
+        } else {
+            console.log('\n' + '='.repeat(60));
+            console.log(`ROTATION ANALYSIS: ${bunkName} (RotationEngine not loaded)`);
+            console.log('='.repeat(60));
 
-        const allActivities = getAllActivityNames();
+            const allActivities = getAllActivityNames();
 
-        console.log('\nActivity History:');
-        allActivities.forEach(act => {
-            const count = getActivityCount(bunkName, act);
-            const daysSince = getDaysSinceActivity(bunkName, act, 999);
-            const daysStr = daysSince === null ? 'never' : (daysSince === 0 ? 'TODAY' : `${daysSince}d ago`);
+            console.log('\nActivity History:');
+            allActivities.forEach(act => {
+                const count = getActivityCount(bunkName, act);
+                const daysSince = getDaysSinceActivity(bunkName, act, 999);
+                const daysStr = daysSince === null ? 'never' : (daysSince === 0 ? 'TODAY' : `${daysSince}d ago`);
 
-            console.log(`  ${act}: count=${count}, last=${daysStr}`);
-        });
+                console.log(`  ${act}: count=${count}, last=${daysStr}`);
+            });
 
-        const todayActivities = getActivitiesDoneToday(bunkName, 999);
-        console.log(`\nDone Today: ${[...todayActivities].join(', ') || 'none'}`);
+            const todayActivities = getActivitiesDoneToday(bunkName, 999);
+            console.log(`\nDone Today: ${[...todayActivities].join(', ') || 'none'}`);
 
-        console.log('\n' + '='.repeat(60));
+            console.log('\n' + '='.repeat(60));
+        }
     };
 
     /**
-     * ★★★ DEBUG: Activity recommendations for a bunk ★★★
+     * ★★★ DEBUG: Activity recommendations - Delegates to RotationEngine ★★★
      */
     Solver.debugActivityRecommendations = function(bunkName, slotIndex = 0) {
-        console.log('\n' + '='.repeat(60));
-        console.log(`ACTIVITY RECOMMENDATIONS: ${bunkName} @ slot ${slotIndex}`);
-        console.log('='.repeat(60));
+        if (window.RotationEngine?.debugBunkRotation) {
+            // RotationEngine's debug includes recommendations
+            window.RotationEngine.debugBunkRotation(bunkName, slotIndex);
+        } else {
+            console.log('\n' + '='.repeat(60));
+            console.log(`ACTIVITY RECOMMENDATIONS: ${bunkName} @ slot ${slotIndex}`);
+            console.log('='.repeat(60));
 
-        const allActivities = getAllActivityNames();
-        const fakeBlock = { bunk: bunkName, slots: [slotIndex] };
+            const allActivities = getAllActivityNames();
+            const fakeBlock = { bunk: bunkName, slots: [slotIndex], divName: 'Unknown' };
 
-        const scored = allActivities.map(act => {
-            const penalty = calculateRotationPenalty(bunkName, act, fakeBlock);
-            return {
-                activity: act,
-                penalty,
-                allowed: penalty !== Infinity
-            };
-        });
+            const scored = allActivities.map(act => {
+                const penalty = calculateRotationPenalty(bunkName, act, fakeBlock);
+                return {
+                    activity: act,
+                    penalty,
+                    allowed: penalty !== Infinity
+                };
+            });
 
-        scored.sort((a, b) => a.penalty - b.penalty);
+            scored.sort((a, b) => a.penalty - b.penalty);
 
-        console.log('\nRanked Activities (best to worst):');
-        scored.slice(0, 15).forEach((item, i) => {
-            const status = item.allowed ? '✅' : '❌';
-            const penaltyStr = item.penalty === Infinity ? 'BLOCKED' : item.penalty.toFixed(0);
-            console.log(`  ${i + 1}. ${status} ${item.activity}: ${penaltyStr}`);
-        });
+            console.log('\nRanked Activities (best to worst):');
+            scored.slice(0, 15).forEach((item, i) => {
+                const status = item.allowed ? '✅' : '❌';
+                const penaltyStr = item.penalty === Infinity ? 'BLOCKED' : item.penalty.toFixed(0);
+                console.log(`  ${i + 1}. ${status} ${item.activity}: ${penaltyStr}`);
+            });
 
-        const blocked = scored.filter(r => !r.allowed);
-        if (blocked.length > 0) {
-            console.log(`\nBlocked (${blocked.length}): ${blocked.map(b => b.activity).join(', ')}`);
+            const blocked = scored.filter(r => !r.allowed);
+            if (blocked.length > 0) {
+                console.log(`\nBlocked (${blocked.length}): ${blocked.map(b => b.activity).join(', ')}`);
+            }
+
+            console.log('\n' + '='.repeat(60));
         }
+    };
 
-        console.log('\n' + '='.repeat(60));
+    /**
+     * Debug rotation config - shows current values from RotationEngine
+     */
+    Solver.debugRotationConfig = function() {
+        if (window.RotationEngine?.debugConfig) {
+            window.RotationEngine.debugConfig();
+        } else {
+            console.log('\n=== ROTATION CONFIG (Fallback Values) ===');
+            console.log('Same Day:', ROTATION_CONFIG.SAME_DAY_PENALTY);
+            console.log('Yesterday:', ROTATION_CONFIG.YESTERDAY_PENALTY);
+            console.log('2 Days Ago:', ROTATION_CONFIG.TWO_DAYS_AGO_PENALTY);
+            console.log('3 Days Ago:', ROTATION_CONFIG.THREE_DAYS_AGO_PENALTY);
+            console.log('Never Done Bonus:', ROTATION_CONFIG.NEVER_DONE_BONUS);
+            console.log('\n⚠️ RotationEngine not loaded - using fallback values');
+        }
     };
 
     /**
@@ -916,11 +852,17 @@
         });
     };
 
-    // Expose globally
+    // ============================================================================
+    // EXPOSE GLOBALLY
+    // ============================================================================
+
     window.totalSolverEngine = Solver;
 
-    // Also expose rotation debug utilities
+    // Expose debug utilities (delegate to RotationEngine when available)
     window.debugBunkRotation = Solver.debugBunkRotation;
     window.debugActivityRecommendations = Solver.debugActivityRecommendations;
+    window.debugRotationConfig = Solver.debugRotationConfig;
+
+    console.log('[SOLVER] v9.0 loaded - ★ DELEGATES TO RotationEngine ★');
 
 })();
