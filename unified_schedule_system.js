@@ -241,20 +241,25 @@ function shouldHighlightBunk(bunkName) {
     // ROTATION CONFIGURATION (for smart regeneration)
     // =========================================================================
     
-    const ROTATION_CONFIG = {
-        SAME_DAY_PENALTY: Infinity,
-        YESTERDAY_PENALTY: 5000,
-        TWO_DAYS_AGO_PENALTY: 3000,
-        THREE_DAYS_AGO_PENALTY: 2000,
-        FOUR_TO_SEVEN_DAYS_PENALTY: 800,
-        WEEK_PLUS_PENALTY: 200,
-        HIGH_FREQUENCY_PENALTY: 1500,
-        ABOVE_AVERAGE_PENALTY: 500,
-        NEVER_DONE_BONUS: -1500,
-        UNDER_UTILIZED_BONUS: -800,
-        ADJACENT_BUNK_BONUS: -100,
-        NEARBY_BUNK_BONUS: -30
-    };
+    // Use RotationEngine as single source of truth
+    const ROTATION_CONFIG = new Proxy({}, {
+        get: function(target, prop) {
+            return window.RotationEngine?.CONFIG?.[prop] ?? {
+                SAME_DAY_PENALTY: Infinity,
+                YESTERDAY_PENALTY: 12000,
+                TWO_DAYS_AGO_PENALTY: 8000,
+                THREE_DAYS_AGO_PENALTY: 5000,
+                FOUR_TO_SEVEN_DAYS_PENALTY: 800,
+                WEEK_PLUS_PENALTY: 200,
+                HIGH_FREQUENCY_PENALTY: 3000,
+                ABOVE_AVERAGE_PENALTY: 1200,
+                NEVER_DONE_BONUS: -5000,
+                UNDER_UTILIZED_BONUS: -2000,
+                ADJACENT_BUNK_BONUS: -100,
+                NEARBY_BUNK_BONUS: -30
+            }[prop];
+        }
+    });
 
     // =========================================================================
     // PINNED ACTIVITY STORAGE
