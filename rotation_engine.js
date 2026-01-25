@@ -1,5 +1,5 @@
 // ============================================================================
-// rotation_engine.js - SUPERCHARGED ACTIVITY ROTATION SYSTEM v2.1
+// rotation_engine.js - SUPERCHARGED ACTIVITY ROTATION SYSTEM v2.2
 // ============================================================================
 // ★★★ SINGLE SOURCE OF TRUTH FOR ALL ROTATION LOGIC ★★★
 //
@@ -11,13 +11,15 @@
 // 5. Streaks are detected and broken
 // 6. Activity coverage is tracked - bunks try ALL available activities
 //
-// KEY IMPROVEMENTS IN v2.1:
+// KEY IMPROVEMENTS IN v2.2:
 // - REAL HISTORY SCANNING from actual saved schedules
 // - STREAK DETECTION with escalating penalties
 // - MUCH STRONGER penalties and bonuses
 // - ACTIVITY COVERAGE tracking
 // - TIE-BREAKING with controlled randomness
 // - buildBunkActivityHistory PROPERLY EXPOSED
+// - rebuildAllHistory and verifyRotationScores utilities
+// - Better edge case handling
 //
 // SCORING PHILOSOPHY:
 // - Lower scores = BETTER (we minimize penalty)
@@ -155,6 +157,13 @@
 
         try {
             const allDaily = window.loadAllDailyData ? window.loadAllDailyData() : {};
+            
+            // ★★★ FIX: Handle null/undefined allDaily ★★★
+            if (!allDaily || typeof allDaily !== 'object') {
+                console.warn('[RotationEngine] No daily data available for history');
+                return history;
+            }
+            
             const today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
             
             // Get sorted dates (most recent first), excluding today
@@ -168,14 +177,18 @@
             datesToProcess.forEach(function(dateKey, daysAgo) {
                 const actualDaysAgo = daysAgo + 1;  // +1 because we excluded today
                 const dayData = allDaily[dateKey];
-                const schedule = (dayData && dayData.scheduleAssignments && dayData.scheduleAssignments[bunkName]) || [];
+                
+                // ★★★ FIX: Defensive checks for day data ★★★
+                if (!dayData || !dayData.scheduleAssignments) return;
+                
+                const schedule = dayData.scheduleAssignments[bunkName] || [];
                 
                 schedule.forEach(function(entry) {
                     if (entry && entry._activity && !entry.continuation && !entry._isTransition) {
                         const actName = entry._activity;
-                        const actLower = actName.toLowerCase().trim();
+                        const actLower = (actName || '').toLowerCase().trim();
                         
-                        if (actLower === 'free' || actLower.indexOf('transition') !== -1) return;
+                        if (actLower === 'free' || actLower === 'free play' || actLower.indexOf('transition') !== -1) return;
                         
                         // Initialize if needed
                         if (!history.byActivity[actName]) {
@@ -270,6 +283,75 @@
 
     // Expose globally
     window.clearRotationCache = RotationEngine.clearHistoryCache;
+
+    // =========================================================================
+    // ★★★ CACHE MANAGEMENT UTILITIES ★★★
+    // =========================================================================
+
+    /**
+     * Force rebuild history for all bunks
+     * Call this after schedule changes or at generation start
+     */
+    RotationEngine.rebuildAllHistory = function() {
+        console.log('[RotationEngine] Rebuilding all history...');
+        _historyCache.clear();
+        _historyCacheDate = null;
+        
+        // Optionally pre-warm cache for all bunks
+        const divisions = window.divisions || {};
+        let bunkCount = 0;
+        
+        for (const divName in divisions) {
+            if (divisions.hasOwnProperty(divName)) {
+                const divData = divisions[divName];
+                const bunks = (divData && divData.bunks) || [];
+                for (let i = 0; i < bunks.length; i++) {
+                    RotationEngine.getBunkHistory(bunks[i]);
+                    bunkCount++;
+                }
+            }
+        }
+        
+        console.log('[RotationEngine] Rebuilt history for ' + bunkCount + ' bunks');
+    };
+
+    /**
+     * Verify rotation scores for a bunk - useful for debugging
+     */
+    RotationEngine.verifyRotationScores = function(bunkName, availableActivities) {
+        const activityProperties = window.activityProperties || {};
+        const results = [];
+        const activitiesToCheck = availableActivities || RotationEngine.getAllActivityNames();
+        
+        activitiesToCheck.forEach(function(act) {
+            var actName = typeof act === 'string' ? act : (act.name || act._activity);
+            var score = RotationEngine.calculateRotationScore({
+                bunkName: bunkName,
+                activityName: actName,
+                divisionName: 'test',
+                beforeSlotIndex: 0,
+                allActivities: null,
+                activityProperties: activityProperties
+            });
+            
+            results.push({
+                activity: actName,
+                score: score,
+                blocked: score === Infinity
+            });
+        });
+        
+        // Sort by score
+        results.sort(function(a, b) { return a.score - b.score; });
+        
+        console.log('\n=== ROTATION VERIFICATION for ' + bunkName + ' ===');
+        results.forEach(function(r, i) {
+            var status = r.blocked ? 'BLOCKED' : r.score.toFixed(0);
+            console.log((i+1) + '. ' + r.activity + ': ' + status);
+        });
+        
+        return results;
+    };
 
     // =========================================================================
     // ★★★ DELEGATED STATE MANAGEMENT - Single Source of Truth ★★★
@@ -753,7 +835,11 @@
         var allActivities = options.allActivities;
         var activityProperties = options.activityProperties;
 
-        if (!bunkName || !activityName || activityName === 'Free') return 0;
+        // ★★★ FIX: Handle edge cases ★★★
+        if (!bunkName || !activityName) return 0;
+        
+        var actLower = (activityName || '').toLowerCase().trim();
+        if (actLower === 'free' || actLower === 'free play' || actLower === 'no field') return 0;
 
         // RECENCY - primary factor
         var recencyScore = RotationEngine.calculateRecencyScore(bunkName, activityName, beforeSlotIndex);
@@ -955,7 +1041,7 @@
     };
 
     RotationEngine.debugConfig = function() {
-        console.log('\n=== SUPERCHARGED ROTATION CONFIG v2.1 ===');
+        console.log('\n=== SUPERCHARGED ROTATION CONFIG v2.2 ===');
         console.log('Same Day:', CONFIG.SAME_DAY_PENALTY);
         console.log('Yesterday:', CONFIG.YESTERDAY_PENALTY);
         console.log('2 Days Ago:', CONFIG.TWO_DAYS_AGO_PENALTY);
@@ -1012,5 +1098,5 @@
     window.debugDivisionRotation = RotationEngine.debugDivisionRotation;
     window.debugRotationConfig = RotationEngine.debugConfig;
 
-    console.log('[RotationEngine] v2.1 SUPERCHARGED loaded - Single Source of Truth');
+    console.log('[RotationEngine] v2.2 SUPERCHARGED loaded - Single Source of Truth');
 })();
