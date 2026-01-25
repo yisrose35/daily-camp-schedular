@@ -515,11 +515,39 @@
                 divisions
             });
 
-            return { 
-                success: true, 
-                target: 'cloud',
-                bunks: filteredBunkCount
-            };
+           // ★★★ NEW: Verify save reached cloud ★★★
+log('Verifying save reached cloud...');
+await new Promise(r => setTimeout(r, 500));
+
+try {
+    const { data: verifyData, error: verifyError } = await client
+        .from(CONFIG.TABLE_NAME)
+        .select('updated_at')
+        .eq('camp_id', campId)
+        .eq('date_key', dateKey)
+        .eq('scheduler_id', userId)
+        .single();
+
+    if (verifyError || !verifyData) {
+        logError('Save verification failed - record not found');
+        return { 
+            success: false, 
+            target: 'verification-failed',
+            error: 'Save not verified'
+        };
+    }
+
+    log('✅ Save VERIFIED at', verifyData.updated_at);
+} catch (verifyErr) {
+    logError('Verification exception:', verifyErr);
+}
+
+return { 
+    success: true, 
+    target: 'cloud',
+    bunks: filteredBunkCount,
+    verified: true
+};
         } catch (e) {
             logError('Save exception:', e);
             setLocalSchedule(dateKey, data);
