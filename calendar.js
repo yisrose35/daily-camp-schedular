@@ -93,16 +93,28 @@
     let datePicker = null;
     
     function onDateChanged() {
-        const newDate = datePicker.value;
-        if (!newDate) return;
-        window.currentScheduleDate = newDate;
-        window.loadCurrentDailyData();
-        window.initScheduleSystem?.();
-        window.initDailyAdjustments?.();
-        if (document.getElementById('master-scheduler')?.classList.contains('active')) {
-            window.initMasterScheduler?.();
+    const newDate = datePicker.value;
+    if (!newDate) return;
+    
+    const oldDate = window.currentScheduleDate;
+    window.currentScheduleDate = newDate;
+    
+    console.log('🗓️ Date changed:', oldDate, '→', newDate);
+    
+    // ★★★ CRITICAL: Dispatch event so orchestrator loads from cloud ★★★
+    window.dispatchEvent(new CustomEvent('campistry-date-changed', {
+        detail: { 
+            dateKey: newDate,
+            oldDateKey: oldDate
         }
+    }));
+    
+    // These are still needed for non-schedule modules
+    window.initDailyAdjustments?.();
+    if (document.getElementById('master-scheduler')?.classList.contains('active')) {
+        window.initMasterScheduler?.();
     }
+}
     
     // ==========================================================
     // 3. DAILY DATA API
