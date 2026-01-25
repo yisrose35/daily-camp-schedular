@@ -3812,6 +3812,7 @@ window.applyPickToBunkDivisionAware = applyPickToBunkDivisionAware;
     window.buildCandidateOptions = buildCandidateOptions;
     window.calculateRotationPenalty = calculateRotationPenalty;
     window.applyPickToBunk = applyPickToBunk;
+window.resolveConflictsAndApply = resolveConflictsAndApply;
 
     // RBAC bypass
     window.enableBypassRBACView = enableBypassRBACView;
