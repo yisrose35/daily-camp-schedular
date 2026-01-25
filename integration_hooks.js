@@ -636,7 +636,8 @@
         if (_datePickerHooked) return;
         
         const datePicker = document.getElementById('schedule-date-input') ||
-                          document.getElementById('datepicker');
+                  document.getElementById('datepicker') ||
+                  document.getElementById('calendar-date-picker');
         
         if (!datePicker) {
             _datePickerRetries++;
