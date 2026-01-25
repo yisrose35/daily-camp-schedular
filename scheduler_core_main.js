@@ -2090,23 +2090,47 @@ if (window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes) {
         // STEP 8: Update History
         // =========================================================================
 
+        / ★★★ UPDATE ROTATION HISTORY (timestamps) AND HISTORICAL COUNTS ★★★
         try {
-            const newHistory = { ...rotationHistory };
+            const newHistory = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
+            newHistory.bunks = newHistory.bunks || {};
+            newHistory.leagues = newHistory.leagues || {};
+
             const timestamp = Date.now();
-            Object.keys(divisions).forEach(divName => {
-                divisions[divName].bunks.forEach(b => {
-                    let lastActivity = null;
-                    for (const entry of window.scheduleAssignments[b] || []) {
-                        if (entry?._activity && entry._activity !== TRANSITION_TYPE && entry._activity !== lastActivity) {
-                            lastActivity = entry._activity;
-                            newHistory.bunks ??= {};
-                            newHistory.bunks[b] ??= {};
-                            newHistory.bunks[b][entry._activity] = timestamp;
+
+            Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
+                (window.scheduleAssignments[bunk] || []).forEach(entry => {
+                    if (entry?._activity && !entry.continuation && !entry._isTransition) {
+                        const actName = entry._activity;
+
+                        // Skip "Free" and transition types
+                        const actLower = actName.toLowerCase();
+                        if (actLower === 'free' || actLower.includes('transition')) {
+                            return;
                         }
+
+                        // Update rotation history (timestamps)
+                        newHistory.bunks[bunk] = newHistory.bunks[bunk] || {};
+                        newHistory.bunks[bunk][actName] = timestamp;
                     }
                 });
             });
+
             window.saveRotationHistory?.(newHistory);
+
+            // ★★★ REBUILD HISTORICAL COUNTS FROM ALL SCHEDULES ★★★
+            // This ensures counts are accurate even after regeneration (no double-counting)
+            if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+                // Small delay to ensure schedule is saved first
+                setTimeout(() => {
+                    window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
+                }, 200);
+            } else {
+                console.warn('[OPTIMIZER] rebuildHistoricalCounts not available - counts may be stale');
+            }
+
+            console.log('📊 Rotation history updated, historical counts rebuild scheduled');
+
         } catch (e) {
             console.error("History update failed:", e);
         }
