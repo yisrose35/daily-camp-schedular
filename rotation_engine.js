@@ -15,6 +15,8 @@
 // - Older repeat (4-7 days) = Moderate (+500-1000)
 // - Never done before = BONUS (-1000)
 // - Under-utilized activity = BONUS (-500)
+//
+// ★★★ UPDATED: Now delegates core tracking functions to SchedulerCoreUtils ★★★
 // ============================================================================
 
 (function() {
@@ -67,49 +69,54 @@
     };
 
     // =========================================================================
-    // STATE MANAGEMENT
+    // ★★★ DELEGATED STATE MANAGEMENT - Single Source of Truth ★★★
     // =========================================================================
 
     /**
      * Get all activities done by a bunk TODAY (before a specific slot)
+     * DELEGATES to SchedulerCoreUtils for single source of truth
      * @param {string} bunkName
      * @param {number} beforeSlotIndex
      * @returns {Set<string>}
      */
     RotationEngine.getActivitiesDoneToday = function(bunkName, beforeSlotIndex) {
+        // Delegate to consolidated function
+        if (window.SchedulerCoreUtils?.getActivitiesDoneToday) {
+            return window.SchedulerCoreUtils.getActivitiesDoneToday(bunkName, beforeSlotIndex);
+        }
+        // Fallback if SchedulerCoreUtils not loaded yet
         const activities = new Set();
         const schedule = window.scheduleAssignments?.[bunkName] || [];
-
         for (let i = 0; i < beforeSlotIndex && i < schedule.length; i++) {
             const entry = schedule[i];
             if (entry && entry._activity && !entry._isTransition && !entry.continuation) {
                 activities.add(entry._activity.toLowerCase().trim());
             }
         }
-
         return activities;
     };
 
     /**
      * Get activities done by a bunk YESTERDAY
+     * DELEGATES to SchedulerCoreUtils for single source of truth
      * @param {string} bunkName
      * @returns {Set<string>}
      */
     RotationEngine.getActivitiesDoneYesterday = function(bunkName) {
+        // Delegate to consolidated function
+        if (window.SchedulerCoreUtils?.getActivitiesDoneYesterday) {
+            return window.SchedulerCoreUtils.getActivitiesDoneYesterday(bunkName);
+        }
+        // Fallback
         const activities = new Set();
-
         try {
             const allDaily = window.loadAllDailyData?.() || {};
-            const currentDate = window.currentScheduleDate;
-
+            const currentDate = window.currentScheduleDate || window.currentDate;
             if (!currentDate) return activities;
 
-            // Calculate yesterday's date
             const [Y, M, D] = currentDate.split('-').map(Number);
-            // Month in JS Date is 0-indexed (0-11)
             const yesterday = new Date(Y, M - 1, D);
             yesterday.setDate(yesterday.getDate() - 1);
-            
             const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
 
             const yesterdayData = allDaily[yesterdayStr];
@@ -124,78 +131,83 @@
         } catch (e) {
             console.warn('[ROTATION] Error getting yesterday activities:', e);
         }
-
         return activities;
     };
 
     /**
      * Get the last time a bunk did a specific activity (days ago)
-     * Returns null if never done, 0 if done today, 1 if yesterday, etc.
+     * DELEGATES to SchedulerCoreUtils for single source of truth
      * @param {string} bunkName
      * @param {string} activityName
      * @param {number} beforeSlotIndex
      * @returns {number|null}
      */
     RotationEngine.getDaysSinceActivity = function(bunkName, activityName, beforeSlotIndex) {
-        const actLower = activityName.toLowerCase().trim();
-
-        // Check today first
+        // Delegate to consolidated function
+        if (window.SchedulerCoreUtils?.getDaysSinceActivity) {
+            return window.SchedulerCoreUtils.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+        }
+        // Fallback
+        const actLower = (activityName || '').toLowerCase().trim();
         const todayActivities = RotationEngine.getActivitiesDoneToday(bunkName, beforeSlotIndex);
         if (todayActivities.has(actLower)) {
-            return 0; // Done today
+            return 0;
         }
-
-        // Check rotation history
         const rotationHistory = window.loadRotationHistory?.() || { bunks: {} };
         const bunkHistory = rotationHistory.bunks?.[bunkName] || {};
-        const lastTimestamp = bunkHistory[activityName];
-
-        if (!lastTimestamp) {
-            // Check historical counts - if count > 0, they've done it but we don't know when
-            const globalSettings = window.loadGlobalSettings?.() || {};
-            const historicalCounts = globalSettings.historicalCounts || {};
-            if (historicalCounts[bunkName]?.[activityName] > 0) {
-                return 14; // Assume 2 weeks ago if we have count but no timestamp
-            }
-            return null; // Never done
+        const lastTimestamp = bunkHistory[activityName] || bunkHistory[actLower];
+        if (lastTimestamp) {
+            const now = Date.now();
+            const daysSince = Math.floor((now - lastTimestamp) / (1000 * 60 * 60 * 24));
+            return Math.max(1, daysSince);
         }
-
-        const now = Date.now();
-        const daysSince = Math.floor((now - lastTimestamp) / (1000 * 60 * 60 * 24));
-        return Math.max(1, daysSince); // At least 1 day if it's in history
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const historicalCounts = globalSettings.historicalCounts || {};
+        if (historicalCounts[bunkName]?.[activityName] > 0) {
+            return 14;
+        }
+        return null;
     };
 
     /**
      * Get total count of how many times a bunk has done an activity
+     * DELEGATES to SchedulerCoreUtils for single source of truth
      * @param {string} bunkName
      * @param {string} activityName
      * @returns {number}
      */
     RotationEngine.getActivityCount = function(bunkName, activityName) {
+        // Delegate to consolidated function
+        if (window.SchedulerCoreUtils?.getActivityCount) {
+            return window.SchedulerCoreUtils.getActivityCount(bunkName, activityName);
+        }
+        // Fallback
         const globalSettings = window.loadGlobalSettings?.() || {};
         const historicalCounts = globalSettings.historicalCounts || {};
         const manualOffsets = globalSettings.manualUsageOffsets || {};
-
         const baseCount = historicalCounts[bunkName]?.[activityName] || 0;
         const offset = manualOffsets[bunkName]?.[activityName] || 0;
-
         return Math.max(0, baseCount + offset);
     };
 
     /**
      * Get average activity count for a bunk across all activities
+     * DELEGATES to SchedulerCoreUtils for single source of truth
      * @param {string} bunkName
      * @param {Array<string>} allActivities
      * @returns {number}
      */
     RotationEngine.getBunkAverageActivityCount = function(bunkName, allActivities) {
+        // Delegate to consolidated function
+        if (window.SchedulerCoreUtils?.getBunkAverageActivityCount) {
+            return window.SchedulerCoreUtils.getBunkAverageActivityCount(bunkName, allActivities);
+        }
+        // Fallback
         if (!allActivities || allActivities.length === 0) return 0;
-
         let total = 0;
         for (const act of allActivities) {
             total += RotationEngine.getActivityCount(bunkName, act);
         }
-
         return total / allActivities.length;
     };
 
@@ -206,7 +218,6 @@
     RotationEngine.getActivityUsageDeviation = function(bunkName, activityName, allActivities) {
         const count = RotationEngine.getActivityCount(bunkName, activityName);
         const average = RotationEngine.getBunkAverageActivityCount(bunkName, allActivities);
-
         return count - average;
     };
 
@@ -289,7 +300,7 @@
      */
     RotationEngine.calculateVarietyScore = function(bunkName, activityName, beforeSlotIndex, allActivities) {
         const todayActivities = RotationEngine.getActivitiesDoneToday(bunkName, beforeSlotIndex);
-        const actLower = activityName.toLowerCase().trim();
+        const actLower = (activityName || '').toLowerCase().trim();
 
         // Already done today - FORBIDDEN
         if (todayActivities.has(actLower)) {
@@ -302,7 +313,7 @@
 
         const globalSettings = window.loadGlobalSettings?.() || {};
         const specialNames = new Set(
-            (globalSettings.app1?.specialActivities || []).map(s => s.name.toLowerCase().trim())
+            (globalSettings.app1?.specialActivities || []).map(s => (s.name || '').toLowerCase().trim())
         );
 
         for (const act of todayActivities) {
@@ -630,5 +641,5 @@
     window.debugRotationRecommendations = RotationEngine.debugRecommendations;
     window.debugDivisionRotation = RotationEngine.debugDivisionRotation;
 
-    console.log('[ROTATION] Smart Activity Rotation Engine loaded');
+    console.log('[ROTATION] Smart Activity Rotation Engine loaded (delegating to SchedulerCoreUtils)');
 })();
