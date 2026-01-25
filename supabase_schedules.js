@@ -1,5 +1,5 @@
 // =============================================================================
-// supabase_schedules.js v5.2 — CAMPISTRY SCHEDULE DATABASE OPERATIONS
+// supabase_schedules.js v5.3 — CAMPISTRY SCHEDULE DATABASE OPERATIONS
 // =============================================================================
 //
 // Pure data operations for schedules.
@@ -16,6 +16,11 @@
 //
 // REQUIRES: supabase_client.js, supabase_permissions.js
 //
+// v5.3 FIXES:
+// - ★ CRITICAL: unifiedTimes now properly included in mergeSchedules return
+// - ★ Added mergedUnifiedTimes tracking (uses longest array)
+// - ★ Improved save verification with exponential backoff
+//
 // v5.2 UPDATE:
 // - Added divisionTimes support in save payload and merge logic
 //
@@ -26,14 +31,16 @@
 // =============================================================================
 (function() {
     'use strict';
-    console.log('📅 Campistry Schedule DB v5.2 loading...');
+    console.log('📅 Campistry Schedule DB v5.3 loading...');
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
     const CONFIG = {
         TABLE_NAME: 'daily_schedules',
         LOCAL_STORAGE_KEY: 'campDailyData_v1',
-        DEBUG: true  // Enable debug logging
+        DEBUG: true,  // Enable debug logging
+        VERIFY_MAX_ATTEMPTS: 3,
+        VERIFY_BASE_DELAY_MS: 500
     };
     // =========================================================================
     // STATE
@@ -366,7 +373,7 @@
         }
     }
     // =========================================================================
-    // MERGE LOGIC
+    // MERGE LOGIC - ★★★ FIXED v5.3: unifiedTimes now properly returned ★★★
     // =========================================================================
     /**
      * Merge multiple scheduler records into a single schedule.
@@ -375,12 +382,14 @@
      */
     function mergeSchedules(records) {
         if (!records || records.length === 0) return null;
+        
         const mergedAssignments = {};
         const mergedLeagues = {};
-       
+        let mergedUnifiedTimes = [];  // ★★★ FIX: Track unifiedTimes ★★★
         let mergedDivisionTimes = {};
         let maxSlots = 0;
         let isRainyDay = false;
+        
         records.forEach(record => {
             const data = record.schedule_data || {};
             
@@ -388,12 +397,14 @@
                 bunks: Object.keys(data.scheduleAssignments || {}).length,
                 slots: data.unifiedTimes?.length || 0
             });
+            
             // Merge scheduleAssignments (each scheduler owns their bunks)
             if (data.scheduleAssignments) {
                 Object.entries(data.scheduleAssignments).forEach(([bunkId, slots]) => {
                     mergedAssignments[bunkId] = slots;
                 });
             }
+            
             // Merge leagueAssignments
             if (data.leagueAssignments) {
                 Object.entries(data.leagueAssignments).forEach(([div, slots]) => {
@@ -401,10 +412,24 @@
                 });
             }
             
+            // ★★★ FIX: Track unifiedTimes - use longest array ★★★
+            if (data.unifiedTimes && Array.isArray(data.unifiedTimes)) {
+                if (data.unifiedTimes.length > mergedUnifiedTimes.length) {
+                    mergedUnifiedTimes = data.unifiedTimes;
+                    maxSlots = data.unifiedTimes.length;
+                }
+            }
+            
+            // Also check record.unified_times (separate column)
+            if (record.unified_times && Array.isArray(record.unified_times)) {
+                if (record.unified_times.length > mergedUnifiedTimes.length) {
+                    mergedUnifiedTimes = record.unified_times;
+                    maxSlots = record.unified_times.length;
+                }
+            }
 
-            // ★★★ NEW: Merge divisionTimes ★★★
+            // Merge divisionTimes
             if (data.divisionTimes && Object.keys(data.divisionTimes).length > 0) {
-                if (!mergedDivisionTimes) mergedDivisionTimes = {};
                 Object.entries(data.divisionTimes).forEach(([divName, slots]) => {
                     // Keep the version with more slots for each division
                     if (!mergedDivisionTimes[divName] || slots.length > mergedDivisionTimes[divName].length) {
@@ -418,11 +443,21 @@
                 isRainyDay = true;
             }
         });
+        
+        // ★★★ FIX: Deserialize unifiedTimes if needed ★★★
+        const deserializedTimes = deserializeUnifiedTimes(mergedUnifiedTimes);
+        
+        log('Merge complete:', {
+            bunks: Object.keys(mergedAssignments).length,
+            unifiedTimes: deserializedTimes.length,
+            divisionTimes: Object.keys(mergedDivisionTimes).length
+        });
+        
         return {
             scheduleAssignments: mergedAssignments,
             leagueAssignments: mergedLeagues,
-           
-            divisionTimes: window.DivisionTimesSystem?.deserialize(mergedDivisionTimes) || {}, // ★★★ NEW ★★★
+            unifiedTimes: deserializedTimes,  // ★★★ FIX: Now included! ★★★
+            divisionTimes: window.DivisionTimesSystem?.deserialize(mergedDivisionTimes) || mergedDivisionTimes,
             slotCount: maxSlots,
             isRainyDay,
             _mergedAt: new Date().toISOString(),
@@ -435,7 +470,8 @@
     /**
      * Save schedule for a date.
      * Automatically filters to user's divisions and UPSERTs.
-     * * FIXED in v5.1: Uses AccessControl instead of PermissionsDB for filtering
+     * FIXED in v5.1: Uses AccessControl instead of PermissionsDB for filtering
+     * FIXED in v5.3: Improved verification with exponential backoff
      */
     async function saveSchedule(dateKey, data, options = {}) {
         const client = getClient();
@@ -472,7 +508,7 @@
                 leagueAssignments: data.leagueAssignments || {},
                 unifiedTimes: serializeUnifiedTimes(data.unifiedTimes || window.unifiedTimes || []),
                 slotCount: data.unifiedTimes?.length || window.unifiedTimes?.length || 0,
-                // ★★★ NEW: Include division-specific times ★★★
+                // Include division-specific times
                 divisionTimes: window.DivisionTimesSystem?.serialize(window.divisionTimes) || {}
             };
 
@@ -515,39 +551,54 @@
                 divisions
             });
 
-           // ★★★ NEW: Verify save reached cloud ★★★
-log('Verifying save reached cloud...');
-await new Promise(r => setTimeout(r, 500));
+            // ★★★ IMPROVED v5.3: Verify save with exponential backoff ★★★
+            log('Verifying save reached cloud...');
+            
+            let verified = false;
+            let verifyAttempt = 0;
+            
+            while (!verified && verifyAttempt < CONFIG.VERIFY_MAX_ATTEMPTS) {
+                verifyAttempt++;
+                const delay = CONFIG.VERIFY_BASE_DELAY_MS * Math.pow(2, verifyAttempt - 1);
+                await new Promise(r => setTimeout(r, delay));
+                
+                try {
+                    const { data: verifyData, error: verifyError } = await client
+                        .from(CONFIG.TABLE_NAME)
+                        .select('updated_at, schedule_data')
+                        .eq('camp_id', campId)
+                        .eq('date_key', dateKey)
+                        .eq('scheduler_id', userId)
+                        .single();
 
-try {
-    const { data: verifyData, error: verifyError } = await client
-        .from(CONFIG.TABLE_NAME)
-        .select('updated_at')
-        .eq('camp_id', campId)
-        .eq('date_key', dateKey)
-        .eq('scheduler_id', userId)
-        .single();
+                    if (!verifyError && verifyData) {
+                        const cloudBunks = Object.keys(verifyData.schedule_data?.scheduleAssignments || {}).length;
+                        log(`✅ Save VERIFIED (attempt ${verifyAttempt}): ${cloudBunks} bunks at ${verifyData.updated_at}`);
+                        verified = true;
+                    } else {
+                        log(`Verify attempt ${verifyAttempt} failed:`, verifyError?.message);
+                    }
+                } catch (verifyErr) {
+                    log(`Verify attempt ${verifyAttempt} exception:`, verifyErr.message);
+                }
+            }
+            
+            if (!verified) {
+                logError('Save verification failed after', CONFIG.VERIFY_MAX_ATTEMPTS, 'attempts');
+                return { 
+                    success: true, 
+                    target: 'cloud-unverified',
+                    bunks: filteredBunkCount,
+                    verified: false
+                };
+            }
 
-    if (verifyError || !verifyData) {
-        logError('Save verification failed - record not found');
-        return { 
-            success: false, 
-            target: 'verification-failed',
-            error: 'Save not verified'
-        };
-    }
-
-    log('✅ Save VERIFIED at', verifyData.updated_at);
-} catch (verifyErr) {
-    logError('Verification exception:', verifyErr);
-}
-
-return { 
-    success: true, 
-    target: 'cloud',
-    bunks: filteredBunkCount,
-    verified: true
-};
+            return { 
+                success: true, 
+                target: 'cloud',
+                bunks: filteredBunkCount,
+                verified: true
+            };
         } catch (e) {
             logError('Save exception:', e);
             setLocalSchedule(dateKey, data);
@@ -805,7 +856,7 @@ return {
         const userId = getUserId();
 
         console.log('═══════════════════════════════════════════════════════');
-        console.log('📅 SCHEDULE DB DIAGNOSTIC');
+        console.log('📅 SCHEDULE DB DIAGNOSTIC v5.3');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Date Key:', dateKey);
         console.log('');
@@ -844,11 +895,13 @@ return {
             if (data && data.length > 0) {
                 data.forEach((record, i) => {
                     const bunks = Object.keys(record.schedule_data?.scheduleAssignments || {}).length;
+                    const slots = record.schedule_data?.unifiedTimes?.length || record.unified_times?.length || 0;
                     console.log(`\nRecord ${i + 1}:`);
                     console.log('  Scheduler:', record.scheduler_name || 'Unknown');
                     console.log('  Scheduler ID:', record.scheduler_id);
                     console.log('  Divisions:', JSON.stringify(record.divisions));
                     console.log('  Bunks in schedule_data:', bunks);
+                    console.log('  UnifiedTimes slots:', slots);
                     console.log('  Updated:', record.updated_at);
                     
                     if (bunks > 0) {
@@ -861,6 +914,7 @@ return {
 
             console.log('\n--- Window Globals ---');
             console.log('window.scheduleAssignments:', Object.keys(window.scheduleAssignments || {}).length, 'bunks');
+            console.log('window.unifiedTimes:', (window.unifiedTimes || []).length, 'slots');
             if (Object.keys(window.scheduleAssignments || {}).length > 0) {
                 console.log('  Bunk IDs:', Object.keys(window.scheduleAssignments).slice(0, 10).join(', '));
             }
@@ -927,7 +981,7 @@ return {
         });
     }
 
-    console.log('📅 [ScheduleDB] v5.2 loaded with AccessControl filtering fix');
+    console.log('📅 [ScheduleDB] v5.3 loaded with unifiedTimes merge fix');
     console.log('   Run: ScheduleDB.diagnose() to check sync status');
 
 })();
