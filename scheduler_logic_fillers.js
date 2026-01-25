@@ -1,62 +1,113 @@
 // ============================================================================
-// scheduler_logic_fillers.js (SMART ROTATION v5 - CONSOLIDATED)
+// scheduler_logic_fillers.js (SUPERCHARGED ROTATION v6.0)
 // ============================================================================
-// MAJOR UPDATE: Now delegates core tracking functions to SchedulerCoreUtils
-// for single source of truth across all files.
+// ★★★ MAJOR UPGRADE: Human-Intelligent Activity Rotation System ★★★
+//
+// KEY IMPROVEMENTS:
+// 1. REAL HISTORY SCANNING - looks at actual saved schedules, not just timestamps
+// 2. STREAK DETECTION - escalating penalties for consecutive day patterns
+// 3. MUCH STRONGER DISTRIBUTION - ensures all bunks get fair access
+// 4. NOVELTY PRIORITIZATION - activities never done get HUGE bonus
+// 5. SMARTER TIE-BREAKING - controlled randomness when scores are similar
+// 6. CROSS-ACTIVITY COVERAGE - ensures bunks try ALL available activities
 //
 // RULES:
 // 1. HARD BLOCK: No bunk does same activity twice in one day (Infinity penalty)
-// 2. STRONG: Yesterday's activities get heavy penalty (+5000)
-// 3. MODERATE: Activities from 2-3 days ago get moderate penalty (+2000-3000)
-// 4. BONUS: Never-done activities get strong bonus (-1500)
-// 5. BONUS: Under-utilized activities get bonus (-800)
-// 6. BALANCED: Tracks division-wide fairness
+// 2. VERY STRONG: Yesterday's activities get HUGE penalty (+12000)
+// 3. STREAK DETECTION: Multiple recent days = escalating multipliers
+// 4. STRONG BONUS: Never-done activities get massive bonus (-5000)
+// 5. FAIRNESS: Cross-bunk distribution enforced with strong penalties
 //
 // SCORING PHILOSOPHY:
 // - Lower scores = BETTER (we minimize penalty)
 // - Activities are sorted by rotation score before selection
-// - Field capacity and sharing rules still enforced
+// - Tie-breaking adds controlled randomness for variety
 //
-// ★★★ UPDATED: Delegates to SchedulerCoreUtils for tracking functions ★★★
+// ★★★ DELEGATES to SchedulerCoreUtils for core tracking functions ★★★
 // ============================================================================
 
 (function () {
     'use strict';
 
     // =========================================================================
-    // ROTATION CONFIGURATION
+    // ★★★ SUPERCHARGED ROTATION CONFIGURATION ★★★
     // =========================================================================
     const ROTATION_CONFIG = {
-        // Hard rules
-        SAME_DAY_PENALTY: Infinity,            // NEVER allow same activity twice in one day
+        // =====================================================================
+        // HARD RULES (Absolute - no exceptions)
+        // =====================================================================
+        SAME_DAY_PENALTY: Infinity,              // NEVER repeat same day
 
-        // Recency penalties (how many days ago did they do it?)
-        YESTERDAY_PENALTY: 5000,               // Did it yesterday
-        TWO_DAYS_AGO_PENALTY: 3000,            // Did it 2 days ago
-        THREE_DAYS_AGO_PENALTY: 2000,          // Did it 3 days ago
-        FOUR_TO_SEVEN_DAYS_PENALTY: 800,       // Did it 4-7 days ago
-        WEEK_PLUS_PENALTY: 200,                // Did it more than a week ago
+        // =====================================================================
+        // RECENCY PENALTIES - MUCH STRONGER than before
+        // =====================================================================
+        YESTERDAY_PENALTY: 12000,                // Did it yesterday - EXTREMELY BAD
+        TWO_DAYS_AGO_PENALTY: 8000,              // 2 days ago - VERY BAD  
+        THREE_DAYS_AGO_PENALTY: 5000,            // 3 days ago - BAD
+        FOUR_DAYS_AGO_PENALTY: 3000,             // 4 days ago - moderate
+        FIVE_DAYS_AGO_PENALTY: 1500,             // 5 days ago - slight concern
+        SIX_SEVEN_DAYS_PENALTY: 800,             // 6-7 days ago - mild
+        WEEK_PLUS_PENALTY: 200,                  // 8+ days ago - minimal
 
-        // Frequency penalties (how often compared to other activities?)
-        HIGH_FREQUENCY_PENALTY: 1500,          // Done this much more than others
-        ABOVE_AVERAGE_PENALTY: 500,            // Done this more than average
+        // =====================================================================
+        // ★★★ STREAK PENALTIES - Escalating for patterns ★★★
+        // =====================================================================
+        STREAK_TWO_DAYS_MULTIPLIER: 2.0,         // Did it 2 of last 3 days
+        STREAK_THREE_DAYS_MULTIPLIER: 4.0,       // Did it 3 of last 5 days  
+        STREAK_FOUR_PLUS_MULTIPLIER: 8.0,        // Did it 4+ of last 7 days
 
-        // Variety bonuses (negative = good)
-        NEVER_DONE_BONUS: -1500,               // NEVER done this activity before
-        UNDER_UTILIZED_BONUS: -800,            // Done less than average
-        VARIETY_BONUS: -300,                   // Adding variety to today
-        BALANCE_BONUS: -200,                   // Balancing sports vs specials today
+        // =====================================================================
+        // FREQUENCY PENALTIES - Compared to other activities
+        // =====================================================================
+        HIGH_FREQUENCY_PENALTY: 3000,            // Done MUCH more than average
+        ABOVE_AVERAGE_PENALTY: 1200,             // Done more than average
+        SLIGHTLY_ABOVE_PENALTY: 500,             // Slightly above average
 
-        // Decay factor for old activities
-        RECENCY_DECAY: 0.7,
+        // =====================================================================
+        // ★★★ ENHANCED VARIETY BONUSES - MUCH STRONGER ★★★
+        // =====================================================================
+        NEVER_DONE_BONUS: -5000,                 // NEVER done - HUGE bonus!
+        DONE_ONCE_BONUS: -3000,                  // Only done once ever - big bonus
+        DONE_TWICE_BONUS: -1500,                 // Only done twice - good bonus
+        UNDER_UTILIZED_BONUS: -2000,             // Significantly under-utilized
+        SLIGHTLY_UNDER_BONUS: -800,              // Slightly under average
+        VARIETY_BONUS: -400,                     // General variety bonus
+        BALANCE_BONUS: -600,                     // Balancing sports vs specials
 
-        // Weights
+        // =====================================================================
+        // ★★★ ENHANCED DISTRIBUTION PENALTIES - CROSS-BUNK FAIRNESS ★★★
+        // =====================================================================
+        MOST_IN_DIVISION_PENALTY: 2500,          // This bunk has done it MOST
+        SEVERE_IMBALANCE_PENALTY: 5000,          // 3+ more than others - SEVERE
+        ABOVE_DIV_AVG_PENALTY: 1000,             // Above division average
+        LEAST_IN_DIVISION_BONUS: -1500,          // This bunk has done it LEAST
+        BELOW_DIV_AVG_BONUS: -600,               // Below division average
+
+        // =====================================================================
+        // ★★★ ACTIVITY COVERAGE TRACKING ★★★
+        // =====================================================================
+        MISSING_ACTIVITY_BONUS: -3500,           // Bunk hasn't tried this at all
+        LOW_COVERAGE_BONUS: -1500,               // Bunk has tried <50% of activities
+
+        // =====================================================================
+        // DECAY & WEIGHTS
+        // =====================================================================
+        RECENCY_DECAY: 0.6,                      // Faster decay for older activities
+
         WEIGHTS: {
             recency: 1.0,
-            frequency: 0.8,
+            streak: 1.5,                          // Streaks are VERY important
+            frequency: 1.0,
             variety: 1.2,
-            distribution: 0.6
-        }
+            distribution: 1.0,                    // Increased from 0.6
+            coverage: 0.8                         // Activity coverage
+        },
+
+        // =====================================================================
+        // TIE-BREAKER CONFIGURATION
+        // =====================================================================
+        TIE_BREAKER_RANGE: 500,
+        TIE_BREAKER_RANDOMNESS: 300
     };
 
     // =========================================================================
@@ -77,13 +128,11 @@
     }
 
     function isFieldUnavailable(fieldName, block) {
-        // Check disabled fields (rainy day, manual overrides)
         const disabledFields = window.currentDisabledFields || [];
         if (disabledFields.includes(fieldName)) {
             return true;
         }
 
-        // Check global locks
         if (!window.GlobalFieldLocks) return false;
         const slots = block.slots || [];
         if (slots.length === 0) return false;
@@ -93,18 +142,138 @@
     }
 
     // =========================================================================
-    // ★★★ DELEGATED ROTATION TRACKING - Single Source of Truth ★★★
+    // ★★★ COMPREHENSIVE HISTORY SCANNER ★★★
+    // Scans ACTUAL saved schedules instead of relying on timestamps
     // =========================================================================
 
     /**
-     * Get all activities done by a bunk TODAY (before current slot)
-     * DELEGATES to SchedulerCoreUtils for single source of truth
+     * Build comprehensive activity history for a bunk by scanning saved schedules
+     * This is the KEY improvement - looks at REAL data
      */
+    function buildBunkActivityHistory(bunkName) {
+        const history = {
+            byActivity: {},       // activityName -> { dates: [], count: 0, daysSinceLast: null }
+            recentWeek: {},       // activityName -> count in last 7 days
+            recentStreak: {},     // activityName -> consecutive days ending at yesterday
+            totalActivities: 0,
+            uniqueActivities: new Set()
+        };
+
+        try {
+            const allDaily = window.loadAllDailyData?.() || {};
+            const today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            
+            // Get sorted dates (most recent first), excluding today
+            const sortedDates = Object.keys(allDaily)
+                .filter(d => d < today)
+                .sort((a, b) => b.localeCompare(a));
+            
+            // Process last 14 days
+            const datesToProcess = sortedDates.slice(0, 14);
+            
+            datesToProcess.forEach((dateKey, daysAgo) => {
+                const actualDaysAgo = daysAgo + 1;  // +1 because we excluded today
+                const dayData = allDaily[dateKey];
+                const schedule = dayData?.scheduleAssignments?.[bunkName] || [];
+                
+                schedule.forEach(entry => {
+                    if (entry && entry._activity && !entry.continuation && !entry._isTransition) {
+                        const actName = entry._activity;
+                        const actLower = actName.toLowerCase().trim();
+                        
+                        if (actLower === 'free' || actLower.includes('transition')) return;
+                        
+                        // Initialize if needed
+                        if (!history.byActivity[actName]) {
+                            history.byActivity[actName] = {
+                                dates: [],
+                                count: 0,
+                                daysSinceLast: null
+                            };
+                        }
+                        
+                        const actHistory = history.byActivity[actName];
+                        actHistory.dates.push({ dateKey, daysAgo: actualDaysAgo });
+                        actHistory.count++;
+                        
+                        // Track first occurrence (most recent)
+                        if (actHistory.daysSinceLast === null) {
+                            actHistory.daysSinceLast = actualDaysAgo;
+                        }
+                        
+                        // Track last 7 days
+                        if (actualDaysAgo <= 7) {
+                            history.recentWeek[actName] = (history.recentWeek[actName] || 0) + 1;
+                        }
+                        
+                        history.totalActivities++;
+                        history.uniqueActivities.add(actName);
+                    }
+                });
+            });
+            
+            // Calculate streaks (consecutive days ending at yesterday)
+            for (const [actName, actData] of Object.entries(history.byActivity)) {
+                const sortedDays = actData.dates
+                    .map(d => d.daysAgo)
+                    .sort((a, b) => a - b);
+                
+                let streak = 0;
+                let expectedDay = 1;  // Start with yesterday
+                
+                for (const day of sortedDays) {
+                    if (day === expectedDay) {
+                        streak++;
+                        expectedDay++;
+                    } else if (day > expectedDay) {
+                        break;
+                    }
+                }
+                
+                history.recentStreak[actName] = streak;
+            }
+            
+        } catch (e) {
+            console.warn('[ROTATION] Error building history:', e);
+        }
+        
+        return history;
+    }
+
+    // Cache for history to avoid rebuilding on every call
+    let _historyCache = new Map();
+    let _historyCacheDate = null;
+
+    function getBunkHistory(bunkName) {
+        const today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        
+        // Invalidate cache if date changed
+        if (_historyCacheDate !== today) {
+            _historyCache.clear();
+            _historyCacheDate = today;
+        }
+        
+        if (!_historyCache.has(bunkName)) {
+            _historyCache.set(bunkName, buildBunkActivityHistory(bunkName));
+        }
+        
+        return _historyCache.get(bunkName);
+    }
+
+    // Clear cache when schedules change
+    window.clearRotationCache = function() {
+        _historyCache.clear();
+        console.log('🔄 Rotation history cache cleared');
+    };
+
+    // =========================================================================
+    // ★★★ DELEGATED ROTATION TRACKING - Single Source of Truth ★★★
+    // =========================================================================
+
     function getActivitiesDoneToday(bunkName, beforeSlotIndex) {
         if (window.SchedulerCoreUtils?.getActivitiesDoneToday) {
             return window.SchedulerCoreUtils.getActivitiesDoneToday(bunkName, beforeSlotIndex);
         }
-        // Fallback if SchedulerCoreUtils not loaded yet
         const activities = new Set();
         const schedule = window.scheduleAssignments?.[bunkName] || [];
         for (let i = 0; i < beforeSlotIndex && i < schedule.length; i++) {
@@ -116,15 +285,10 @@
         return activities;
     }
 
-    /**
-     * Get activities done YESTERDAY (for recency penalty)
-     * DELEGATES to SchedulerCoreUtils for single source of truth
-     */
     function getActivitiesFromYesterday(bunkName) {
         if (window.SchedulerCoreUtils?.getActivitiesDoneYesterday) {
             return window.SchedulerCoreUtils.getActivitiesDoneYesterday(bunkName);
         }
-        // Fallback
         const activities = new Set();
         try {
             const allDaily = window.loadAllDailyData?.() || {};
@@ -146,20 +310,15 @@
                 }
             }
         } catch (e) {
-            // Silent fail - yesterday data may not exist
+            // Silent fail
         }
         return activities;
     }
 
-    /**
-     * Get how many days since bunk last did an activity
-     * DELEGATES to SchedulerCoreUtils for single source of truth
-     */
     function getDaysSinceActivity(bunkName, activityName, beforeSlotIndex) {
         if (window.SchedulerCoreUtils?.getDaysSinceActivity) {
             return window.SchedulerCoreUtils.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
         }
-        // Fallback
         const actLower = (activityName || '').toLowerCase().trim();
         const todayActivities = getActivitiesDoneToday(bunkName, beforeSlotIndex);
         if (todayActivities.has(actLower)) {
@@ -181,15 +340,10 @@
         return null;
     }
 
-    /**
-     * Get total count of how many times bunk has done an activity
-     * DELEGATES to SchedulerCoreUtils for single source of truth
-     */
     function getActivityCount(bunkName, activityName) {
         if (window.SchedulerCoreUtils?.getActivityCount) {
             return window.SchedulerCoreUtils.getActivityCount(bunkName, activityName);
         }
-        // Fallback
         const globalSettings = window.loadGlobalSettings?.() || {};
         const historicalCounts = globalSettings.historicalCounts || {};
         const manualOffsets = globalSettings.manualUsageOffsets || {};
@@ -198,14 +352,10 @@
         return Math.max(0, baseCount + offset);
     }
 
-    /**
-     * Get average activity count for bunk across all activities
-     */
     function getBunkAverageCount(bunkName, allActivityNames) {
         if (window.SchedulerCoreUtils?.getBunkAverageActivityCount) {
             return window.SchedulerCoreUtils.getBunkAverageActivityCount(bunkName, allActivityNames);
         }
-        // Fallback
         if (!allActivityNames || allActivityNames.length === 0) return 0;
         let total = 0;
         for (const act of allActivityNames) {
@@ -214,9 +364,6 @@
         return total / allActivityNames.length;
     }
 
-    /**
-     * Get all unique activity names from config
-     */
     function getAllActivityNames() {
         const globalSettings = window.loadGlobalSettings?.() || {};
         const fields = globalSettings.app1?.fields || [];
@@ -235,9 +382,6 @@
         return [...names];
     }
 
-    /**
-     * Check if activity is a "special" type
-     */
     function isSpecialActivity(activityName) {
         const globalSettings = window.loadGlobalSettings?.() || {};
         const specials = globalSettings.app1?.specialActivities || [];
@@ -246,49 +390,136 @@
     }
 
     // =========================================================================
-    // ★★★ ROTATION SCORING FUNCTIONS ★★★
+    // ★★★ SUPERCHARGED ROTATION SCORING FUNCTIONS ★★★
     // =========================================================================
 
     /**
-     * Calculate RECENCY score - how recently did they do this?
+     * Calculate RECENCY score with real history scanning
      * LOWER IS BETTER
      */
     function calculateRecencyScore(bunkName, activityName, beforeSlotIndex) {
-        const daysSince = getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
-
-        if (daysSince === null) {
-            // NEVER done - this is GREAT!
-            return ROTATION_CONFIG.NEVER_DONE_BONUS;
-        }
-
-        if (daysSince === 0) {
-            // Same day - FORBIDDEN
+        // First check today
+        const todayActivities = getActivitiesDoneToday(bunkName, beforeSlotIndex);
+        const actLower = (activityName || '').toLowerCase().trim();
+        
+        if (todayActivities.has(actLower)) {
             return ROTATION_CONFIG.SAME_DAY_PENALTY;
         }
-
+        
+        // Get comprehensive history from actual schedules
+        const history = getBunkHistory(bunkName);
+        const actHistory = history.byActivity[activityName];
+        
+        // Never done at all - HUGE bonus!
+        if (!actHistory || actHistory.count === 0) {
+            return ROTATION_CONFIG.NEVER_DONE_BONUS;
+        }
+        
+        // Check total count for novelty bonuses
+        if (actHistory.count === 1) {
+            return ROTATION_CONFIG.DONE_ONCE_BONUS;
+        }
+        if (actHistory.count === 2) {
+            return ROTATION_CONFIG.DONE_TWICE_BONUS;
+        }
+        
+        const daysSince = actHistory.daysSinceLast;
+        
+        if (daysSince === null) {
+            // Fallback to old method
+            return calculateRecencyScoreFallback(bunkName, activityName, beforeSlotIndex);
+        }
+        
+        // Apply recency penalties based on actual days
         if (daysSince === 1) {
             return ROTATION_CONFIG.YESTERDAY_PENALTY;
         }
-
         if (daysSince === 2) {
             return ROTATION_CONFIG.TWO_DAYS_AGO_PENALTY;
         }
-
         if (daysSince === 3) {
             return ROTATION_CONFIG.THREE_DAYS_AGO_PENALTY;
         }
-
-        if (daysSince <= 7) {
-            return ROTATION_CONFIG.FOUR_TO_SEVEN_DAYS_PENALTY;
+        if (daysSince === 4) {
+            return ROTATION_CONFIG.FOUR_DAYS_AGO_PENALTY;
         }
+        if (daysSince === 5) {
+            return ROTATION_CONFIG.FIVE_DAYS_AGO_PENALTY;
+        }
+        if (daysSince <= 7) {
+            return ROTATION_CONFIG.SIX_SEVEN_DAYS_PENALTY;
+        }
+        
+        // More than a week ago - apply decay
+        const weeksAgo = Math.floor(daysSince / 7);
+        return Math.max(50, ROTATION_CONFIG.WEEK_PLUS_PENALTY * Math.pow(ROTATION_CONFIG.RECENCY_DECAY, weeksAgo));
+    }
 
-        // More than a week ago - decay penalty over time
+    // Fallback if history scanning fails
+    function calculateRecencyScoreFallback(bunkName, activityName, beforeSlotIndex) {
+        const daysSince = getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+        
+        if (daysSince === null) {
+            return ROTATION_CONFIG.NEVER_DONE_BONUS;
+        }
+        if (daysSince === 0) {
+            return ROTATION_CONFIG.SAME_DAY_PENALTY;
+        }
+        if (daysSince === 1) {
+            return ROTATION_CONFIG.YESTERDAY_PENALTY;
+        }
+        if (daysSince === 2) {
+            return ROTATION_CONFIG.TWO_DAYS_AGO_PENALTY;
+        }
+        if (daysSince === 3) {
+            return ROTATION_CONFIG.THREE_DAYS_AGO_PENALTY;
+        }
+        if (daysSince <= 7) {
+            return ROTATION_CONFIG.SIX_SEVEN_DAYS_PENALTY;
+        }
+        
         const weeksAgo = Math.floor(daysSince / 7);
         return Math.max(50, ROTATION_CONFIG.WEEK_PLUS_PENALTY * Math.pow(ROTATION_CONFIG.RECENCY_DECAY, weeksAgo));
     }
 
     /**
-     * Calculate FREQUENCY score - how often have they done this vs other activities?
+     * ★★★ NEW: STREAK DETECTION SCORE ★★★
+     * Escalating penalties for doing same activity multiple recent days
+     */
+    function calculateStreakScore(bunkName, activityName) {
+        const history = getBunkHistory(bunkName);
+        
+        // Check consecutive day streak
+        const streak = history.recentStreak[activityName] || 0;
+        
+        if (streak >= 4) {
+            return ROTATION_CONFIG.YESTERDAY_PENALTY * ROTATION_CONFIG.STREAK_FOUR_PLUS_MULTIPLIER;
+        }
+        if (streak >= 3) {
+            return ROTATION_CONFIG.YESTERDAY_PENALTY * ROTATION_CONFIG.STREAK_THREE_DAYS_MULTIPLIER;
+        }
+        if (streak >= 2) {
+            return ROTATION_CONFIG.YESTERDAY_PENALTY * ROTATION_CONFIG.STREAK_TWO_DAYS_MULTIPLIER;
+        }
+        
+        // Also check frequency in last week (even if not consecutive)
+        const weekCount = history.recentWeek[activityName] || 0;
+        
+        if (weekCount >= 4) {
+            return ROTATION_CONFIG.HIGH_FREQUENCY_PENALTY * 2;
+        }
+        if (weekCount >= 3) {
+            return ROTATION_CONFIG.HIGH_FREQUENCY_PENALTY;
+        }
+        if (weekCount >= 2) {
+            return ROTATION_CONFIG.ABOVE_AVERAGE_PENALTY;
+        }
+        
+        return 0;
+    }
+
+    /**
+     * Calculate FREQUENCY score - enhanced version
      * LOWER IS BETTER
      */
     function calculateFrequencyScore(bunkName, activityName) {
@@ -299,30 +530,32 @@
         const average = getBunkAverageCount(bunkName, allActivities);
         const deviation = count - average;
 
-        if (deviation <= -2) {
-            // Significantly under-utilized - bonus!
+        if (deviation <= -3) {
             return ROTATION_CONFIG.UNDER_UTILIZED_BONUS;
         }
 
-        if (deviation < 0) {
-            // Slightly under-utilized
-            return ROTATION_CONFIG.VARIETY_BONUS;
+        if (deviation <= -1) {
+            return ROTATION_CONFIG.SLIGHTLY_UNDER_BONUS;
         }
 
         if (deviation === 0) {
             return 0;
         }
 
+        if (deviation <= 1) {
+            return ROTATION_CONFIG.SLIGHTLY_ABOVE_PENALTY;
+        }
+
         if (deviation <= 2) {
             return ROTATION_CONFIG.ABOVE_AVERAGE_PENALTY;
         }
 
-        // Significantly over-used
-        return ROTATION_CONFIG.HIGH_FREQUENCY_PENALTY + (deviation - 2) * 200;
+        // Significantly over-used - escalating penalty
+        return ROTATION_CONFIG.HIGH_FREQUENCY_PENALTY + (deviation - 2) * 500;
     }
 
     /**
-     * Calculate VARIETY score - how much variety does this add to today?
+     * Calculate VARIETY score - enhanced version
      * LOWER IS BETTER
      */
     function calculateVarietyScore(bunkName, activityName, beforeSlotIndex) {
@@ -348,22 +581,28 @@
 
         const thisIsSpecial = isSpecialActivity(activityName);
 
-        // Bonus for balancing the day
+        // Strong bonus for balancing the day
+        if (thisIsSpecial && todaySports > todaySpecials + 1) {
+            return ROTATION_CONFIG.BALANCE_BONUS * 2;
+        }
         if (thisIsSpecial && todaySports > todaySpecials) {
             return ROTATION_CONFIG.BALANCE_BONUS;
         }
 
+        if (!thisIsSpecial && todaySpecials > todaySports + 1) {
+            return ROTATION_CONFIG.BALANCE_BONUS * 2;
+        }
         if (!thisIsSpecial && todaySpecials > todaySports) {
             return ROTATION_CONFIG.BALANCE_BONUS;
         }
 
-        // General variety bonus based on unique activities today
+        // General variety bonus
         const uniqueToday = todayActivities.size;
-        return -50 * Math.min(uniqueToday, 4);
+        return ROTATION_CONFIG.VARIETY_BONUS - (50 * Math.min(uniqueToday, 4));
     }
 
     /**
-     * Calculate DISTRIBUTION score - fairness across division
+     * Calculate DISTRIBUTION score - enhanced cross-bunk fairness
      * LOWER IS BETTER
      */
     function calculateDistributionScore(bunkName, activityName, divisionName) {
@@ -377,17 +616,63 @@
 
         const minCount = Math.min(...counts);
         const maxCount = Math.max(...counts);
+        const avgCount = counts.reduce((a, b) => a + b, 0) / counts.length;
 
+        // SEVERE imbalance - 3+ more than min
+        if (myCount >= minCount + 3) {
+            return ROTATION_CONFIG.SEVERE_IMBALANCE_PENALTY;
+        }
+
+        // This bunk has done it most
         if (myCount === maxCount && maxCount > minCount) {
-            // This bunk has done it most - penalty
-            return 300 * (maxCount - minCount);
+            return ROTATION_CONFIG.MOST_IN_DIVISION_PENALTY + (maxCount - minCount) * 300;
         }
 
+        // Above division average
+        if (myCount > avgCount + 0.5) {
+            return ROTATION_CONFIG.ABOVE_DIV_AVG_PENALTY;
+        }
+
+        // This bunk has done it LEAST - strong bonus
         if (myCount === minCount && maxCount > minCount) {
-            // This bunk has done it least - bonus
-            return -300;
+            return ROTATION_CONFIG.LEAST_IN_DIVISION_BONUS - (maxCount - minCount) * 200;
         }
 
+        // Below division average - bonus
+        if (myCount < avgCount - 0.5) {
+            return ROTATION_CONFIG.BELOW_DIV_AVG_BONUS;
+        }
+
+        return 0;
+    }
+
+    /**
+     * ★★★ NEW: ACTIVITY COVERAGE SCORE ★★★
+     * Encourage bunks to try ALL available activities
+     */
+    function calculateCoverageScore(bunkName, activityName) {
+        const allActivities = getAllActivityNames();
+        if (allActivities.length === 0) return 0;
+        
+        const history = getBunkHistory(bunkName);
+        const triedActivities = history.uniqueActivities.size;
+        const coverageRatio = triedActivities / allActivities.length;
+        
+        // Has this bunk ever tried this activity?
+        const hasTriedThis = history.byActivity[activityName]?.count > 0;
+        
+        if (!hasTriedThis) {
+            return ROTATION_CONFIG.MISSING_ACTIVITY_BONUS;
+        }
+        
+        // Low overall coverage - bonus for trying less-used activities
+        if (coverageRatio < 0.5) {
+            const actCount = history.byActivity[activityName]?.count || 0;
+            if (actCount <= 1) {
+                return ROTATION_CONFIG.LOW_COVERAGE_BONUS;
+            }
+        }
+        
         return 0;
     }
 
@@ -404,15 +689,15 @@
         const todayCount = todaySet.has((activityName || '').toLowerCase().trim()) ? 1 : 0;
 
         if (hist + todayCount >= maxUsage) {
-            return Infinity; // At limit
+            return Infinity;
         }
 
         if (hist + todayCount >= maxUsage - 1) {
-            return 2000; // One away
+            return 2000;
         }
 
         if (hist + todayCount >= maxUsage - 2) {
-            return 800; // Two away
+            return 800;
         }
 
         return 0;
@@ -420,7 +705,7 @@
 
     /**
      * ★★★ MASTER ROTATION SCORE CALCULATOR ★★★
-     * Returns total rotation penalty for an activity choice
+     * Combines all factors with weights
      * LOWER IS BETTER, Infinity means BLOCKED
      */
     function calculateRotationScore(bunkName, activityName, block, activityProperties) {
@@ -430,10 +715,9 @@
         const divisionName = block.divName || block.division;
         const todaySet = getActivitiesDoneToday(bunkName, beforeSlotIndex);
 
-        // RECENCY - most important
+        // RECENCY - primary factor
         const recencyScore = calculateRecencyScore(bunkName, activityName, beforeSlotIndex);
 
-        // If same day, stop immediately
         if (recencyScore === Infinity) {
             return Infinity;
         }
@@ -445,11 +729,17 @@
             return Infinity;
         }
 
+        // ★★★ STREAK DETECTION ★★★
+        const streakScore = calculateStreakScore(bunkName, activityName);
+
         // FREQUENCY
         const frequencyScore = calculateFrequencyScore(bunkName, activityName);
 
         // DISTRIBUTION
         const distributionScore = calculateDistributionScore(bunkName, activityName, divisionName);
+
+        // ★★★ COVERAGE ★★★
+        const coverageScore = calculateCoverageScore(bunkName, activityName);
 
         // LIMIT
         const limitScore = calculateLimitScore(bunkName, activityName, activityProperties, todaySet);
@@ -461,9 +751,11 @@
         // Combine with weights
         const totalScore = (
             recencyScore * ROTATION_CONFIG.WEIGHTS.recency +
+            streakScore * ROTATION_CONFIG.WEIGHTS.streak +
             frequencyScore * ROTATION_CONFIG.WEIGHTS.frequency +
             varietyScore * ROTATION_CONFIG.WEIGHTS.variety +
             distributionScore * ROTATION_CONFIG.WEIGHTS.distribution +
+            coverageScore * ROTATION_CONFIG.WEIGHTS.coverage +
             limitScore
         );
 
@@ -537,7 +829,6 @@
             return false;
         }
 
-        // Must be same activity when sharing
         if (state.activities.size > 0 && activityName) {
             const myActivity = activityName.toLowerCase().trim();
             if (!state.activities.has(myActivity)) {
@@ -581,47 +872,65 @@
     }
 
     // =========================================================================
-    // ★★★ SMART PICK SORTING - ROTATION AWARE ★★★
+    // ★★★ SMART PICK SORTING WITH TIE-BREAKING ★★★
     // =========================================================================
 
-    /**
-     * Sort picks by rotation score (LOWER IS BETTER)
-     * This is the key function that makes rotation "super smart"
-     */
     function sortPicksByRotationScore(picks, block, activityProperties) {
         const bunkName = block.bunk;
         const divName = block.divName;
 
-        return picks
-            .map(pick => {
-                const actName = pick._activity || pick.sport || fieldLabel(pick.field);
-                const fieldName = fieldLabel(pick.field);
+        const scored = picks.map(pick => {
+            const actName = pick._activity || pick.sport || fieldLabel(pick.field);
+            const fieldName = fieldLabel(pick.field);
 
-                // Calculate rotation score
-                const rotationScore = calculateRotationScore(bunkName, actName, block, activityProperties);
+            const rotationScore = calculateRotationScore(bunkName, actName, block, activityProperties);
 
-                // If blocked by rotation, mark as such
-                if (rotationScore === Infinity) {
-                    return { ...pick, _rotationScore: Infinity, _blocked: true };
-                }
+            if (rotationScore === Infinity) {
+                return { ...pick, _rotationScore: Infinity, _blocked: true };
+            }
 
-                // Calculate other scores
-                const fieldProps = activityProperties[fieldName] || {};
-                const preferenceScore = calculatePreferenceScore(fieldProps, divName);
-                const sharingBonus = calculateSharingBonus(fieldName, block, activityProperties);
+            const fieldProps = activityProperties[fieldName] || {};
+            const preferenceScore = calculatePreferenceScore(fieldProps, divName);
+            const sharingBonus = calculateSharingBonus(fieldName, block, activityProperties);
 
-                // Combined score (lower is better)
-                // Rotation score is PRIMARY, preference and sharing are secondary
-                const totalScore = rotationScore - preferenceScore - sharingBonus;
+            const totalScore = rotationScore - preferenceScore - sharingBonus;
 
-                return { ...pick, _rotationScore: rotationScore, _totalScore: totalScore, _blocked: false };
-            })
-            .filter(pick => !pick._blocked) // Remove blocked picks
-            .sort((a, b) => a._totalScore - b._totalScore); // Sort by total score (ascending)
+            return { 
+                ...pick, 
+                _rotationScore: rotationScore, 
+                _totalScore: totalScore, 
+                _blocked: false 
+            };
+        })
+        .filter(pick => !pick._blocked);
+
+        // Sort by total score
+        scored.sort((a, b) => a._totalScore - b._totalScore);
+
+        // ★★★ TIE-BREAKING: Add controlled randomness when scores are close ★★★
+        if (scored.length >= 2) {
+            const bestScore = scored[0]._totalScore;
+            const tieGroup = scored.filter(p => 
+                p._totalScore <= bestScore + ROTATION_CONFIG.TIE_BREAKER_RANGE
+            );
+            
+            if (tieGroup.length > 1) {
+                tieGroup.forEach(p => {
+                    p._tieBreaker = Math.random() * ROTATION_CONFIG.TIE_BREAKER_RANDOMNESS;
+                    p._finalScore = p._totalScore + p._tieBreaker;
+                });
+                
+                tieGroup.sort((a, b) => a._finalScore - b._finalScore);
+                
+                scored.splice(0, tieGroup.length, ...tieGroup);
+            }
+        }
+
+        return scored;
     }
 
     // =========================================================================
-    // SPECIAL ACTIVITY SELECTOR (WITH SMART ROTATION)
+    // SPECIAL ACTIVITY SELECTOR (WITH SUPERCHARGED ROTATION)
     // =========================================================================
 
     window.findBestSpecial = function (
@@ -644,7 +953,6 @@
                 _activity: a.name
             }));
 
-        // Filter by availability and capacity
         const available = specials.filter(pick => {
             const actName = pick._activity;
             const fieldName = fieldLabel(pick.field);
@@ -653,7 +961,6 @@
                 return false;
             }
 
-            // ★★★ ROTATION CHECK - Block same-day repeats ★★★
             if (doneToday.has((actName || '').toLowerCase().trim())) {
                 return false;
             }
@@ -674,14 +981,13 @@
             return true;
         });
 
-        // ★★★ SORT BY ROTATION SCORE ★★★
         const sorted = sortPicksByRotationScore(available, block, activityProperties);
 
         return sorted[0] || null;
     };
 
     // =========================================================================
-    // SPORTS ACTIVITY SELECTOR (WITH SMART ROTATION)
+    // SPORTS ACTIVITY SELECTOR (WITH SUPERCHARGED ROTATION)
     // =========================================================================
 
     window.findBestSportActivity = function (
@@ -708,7 +1014,6 @@
                 }));
             });
 
-        // Filter by availability and capacity
         const available = sports.filter(pick => {
             const actName = pick._activity;
             const fieldName = fieldLabel(pick.field);
@@ -717,7 +1022,6 @@
                 return false;
             }
 
-            // ★★★ ROTATION CHECK - Block same-day repeats ★★★
             if (doneToday.has((actName || '').toLowerCase().trim())) {
                 return false;
             }
@@ -740,14 +1044,13 @@
             return true;
         });
 
-        // ★★★ SORT BY ROTATION SCORE ★★★
         const sorted = sortPicksByRotationScore(available, block, activityProperties);
 
         return sorted[0] || null;
     };
 
     // =========================================================================
-    // SPORTS SLOT — FAIRNESS-BASED SELECTOR (WITH SMART ROTATION)
+    // SPORTS SLOT — FAIRNESS-BASED SELECTOR (WITH SUPERCHARGED ROTATION)
     // =========================================================================
 
     function findBestSportsSlot(block, allActivities, fieldUsageBySlot, yesterdayHistory,
@@ -774,7 +1077,6 @@
             });
         });
 
-        // Filter by availability
         const available = picks.filter(pick => {
             const actName = pick._activity;
             const fieldName = pick.field;
@@ -783,7 +1085,6 @@
                 return false;
             }
 
-            // ★★★ ROTATION CHECK - Block same-day repeats ★★★
             if (doneToday.has((actName || '').toLowerCase().trim())) {
                 return false;
             }
@@ -806,7 +1107,6 @@
             return true;
         });
 
-        // ★★★ SORT BY ROTATION SCORE ★★★
         const sorted = sortPicksByRotationScore(available, block, activityProperties);
 
         return sorted[0] || null;
@@ -871,65 +1171,98 @@
     };
 
     // =========================================================================
-    // DEBUG UTILITIES
+    // ★★★ ENHANCED DEBUG UTILITIES ★★★
     // =========================================================================
 
-    /**
-     * Debug: Show rotation analysis for a bunk
-     */
     window.debugFillerRotation = function(bunkName, slotIndex = 0) {
-        console.log('\n' + '='.repeat(60));
-        console.log(`FILLER ROTATION DEBUG: ${bunkName} @ slot ${slotIndex}`);
-        console.log('='.repeat(60));
+        console.log('\n' + '='.repeat(70));
+        console.log(`★★★ SUPERCHARGED ROTATION DEBUG: ${bunkName} @ slot ${slotIndex} ★★★`);
+        console.log('='.repeat(70));
+
+        const history = getBunkHistory(bunkName);
+        
+        console.log('\n📊 BUNK HISTORY (from actual schedules):');
+        console.log(`  Total activities tracked: ${history.totalActivities}`);
+        console.log(`  Unique activities tried: ${history.uniqueActivities.size}`);
+        
+        console.log('\n📅 RECENT WEEK FREQUENCY:');
+        const weekEntries = Object.entries(history.recentWeek).sort((a, b) => b[1] - a[1]);
+        if (weekEntries.length === 0) {
+            console.log('  No activities in last 7 days');
+        } else {
+            weekEntries.forEach(([act, count]) => {
+                console.log(`  ${act}: ${count}x in last 7 days`);
+            });
+        }
+        
+        console.log('\n🔥 CURRENT STREAKS (consecutive days):');
+        const streakEntries = Object.entries(history.recentStreak).filter(([, s]) => s > 0).sort((a, b) => b[1] - a[1]);
+        if (streakEntries.length === 0) {
+            console.log('  No active streaks');
+        } else {
+            streakEntries.forEach(([act, streak]) => {
+                console.log(`  ⚠️ ${act}: ${streak} consecutive days`);
+            });
+        }
 
         const todayActivities = getActivitiesDoneToday(bunkName, slotIndex);
-        console.log(`\nDone Today (${todayActivities.size}): ${[...todayActivities].join(', ') || 'none'}`);
+        console.log(`\n📍 DONE TODAY: ${[...todayActivities].join(', ') || 'none yet'}`);
 
         const yesterdayActivities = getActivitiesFromYesterday(bunkName);
-        console.log(`Done Yesterday (${yesterdayActivities.size}): ${[...yesterdayActivities].join(', ') || 'none'}`);
+        console.log(`📍 DONE YESTERDAY: ${[...yesterdayActivities].join(', ') || 'none'}`);
 
         const allActivities = getAllActivityNames();
-        console.log(`\nAll Activities (${allActivities.length}):`);
-
         const fakeBlock = { bunk: bunkName, slots: [slotIndex], divName: 'Unknown' };
         const activityProperties = window.activityProperties || {};
 
+        console.log('\n🏆 ACTIVITY RANKINGS (best first):');
         const scored = allActivities.map(act => {
             const score = calculateRotationScore(bunkName, act, fakeBlock, activityProperties);
-            return { activity: act, score };
+            const streak = calculateStreakScore(bunkName, act);
+            const weekCount = history.recentWeek[act] || 0;
+            return { activity: act, score, streak, weekCount };
         }).sort((a, b) => a.score - b.score);
 
-        console.log('\nRanked by Rotation Score (best first):');
         scored.slice(0, 15).forEach((item, i) => {
             const status = item.score === Infinity ? '❌ BLOCKED' : item.score.toFixed(0);
-            console.log(`  ${i + 1}. ${item.activity}: ${status}`);
+            const streakInfo = item.streak > 0 ? ` [streak: +${item.streak.toFixed(0)}]` : '';
+            const weekInfo = item.weekCount > 0 ? ` (${item.weekCount}x/week)` : '';
+            console.log(`  ${i + 1}. ${item.activity}: ${status}${streakInfo}${weekInfo}`);
         });
 
         const blocked = scored.filter(s => s.score === Infinity);
-        console.log(`\nBlocked Activities: ${blocked.map(b => b.activity).join(', ') || 'none'}`);
+        console.log(`\n🚫 Blocked: ${blocked.map(b => b.activity).join(', ') || 'none'}`);
 
-        console.log('\n' + '='.repeat(60));
+        console.log('\n' + '='.repeat(70));
     };
 
-    /**
-     * Debug: Show rotation configuration
-     */
     window.debugRotationConfig = function() {
-        console.log('\n=== ROTATION CONFIGURATION ===');
-        console.log('Same Day Penalty:', ROTATION_CONFIG.SAME_DAY_PENALTY);
-        console.log('Yesterday Penalty:', ROTATION_CONFIG.YESTERDAY_PENALTY);
-        console.log('2 Days Ago Penalty:', ROTATION_CONFIG.TWO_DAYS_AGO_PENALTY);
-        console.log('3 Days Ago Penalty:', ROTATION_CONFIG.THREE_DAYS_AGO_PENALTY);
-        console.log('4-7 Days Penalty:', ROTATION_CONFIG.FOUR_TO_SEVEN_DAYS_PENALTY);
-        console.log('Week+ Penalty:', ROTATION_CONFIG.WEEK_PLUS_PENALTY);
-        console.log('Never Done Bonus:', ROTATION_CONFIG.NEVER_DONE_BONUS);
-        console.log('Under-Utilized Bonus:', ROTATION_CONFIG.UNDER_UTILIZED_BONUS);
-        console.log('Weights:', ROTATION_CONFIG.WEIGHTS);
+        console.log('\n=== SUPERCHARGED ROTATION CONFIG v6.0 ===');
+        console.log('Same Day:', ROTATION_CONFIG.SAME_DAY_PENALTY);
+        console.log('Yesterday:', ROTATION_CONFIG.YESTERDAY_PENALTY);
+        console.log('2 Days Ago:', ROTATION_CONFIG.TWO_DAYS_AGO_PENALTY);
+        console.log('3 Days Ago:', ROTATION_CONFIG.THREE_DAYS_AGO_PENALTY);
+        console.log('\nStreak Multipliers:', {
+            '2-day': ROTATION_CONFIG.STREAK_TWO_DAYS_MULTIPLIER,
+            '3-day': ROTATION_CONFIG.STREAK_THREE_DAYS_MULTIPLIER,
+            '4+': ROTATION_CONFIG.STREAK_FOUR_PLUS_MULTIPLIER
+        });
+        console.log('\nBonuses:');
+        console.log('  Never Done:', ROTATION_CONFIG.NEVER_DONE_BONUS);
+        console.log('  Done Once:', ROTATION_CONFIG.DONE_ONCE_BONUS);
+        console.log('  Done Twice:', ROTATION_CONFIG.DONE_TWICE_BONUS);
+        console.log('  Missing Activity:', ROTATION_CONFIG.MISSING_ACTIVITY_BONUS);
+        console.log('\nDistribution Penalties:');
+        console.log('  Most in Division:', ROTATION_CONFIG.MOST_IN_DIVISION_PENALTY);
+        console.log('  Severe Imbalance:', ROTATION_CONFIG.SEVERE_IMBALANCE_PENALTY);
+        console.log('  Least in Division Bonus:', ROTATION_CONFIG.LEAST_IN_DIVISION_BONUS);
+        console.log('\nWeights:', ROTATION_CONFIG.WEIGHTS);
+        console.log('Tie-Breaker Range:', ROTATION_CONFIG.TIE_BREAKER_RANGE);
     };
 
     // Expose config for tuning
     window.ROTATION_CONFIG = ROTATION_CONFIG;
 
-    console.log('[FILLERS] Smart Rotation v5 loaded (delegating to SchedulerCoreUtils)');
+    console.log('★★★ [FILLERS] SUPERCHARGED Rotation v6.0 loaded ★★★');
 
 })();
