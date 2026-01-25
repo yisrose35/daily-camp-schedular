@@ -844,6 +844,7 @@
     }
 
     function getSyncStatus() {
+        const isActive = !!_subscription;
         return {
             status: _syncStatus,
             isOnline: _isOnline,
@@ -852,7 +853,8 @@
             currentDate: _currentDateKey,
             initialHydrationDone: _initialHydrationDone,
             reconnectAttempts: _reconnectAttempts,
-            subscriptionActive: !!_subscription
+            subscriptionActive: isActive,
+            isSubscribed: isActive  // ★ Alias for compatibility
         };
     }
 
