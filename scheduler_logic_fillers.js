@@ -537,12 +537,19 @@
         }
     };
 
-    // Expose reference to RotationEngine config
     Object.defineProperty(window, 'ROTATION_CONFIG', {
         get: function() {
             return window.RotationEngine?.CONFIG || {};
         }
     });
+
+    // Expose calculateRotationScore (delegates to RotationEngine)
+    window.calculateRotationScore = function(options) {
+        if (window.RotationEngine?.calculateRotationScore) {
+            return window.RotationEngine.calculateRotationScore(options);
+        }
+        return 0;
+    };
 
     console.log('[FILLERS] v6.0 loaded - DELEGATING to RotationEngine');
 
