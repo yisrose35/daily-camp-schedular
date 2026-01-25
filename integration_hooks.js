@@ -624,6 +624,20 @@
             console.log('🔗 Generation hook installed');
         }
     }
+    // ★★★ AUTO-REBUILD COUNTS AFTER GENERATION ★★★
+    window.addEventListener('campistry-generation-complete', async (e) => {
+        const dateKey = e.detail?.dateKey || window.currentScheduleDate;
+        
+        console.log('🔗 [IntegrationHooks] Generation complete, rebuilding historical counts...');
+        
+        // Wait a moment for data to settle
+        await new Promise(r => setTimeout(r, 500));
+        
+        // Rebuild counts
+        if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+            window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
+        }
+    });
 
     // =========================================================================
     // HOOK: HANDLE REMOTE CHANGES (v6.1 - WITH BYPASS GUARD)
