@@ -186,6 +186,7 @@
                window.currentScheduleDate || 
                document.getElementById('schedule-date-input')?.value ||
                document.getElementById('datepicker')?.value ||
+               document.getElementById('calendar-date-picker')?.value ||
                new Date().toISOString().split('T')[0];
     }
 
