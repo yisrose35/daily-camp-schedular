@@ -1,11 +1,11 @@
 // ============================================================================
 // analytics.js
 //
-// SUPERCHARGED VERSION:
-// - Enhanced Field Availability Grid with partial availability display
+// SUPERCHARGED VERSION v2:
+// - Enhanced Field Availability Grid with clear partial availability display
+// - Time slots on TOP (columns), Fields/Specials on SIDE (rows)
 // - Bunk Rotation Report with activity counts + last done + manual adjustments
-// - Removed separate Usage Manager (merged into Rotation Report)
-// - 30-minute increments from camp start to end time
+// - Matches site theme styling
 // ============================================================================
 
 (function () {
@@ -50,6 +50,17 @@
     }
 
     /**
+     * Convert minutes to short label (e.g., 570 → "9:30a")
+     */
+    function minutesToShortLabel(mins) {
+        let h = Math.floor(mins / 60);
+        const m = mins % 60;
+        const ap = h >= 12 ? 'p' : 'a';
+        h = h % 12 || 12;
+        return `${h}:${m < 10 ? '0' + m : m}${ap}`;
+    }
+
+    /**
      * Get field label (handle object vs string)
      */
     function fieldLabel(f) {
@@ -61,19 +72,67 @@
     }
 
     /**
-     * Get camp start/end times from config
+     * Get camp start/end times - finds EARLIEST start and LATEST end
+     * from division times, unified times, or config
      */
     function getCampTimes() {
         const gs = window.loadGlobalSettings?.() || {};
         const app1 = gs.app1 || window.app1 || {};
         
-        const startTime = app1.startTime || "9:00am";
-        const endTime = app1.endTime || "4:00pm";
-        
-        const startMin = parseTimeToMinutes(startTime) || 540; // 9:00 AM
-        const endMin = parseTimeToMinutes(endTime) || 960;     // 4:00 PM
-        
-        return { startMin, endMin, startTime, endTime };
+        let earliestStart = Infinity;
+        let latestEnd = 0;
+
+        // Check division times first
+        const divisionTimes = window.divisionTimes || {};
+        Object.values(divisionTimes).forEach(slots => {
+            if (!Array.isArray(slots)) return;
+            slots.forEach(slot => {
+                let sMin, eMin;
+                if (slot.startMin !== undefined) {
+                    sMin = slot.startMin;
+                    eMin = slot.endMin;
+                } else if (slot.start) {
+                    const sd = new Date(slot.start);
+                    const ed = new Date(slot.end);
+                    sMin = sd.getHours() * 60 + sd.getMinutes();
+                    eMin = ed.getHours() * 60 + ed.getMinutes();
+                }
+                if (sMin !== undefined && sMin < earliestStart) earliestStart = sMin;
+                if (eMin !== undefined && eMin > latestEnd) latestEnd = eMin;
+            });
+        });
+
+        // Check unified times as fallback
+        const unifiedTimes = window.unifiedTimes || [];
+        unifiedTimes.forEach(slot => {
+            let sMin, eMin;
+            if (slot.startMin !== undefined) {
+                sMin = slot.startMin;
+                eMin = slot.endMin;
+            } else if (slot.start) {
+                const sd = new Date(slot.start);
+                const ed = new Date(slot.end);
+                sMin = sd.getHours() * 60 + sd.getMinutes();
+                eMin = ed.getHours() * 60 + ed.getMinutes();
+            }
+            if (sMin !== undefined && sMin < earliestStart) earliestStart = sMin;
+            if (eMin !== undefined && eMin > latestEnd) latestEnd = eMin;
+        });
+
+        // Fallback to config
+        if (earliestStart === Infinity) {
+            earliestStart = parseTimeToMinutes(app1.startTime || "9:00am") || 540;
+        }
+        if (latestEnd === 0) {
+            latestEnd = parseTimeToMinutes(app1.endTime || "4:00pm") || 960;
+        }
+
+        return { 
+            startMin: earliestStart, 
+            endMin: latestEnd, 
+            startTime: minutesToTimeLabel(earliestStart), 
+            endTime: minutesToTimeLabel(latestEnd) 
+        };
     }
 
     /**
@@ -87,7 +146,8 @@
             slots.push({
                 startMin: min,
                 endMin: min + 30,
-                label: minutesToTimeLabel(min) + ' - ' + minutesToTimeLabel(min + 30)
+                label: minutesToTimeLabel(min),
+                shortLabel: minutesToShortLabel(min)
             });
         }
         
@@ -191,7 +251,8 @@
     }
 
     // ========================================================================
-    // FIELD AVAILABILITY GRID - SUPERCHARGED
+    // FIELD AVAILABILITY GRID - SUPERCHARGED v2
+    // Time on TOP, Fields/Specials on SIDE
     // ========================================================================
 
     function renderFieldAvailabilityGrid() {
@@ -201,57 +262,67 @@
         const { startTime, endTime } = getCampTimes();
 
         wrapper.innerHTML = `
-            <h2 class="report-title" style="border-bottom:2px solid #1a5fb4;margin-bottom:15px;">
-                📊 Field Availability Grid
-            </h2>
-            
-            <div style="margin-bottom:15px;padding:12px;background:#f8f9fa;border-radius:8px;border:1px solid #dee2e6;">
-                <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
-                    <div>
-                        <label style="font-weight:600;color:#495057;">🔍 Quick Search:</label>
-                        <select id="avail-field-search" style="padding:6px 10px;margin-left:8px;border-radius:4px;border:1px solid #ced4da;">
-                            <option value="">-- Select Field/Activity --</option>
+            <div class="setup-card" style="margin-bottom:16px;">
+                <div class="setup-card-header">
+                    <div class="setup-step-pill">Availability</div>
+                    <div class="setup-card-text">
+                        <h3 style="margin:0;">Field & Activity Availability</h3>
+                        <p style="margin:2px 0 0;font-size:0.8rem;color:#6b7280;">
+                            Camp hours: <strong>${startTime}</strong> to <strong>${endTime}</strong> (30-min slots)
+                        </p>
+                    </div>
+                </div>
+                
+                <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px;padding:12px;background:#f9fafb;border-radius:12px;border:1px solid #e5e7eb;">
+                    <div style="flex:1;min-width:180px;">
+                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Search Field/Activity</label>
+                        <select id="avail-field-search" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;">
+                            <option value="">-- Select --</option>
                         </select>
                     </div>
-                    <div>
-                        <label style="font-weight:600;color:#495057;">⏰ Time:</label>
-                        <select id="avail-time-search" style="padding:6px 10px;margin-left:8px;border-radius:4px;border:1px solid #ced4da;">
-                            <option value="">-- Select Time --</option>
+                    <div style="flex:1;min-width:140px;">
+                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Time Slot</label>
+                        <select id="avail-time-search" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;">
+                            <option value="">-- Select --</option>
                         </select>
                     </div>
-                    <button id="avail-search-btn" style="padding:6px 16px;background:#1a5fb4;color:white;border:none;border-radius:4px;cursor:pointer;font-weight:600;">
-                        Check Availability
+                    <button id="avail-search-btn" style="padding:8px 20px;background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;border:none;border-radius:999px;font-size:0.85rem;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(37,99,235,0.3);">
+                        Check
                     </button>
                 </div>
-                <div id="avail-search-result" style="margin-top:10px;display:none;"></div>
-            </div>
-            
-            <div style="margin-bottom:15px;display:flex;gap:15px;align-items:center;flex-wrap:wrap;">
-                <select id="avail-type-filter" style="padding:6px 10px;border-radius:4px;border:1px solid #ced4da;">
-                    <option value="all">Show All Resources</option>
-                    <option value="field">Fields Only</option>
-                    <option value="special">Special Activities Only</option>
-                </select>
                 
-                <div style="font-size:0.85em;color:#555;display:flex;gap:15px;flex-wrap:wrap;">
-                    <span><span style="display:inline-block;width:20px;height:20px;background:#d4edda;border:1px solid #28a745;text-align:center;line-height:20px;font-weight:bold;color:#155724;">✓</span> Available</span>
-                    <span><span style="display:inline-block;width:20px;height:20px;background:#f8d7da;border:1px solid #dc3545;text-align:center;line-height:20px;font-weight:bold;color:#721c24;">✗</span> In Use</span>
-                    <span><span style="display:inline-block;width:40px;height:20px;background:linear-gradient(90deg, #f8d7da 50%, #d4edda 50%);border:1px solid #6c757d;text-align:center;line-height:20px;font-size:10px;">⟷</span> Partial</span>
+                <div id="avail-search-result" style="display:none;margin-bottom:14px;"></div>
+                
+                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
+                    <select id="avail-type-filter" style="padding:6px 14px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;">
+                        <option value="all">All Resources</option>
+                        <option value="field">Fields Only</option>
+                        <option value="special">Special Activities Only</option>
+                    </select>
+                    
+                    <div style="display:flex;gap:12px;font-size:0.8rem;color:#4b5563;">
+                        <span style="display:flex;align-items:center;gap:4px;">
+                            <span style="width:18px;height:18px;background:#d1fae5;border:2px solid #10b981;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#047857;">✓</span>
+                            Free
+                        </span>
+                        <span style="display:flex;align-items:center;gap:4px;">
+                            <span style="width:18px;height:18px;background:#fee2e2;border:2px solid #ef4444;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#b91c1c;">✗</span>
+                            In Use
+                        </span>
+                        <span style="display:flex;align-items:center;gap:4px;">
+                            <span style="width:36px;height:18px;background:linear-gradient(90deg,#fee2e2 50%,#d1fae5 50%);border:2px solid #6b7280;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:600;color:#374151;">→</span>
+                            Partial
+                        </span>
+                    </div>
                 </div>
             </div>
-            
-            <p style="color:#6c757d;font-size:0.85em;margin-bottom:10px;">
-                Camp hours: <strong>${startTime}</strong> to <strong>${endTime}</strong> (30-minute increments)
-            </p>
 
-            <div id="avail-grid-wrapper" style="overflow-x:auto;"></div>
+            <div id="avail-grid-wrapper" class="schedule-view-wrapper" style="border-radius:12px;border:1px solid #e5e7eb;overflow:hidden;"></div>
         `;
 
-        // Populate dropdowns and render grid
         populateAvailabilityDropdowns();
         buildAvailabilityGrid();
 
-        // Event listeners
         document.getElementById("avail-type-filter").onchange = buildAvailabilityGrid;
         document.getElementById("avail-search-btn").onclick = performAvailabilitySearch;
     }
@@ -269,7 +340,7 @@
         resources.forEach(r => {
             const opt = document.createElement('option');
             opt.value = r.name;
-            opt.textContent = `${r.name} (${r.type})`;
+            opt.textContent = r.name;
             fieldSelect.appendChild(opt);
         });
 
@@ -293,7 +364,7 @@
 
         if (!fieldName || !timeVal) {
             resultDiv.style.display = 'block';
-            resultDiv.innerHTML = `<div style="color:#856404;background:#fff3cd;padding:8px 12px;border-radius:4px;border:1px solid #ffc107;">⚠️ Please select both a field/activity and a time.</div>`;
+            resultDiv.innerHTML = `<div style="padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:999px;color:#92400e;font-size:0.85rem;">⚠️ Please select both a field/activity and a time slot.</div>`;
             return;
         }
 
@@ -302,38 +373,34 @@
         const usageData = buildDetailedUsageMap();
         const resourceUsage = usageData[fieldName] || [];
 
-        // Find any usage that overlaps with this slot
         const overlapping = resourceUsage.filter(u => u.startMin < slotEndMin && u.endMin > slotStartMin);
 
         resultDiv.style.display = 'block';
 
         if (overlapping.length === 0) {
             resultDiv.innerHTML = `
-                <div style="color:#155724;background:#d4edda;padding:10px 14px;border-radius:4px;border:1px solid #28a745;">
+                <div style="padding:12px 16px;background:#d1fae5;border:2px solid #10b981;border-radius:12px;color:#047857;font-size:0.9rem;">
                     ✅ <strong>${fieldName}</strong> is <strong>AVAILABLE</strong> from ${minutesToTimeLabel(slotStartMin)} to ${minutesToTimeLabel(slotEndMin)}
                 </div>`;
         } else {
-            // Check if fully or partially blocked
             const fullyBlocked = overlapping.some(u => u.startMin <= slotStartMin && u.endMin >= slotEndMin);
             
             if (fullyBlocked) {
                 const usage = overlapping[0];
                 resultDiv.innerHTML = `
-                    <div style="color:#721c24;background:#f8d7da;padding:10px 14px;border-radius:4px;border:1px solid #dc3545;">
-                        ❌ <strong>${fieldName}</strong> is <strong>UNAVAILABLE</strong> from ${minutesToTimeLabel(slotStartMin)} to ${minutesToTimeLabel(slotEndMin)}<br>
-                        <span style="font-size:0.9em;">Used by: <strong>${usage.bunk}</strong> for <strong>${usage.activity}</strong> (${minutesToTimeLabel(usage.startMin)} - ${minutesToTimeLabel(usage.endMin)})</span>
+                    <div style="padding:12px 16px;background:#fee2e2;border:2px solid #ef4444;border-radius:12px;color:#b91c1c;font-size:0.9rem;">
+                        ❌ <strong>${fieldName}</strong> is <strong>IN USE</strong> from ${minutesToTimeLabel(slotStartMin)} to ${minutesToTimeLabel(slotEndMin)}<br>
+                        <span style="font-size:0.85em;color:#7f1d1d;">Used by: <strong>${usage.bunk}</strong> → ${usage.activity} (${minutesToTimeLabel(usage.startMin)} - ${minutesToTimeLabel(usage.endMin)})</span>
                     </div>`;
             } else {
-                // Partial availability
                 let details = overlapping.map(u => 
-                    `<li><strong>${u.bunk}</strong>: ${u.activity} (${minutesToTimeLabel(u.startMin)} - ${minutesToTimeLabel(u.endMin)})</li>`
-                ).join('');
+                    `• <strong>${u.bunk}</strong>: ${u.activity} (${minutesToTimeLabel(u.startMin)} - ${minutesToTimeLabel(u.endMin)})`
+                ).join('<br>');
                 
                 resultDiv.innerHTML = `
-                    <div style="color:#856404;background:#fff3cd;padding:10px 14px;border-radius:4px;border:1px solid #ffc107;">
-                        ⚠️ <strong>${fieldName}</strong> is <strong>PARTIALLY AVAILABLE</strong> from ${minutesToTimeLabel(slotStartMin)} to ${minutesToTimeLabel(slotEndMin)}<br>
-                        <span style="font-size:0.9em;">Conflicts:</span>
-                        <ul style="margin:5px 0 0 20px;padding:0;">${details}</ul>
+                    <div style="padding:12px 16px;background:#fef3c7;border:2px solid #f59e0b;border-radius:12px;color:#92400e;font-size:0.9rem;">
+                        ⚠️ <strong>${fieldName}</strong> is <strong>PARTIALLY AVAILABLE</strong><br>
+                        <span style="font-size:0.85em;">${details}</span>
                     </div>`;
             }
         }
@@ -341,21 +408,18 @@
 
     /**
      * Build detailed usage map with exact times
-     * Returns: { fieldName: [{ bunk, activity, startMin, endMin }, ...] }
      */
     function buildDetailedUsageMap() {
         const usageMap = {};
         const assignments = window.scheduleAssignments || 
                            window.loadCurrentDailyData?.().scheduleAssignments || {};
         
-        // Get division times for accurate slot timing
         const divisionTimes = window.divisionTimes || {};
         const unifiedTimes = window.unifiedTimes || [];
 
         Object.entries(assignments).forEach(([bunk, schedule]) => {
             if (!Array.isArray(schedule)) return;
 
-            // Determine which division this bunk belongs to
             const divName = getDivisionForBunk(bunk);
             const times = divisionTimes[divName] || unifiedTimes || [];
 
@@ -370,7 +434,6 @@
                 const fName = fieldLabel(field);
                 if (!usageMap[fName]) usageMap[fName] = [];
 
-                // Get actual time from slot
                 const slotInfo = times[idx];
                 let startMin, endMin;
 
@@ -386,7 +449,7 @@
                     }
                 }
 
-                // Handle multi-slot activities (check for continuations)
+                // Handle multi-slot activities
                 let actualEndMin = endMin;
                 for (let i = idx + 1; i < schedule.length; i++) {
                     const nextEntry = schedule[i];
@@ -430,7 +493,6 @@
                 const activity = entry._activity || entry.activity;
                 if (!activity || activity === 'Free') return;
 
-                // Check if this is a special activity (not field-based)
                 const isSpecial = allActivities.some(a => a.name === activity && a.type === 'special');
                 if (!isSpecial) return;
 
@@ -451,7 +513,6 @@
                     }
                 }
 
-                // Handle multi-slot
                 let actualEndMin = endMin;
                 for (let i = idx + 1; i < schedule.length; i++) {
                     const nextEntry = schedule[i];
@@ -472,7 +533,6 @@
                 }
 
                 if (startMin !== undefined) {
-                    // Avoid duplicates if already added via field
                     const exists = usageMap[activity].some(u => 
                         u.bunk === bunk && u.startMin === startMin);
                     if (!exists) {
@@ -504,7 +564,7 @@
     }
 
     /**
-     * Build the availability grid with partial availability support
+     * Build the availability grid - TIME on TOP, RESOURCES on SIDE
      */
     function buildAvailabilityGrid() {
         const gridDiv = document.getElementById("avail-grid-wrapper");
@@ -519,37 +579,45 @@
         if (filter === 'special') resources = specials;
 
         if (!resources.length) {
-            gridDiv.innerHTML = "<p style='color:#6c757d;'>No resources configured.</p>";
+            gridDiv.innerHTML = "<p style='color:#6b7280;padding:20px;text-align:center;'>No resources configured.</p>";
             return;
         }
 
         const slots = generate30MinSlots();
         const usageMap = buildDetailedUsageMap();
 
+        // TIME on TOP (columns), RESOURCES on SIDE (rows)
         let html = `
-            <table class="availability-grid" style="border-collapse:collapse;width:100%;font-size:0.85em;">
+            <table style="border-collapse:collapse;width:100%;font-size:0.8rem;">
                 <thead>
-                    <tr style="background:#e9ecef;">
-                        <th style="position:sticky;left:0;background:#e9ecef;z-index:10;padding:8px;border:1px solid #dee2e6;min-width:100px;">Time</th>
+                    <tr style="background:linear-gradient(135deg,#f3f4f6,#e5e7eb);">
+                        <th style="position:sticky;left:0;z-index:10;background:#f3f4f6;padding:10px 12px;border:1px solid #d1d5db;min-width:140px;text-align:left;font-weight:600;color:#374151;">
+                            Resource
+                        </th>
         `;
 
-        resources.forEach(r => {
-            html += `<th style="padding:8px;border:1px solid #dee2e6;min-width:80px;white-space:nowrap;">${r.name}</th>`;
+        // Time headers
+        slots.forEach(slot => {
+            html += `<th style="padding:8px 4px;border:1px solid #d1d5db;min-width:60px;font-weight:600;color:#374151;white-space:nowrap;font-size:0.75rem;">${slot.shortLabel}</th>`;
         });
         html += `</tr></thead><tbody>`;
 
-        slots.forEach(slot => {
+        // Resource rows
+        resources.forEach((r, rowIdx) => {
+            const resourceUsage = usageMap[r.name] || [];
+            const rowBg = rowIdx % 2 === 0 ? '#ffffff' : '#fafafa';
+            const typeIcon = r.type === 'special' ? '⭐' : '🏟️';
+            
             html += `
-                <tr>
-                    <td style="position:sticky;left:0;background:#f8f9fa;font-weight:600;padding:6px 8px;border:1px solid #dee2e6;white-space:nowrap;">
-                        ${minutesToTimeLabel(slot.startMin)}
+                <tr style="background:${rowBg};">
+                    <td style="position:sticky;left:0;background:${rowBg};padding:8px 10px;border:1px solid #d1d5db;font-weight:600;color:#111827;white-space:nowrap;">
+                        <span style="margin-right:4px;">${typeIcon}</span>${r.name}
                     </td>
             `;
 
-            resources.forEach(r => {
-                const resourceUsage = usageMap[r.name] || [];
+            slots.forEach(slot => {
                 const cellData = getCellAvailability(slot.startMin, slot.endMin, resourceUsage);
-                html += renderAvailabilityCell(cellData);
+                html += renderAvailabilityCell(cellData, slot);
             });
 
             html += `</tr>`;
@@ -561,7 +629,6 @@
 
     /**
      * Determine availability status for a cell
-     * Returns: { status: 'available'|'unavailable'|'partial', transitionTime, transitionType, usage }
      */
     function getCellAvailability(slotStart, slotEnd, usageList) {
         const overlapping = usageList.filter(u => u.startMin < slotEnd && u.endMin > slotStart);
@@ -570,17 +637,14 @@
             return { status: 'available' };
         }
 
-        // Check if fully blocked
         const fullyBlocked = overlapping.some(u => u.startMin <= slotStart && u.endMin >= slotEnd);
         if (fullyBlocked) {
             return { status: 'unavailable', usage: overlapping[0] };
         }
 
-        // Partial - find the transition time
         const usage = overlapping[0];
         
         if (usage.startMin > slotStart && usage.startMin < slotEnd) {
-            // Activity STARTS during this slot (available → unavailable)
             return {
                 status: 'partial',
                 transitionTime: usage.startMin,
@@ -588,7 +652,6 @@
                 usage
             };
         } else if (usage.endMin > slotStart && usage.endMin < slotEnd) {
-            // Activity ENDS during this slot (unavailable → available)
             return {
                 status: 'partial',
                 transitionTime: usage.endMin,
@@ -601,43 +664,55 @@
     }
 
     /**
-     * Render a single availability cell
+     * Render a single availability cell with improved visuals
      */
-    function renderAvailabilityCell(cellData) {
+    function renderAvailabilityCell(cellData, slot) {
         const { status, transitionTime, transitionType, usage } = cellData;
 
         if (status === 'available') {
-            return `<td style="background:#d4edda;text-align:center;padding:6px;border:1px solid #dee2e6;color:#155724;font-weight:bold;">✓</td>`;
+            return `<td style="background:#d1fae5;text-align:center;padding:6px 2px;border:1px solid #d1d5db;">
+                <span style="color:#047857;font-weight:700;font-size:1em;">✓</span>
+            </td>`;
         }
 
         if (status === 'unavailable') {
             const title = usage ? `${usage.bunk}: ${usage.activity}` : '';
-            return `<td style="background:#f8d7da;text-align:center;padding:6px;border:1px solid #dee2e6;color:#721c24;font-weight:bold;" title="${title}">✗</td>`;
+            return `<td style="background:#fee2e2;text-align:center;padding:6px 2px;border:1px solid #d1d5db;" title="${title}">
+                <span style="color:#b91c1c;font-weight:700;font-size:1em;">✗</span>
+            </td>`;
         }
 
-        // Partial availability
-        const timeLabel = minutesToTimeLabel(transitionTime);
+        // Partial availability - clearer design
+        const timeLabel = minutesToShortLabel(transitionTime);
         const title = usage ? `${usage.bunk}: ${usage.activity}` : '';
 
         if (transitionType === 'ends') {
-            // Unavailable → Available (X | ✓)
+            // Busy until transitionTime, then free
             return `
-                <td style="padding:0;border:1px solid #dee2e6;position:relative;" title="${title}">
+                <td style="padding:0;border:1px solid #d1d5db;position:relative;height:36px;" title="${title}: Free from ${timeLabel}">
                     <div style="display:flex;height:100%;">
-                        <div style="flex:1;background:#f8d7da;display:flex;align-items:center;justify-content:center;color:#721c24;font-weight:bold;">✗</div>
-                        <div style="flex:1;background:#d4edda;display:flex;align-items:center;justify-content:center;color:#155724;font-weight:bold;">✓</div>
+                        <div style="flex:1;background:#fee2e2;display:flex;align-items:center;justify-content:center;">
+                            <span style="color:#b91c1c;font-weight:700;font-size:0.85em;">✗</span>
+                        </div>
+                        <div style="flex:1;background:#d1fae5;display:flex;align-items:center;justify-content:center;">
+                            <span style="color:#047857;font-weight:700;font-size:0.85em;">✓</span>
+                        </div>
                     </div>
-                    <div style="position:absolute;bottom:0;left:0;right:0;text-align:center;font-size:9px;background:rgba(255,255,255,0.9);color:#495057;padding:1px;">${timeLabel}</div>
+                    <div style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);font-size:8px;font-weight:600;color:#374151;background:rgba(255,255,255,0.95);padding:0 3px;border-radius:2px;white-space:nowrap;">${timeLabel}</div>
                 </td>`;
         } else {
-            // Available → Unavailable (✓ | X)
+            // Free until transitionTime, then busy
             return `
-                <td style="padding:0;border:1px solid #dee2e6;position:relative;" title="${title}">
+                <td style="padding:0;border:1px solid #d1d5db;position:relative;height:36px;" title="${title}: In use from ${timeLabel}">
                     <div style="display:flex;height:100%;">
-                        <div style="flex:1;background:#d4edda;display:flex;align-items:center;justify-content:center;color:#155724;font-weight:bold;">✓</div>
-                        <div style="flex:1;background:#f8d7da;display:flex;align-items:center;justify-content:center;color:#721c24;font-weight:bold;">✗</div>
+                        <div style="flex:1;background:#d1fae5;display:flex;align-items:center;justify-content:center;">
+                            <span style="color:#047857;font-weight:700;font-size:0.85em;">✓</span>
+                        </div>
+                        <div style="flex:1;background:#fee2e2;display:flex;align-items:center;justify-content:center;">
+                            <span style="color:#b91c1c;font-weight:700;font-size:0.85em;">✗</span>
+                        </div>
                     </div>
-                    <div style="position:absolute;bottom:0;left:0;right:0;text-align:center;font-size:9px;background:rgba(255,255,255,0.9);color:#495057;padding:1px;">${timeLabel}</div>
+                    <div style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);font-size:8px;font-weight:600;color:#374151;background:rgba(255,255,255,0.95);padding:0 3px;border-radius:2px;white-space:nowrap;">${timeLabel}</div>
                 </td>`;
         }
     }
@@ -651,32 +726,33 @@
         if (!wrapper) return;
 
         wrapper.innerHTML = `
-            <h2 class="report-title" style="border-bottom:2px solid #28a745;margin-bottom:15px;">
-                📈 Bunk Rotation & Usage Report
-            </h2>
-
-            <p style="color:#666;margin-bottom:15px;">
-                View how many times each bunk has done each activity, when they last did it, and manually adjust counts if needed.
-            </p>
-
-            <div style="margin-bottom:15px;display:flex;gap:15px;align-items:center;flex-wrap:wrap;">
-                <div>
-                    <label style="font-weight:600;">Select Division:</label>
-                    <select id="rotation-div-select" style="padding:6px 10px;margin-left:8px;border-radius:4px;border:1px solid #ced4da;">
-                        <option value="">-- Select --</option>
-                    </select>
+            <div class="setup-card" style="margin-bottom:16px;">
+                <div class="setup-card-header">
+                    <div class="setup-step-pill" style="background:linear-gradient(135deg,#10b981,#059669);">Rotation</div>
+                    <div class="setup-card-text">
+                        <h3 style="margin:0;">Bunk Rotation & Usage</h3>
+                        <p style="margin:2px 0 0;font-size:0.8rem;color:#6b7280;">
+                            Track activity counts, last done dates, and manual adjustments
+                        </p>
+                    </div>
                 </div>
-                <div>
-                    <label style="font-weight:600;">Filter Activities:</label>
-                    <select id="rotation-type-filter" style="padding:6px 10px;margin-left:8px;border-radius:4px;border:1px solid #ced4da;">
-                        <option value="all">All Activities</option>
-                        <option value="sport">Sports Only</option>
-                        <option value="special">Special Activities Only</option>
-                    </select>
+                
+                <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px;">
+                    <div style="flex:1;min-width:160px;">
+                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Division</label>
+                        <select id="rotation-div-select" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;">
+                            <option value="">-- Select Division --</option>
+                        </select>
+                    </div>
+                    <div style="flex:1;min-width:140px;">
+                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Filter</label>
+                        <select id="rotation-type-filter" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;">
+                            <option value="all">All Activities</option>
+                            <option value="sport">Sports Only</option>
+                            <option value="special">Special Only</option>
+                        </select>
+                    </div>
                 </div>
-                <button id="rotation-rebuild-btn" style="padding:6px 12px;background:#6c757d;color:white;border:none;border-radius:4px;cursor:pointer;" title="Rebuild counts from all saved schedules">
-                    🔄 Rebuild Counts
-                </button>
             </div>
 
             <div id="rotation-table-container"></div>
@@ -689,15 +765,6 @@
 
         divSelect.onchange = () => renderRotationTable(divSelect.value);
         document.getElementById("rotation-type-filter").onchange = () => renderRotationTable(divSelect.value);
-        document.getElementById("rotation-rebuild-btn").onclick = () => {
-            if (window.rebuildHistoricalCounts) {
-                window.rebuildHistoricalCounts(true);
-                alert('Historical counts rebuilt from all saved schedules!');
-                renderRotationTable(divSelect.value);
-            } else {
-                alert('rebuildHistoricalCounts function not available.');
-            }
-        };
     }
 
     /**
@@ -706,13 +773,16 @@
     function renderRotationTable(divName) {
         const container = document.getElementById("rotation-table-container");
         if (!divName) {
-            container.innerHTML = "<p style='color:#6c757d;'>Select a division to view rotation data.</p>";
+            container.innerHTML = `<div style="padding:30px;text-align:center;color:#6b7280;background:#f9fafb;border-radius:12px;border:1px dashed #d1d5db;">
+                <span style="font-size:1.5em;">📋</span><br>
+                <span style="font-size:0.9rem;">Select a division to view rotation data</span>
+            </div>`;
             return;
         }
 
         const bunks = divisions[divName]?.bunks || [];
         if (!bunks.length) {
-            container.innerHTML = "<p style='color:#dc3545;'>No bunks in this division.</p>";
+            container.innerHTML = `<div style="padding:20px;text-align:center;color:#b91c1c;background:#fee2e2;border-radius:12px;">No bunks in this division.</div>`;
             return;
         }
 
@@ -722,7 +792,7 @@
         if (filter === 'special') filteredActivities = allActivities.filter(a => a.type === 'special');
 
         if (!filteredActivities.length) {
-            container.innerHTML = "<p style='color:#6c757d;'>No activities match the filter.</p>";
+            container.innerHTML = `<div style="padding:20px;text-align:center;color:#6b7280;background:#f9fafb;border-radius:12px;">No activities match the filter.</div>`;
             return;
         }
 
@@ -730,13 +800,11 @@
         const allDaily = window.loadAllDailyData?.() || {};
         const global = window.loadGlobalSettings?.() || {};
         const manualOffsets = global.manualUsageOffsets || {};
-        const rotationHistory = window.loadRotationHistory?.() || { bunks: {} };
 
         // Compute raw historical counts and last done dates
         const rawCounts = {};
-        const lastDone = {}; // { bunk: { activity: dateKey } }
+        const lastDone = {};
 
-        // Sort dates to process chronologically
         const sortedDates = Object.keys(allDaily).sort();
 
         sortedDates.forEach(dateKey => {
@@ -755,33 +823,35 @@
                         rawCounts[bunk][act] = (rawCounts[bunk][act] || 0) + 1;
 
                         lastDone[bunk] = lastDone[bunk] || {};
-                        lastDone[bunk][act] = dateKey; // Will end up with the latest date
+                        lastDone[bunk][act] = dateKey;
                     }
                 });
             });
         });
 
-        // Build table
+        // Build table with themed styling
         let html = `
-            <div style="overflow-x:auto;">
-                <table class="report-table" style="border-collapse:collapse;width:100%;font-size:0.85em;">
-                    <thead>
-                        <tr style="background:#e9ecef;">
-                            <th style="padding:8px;border:1px solid #dee2e6;position:sticky;left:0;background:#e9ecef;z-index:5;">Bunk</th>
-                            <th style="padding:8px;border:1px solid #dee2e6;">Activity</th>
-                            <th style="padding:8px;border:1px solid #dee2e6;">Type</th>
-                            <th style="padding:8px;border:1px solid #dee2e6;text-align:center;">Count</th>
-                            <th style="padding:8px;border:1px solid #dee2e6;text-align:center;">Adjust (+/-)</th>
-                            <th style="padding:8px;border:1px solid #dee2e6;text-align:center;font-weight:bold;">Total</th>
-                            <th style="padding:8px;border:1px solid #dee2e6;">Last Done</th>
-                            <th style="padding:8px;border:1px solid #dee2e6;text-align:center;">Limit</th>
-                        </tr>
-                    </thead>
-                    <tbody>
+            <div style="border-radius:12px;border:1px solid #e5e7eb;overflow:hidden;box-shadow:0 4px 12px rgba(15,23,42,0.06);">
+                <div style="overflow-x:auto;">
+                    <table style="border-collapse:collapse;width:100%;font-size:0.8rem;">
+                        <thead>
+                            <tr style="background:linear-gradient(135deg,#f3f4f6,#e5e7eb);">
+                                <th style="padding:10px 12px;border:1px solid #d1d5db;text-align:left;font-weight:600;color:#374151;position:sticky;left:0;background:#f3f4f6;z-index:5;min-width:100px;">Bunk</th>
+                                <th style="padding:10px 12px;border:1px solid #d1d5db;text-align:left;font-weight:600;color:#374151;min-width:120px;">Activity</th>
+                                <th style="padding:10px 12px;border:1px solid #d1d5db;text-align:center;font-weight:600;color:#374151;width:50px;">Type</th>
+                                <th style="padding:10px 12px;border:1px solid #d1d5db;text-align:center;font-weight:600;color:#374151;width:60px;">Count</th>
+                                <th style="padding:10px 12px;border:1px solid #d1d5db;text-align:center;font-weight:600;color:#374151;width:70px;">Adjust</th>
+                                <th style="padding:10px 12px;border:1px solid #d1d5db;text-align:center;font-weight:600;color:#374151;width:60px;">Total</th>
+                                <th style="padding:10px 12px;border:1px solid #d1d5db;text-align:left;font-weight:600;color:#374151;min-width:130px;">Last Done</th>
+                                <th style="padding:10px 12px;border:1px solid #d1d5db;text-align:center;font-weight:600;color:#374151;width:50px;">Limit</th>
+                            </tr>
+                        </thead>
+                        <tbody>
         `;
 
-        bunks.forEach(bunk => {
+        bunks.forEach((bunk, bunkIdx) => {
             let isFirstRow = true;
+            const bunkBg = bunkIdx % 2 === 0 ? '#ffffff' : '#fafafa';
 
             filteredActivities.forEach(act => {
                 const hist = rawCounts[bunk]?.[act.name] || 0;
@@ -789,63 +859,63 @@
                 const total = Math.max(0, hist + offset);
                 const limit = act.max > 0 ? act.max : '∞';
                 const lastDate = lastDone[bunk]?.[act.name] || '';
-                const lastDateFormatted = lastDate ? formatDateDisplay(lastDate) : 'Never';
+                const lastDateFormatted = lastDate ? formatDateDisplay(lastDate) : '—';
                 
-                // Calculate days since
                 let daysSince = '';
                 if (lastDate) {
                     const last = new Date(lastDate);
                     const today = new Date();
                     const diffDays = Math.floor((today - last) / (1000 * 60 * 60 * 24));
-                    daysSince = diffDays === 0 ? '(Today)' : diffDays === 1 ? '(Yesterday)' : `(${diffDays}d ago)`;
+                    if (diffDays === 0) daysSince = 'Today';
+                    else if (diffDays === 1) daysSince = 'Yesterday';
+                    else daysSince = `${diffDays}d ago`;
                 }
 
-                // Row styling
-                let rowStyle = "";
+                // Row styling based on status
+                let rowBg = bunkBg;
+                let totalStyle = 'font-weight:600;';
                 if (act.max > 0 && total >= act.max) {
-                    rowStyle = "background:#ffebee;"; // At or over limit
+                    rowBg = '#fee2e2';
+                    totalStyle += 'color:#b91c1c;';
                 } else if (total === 0) {
-                    rowStyle = "background:#fff3cd;"; // Never done - highlight
+                    totalStyle += 'color:#d97706;';
                 }
 
-                const typeLabel = act.type === 'special' ? 
-                    '<span style="color:#6f42c1;font-weight:500;">Special</span>' : 
-                    '<span style="color:#0d6efd;font-weight:500;">Sport</span>';
+                const typeIcon = act.type === 'special' ? 
+                    '<span style="background:#ddd6fe;color:#7c3aed;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">⭐</span>' : 
+                    '<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">🏟️</span>';
 
                 html += `
-                    <tr style="${rowStyle}">
-                        <td style="padding:6px 8px;border:1px solid #dee2e6;position:sticky;left:0;background:${rowStyle ? '#ffebee' : '#fff'};font-weight:${isFirstRow ? '600' : '400'};">
+                    <tr style="background:${rowBg};">
+                        <td style="padding:8px 10px;border:1px solid #e5e7eb;position:sticky;left:0;background:${rowBg};font-weight:${isFirstRow ? '600' : '400'};color:#111827;">
                             ${isFirstRow ? bunk : ''}
                         </td>
-                        <td style="padding:6px 8px;border:1px solid #dee2e6;">${act.name}</td>
-                        <td style="padding:6px 8px;border:1px solid #dee2e6;">${typeLabel}</td>
-                        <td style="padding:6px 8px;border:1px solid #dee2e6;text-align:center;">${hist}</td>
-                        <td style="padding:6px 8px;border:1px solid #dee2e6;text-align:center;">
+                        <td style="padding:8px 10px;border:1px solid #e5e7eb;color:#374151;">${act.name}</td>
+                        <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;">${typeIcon}</td>
+                        <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;">${hist}</td>
+                        <td style="padding:4px 6px;border:1px solid #e5e7eb;text-align:center;">
                             <input
                                 type="number"
                                 class="rotation-adj-input"
                                 data-bunk="${bunk}"
                                 data-act="${act.name}"
                                 value="${offset}"
-                                style="width:50px;text-align:center;padding:2px;border:1px solid #ced4da;border-radius:3px;"
+                                style="width:45px;text-align:center;padding:4px;border:1px solid #d1d5db;border-radius:999px;font-size:0.8rem;"
                             />
                         </td>
-                        <td style="padding:6px 8px;border:1px solid #dee2e6;text-align:center;font-weight:bold;${total === 0 ? 'color:#dc3545;' : ''}">${total}</td>
-                        <td style="padding:6px 8px;border:1px solid #dee2e6;font-size:0.9em;">
-                            ${lastDateFormatted} <span style="color:#6c757d;">${daysSince}</span>
+                        <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;${totalStyle}">${total}</td>
+                        <td style="padding:8px 10px;border:1px solid #e5e7eb;font-size:0.85em;">
+                            ${lastDateFormatted} <span style="color:#9ca3af;font-size:0.85em;">${daysSince}</span>
                         </td>
-                        <td style="padding:6px 8px;border:1px solid #dee2e6;text-align:center;${act.max > 0 && total >= act.max ? 'color:#dc3545;font-weight:bold;' : ''}">${limit}</td>
+                        <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;${act.max > 0 && total >= act.max ? 'color:#b91c1c;font-weight:600;' : 'color:#6b7280;'}">${limit}</td>
                     </tr>
                 `;
 
                 isFirstRow = false;
             });
-
-            // Add separator row between bunks
-            html += `<tr style="height:4px;background:#dee2e6;"><td colspan="8"></td></tr>`;
         });
 
-        html += `</tbody></table></div>`;
+        html += `</tbody></table></div></div>`;
 
         // Summary stats
         html += buildRotationSummary(bunks, filteredActivities, rawCounts, manualOffsets);
@@ -890,7 +960,6 @@
      * Build summary statistics for rotation report
      */
     function buildRotationSummary(bunks, activities, rawCounts, manualOffsets) {
-        // Find bunks with never-done activities
         const neverDone = [];
         const atLimit = [];
 
@@ -909,23 +978,39 @@
             });
         });
 
-        let html = `<div style="margin-top:20px;padding:15px;background:#f8f9fa;border-radius:8px;border:1px solid #dee2e6;">`;
-        html += `<h4 style="margin:0 0 10px 0;color:#495057;">📊 Summary</h4>`;
+        let html = `
+            <div class="setup-card" style="margin-top:16px;">
+                <div class="setup-card-header">
+                    <div class="setup-step-pill setup-step-pill-muted">Summary</div>
+                    <div class="setup-card-text">
+                        <h3 style="margin:0;font-size:0.95rem;">Quick Stats</h3>
+                    </div>
+                </div>
+        `;
 
         if (neverDone.length > 0) {
-            html += `<div style="margin-bottom:10px;">
-                <strong style="color:#856404;">⚠️ Never Done (${neverDone.length}):</strong>
-                <span style="font-size:0.9em;color:#666;"> ${neverDone.slice(0, 10).map(n => `${n.bunk}→${n.activity}`).join(', ')}${neverDone.length > 10 ? '...' : ''}</span>
-            </div>`;
+            html += `
+                <div style="margin-bottom:10px;padding:10px 12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:999px;">
+                    <strong style="color:#92400e;">⚠️ Never Done (${neverDone.length}):</strong>
+                    <span style="font-size:0.85em;color:#78350f;margin-left:6px;">
+                        ${neverDone.slice(0, 8).map(n => `${n.bunk}→${n.activity}`).join(', ')}${neverDone.length > 8 ? '...' : ''}
+                    </span>
+                </div>`;
         } else {
-            html += `<div style="margin-bottom:10px;color:#155724;">✅ All bunks have done all activities at least once!</div>`;
+            html += `
+                <div style="margin-bottom:10px;padding:10px 12px;background:#d1fae5;border:1px solid #10b981;border-radius:999px;">
+                    <strong style="color:#047857;">✅ All bunks have done all activities at least once!</strong>
+                </div>`;
         }
 
         if (atLimit.length > 0) {
-            html += `<div>
-                <strong style="color:#721c24;">🛑 At Limit (${atLimit.length}):</strong>
-                <span style="font-size:0.9em;color:#666;"> ${atLimit.map(a => `${a.bunk}→${a.activity} (${a.total}/${a.limit})`).join(', ')}</span>
-            </div>`;
+            html += `
+                <div style="padding:10px 12px;background:#fee2e2;border:1px solid #ef4444;border-radius:999px;">
+                    <strong style="color:#b91c1c;">🛑 At Limit (${atLimit.length}):</strong>
+                    <span style="font-size:0.85em;color:#7f1d1d;margin-left:6px;">
+                        ${atLimit.map(a => `${a.bunk}→${a.activity}`).join(', ')}
+                    </span>
+                </div>`;
         }
 
         html += `</div>`;
