@@ -1,10 +1,12 @@
 // =============================================================================
-// schedule_orchestrator.js v1.3 — CAMPISTRY SCHEDULE ORCHESTRATOR
+// schedule_orchestrator.js v1.4 — CAMPISTRY SCHEDULE ORCHESTRATOR
 // =============================================================================
 //
 // ★★★ THE SINGLE SOURCE OF TRUTH FOR ALL SCHEDULE OPERATIONS ★★★
 //
-// v1.3 FIXES:
+// v1.4 FIXES:
+// - ★ REALTIME SUBSCRIPTION - Auto-subscribes when loading a date
+// - ★ UNSUBSCRIBE ON DATE CHANGE - Cleans up old subscription before new one
 // - ★ IMPROVED TIMEOUT - Uses AbortController for proper cancellation
 // - ★ EXPONENTIAL BACKOFF VERIFICATION - 500ms, 1s, 2s delays
 // - ★ BETTER MERGE - Properly handles unifiedTimes from all records
@@ -45,7 +47,7 @@
     // =========================================================================
 
     const CONFIG = {
-        VERSION: '1.3.0',
+        VERSION: '1.4.0',
         DEBUG: true,
         LOCAL_STORAGE_KEY: 'campDailyData_v1',
         
@@ -529,6 +531,17 @@
 
             _lastLoadResult = result;
             dispatch(CONFIG.EVENTS.LOADED, result);
+
+            // ═══════════════════════════════════════════════════════════════
+            // STEP 6: Subscribe to realtime updates for this date
+            // ═══════════════════════════════════════════════════════════════
+            
+            if (window.ScheduleSync?.subscribe) {
+                log('Step 6: Subscribing to realtime for', dateKey);
+                window.ScheduleSync.subscribe(dateKey).catch(e => {
+                    logWarn('Realtime subscription failed:', e.message);
+                });
+            }
 
             log('═══════════════════════════════════════════════════════');
             log('LOAD COMPLETE:', result.source, '-', result.bunkCount, 'bunks');
@@ -1087,7 +1100,15 @@
         log('Date changed:', oldDateKey, '→', newDateKey);
 
         // ═══════════════════════════════════════════════════════════════
-        // AUTO-SAVE current schedule before switching dates
+        // STEP 1: Unsubscribe from old date's realtime
+        // ═══════════════════════════════════════════════════════════════
+        if (window.ScheduleSync?.unsubscribe) {
+            log('Unsubscribing from realtime for', oldDateKey);
+            await window.ScheduleSync.unsubscribe();
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // STEP 2: AUTO-SAVE current schedule before switching dates
         // ═══════════════════════════════════════════════════════════════
         if (oldDateKey) {
             const currentBunks = Object.keys(window.scheduleAssignments || {}).length;
@@ -1101,7 +1122,7 @@
             }
         }
 
-        // Load new date
+        // STEP 3: Load new date (which will also subscribe to realtime)
         await loadSchedule(newDateKey);
     }
 
