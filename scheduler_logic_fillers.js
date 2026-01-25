@@ -1,7 +1,8 @@
 // ============================================================================
-// scheduler_logic_fillers.js (SMART ROTATION v4)
+// scheduler_logic_fillers.js (SMART ROTATION v5 - CONSOLIDATED)
 // ============================================================================
-// MAJOR UPDATE: Super Smart Activity Rotation System
+// MAJOR UPDATE: Now delegates core tracking functions to SchedulerCoreUtils
+// for single source of truth across all files.
 //
 // RULES:
 // 1. HARD BLOCK: No bunk does same activity twice in one day (Infinity penalty)
@@ -15,6 +16,8 @@
 // - Lower scores = BETTER (we minimize penalty)
 // - Activities are sorted by rotation score before selection
 // - Field capacity and sharing rules still enforced
+//
+// ★★★ UPDATED: Delegates to SchedulerCoreUtils for tracking functions ★★★
 // ============================================================================
 
 (function () {
@@ -90,37 +93,42 @@
     }
 
     // =========================================================================
-    // ★★★ SMART ROTATION TRACKING ★★★
+    // ★★★ DELEGATED ROTATION TRACKING - Single Source of Truth ★★★
     // =========================================================================
 
     /**
      * Get all activities done by a bunk TODAY (before current slot)
-     * This is the PRIMARY check for same-day blocking
+     * DELEGATES to SchedulerCoreUtils for single source of truth
      */
     function getActivitiesDoneToday(bunkName, beforeSlotIndex) {
+        if (window.SchedulerCoreUtils?.getActivitiesDoneToday) {
+            return window.SchedulerCoreUtils.getActivitiesDoneToday(bunkName, beforeSlotIndex);
+        }
+        // Fallback if SchedulerCoreUtils not loaded yet
         const activities = new Set();
         const schedule = window.scheduleAssignments?.[bunkName] || [];
-
         for (let i = 0; i < beforeSlotIndex && i < schedule.length; i++) {
             const entry = schedule[i];
             if (entry && entry._activity && !entry._isTransition && !entry.continuation) {
                 activities.add(entry._activity.toLowerCase().trim());
             }
         }
-
         return activities;
     }
 
     /**
      * Get activities done YESTERDAY (for recency penalty)
+     * DELEGATES to SchedulerCoreUtils for single source of truth
      */
     function getActivitiesFromYesterday(bunkName) {
+        if (window.SchedulerCoreUtils?.getActivitiesDoneYesterday) {
+            return window.SchedulerCoreUtils.getActivitiesDoneYesterday(bunkName);
+        }
+        // Fallback
         const activities = new Set();
-
         try {
             const allDaily = window.loadAllDailyData?.() || {};
-            const currentDate = window.currentScheduleDate;
-
+            const currentDate = window.currentScheduleDate || window.currentDate;
             if (!currentDate) return activities;
 
             const [Y, M, D] = currentDate.split('-').map(Number);
@@ -140,55 +148,53 @@
         } catch (e) {
             // Silent fail - yesterday data may not exist
         }
-
         return activities;
     }
 
     /**
      * Get how many days since bunk last did an activity
-     * Returns: null (never), 0 (today), 1 (yesterday), etc.
+     * DELEGATES to SchedulerCoreUtils for single source of truth
      */
     function getDaysSinceActivity(bunkName, activityName, beforeSlotIndex) {
-        const actLower = activityName.toLowerCase().trim();
-
-        // Check today first
+        if (window.SchedulerCoreUtils?.getDaysSinceActivity) {
+            return window.SchedulerCoreUtils.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+        }
+        // Fallback
+        const actLower = (activityName || '').toLowerCase().trim();
         const todayActivities = getActivitiesDoneToday(bunkName, beforeSlotIndex);
         if (todayActivities.has(actLower)) {
-            return 0; // Done today
+            return 0;
         }
-
-        // Check rotation history for timestamps
         const rotationHistory = window.loadRotationHistory?.() || { bunks: {} };
         const bunkHistory = rotationHistory.bunks?.[bunkName] || {};
-        const lastTimestamp = bunkHistory[activityName];
-
+        const lastTimestamp = bunkHistory[activityName] || bunkHistory[actLower];
         if (lastTimestamp) {
             const now = Date.now();
             const daysSince = Math.floor((now - lastTimestamp) / (1000 * 60 * 60 * 24));
             return Math.max(1, daysSince);
         }
-
-        // Check historical counts as fallback
         const globalSettings = window.loadGlobalSettings?.() || {};
         const historicalCounts = globalSettings.historicalCounts || {};
         if (historicalCounts[bunkName]?.[activityName] > 0) {
-            return 14; // Assume 2 weeks ago if count exists but no timestamp
+            return 14;
         }
-
-        return null; // Never done
+        return null;
     }
 
     /**
      * Get total count of how many times bunk has done an activity
+     * DELEGATES to SchedulerCoreUtils for single source of truth
      */
     function getActivityCount(bunkName, activityName) {
+        if (window.SchedulerCoreUtils?.getActivityCount) {
+            return window.SchedulerCoreUtils.getActivityCount(bunkName, activityName);
+        }
+        // Fallback
         const globalSettings = window.loadGlobalSettings?.() || {};
         const historicalCounts = globalSettings.historicalCounts || {};
         const manualOffsets = globalSettings.manualUsageOffsets || {};
-
         const baseCount = historicalCounts[bunkName]?.[activityName] || 0;
         const offset = manualOffsets[bunkName]?.[activityName] || 0;
-
         return Math.max(0, baseCount + offset);
     }
 
@@ -196,13 +202,15 @@
      * Get average activity count for bunk across all activities
      */
     function getBunkAverageCount(bunkName, allActivityNames) {
+        if (window.SchedulerCoreUtils?.getBunkAverageActivityCount) {
+            return window.SchedulerCoreUtils.getBunkAverageActivityCount(bunkName, allActivityNames);
+        }
+        // Fallback
         if (!allActivityNames || allActivityNames.length === 0) return 0;
-
         let total = 0;
         for (const act of allActivityNames) {
             total += getActivityCount(bunkName, act);
         }
-
         return total / allActivityNames.length;
     }
 
@@ -233,7 +241,7 @@
     function isSpecialActivity(activityName) {
         const globalSettings = window.loadGlobalSettings?.() || {};
         const specials = globalSettings.app1?.specialActivities || [];
-        const specialNames = new Set(specials.map(s => s.name.toLowerCase().trim()));
+        const specialNames = new Set(specials.map(s => (s.name || '').toLowerCase().trim()));
         return specialNames.has((activityName || '').toLowerCase().trim());
     }
 
@@ -319,7 +327,7 @@
      */
     function calculateVarietyScore(bunkName, activityName, beforeSlotIndex) {
         const todayActivities = getActivitiesDoneToday(bunkName, beforeSlotIndex);
-        const actLower = activityName.toLowerCase().trim();
+        const actLower = (activityName || '').toLowerCase().trim();
 
         // Already done today - FORBIDDEN
         if (todayActivities.has(actLower)) {
@@ -392,10 +400,8 @@
 
         if (maxUsage <= 0) return 0;
 
-        const globalSettings = window.loadGlobalSettings?.() || {};
-        const historicalCounts = globalSettings.historicalCounts || {};
-        const hist = historicalCounts[bunkName]?.[activityName] || 0;
-        const todayCount = todaySet.has(activityName.toLowerCase().trim()) ? 1 : 0;
+        const hist = getActivityCount(bunkName, activityName);
+        const todayCount = todaySet.has((activityName || '').toLowerCase().trim()) ? 1 : 0;
 
         if (hist + todayCount >= maxUsage) {
             return Infinity; // At limit
@@ -648,7 +654,7 @@
             }
 
             // ★★★ ROTATION CHECK - Block same-day repeats ★★★
-            if (doneToday.has(actName.toLowerCase().trim())) {
+            if (doneToday.has((actName || '').toLowerCase().trim())) {
                 return false;
             }
 
@@ -712,7 +718,7 @@
             }
 
             // ★★★ ROTATION CHECK - Block same-day repeats ★★★
-            if (doneToday.has(actName.toLowerCase().trim())) {
+            if (doneToday.has((actName || '').toLowerCase().trim())) {
                 return false;
             }
 
@@ -778,7 +784,7 @@
             }
 
             // ★★★ ROTATION CHECK - Block same-day repeats ★★★
-            if (doneToday.has(actName.toLowerCase().trim())) {
+            if (doneToday.has((actName || '').toLowerCase().trim())) {
                 return false;
             }
 
@@ -924,6 +930,6 @@
     // Expose config for tuning
     window.ROTATION_CONFIG = ROTATION_CONFIG;
 
-    console.log('[FILLERS] Smart Rotation v4 loaded - Super smart activity distribution enabled');
+    console.log('[FILLERS] Smart Rotation v5 loaded (delegating to SchedulerCoreUtils)');
 
 })();
