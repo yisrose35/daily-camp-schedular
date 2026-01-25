@@ -913,24 +913,25 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
 
     function calculateRotationPenalty(bunk, activityName, slots) {
         if (!activityName || activityName === 'Free') return 0;
+        
+        // ★★★ DELEGATE TO ROTATION ENGINE ★★★
+        if (window.RotationEngine?.calculateRotationScore) {
+            const divName = getDivisionForBunk(bunk);
+            return window.RotationEngine.calculateRotationScore({
+                bunkName: bunk,
+                activityName: activityName,
+                divisionName: divName,
+                beforeSlotIndex: slots[0] || 0,
+                allActivities: null,
+                activityProperties: getActivityProperties()
+            });
+        }
+        
+        // Fallback if RotationEngine not loaded
         const firstSlot = slots[0];
         const doneToday = getActivitiesDoneToday(bunk, firstSlot);
-        if (doneToday.has(activityName.toLowerCase().trim())) return ROTATION_CONFIG.SAME_DAY_PENALTY;
-        const daysSince = getDaysSinceActivity(bunk, activityName);
-        let recencyPenalty = 0;
-        if (daysSince === null) recencyPenalty = ROTATION_CONFIG.NEVER_DONE_BONUS;
-        else if (daysSince === 0) return ROTATION_CONFIG.SAME_DAY_PENALTY;
-        else if (daysSince === 1) recencyPenalty = ROTATION_CONFIG.YESTERDAY_PENALTY;
-        else if (daysSince === 2) recencyPenalty = ROTATION_CONFIG.TWO_DAYS_AGO_PENALTY;
-        else if (daysSince === 3) recencyPenalty = ROTATION_CONFIG.THREE_DAYS_AGO_PENALTY;
-        else if (daysSince <= 7) recencyPenalty = ROTATION_CONFIG.FOUR_TO_SEVEN_DAYS_PENALTY;
-        else recencyPenalty = ROTATION_CONFIG.WEEK_PLUS_PENALTY;
-        const count = getActivityCount(bunk, activityName);
-        let frequencyPenalty = 0;
-        if (count > 5) frequencyPenalty = ROTATION_CONFIG.HIGH_FREQUENCY_PENALTY;
-        else if (count > 3) frequencyPenalty = ROTATION_CONFIG.ABOVE_AVERAGE_PENALTY;
-        else if (count === 0) frequencyPenalty = ROTATION_CONFIG.UNDER_UTILIZED_BONUS;
-        return recencyPenalty + frequencyPenalty;
+        if (doneToday.has(activityName.toLowerCase().trim())) return Infinity;
+        return 0;
     }
 
     function buildCandidateOptions(slots, activityProps, disabledFields = [], divName = null) {
