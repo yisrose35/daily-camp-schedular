@@ -1,48 +1,57 @@
 // =============================================================================
-// integration_hooks.js v6.1 — CAMPISTRY SCHEDULER INTEGRATION
+// integration_hooks.js v6.2 — CAMPISTRY SCHEDULER INTEGRATION
 // =============================================================================
 //
-// FIXES IN v6.1:
+// v6.2 FIXES:
+// - ★ FIXED DUPLICATE saveGlobalSettings - single authoritative handler
+// - ★ AUTO-SAVE BEFORE DATE CHANGE - prevents data loss when switching dates
+// - ★ BEFOREUNLOAD HANDLER - saves on page exit
+// - ★ SAVE VERIFICATION - confirms cloud writes with retry
+// - ★ USER NOTIFICATIONS - shows save status to user
+// - ★ CONSOLIDATED PATCHES - removed competing save handlers
+//
+// v6.1 FIXES:
 // - ★ BYPASS SAVE GUARD - Skips remote merge during _postEditInProgress
 //
-// FIXES IN v6.0:
+// v6.0 FIXES:
 // - ★ BATCHED GLOBAL SETTINGS SYNC - Multiple calls are batched into one cloud write
 // - ★ ALL DATA TYPES sync to camp_state (divisions, bunks, activities, fields, etc.)
-// - ★ forceSyncToCloud() properly pushes all pending changes
-// - ★ Local storage stays in sync with cloud
-// - ★ Debounced auto-sync with 500ms delay
-//
-// HOW TO USE:
-// 1. Include all 4 supabase_*.js files in your HTML
-// 2. Include this file AFTER them
-// 3. Your existing scheduler will automatically use the new system
 //
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('🔗 Campistry Integration Hooks v6.1 loading...');
+    console.log('🔗 Campistry Integration Hooks v6.2 loading...');
 
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
     
     const CONFIG = {
-        SYNC_DEBOUNCE_MS: 500,        // Batch saves within this window
+        SYNC_DEBOUNCE_MS: 500,
         LOCAL_STORAGE_KEY: 'campGlobalSettings_v1',
-        DEBUG: true
+        DEBUG: true,
+        SAVE_MAX_RETRIES: 3,
+        SAVE_RETRY_DELAY_MS: 2000,
+        SHOW_NOTIFICATIONS: true
     };
 
     // =========================================================================
     // STATE
     // =========================================================================
     
-    let _pendingChanges = {};          // Accumulated changes to sync
-    let _syncTimeout = null;           // Debounce timer
-    let _isSyncing = false;            // Prevent re-entry
-    let _localCache = null;            // In-memory cache of global settings
+    let _pendingChanges = {};
+    let _syncTimeout = null;
+    let _isSyncing = false;
+    let _localCache = null;
     let _lastSyncTime = 0;
+    let _datePickerHooked = false;
+    let _datePickerRetries = 0;
+    let _scheduleCloudLoadDone = false;
+
+    // Store the TRUE original saveGlobalSettings before ANY patches
+    const _trueOriginalSaveGlobalSettings = window.saveGlobalSettings;
 
     // =========================================================================
     // LOGGING
@@ -56,6 +65,58 @@
 
     function logError(...args) {
         console.error('🔗 [Hooks] ERROR:', ...args);
+    }
+
+    // =========================================================================
+    // USER NOTIFICATIONS
+    // =========================================================================
+
+    function showNotification(message, type = 'info') {
+        if (!CONFIG.SHOW_NOTIFICATIONS) return;
+
+        // Remove any existing notification from this module
+        const existing = document.querySelector('.hooks-notification');
+        if (existing) existing.remove();
+
+        const colors = {
+            success: '#22c55e',
+            error: '#ef4444',
+            warning: '#f59e0b',
+            info: '#3b82f6'
+        };
+
+        const notification = document.createElement('div');
+        notification.className = 'hooks-notification';
+        notification.style.cssText = `
+            position: fixed;
+            bottom: 70px;
+            right: 20px;
+            background: ${colors[type] || colors.info};
+            color: white;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 999998;
+            animation: hooksSlideIn 0.3s ease;
+        `;
+        notification.textContent = message;
+
+        if (!document.querySelector('#hooks-notification-styles')) {
+            const style = document.createElement('style');
+            style.id = 'hooks-notification-styles';
+            style.textContent = `
+                @keyframes hooksSlideIn {
+                    from { transform: translateX(100%); opacity: 0; }
+                    to { transform: translateX(0); opacity: 1; }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        document.body.appendChild(notification);
+        setTimeout(() => notification.remove(), type === 'error' ? 5000 : 2500);
     }
 
     // =========================================================================
@@ -82,10 +143,9 @@
             _localCache = data;
             localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(data));
             
-            // Also update legacy keys for backward compatibility
+            // Update legacy keys for backward compatibility
             localStorage.setItem('CAMPISTRY_LOCAL_CACHE', JSON.stringify(data));
             
-            // Update the global registry cache
             if (data.divisions || data.bunks) {
                 localStorage.setItem('campGlobalRegistry_v1', JSON.stringify({
                     divisions: data.divisions || {},
@@ -108,28 +168,17 @@
     // CLOUD SYNC - BATCHED OPERATIONS
     // =========================================================================
 
-    /**
-     * Queue a setting change for batch sync.
-     * Multiple calls within SYNC_DEBOUNCE_MS are batched together.
-     */
     function queueSettingChange(key, value) {
-        // Immediately update local storage
         updateLocalSetting(key, value);
-        
-        // Add to pending changes
         _pendingChanges[key] = value;
         
         log(`Queued change: ${key}`, typeof value === 'object' ? 
             (Array.isArray(value) ? `[${value.length} items]` : `{${Object.keys(value).length} keys}`) : 
             value);
         
-        // Schedule debounced sync
         scheduleBatchSync();
     }
 
-    /**
-     * Schedule a batched sync operation.
-     */
     function scheduleBatchSync() {
         if (_syncTimeout) {
             clearTimeout(_syncTimeout);
@@ -140,9 +189,6 @@
         }, CONFIG.SYNC_DEBOUNCE_MS);
     }
 
-    /**
-     * Execute the batched sync to cloud.
-     */
     async function executeBatchSync() {
         if (_isSyncing) {
             log('Sync already in progress, rescheduling...');
@@ -171,7 +217,6 @@
         try {
             log('Executing batch sync:', Object.keys(changesToSync));
 
-            // Get current cloud state
             const { data: current, error: fetchError } = await client
                 .from('camp_state')
                 .select('state')
@@ -179,12 +224,10 @@
                 .single();
 
             if (fetchError && fetchError.code !== 'PGRST116') {
-                // PGRST116 = no rows found, which is fine for new camps
                 logError('Failed to fetch current state:', fetchError);
                 throw fetchError;
             }
 
-            // Merge changes into current state
             const currentState = current?.state || {};
             const newState = { 
                 ...currentState, 
@@ -192,7 +235,6 @@
                 updated_at: new Date().toISOString()
             };
 
-            // Upsert to cloud
             const { error: upsertError } = await client
                 .from('camp_state')
                 .upsert({
@@ -213,23 +255,17 @@
             console.log('☁️ Cloud sync complete:', {
                 keys: Object.keys(changesToSync),
                 divisions: newState.divisions ? Object.keys(newState.divisions).length : 0,
-                bunks: newState.bunks?.length || 0,
-                activities: newState.specialActivities?.length || 
-                           newState.app1?.specialActivities?.length || 0
+                bunks: newState.bunks?.length || 0
             });
 
-            // Dispatch success event
             window.dispatchEvent(new CustomEvent('campistry-settings-synced', {
                 detail: { keys: Object.keys(changesToSync) }
             }));
 
         } catch (e) {
             logError('Batch sync failed:', e);
-            
-            // Re-queue failed changes for retry
             Object.assign(_pendingChanges, changesToSync);
             
-            // Dispatch error event
             window.dispatchEvent(new CustomEvent('campistry-sync-error', {
                 detail: { error: e.message, keys: Object.keys(changesToSync) }
             }));
@@ -238,47 +274,186 @@
         }
     }
 
-    /**
-     * Force an immediate sync (bypasses debounce).
-     */
     async function forceSyncToCloud() {
         log('Force sync requested');
         
-        // Clear any pending debounce
         if (_syncTimeout) {
             clearTimeout(_syncTimeout);
             _syncTimeout = null;
         }
 
-        // Include any local changes that might not be in pending
         const localSettings = getLocalSettings();
-        
-        // Merge local into pending (local takes precedence for most recent)
         const allChanges = { ...localSettings, ..._pendingChanges };
         _pendingChanges = allChanges;
         
-        // Execute immediately
         await executeBatchSync();
         
         return true;
     }
 
     // =========================================================================
-    // BACKWARD COMPATIBILITY LAYER
+    // VERIFIED SCHEDULE SAVE (WITH RETRY)
+    // =========================================================================
+
+    async function verifiedScheduleSave(dateKey, data, attempt = 1) {
+        if (!dateKey) dateKey = window.currentScheduleDate;
+        if (!data) {
+            data = {
+                scheduleAssignments: window.scheduleAssignments || {},
+                leagueAssignments: window.leagueAssignments || {},
+                unifiedTimes: window.unifiedTimes || [],
+                divisionTimes: window.divisionTimes || {},
+                isRainyDay: window.isRainyDay || false
+            };
+        }
+
+        const bunkCount = Object.keys(data.scheduleAssignments || {}).length;
+        log(`[VERIFIED SAVE] Attempt ${attempt}/${CONFIG.SAVE_MAX_RETRIES} - ${bunkCount} bunks for ${dateKey}`);
+
+        if (bunkCount === 0) {
+            log('[VERIFIED SAVE] No data to save');
+            return { success: true, target: 'empty' };
+        }
+
+        if (!window.ScheduleDB?.saveSchedule) {
+            log('[VERIFIED SAVE] ScheduleDB not ready, waiting...');
+            if (attempt < CONFIG.SAVE_MAX_RETRIES) {
+                await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
+                return verifiedScheduleSave(dateKey, data, attempt + 1);
+            }
+            logError('[VERIFIED SAVE] ScheduleDB never became available');
+            return { success: false, error: 'ScheduleDB not available' };
+        }
+
+        const campId = window.CampistryDB?.getCampId?.();
+        const userId = window.CampistryDB?.getUserId?.();
+
+        if (!campId || !userId) {
+            log('[VERIFIED SAVE] Auth not ready, waiting...');
+            if (attempt < CONFIG.SAVE_MAX_RETRIES) {
+                await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
+                return verifiedScheduleSave(dateKey, data, attempt + 1);
+            }
+            logError('[VERIFIED SAVE] Auth never became available');
+            return { success: false, error: 'Missing authentication' };
+        }
+
+        try {
+            const result = await window.ScheduleDB.saveSchedule(dateKey, data);
+            
+            if (result?.success && result?.target === 'cloud') {
+                console.log('🔗 ✅ Schedule saved to cloud:', bunkCount, 'bunks');
+                showNotification(`Saved ${bunkCount} bunks`, 'success');
+                return result;
+            } else if (result?.target === 'local' || result?.target === 'local-fallback') {
+                console.warn('🔗 ⚠️ Schedule saved to LOCAL only, retrying cloud...');
+                if (attempt < CONFIG.SAVE_MAX_RETRIES) {
+                    await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
+                    return verifiedScheduleSave(dateKey, data, attempt + 1);
+                }
+                showNotification('Saved locally (offline)', 'warning');
+                return result;
+            } else {
+                logError('[VERIFIED SAVE] Save failed:', result?.error);
+                if (attempt < CONFIG.SAVE_MAX_RETRIES) {
+                    await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
+                    return verifiedScheduleSave(dateKey, data, attempt + 1);
+                }
+                showNotification('Save failed', 'error');
+                return result;
+            }
+        } catch (e) {
+            logError('[VERIFIED SAVE] Exception:', e);
+            if (attempt < CONFIG.SAVE_MAX_RETRIES) {
+                await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
+                return verifiedScheduleSave(dateKey, data, attempt + 1);
+            }
+            showNotification('Save error', 'error');
+            return { success: false, error: e.message };
+        }
+    }
+
+    // =========================================================================
+    // FORCE LOAD FROM CLOUD
+    // =========================================================================
+
+    async function forceLoadScheduleFromCloud(dateKey) {
+        if (!dateKey) dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        
+        log('[CLOUD LOAD] Force loading schedule for:', dateKey);
+
+        if (!window.ScheduleDB?.loadSchedule) {
+            log('[CLOUD LOAD] ScheduleDB not available');
+            return { success: false, error: 'ScheduleDB not available' };
+        }
+
+        try {
+            const result = await window.ScheduleDB.loadSchedule(dateKey);
+            
+            if (result?.success && result.data) {
+                const bunkCount = Object.keys(result.data.scheduleAssignments || {}).length;
+                log(`[CLOUD LOAD] Loaded ${bunkCount} bunks from ${result.source}`);
+                
+                // Hydrate window globals
+                if (result.data.scheduleAssignments) {
+                    window.scheduleAssignments = result.data.scheduleAssignments;
+                }
+                if (result.data.leagueAssignments) {
+                    window.leagueAssignments = result.data.leagueAssignments;
+                }
+                if (result.data.unifiedTimes?.length > 0) {
+                    window.unifiedTimes = result.data.unifiedTimes;
+                }
+                if (result.data.divisionTimes) {
+                    window.divisionTimes = result.data.divisionTimes;
+                }
+
+                // Update localStorage
+                const DAILY_KEY = 'campDailyData_v1';
+                try {
+                    const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                    allData[dateKey] = result.data;
+                    localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                } catch (e) { /* ignore */ }
+
+                // Refresh UI
+                if (window.updateTable) {
+                    window.updateTable();
+                }
+
+                console.log('🔗 ✅ Schedule loaded from cloud:', bunkCount, 'bunks');
+                return result;
+            } else {
+                log('[CLOUD LOAD] No cloud data found');
+                return { success: true, source: 'empty', data: null };
+            }
+        } catch (e) {
+            logError('[CLOUD LOAD] Exception:', e);
+            return { success: false, error: e.message };
+        }
+    }
+
+    // =========================================================================
+    // SINGLE AUTHORITATIVE saveGlobalSettings HANDLER
     // =========================================================================
 
     /**
-     * saveGlobalSettings - Save a setting (queued for batch sync)
-     * This is SYNCHRONOUS for callers but queues async cloud sync.
+     * ★★★ SINGLE AUTHORITATIVE HANDLER ★★★
+     * This replaces all other patches. Do NOT patch this function elsewhere.
      */
     window.saveGlobalSettings = function(key, data) {
-        // For daily_schedules, route to ScheduleDB
+        // For daily_schedules, use verified save with retry
         if (key === 'daily_schedules') {
             const dateKey = Object.keys(data)[0];
             if (dateKey && data[dateKey]) {
-                // Fire and forget - let ScheduleDB handle it
-                window.ScheduleDB?.saveSchedule?.(dateKey, data[dateKey])
-                    .catch(e => logError('ScheduleDB save failed:', e));
+                // Use verified save (async, but return sync for compatibility)
+                verifiedScheduleSave(dateKey, data[dateKey])
+                    .then(result => {
+                        if (!result?.success) {
+                            console.warn('🔗 Schedule save issue:', result?.error);
+                        }
+                    })
+                    .catch(e => logError('Schedule save failed:', e));
             }
             return true;
         }
@@ -286,13 +461,14 @@
         // All other settings go through batched sync
         queueSettingChange(key, data);
         
-        // Return synchronously for backward compatibility
         return true;
     };
 
+    // Mark as the authoritative handler so other code doesn't re-patch
+    window.saveGlobalSettings._isAuthoritativeHandler = true;
+
     /**
      * loadGlobalSettings - Load settings (from cache or cloud)
-     * This is SYNCHRONOUS and returns cached data.
      */
     window.loadGlobalSettings = function(key) {
         const settings = getLocalSettings();
@@ -304,21 +480,13 @@
         return settings;
     };
 
-    /**
-     * forceSyncToCloud - Exposed globally for other modules
-     */
     window.forceSyncToCloud = forceSyncToCloud;
 
-    /**
-     * setCloudState - Full state replacement (used by import)
-     */
     window.setCloudState = async function(newState, force = false) {
         log('setCloudState called', force ? '(forced)' : '');
         
-        // Update local storage
         setLocalSettings(newState);
         
-        // Queue all keys for sync
         Object.keys(newState).forEach(key => {
             _pendingChanges[key] = newState[key];
         });
@@ -332,9 +500,6 @@
         return true;
     };
 
-    /**
-     * resetCloudState - Clear all data (used by erase)
-     */
     window.resetCloudState = async function() {
         log('resetCloudState called');
         
@@ -356,19 +521,14 @@
             updated_at: new Date().toISOString()
         };
         
-        // Clear local
         setLocalSettings(emptyState);
         _pendingChanges = emptyState;
         
-        // Sync immediately
         await forceSyncToCloud();
         
         return true;
     };
 
-    /**
-     * clearCloudKeys - Clear specific keys from cloud
-     */
     window.clearCloudKeys = async function(keys) {
         log('clearCloudKeys called:', keys);
         
@@ -420,37 +580,29 @@
                 const cloudState = data.state;
                 const localState = getLocalSettings();
                 
-                // Merge: cloud wins for structure, but preserve any local changes
-                // that are newer (based on updated_at)
                 const cloudTime = new Date(cloudState.updated_at || 0).getTime();
                 const localTime = new Date(localState.updated_at || 0).getTime();
                 
                 let mergedState;
                 if (localTime > cloudTime) {
-                    // Local is newer - use local but fill in missing from cloud
                     mergedState = { ...cloudState, ...localState };
                     log('Using local state (newer)');
                 } else {
-                    // Cloud is newer - use cloud
                     mergedState = cloudState;
                     log('Using cloud state (newer)');
                 }
                 
                 setLocalSettings(mergedState);
                 
-                // Update window references for legacy code
                 window.divisions = mergedState.divisions || {};
                 window.globalBunks = mergedState.bunks || [];
                 window.availableDivisions = Object.keys(mergedState.divisions || {});
                 
                 console.log('☁️ Hydrated from cloud:', {
                     divisions: Object.keys(mergedState.divisions || {}).length,
-                    bunks: (mergedState.bunks || []).length,
-                    activities: (mergedState.app1?.specialActivities || []).length,
-                    fields: (mergedState.app1?.fields || []).length
+                    bunks: (mergedState.bunks || []).length
                 });
                 
-                // Dispatch hydration event
                 window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
             }
         } catch (e) {
@@ -459,19 +611,15 @@
     }
 
     // =========================================================================
-    // WAIT FOR ALL SYSTEMS TO BE READY
+    // WAIT FOR ALL SYSTEMS
     // =========================================================================
 
     async function waitForSystems() {
-        // Wait for CampistryDB
         if (window.CampistryDB?.ready) {
             await window.CampistryDB.ready;
         }
 
-        // Wait a bit for other modules
         await new Promise(r => setTimeout(r, 200));
-
-        // Hydrate from cloud first
         await hydrateFromCloud();
 
         console.log('🔗 All systems ready, installing hooks...');
@@ -479,12 +627,10 @@
     }
 
     // =========================================================================
-    // HOOK: AUTO-SUBSCRIBE ON DATE CHANGE
+    // HOOK: DATE PICKER (WITH AUTO-SAVE)
     // =========================================================================
 
-    let _datePickerRetries = 0;
     const MAX_DATE_PICKER_RETRIES = 5;
-    let _datePickerHooked = false;
 
     function hookDatePicker() {
         if (_datePickerHooked) return;
@@ -495,10 +641,9 @@
         if (!datePicker) {
             _datePickerRetries++;
             if (_datePickerRetries < MAX_DATE_PICKER_RETRIES) {
-                // Silent retry
                 setTimeout(hookDatePicker, 2000);
             } else if (_datePickerRetries === MAX_DATE_PICKER_RETRIES) {
-                log('Date picker not found on this page (normal for Setup tab)');
+                log('Date picker not found on this page');
             }
             return;
         }
@@ -506,28 +651,44 @@
         _datePickerHooked = true;
         log('Date picker found, hooking...');
         
-        // Handle initial value if present
         if (datePicker.value && !window.currentScheduleDate) {
             window.currentScheduleDate = datePicker.value;
             log('Initial date set:', datePicker.value);
         }
 
         datePicker.addEventListener('change', async (e) => {
-            const dateKey = e.target.value;
-            if (!dateKey) return;
+            const newDateKey = e.target.value;
+            if (!newDateKey) return;
 
-            console.log('🔗 Date changed to:', dateKey);
+            const oldDateKey = window.currentScheduleDate;
+            console.log('🔗 Date changed:', oldDateKey, '→', newDateKey);
 
-            window.currentScheduleDate = dateKey;
+            // ═══════════════════════════════════════════════════════════════
+            // ★★★ AUTO-SAVE BEFORE DATE CHANGE ★★★
+            // ═══════════════════════════════════════════════════════════════
+            if (oldDateKey && oldDateKey !== newDateKey) {
+                const currentBunks = Object.keys(window.scheduleAssignments || {}).length;
+                if (currentBunks > 0) {
+                    console.log('🔗 Auto-saving before date change:', currentBunks, 'bunks');
+                    showNotification('Saving...', 'info');
+                    try {
+                        await verifiedScheduleSave(oldDateKey);
+                    } catch (e) {
+                        logError('Auto-save failed:', e);
+                    }
+                }
+            }
+
+            window.currentScheduleDate = newDateKey;
 
             // Subscribe to realtime for this date
             if (window.ScheduleSync?.subscribe) {
-                await window.ScheduleSync.subscribe(dateKey);
+                await window.ScheduleSync.subscribe(newDateKey);
             }
 
             // Load schedule for this date
             if (window.ScheduleDB?.loadSchedule) {
-                const result = await window.ScheduleDB.loadSchedule(dateKey);
+                const result = await window.ScheduleDB.loadSchedule(newDateKey);
                 
                 if (result?.success && result.data) {
                     window.scheduleAssignments = result.data.scheduleAssignments || {};
@@ -536,12 +697,15 @@
                     if (result.data.unifiedTimes?.length > 0) {
                         window.unifiedTimes = result.data.unifiedTimes;
                     }
+                    if (result.data.divisionTimes) {
+                        window.divisionTimes = result.data.divisionTimes;
+                    }
 
                     if (window.updateTable) {
                         window.updateTable();
                     }
 
-                    console.log('🔗 Loaded schedule for', dateKey, {
+                    console.log('🔗 Loaded schedule for', newDateKey, {
                         bunks: Object.keys(window.scheduleAssignments).length,
                         source: result.source
                     });
@@ -561,19 +725,18 @@
             const originalSave = window.saveCurrentDailyData;
 
             window.saveCurrentDailyData = function(key, value) {
-                // Call original for local storage
                 originalSave.call(this, key, value);
 
-                // Queue cloud save for schedule
                 const dateKey = window.currentScheduleDate;
                 if (!dateKey) return;
 
                 const data = {
-                scheduleAssignments: window.scheduleAssignments || {},
-                leagueAssignments: window.leagueAssignments || {},
-                unifiedTimes: window.unifiedTimes || [],
-                isRainyDay: window.isRainyDay || false
-            };
+                    scheduleAssignments: window.scheduleAssignments || {},
+                    leagueAssignments: window.leagueAssignments || {},
+                    unifiedTimes: window.unifiedTimes || [],
+                    divisionTimes: window.divisionTimes || {},
+                    isRainyDay: window.isRainyDay || false
+                };
 
                 if (window.ScheduleSync?.queueSave) {
                     window.ScheduleSync.queueSave(dateKey, data);
@@ -589,23 +752,24 @@
     // =========================================================================
 
     function hookGeneration() {
+        // Single handler for generation complete
         window.addEventListener('campistry-generation-complete', async (e) => {
             const dateKey = e.detail?.dateKey || window.currentScheduleDate;
             if (!dateKey) return;
 
             console.log('🔗 Generation complete for', dateKey);
 
-            const data = {
-                scheduleAssignments: window.scheduleAssignments || {},
-                leagueAssignments: window.leagueAssignments || {},
-                unifiedTimes: window.unifiedTimes || [],
-                isRainyDay: window.isRainyDay || false
-            };
+            // Wait for data to settle
+            await new Promise(r => setTimeout(r, 1000));
 
-            if (window.ScheduleSync?.queueSave) {
-                window.ScheduleSync.queueSave(dateKey, data);
+            // Use verified save
+            await verifiedScheduleSave(dateKey);
+            
+            // Rebuild counts if available
+            if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+                window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
             }
-        });
+        }, { once: false });
 
         // Intercept generateSchedule if it exists
         if (window.generateSchedule) {
@@ -624,20 +788,6 @@
             console.log('🔗 Generation hook installed');
         }
     }
-    // ★★★ AUTO-REBUILD COUNTS AFTER GENERATION ★★★
-    window.addEventListener('campistry-generation-complete', async (e) => {
-        const dateKey = e.detail?.dateKey || window.currentScheduleDate;
-        
-        console.log('🔗 [IntegrationHooks] Generation complete, rebuilding historical counts...');
-        
-        // Wait a moment for data to settle
-        await new Promise(r => setTimeout(r, 500));
-        
-        // Rebuild counts
-        if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
-            window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
-        }
-    });
 
     // =========================================================================
     // HOOK: HANDLE REMOTE CHANGES (v6.1 - WITH BYPASS GUARD)
@@ -650,7 +800,7 @@
         }
 
         window.ScheduleSync.onRemoteChange((change) => {
-            // ★★★ v6.1 GUARD: Skip during post-edit/bypass operations ★★★
+            // Skip during post-edit/bypass operations
             if (window._postEditInProgress) {
                 console.log('🔗 Skipping remote merge - post-edit in progress');
                 return;
@@ -660,7 +810,6 @@
 
             if (window.ScheduleDB?.loadSchedule && change.dateKey) {
                 window.ScheduleDB.loadSchedule(change.dateKey).then(result => {
-                    // Double-check guard in case state changed during async load
                     if (window._postEditInProgress) {
                         console.log('🔗 Skipping merge - post-edit started during load');
                         return;
@@ -757,7 +906,6 @@
     // =========================================================================
 
     function hookEraseFunctions() {
-        // Hook eraseAllSchedules if present
         if (typeof window.eraseAllSchedules === 'function') {
             const original = window.eraseAllSchedules;
             
@@ -797,6 +945,81 @@
     }
 
     // =========================================================================
+    // HOOK: BEFOREUNLOAD - SAVE ON PAGE EXIT
+    // =========================================================================
+
+    function hookBeforeUnload() {
+        window.addEventListener('beforeunload', (e) => {
+            const dateKey = window.currentScheduleDate;
+            const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
+
+            if (dateKey && bunkCount > 0) {
+                console.log('🔗 Page unloading, final save...');
+                
+                // Synchronous localStorage save (guaranteed)
+                try {
+                    const DAILY_KEY = 'campDailyData_v1';
+                    const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                    allData[dateKey] = {
+                        scheduleAssignments: window.scheduleAssignments,
+                        leagueAssignments: window.leagueAssignments,
+                        unifiedTimes: window.unifiedTimes,
+                        divisionTimes: window.divisionTimes,
+                        savedAt: new Date().toISOString()
+                    };
+                    localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                } catch (err) {
+                    logError('Final save failed:', err);
+                }
+                
+                // Attempt cloud save (may not complete)
+                window.ScheduleDB?.saveSchedule?.(dateKey, {
+                    scheduleAssignments: window.scheduleAssignments,
+                    leagueAssignments: window.leagueAssignments,
+                    unifiedTimes: window.unifiedTimes,
+                    divisionTimes: window.divisionTimes
+                }).catch(() => {});
+            }
+        });
+
+        console.log('🔗 beforeunload hook installed');
+    }
+
+    // =========================================================================
+    // HOOK: AUTO-LOAD FROM CLOUD AFTER HYDRATION
+    // =========================================================================
+
+    function hookCloudHydration() {
+        window.addEventListener('campistry-cloud-hydrated', async () => {
+            if (_scheduleCloudLoadDone) return;
+            _scheduleCloudLoadDone = true;
+
+            log('[HOOK] Cloud hydrated, checking for schedule data...');
+
+            await new Promise(r => setTimeout(r, 500));
+
+            const dateKey = window.currentScheduleDate || 
+                           document.getElementById('schedule-date-input')?.value ||
+                           document.getElementById('datepicker')?.value;
+            
+            if (!dateKey) {
+                log('[HOOK] No date key available');
+                return;
+            }
+
+            const currentBunks = Object.keys(window.scheduleAssignments || {}).length;
+            
+            if (currentBunks === 0) {
+                log('[HOOK] No local data, fetching from cloud...');
+                await forceLoadScheduleFromCloud(dateKey);
+            } else {
+                log('[HOOK] Local data exists, refreshing from cloud...');
+                await forceLoadScheduleFromCloud(dateKey);
+            }
+        });
+    }
+
+    // =========================================================================
     // INSTALL ALL HOOKS
     // =========================================================================
 
@@ -808,6 +1031,8 @@
         hookRemoteChanges();
         hookBlockedCells();
         hookEraseFunctions();
+        hookBeforeUnload();
+        hookCloudHydration();
 
         // Expose helper functions globally
         window.scheduleCloudSync = function() {
@@ -818,6 +1043,7 @@
                 scheduleAssignments: window.scheduleAssignments || {},
                 leagueAssignments: window.leagueAssignments || {},
                 unifiedTimes: window.unifiedTimes || [],
+                divisionTimes: window.divisionTimes || {},
                 isRainyDay: window.isRainyDay || false
             };
 
@@ -827,17 +1053,18 @@
         };
 
         window.forceCloudSync = async function() {
-            // Sync both schedules and global settings
             await window.ScheduleSync?.forceSync?.();
             await forceSyncToCloud();
         };
 
+        // Expose verified save functions
+        window.verifiedScheduleSave = verifiedScheduleSave;
+        window.forceLoadScheduleFromCloud = forceLoadScheduleFromCloud;
+
         console.log('🔗 All hooks installed!');
 
-        // Dispatch ready event
         window.dispatchEvent(new CustomEvent('campistry-integration-ready'));
 
-        // Auto-subscribe to current date if one is set
         const currentDate = window.currentScheduleDate || document.getElementById('schedule-date-input')?.value;
         if (currentDate && window.ScheduleSync?.subscribe) {
             console.log('🔗 Auto-subscribing to current date:', currentDate);
@@ -846,287 +1073,50 @@
     }
 
     // =========================================================================
-    // START
+    // DIAGNOSTIC FUNCTION
     // =========================================================================
 
-    // Wait for DOM ready
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', waitForSystems);
-    } else {
-        setTimeout(waitForSystems, 300);
-    }
-// =============================================================================
-// APPEND THIS TO THE END OF integration_hooks.js (BEFORE the closing })(); )
-// =============================================================================
-// CLOUD SAVE VERIFICATION PATCH v1.0
-// Fixes: Schedule not persisting to cloud on new device
-// =============================================================================
-
-    // =========================================================================
-    // PATCH: VERIFIED SAVE TO CLOUD WITH RETRY
-    // =========================================================================
-
-    const SAVE_MAX_RETRIES = 3;
-    const SAVE_RETRY_DELAY = 2000;
-
-    async function verifiedScheduleSave(dateKey, data, attempt = 1) {
-        if (!dateKey) dateKey = window.currentScheduleDate;
-        if (!data) {
-            data = {
-                scheduleAssignments: window.scheduleAssignments || {},
-                leagueAssignments: window.leagueAssignments || {},
-                unifiedTimes: window.unifiedTimes || [],
-                isRainyDay: window.isRainyDay || false
-            };
-        }
-
-        const bunkCount = Object.keys(data.scheduleAssignments || {}).length;
-        log(`[VERIFIED SAVE] Attempt ${attempt}/${SAVE_MAX_RETRIES} - ${bunkCount} bunks for ${dateKey}`);
-
-        if (bunkCount === 0) {
-            log('[VERIFIED SAVE] No data to save');
-            return { success: true, target: 'empty' };
-        }
-
-        // Check dependencies
-        if (!window.ScheduleDB?.saveSchedule) {
-            log('[VERIFIED SAVE] ScheduleDB not ready, waiting...');
-            if (attempt < SAVE_MAX_RETRIES) {
-                await new Promise(r => setTimeout(r, SAVE_RETRY_DELAY));
-                return verifiedScheduleSave(dateKey, data, attempt + 1);
-            }
-            logError('[VERIFIED SAVE] ScheduleDB never became available');
-            return { success: false, error: 'ScheduleDB not available' };
-        }
-
-        const campId = window.CampistryDB?.getCampId?.();
-        const userId = window.CampistryDB?.getUserId?.();
-
-        if (!campId || !userId) {
-            log('[VERIFIED SAVE] Auth not ready, waiting...');
-            if (attempt < SAVE_MAX_RETRIES) {
-                await new Promise(r => setTimeout(r, SAVE_RETRY_DELAY));
-                return verifiedScheduleSave(dateKey, data, attempt + 1);
-            }
-            logError('[VERIFIED SAVE] Auth never became available');
-            return { success: false, error: 'Missing authentication' };
-        }
-
-        try {
-            const result = await window.ScheduleDB.saveSchedule(dateKey, data);
-            
-            if (result?.success && result?.target === 'cloud') {
-                console.log('🔗 ✅ VERIFIED: Schedule saved to cloud successfully');
-                return result;
-            } else if (result?.target === 'local' || result?.target === 'local-fallback') {
-                console.warn('🔗 ⚠️ Schedule saved to LOCAL only, retrying cloud...');
-                if (attempt < SAVE_MAX_RETRIES) {
-                    await new Promise(r => setTimeout(r, SAVE_RETRY_DELAY));
-                    return verifiedScheduleSave(dateKey, data, attempt + 1);
-                }
-                return result;
-            } else {
-                logError('[VERIFIED SAVE] Save failed:', result?.error);
-                if (attempt < SAVE_MAX_RETRIES) {
-                    await new Promise(r => setTimeout(r, SAVE_RETRY_DELAY));
-                    return verifiedScheduleSave(dateKey, data, attempt + 1);
-                }
-                return result;
-            }
-        } catch (e) {
-            logError('[VERIFIED SAVE] Exception:', e);
-            if (attempt < SAVE_MAX_RETRIES) {
-                await new Promise(r => setTimeout(r, SAVE_RETRY_DELAY));
-                return verifiedScheduleSave(dateKey, data, attempt + 1);
-            }
-            return { success: false, error: e.message };
-        }
-    }
-
-    // =========================================================================
-    // PATCH: FORCE LOAD FROM CLOUD (for new devices)
-    // =========================================================================
-
-    async function forceLoadScheduleFromCloud(dateKey) {
-        if (!dateKey) dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        
-        log('[CLOUD LOAD] Force loading schedule for:', dateKey);
-
-        if (!window.ScheduleDB?.loadSchedule) {
-            log('[CLOUD LOAD] ScheduleDB not available');
-            return { success: false, error: 'ScheduleDB not available' };
-        }
-
-        try {
-            const result = await window.ScheduleDB.loadSchedule(dateKey);
-            
-            if (result?.success && result.data) {
-                const bunkCount = Object.keys(result.data.scheduleAssignments || {}).length;
-                log(`[CLOUD LOAD] Loaded ${bunkCount} bunks from ${result.source}`);
-                
-                // Hydrate window globals
-                if (result.data.scheduleAssignments) {
-                    window.scheduleAssignments = result.data.scheduleAssignments;
-                }
-                if (result.data.leagueAssignments) {
-                    window.leagueAssignments = result.data.leagueAssignments;
-                }
-                if (result.data.unifiedTimes?.length > 0) {
-                    window.unifiedTimes = result.data.unifiedTimes;
-                    window._unifiedTimesFromCloud = true;
-                }
-
-                // Update localStorage
-                const DAILY_KEY = 'campDailyData_v1';
-                try {
-                    const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-                    allData[dateKey] = result.data;
-                    localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-                } catch (e) { /* ignore localStorage errors */ }
-
-                // Refresh UI
-                if (window.updateTable) {
-                    window.updateTable();
-                }
-
-                console.log('🔗 ✅ Schedule loaded from cloud:', bunkCount, 'bunks');
-                return result;
-            } else {
-                log('[CLOUD LOAD] No cloud data found');
-                return { success: true, source: 'empty', data: null };
-            }
-        } catch (e) {
-            logError('[CLOUD LOAD] Exception:', e);
-            return { success: false, error: e.message };
-        }
-    }
-
-    // =========================================================================
-    // PATCH: OVERRIDE saveGlobalSettings FOR daily_schedules
-    // =========================================================================
-
-    const _originalSaveGlobalSettings = window.saveGlobalSettings;
-    
-    window.saveGlobalSettings = function(key, data) {
-        // For daily_schedules, use verified save instead of fire-and-forget
-        if (key === 'daily_schedules') {
-            const dateKey = Object.keys(data)[0];
-            if (dateKey && data[dateKey]) {
-                // Use verified save with retry
-                verifiedScheduleSave(dateKey, data[dateKey])
-                    .then(result => {
-                        if (!result?.success || result?.target !== 'cloud') {
-                            console.warn('🔗 Schedule save may not have reached cloud');
-                        }
-                    })
-                    .catch(e => logError('Verified schedule save failed:', e));
-            }
-            return true;
-        }
-        
-        // All other settings use original handler
-        return _originalSaveGlobalSettings?.call(this, key, data);
-    };
-
-    // =========================================================================
-    // PATCH: HOOK GENERATION COMPLETE WITH VERIFIED SAVE
-    // =========================================================================
-
-    // Remove old listener and add new one with verified save
-    window.addEventListener('campistry-generation-complete', async (e) => {
-        const dateKey = e.detail?.dateKey || window.currentScheduleDate;
-        if (!dateKey) return;
-
-        console.log('🔗 [PATCHED] Generation complete, initiating verified save...');
-
-        // Wait for data to settle
-        await new Promise(r => setTimeout(r, 1000));
-
-        const data = {
-                scheduleAssignments: window.scheduleAssignments || {},
-                leagueAssignments: window.leagueAssignments || {},
-                unifiedTimes: window.unifiedTimes || [],
-                isRainyDay: window.isRainyDay || false
-            };
-
-        // Use verified save
-        await verifiedScheduleSave(dateKey, data);
-    });
-
-    // =========================================================================
-    // PATCH: AUTO-LOAD FROM CLOUD AFTER HYDRATION
-    // =========================================================================
-
-    let _scheduleCloudLoadDone = false;
-
-    window.addEventListener('campistry-cloud-hydrated', async () => {
-        if (_scheduleCloudLoadDone) return;
-        _scheduleCloudLoadDone = true;
-
-        log('[PATCH] Cloud hydrated, checking for schedule data...');
-
-        // Wait for ScheduleDB
-        await new Promise(r => setTimeout(r, 500));
-
-        const dateKey = window.currentScheduleDate || 
-                       document.getElementById('schedule-date-input')?.value ||
-                       document.getElementById('datepicker')?.value;
-        
-        if (!dateKey) {
-            log('[PATCH] No date key available');
-            return;
-        }
-
-        // Check if we already have data
-        const currentBunks = Object.keys(window.scheduleAssignments || {}).length;
-        
-        if (currentBunks === 0) {
-            log('[PATCH] No local data, fetching from cloud...');
-            await forceLoadScheduleFromCloud(dateKey);
-        } else {
-            // Still fetch from cloud to get latest merged data
-            log('[PATCH] Local data exists, refreshing from cloud...');
-            await forceLoadScheduleFromCloud(dateKey);
-        }
-    });
-
-    // =========================================================================
-    // EXPOSE NEW FUNCTIONS GLOBALLY
-    // =========================================================================
-
-    window.verifiedScheduleSave = verifiedScheduleSave;
-    window.forceLoadScheduleFromCloud = forceLoadScheduleFromCloud;
-
-    // Diagnostic function
     window.diagnoseScheduleSync = async function() {
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         const campId = window.CampistryDB?.getCampId?.();
+        const userId = window.CampistryDB?.getUserId?.();
         const client = window.CampistryDB?.getClient?.();
 
         console.log('═══════════════════════════════════════════════════════');
-        console.log('SCHEDULE SYNC DIAGNOSTIC');
+        console.log('SCHEDULE SYNC DIAGNOSTIC v6.2');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Date:', dateKey);
         console.log('Camp ID:', campId || 'MISSING');
+        console.log('User ID:', userId?.substring(0, 8) + '...' || 'MISSING');
         console.log('');
         console.log('Window globals:');
         console.log('  scheduleAssignments:', Object.keys(window.scheduleAssignments || {}).length, 'bunks');
         console.log('  unifiedTimes:', (window.unifiedTimes || []).length, 'slots');
+        console.log('  divisionTimes:', Object.keys(window.divisionTimes || {}).length, 'divisions');
         console.log('');
 
         if (client && campId) {
             try {
                 const { data, error } = await client
                     .from('daily_schedules')
-                    .select('scheduler_id, scheduler_name, divisions, updated_at')
+                    .select('scheduler_id, scheduler_name, divisions, updated_at, schedule_data')
                     .eq('camp_id', campId)
                     .eq('date_key', dateKey);
 
                 console.log('Cloud records:', data?.length || 0);
                 if (data && data.length > 0) {
+                    let totalCloudBunks = 0;
                     data.forEach((r, i) => {
-                        console.log(`  [${i + 1}] ${r.scheduler_name || 'Unknown'} - divisions: ${JSON.stringify(r.divisions)}`);
+                        const bunks = Object.keys(r.schedule_data?.scheduleAssignments || {}).length;
+                        totalCloudBunks += bunks;
+                        const isMe = r.scheduler_id === userId ? ' ★YOU★' : '';
+                        console.log(`  [${i + 1}] ${r.scheduler_name || 'Unknown'}${isMe}`);
+                        console.log(`      Divisions: ${JSON.stringify(r.divisions)}`);
+                        console.log(`      Bunks: ${bunks}`);
+                        console.log(`      Updated: ${r.updated_at}`);
                     });
+                    console.log('');
+                    console.log('Total cloud bunks:', totalCloudBunks);
                 } else {
                     console.log('  ⚠️ NO RECORDS IN CLOUD!');
                     console.log('  Run: await verifiedScheduleSave()');
@@ -1135,16 +1125,24 @@
                 console.log('Cloud query error:', e.message);
             }
         }
+        console.log('');
+        console.log('Quick Actions:');
+        console.log('  await verifiedScheduleSave()        // Save with retry');
+        console.log('  await forceLoadScheduleFromCloud()  // Load from cloud');
         console.log('═══════════════════════════════════════════════════════');
     };
 
-    console.log('🔗 ✅ Cloud save verification patch installed');
-    console.log('   New commands:');
-    console.log('   - verifiedScheduleSave()        → Save with retry');
-    console.log('   - forceLoadScheduleFromCloud()  → Load from cloud');
-    console.log('   - diagnoseScheduleSync()        → Check sync status');
+    // =========================================================================
+    // START
+    // =========================================================================
 
-// =============================================================================
-// END OF PATCH - Make sure this is BEFORE the closing })(); of integration_hooks.js
-// =============================================================================
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', waitForSystems);
+    } else {
+        setTimeout(waitForSystems, 300);
+    }
+
+    console.log('🔗 Campistry Integration Hooks v6.2 loaded');
+    console.log('   Commands: diagnoseScheduleSync(), verifiedScheduleSave(), forceLoadScheduleFromCloud()');
+
 })();
