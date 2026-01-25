@@ -1788,7 +1788,211 @@
         isReserved: Utils.isFieldReserved,
         parseTimeToMinutes: Utils.parseTimeToMinutes
     };
+// =============================================================================
+// ADD THIS CODE TO scheduler_core_utils.js
+// =============================================================================
+// Insert this section BEFORE the final console.log and closing })();
+// Look for a line like: console.log('⚙️ Scheduler Core Utils loaded');
+// Add this code BEFORE that line
+// =============================================================================
 
+    // =================================================================
+    // 14. ACTIVITY ROTATION TRACKING (CONSOLIDATED - SINGLE SOURCE OF TRUTH)
+    // =================================================================
+
+    /**
+     * Get all activities done by a bunk TODAY (before a specific slot)
+     * SINGLE SOURCE OF TRUTH - all other files should delegate to this
+     * @param {string} bunkName
+     * @param {number} beforeSlotIndex
+     * @returns {Set<string>} - lowercase activity names
+     */
+    Utils.getActivitiesDoneToday = function(bunkName, beforeSlotIndex) {
+        const activities = new Set();
+        const schedule = window.scheduleAssignments?.[bunkName] || [];
+
+        for (let i = 0; i < beforeSlotIndex && i < schedule.length; i++) {
+            const entry = schedule[i];
+            if (entry && entry._activity && !entry._isTransition && !entry.continuation) {
+                activities.add(entry._activity.toLowerCase().trim());
+            }
+        }
+
+        return activities;
+    };
+
+    /**
+     * Get activities done by a bunk YESTERDAY
+     * @param {string} bunkName
+     * @returns {Set<string>}
+     */
+    Utils.getActivitiesDoneYesterday = function(bunkName) {
+        const activities = new Set();
+
+        try {
+            const allDaily = window.loadAllDailyData?.() || {};
+            const currentDate = window.currentScheduleDate || window.currentDate;
+
+            if (!currentDate) return activities;
+
+            const [Y, M, D] = currentDate.split('-').map(Number);
+            const yesterday = new Date(Y, M - 1, D);
+            yesterday.setDate(yesterday.getDate() - 1);
+
+            const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+
+            const yesterdayData = allDaily[yesterdayStr];
+            if (!yesterdayData?.scheduleAssignments?.[bunkName]) return activities;
+
+            const schedule = yesterdayData.scheduleAssignments[bunkName];
+            for (const entry of schedule) {
+                if (entry && entry._activity && !entry._isTransition && !entry.continuation) {
+                    activities.add(entry._activity.toLowerCase().trim());
+                }
+            }
+        } catch (e) {
+            console.warn('[SchedulerCoreUtils] Error getting yesterday activities:', e);
+        }
+
+        return activities;
+    };
+
+    /**
+     * Get the last time a bunk did a specific activity (days ago)
+     * Returns null if never done, 0 if done today, 1 if yesterday, etc.
+     * @param {string} bunkName
+     * @param {string} activityName
+     * @param {number} beforeSlotIndex
+     * @returns {number|null}
+     */
+    Utils.getDaysSinceActivity = function(bunkName, activityName, beforeSlotIndex) {
+        const actLower = (activityName || '').toLowerCase().trim();
+
+        // Check today first
+        const todayActivities = Utils.getActivitiesDoneToday(bunkName, beforeSlotIndex);
+        if (todayActivities.has(actLower)) {
+            return 0; // Done today
+        }
+
+        // Check rotation history for timestamps
+        const rotationHistory = window.loadRotationHistory?.() || { bunks: {} };
+        const bunkHistory = rotationHistory.bunks?.[bunkName] || {};
+        const lastTimestamp = bunkHistory[activityName] || bunkHistory[actLower];
+
+        if (lastTimestamp) {
+            const now = Date.now();
+            const daysSince = Math.floor((now - lastTimestamp) / (1000 * 60 * 60 * 24));
+            return Math.max(1, daysSince);
+        }
+
+        // Check historical counts as fallback - if count > 0, they've done it sometime
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const historicalCounts = globalSettings.historicalCounts || {};
+        if (historicalCounts[bunkName]?.[activityName] > 0 || historicalCounts[bunkName]?.[actLower] > 0) {
+            return 14; // Assume 2 weeks ago if count exists but no timestamp
+        }
+
+        return null; // Never done
+    };
+
+    /**
+     * Get total count of how many times a bunk has done an activity
+     * Combines historicalCounts + manualUsageOffsets
+     * @param {string} bunkName
+     * @param {string} activityName
+     * @returns {number}
+     */
+    Utils.getActivityCount = function(bunkName, activityName) {
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const historicalCounts = globalSettings.historicalCounts || {};
+        const manualOffsets = globalSettings.manualUsageOffsets || {};
+
+        const baseCount = historicalCounts[bunkName]?.[activityName] || 0;
+        const offset = manualOffsets[bunkName]?.[activityName] || 0;
+
+        return Math.max(0, baseCount + offset);
+    };
+
+    /**
+     * Get average activity count for a bunk across all activities
+     * @param {string} bunkName
+     * @param {string[]} allActivityNames
+     * @returns {number}
+     */
+    Utils.getBunkAverageActivityCount = function(bunkName, allActivityNames) {
+        if (!allActivityNames || allActivityNames.length === 0) return 0;
+
+        let total = 0;
+        for (const act of allActivityNames) {
+            total += Utils.getActivityCount(bunkName, act);
+        }
+
+        return total / allActivityNames.length;
+    };
+
+    /**
+     * ★★★ REBUILD HISTORICAL COUNTS FROM ALL SAVED SCHEDULES ★★★
+     * This is the DEFINITIVE source of truth for activity counts.
+     * Call this after generation or on app load to sync counts.
+     * @param {boolean} saveToCloud - Whether to save to globalSettings
+     * @returns {Object} - The rebuilt counts { bunk: { activity: count } }
+     */
+    Utils.rebuildHistoricalCounts = function(saveToCloud = true) {
+        console.log('📊 [SchedulerCoreUtils] Rebuilding historical counts from all schedules...');
+
+        const allDaily = window.loadAllDailyData?.() || {};
+        const counts = {};
+        let totalActivities = 0;
+        let datesProcessed = 0;
+
+        Object.entries(allDaily).forEach(([dateKey, dayData]) => {
+            const sched = dayData?.scheduleAssignments || {};
+            datesProcessed++;
+
+            Object.keys(sched).forEach(bunk => {
+                const bunkSchedule = sched[bunk] || [];
+
+                bunkSchedule.forEach(entry => {
+                    // Only count valid activities, skip continuations and transitions
+                    if (entry && entry._activity && !entry.continuation && !entry._isTransition) {
+                        const actName = entry._activity;
+
+                        // Skip "Free" and transition types
+                        const actLower = actName.toLowerCase();
+                        if (actLower === 'free' || actLower.includes('transition')) {
+                            return;
+                        }
+
+                        counts[bunk] = counts[bunk] || {};
+                        counts[bunk][actName] = (counts[bunk][actName] || 0) + 1;
+                        totalActivities++;
+                    }
+                });
+            });
+        });
+
+        console.log(`📊 [SchedulerCoreUtils] Rebuilt counts from ${datesProcessed} dates: ${Object.keys(counts).length} bunks, ${totalActivities} total activities`);
+
+        // Save to globalSettings if requested
+        if (saveToCloud && window.saveGlobalSettings) {
+            window.saveGlobalSettings('historicalCounts', counts);
+            console.log('📊 [SchedulerCoreUtils] Saved historical counts to globalSettings');
+
+            // Trigger cloud sync if available
+            if (typeof window.forceSyncToCloud === 'function') {
+                setTimeout(() => window.forceSyncToCloud(), 100);
+            }
+        }
+
+        return counts;
+    };
+
+    // Export for easy console access
+    window.rebuildHistoricalCounts = Utils.rebuildHistoricalCounts;
+
+    // =================================================================
+    // END OF ACTIVITY ROTATION TRACKING SECTION
+    // =================================================================
     console.log("✅ SchedulerCoreUtils v7.4 Loaded (RBAC Fixed & Legacy Fallbacks Removed)");
 
 })();
