@@ -636,8 +636,8 @@
         if (_datePickerHooked) return;
         
         const datePicker = document.getElementById('schedule-date-input') ||
-                  document.getElementById('datepicker') ||
-                  document.getElementById('calendar-date-picker');
+                          document.getElementById('datepicker') ||
+                          document.getElementById('calendar-date-picker');
         
         if (!datePicker) {
             _datePickerRetries++;
@@ -1001,7 +1001,8 @@
 
             const dateKey = window.currentScheduleDate || 
                            document.getElementById('schedule-date-input')?.value ||
-                           document.getElementById('datepicker')?.value;
+                           document.getElementById('datepicker')?.value ||
+                           document.getElementById('calendar-date-picker')?.value;
             
             if (!dateKey) {
                 log('[HOOK] No date key available');
@@ -1066,7 +1067,7 @@
 
         window.dispatchEvent(new CustomEvent('campistry-integration-ready'));
 
-        const currentDate = window.currentScheduleDate || document.getElementById('schedule-date-input')?.value;
+        const currentDate = window.currentScheduleDate || document.getElementById('schedule-date-input')?.value || document.getElementById('calendar-date-picker')?.value;
         if (currentDate && window.ScheduleSync?.subscribe) {
             console.log('🔗 Auto-subscribing to current date:', currentDate);
             window.ScheduleSync.subscribe(currentDate);
