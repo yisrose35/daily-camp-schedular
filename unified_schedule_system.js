@@ -893,17 +893,8 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
     // =========================================================================
 
     function getActivitiesDoneToday(bunk, beforeSlot) {
-        const done = new Set();
-        const bunkData = window.scheduleAssignments?.[bunk];
-        if (!bunkData) return done;
-        for (let i = 0; i < beforeSlot; i++) {
-            const entry = bunkData[i];
-            if (entry) {
-                const actName = entry._activity || entry.sport || fieldLabel(entry.field);
-                if (actName && actName.toLowerCase() !== 'free' && !actName.toLowerCase().includes('transition')) done.add(actName.toLowerCase().trim());
-            }
-        }
-        return done;
+        return window.SchedulerCoreUtils?.getActivitiesDoneToday?.(bunk, beforeSlot) 
+            || new Set();
     }
 
     function getActivityCount(bunk, activityName) {
