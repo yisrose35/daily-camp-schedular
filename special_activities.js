@@ -1,5 +1,5 @@
 // ============================================================================
-// special_activities.js — MERGED: FIELDS.JS UX STYLE
+// special_activities.js — PRODUCTION-READY v2.0
 // ============================================================================
 // 1. Layout: Apple-inspired Two-Pane with Collapsible Detail Sections.
 // 2. Logic: Retains Sharing, Frequency, and Time Rules.
@@ -7,10 +7,25 @@
 // 4. Update: Added Location Dropdown for Special Activities.
 // 5. Update: Added RBAC Checks for Add/Delete operations.
 // 6. Update: Transition/Zone rules removed - now managed in Locations tab.
+//
+// v2.0 PRODUCTION FIXES:
+// - ★ CLOUD SYNC: Proper cloud sync via saveGlobalSettings
+// - ★ TAB REFRESH: Refreshes data when tab becomes visible
+// - ★ MEMORY LEAK FIX: Proper cleanup of all event listeners
+// - ★ DATA VALIDATION: Validates structure on load
+// - ★ TYPE CONSISTENCY: Ensures proper number/string handling
+// - ★ NULL SAFETY: Added checks for DOM elements and parameters
+// - ★ ORPHAN CLEANUP: Validates divisions and locations on load
+// - ★ ERROR HANDLING: Added try/catch around risky operations
 // ============================================================================
 (function() {
 'use strict';
 
+console.log("[SPECIAL_ACTIVITIES] Module v2.0 loading...");
+
+// =========================================================================
+// STATE - Internal variables
+// =========================================================================
 let specialActivities = [];
 let rainyDayActivities = [];
 let selectedItemId = null;
@@ -19,22 +34,303 @@ let rainyDayListEl = null;
 let detailPaneEl = null;
 let addSpecialInput = null;
 let addRainyDayInput = null;
+let _isInitialized = false;
+let _refreshTimeout = null;
 
-// Fix #1: Ensure sync happens on page unload
-window.addEventListener('beforeunload', () => {
-    if (window._specialActivitiesSyncTimeout) {
-        clearTimeout(window._specialActivitiesSyncTimeout);
-        window.forceSyncToCloud?.();
+// ★ FIX: Track active event listeners for cleanup (with target info)
+let activeEventListeners = [];
+
+// ★ FIX: Track cloud sync callback for cleanup
+let _cloudSyncCallback = null;
+
+// =========================================================================
+// ★ EVENT LISTENER CLEANUP HELPER
+// =========================================================================
+function cleanupEventListeners() {
+    activeEventListeners.forEach(({ type, handler, options, target }) => {
+        const eventTarget = target || window;
+        try {
+            eventTarget.removeEventListener(type, handler, options);
+        } catch (e) {
+            // Ignore errors during cleanup
+        }
+    });
+    activeEventListeners = [];
+    
+    // Cleanup cloud sync callback
+    if (_cloudSyncCallback && window.SupabaseSync?.removeStatusCallback) {
+        window.SupabaseSync.removeStatusCallback(_cloudSyncCallback);
+        _cloudSyncCallback = null;
     }
-});
+    
+    // Clear any pending refresh timeout
+    if (_refreshTimeout) {
+        clearTimeout(_refreshTimeout);
+        _refreshTimeout = null;
+    }
+}
 
-//------------------------------------------------------------------
+// =========================================================================
+// ★ TAB VISIBILITY HANDLERS - Refresh data when tab becomes visible
+// =========================================================================
+let _visibilityHandler = null;
+let _focusHandler = null;
+
+function setupTabListeners() {
+    // Cleanup existing listeners first
+    cleanupTabListeners();
+    
+    // Visibility change handler
+    _visibilityHandler = () => {
+        if (document.visibilityState === 'visible' && _isInitialized) {
+            // Debounce refresh
+            if (_refreshTimeout) {
+                clearTimeout(_refreshTimeout);
+            }
+            _refreshTimeout = setTimeout(() => {
+                console.log("[SPECIAL_ACTIVITIES] Tab visible - refreshing data...");
+                refreshFromStorage();
+            }, 300);
+        }
+    };
+    document.addEventListener('visibilitychange', _visibilityHandler);
+    activeEventListeners.push({ type: 'visibilitychange', handler: _visibilityHandler, target: document });
+    
+    // Focus handler
+    _focusHandler = () => {
+        if (_isInitialized) {
+            if (_refreshTimeout) {
+                clearTimeout(_refreshTimeout);
+            }
+            _refreshTimeout = setTimeout(() => {
+                console.log("[SPECIAL_ACTIVITIES] Window focused - refreshing data...");
+                refreshFromStorage();
+            }, 300);
+        }
+    };
+    window.addEventListener('focus', _focusHandler);
+    activeEventListeners.push({ type: 'focus', handler: _focusHandler, target: window });
+}
+
+function cleanupTabListeners() {
+    if (_visibilityHandler) {
+        document.removeEventListener('visibilitychange', _visibilityHandler);
+        _visibilityHandler = null;
+    }
+    if (_focusHandler) {
+        window.removeEventListener('focus', _focusHandler);
+        _focusHandler = null;
+    }
+    if (_refreshTimeout) {
+        clearTimeout(_refreshTimeout);
+        _refreshTimeout = null;
+    }
+}
+
+// =========================================================================
+// ★ CLOUD SYNC LISTENER - React to remote changes
+// =========================================================================
+function setupCloudSyncListener() {
+    // Cleanup existing
+    if (_cloudSyncCallback && window.SupabaseSync?.removeStatusCallback) {
+        window.SupabaseSync.removeStatusCallback(_cloudSyncCallback);
+    }
+    
+    // Listen for cloud sync events
+    if (window.SupabaseSync?.onStatusChange) {
+        _cloudSyncCallback = (status) => {
+            if (status === 'idle' && _isInitialized) {
+                console.log("[SPECIAL_ACTIVITIES] Cloud sync complete - refreshing...");
+                refreshFromStorage();
+            }
+        };
+        window.SupabaseSync.onStatusChange(_cloudSyncCallback);
+    }
+    
+    // Also listen for custom campistry events
+    const handleRemoteChange = (event) => {
+        if (_isInitialized && event.detail?.key === 'specialActivities') {
+            console.log("[SPECIAL_ACTIVITIES] Remote specialActivities change detected");
+            refreshFromStorage();
+        }
+    };
+    window.addEventListener('campistry-remote-change', handleRemoteChange);
+    activeEventListeners.push({ type: 'campistry-remote-change', handler: handleRemoteChange, target: window });
+}
+
+// =========================================================================
+// ★ BEFOREUNLOAD HANDLER - Ensure sync on page exit
+// =========================================================================
+let _beforeUnloadHandler = null;
+
+function setupBeforeUnloadHandler() {
+    // Cleanup existing
+    if (_beforeUnloadHandler) {
+        window.removeEventListener('beforeunload', _beforeUnloadHandler);
+    }
+    
+    _beforeUnloadHandler = () => {
+        if (window._specialActivitiesSyncTimeout) {
+            clearTimeout(window._specialActivitiesSyncTimeout);
+            window._specialActivitiesSyncTimeout = null;
+            // Force immediate sync
+            window.forceSyncToCloud?.();
+        }
+    };
+    
+    window.addEventListener('beforeunload', _beforeUnloadHandler);
+    activeEventListeners.push({ type: 'beforeunload', handler: _beforeUnloadHandler, target: window });
+}
+
+// =========================================================================
+// ★ DATA VALIDATION - Ensure activity structure is valid
+// =========================================================================
+function validateSpecialActivity(activity, activityName) {
+    if (!activity || typeof activity !== 'object') {
+        return createDefaultActivity(activityName || 'Unknown');
+    }
+    
+    // ★ Get valid division names for orphan detection
+    let validDivisions = null;
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+        const divisions = settings.divisions || {};
+        validDivisions = new Set(Object.keys(divisions));
+    } catch (e) {
+        validDivisions = null;
+    }
+    
+    // ★ Validate sharableWith structure
+    let sharableWith = activity.sharableWith;
+    if (!sharableWith || typeof sharableWith !== 'object') {
+        sharableWith = { type: 'not_sharable', divisions: [], capacity: 2 };
+    } else {
+        // Validate type
+        if (!['not_sharable', 'custom', 'all'].includes(sharableWith.type)) {
+            sharableWith.type = 'not_sharable';
+        }
+        // Validate divisions array and remove orphans
+        if (!Array.isArray(sharableWith.divisions)) {
+            sharableWith.divisions = [];
+        } else if (validDivisions && validDivisions.size > 0) {
+            const originalLength = sharableWith.divisions.length;
+            sharableWith.divisions = sharableWith.divisions.filter(d => 
+                typeof d === 'string' && validDivisions.has(d)
+            );
+            if (sharableWith.divisions.length < originalLength) {
+                console.warn(`[SPECIAL_ACTIVITIES] "${activity.name}": Removed ${originalLength - sharableWith.divisions.length} orphaned division(s) from sharableWith`);
+            }
+        }
+        // ★ FIX: Ensure capacity is a number
+        sharableWith.capacity = parseInt(sharableWith.capacity, 10) || 2;
+    }
+    
+    // ★ Validate limitUsage structure (match fields.js pattern)
+    let limitUsage = activity.limitUsage;
+    if (!limitUsage || typeof limitUsage !== 'object') {
+        limitUsage = { enabled: false, divisions: {}, priorityList: [] };
+    } else {
+        limitUsage.enabled = limitUsage.enabled === true;
+        
+        // Validate divisions object
+        if (typeof limitUsage.divisions !== 'object' || limitUsage.divisions === null) {
+            limitUsage.divisions = {};
+        } else if (validDivisions && validDivisions.size > 0) {
+            // Remove orphaned division keys
+            const divKeys = Object.keys(limitUsage.divisions);
+            divKeys.forEach(divKey => {
+                if (!validDivisions.has(divKey)) {
+                    delete limitUsage.divisions[divKey];
+                    console.warn(`[SPECIAL_ACTIVITIES] "${activity.name}": Removed orphaned division "${divKey}" from limitUsage`);
+                }
+            });
+        }
+        
+        // ★ FIX: Ensure priorityList exists and is valid (like fields.js)
+        if (!Array.isArray(limitUsage.priorityList)) {
+            limitUsage.priorityList = Object.keys(limitUsage.divisions);
+        } else if (validDivisions && validDivisions.size > 0) {
+            limitUsage.priorityList = limitUsage.priorityList.filter(d => validDivisions.has(d));
+        }
+    }
+    
+    // ★ Validate timeRules with parsed times
+    let timeRules = activity.timeRules;
+    if (!Array.isArray(timeRules)) {
+        timeRules = [];
+    } else {
+        timeRules = timeRules.map(rule => ({
+            type: rule.type || 'Available',
+            start: rule.start || '',
+            end: rule.end || '',
+            startMin: rule.startMin ?? parseTimeToMinutes(rule.start),
+            endMin: rule.endMin ?? parseTimeToMinutes(rule.end)
+        })).filter(rule => rule.start && rule.end);
+    }
+    
+    // ★ Validate location
+    let location = activity.location;
+    if (location) {
+        // Check if location still exists
+        const allLocations = window.getAllLocations?.() || [];
+        const locationExists = allLocations.some(loc => loc.name === location);
+        if (!locationExists) {
+            console.warn(`[SPECIAL_ACTIVITIES] "${activity.name}": Location "${location}" no longer exists, clearing`);
+            location = null;
+        }
+    }
+    
+    return {
+        name: activity.name || activityName || 'Unknown',
+        available: activity.available !== false,
+        sharableWith: sharableWith,
+        limitUsage: limitUsage,
+        timeRules: timeRules,
+        maxUsage: (activity.maxUsage !== undefined && activity.maxUsage !== "" && activity.maxUsage !== null) 
+            ? parseInt(activity.maxUsage, 10) || null 
+            : null,
+        frequencyWeeks: parseInt(activity.frequencyWeeks, 10) || 0,
+        rainyDayExclusive: activity.rainyDayExclusive === true,
+        rainyDayOnly: activity.rainyDayOnly === true, // Legacy support
+        rainyDayAvailable: activity.rainyDayAvailable !== false,
+        location: location
+    };
+}
+
+function createDefaultActivity(name) {
+    return {
+        name: name,
+        available: true,
+        sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
+        limitUsage: { enabled: false, divisions: {}, priorityList: [] },
+        timeRules: [],
+        maxUsage: null,
+        frequencyWeeks: 0,
+        rainyDayExclusive: false,
+        rainyDayAvailable: true,
+        location: null
+    };
+}
+
+function validateAllActivities(activities) {
+    if (!Array.isArray(activities)) return [];
+    return activities.map(a => validateSpecialActivity(a, a?.name));
+}
+
+// =========================================================================
 // INIT
-//------------------------------------------------------------------
+// =========================================================================
 function initSpecialActivitiesTab() {
     const container = document.getElementById("special_activities");
-    if (!container) return;
+    if (!container) {
+        console.warn("[SPECIAL_ACTIVITIES] Container element not found");
+        return;
+    }
 
+    // ★ FIX: Clean up any existing state before re-init
+    cleanupEventListeners();
+    cleanupTabListeners();
+    
     loadData();
     container.innerHTML = "";
 
@@ -59,81 +355,36 @@ function initSpecialActivitiesTab() {
         .sa-detail-section-body { display: none; padding: 16px; border-top: 1px solid #E5E7EB; }
 
         /* Chips */
-        .sa-chip { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; cursor: pointer; border: 1px solid #E5E7EB; margin-right: 4px; margin-bottom: 4px; transition: all 0.2s; }
-        .sa-chip.active { background: #10B981; color: white; border-color: #10B981; box-shadow: 0 2px 5px rgba(16, 185, 129, 0.3); }
-        .sa-chip.inactive { background: #F3F4F6; color: #374151; }
-        .sa-chip:hover { transform: translateY(-1px); }
+        .sa-chip { display: inline-block; padding: 6px 12px; border-radius: 6px; margin: 4px; cursor: pointer; transition: all 0.15s; font-size: 0.85rem; }
+        .sa-chip.active { background: #ECFDF5; color: #047857; border: 1px solid #10B981; }
+        .sa-chip.inactive { background: #F9FAFB; color: #6B7280; border: 1px solid #E5E7EB; }
+        .sa-chip:hover { transform: scale(1.05); }
 
-        /* Switch/Toggle */
-        .sa-switch { position: relative; display: inline-block; width: 34px; height: 20px; flex-shrink: 0; }
+        /* Toggle Switch */
+        .sa-switch { position: relative; width: 40px; height: 22px; display: inline-block; }
         .sa-switch input { opacity: 0; width: 0; height: 0; }
-        .sa-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
-        .sa-slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
-        .sa-switch input:checked + .sa-slider { background-color: #10B981; }
-        .sa-switch input:checked + .sa-slider:before { transform: translateX(14px); }
+        .sa-slider { position: absolute; cursor: pointer; inset: 0; background: #ccc; border-radius: 22px; transition: 0.2s; }
+        .sa-slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.2s; }
+        .sa-switch input:checked + .sa-slider { background: #10B981; }
+        .sa-switch input:checked + .sa-slider:before { transform: translateX(18px); }
 
-        /* Form inputs */
-        .sa-field-input {
-            padding: 6px 10px;
-            border: 1px solid #D1D5DB;
-            border-radius: 6px;
-            font-size: 0.9rem;
-            transition: all 0.15s ease;
-        }
-        .sa-field-input:focus {
-            outline: none;
-            border-color: #10B981;
-            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
-        }
-
-        /* Priority List */
-        .sa-priority-list-item { display: flex; align-items: center; gap: 10px; padding: 8px; background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; margin-bottom: 6px; }
-        .sa-priority-btn { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px solid #D1D5DB; border-radius: 4px; background: white; cursor: pointer; font-size: 0.8rem; transition: all 0.15s; }
-        .sa-priority-btn:hover:not(:disabled) { border-color: #10B981; color: #10B981; }
-        .sa-priority-btn:disabled { opacity: 0.4; cursor: default; }
-
-        .sa-muted { color: #6B7280; font-size: 0.85rem; }
+        /* Muted / Empty */
+        .sa-muted { color: #9CA3AF; font-style: italic; text-align: center; padding: 20px; }
 
         /* Rainy Day List Styles */
-        .sa-rainy-list { 
-            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); 
-            border-color: #7dd3fc !important; 
-        }
-        .sa-rainy-list .sa-list-item { 
-            border-color: #bae6fd; 
-        }
-        .sa-rainy-list .sa-list-item:hover { 
-            background: #e0f2fe; 
-        }
-        .sa-rainy-list .sa-list-item.selected { 
-            background: linear-gradient(135deg, #bae6fd 0%, #e0f2fe 100%); 
-            border-left: 3px solid #0284c7; 
-        }
-        .sa-rainy-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 2px 8px;
-            background: linear-gradient(135deg, #0ea5e9, #0284c7);
-            color: white;
-            border-radius: 999px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            margin-left: 6px;
-        }
+        .sa-rainy-list { background: linear-gradient(to bottom, #f0f9ff, #fff) !important; border-color: #7dd3fc !important; }
+        .sa-rainy-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.7rem; color: #0284c7; background: #e0f2fe; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
     `;
     container.appendChild(style);
 
-    // Create the main content wrapper
     const contentWrapper = document.createElement('div');
     contentWrapper.innerHTML = `
-        <div class="setup-grid">
-          <section class="setup-card setup-card-wide" style="border:none; box-shadow:none; background:transparent;">
-            <div class="setup-card-header" style="margin-bottom:20px;">
-              <span class="setup-step-pill">Specials</span>
-              <div class="setup-card-text">
-                <h3>Special Activities & Rotations</h3>
-                <p>Add canteen, electives, trips, lakes, buses, and control availability, sharing, division access, and rotation rules.</p>
+        <div class="setup-panel">
+          <section>
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px; margin-bottom:24px;">
+              <div>
+                <div class="setup-title">Special Activities</div>
+                <p class="setup-description">Manage special camp programs and their availability, sharing, division access, and rotation rules.</p>
               </div>
             </div>
 
@@ -177,83 +428,175 @@ function initSpecialActivitiesTab() {
         </div>`;
     container.appendChild(contentWrapper);
 
+    // ★ FIX: Null check all DOM elements
     specialsListEl = document.getElementById("specials-master-list");
     rainyDayListEl = document.getElementById("rainy-day-master-list");
     detailPaneEl = document.getElementById("specials-detail-pane");
     addSpecialInput = document.getElementById("new-special-input");
     addRainyDayInput = document.getElementById("new-rainy-day-input");
 
-    document.getElementById("add-special-btn").onclick = addSpecial;
-    addSpecialInput.onkeyup = e => { if (e.key === "Enter") addSpecial(); };
+    const addSpecialBtn = document.getElementById("add-special-btn");
+    const addRainyDayBtn = document.getElementById("add-rainy-day-btn");
 
-    document.getElementById("add-rainy-day-btn").onclick = addRainyDayActivity;
-    addRainyDayInput.onkeyup = e => { if (e.key === "Enter") addRainyDayActivity(); };
+    if (addSpecialBtn) {
+        addSpecialBtn.onclick = addSpecial;
+    }
+    if (addSpecialInput) {
+        addSpecialInput.onkeyup = e => { if (e.key === "Enter") addSpecial(); };
+    }
+
+    if (addRainyDayBtn) {
+        addRainyDayBtn.onclick = addRainyDayActivity;
+    }
+    if (addRainyDayInput) {
+        addRainyDayInput.onkeyup = e => { if (e.key === "Enter") addRainyDayActivity(); };
+    }
+
+    // ★ Setup event listeners for tab visibility and cloud sync
+    setupTabListeners();
+    setupCloudSyncListener();
+    setupBeforeUnloadHandler();
+    
+    _isInitialized = true;
 
     renderMasterList();
     renderRainyDayList();
     renderDetailPane();
-}
-
-//------------------------------------------------------------------
-// DATA LOADING
-//------------------------------------------------------------------
-function loadData() {
-    const allActivities = window.getGlobalSpecialActivities?.() || [];
     
-    // Separate regular and rainy day exclusive activities
-    specialActivities = [];
-    rainyDayActivities = [];
-    
-    allActivities.forEach(s => {
-        // Ensure data completeness
-        s.available = s.available !== false;
-        s.timeRules = s.timeRules || [];
-        s.sharableWith = s.sharableWith || { type: 'not_sharable', divisions: [], capacity: 2 };
-        if (!s.sharableWith.capacity) s.sharableWith.capacity = 2;
-        s.limitUsage = s.limitUsage || { enabled: false, divisions: {} };
-        s.maxUsage = (s.maxUsage !== undefined && s.maxUsage !== "") ? s.maxUsage : null;
-        s.frequencyWeeks = s.frequencyWeeks || 0;
-        
-        // Location Initialization
-        s.location = s.location || null;
-
-        // Weather / Rainy Day fields
-        s.rainyDayAvailable = s.rainyDayAvailable ?? true;
-        s.rainyDayExclusive = s.rainyDayExclusive ?? false;
-        
-        // Also support legacy property name from daily_adjustments.js
-        if (s.rainyDayOnly === true) {
-            s.rainyDayExclusive = true;
-        }
-        
-        // Separate into appropriate list
-        if (s.rainyDayExclusive) {
-            rainyDayActivities.push(s);
-        } else {
-            specialActivities.push(s);
-        }
+    console.log("[SPECIAL_ACTIVITIES] Initialized:", {
+        specials: specialActivities.length,
+        rainyDay: rainyDayActivities.length
     });
 }
 
-function saveData() {
-    // Combine both lists for saving
-    const allActivities = [...specialActivities, ...rainyDayActivities];
-    window.saveGlobalSpecialActivities?.(allActivities);
-    
-    // ⭐ Trigger cloud sync to ensure data persists
-    if (typeof window.forceSyncToCloud === 'function') {
-        // Use a slight delay to batch multiple rapid saves
-        clearTimeout(window._specialActivitiesSyncTimeout);
-        window._specialActivitiesSyncTimeout = setTimeout(() => {
-            window.forceSyncToCloud();
-        }, 500);
+// =========================================================================
+// DATA LOADING / SAVING - ★ CLOUD SYNC AWARE
+// =========================================================================
+
+/**
+ * Load data from persisted storage (localStorage/cloud cache)
+ * Always reads fresh from loadGlobalSettings to stay in sync
+ */
+function loadData() {
+    try {
+        const allActivities = window.getGlobalSpecialActivities?.() || [];
+        
+        // Separate regular and rainy day exclusive activities
+        specialActivities = [];
+        rainyDayActivities = [];
+        
+        allActivities.forEach(s => {
+            // ★ FIX: Validate each activity on load
+            const validated = validateSpecialActivity(s, s?.name);
+            
+            // Also support legacy property name from daily_adjustments.js
+            if (validated.rainyDayOnly === true) {
+                validated.rainyDayExclusive = true;
+            }
+            
+            // Separate into appropriate list
+            if (validated.rainyDayExclusive) {
+                rainyDayActivities.push(validated);
+            } else {
+                specialActivities.push(validated);
+            }
+        });
+        
+        console.log("[SPECIAL_ACTIVITIES] Data loaded:", {
+            specials: specialActivities.length,
+            rainyDay: rainyDayActivities.length
+        });
+    } catch (e) {
+        console.error("[SPECIAL_ACTIVITIES] Error loading data:", e);
+        specialActivities = [];
+        rainyDayActivities = [];
     }
 }
 
-//------------------------------------------------------------------
+/**
+ * Refresh data from storage (call when tab becomes visible or after cloud sync)
+ */
+function refreshFromStorage() {
+    // ★ FIX: Store previous state for proper comparison
+    const previousSpecialsJson = JSON.stringify(specialActivities);
+    const previousRainyJson = JSON.stringify(rainyDayActivities);
+    const previousSelected = selectedItemId;
+    
+    loadData();
+    
+    // If selected item no longer exists, clear selection
+    if (selectedItemId) {
+        const [, name] = selectedItemId.split(/-(.+)/);
+        const exists = specialActivities.some(s => s.name === name) || 
+                       rainyDayActivities.some(s => s.name === name);
+        if (!exists) {
+            selectedItemId = null;
+        }
+    }
+    
+    // ★ FIX: Compare actual content, not just counts
+    const newSpecialsJson = JSON.stringify(specialActivities);
+    const newRainyJson = JSON.stringify(rainyDayActivities);
+    const dataChanged = previousSpecialsJson !== newSpecialsJson || 
+                        previousRainyJson !== newRainyJson ||
+                        previousSelected !== selectedItemId;
+    
+    if (dataChanged) {
+        console.log("[SPECIAL_ACTIVITIES] Data changed - re-rendering UI");
+        if (specialsListEl) renderMasterList();
+        if (rainyDayListEl) renderRainyDayList();
+        if (detailPaneEl) renderDetailPane();
+    } else {
+        console.log("[SPECIAL_ACTIVITIES] Data unchanged - skipping re-render");
+    }
+}
+
+/**
+ * Save data to persisted storage and queue for cloud sync
+ * ★ Uses saveGlobalSpecialActivities which handles cloud sync
+ */
+function saveData() {
+    // ✅ RBAC Check for modifications
+    if (window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup()) {
+        console.warn('[SPECIAL_ACTIVITIES] Save blocked - insufficient permissions');
+        return;
+    }
+    
+    try {
+        // ★ Validate before saving
+        const validatedSpecials = validateAllActivities(specialActivities);
+        const validatedRainy = validateAllActivities(rainyDayActivities);
+        
+        // Update internal state with validated data
+        specialActivities = validatedSpecials;
+        rainyDayActivities = validatedRainy;
+        
+        // Combine both lists for saving
+        const allActivities = [...specialActivities, ...rainyDayActivities];
+        window.saveGlobalSpecialActivities?.(allActivities);
+        
+        // ⭐ Trigger cloud sync to ensure data persists
+        if (typeof window.forceSyncToCloud === 'function') {
+            // Use a slight delay to batch multiple rapid saves
+            if (window._specialActivitiesSyncTimeout) {
+                clearTimeout(window._specialActivitiesSyncTimeout);
+            }
+            window._specialActivitiesSyncTimeout = setTimeout(() => {
+                window.forceSyncToCloud();
+                window._specialActivitiesSyncTimeout = null;
+            }, 500);
+        }
+    } catch (e) {
+        console.error("[SPECIAL_ACTIVITIES] Error saving data:", e);
+    }
+}
+
+// =========================================================================
 // LEFT LIST (Master List)
-//------------------------------------------------------------------
+// =========================================================================
 function renderMasterList() {
+    if (!specialsListEl) return;
+    
     specialsListEl.innerHTML = "";
     
     if (specialActivities.length === 0) {
@@ -267,6 +610,8 @@ function renderMasterList() {
 }
 
 function renderRainyDayList() {
+    if (!rainyDayListEl) return;
+    
     rainyDayListEl.innerHTML = "";
     
     if (rainyDayActivities.length === 0) {
@@ -284,6 +629,8 @@ function renderRainyDayList() {
 }
 
 function createMasterListItem(item, isRainyDay = false) {
+    if (!item || !item.name) return document.createElement('div');
+    
     const id = `special-${item.name}`;
     const el = document.createElement("div");
     el.className = "sa-list-item" + (id === selectedItemId ? " selected" : "");
@@ -298,13 +645,13 @@ function createMasterListItem(item, isRainyDay = false) {
     
     const nameEl = document.createElement("div");
     nameEl.className = "sa-list-item-name";
-    nameEl.textContent = item.name;
+    nameEl.textContent = item.name; // ★ FIX: Use textContent for safety
 
     // Add rainy day badge for rainy exclusive items
     if (isRainyDay) {
         const badge = document.createElement("span");
         badge.className = "sa-rainy-badge";
-        badge.innerHTML = "🌧️ Rainy Only";
+        badge.textContent = "🌧️ Rainy Only";
         nameEl.appendChild(badge);
     }
 
@@ -334,10 +681,12 @@ function createMasterListItem(item, isRainyDay = false) {
     return el;
 }
 
-//------------------------------------------------------------------
+// =========================================================================
 // RIGHT PANEL — APPLE STYLE COLLAPSIBLE SECTIONS
-//------------------------------------------------------------------
+// =========================================================================
 function renderDetailPane() {
+    if (!detailPaneEl) return;
+    
     if (!selectedItemId) {
         detailPaneEl.innerHTML = `
             <div style="height:300px; display:flex; align-items:center; justify-content:center; color:#9CA3AF; border:1px dashed #E5E7EB; border-radius:12px;">
@@ -347,6 +696,11 @@ function renderDetailPane() {
     }
 
     const [, name] = selectedItemId.split(/-(.+)/);
+    if (!name) {
+        detailPaneEl.innerHTML = `<p class='sa-muted'>Invalid selection.</p>`;
+        selectedItemId = null;
+        return;
+    }
     
     // Search in both regular and rainy day activities
     let item = specialActivities.find(s => s.name === name);
@@ -384,8 +738,22 @@ function renderDetailPane() {
     title.title = "Double click to rename";
     makeEditable(title, newName => {
         if (!newName.trim()) return;
+        const oldName = item.name;
+        if (oldName === newName) return;
+        
+        // ★ FIX: Check for duplicate names in both lists
+        if (specialActivities.some(s => s !== item && s.name.toLowerCase() === newName.toLowerCase()) ||
+            rainyDayActivities.some(s => s !== item && s.name.toLowerCase() === newName.toLowerCase())) {
+            alert(`A special activity named "${newName}" already exists.`);
+            return;
+        }
+        
         item.name = newName;
         selectedItemId = `special-${newName}`;
+        
+        // ★ FIX: Propagate rename to schedules (like fields.js does)
+        propagateSpecialActivityRename(oldName, newName);
+        
         saveData();
         renderMasterList();
         renderRainyDayList();
@@ -397,7 +765,7 @@ function renderDetailPane() {
     if (isRainyDayItem) {
         const badge = document.createElement("span");
         badge.style.cssText = "display:inline-flex; align-items:center; gap:4px; padding:4px 10px; background:linear-gradient(135deg, #0ea5e9, #0284c7); color:white; border-radius:999px; font-size:0.75rem; font-weight:600;";
-        badge.innerHTML = "🌧️ Rainy Day Only";
+        badge.textContent = "🌧️ Rainy Day Only";
         titleContainer.appendChild(badge);
     }
 
@@ -417,9 +785,18 @@ function renderDetailPane() {
     delBtn.style.alignItems = "center";
     delBtn.onclick = () => {
         // ✅ RBAC Check
-        if (!window.AccessControl?.checkSetupAccess('delete special activities')) return;
+        if (window.AccessControl?.canEraseData && !window.AccessControl.canEraseData()) {
+            window.AccessControl?.showPermissionDenied?.('delete special activities');
+            return;
+        }
+        if (!window.AccessControl?.checkSetupAccess?.('delete special activities')) return;
 
-        if (confirm(`Delete "${item.name}"?`)) {
+        if (confirm(`Delete "${escapeHtml(item.name)}"?\n\nThis will also remove references from all schedules.`)) {
+            const deletedName = item.name;
+            
+            // ★ FIX: Cleanup before removing (like fields.js)
+            cleanupDeletedSpecialActivity(deletedName);
+            
             if (isRainyDayItem) {
                 rainyDayActivities = rainyDayActivities.filter(s => s.name !== item.name);
             } else {
@@ -442,143 +819,99 @@ function renderDetailPane() {
     availability.style.padding = "12px";
     availability.style.borderRadius = "8px";
     availability.style.marginBottom = "20px";
-    
-    if (isRainyDayItem) {
-        availability.style.background = item.available ? "linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%)" : "#FEF2F2";
-        availability.style.border = item.available ? "1px solid #7dd3fc" : "1px solid #FECACA";
-        availability.style.color = item.available ? "#0369a1" : "#991B1B";
-    } else {
-        availability.style.background = item.available ? "#ECFDF5" : "#FEF2F2";
-        availability.style.border = item.available ? "1px solid #A7F3D0" : "1px solid #FECACA";
-        availability.style.color = item.available ? "#065F46" : "#991B1B";
-    }
-    
-    availability.style.fontSize = "0.9rem";
+    availability.style.background = item.available ? "#ECFDF5" : "#FEF2F2";
     availability.style.display = "flex";
     availability.style.justifyContent = "space-between";
-    
-    let statusText = item.available ? 'AVAILABLE' : 'UNAVAILABLE';
-    if (isRainyDayItem && item.available) {
-        statusText = 'AVAILABLE ON RAINY DAYS';
-    }
-    
-    availability.innerHTML = `<span>Special is <strong>${statusText}</strong></span> <span style="font-size:0.8rem; opacity:0.8;">Toggle in master list</span>`;
+    availability.style.alignItems = "center";
+
+    const avLabel = document.createElement("span");
+    avLabel.style.fontWeight = "500";
+    avLabel.style.color = item.available ? "#047857" : "#DC2626";
+    avLabel.textContent = item.available ? "✓ Available for Scheduling" : "✗ Not Available";
+    availability.appendChild(avLabel);
+
+    const avTog = document.createElement("label");
+    avTog.className = "sa-switch";
+    const avCb = document.createElement("input");
+    avCb.type = "checkbox";
+    avCb.checked = item.available;
+    avCb.onchange = () => {
+        item.available = avCb.checked;
+        saveData();
+        renderDetailPane();
+        renderMasterList();
+        renderRainyDayList();
+    };
+    const avSlider = document.createElement("span");
+    avSlider.className = "sa-slider";
+    avTog.appendChild(avCb);
+    avTog.appendChild(avSlider);
+    availability.appendChild(avTog);
     detailPaneEl.appendChild(availability);
 
-    // -- Rainy Day Info Banner for rainy items --
-    if (isRainyDayItem) {
-        const rainyBanner = document.createElement("div");
-        rainyBanner.style.cssText = `
-            background: linear-gradient(135deg, #0c4a6e 0%, #164e63 100%);
-            color: #f0f9ff;
-            padding: 14px 16px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        `;
-        rainyBanner.innerHTML = `
-            <span style="font-size:24px;">☔</span>
-            <div>
-                <strong style="display:block; margin-bottom:2px;">Rainy Day Exclusive Activity</strong>
-                <span style="font-size:0.85rem; opacity:0.85;">This activity will only appear in the schedule when Rainy Day Mode is activated.</span>
-            </div>
-        `;
-        detailPaneEl.appendChild(rainyBanner);
-    }
-
-    // -- LOCATION DROPDOWN --
+    // -- 3. LOCATION DROPDOWN --
     detailPaneEl.appendChild(renderLocationDropdown(item));
 
-    // -- 3. ACCORDION SECTIONS --
-    // NOTE: Transition & Zone Rules removed - now managed in Locations tab
+    // -- 4. COLLAPSIBLE SECTIONS --
+    const sections = [
+        { title: "Sharing Rules", summary: summarySharing(item), render: () => renderSharing(item) },
+        { title: "Division Access", summary: summaryAccess(item), render: () => renderAccess(item) },
+        { title: "Time Availability", summary: summaryTime(item), render: () => renderTimeRules(item) }
+    ];
 
-    // Frequency Limits
-    detailPaneEl.appendChild(createSection("Frequency Limits", summaryFrequency(item), 
-        () => renderFrequency(item)));
+    sections.forEach(sec => {
+        const section = document.createElement("div");
+        section.className = "sa-detail-section";
 
-    // Sharing Rules
-    detailPaneEl.appendChild(createSection("Sharing Rules", summarySharing(item), 
-        () => renderSharing(item)));
+        const hdr = document.createElement("div");
+        hdr.className = "sa-detail-section-header";
+        hdr.innerHTML = `<div>
+            <div class="sa-detail-section-title">${escapeHtml(sec.title)}</div>
+            <div class="sa-detail-section-summary">${escapeHtml(sec.summary)}</div>
+        </div>
+        <span style="font-size:1rem;">▸</span>`;
 
-    // Access & Restrictions
-    detailPaneEl.appendChild(createSection("Access & Restrictions", summaryAccess(item), 
-        () => renderAccess(item)));
+        const body = document.createElement("div");
+        body.className = "sa-detail-section-body";
+        body.appendChild(sec.render());
 
-    // Time Rules
-    detailPaneEl.appendChild(createSection("Time Rules", summaryTime(item), 
-        () => renderTimeRules(item)));
+        hdr.onclick = () => {
+            const isOpen = body.style.display === "block";
+            body.style.display = isOpen ? "none" : "block";
+            hdr.querySelector("span").textContent = isOpen ? "▸" : "▾";
+        };
+
+        section.appendChild(hdr);
+        section.appendChild(body);
+        detailPaneEl.appendChild(section);
+    });
 }
 
-//------------------------------------------------------------------
-// SECTION BUILDER (Accordion UX)
-//------------------------------------------------------------------
-function createSection(title, summary, builder) {
-    const wrap = document.createElement("div");
-    wrap.className = "sa-detail-section";
-
-    const head = document.createElement("div");
-    head.className = "sa-detail-section-header";
-
-    const t = document.createElement("div");
-    t.innerHTML = `<div class="sa-detail-section-title">${escapeHtml(title)}</div><div class="sa-detail-section-summary">${escapeHtml(summary)}</div>`;
-
-    const caret = document.createElement("span");
-    caret.innerHTML = `<svg width="20" height="20" fill="none" stroke="#9CA3AF" stroke-width="2" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"></path></svg>`;
-    caret.style.transition = "transform 0.2s";
-
-    head.appendChild(t);
-    head.appendChild(caret);
-
-    const body = document.createElement("div");
-    body.className = "sa-detail-section-body";
-
-    head.onclick = () => {
-        const open = body.style.display === "block";
-        body.style.display = open ? "none" : "block";
-        caret.style.transform = open ? "rotate(0deg)" : "rotate(90deg)";
-        if (!open && !body.dataset.built) {
-            body.innerHTML = "";
-            body.appendChild(builder());
-            body.dataset.built = "1";
-        }
-    };
-
-    wrap.appendChild(head);
-    wrap.appendChild(body);
-    return wrap;
-}
-
-//------------------------------------------------------------------
-// SUMMARY GENERATORS
-//------------------------------------------------------------------
-function summaryFrequency(item) {
-    if (item.maxUsage === null || item.maxUsage === undefined) {
-        return "Unlimited usage";
-    }
-    const freqLabels = { 0: "Summer", 1: "Week", 2: "2 Weeks", 3: "3 Weeks", 4: "4 Weeks" };
-    return `${item.maxUsage}x per ${freqLabels[item.frequencyWeeks] || "Summer"}`;
-}
-
+// =========================================================================
+// SUMMARIES
+// =========================================================================
 function summarySharing(item) { 
-    return item.sharableWith.type === "not_sharable" ? "Not sharable" : `Sharable (Max ${item.sharableWith.capacity})`; 
+    if (!item.sharableWith) return "Not sharable";
+    return item.sharableWith.type === "not_sharable" 
+        ? "Not sharable" 
+        : `Sharable (Max ${parseInt(item.sharableWith.capacity, 10) || 2})`; 
 }
 
 function summaryAccess(item) {
-    if (!item.limitUsage.enabled) return "Open to All Divisions";
+    if (!item.limitUsage || !item.limitUsage.enabled) return "Open to All Divisions";
     const allowedCount = Object.keys(item.limitUsage.divisions || {}).length;
     if (allowedCount === 0) return "Restricted (none selected)";
     return `${allowedCount} division${allowedCount !== 1 ? 's' : ''} with priority`;
 }
 
 function summaryTime(item) { 
-    return item.timeRules.length ? `${item.timeRules.length} rule(s) active` : "Available all day"; 
+    const count = (item.timeRules || []).length;
+    return count ? `${count} rule(s) active` : "Available all day"; 
 }
 
-//------------------------------------------------------------------
+// =========================================================================
 // CONTENT RENDERERS
-//------------------------------------------------------------------
+// =========================================================================
 
 // 0. LOCATION DROPDOWN HELPER
 function renderLocationDropdown(item) {
@@ -591,7 +924,7 @@ function renderLocationDropdown(item) {
     let optionsHtml = '<option value="">No specific location</option>';
     allLocations.forEach(loc => {
         const selected = item.location === loc.name ? 'selected' : '';
-        optionsHtml += `<option value="${loc.name}" ${selected}>${loc.displayName}</option>`;
+        optionsHtml += `<option value="${escapeHtml(loc.name)}" ${selected}>${escapeHtml(loc.displayName || loc.name)}</option>`;
     });
     
     container.innerHTML = `
@@ -610,133 +943,18 @@ function renderLocationDropdown(item) {
         </p>
     `;
     
-    container.querySelector('#special-location-select').onchange = function() {
-        item.location = this.value || null;
-        saveData();
-    };
+    const selectEl = container.querySelector('#special-location-select');
+    if (selectEl) {
+        selectEl.onchange = function() {
+            item.location = this.value || null;
+            saveData();
+        };
+    }
     
     return container;
 }
 
-// 1. FREQUENCY LIMITS
-function renderFrequency(item) {
-    const container = document.createElement("div");
-
-    const updateSummary = () => {
-        const summaryEl = container.closest('.sa-detail-section')?.querySelector('.sa-detail-section-summary');
-        if (summaryEl) summaryEl.textContent = summaryFrequency(item);
-    };
-
-    const renderContent = () => {
-        container.innerHTML = "";
-
-        if (item.maxUsage === null || item.maxUsage === undefined) {
-            // No limit set
-            const noLimitBox = document.createElement("div");
-            noLimitBox.style.padding = "16px";
-            noLimitBox.style.background = "#F9FAFB";
-            noLimitBox.style.borderRadius = "8px";
-            noLimitBox.style.textAlign = "center";
-            noLimitBox.innerHTML = `
-                <p style="margin:0 0 12px; color:#6B7280;">Unlimited usage allowed.</p>
-                <button id="add-freq-rule" style="background:#10B981; color:white; border:none; padding:8px 20px; border-radius:999px; cursor:pointer; font-weight:500;">
-                    + Add Frequency Rule
-                </button>
-            `;
-            container.appendChild(noLimitBox);
-
-            container.querySelector('#add-freq-rule').onclick = () => {
-                item.maxUsage = 1;
-                item.frequencyWeeks = 0;
-                saveData();
-                renderContent();
-                updateSummary();
-            };
-        } else {
-            // Has limit
-            const desc = document.createElement("p");
-            desc.className = "sa-muted";
-            desc.style.marginBottom = "12px";
-            desc.textContent = "Bunks are allowed to use this special:";
-            container.appendChild(desc);
-
-            const controlRow = document.createElement("div");
-            controlRow.style.display = "flex";
-            controlRow.style.gap = "10px";
-            controlRow.style.alignItems = "center";
-            controlRow.style.flexWrap = "wrap";
-
-            // Count Input
-            const maxInput = document.createElement("input");
-            maxInput.type = "number";
-            maxInput.min = "1";
-            maxInput.value = item.maxUsage;
-            maxInput.className = "sa-field-input";
-            maxInput.style.width = "60px";
-            maxInput.onchange = () => {
-                const val = parseInt(maxInput.value) || 1;
-                item.maxUsage = Math.max(1, val);
-                saveData();
-                updateSummary();
-            };
-
-            const timeLabel = document.createElement("span");
-            timeLabel.textContent = "time(s) per";
-            timeLabel.style.fontSize = "0.85rem";
-
-            // Frequency Dropdown
-            const freqSelect = document.createElement("select");
-            freqSelect.className = "sa-field-input";
-            const opts = [
-                { v: 0, t: "Summer (Lifetime)" },
-                { v: 1, t: "1 Week (7 Days)" },
-                { v: 2, t: "2 Weeks (14 Days)" },
-                { v: 3, t: "3 Weeks (21 Days)" },
-                { v: 4, t: "4 Weeks (28 Days)" }
-            ];
-            opts.forEach(o => {
-                const op = document.createElement("option");
-                op.value = o.v;
-                op.textContent = o.t;
-                if (item.frequencyWeeks === o.v) op.selected = true;
-                freqSelect.appendChild(op);
-            });
-            freqSelect.onchange = () => {
-                item.frequencyWeeks = parseInt(freqSelect.value, 10);
-                saveData();
-                updateSummary();
-            };
-
-            // Remove Button
-            const removeBtn = document.createElement("button");
-            removeBtn.textContent = "Remove Rule";
-            removeBtn.style.background = "#FEE2E2";
-            removeBtn.style.color = "#DC2626";
-            removeBtn.style.border = "1px solid #FECACA";
-            removeBtn.style.padding = "6px 12px";
-            removeBtn.style.borderRadius = "6px";
-            removeBtn.style.cursor = "pointer";
-            removeBtn.onclick = () => {
-                item.maxUsage = null;
-                item.frequencyWeeks = 0;
-                saveData();
-                renderContent();
-                updateSummary();
-            };
-
-            controlRow.appendChild(maxInput);
-            controlRow.appendChild(timeLabel);
-            controlRow.appendChild(freqSelect);
-            controlRow.appendChild(removeBtn);
-            container.appendChild(controlRow);
-        }
-    };
-
-    renderContent();
-    return container;
-}
-
-// 2. SHARING RULES
+// 1. SHARING RULES
 function renderSharing(item) {
     const container = document.createElement("div");
 
@@ -748,76 +966,86 @@ function renderSharing(item) {
     const renderContent = () => {
         container.innerHTML = "";
 
-        const rules = item.sharableWith;
+        const rules = item.sharableWith || { type: 'not_sharable', divisions: [], capacity: 2 };
 
-        // Toggle
-        const tog = document.createElement("label");
-        tog.className = "sa-switch";
-        const cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.checked = rules.type !== 'not_sharable';
-        cb.onchange = () => {
-            rules.type = cb.checked ? 'all' : 'not_sharable';
+        // Mode Buttons
+        const modeWrap = document.createElement("div");
+        modeWrap.style.display = "flex";
+        modeWrap.style.gap = "12px";
+        modeWrap.style.marginBottom = "16px";
+
+        const btnNot = document.createElement("button");
+        btnNot.textContent = "Not Sharable";
+        btnNot.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${rules.type === 'not_sharable' ? '#ECFDF5' : '#fff'}; color:${rules.type === 'not_sharable' ? '#047857' : '#333'}; border-color:${rules.type === 'not_sharable' ? '#10B981' : '#E5E7EB'}; font-weight:${rules.type === 'not_sharable' ? '600' : '400'}; transition:all 0.2s;`;
+
+        const btnSha = document.createElement("button");
+        btnSha.textContent = "Sharable";
+        btnSha.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${rules.type !== 'not_sharable' ? '#ECFDF5' : '#fff'}; color:${rules.type !== 'not_sharable' ? '#047857' : '#333'}; border-color:${rules.type !== 'not_sharable' ? '#10B981' : '#E5E7EB'}; font-weight:${rules.type !== 'not_sharable' ? '600' : '400'}; transition:all 0.2s;`;
+
+        btnNot.onclick = () => { 
+            rules.type = 'not_sharable'; 
             rules.divisions = [];
-            saveData();
-            renderContent();
-            updateSummary();
+            saveData(); 
+            renderContent(); 
+            updateSummary(); 
         };
-        const sl = document.createElement("span");
-        sl.className = "sa-slider";
-        tog.appendChild(cb);
-        tog.appendChild(sl);
+        btnSha.onclick = () => { 
+            rules.type = 'custom'; 
+            saveData(); 
+            renderContent(); 
+            updateSummary(); 
+        };
 
-        const header = document.createElement("div");
-        header.style.display = "flex";
-        header.style.alignItems = "center";
-        header.style.gap = "10px";
-        header.appendChild(tog);
-        header.appendChild(document.createTextNode("Allow Sharing (Multiple bunks at once)"));
-        container.appendChild(header);
+        modeWrap.appendChild(btnNot);
+        modeWrap.appendChild(btnSha);
+        container.appendChild(modeWrap);
 
+        // Detail if Sharable
         if (rules.type !== 'not_sharable') {
             const det = document.createElement("div");
-            det.style.marginTop = "16px";
-            det.style.paddingLeft = "12px";
-            det.style.borderLeft = "2px solid #E5E7EB";
+            det.style.background = "#F9FAFB";
+            det.style.padding = "12px";
+            det.style.borderRadius = "8px";
 
             // Capacity
             const capRow = document.createElement("div");
             capRow.style.marginBottom = "12px";
-            capRow.innerHTML = `<span style="font-size:0.85rem;">Max Capacity: </span>`;
+            capRow.innerHTML = `<label style="font-size:0.85rem;font-weight:500;">Max Groups at Once</label>`;
             const capIn = document.createElement("input");
             capIn.type = "number";
             capIn.min = "2";
-            capIn.value = rules.capacity;
-            capIn.className = "sa-field-input";
-            capIn.style.width = "60px";
-            capIn.style.marginLeft = "8px";
+            capIn.max = "99";
+            capIn.value = parseInt(rules.capacity, 10) || 2;
+            capIn.style.cssText = "width:60px; padding:6px; margin-left:8px; border:1px solid #E5E7EB; border-radius:4px;";
             capIn.onchange = () => { 
-                rules.capacity = Math.max(2, parseInt(capIn.value) || 2); 
+                rules.capacity = Math.max(2, parseInt(capIn.value, 10) || 2); 
                 saveData(); 
-                updateSummary();
+                updateSummary(); 
             };
             capRow.appendChild(capIn);
             det.appendChild(capRow);
 
-            // Limit Divisions
-            const divLabel = document.createElement("div");
-            divLabel.textContent = "Limit sharing to specific divisions (Optional):";
-            divLabel.style.fontSize = "0.85rem";
-            divLabel.style.marginBottom = "6px";
-            det.appendChild(divLabel);
+            // Division Chips
+            const chipLabel = document.createElement("div");
+            chipLabel.textContent = "Limit to Divisions (optional):";
+            chipLabel.style.fontSize = "0.85rem";
+            chipLabel.style.fontWeight = "500";
+            chipLabel.style.marginBottom = "6px";
+            det.appendChild(chipLabel);
 
             const chipWrap = document.createElement("div");
-            const allDivs = window.availableDivisions || [];
-            allDivs.forEach(d => {
+            const availableDivisions = window.availableDivisions || Object.keys(window.divisions || {});
+            availableDivisions.forEach(d => {
                 const isActive = rules.divisions.includes(d);
                 const chip = document.createElement("span");
                 chip.className = "sa-chip " + (isActive ? "active" : "inactive");
                 chip.textContent = d;
                 chip.onclick = () => {
-                    if (isActive) rules.divisions = rules.divisions.filter(x => x !== d);
-                    else rules.divisions.push(d);
+                    if (isActive) {
+                        rules.divisions = rules.divisions.filter(x => x !== d);
+                    } else {
+                        rules.divisions.push(d);
+                    }
                     rules.type = rules.divisions.length > 0 ? 'custom' : 'all';
                     saveData();
                     chip.className = "sa-chip " + (rules.divisions.includes(d) ? "active" : "inactive");
@@ -833,7 +1061,7 @@ function renderSharing(item) {
     return container;
 }
 
-// 3. ACCESS & RESTRICTIONS
+// 2. ACCESS & RESTRICTIONS
 function renderAccess(item) {
     const container = document.createElement("div");
 
@@ -845,7 +1073,11 @@ function renderAccess(item) {
     const renderContent = () => {
         container.innerHTML = "";
 
-        const rules = item.limitUsage;
+        const rules = item.limitUsage || { enabled: false, divisions: {}, priorityList: [] };
+        // ★ FIX: Ensure priorityList exists
+        if (!rules.priorityList) {
+            rules.priorityList = Object.keys(rules.divisions || {});
+        }
 
         // Toggle Mode Buttons
         const modeWrap = document.createElement("div");
@@ -861,51 +1093,43 @@ function renderAccess(item) {
         btnRes.textContent = "Restricted";
         btnRes.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${rules.enabled ? '#ECFDF5' : '#fff'}; color:${rules.enabled ? '#047857' : '#333'}; border-color:${rules.enabled ? '#10B981' : '#E5E7EB'}; font-weight:${rules.enabled ? '600' : '400'}; transition:all 0.2s;`;
 
-        btnAll.onclick = () => {
-            rules.enabled = false;
-            rules.divisions = {};
-            rules.priorityList = [];
-            saveData();
-            renderContent();
-            updateSummary();
+        btnAll.onclick = () => { 
+            rules.enabled = false; 
+            item.limitUsage = rules;
+            saveData(); 
+            renderContent(); 
+            updateSummary(); 
         };
-
-        btnRes.onclick = () => {
-            rules.enabled = true;
-            saveData();
-            renderContent();
-            updateSummary();
+        btnRes.onclick = () => { 
+            rules.enabled = true; 
+            item.limitUsage = rules;
+            saveData(); 
+            renderContent(); 
+            updateSummary(); 
         };
 
         modeWrap.appendChild(btnAll);
         modeWrap.appendChild(btnRes);
         container.appendChild(modeWrap);
 
+        // Restricted Details
         if (rules.enabled) {
             const body = document.createElement("div");
+            body.style.background = "#F9FAFB";
+            body.style.padding = "12px";
+            body.style.borderRadius = "8px";
 
-            // Initialize priorityList if needed
-            rules.priorityList = rules.priorityList || [];
-            // Clean up priorityList to only include divisions that are in rules.divisions
-            rules.priorityList = rules.priorityList.filter(d => d in rules.divisions);
-
-            // Priority List Header
-            const pHeader = document.createElement("div");
-            pHeader.textContent = "Priority Order (Top = First Choice):";
-            pHeader.style.fontSize = "0.85rem";
-            pHeader.style.fontWeight = "600";
-            pHeader.style.marginBottom = "6px";
-            body.appendChild(pHeader);
-
+            // Priority List
             const listContainer = document.createElement("div");
+            listContainer.style.marginBottom = "16px";
 
             if (rules.priorityList.length === 0) {
-                listContainer.innerHTML = `<div class="sa-muted" style="font-size:0.8rem; font-style:italic; padding:4px;">No divisions selected. Click below to add.</div>`;
+                listContainer.innerHTML = `<div style="color:#9CA3AF; font-style:italic; font-size:0.85rem;">Click divisions below to allow access.</div>`;
             }
 
             rules.priorityList.forEach((divName, idx) => {
                 const row = document.createElement("div");
-                row.className = "sa-priority-list-item";
+                row.style.cssText = "display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:white; border:1px solid #E5E7EB; border-radius:6px; margin-bottom:6px;";
                 row.innerHTML = `<span style="font-weight:bold; color:#10B981; width:20px;">${idx + 1}</span> <span style="flex:1;">${escapeHtml(divName)}</span>`;
 
                 const ctrls = document.createElement("div");
@@ -914,10 +1138,15 @@ function renderAccess(item) {
 
                 const mkBtn = (txt, fn, dis) => {
                     const b = document.createElement("button");
-                    b.className = "sa-priority-btn";
+                    b.style.cssText = "padding:4px 8px; border:1px solid #E5E7EB; border-radius:4px; background:white; cursor:pointer; font-size:0.8rem;";
                     b.textContent = txt;
-                    if (dis) b.disabled = true;
-                    else b.onclick = fn;
+                    if (dis) {
+                        b.disabled = true;
+                        b.style.opacity = "0.5";
+                        b.style.cursor = "not-allowed";
+                    } else {
+                        b.onclick = fn;
+                    }
                     return b;
                 };
 
@@ -960,7 +1189,7 @@ function renderAccess(item) {
             body.appendChild(divHeader);
 
             const chipWrap = document.createElement("div");
-            const availableDivisions = window.availableDivisions || [];
+            const availableDivisions = window.availableDivisions || Object.keys(window.divisions || {});
 
             availableDivisions.forEach(divName => {
                 const isAllowed = divName in rules.divisions;
@@ -991,7 +1220,7 @@ function renderAccess(item) {
     return container;
 }
 
-// 4. TIME RULES
+// 3. TIME RULES
 function renderTimeRules(item) {
     const container = document.createElement("div");
 
@@ -1002,6 +1231,11 @@ function renderTimeRules(item) {
 
     const renderContent = () => {
         container.innerHTML = "";
+
+        // Ensure timeRules is an array
+        if (!Array.isArray(item.timeRules)) {
+            item.timeRules = [];
+        }
 
         // Existing Rules
         if (item.timeRules.length > 0) {
@@ -1017,83 +1251,75 @@ function renderTimeRules(item) {
                 row.style.border = "1px solid #E5E7EB";
 
                 const txt = document.createElement("span");
-                txt.innerHTML = `<strong style="color:${r.type === 'Available' ? '#059669' : '#DC2626'}">${escapeHtml(r.type)}</strong>: ${escapeHtml(r.start)} to ${escapeHtml(r.end)}`;
+                const colorClass = r.type === 'Available' ? '#10B981' : '#DC2626';
+                txt.innerHTML = `<strong style="color:${colorClass}">${escapeHtml(r.type)}</strong> ${escapeHtml(r.start)} - ${escapeHtml(r.end)}`;
+                row.appendChild(txt);
 
-                const del = document.createElement("button");
-                del.textContent = "✕";
-                del.style.border = "none";
-                del.style.background = "transparent";
-                del.style.color = "#9CA3AF";
-                del.style.cursor = "pointer";
-                del.onclick = () => {
+                const delBtn = document.createElement("button");
+                delBtn.textContent = "✕";
+                delBtn.style.cssText = "background:none; border:none; color:#DC2626; cursor:pointer; font-size:1rem;";
+                delBtn.onclick = () => {
                     item.timeRules.splice(i, 1);
                     saveData();
                     renderContent();
                     updateSummary();
                 };
+                row.appendChild(delBtn);
 
-                row.appendChild(txt);
-                row.appendChild(del);
                 container.appendChild(row);
             });
-        } else {
-            container.innerHTML = `<div class="sa-muted" style="font-size:0.8rem; margin-bottom:10px;">No specific time rules (Available all day).</div>`;
         }
 
-        // Add New Row
+        // Add New Rule
         const addRow = document.createElement("div");
         addRow.style.display = "flex";
         addRow.style.gap = "8px";
-        addRow.style.marginTop = "12px";
-        addRow.style.paddingTop = "12px";
-        addRow.style.borderTop = "1px dashed #E5E7EB";
-        addRow.style.flexWrap = "wrap";
         addRow.style.alignItems = "center";
+        addRow.style.flexWrap = "wrap";
+        addRow.style.marginTop = "12px";
 
         const typeSel = document.createElement("select");
-        typeSel.innerHTML = `<option>Available</option><option>Unavailable</option>`;
-        typeSel.className = "sa-field-input";
+        typeSel.innerHTML = `<option value="Available">Available</option><option value="Unavailable">Unavailable</option>`;
+        typeSel.style.cssText = "padding:6px; border:1px solid #E5E7EB; border-radius:4px;";
 
         const startIn = document.createElement("input");
+        startIn.type = "text";
         startIn.placeholder = "9:00am";
-        startIn.className = "sa-field-input";
-        startIn.style.width = "80px";
+        startIn.style.cssText = "width:80px; padding:6px; border:1px solid #E5E7EB; border-radius:4px;";
 
         const endIn = document.createElement("input");
+        endIn.type = "text";
         endIn.placeholder = "10:00am";
-        endIn.className = "sa-field-input";
-        endIn.style.width = "80px";
+        endIn.style.cssText = "width:80px; padding:6px; border:1px solid #E5E7EB; border-radius:4px;";
 
         const btn = document.createElement("button");
-        btn.textContent = "Add";
-        btn.style.background = "#111";
-        btn.style.color = "white";
-        btn.style.border = "none";
-        btn.style.borderRadius = "6px";
-        btn.style.padding = "6px 16px";
-        btn.style.cursor = "pointer";
-
+        btn.textContent = "+ Add";
+        btn.style.cssText = "padding:6px 12px; background:#10B981; color:white; border:none; border-radius:4px; cursor:pointer;";
         btn.onclick = () => {
-            if (!startIn.value || !endIn.value) {
+            if (!startIn.value.trim() || !endIn.value.trim()) {
                 alert("Please enter both start and end times.");
                 return;
             }
-            if (parseTimeToMinutes(startIn.value) === null) {
+            const startMin = parseTimeToMinutes(startIn.value);
+            const endMin = parseTimeToMinutes(endIn.value);
+            if (startMin === null) {
                 alert("Invalid Start Time format. Use format like 9:00am");
                 return;
             }
-            if (parseTimeToMinutes(endIn.value) === null) {
+            if (endMin === null) {
                 alert("Invalid End Time format. Use format like 10:00am");
                 return;
             }
-            if (parseTimeToMinutes(startIn.value) >= parseTimeToMinutes(endIn.value)) {
+            if (startMin >= endMin) {
                 alert("End time must be after start time.");
                 return;
             }
-            item.timeRules.push({ 
-                type: typeSel.value, 
-                start: startIn.value, 
-                end: endIn.value 
+            item.timeRules.push({
+                type: typeSel.value,
+                start: startIn.value,
+                end: endIn.value,
+                startMin: startMin,
+                endMin: endMin
             });
             saveData();
             renderContent();
@@ -1113,16 +1339,18 @@ function renderTimeRules(item) {
     return container;
 }
 
-//------------------------------------------------------------------
+// =========================================================================
 // ADD SPECIAL
-//------------------------------------------------------------------
+// =========================================================================
 function addSpecial() {
     // ✅ RBAC Check
-    if (!window.AccessControl?.checkSetupAccess('add special activities')) return;
+    if (!window.AccessControl?.checkSetupAccess?.('add special activities')) return;
+    
+    if (!addSpecialInput) return;
     
     const n = addSpecialInput.value.trim();
     if (!n) return;
-    
+
     // Check both lists for name conflicts
     if (specialActivities.some(s => s.name.toLowerCase() === n.toLowerCase()) ||
         rainyDayActivities.some(s => s.name.toLowerCase() === n.toLowerCase())) {
@@ -1130,18 +1358,7 @@ function addSpecial() {
         return;
     }
 
-    specialActivities.push({
-        name: n,
-        available: true,
-        sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
-        limitUsage: { enabled: false, divisions: {} },
-        timeRules: [],
-        maxUsage: null,
-        frequencyWeeks: 0,
-        rainyDayExclusive: false,
-        rainyDayAvailable: true,
-        location: null
-    });
+    specialActivities.push(createDefaultActivity(n));
 
     addSpecialInput.value = "";
     saveData();
@@ -1151,16 +1368,18 @@ function addSpecial() {
     renderDetailPane();
 }
 
-//------------------------------------------------------------------
+// =========================================================================
 // ADD RAINY DAY ACTIVITY
-//------------------------------------------------------------------
+// =========================================================================
 function addRainyDayActivity() {
     // ✅ RBAC Check
-    if (!window.AccessControl?.checkSetupAccess('add rainy day activities')) return;
+    if (!window.AccessControl?.checkSetupAccess?.('add rainy day activities')) return;
+    
+    if (!addRainyDayInput) return;
     
     const n = addRainyDayInput.value.trim();
     if (!n) return;
-    
+
     // Check both lists for name conflicts
     if (specialActivities.some(s => s.name.toLowerCase() === n.toLowerCase()) ||
         rainyDayActivities.some(s => s.name.toLowerCase() === n.toLowerCase())) {
@@ -1168,19 +1387,10 @@ function addRainyDayActivity() {
         return;
     }
 
-    rainyDayActivities.push({
-        name: n,
-        available: true,
-        sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
-        limitUsage: { enabled: false, divisions: {} },
-        timeRules: [],
-        maxUsage: null,
-        frequencyWeeks: 0,
-        rainyDayExclusive: true,  // This is the key difference
-        rainyDayOnly: true,       // Legacy support for daily_adjustments.js
-        rainyDayAvailable: true,
-        location: null
-    });
+    const newActivity = createDefaultActivity(n);
+    newActivity.rainyDayExclusive = true;
+    newActivity.rainyDayOnly = true; // Legacy support
+    rainyDayActivities.push(newActivity);
 
     addRainyDayInput.value = "";
     saveData();
@@ -1190,9 +1400,140 @@ function addRainyDayActivity() {
     renderDetailPane();
 }
 
-//------------------------------------------------------------------
+// =========================================================================
+// ★ CLEANUP & RENAME HELPERS (like fields.js)
+// =========================================================================
+
+/**
+ * Cleanup all references to a deleted special activity
+ */
+function cleanupDeletedSpecialActivity(activityName) {
+    if (!activityName) return;
+    
+    console.log(`🗑️ [SPECIAL_ACTIVITIES] Cleaning up references to: "${activityName}"`);
+    let cleanupCount = 0;
+    
+    try {
+        // 1. Clean from daily schedules
+        const settings = window.loadGlobalSettings?.() || {};
+        const dailySchedules = settings.daily_schedules || {};
+        
+        Object.keys(dailySchedules).forEach(dateKey => {
+            const dayData = dailySchedules[dateKey];
+            if (!dayData?.scheduleAssignments) return;
+            
+            Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
+                const slots = dayData.scheduleAssignments[bunkKey];
+                if (!Array.isArray(slots)) return;
+                
+                slots.forEach((slot, idx) => {
+                    if (slot?._activity === activityName || 
+                        slot?.activity === activityName ||
+                        slot?.event === activityName) {
+                        dayData.scheduleAssignments[bunkKey][idx] = null;
+                        cleanupCount++;
+                    }
+                });
+            });
+        });
+        
+        if (cleanupCount > 0) {
+            window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+            console.log(`   ✅ Cleared ${cleanupCount} schedule references`);
+        }
+        
+        // 2. Clean from current session
+        if (window.scheduleAssignments) {
+            Object.keys(window.scheduleAssignments).forEach(bunkKey => {
+                const slots = window.scheduleAssignments[bunkKey];
+                if (!Array.isArray(slots)) return;
+                
+                slots.forEach((slot, idx) => {
+                    if (slot?._activity === activityName || 
+                        slot?.activity === activityName ||
+                        slot?.event === activityName) {
+                        window.scheduleAssignments[bunkKey][idx] = null;
+                    }
+                });
+            });
+        }
+        
+        // 3. Clean from activityProperties
+        if (window.activityProperties?.[activityName]) {
+            delete window.activityProperties[activityName];
+            console.log(`   ✅ Removed from activityProperties`);
+        }
+        
+        console.log(`🗑️ [SPECIAL_ACTIVITIES] Cleanup complete for "${activityName}"`);
+        
+    } catch (e) {
+        console.error('[SPECIAL_ACTIVITIES] Error during cleanup:', e);
+    }
+}
+
+/**
+ * Propagate special activity rename to all references
+ */
+function propagateSpecialActivityRename(oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return;
+    
+    console.log(`📝 [SPECIAL_ACTIVITIES] Propagating rename: "${oldName}" → "${newName}"`);
+    
+    try {
+        // 1. Update daily schedules
+        const settings = window.loadGlobalSettings?.() || {};
+        const dailySchedules = settings.daily_schedules || {};
+        let updateCount = 0;
+        
+        Object.keys(dailySchedules).forEach(dateKey => {
+            const dayData = dailySchedules[dateKey];
+            if (!dayData?.scheduleAssignments) return;
+            
+            Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
+                const slots = dayData.scheduleAssignments[bunkKey];
+                if (!Array.isArray(slots)) return;
+                
+                slots.forEach((slot, idx) => {
+                    if (slot?._activity === oldName) {
+                        dayData.scheduleAssignments[bunkKey][idx]._activity = newName;
+                        updateCount++;
+                    }
+                    if (slot?.activity === oldName) {
+                        dayData.scheduleAssignments[bunkKey][idx].activity = newName;
+                        updateCount++;
+                    }
+                    if (slot?.event === oldName) {
+                        dayData.scheduleAssignments[bunkKey][idx].event = newName;
+                        updateCount++;
+                    }
+                });
+            });
+        });
+        
+        if (updateCount > 0) {
+            window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+            console.log(`   ✅ Updated ${updateCount} schedule references`);
+        }
+        
+        // 2. Update activityProperties
+        if (window.activityProperties?.[oldName]) {
+            window.activityProperties[newName] = {
+                ...window.activityProperties[oldName]
+            };
+            delete window.activityProperties[oldName];
+            console.log(`   ✅ Updated activityProperties`);
+        }
+        
+        console.log(`📝 [SPECIAL_ACTIVITIES] Rename propagation complete`);
+        
+    } catch (e) {
+        console.error('[SPECIAL_ACTIVITIES] Error during rename propagation:', e);
+    }
+}
+
+// =========================================================================
 // HELPERS
-//------------------------------------------------------------------
+// =========================================================================
 function escapeHtml(str) {
     if (str === null || str === undefined) return "";
     const div = document.createElement("div");
@@ -1201,6 +1542,8 @@ function escapeHtml(str) {
 }
 
 function makeEditable(el, save) {
+    if (!el) return;
+    
     el.ondblclick = () => {
         const inp = document.createElement("input");
         inp.value = el.textContent;
@@ -1252,20 +1595,31 @@ function parseTimeToMinutes(str) {
     return hh * 60 + mm;
 }
 
-//------------------------------------------------------------------
+// =========================================================================
 // EXPORTS
-//------------------------------------------------------------------
+// =========================================================================
 window.initSpecialActivitiesTab = initSpecialActivitiesTab;
-window.specialActivities = specialActivities;
-window.rainyDayActivities = rainyDayActivities;
+
+// ★ FIX: Export arrays via getters (not direct references which can become stale)
+Object.defineProperty(window, 'specialActivities', {
+    get: function() { return specialActivities; },
+    set: function(val) { specialActivities = val; },
+    configurable: true
+});
+
+Object.defineProperty(window, 'rainyDayActivities', {
+    get: function() { return rainyDayActivities; },
+    set: function(val) { rainyDayActivities = val; },
+    configurable: true
+});
 
 // Export getters for external access
 window.getSpecialActivities = function() {
-    return specialActivities;
+    return [...specialActivities]; // Return copy to prevent external mutation
 };
 
 window.getRainyDayActivities = function() {
-    return rainyDayActivities;
+    return [...rainyDayActivities]; // Return copy
 };
 
 window.getAllSpecialActivities = function() {
@@ -1273,23 +1627,29 @@ window.getAllSpecialActivities = function() {
 };
 
 window.getSpecialActivityByName = function(name) {
-    let item = specialActivities.find(s => s.name === name);
+    if (!name) return null;
+    const nameStr = String(name);
+    let item = specialActivities.find(s => s.name === nameStr);
     if (!item) {
-        item = rainyDayActivities.find(s => s.name === name);
+        item = rainyDayActivities.find(s => s.name === nameStr);
     }
-    return item;
+    return item ? { ...item } : null; // Return copy
 };
 
 // Check if rainy day mode is active (for scheduler integration)
 window.isRainyDayModeActive = function() {
-    const dailyData = window.loadCurrentDailyData?.() || {};
-    return dailyData.rainyDayMode === true;
+    try {
+        const dailyData = window.loadCurrentDailyData?.() || {};
+        return dailyData.rainyDayMode === true;
+    } catch (e) {
+        return false;
+    }
 };
 
 // Get available special activities based on weather
 window.getAvailableSpecialActivities = function() {
     const isRainy = window.isRainyDayModeActive?.() || false;
-    
+
     if (isRainy) {
         // Rainy day: return regular specials that are rainy-available + rainy day exclusives
         const regularAvailable = specialActivities.filter(s => s.available && s.rainyDayAvailable !== false);
@@ -1300,5 +1660,140 @@ window.getAvailableSpecialActivities = function() {
         return specialActivities.filter(s => s.available);
     }
 };
+
+// ★ FIX: Export cleanup function for external use
+window.cleanupSpecialActivitiesModule = function() {
+    cleanupEventListeners();
+    cleanupTabListeners();
+    _isInitialized = false;
+    console.log("[SPECIAL_ACTIVITIES] Module cleaned up");
+};
+
+// ★ NEW: Force refresh from cloud/storage
+window.refreshSpecialActivitiesFromStorage = function() {
+    if (_isInitialized) {
+        refreshFromStorage();
+    }
+};
+
+// ★ NEW: Validate special activities (can be called externally)
+window.validateSpecialActivities = function() {
+    const allActivities = window.getAllSpecialActivities?.() || [];
+    const validated = validateAllActivities(allActivities);
+    
+    let issuesFixed = 0;
+    allActivities.forEach((original, i) => {
+        const fixed = validated[i];
+        if (JSON.stringify(original) !== JSON.stringify(fixed)) {
+            issuesFixed++;
+        }
+    });
+    
+    if (issuesFixed > 0) {
+        console.log(`[SPECIAL_ACTIVITIES] Validation fixed ${issuesFixed} issues`);
+        // Reload with validated data
+        loadData();
+        if (_isInitialized) {
+            renderMasterList();
+            renderRainyDayList();
+            renderDetailPane();
+        }
+    }
+    
+    return { activitiesChecked: allActivities.length, issuesFixed };
+};
+
+// ★ COMPREHENSIVE DIAGNOSTICS (like fields.js)
+window.diagnoseSpecialActivities = function() {
+    console.log('\n' + '═'.repeat(60));
+    console.log('🔍 SPECIAL ACTIVITIES DIAGNOSTICS');
+    console.log('═'.repeat(60));
+    
+    const settings = window.loadGlobalSettings?.() || {};
+    const storedActivities = window.getGlobalSpecialActivities?.() || [];
+    const divisions = Object.keys(settings.divisions || {});
+    const locations = window.getAllLocations?.() || [];
+    
+    console.log(`\n📊 SUMMARY:`);
+    console.log(`   Total activities: ${storedActivities.length}`);
+    console.log(`   Regular specials: ${specialActivities.length}`);
+    console.log(`   Rainy day specials: ${rainyDayActivities.length}`);
+    console.log(`   Valid divisions: ${divisions.join(', ') || 'none'}`);
+    console.log(`   Available locations: ${locations.length}`);
+    
+    const issues = [];
+    
+    storedActivities.forEach((a, idx) => {
+        const actIssues = [];
+        
+        // Check sharableWith structure
+        if (!a.sharableWith) {
+            actIssues.push('Missing sharableWith');
+        } else {
+            if (!a.sharableWith.type) actIssues.push('sharableWith.type missing');
+            if (!Array.isArray(a.sharableWith.divisions)) actIssues.push('sharableWith.divisions not array');
+            if (a.sharableWith.capacity === undefined) actIssues.push('sharableWith.capacity missing');
+            
+            // Check for stale divisions
+            if (Array.isArray(a.sharableWith.divisions)) {
+                const stale = a.sharableWith.divisions.filter(d => !divisions.includes(d));
+                if (stale.length > 0) actIssues.push(`Stale sharableWith.divisions: ${stale.join(', ')}`);
+            }
+        }
+        
+        // Check limitUsage structure
+        if (!a.limitUsage) {
+            actIssues.push('Missing limitUsage');
+        } else {
+            if (a.limitUsage.enabled === undefined) actIssues.push('limitUsage.enabled missing');
+            if (typeof a.limitUsage.divisions !== 'object') actIssues.push('limitUsage.divisions not object');
+            if (!Array.isArray(a.limitUsage.priorityList)) actIssues.push('limitUsage.priorityList missing');
+            
+            // Check for stale divisions
+            if (typeof a.limitUsage.divisions === 'object') {
+                const stale = Object.keys(a.limitUsage.divisions).filter(d => !divisions.includes(d));
+                if (stale.length > 0) actIssues.push(`Stale limitUsage.divisions: ${stale.join(', ')}`);
+            }
+        }
+        
+        // Check timeRules
+        if (!Array.isArray(a.timeRules)) {
+            actIssues.push('timeRules not array');
+        } else {
+            a.timeRules.forEach((rule, rIdx) => {
+                if (rule.startMin === undefined) actIssues.push(`timeRules[${rIdx}].startMin missing`);
+                if (rule.endMin === undefined) actIssues.push(`timeRules[${rIdx}].endMin missing`);
+            });
+        }
+        
+        // Check location
+        if (a.location && locations.length > 0) {
+            const locationExists = locations.some(l => l.name === a.location);
+            if (!locationExists) actIssues.push(`Invalid location: "${a.location}"`);
+        }
+        
+        if (actIssues.length > 0) {
+            issues.push({ activity: a.name || `[index ${idx}]`, issues: actIssues });
+        }
+    });
+    
+    if (issues.length === 0) {
+        console.log('\n✅ All special activities have valid structure!');
+    } else {
+        console.log(`\n⚠️ ISSUES FOUND (${issues.length} activities):`);
+        issues.forEach(item => {
+            console.log(`\n   📁 ${item.activity}:`);
+            item.issues.forEach(issue => console.log(`      - ${issue}`));
+        });
+    }
+    
+    console.log('\n' + '═'.repeat(60));
+    console.log('💡 Run validateSpecialActivities() to auto-fix issues');
+    console.log('═'.repeat(60) + '\n');
+    
+    return { activities: storedActivities.length, issues: issues.length };
+};
+
+console.log("[SPECIAL_ACTIVITIES] Module v2.0 loaded");
 
 })();
