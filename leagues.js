@@ -37,6 +37,8 @@
     let detailPaneEl = null;
     let _isInitialized = false;
     let _refreshTimeout = null;
+    let _saveInProgress = false;  // ★ Prevent refresh during save
+    let _lastSaveTime = 0;        // ★ Track when last save happened
 
     // ★ FIX: Track active event listeners for cleanup (with target info)
     let activeEventListeners = [];
@@ -307,14 +309,22 @@
         }
 
         try {
+            // ★ Set flag to prevent race condition with refresh
+            _saveInProgress = true;
+            _lastSaveTime = Date.now();
+            
             // ★ Save via saveGlobalSettings (handles batching + cloud sync)
             window.saveGlobalSettings?.('leaguesByName', leaguesByName);
             
-            // Note: forceSyncToCloud is already batched by integration_hooks,
-            // so we don't need to call it on every save
             console.log("[LEAGUES] Data saved to cloud");
+            
+            // ★ Clear flag after a short delay to allow sync to complete
+            setTimeout(() => {
+                _saveInProgress = false;
+            }, 500);
         } catch (e) {
             console.error("[LEAGUES] Save failed:", e);
+            _saveInProgress = false;
         }
     }
 
@@ -322,6 +332,16 @@
         try {
             const global = window.loadGlobalSettings?.() || {};
             const loadedData = global.leaguesByName || {};
+            const loadedCount = Object.keys(loadedData).length;
+            const currentCount = Object.keys(leaguesByName).length;
+
+            // ★ SAFEGUARD: If we have data but loaded empty, this is suspicious
+            // Don't overwrite unless we're sure (e.g., fresh init or explicit reset)
+            if (currentCount > 0 && loadedCount === 0) {
+                console.warn("[LEAGUES] ⚠️ Refusing to overwrite " + currentCount + " leagues with empty data!");
+                console.warn("[LEAGUES] This may be a race condition or sync issue.");
+                return; // Keep current in-memory data
+            }
 
             // GCM FIX: Don't replace the object. Clear and refill it.
             // 1. Remove old keys
@@ -344,6 +364,20 @@
      * Refresh data from storage (call when tab becomes visible or after cloud sync)
      */
     function refreshFromStorage() {
+        // ★ FIX: Skip refresh if save is in progress to prevent race condition
+        if (_saveInProgress) {
+            console.log("[LEAGUES] Skipping refresh - save in progress");
+            return;
+        }
+        
+        // ★ FIX: Also skip if we just saved (within last 2 seconds)
+        // This prevents the focus event from loading stale data
+        const timeSinceSave = Date.now() - _lastSaveTime;
+        if (timeSinceSave < 2000) {
+            console.log("[LEAGUES] Skipping refresh - recent save (" + timeSinceSave + "ms ago)");
+            return;
+        }
+        
         // ★ FIX: Store previous state for proper comparison
         const previousDataJson = JSON.stringify(leaguesByName);
         const previousSelected = selectedLeagueName;
