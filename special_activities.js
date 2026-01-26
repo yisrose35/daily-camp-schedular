@@ -2,10 +2,11 @@
 // special_activities.js — MERGED: FIELDS.JS UX STYLE
 // ============================================================================
 // 1. Layout: Apple-inspired Two-Pane with Collapsible Detail Sections.
-// 2. Logic: Retains all Transition, Sharing, Frequency, and Time Rules.
+// 2. Logic: Retains Sharing, Frequency, and Time Rules.
 // 3. Style: Matches fields.js for consistent UI/UX across the app.
 // 4. Update: Added Location Dropdown for Special Activities.
 // 5. Update: Added RBAC Checks for Add/Delete operations.
+// 6. Update: Transition/Zone rules removed - now managed in Locations tab.
 // ============================================================================
 (function() {
 'use strict';
@@ -217,16 +218,6 @@ function loadData() {
         // Location Initialization
         s.location = s.location || null;
 
-        // Transition fields
-        s.transition = s.transition || {
-            preMin: 0,
-            postMin: 0,
-            label: "Change Time",
-            zone: window.DEFAULT_ZONE_NAME || "Default",
-            occupiesField: true,
-            minDurationMin: 0
-        };
-
         // Weather / Rainy Day fields
         s.rainyDayAvailable = s.rainyDayAvailable ?? true;
         s.rainyDayExclusive = s.rainyDayExclusive ?? false;
@@ -317,8 +308,6 @@ function createMasterListItem(item, isRainyDay = false) {
         badge.innerHTML = "🌧️ Rainy Only";
         nameEl.appendChild(badge);
     }
-
-    
 
     infoDiv.appendChild(nameEl);
     el.appendChild(infoDiv);
@@ -500,12 +489,11 @@ function renderDetailPane() {
         detailPaneEl.appendChild(rainyBanner);
     }
 
-    // -- LOCATION DROPDOWN (NEW) --
+    // -- LOCATION DROPDOWN --
     detailPaneEl.appendChild(renderLocationDropdown(item));
 
     // -- 3. ACCORDION SECTIONS --
-    
-    
+    // NOTE: Transition & Zone Rules removed - now managed in Locations tab
 
     // Frequency Limits
     detailPaneEl.appendChild(createSection("Frequency Limits", summaryFrequency(item), 
@@ -566,8 +554,6 @@ function createSection(title, summary, builder) {
 //------------------------------------------------------------------
 // SUMMARY GENERATORS
 //------------------------------------------------------------------
-
-
 function summaryFrequency(item) {
     if (item.maxUsage === null || item.maxUsage === undefined) {
         return "Unlimited usage";
@@ -620,7 +606,7 @@ function renderLocationDropdown(item) {
             ${optionsHtml}
         </select>
         <p style="margin: 8px 0 0 0; font-size: 0.8rem; color: #0369A1;">
-            ⓘ Activities at the same location cannot be scheduled at the same time.
+            ⓘ Activities at the same location cannot be scheduled at the same time. Transition times are configured in the Locations tab.
         </p>
     `;
     
@@ -632,8 +618,7 @@ function renderLocationDropdown(item) {
     return container;
 }
 
-
-// 2. FREQUENCY LIMITS
+// 1. FREQUENCY LIMITS
 function renderFrequency(item) {
     const container = document.createElement("div");
 
@@ -751,7 +736,7 @@ function renderFrequency(item) {
     return container;
 }
 
-// 3. SHARING RULES
+// 2. SHARING RULES
 function renderSharing(item) {
     const container = document.createElement("div");
 
@@ -848,7 +833,7 @@ function renderSharing(item) {
     return container;
 }
 
-// 4. ACCESS & RESTRICTIONS
+// 3. ACCESS & RESTRICTIONS
 function renderAccess(item) {
     const container = document.createElement("div");
 
@@ -1022,7 +1007,7 @@ function renderAccess(item) {
     return container;
 }
 
-// 5. TIME RULES
+// 4. TIME RULES
 function renderTimeRules(item) {
     const container = document.createElement("div");
 
@@ -1172,15 +1157,7 @@ function addSpecial() {
         frequencyWeeks: 0,
         rainyDayExclusive: false,
         rainyDayAvailable: true,
-        location: null,
-        transition: {
-            preMin: 0,
-            postMin: 0,
-            label: "Change Time",
-            zone: window.DEFAULT_ZONE_NAME || "Default",
-            occupiesField: true,
-            minDurationMin: 0
-        }
+        location: null
     });
 
     addSpecialInput.value = "";
@@ -1220,15 +1197,7 @@ function addRainyDayActivity() {
         rainyDayExclusive: true,  // This is the key difference
         rainyDayOnly: true,       // Legacy support for daily_adjustments.js
         rainyDayAvailable: true,
-        location: null,
-        transition: {
-            preMin: 0,
-            postMin: 0,
-            label: "Change Time",
-            zone: window.DEFAULT_ZONE_NAME || "Default",
-            occupiesField: true,
-            minDurationMin: 0
-        }
+        location: null
     });
 
     addRainyDayInput.value = "";
