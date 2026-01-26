@@ -11,6 +11,9 @@
 // 7. SEC: Added RBAC checks for Add, Delete, and Save operations.
 // 8. Update: Transition/Zone rules removed - now managed in Locations tab.
 // 9. ★★★ v2.0: COMPREHENSIVE FIELD NORMALIZATION on save ★★★
+// 10. ★★★ v2.1: DELETION CLEANUP - removes field refs from schedules ★★★
+// 11. ★★★ v2.1: RENAME PROPAGATION - updates all field references ★★★
+// 12. ★★★ v2.1: DIVISION VALIDATION - removes stale division refs ★★★
 // ============================================================================
 (function(){
 'use strict';
@@ -260,6 +263,303 @@ function loadData(){
         // Rainy Day Default
         f.rainyDayAvailable = f.rainyDayAvailable ?? false;
     });
+    
+    // ★★★ RUN DIVISION VALIDATION on load ★★★
+    const validation = validateFieldDivisions();
+    if (validation.issuesFixed > 0) {
+        console.log(`[Fields] Auto-fixed ${validation.issuesFixed} stale division references on load`);
+        // Save fixes silently (don't trigger RBAC since this is system cleanup)
+        try {
+            const settings = window.loadGlobalSettings?.() || {};
+            settings.app1 = settings.app1 || {};
+            settings.app1.fields = fields;
+            window.saveGlobalSettings?.("app1", settings.app1);
+        } catch (e) {
+            console.warn('[Fields] Could not save division validation fixes:', e);
+        }
+    }
+}
+
+//------------------------------------------------------------------
+// ★★★ FIELD DELETION CLEANUP ★★★
+// Removes all references to a deleted field from schedules and history
+//------------------------------------------------------------------
+function cleanupDeletedField(fieldName) {
+    if (!fieldName) return;
+    
+    console.log(`🗑️ [Fields] Cleaning up references to deleted field: "${fieldName}"`);
+    let cleanupCount = 0;
+    
+    try {
+        // 1. Clean from daily schedules (scheduleAssignments)
+        const settings = window.loadGlobalSettings?.() || {};
+        const dailySchedules = settings.daily_schedules || {};
+        
+        Object.keys(dailySchedules).forEach(dateKey => {
+            const dayData = dailySchedules[dateKey];
+            if (!dayData?.scheduleAssignments) return;
+            
+            Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
+                const slots = dayData.scheduleAssignments[bunkKey];
+                if (!Array.isArray(slots)) return;
+                
+                slots.forEach((slot, idx) => {
+                    if (slot?.location === fieldName || slot?.field === fieldName) {
+                        // Clear location reference but keep activity
+                        dayData.scheduleAssignments[bunkKey][idx] = {
+                            ...slot,
+                            location: null,
+                            field: null,
+                            _fieldDeletedOn: new Date().toISOString()
+                        };
+                        cleanupCount++;
+                    }
+                });
+            });
+        });
+        
+        if (cleanupCount > 0) {
+            window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+            console.log(`   ✅ Cleared ${cleanupCount} field references from schedules`);
+        }
+        
+        // 2. Clean from current session scheduleAssignments
+        if (window.scheduleAssignments) {
+            Object.keys(window.scheduleAssignments).forEach(bunkKey => {
+                const slots = window.scheduleAssignments[bunkKey];
+                if (!Array.isArray(slots)) return;
+                
+                slots.forEach((slot, idx) => {
+                    if (slot?.location === fieldName || slot?.field === fieldName) {
+                        window.scheduleAssignments[bunkKey][idx] = {
+                            ...slot,
+                            location: null,
+                            field: null
+                        };
+                    }
+                });
+            });
+        }
+        
+        // 3. Clean from activityProperties
+        if (window.activityProperties?.[fieldName]) {
+            delete window.activityProperties[fieldName];
+            console.log(`   ✅ Removed from activityProperties`);
+        }
+        
+        // 4. Clean from GlobalFieldLocks if present
+        if (window.GlobalFieldLocks?._locks) {
+            Object.keys(window.GlobalFieldLocks._locks).forEach(key => {
+                if (key.includes(fieldName)) {
+                    delete window.GlobalFieldLocks._locks[key];
+                }
+            });
+        }
+        
+        console.log(`🗑️ [Fields] Cleanup complete for "${fieldName}"`);
+        
+    } catch (e) {
+        console.error('[Fields] Error during field cleanup:', e);
+    }
+}
+
+//------------------------------------------------------------------
+// ★★★ FIELD RENAME PROPAGATION ★★★
+// Updates all references when a field is renamed
+//------------------------------------------------------------------
+function propagateFieldRename(oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return;
+    
+    console.log(`📝 [Fields] Propagating rename: "${oldName}" → "${newName}"`);
+    let updateCount = 0;
+    
+    try {
+        // 1. Update daily schedules
+        const settings = window.loadGlobalSettings?.() || {};
+        const dailySchedules = settings.daily_schedules || {};
+        
+        Object.keys(dailySchedules).forEach(dateKey => {
+            const dayData = dailySchedules[dateKey];
+            if (!dayData?.scheduleAssignments) return;
+            
+            Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
+                const slots = dayData.scheduleAssignments[bunkKey];
+                if (!Array.isArray(slots)) return;
+                
+                slots.forEach((slot, idx) => {
+                    if (slot?.location === oldName) {
+                        dayData.scheduleAssignments[bunkKey][idx].location = newName;
+                        updateCount++;
+                    }
+                    if (slot?.field === oldName) {
+                        dayData.scheduleAssignments[bunkKey][idx].field = newName;
+                        updateCount++;
+                    }
+                });
+            });
+        });
+        
+        if (updateCount > 0) {
+            window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+            console.log(`   ✅ Updated ${updateCount} references in daily schedules`);
+        }
+        
+        // 2. Update current session scheduleAssignments
+        if (window.scheduleAssignments) {
+            Object.keys(window.scheduleAssignments).forEach(bunkKey => {
+                const slots = window.scheduleAssignments[bunkKey];
+                if (!Array.isArray(slots)) return;
+                
+                slots.forEach((slot, idx) => {
+                    if (slot?.location === oldName) {
+                        window.scheduleAssignments[bunkKey][idx].location = newName;
+                    }
+                    if (slot?.field === oldName) {
+                        window.scheduleAssignments[bunkKey][idx].field = newName;
+                    }
+                });
+            });
+        }
+        
+        // 3. Update activityProperties
+        if (window.activityProperties?.[oldName]) {
+            window.activityProperties[newName] = {
+                ...window.activityProperties[oldName]
+            };
+            delete window.activityProperties[oldName];
+            console.log(`   ✅ Updated activityProperties`);
+        }
+        
+        // 4. Update GlobalFieldLocks if present
+        if (window.GlobalFieldLocks?._locks) {
+            const keysToUpdate = Object.keys(window.GlobalFieldLocks._locks)
+                .filter(k => k.includes(oldName));
+            
+            keysToUpdate.forEach(oldKey => {
+                const newKey = oldKey.replace(oldName, newName);
+                window.GlobalFieldLocks._locks[newKey] = window.GlobalFieldLocks._locks[oldKey];
+                delete window.GlobalFieldLocks._locks[oldKey];
+            });
+            
+            if (keysToUpdate.length > 0) {
+                console.log(`   ✅ Updated ${keysToUpdate.length} field lock entries`);
+            }
+        }
+        
+        // 5. Update location zones if present
+        const locationZones = settings.locationZones || {};
+        let zonesUpdated = false;
+        
+        Object.keys(locationZones).forEach(zoneName => {
+            const zone = locationZones[zoneName];
+            if (zone?.fields && Array.isArray(zone.fields)) {
+                const idx = zone.fields.indexOf(oldName);
+                if (idx !== -1) {
+                    zone.fields[idx] = newName;
+                    zonesUpdated = true;
+                }
+            }
+            if (zone?.locations?.[oldName]) {
+                zone.locations[newName] = zone.locations[oldName];
+                delete zone.locations[oldName];
+                zonesUpdated = true;
+            }
+        });
+        
+        if (zonesUpdated) {
+            window.saveGlobalSettings?.('locationZones', locationZones);
+            console.log(`   ✅ Updated location zones`);
+        }
+        
+        console.log(`📝 [Fields] Rename propagation complete: "${oldName}" → "${newName}"`);
+        
+    } catch (e) {
+        console.error('[Fields] Error during rename propagation:', e);
+    }
+}
+
+//------------------------------------------------------------------
+// ★★★ DIVISION VALIDATION ★★★  
+// Validates and cleans stale division references in field configs
+//------------------------------------------------------------------
+function validateFieldDivisions() {
+    const settings = window.loadGlobalSettings?.() || {};
+    const validDivisions = getValidDivisionNames();
+    
+    if (validDivisions.length === 0) {
+        console.log('[Fields] No divisions found - skipping validation');
+        return { fieldsChecked: 0, issuesFixed: 0 };
+    }
+    
+    let issuesFixed = 0;
+    
+    fields.forEach(field => {
+        // Validate sharableWith.divisions
+        if (field.sharableWith?.divisions && Array.isArray(field.sharableWith.divisions)) {
+            const originalLength = field.sharableWith.divisions.length;
+            field.sharableWith.divisions = field.sharableWith.divisions.filter(div => 
+                validDivisions.includes(div)
+            );
+            
+            if (field.sharableWith.divisions.length < originalLength) {
+                const removed = originalLength - field.sharableWith.divisions.length;
+                console.log(`[Fields] Removed ${removed} stale division(s) from ${field.name} sharableWith`);
+                issuesFixed += removed;
+            }
+        }
+        
+        // Validate limitUsage.divisions
+        if (field.limitUsage?.divisions && typeof field.limitUsage.divisions === 'object') {
+            const divKeys = Object.keys(field.limitUsage.divisions);
+            divKeys.forEach(divKey => {
+                if (!validDivisions.includes(divKey)) {
+                    delete field.limitUsage.divisions[divKey];
+                    console.log(`[Fields] Removed stale division "${divKey}" from ${field.name} limitUsage`);
+                    issuesFixed++;
+                }
+            });
+        }
+        
+        // Validate limitUsage.priorityList
+        if (field.limitUsage?.priorityList && Array.isArray(field.limitUsage.priorityList)) {
+            const originalLength = field.limitUsage.priorityList.length;
+            field.limitUsage.priorityList = field.limitUsage.priorityList.filter(div => 
+                validDivisions.includes(div)
+            );
+            
+            if (field.limitUsage.priorityList.length < originalLength) {
+                const removed = originalLength - field.limitUsage.priorityList.length;
+                console.log(`[Fields] Removed ${removed} stale division(s) from ${field.name} priorityList`);
+                issuesFixed += removed;
+            }
+        }
+    });
+    
+    if (issuesFixed > 0) {
+        console.log(`[Fields] Division validation complete: ${issuesFixed} issues fixed`);
+        // Don't call saveData here - caller should save if needed
+    }
+    
+    return { fieldsChecked: fields.length, issuesFixed };
+}
+
+/**
+ * Get valid division names from global settings
+ */
+function getValidDivisionNames() {
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+        const divisions = settings.divisions || settings.app1?.divisions || {};
+        
+        if (Array.isArray(divisions)) {
+            return divisions.map(d => d?.name || d).filter(Boolean);
+        }
+        
+        return Object.keys(divisions);
+    } catch (e) {
+        console.error('[Fields] Error getting valid divisions:', e);
+        return [];
+    }
 }
 
 //------------------------------------------------------------------
@@ -590,8 +890,21 @@ function renderDetailPane(){
 
     makeEditable(title, newName=>{
         if(!newName.trim()) return;
+        const oldName = item.name;
+        if (oldName === newName) return;
+        
+        // Check for duplicate names
+        if (fields.some(f => f !== item && f.name.toLowerCase() === newName.toLowerCase())) {
+            alert(`A field named "${newName}" already exists.`);
+            return;
+        }
+        
         item.name = newName;
         selectedItemId = `field-${newName}`;
+        
+        // ★★★ PROPAGATE RENAME to all references ★★★
+        propagateFieldRename(oldName, newName);
+        
         saveData();
         renderMasterLists();
         renderDetailPane();
@@ -618,7 +931,12 @@ function renderDetailPane(){
             window.AccessControl?.showPermissionDenied?.('delete fields');
             return;
         }
-        if(confirm(`Delete "${item.name}"?`)){
+        if(confirm(`Delete "${item.name}"?\n\nThis will also remove field references from all schedules.`)){
+            const deletedFieldName = item.name;
+            
+            // ★★★ CLEANUP before removing ★★★
+            cleanupDeletedField(deletedFieldName);
+            
             fields = fields.filter(f => f !== item);
             saveData();
             selectedItemId = null;
@@ -1414,6 +1732,119 @@ window.refreshActivityPropertiesFromFields = function() {
     
     console.log('🔄 [Fields] activityProperties refreshed from stored fields');
     return window.activityProperties;
+};
+
+// ★★★ EXPORT: Field cleanup utility ★★★
+window.cleanupDeletedField = cleanupDeletedField;
+
+// ★★★ EXPORT: Field rename propagation utility ★★★  
+window.propagateFieldRename = propagateFieldRename;
+
+// ★★★ EXPORT: Division validation utility ★★★
+window.validateFieldDivisions = validateFieldDivisions;
+
+// ★★★ COMPREHENSIVE FIELD DIAGNOSTICS ★★★
+window.diagnoseFields = function() {
+    console.log('\n' + '═'.repeat(60));
+    console.log('🔍 FIELD DIAGNOSTICS');
+    console.log('═'.repeat(60));
+    
+    const settings = window.loadGlobalSettings?.() || {};
+    const storedFields = settings.app1?.fields || [];
+    const rootFields = settings.fields || [];
+    const divisions = getValidDivisionNames();
+    
+    console.log(`\n📊 SUMMARY:`);
+    console.log(`   Fields in app1.fields: ${storedFields.length}`);
+    console.log(`   Fields in root.fields: ${rootFields.length}`);
+    console.log(`   Fields in local array: ${fields.length}`);
+    console.log(`   Valid divisions: ${divisions.join(', ') || 'none'}`);
+    
+    const issues = [];
+    
+    storedFields.forEach((f, idx) => {
+        const fieldIssues = [];
+        
+        // Check sharableWith structure
+        if (!f.sharableWith) {
+            fieldIssues.push('Missing sharableWith');
+        } else {
+            if (!f.sharableWith.type) fieldIssues.push('sharableWith.type missing');
+            if (!Array.isArray(f.sharableWith.divisions)) fieldIssues.push('sharableWith.divisions not array');
+            if (f.sharableWith.capacity === undefined) fieldIssues.push('sharableWith.capacity missing');
+            
+            // Check for stale divisions
+            if (Array.isArray(f.sharableWith.divisions)) {
+                const stale = f.sharableWith.divisions.filter(d => !divisions.includes(d));
+                if (stale.length > 0) fieldIssues.push(`Stale sharableWith.divisions: ${stale.join(', ')}`);
+            }
+        }
+        
+        // Check limitUsage structure
+        if (!f.limitUsage) {
+            fieldIssues.push('Missing limitUsage');
+        } else {
+            if (f.limitUsage.enabled === undefined) fieldIssues.push('limitUsage.enabled missing');
+            if (typeof f.limitUsage.divisions !== 'object') fieldIssues.push('limitUsage.divisions not object');
+            if (!Array.isArray(f.limitUsage.priorityList)) fieldIssues.push('limitUsage.priorityList not array');
+            
+            // Check for stale divisions
+            if (typeof f.limitUsage.divisions === 'object') {
+                const stale = Object.keys(f.limitUsage.divisions).filter(d => !divisions.includes(d));
+                if (stale.length > 0) fieldIssues.push(`Stale limitUsage.divisions: ${stale.join(', ')}`);
+            }
+        }
+        
+        // Check timeRules
+        if (!Array.isArray(f.timeRules)) {
+            fieldIssues.push('timeRules not array');
+        } else {
+            f.timeRules.forEach((rule, rIdx) => {
+                if (rule.startMin === undefined) fieldIssues.push(`timeRules[${rIdx}].startMin missing`);
+                if (rule.endMin === undefined) fieldIssues.push(`timeRules[${rIdx}].endMin missing`);
+            });
+        }
+        
+        // Check rainyDayAvailable
+        if (f.rainyDayAvailable === undefined) {
+            fieldIssues.push('rainyDayAvailable missing');
+        }
+        
+        if (fieldIssues.length > 0) {
+            issues.push({ field: f.name || `[index ${idx}]`, issues: fieldIssues });
+        }
+    });
+    
+    if (issues.length === 0) {
+        console.log('\n✅ All fields have valid structure!');
+    } else {
+        console.log(`\n⚠️ ISSUES FOUND (${issues.length} fields):`);
+        issues.forEach(item => {
+            console.log(`\n   📁 ${item.field}:`);
+            item.issues.forEach(issue => console.log(`      - ${issue}`));
+        });
+    }
+    
+    // Check activityProperties sync
+    console.log('\n📋 ACTIVITY PROPERTIES SYNC:');
+    const actProps = window.activityProperties || {};
+    storedFields.forEach(f => {
+        const prop = actProps[f.name];
+        if (!prop) {
+            console.log(`   ❌ ${f.name}: NOT in activityProperties`);
+        } else if (prop.type !== 'field') {
+            console.log(`   ⚠️ ${f.name}: type is "${prop.type}" (should be "field")`);
+        } else {
+            console.log(`   ✅ ${f.name}: synced`);
+        }
+    });
+    
+    console.log('\n' + '═'.repeat(60));
+    console.log('💡 Run validateFieldDivisions() to fix stale division refs');
+    console.log('💡 Run refreshActivityPropertiesFromFields() to resync');
+    console.log('═'.repeat(60) + '\n');
+    
+    return { fields: storedFields.length, issues: issues.length };
 };
 
 })();
