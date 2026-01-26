@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_main.js (FIXED v17.9 - EXACT SLOT MATCHING)
+// scheduler_core_main.js (FIXED v17.10 - CAPACITY LOGIC FIX)
 // ============================================================================
 // ★★★ CRITICAL PROCESSING ORDER ★★★
 // 1. Initialize GlobalFieldLocks & LocationUsage (RESET)
@@ -12,13 +12,13 @@
 // 8. Process Smart Tiles
 // 9. Run Total Solver
 //
-// v17 FIX: Fixed forEach loop that wasn't properly closed
-// v17.4: Added DivisionTimesSystem support
-// v17.5: Fixed split tile metadata & pinned events
-// v17.6: Fixed Split Tile targeting using exact slot matching vs broad range
-// v17.7: Fixed split tile fillBlock slot usage & solver pick propagation
+// v17.10: ★★★ FIXED: Capacity calculation - type='all' now returns 999 ★★★
+// v17.9: Use exact slot matching for skeleton blocks
 // v17.8: Added D2 Diagnostics & Gap Detection Type Coercion Fix
-// v17.9: ★★★ FIX: Use exact slot matching for skeleton blocks to prevent boundary overlap ★★★
+// v17.7: Fixed split tile fillBlock slot usage & solver pick propagation
+// v17.6: Fixed Split Tile targeting using exact slot matching vs broad range
+// v17.5: Fixed split tile metadata & pinned events
+// v17.4: Added DivisionTimesSystem support
 // ============================================================================
 
 (function() {
@@ -26,20 +26,75 @@
 
     const TRANSITION_TYPE = window.TRANSITION_TYPE || "Transition/Buffer";
 
+    // =========================================================================
+    // ★★★ CENTRALIZED CAPACITY FUNCTION (v17.10) ★★★
+    // =========================================================================
+
+    /**
+     * Get field capacity - SINGLE SOURCE OF TRUTH
+     * - type='not_sharable' → 1
+     * - type='all' → 999 (unlimited)
+     * - type='custom' → configured capacity (default 2)
+     */
+    function getFieldCapacityLocal(fieldName, activityProperties) {
+        // Use centralized utility if available
+        if (window.SchedulerCoreUtils?.getFieldCapacity) {
+            return window.SchedulerCoreUtils.getFieldCapacity(fieldName, activityProperties);
+        }
+        
+        // Also check global settings for field config
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const fields = globalSettings.app1?.fields || globalSettings.fields || [];
+        const fieldConfig = fields.find(f => f.name?.toLowerCase() === fieldName?.toLowerCase());
+        
+        // Check both activityProperties AND fieldConfig (dual lookup)
+        const props = activityProperties?.[fieldName] || fieldConfig || {};
+        
+        if (props.sharableWith) {
+            // ★★★ FIX: type='all' = unlimited (999) ★★★
+            if (props.sharableWith.type === 'all') {
+                return 999;
+            }
+            // type='custom' uses configured capacity
+            if (props.sharableWith.type === 'custom') {
+                return parseInt(props.sharableWith.capacity) || 2;
+            }
+            // type='not_sharable' - return 1
+            if (props.sharableWith.type === 'not_sharable') {
+                return 1;
+            }
+            // Explicit capacity value
+            if (props.sharableWith.capacity) {
+                return parseInt(props.sharableWith.capacity);
+            }
+        }
+        
+        // Legacy sharable boolean
+        if (props.sharable) {
+            return 2;
+        }
+        
+        return 1; // Default: not sharable
+    }
+
+    // Export for external use
+    window.getFieldCapacityFromMain = getFieldCapacityLocal;
+
     // -------------------------------------------------------------------------
     // TIME SLOT HELPERS
     // -------------------------------------------------------------------------
 
-    /** * Find exact slot index for a specific time range in a division 
+    /**
+     * Find exact slot index for a specific time range in a division 
      * @param {string} divName - Division name 
      * @param {number} startMin - Start time in minutes 
      * @param {number} endMin - End time in minutes 
      * @returns {number} Slot index or -1 if not found 
      */
-   function findExactSlotForTimeRange(divName, startMin, endMin) {
-    // ★★★ v17.10 FIX: Convert divName to string for divisionTimes lookup ★★★
-    const divNameStr = String(divName);
-    const divSlots = window.divisionTimes?.[divNameStr] || [];
+    function findExactSlotForTimeRange(divName, startMin, endMin) {
+        // ★★★ v17.10 FIX: Convert divName to string for divisionTimes lookup ★★★
+        const divNameStr = String(divName);
+        const divSlots = window.divisionTimes?.[divNameStr] || [];
         
         // Exact match
         for (let i = 0; i < divSlots.length; i++) {
@@ -118,7 +173,7 @@
     }
 
     // -------------------------------------------------------------------------
-    // LOCATION CONFLICT HELPERS
+    // ★★★ LOCATION CONFLICT HELPERS (FIXED v17.10) ★★★
     // -------------------------------------------------------------------------
 
     function canScheduleAtLocation(activityName, locationName, slots) {
@@ -126,23 +181,8 @@
 
         const comprehensiveUsage = window.buildFieldUsageBySlot?.() || {};
         
-        const globalSettings = window.loadGlobalSettings?.() || {};
-        const fields = globalSettings.app1?.fields || globalSettings.fields || [];
-        const fieldConfig = fields.find(f => f.name?.toLowerCase() === locationName.toLowerCase());
-        
-        let maxCapacity = 1;
-        if (fieldConfig?.sharableWith?.capacity) {
-            maxCapacity = parseInt(fieldConfig.sharableWith.capacity) || 1;
-        } else if (fieldConfig?.sharable) {
-            maxCapacity = 2;
-        }
-        
-        const actProps = window.activityProperties?.[locationName] || {};
-        if (actProps.sharableWith?.capacity) {
-            maxCapacity = Math.max(maxCapacity, parseInt(actProps.sharableWith.capacity) || 1);
-        } else if (actProps.sharable) {
-            maxCapacity = Math.max(maxCapacity, 2);
-        }
+        // ★★★ FIX v17.10: Use centralized capacity calculation ★★★
+        const maxCapacity = getFieldCapacityLocal(locationName, window.activityProperties);
 
         for (const slotIdx of slots) {
             const slotUsage = comprehensiveUsage[slotIdx]?.[locationName];
@@ -384,8 +424,8 @@
             const preSlots = Utils.findSlotsForRange(blockStartMin, effectiveStart, block.divName);
             preSlots.forEach((slotIndex, i) => {
                 if (!window.scheduleAssignments[bunk][slotIndex]) {
-    window.scheduleAssignments[bunk][slotIndex] = {
-        field: TRANSITION_TYPE,
+                    window.scheduleAssignments[bunk][slotIndex] = {
+                        field: TRANSITION_TYPE,
                         sport: trans.label,
                         continuation: i > 0,
                         _fixed: true,
@@ -478,9 +518,9 @@
             const postSlots = Utils.findSlotsForRange(effectiveEnd, blockEndMin, block.divName);
             postSlots.forEach((slotIndex, i) => {
                 if (!window.scheduleAssignments[bunk][slotIndex]) {
-    window.scheduleAssignments[bunk][slotIndex] = {
-        field: TRANSITION_TYPE,
-                sport: trans.label,
+                    window.scheduleAssignments[bunk][slotIndex] = {
+                        field: TRANSITION_TYPE,
+                        sport: trans.label,
                         continuation: i > 0,
                         _fixed: true,
                         _activity: TRANSITION_TYPE,
@@ -671,7 +711,7 @@
 
     window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v17.9 - EXACT SLOT MATCHING FIX) ★★★");
+        console.log("★★★ OPTIMIZER STARTED (v17.10 - CAPACITY LOGIC FIX) ★★★");
 
         // ★★★ SCHEDULER RESTRICTION ★★★
         if (window.AccessControl?.filterDivisionsForGeneration) {
@@ -929,11 +969,13 @@
 
             console.log(`[STEP 1] Initialized ${divName} bunks with ${slotCount} slots`);
         });
-// ★★★ v17.10 FIX: Rebuild unifiedTimes from divisionTimes for legacy compatibility ★★★
-if (window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes) {
-    window.unifiedTimes = window.DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes(window.divisionTimes);
-    console.log(`[STEP 1] Rebuilt unifiedTimes: ${window.unifiedTimes.length} slots for legacy compatibility`);
-}
+
+        // ★★★ v17.10 FIX: Rebuild unifiedTimes from divisionTimes for legacy compatibility ★★★
+        if (window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes) {
+            window.unifiedTimes = window.DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes(window.divisionTimes);
+            console.log(`[STEP 1] Rebuilt unifiedTimes: ${window.unifiedTimes.length} slots for legacy compatibility`);
+        }
+
         // =========================================================================
         // ★★★ STEP 1.5: RESTORE EXISTING SCHEDULE FOR LOCKED DIVISIONS ★★★
         // =========================================================================
@@ -1053,13 +1095,8 @@ if (window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes) {
                             fieldUsageBySlot[targetIndex] = {};
                         }
 
-                        const props = activityProperties?.[fieldName] || {};
-                        let maxCapacity = 1;
-                        if (props.sharableWith?.capacity) {
-                            maxCapacity = parseInt(props.sharableWith.capacity) || 1;
-                        } else if (props.sharable) {
-                            maxCapacity = 2;
-                        }
+                        // ★★★ FIX v17.10: Use centralized capacity calculation ★★★
+                        const maxCapacity = getFieldCapacityLocal(fieldName, activityProperties);
 
                         if (!fieldUsageBySlot[targetIndex][fieldName]) {
                             fieldUsageBySlot[targetIndex][fieldName] = {
@@ -1210,13 +1247,8 @@ if (window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes) {
                             continue;
                         }
 
-                        const props = activityProperties[candidateField] || {};
-                        let maxCapacity = 1;
-                        if (props.sharableWith?.capacity) {
-                            maxCapacity = parseInt(props.sharableWith.capacity) || 1;
-                        } else if (props.sharable) {
-                            maxCapacity = 2;
-                        }
+                        // ★★★ FIX v17.10: Use centralized capacity calculation ★★★
+                        const maxCapacity = getFieldCapacityLocal(candidateField, activityProperties);
 
                         let canUse = true;
                         for (const slotIdx of slots) {
@@ -1261,13 +1293,8 @@ if (window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes) {
                     return;
                 }
 
-                const props = activityProperties[activityName] || {};
-                let maxCapacity = 1;
-                if (props.sharableWith?.capacity) {
-                    maxCapacity = parseInt(props.sharableWith.capacity) || 1;
-                } else if (props.sharable) {
-                    maxCapacity = 2;
-                }
+                // ★★★ FIX v17.10: Use centralized capacity calculation ★★★
+                const maxCapacity = getFieldCapacityLocal(activityName, activityProperties);
 
                 let hasRoom = true;
                 for (const slotIdx of slots) {
@@ -2155,18 +2182,15 @@ if (window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes) {
     // =========================================================================
     window.runOptimizer = window.runSkeletonOptimizer;
 
+    // =========================================================================
+    // ★★★ FIXED v17.10: registerSingleSlotUsage with correct capacity logic ★★★
+    // =========================================================================
     function registerSingleSlotUsage(slotIndex, fieldName, divName, bunkName, activityName, fieldUsageBySlot, activityProperties) {
         if (slotIndex == null || !fieldName) return;
         const key = typeof fieldName === 'string' ? fieldName : (fieldName?.name || String(fieldName));
-        const rawProps = (activityProperties && activityProperties[key]) || {
-            available: true,
-            sharable: false,
-            sharableWith: {
-                type: 'not_sharable',
-                capacity: 1
-            }
-        };
-        const cap = rawProps?.sharableWith?.capacity || (rawProps?.sharable ? 2 : 1);
+        
+        // ★★★ FIX v17.10: Use centralized capacity calculation ★★★
+        const cap = getFieldCapacityLocal(key, activityProperties);
 
         if (!fieldUsageBySlot[slotIndex]) fieldUsageBySlot[slotIndex] = {};
         const existingUsage = fieldUsageBySlot[slotIndex][key] || {
@@ -2184,6 +2208,6 @@ if (window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes) {
 
     window.registerSingleSlotUsage = registerSingleSlotUsage;
 
-    console.log('⚙️ Scheduler Core Main v17.9 loaded (EXACT SLOT MATCHING FIX)');
+    console.log('⚙️ Scheduler Core Main v17.10 loaded (CAPACITY LOGIC FIX - type=all → 999)');
 
 })();
