@@ -1,5 +1,5 @@
 // ============================================================================
-// total_solver_engine.js (ENHANCED v9.1 - UNIFIED ROTATION SCORING)
+// total_solver_engine.js (ENHANCED v9.2 - CROSS-DIVISION TIME CONFLICT FIX)
 // Backtracking Constraint Solver + League Engine
 // ----------------------------------------------------------------------------
 // ★★★ NOW DELEGATES ALL ROTATION LOGIC TO rotation_engine.js ★★★
@@ -17,7 +17,10 @@
 // - League game handling
 // - Penalty cost calculation (delegates rotation to RotationEngine)
 //
-// KEY FIXES IN v9.1:
+// KEY FIXES IN v9.2:
+// - ★★★ CROSS-DIVISION TIME-BASED CONFLICT DETECTION ★★★
+// - Checks field usage by TIME OVERLAP, not slot index
+// - Prevents conflicts when Div 1 slot 6 overlaps Div 2 slot 7 in time
 // - Clears rotation cache at solver start
 // - Property checks for both field AND activity names
 // - Better integration with RotationEngine
@@ -31,6 +34,7 @@
 
     const DEBUG_MODE = false;
     const DEBUG_ROTATION = false;
+    const DEBUG_CROSS_DIV = false; // Set to true to debug cross-division conflicts
 
     let globalConfig = null;
     let activityProperties = {};
@@ -103,6 +107,12 @@
     function rotationLog(...args) {
         if (DEBUG_ROTATION) {
             console.log('[ROTATION]', ...args);
+        }
+    }
+
+    function crossDivLog(...args) {
+        if (DEBUG_CROSS_DIV) {
+            console.log('[CROSS-DIV]', ...args);
         }
     }
 
@@ -264,7 +274,73 @@
     }
 
     // ============================================================================
-    // PENALTY ENGINE (ENHANCED WITH DELEGATED ROTATION)
+    // ★★★ v9.2: CROSS-DIVISION TIME-BASED FIELD USAGE COUNTER ★★★
+    // ============================================================================
+
+    /**
+     * Count how many bunks are using a field during a specific time window
+     * across ALL divisions (not just by slot index)
+     * 
+     * @param {string} fieldName - Field to check
+     * @param {number} blockStartMin - Block start time in minutes
+     * @param {number} blockEndMin - Block end time in minutes
+     * @param {string} excludeBunk - Bunk to exclude from count
+     * @param {Object} bunkMeta - Bunk metadata for sizes
+     * @returns {Object} { fieldCount, combinedSize, existingActivities }
+     */
+    function countFieldUsageByTime(fieldName, blockStartMin, blockEndMin, excludeBunk, bunkMeta) {
+        let fieldCount = 0;
+        let combinedSize = 0;
+        const existingActivities = new Set();
+        
+        if (blockStartMin === null || blockEndMin === null) {
+            return { fieldCount, combinedSize, existingActivities };
+        }
+        
+        const divisions = window.divisions || {};
+        const schedules = window.scheduleAssignments || {};
+        const fieldNameLower = fieldName.toLowerCase().trim();
+        
+        for (const [otherDivName, otherDivData] of Object.entries(divisions)) {
+            const otherDivSlots = window.divisionTimes?.[otherDivName] || [];
+            
+            for (const otherBunk of (otherDivData.bunks || [])) {
+                if (String(otherBunk) === String(excludeBunk)) continue;
+                
+                const otherAssignments = schedules[otherBunk] || [];
+                
+                for (let otherSlotIdx = 0; otherSlotIdx < otherDivSlots.length; otherSlotIdx++) {
+                    const otherSlot = otherDivSlots[otherSlotIdx];
+                    if (!otherSlot) continue;
+                    
+                    // ★★★ KEY: Check TIME overlap, not slot index ★★★
+                    const hasTimeOverlap = otherSlot.startMin < blockEndMin && 
+                                          otherSlot.endMin > blockStartMin;
+                    
+                    if (!hasTimeOverlap) continue;
+                    
+                    const entry = otherAssignments[otherSlotIdx];
+                    if (!entry || entry.continuation) continue;
+                    
+                    const entryField = window.SchedulerCoreUtils?.fieldLabel?.(entry.field) || entry._activity;
+                    if (entryField && entryField.toLowerCase().trim() === fieldNameLower) {
+                        fieldCount++;
+                        combinedSize += (bunkMeta?.[otherBunk]?.size || 0);
+                        if (entry._activity) {
+                            existingActivities.add(entry._activity.toLowerCase().trim());
+                        }
+                        
+                        crossDivLog(`  Found: ${otherBunk} (Div ${otherDivName}) @ slot ${otherSlotIdx} (${otherSlot.startMin}-${otherSlot.endMin})`);
+                    }
+                }
+            }
+        }
+        
+        return { fieldCount, combinedSize, existingActivities };
+    }
+
+    // ============================================================================
+    // PENALTY ENGINE (ENHANCED WITH CROSS-DIVISION TIME CHECKING)
     // ============================================================================
 
     function calculatePenaltyCost(block, pick) {
@@ -296,76 +372,90 @@
 
         penalty -= sharingScore;
 
-        // Capacity and activity matching checks
-        const schedules = window.scheduleAssignments || {};
-        const slots = block.slots || [];
+        // =========================================================================
+        // ★★★ v9.2 FIX: TIME-BASED CROSS-DIVISION CONFLICT DETECTION ★★★
+        // =========================================================================
+        
+        // Get the actual time range for this block
+        const blockDivName = block.divName || block.division;
+        const blockDivSlots = window.divisionTimes?.[blockDivName] || [];
+        const blockSlots = block.slots || [];
+        
+        let blockStartMin = null, blockEndMin = null;
+        if (blockSlots.length > 0 && blockDivSlots[blockSlots[0]]) {
+            blockStartMin = blockDivSlots[blockSlots[0]].startMin;
+            const lastSlot = blockDivSlots[blockSlots[blockSlots.length - 1]];
+            blockEndMin = lastSlot ? lastSlot.endMin : (blockStartMin + 30);
+        }
+        
+        crossDivLog(`Checking ${bunk} for ${fieldName} at ${blockStartMin}-${blockEndMin} (Div ${blockDivName})`);
+        
+        // Count field usage across ALL divisions by TIME overlap
+        const { fieldCount, combinedSize, existingActivities } = countFieldUsageByTime(
+            fieldName,
+            blockStartMin,
+            blockEndMin,
+            bunk,
+            bunkMeta
+        );
+        
+        const totalCombinedSize = combinedSize + mySize;
+        
+        crossDivLog(`  Field usage: ${fieldCount} bunks already using ${fieldName}`);
 
-        for (const slotIdx of slots) {
-            let fieldCount = 0;
-            let existingActivities = new Set();
-            let combinedSize = mySize;
+        // ★★★ FIX: Check both field AND activity name for properties ★★★
+        const props = activityProperties[fieldName] || activityProperties[act] || {};
+        let maxCapacity = 1;
+        if (props.sharableWith?.capacity) {
+            maxCapacity = parseInt(props.sharableWith.capacity) || 1;
+        } else if (props.sharable || props.sharableWith?.type === "all") {
+            maxCapacity = 2;
+        }
 
-            for (const [otherBunk, otherSlots] of Object.entries(schedules)) {
-                if (otherBunk === bunk) continue;
-                const entry = otherSlots?.[slotIdx];
-                if (!entry) continue;
+        crossDivLog(`  Capacity: ${fieldCount}/${maxCapacity}`);
 
-                const entryField = window.SchedulerCoreUtils?.fieldLabel(entry.field) || entry._activity;
-                if (entryField && entryField.toLowerCase().trim() === fieldName.toLowerCase().trim()) {
-                    fieldCount++;
-                    combinedSize += (bunkMeta[otherBunk]?.size || 0);
-                    if (entry._activity) {
-                        existingActivities.add(entry._activity.toLowerCase().trim());
-                    }
-                }
-            }
+        if (fieldCount >= maxCapacity) {
+            crossDivLog(`  ❌ REJECTED - at capacity`);
+            return 999999;
+        }
 
-            // ★★★ FIX: Check both field AND activity name for properties ★★★
-            const props = activityProperties[fieldName] || activityProperties[act] || {};
-            let maxCapacity = 1;
-            if (props.sharableWith?.capacity) {
-                maxCapacity = parseInt(props.sharableWith.capacity) || 1;
-            } else if (props.sharable || props.sharableWith?.type === "all") {
-                maxCapacity = 2;
-            }
-
-            if (fieldCount >= maxCapacity) {
-                return 999999;
-            }
-
-            if (fieldCount > 0 && existingActivities.size > 0) {
-                const myActivity = (act || '').toLowerCase().trim();
-                if (!existingActivities.has(myActivity)) {
-                    return 888888;
-                }
-            }
-
-            // Sport player requirements (soft constraints)
-            if (act && !pick._isLeague) {
-                const playerCheck = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(act, combinedSize, false);
-
-                if (playerCheck && !playerCheck.valid) {
-                    if (playerCheck.severity === 'hard') {
-                        penalty += 8000;
-                    } else if (playerCheck.severity === 'soft') {
-                        penalty += 1500;
-                    }
-                } else if (playerCheck && playerCheck.valid) {
-                    penalty -= 500;
-                }
+        if (fieldCount > 0 && existingActivities.size > 0) {
+            const myActivity = (act || '').toLowerCase().trim();
+            if (!existingActivities.has(myActivity)) {
+                crossDivLog(`  ❌ REJECTED - activity mismatch (field has: ${[...existingActivities].join(', ')})`);
+                return 888888;
             }
         }
 
-        // Adjacent bunk bonus
+        // Sport player requirements (soft constraints)
+        if (act && !pick._isLeague) {
+            const playerCheck = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(act, totalCombinedSize, false);
+
+            if (playerCheck && !playerCheck.valid) {
+                if (playerCheck.severity === 'hard') {
+                    penalty += 8000;
+                } else if (playerCheck.severity === 'soft') {
+                    penalty += 1500;
+                }
+            } else if (playerCheck && playerCheck.valid) {
+                penalty -= 500;
+            }
+        }
+
+        // =========================================================================
+        // Adjacent bunk bonus (still uses slot-based for same-division proximity)
+        // =========================================================================
         const myNum = getBunkNumber(bunk);
+        const schedules = window.scheduleAssignments || {};
+        
         if (myNum !== null) {
-            for (const slotIdx of slots) {
+            for (const slotIdx of blockSlots) {
                 for (const [otherBunk, otherSlots] of Object.entries(schedules)) {
                     if (otherBunk === bunk) continue;
                     const entry = otherSlots?.[slotIdx];
                     if (!entry) continue;
 
-                    const entryField = window.SchedulerCoreUtils?.fieldLabel(entry.field) || entry._activity;
+                    const entryField = window.SchedulerCoreUtils?.fieldLabel?.(entry.field) || entry._activity;
                     if (entryField && entryField.toLowerCase().trim() === fieldName.toLowerCase().trim()) {
                         const otherNum = getBunkNumber(otherBunk);
                         if (otherNum !== null) {
@@ -669,6 +759,7 @@
         
         console.log(`[SOLVER] Processing ${activityBlocks.length} activity blocks`);
         console.log(`[SOLVER] ★ Using ${window.RotationEngine ? 'SUPERCHARGED RotationEngine v2.2' : 'FALLBACK scoring'}`);
+        console.log(`[SOLVER] ★ Cross-division time-based conflict detection ENABLED (v9.2)`);
         
         let bestSchedule = [];
         let maxDepthReached = 0;
@@ -757,6 +848,78 @@
         }
 
         return true;
+    };
+
+    /**
+     * ★★★ v9.2: DEBUG Cross-division time conflict check ★★★
+     */
+    Solver.debugCrossDivisionConflict = function(fieldName, divName, slotIdx) {
+        const divSlots = window.divisionTimes?.[divName] || [];
+        const slot = divSlots[slotIdx];
+        if (!slot) {
+            console.log('Slot not found');
+            return;
+        }
+        
+        console.log(`\n🔍 Cross-Division Check: "${fieldName}" at Div ${divName} Slot ${slotIdx}`);
+        console.log(`   Time: ${slot.startMin}-${slot.endMin} (${window.SchedulerCoreUtils?.minutesToTime?.(slot.startMin) || slot.startMin} - ${window.SchedulerCoreUtils?.minutesToTime?.(slot.endMin) || slot.endMin})`);
+        
+        const divisions = window.divisions || {};
+        const conflicts = [];
+        
+        for (const [otherDivName, otherDivData] of Object.entries(divisions)) {
+            const otherDivSlots = window.divisionTimes?.[otherDivName] || [];
+            
+            for (const otherBunk of (otherDivData.bunks || [])) {
+                const otherAssignments = window.scheduleAssignments?.[otherBunk] || [];
+                
+                for (let otherSlotIdx = 0; otherSlotIdx < otherDivSlots.length; otherSlotIdx++) {
+                    const otherSlot = otherDivSlots[otherSlotIdx];
+                    if (!otherSlot) continue;
+                    
+                    // Check time overlap
+                    if (otherSlot.startMin < slot.endMin && otherSlot.endMin > slot.startMin) {
+                        const entry = otherAssignments[otherSlotIdx];
+                        if (entry?.field === fieldName || entry?._activity === fieldName) {
+                            conflicts.push({
+                                div: otherDivName,
+                                bunk: otherBunk,
+                                slot: otherSlotIdx,
+                                time: `${otherSlot.startMin}-${otherSlot.endMin}`,
+                                overlap: `${Math.max(slot.startMin, otherSlot.startMin)}-${Math.min(slot.endMin, otherSlot.endMin)}`
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Get capacity
+        const props = activityProperties[fieldName] || {};
+        let maxCapacity = 1;
+        if (props.sharableWith?.capacity) {
+            maxCapacity = parseInt(props.sharableWith.capacity) || 1;
+        } else if (props.sharable || props.sharableWith?.type === "all") {
+            maxCapacity = 2;
+        }
+        
+        if (conflicts.length === 0) {
+            console.log('   ✅ No conflicts found');
+        } else {
+            console.log(`   Found ${conflicts.length} bunks using this field during overlapping time:`);
+            conflicts.forEach(c => {
+                console.log(`      Div ${c.div} Bunk ${c.bunk} @ slot ${c.slot} (${c.time}), overlap: ${c.overlap}`);
+            });
+            console.log(`\n   Capacity: ${maxCapacity}`);
+            console.log(`   Current usage: ${conflicts.length}`);
+            if (conflicts.length >= maxCapacity) {
+                console.log(`   ❌ WOULD BE REJECTED (at or over capacity)`);
+            } else {
+                console.log(`   ✅ Has room (${maxCapacity - conflicts.length} remaining)`);
+            }
+        }
+        
+        return conflicts;
     };
 
     /**
@@ -873,12 +1036,14 @@
     // ============================================================================
 
     window.totalSolverEngine = Solver;
+    window.TotalSolver = Solver; // Alias for compatibility
 
     // Expose debug utilities (delegate to RotationEngine when available)
     window.debugBunkRotation = Solver.debugBunkRotation;
     window.debugActivityRecommendations = Solver.debugActivityRecommendations;
     window.debugRotationConfig = Solver.debugRotationConfig;
+    window.debugCrossDivisionConflict = Solver.debugCrossDivisionConflict;
 
-    console.log('[SOLVER] v9.1 loaded - ★ UNIFIED ROTATION SCORING ★');
+    console.log('[SOLVER] v9.2 loaded - ★ CROSS-DIVISION TIME CONFLICT DETECTION ★');
 
 })();
