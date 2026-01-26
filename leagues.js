@@ -313,6 +313,20 @@
             _saveInProgress = true;
             _lastSaveTime = Date.now();
             
+            // ★ FIX: Also update localStorage immediately (not just queue for cloud)
+            // This prevents the race condition where load reads stale localStorage
+            try {
+                const lsKey = 'campistryGlobalSettings';
+                const lsRaw = localStorage.getItem(lsKey);
+                const lsData = lsRaw ? JSON.parse(lsRaw) : {};
+                lsData.leaguesByName = leaguesByName;
+                lsData.updated_at = new Date().toISOString();
+                localStorage.setItem(lsKey, JSON.stringify(lsData));
+                console.log("[LEAGUES] Data written to localStorage immediately");
+            } catch (lsErr) {
+                console.warn("[LEAGUES] localStorage write failed:", lsErr);
+            }
+            
             // ★ Save via saveGlobalSettings (handles batching + cloud sync)
             window.saveGlobalSettings?.('leaguesByName', leaguesByName);
             
@@ -330,10 +344,55 @@
 
     function loadLeaguesData() {
         try {
+            // ★ Check multiple sources for league data
+            let loadedData = {};
+            let source = 'none';
+            
+            // Source 1: loadGlobalSettings (may include cloud-synced data)
             const global = window.loadGlobalSettings?.() || {};
-            const loadedData = global.leaguesByName || {};
+            const fromGlobal = global.leaguesByName || {};
+            const fromGlobalCount = Object.keys(fromGlobal).length;
+            
+            // Source 2: localStorage directly (most recent local writes)
+            let fromLS = {};
+            let fromLSCount = 0;
+            try {
+                const lsRaw = localStorage.getItem('campistryGlobalSettings');
+                if (lsRaw) {
+                    const lsData = JSON.parse(lsRaw);
+                    fromLS = lsData?.leaguesByName || {};
+                    fromLSCount = Object.keys(fromLS).length;
+                }
+            } catch (lsErr) {
+                console.log("[LEAGUES] localStorage read failed:", lsErr);
+            }
+            
+            // Source 3: app1 nested structure (legacy)
+            const fromApp1 = global.app1?.leaguesByName || {};
+            const fromApp1Count = Object.keys(fromApp1).length;
+            
+            // ★ Use the source with the most data
+            if (fromGlobalCount >= fromLSCount && fromGlobalCount >= fromApp1Count && fromGlobalCount > 0) {
+                loadedData = fromGlobal;
+                source = 'global';
+            } else if (fromLSCount >= fromApp1Count && fromLSCount > 0) {
+                loadedData = fromLS;
+                source = 'localStorage';
+            } else if (fromApp1Count > 0) {
+                loadedData = fromApp1;
+                source = 'app1';
+            }
+            
             const loadedCount = Object.keys(loadedData).length;
             const currentCount = Object.keys(leaguesByName).length;
+
+            console.log("[LEAGUES] Load sources:", {
+                fromGlobal: fromGlobalCount,
+                fromLS: fromLSCount,
+                fromApp1: fromApp1Count,
+                using: source,
+                currentInMemory: currentCount
+            });
 
             // ★ SAFEGUARD: If we have data but loaded empty, this is suspicious
             // Don't overwrite unless we're sure (e.g., fresh init or explicit reset)
@@ -353,7 +412,8 @@
             });
 
             console.log("[LEAGUES] Data loaded:", {
-                leagues: Object.keys(leaguesByName).length
+                leagues: Object.keys(leaguesByName).length,
+                source: source
             });
         } catch (e) {
             console.error("[LEAGUES] Load failed:", e);
