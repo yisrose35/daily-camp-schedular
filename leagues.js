@@ -1309,6 +1309,116 @@
         container.appendChild(saveBtn);
     }
 
+    // =========================================================================
+    // ★ SMART DIVISION MATCHING
+    // Handles variations like "1st grade" vs "1", "Grade 1", "1st", etc.
+    // But avoids false matches like "1" matching "11"
+    // =========================================================================
+    
+    /**
+     * Extract the grade/division number from a string
+     * Returns { number: X, suffix: 'st'|'nd'|'rd'|'th'|'', hasGrade: bool }
+     */
+    function extractDivisionNumber(str) {
+        if (!str) return null;
+        const s = String(str).toLowerCase().trim();
+        
+        // Pattern: "1st", "2nd", "3rd", "4th", "11th", etc.
+        const ordinalMatch = s.match(/^(\d+)(st|nd|rd|th)?\s*(grade)?$/);
+        if (ordinalMatch) {
+            return { 
+                number: parseInt(ordinalMatch[1], 10), 
+                suffix: ordinalMatch[2] || '',
+                hasGrade: !!ordinalMatch[3]
+            };
+        }
+        
+        // Pattern: "grade 1", "grade 11"
+        const gradeMatch = s.match(/^grade\s*(\d+)$/);
+        if (gradeMatch) {
+            return { 
+                number: parseInt(gradeMatch[1], 10), 
+                suffix: '',
+                hasGrade: true
+            };
+        }
+        
+        // Pattern: just a number "1", "11"
+        const numMatch = s.match(/^(\d+)$/);
+        if (numMatch) {
+            return { 
+                number: parseInt(numMatch[1], 10), 
+                suffix: '',
+                hasGrade: false
+            };
+        }
+        
+        // Pattern: "division 1", "div 3"
+        const divMatch = s.match(/^(?:division|div)\s*(\d+)$/);
+        if (divMatch) {
+            return { 
+                number: parseInt(divMatch[1], 10), 
+                suffix: '',
+                hasGrade: false
+            };
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Check if two division names refer to the same division
+     * Strict matching to avoid "1" matching "11"
+     */
+    function divisionsMatch(div1, div2) {
+        if (!div1 || !div2) return false;
+        
+        // Exact match (case-insensitive)
+        if (String(div1).toLowerCase().trim() === String(div2).toLowerCase().trim()) {
+            return true;
+        }
+        
+        // Extract numbers and compare
+        const num1 = extractDivisionNumber(div1);
+        const num2 = extractDivisionNumber(div2);
+        
+        if (num1 && num2) {
+            // Numbers must match exactly (prevents "1" matching "11")
+            return num1.number === num2.number;
+        }
+        
+        // Check if one contains the other as a word boundary match
+        // e.g., "Junior Boys" contains "Junior Boys 1" - but we want exact for numbers
+        const s1 = String(div1).toLowerCase().trim();
+        const s2 = String(div2).toLowerCase().trim();
+        
+        // If neither has a number, check for substring with word boundaries
+        if (!num1 && !num2) {
+            // One must fully contain the other
+            return s1.includes(s2) || s2.includes(s1);
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Find all schedule divisions that match any of the league's divisions
+     */
+    function getMatchingScheduleDivisions(leagueDivisions, availableDivisions) {
+        const matches = new Set();
+        
+        for (const leagueDiv of leagueDivisions) {
+            for (const schedDiv of availableDivisions) {
+                if (divisionsMatch(leagueDiv, schedDiv)) {
+                    matches.add(schedDiv);
+                    console.log(`[LEAGUES] Division match: "${leagueDiv}" ↔ "${schedDiv}"`);
+                }
+            }
+        }
+        
+        return Array.from(matches);
+    }
+
     /**
      * ★ Import games from the current day's schedule
      * Finds league matchups and creates game entries for result entry
@@ -1326,24 +1436,42 @@
             const leagueAssignments = window.leagueAssignments || {};
             const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
 
+            console.log('[LEAGUES] Import: Looking for games for league "' + league.name + '"');
+            console.log('[LEAGUES] Import: League divisions:', league.divisions);
+            console.log('[LEAGUES] Import: Available leagueAssignments keys:', Object.keys(leagueAssignments));
+
             // Find matchups for this league
             const foundMatchups = [];
             const processedMatchups = new Set(); // Avoid duplicates
 
-            // Method 1: Check leagueAssignments (primary source)
-            for (const divName of (league.divisions || [])) {
+            // ★ Use smart division matching to find schedule divisions that match league divisions
+            const availableScheduleDivisions = Object.keys(leagueAssignments);
+            const matchingDivisions = getMatchingScheduleDivisions(league.divisions || [], availableScheduleDivisions);
+            
+            console.log('[LEAGUES] Import: Matching divisions found:', matchingDivisions);
+
+            // Method 1: Check leagueAssignments using smart-matched divisions (primary source)
+            for (const divName of matchingDivisions) {
                 const divAssignments = leagueAssignments[divName];
                 if (!divAssignments) continue;
 
                 for (const slotIdx of Object.keys(divAssignments)) {
                     const slotData = divAssignments[slotIdx];
                     
-                    // Check if this is for our league
-                    const isOurLeague = slotData?.leagueName === league.name ||
-                        slotData?.gameLabel?.includes(league.name);
+                    // Check if this is for our league (by name match)
+                    const slotLeagueName = slotData?.leagueName || '';
+                    const slotGameLabel = slotData?.gameLabel || '';
                     
-                    if (!isOurLeague) continue;
+                    const isOurLeague = slotLeagueName === league.name ||
+                        slotLeagueName.toLowerCase() === league.name.toLowerCase() ||
+                        slotGameLabel.toLowerCase().includes(league.name.toLowerCase());
+                    
+                    if (!isOurLeague) {
+                        console.log('[LEAGUES] Import: Skipping slot - league mismatch:', slotLeagueName, 'vs', league.name);
+                        continue;
+                    }
 
+                    console.log('[LEAGUES] Import: Found matching slot in div "' + divName + '" slot ' + slotIdx);
                     const matchups = slotData.matchups || [];
 
                     matchups.forEach(m => {
@@ -1364,6 +1492,7 @@
                             if (!processedMatchups.has(key)) {
                                 processedMatchups.add(key);
                                 foundMatchups.push({ teamA, teamB });
+                                console.log('[LEAGUES] Import: Found match:', teamA, 'vs', teamB);
                             }
                         }
                     });
@@ -1372,6 +1501,8 @@
 
             // Method 2: Scan scheduleAssignments for league entries (fallback)
             if (foundMatchups.length === 0) {
+                console.log('[LEAGUES] Import: No matches from leagueAssignments, trying scheduleAssignments...');
+                
                 for (const bunkName of Object.keys(scheduleAssignments)) {
                     const bunkSchedule = scheduleAssignments[bunkName];
                     if (!Array.isArray(bunkSchedule)) continue;
@@ -1385,8 +1516,10 @@
                         const isH2H = entry._h2h === true;
 
                         const isOurLeague = entryLeagueName === league.name ||
-                            activityName.includes(`League: ${league.name}`) ||
-                            (isH2H && activityName.includes(league.name));
+                            entryLeagueName.toLowerCase() === league.name.toLowerCase() ||
+                            activityName.toLowerCase().includes(`league: ${league.name.toLowerCase()}`) ||
+                            activityName.toLowerCase().includes(league.name.toLowerCase()) ||
+                            (isH2H && activityName.toLowerCase().includes(league.name.toLowerCase()));
 
                         if (!isOurLeague) continue;
 
