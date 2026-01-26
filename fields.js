@@ -60,11 +60,6 @@ function initFieldsTab(){
         .chip.active { background: #10B981; color: white; border-color: #10B981; box-shadow: 0 2px 5px rgba(16, 185, 129, 0.3); }
         .chip.inactive { background: #F3F4F6; color: #374151; }
         .chip:hover { transform: translateY(-1px); }
-        
-        .priority-list-item { display: flex; align-items: center; gap: 10px; padding: 8px; background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; margin-bottom: 6px; }
-        .priority-btn { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px solid #D1D5DB; border-radius: 4px; background: white; cursor: pointer; font-size: 0.8rem; transition: all 0.15s; }
-        .priority-btn:hover:not(:disabled) { border-color: #10B981; color: #10B981; }
-        .priority-btn:disabled { opacity: 0.4; cursor: default; }
 
         .activity-button { padding: 6px 12px; border: 1px solid #E5E7EB; border-radius: 8px; background: white; cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }
         .activity-button:hover { background: #F9FAFB; }
@@ -253,7 +248,6 @@ function loadData(){
         if(!f.sharableWith.capacity) f.sharableWith.capacity = 2;
         
         f.limitUsage = f.limitUsage || { enabled:false, divisions:{} };
-        f.preferences = f.preferences || { enabled:false, exclusive:false, list:[] };
 
         // Rainy Day Default
         f.rainyDayAvailable = f.rainyDayAvailable ?? false;
@@ -659,8 +653,9 @@ function summaryActivities(f){ return f.activities.length ? `${f.activities.leng
 function summarySharing(f){ return f.sharableWith.type === "not_sharable" ? "Not sharable" : `Sharable (Max ${f.sharableWith.capacity})`; }
 function summaryAccess(f){ 
     if(!f.limitUsage.enabled) return "Open to All Divisions";
-    if(f.preferences.exclusive) return "Exclusive to specific divisions";
-    return "Priority/Restrictions Active";
+    const allowedCount = Object.keys(f.limitUsage.divisions || {}).length;
+    if (allowedCount === 0) return "Restricted (none selected)";
+    return `Restricted to ${allowedCount} division${allowedCount !== 1 ? 's' : ''}`;
 }
 function summaryTime(f){ return f.timeRules.length ? `${f.timeRules.length} rule(s) active` : "Available all day"; }
 function summaryWeather(f) { return f.rainyDayAvailable ? "🏠 Indoor (Rain OK)" : "🌳 Outdoor"; }
@@ -923,7 +918,6 @@ function renderAccess(item){
         container.innerHTML = "";
         
         const rules = item.limitUsage;
-        const prefs = item.preferences;
 
         // Toggle Mode Buttons
         const modeWrap = document.createElement("div");
@@ -934,12 +928,12 @@ function renderAccess(item){
         btnAll.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${!rules.enabled ? '#ECFDF5' : '#fff'}; color:${!rules.enabled ? '#047857' : '#333'}; border-color:${!rules.enabled ? '#10B981' : '#E5E7EB'}; font-weight:${!rules.enabled ? '600' : '400'}; transition:all 0.2s;`;
         
         const btnRes = document.createElement("button");
-        btnRes.textContent = "Restricted / Priority";
+        btnRes.textContent = "Restricted";
         btnRes.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${rules.enabled ? '#ECFDF5' : '#fff'}; color:${rules.enabled ? '#047857' : '#333'}; border-color:${rules.enabled ? '#10B981' : '#E5E7EB'}; font-weight:${rules.enabled ? '600' : '400'}; transition:all 0.2s;`;
 
         btnAll.onclick = ()=>{ 
             rules.enabled=false; 
-            prefs.enabled=false; 
+            rules.divisions = {};
             saveData(); 
             renderContent(); 
             updateSummary();
@@ -947,7 +941,6 @@ function renderAccess(item){
 
         btnRes.onclick = ()=>{ 
             rules.enabled=true; 
-            prefs.enabled=true; 
             saveData(); 
             renderContent(); 
             updateSummary();
@@ -959,83 +952,15 @@ function renderAccess(item){
 
         if(rules.enabled){
             const body = document.createElement("div");
-            
-            // Exclusive Checkbox
-            const exLabel = document.createElement("label");
-            exLabel.style.display="flex"; exLabel.style.alignItems="center"; exLabel.style.gap="8px"; exLabel.style.marginBottom="12px"; exLabel.style.cursor="pointer";
-            const exCk = document.createElement("input"); 
-            exCk.type="checkbox"; 
-            exCk.checked=prefs.exclusive;
-            exCk.onchange = ()=>{ prefs.exclusive=exCk.checked; saveData(); updateSummary(); };
-            exLabel.appendChild(exCk);
-            exLabel.appendChild(document.createTextNode("Exclusive Mode (Only allowed divisions can use this)"));
-            body.appendChild(exLabel);
 
-            // Priority List
-            const pHeader = document.createElement("div");
-            pHeader.textContent = "Priority Order (Top = First Choice):";
-            pHeader.style.fontSize="0.85rem"; pHeader.style.fontWeight="600"; pHeader.style.marginBottom="6px";
-            body.appendChild(pHeader);
-
-            const listContainer = document.createElement("div");
-            
-            prefs.list = (prefs.list || []).filter(d => rules.divisions.hasOwnProperty(d));
-
-            if(prefs.list.length === 0) {
-                listContainer.innerHTML = `<div class="muted" style="font-size:0.8rem; font-style:italic; padding:4px; color:#6B7280;">No priority divisions set. Add below.</div>`;
-            }
-            
-            prefs.list.forEach((divName, idx) => {
-                const row = document.createElement("div"); 
-                row.className = "priority-list-item";
-                row.innerHTML = `<span style="font-weight:bold; color:#10B981; width:20px;">${idx+1}</span> <span style="flex:1;">${escapeHtml(divName)}</span>`;
-                
-                const ctrls = document.createElement("div"); 
-                ctrls.style.display="flex"; 
-                ctrls.style.gap="4px";
-                
-                const mkBtn = (txt, fn, dis) => {
-                    const b = document.createElement("button"); 
-                    b.className="priority-btn"; 
-                    b.textContent=txt;
-                    if(dis) b.disabled=true; 
-                    else b.onclick=fn;
-                    return b;
-                };
-                
-                ctrls.appendChild(mkBtn("↑", ()=>{ 
-                    [prefs.list[idx-1], prefs.list[idx]] = [prefs.list[idx], prefs.list[idx-1]]; 
-                    saveData(); 
-                    renderContent(); 
-                }, idx===0));
-                
-                ctrls.appendChild(mkBtn("↓", ()=>{ 
-                    [prefs.list[idx+1], prefs.list[idx]] = [prefs.list[idx], prefs.list[idx+1]]; 
-                    saveData(); 
-                    renderContent(); 
-                }, idx===prefs.list.length-1));
-                
-                const rm = mkBtn("✕", ()=>{ 
-                    prefs.list = prefs.list.filter(d=>d!==divName); 
-                    saveData(); 
-                    renderContent(); 
-                }, false);
-                rm.style.color="#DC2626"; 
-                rm.style.borderColor="#FECACA";
-                ctrls.appendChild(rm);
-
-                row.appendChild(ctrls);
-                listContainer.appendChild(row);
-            });
-
-            body.appendChild(listContainer);
+            // Description
+            const desc = document.createElement("p");
+            desc.className = "muted";
+            desc.style.marginBottom = "12px";
+            desc.textContent = "Only selected divisions can use this field:";
+            body.appendChild(desc);
 
             // Division Selector Chips
-            const divHeader = document.createElement("div");
-            divHeader.textContent = "Allowed Divisions (Click to add/remove from priority):";
-            divHeader.style.fontSize="0.85rem"; divHeader.style.fontWeight="600"; divHeader.style.marginTop="16px"; divHeader.style.marginBottom="6px";
-            body.appendChild(divHeader);
-
             const chipWrap = document.createElement("div");
             const availableDivisions = window.availableDivisions || [];
 
@@ -1047,18 +972,24 @@ function renderAccess(item){
                 c.onclick = ()=>{
                     if(isAllowed){
                         delete rules.divisions[divName];
-                        prefs.list = prefs.list.filter(d => d !== divName);
                     } else {
                         rules.divisions[divName] = [];
-                        if(!prefs.list.includes(divName)) prefs.list.push(divName);
                     }
                     saveData();
-                    renderContent(); 
+                    renderContent();
+                    updateSummary();
                 };
                 chipWrap.appendChild(c);
             });
 
             body.appendChild(chipWrap);
+
+            // Hint
+            const hint = document.createElement("p");
+            hint.style.cssText = "margin-top: 12px; font-size: 0.8rem; color: #6B7280;";
+            hint.textContent = "💡 Click divisions to allow/disallow access. Unselected divisions cannot use this field.";
+            body.appendChild(hint);
+
             container.appendChild(body);
         }
     };
@@ -1280,7 +1211,6 @@ function addField(){
         available: true,
         sharableWith: { type:'not_sharable', divisions:[], capacity:2 },
         limitUsage: { enabled:false, divisions:{} },
-        preferences: { enabled:false, exclusive:false, list:[] },
         timeRules: [],
         rainyDayAvailable: false
     });
