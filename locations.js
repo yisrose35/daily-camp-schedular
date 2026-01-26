@@ -272,33 +272,47 @@ function initLocationsTab(){
     // ★ Setup cloud sync listener (if available)
     setupCloudSyncListener();
 
-    // Inject Styles
+    // Inject Styles - ★ UNIFIED with fields.js styling
     const style = document.createElement('style');
     style.innerHTML = `
-        /* Two-pane layout styles */
-        .locations-master-list { border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; overflow: hidden; }
-        .locations-list-item { padding: 12px 14px; border-bottom: 1px solid #f3f4f6; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.15s, border-color 0.15s, box-shadow 0.18s, transform 0.08s; }
-        .locations-list-item:last-child { border-bottom: none; }
-        .locations-list-item:hover { background: #f9fafb; transform: translateY(-0.5px); }
-        .locations-list-item.selected { background: #eff6ff; border-left: 3px solid #2563eb; }
-        .locations-list-item-name { font-weight: 500; color: #111827; font-size: 0.9rem; }
-        .locations-list-item-meta { font-size: 0.75rem; color: #6b7280; margin-left: 6px; }
-        .locations-list-item-badge { font-size: 0.65rem; padding: 2px 8px; border-radius: 999px; background: linear-gradient(135deg, #2563eb, #0ea5e9); color: #fff; margin-left: 8px; font-weight: 500; }
+        /* Master List - matches fields.js */
+        .master-list { border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
+        .list-item { padding: 12px 14px; border-bottom: 1px solid #F3F4F6; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.15s; }
+        .list-item:last-child { border-bottom: none; }
+        .list-item:hover { background: #F9FAFB; }
+        .list-item.selected { background: #F0FDF4; border-left: 3px solid #10B981; }
+        .list-item-name { font-weight: 500; color: #1F2937; font-size: 0.9rem; }
+        .list-item-meta { font-size: 0.75rem; color: #6B7280; margin-left: 6px; }
+        .list-item-badge { font-size: 0.65rem; padding: 2px 8px; border-radius: 999px; background: #10B981; color: #fff; margin-left: 8px; font-weight: 500; }
 
-        /* Detail Section Accordion */
-        .loc-detail-section { margin-bottom: 12px; border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; }
-        .loc-detail-section-header { padding: 12px 16px; background: #f9fafb; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; border-radius: 11px; transition: background 0.15s; }
-        .loc-detail-section-header:hover { background: #f3f4f6; }
-        .loc-detail-section-title { font-size: 0.9rem; font-weight: 600; color: #111827; }
-        .loc-detail-section-summary { font-size: 0.8rem; color: #6b7280; margin-top: 2px; }
-        .loc-detail-section-body { display: none; padding: 16px; border-top: 1px solid #e5e7eb; }
+        /* Accordion / Collapsible Sections - matches fields.js */
+        .detail-section { margin-bottom: 12px; border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
+        .detail-section-header { padding: 12px 16px; background: #F9FAFB; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; }
+        .detail-section-header:hover { background: #F3F4F6; }
+        .detail-section-title { font-size: 0.9rem; font-weight: 600; color: #111; }
+        .detail-section-summary { font-size: 0.8rem; color: #6B7280; margin-top: 2px; }
+        .detail-section-body { display: none; padding: 16px; border-top: 1px solid #E5E7EB; }
+
+        /* Chips - matches fields.js */
+        .chip { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; cursor: pointer; border: 1px solid #E5E7EB; margin-right: 4px; margin-bottom: 4px; transition: all 0.2s; }
+        .chip.active { background: #10B981; color: white; border-color: #10B981; box-shadow: 0 2px 5px rgba(16, 185, 129, 0.3); }
+        .chip.inactive { background: #F3F4F6; color: #374151; }
+        .chip:hover { transform: translateY(-1px); }
+
+        /* Toggle Switch - matches fields.js */
+        .switch { position: relative; display: inline-block; width: 34px; height: 20px; flex-shrink: 0; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #10B981; }
+        input:checked + .slider:before { transform: translateX(14px); }
 
         /* Multi-select dropdown trigger */
         .multi-select-dropdown { position: relative; }
         .multi-select-trigger { 
             width: 100%; 
             padding: 10px 14px; 
-            border: 1px solid #d1d5db; 
+            border: 1px solid #D1D5DB; 
             border-radius: 10px; 
             background: #fff; 
             cursor: pointer; 
@@ -310,12 +324,12 @@ function initLocationsTab(){
             gap: 6px;
             transition: border-color 0.15s, box-shadow 0.15s;
         }
-        .multi-select-trigger:hover { border-color: #9ca3af; }
-        .multi-select-trigger.open { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.15); }
-        .multi-select-placeholder { color: #9ca3af; font-size: 0.9rem; }
+        .multi-select-trigger:hover { border-color: #9CA3AF; }
+        .multi-select-trigger.open { border-color: #10B981; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); }
+        .multi-select-placeholder { color: #9CA3AF; font-size: 0.9rem; }
         .multi-select-tag { 
-            background: #dbeafe; 
-            color: #1e40af; 
+            background: #ECFDF5; 
+            color: #047857; 
             padding: 4px 10px; 
             border-radius: 6px; 
             font-size: 0.8rem; 
@@ -323,12 +337,12 @@ function initLocationsTab(){
             display: inline-flex; 
             align-items: center; 
             gap: 6px;
-            border: 1px solid #bfdbfe;
+            border: 1px solid #A7F3D0;
         }
         .multi-select-tag.special-tag {
-            background: #fef3c7;
-            color: #92400e;
-            border: 1px solid #fcd34d;
+            background: #FEF3C7;
+            color: #92400E;
+            border: 1px solid #FCD34D;
         }
         .multi-select-tag-remove { 
             cursor: pointer; 
@@ -339,12 +353,12 @@ function initLocationsTab(){
         }
         .multi-select-tag-remove:hover { opacity: 1; }
         
-        /* Multi-select dropdown panel - FIXED positioning */
+        /* Multi-select dropdown panel */
         .multi-select-options { 
             position: fixed; 
             z-index: 999999;
             background: #fff; 
-            border: 1px solid #e5e7eb; 
+            border: 1px solid #E5E7EB; 
             border-radius: 12px; 
             overflow-y: auto;
             overflow-x: hidden;
@@ -360,17 +374,17 @@ function initLocationsTab(){
             align-items: center; 
             gap: 10px;
             transition: background 0.1s;
-            border-bottom: 1px solid #f3f4f6;
+            border-bottom: 1px solid #F3F4F6;
         }
         .multi-select-option:last-child { border-bottom: none; }
-        .multi-select-option:hover { background: #f9fafb; }
-        .multi-select-option.selected { background: #eff6ff; }
+        .multi-select-option:hover { background: #F9FAFB; }
+        .multi-select-option.selected { background: #F0FDF4; }
         .multi-select-option.disabled { opacity: 0.5; cursor: not-allowed; }
         .multi-select-option.disabled:hover { background: transparent; }
         .multi-select-checkbox { 
             width: 18px; 
             height: 18px; 
-            accent-color: #2563eb; 
+            accent-color: #10B981; 
             flex-shrink: 0;
         }
         .multi-select-option-label { 
@@ -380,30 +394,30 @@ function initLocationsTab(){
         }
         .multi-select-option-badge {
             font-size: 0.7rem;
-            color: #dc2626;
-            background: #fef2f2;
+            color: #DC2626;
+            background: #FEF2F2;
             padding: 2px 8px;
             border-radius: 999px;
-            border: 1px solid #fecaca;
+            border: 1px solid #FECACA;
         }
         .multi-select-option-type {
             font-size: 0.7rem;
-            color: #6b7280;
-            background: #f3f4f6;
+            color: #6B7280;
+            background: #F3F4F6;
             padding: 2px 8px;
             border-radius: 999px;
         }
         .multi-select-option-type.special {
-            color: #92400e;
-            background: #fef3c7;
+            color: #92400E;
+            background: #FEF3C7;
         }
         .multi-select-section-header {
             padding: 10px 14px;
-            background: #f9fafb;
-            border-bottom: 1px solid #e5e7eb;
+            background: #F9FAFB;
+            border-bottom: 1px solid #E5E7EB;
             font-size: 0.75rem;
             font-weight: 600;
-            color: #6b7280;
+            color: #6B7280;
             text-transform: uppercase;
             letter-spacing: 0.03em;
             position: sticky;
@@ -411,46 +425,46 @@ function initLocationsTab(){
             z-index: 1;
         }
 
-        /* Location item in list */
+        /* Location/Facility item in list */
         .location-item { 
             display: flex; 
             justify-content: space-between; 
             align-items: center;
             padding: 12px 14px; 
-            background: #f9fafb; 
-            border: 1px solid #e5e7eb; 
+            background: #F9FAFB; 
+            border: 1px solid #E5E7EB; 
             border-radius: 10px; 
             margin-bottom: 8px; 
             transition: all 0.15s;
         }
-        .location-item:hover { background: #eff6ff; border-color: #bfdbfe; }
+        .location-item:hover { background: #F0FDF4; border-color: #A7F3D0; }
         .location-item-name { font-weight: 500; color: #111827; font-size: 0.9rem; }
         .location-item-actions { display: flex; gap: 8px; align-items: center; }
         .location-delete-btn { 
             background: transparent; 
             border: none; 
-            color: #dc2626; 
+            color: #DC2626; 
             cursor: pointer;
             padding: 6px 10px; 
             border-radius: 6px; 
             font-size: 0.85rem; 
             transition: background 0.15s;
         }
-        .location-delete-btn:hover { background: #fee2e2; }
+        .location-delete-btn:hover { background: #FEE2E2; }
 
         /* Form inputs */
-        .loc-input {
+        .form-input {
             padding: 10px 14px; 
-            border: 1px solid #d1d5db; 
+            border: 1px solid #D1D5DB; 
             border-radius: 10px; 
             font-size: 0.9rem; 
             transition: border-color 0.15s, box-shadow 0.15s;
         }
-        .loc-input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.15); }
-        .loc-input-small { width: 80px; text-align: center; }
+        .form-input:focus { outline: none; border-color: #10B981; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); }
+        .form-input-small { width: 80px; text-align: center; }
 
         /* Muted text */
-        .loc-muted { color: #6b7280; font-size: 0.85rem; }
+        .muted { color: #6B7280; font-size: 0.85rem; }
     `;
     container.appendChild(style);
 
@@ -476,7 +490,7 @@ function initLocationsTab(){
                   <input id="new-zone-input" placeholder="New Zone (e.g., #2 School)" style="flex:1; border:none; outline:none; font-size:0.9rem;">
                   <button id="add-zone-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
                 </div>
-                <div id="zones-master-list" class="locations-master-list" style="max-height:400px; overflow-y:auto;"></div>
+                <div id="zones-master-list" class="master-list" style="max-height:400px; overflow-y:auto;"></div>
                 
                 <!-- Pinned Tile Defaults Section -->
                 <div style="margin-top:24px;">
@@ -486,9 +500,9 @@ function initLocationsTab(){
                   </p>
                   <div id="pinned-defaults-list" style="margin-bottom:12px;"></div>
                   <div style="display:flex; gap:8px; align-items:center;">
-                    <input id="new-pinned-tile-input" class="loc-input" placeholder="Tile name" style="flex:1;">
-                    <select id="new-pinned-tile-location" class="loc-input" style="flex:1;"></select>
-                    <button id="add-pinned-default-btn" style="background:#2563eb; color:white; border:none; border-radius:8px; padding:8px 12px; cursor:pointer; font-size:0.85rem;">Add</button>
+                    <input id="new-pinned-tile-input" class="form-input" placeholder="Tile name" style="flex:1;">
+                    <select id="new-pinned-tile-location" class="form-input" style="flex:1;"></select>
+                    <button id="add-pinned-default-btn" style="background:#10B981; color:white; border:none; border-radius:8px; padding:8px 12px; cursor:pointer; font-size:0.85rem;">Add</button>
                   </div>
                 </div>
               </div>
@@ -646,7 +660,7 @@ function renderZonesList(){
 
 function createZoneListItem(zone){
     const el = document.createElement("div");
-    el.className = "locations-list-item" + (zone.name === selectedZoneId ? " selected" : "");
+    el.className = "list-item" + (zone.name === selectedZoneId ? " selected" : "");
     el.onclick = () => {
         selectedZoneId = zone.name;
         renderZonesList();
@@ -656,19 +670,19 @@ function createZoneListItem(zone){
     const infoDiv = document.createElement("div");
     
     const nameEl = document.createElement("span");
-    nameEl.className = "locations-list-item-name";
+    nameEl.className = "list-item-name";
     nameEl.textContent = zone.name;
     infoDiv.appendChild(nameEl);
     
     if(zone.isDefault){
         const badge = document.createElement("span");
-        badge.className = "locations-list-item-badge";
+        badge.className = "list-item-badge";
         badge.textContent = "Default";
         infoDiv.appendChild(badge);
     }
     
     const meta = document.createElement("div");
-    meta.className = "locations-list-item-meta";
+    meta.className = "list-item-meta";
     const fieldCount = zone.fields?.length || 0;
     const specialCount = zone.specialActivities?.length || 0;  // ★ NEW
     const locCount = Object.keys(zone.locations || {}).length;
@@ -796,13 +810,13 @@ function renderDetailPane(){
 //------------------------------------------------------------------
 function createSection(title, summary, builder){
     const wrap = document.createElement("div"); 
-    wrap.className = "loc-detail-section";
+    wrap.className = "detail-section";
 
     const head = document.createElement("div");
-    head.className = "loc-detail-section-header";
+    head.className = "detail-section-header";
 
     const t = document.createElement("div");
-    t.innerHTML = `<div class="loc-detail-section-title">${title}</div><div class="loc-detail-section-summary">${escapeHtml(summary)}</div>`;
+    t.innerHTML = `<div class="detail-section-title">${title}</div><div class="detail-section-summary">${escapeHtml(summary)}</div>`;
 
     const caret = document.createElement("span");
     caret.innerHTML = `<svg width="20" height="20" fill="none" stroke="#9CA3AF" stroke-width="2" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"></path></svg>`;
@@ -812,7 +826,7 @@ function createSection(title, summary, builder){
     head.appendChild(caret);
 
     const body = document.createElement("div");
-    body.className = "loc-detail-section-body";
+    body.className = "detail-section-body";
 
     head.onclick = () => {
         const open = body.style.display === "block";
@@ -872,29 +886,29 @@ function renderTransitionSection(zone){
     const container = document.createElement("div");
     
     const updateSummary = () => {
-        const summaryEl = container.closest('.loc-detail-section')?.querySelector('.loc-detail-section-summary');
+        const summaryEl = container.closest('.detail-section')?.querySelector('.detail-section-summary');
         if(summaryEl) summaryEl.textContent = summaryTransition(zone);
     };
     
     container.innerHTML = `
-        <p class="loc-muted" style="margin-top:0; margin-bottom:16px;">
+        <p class="muted" style="margin-top:0; margin-bottom:16px;">
             Transition time adds buffer before/after activities in this zone for travel or setup.
         </p>
         <div style="display:flex; gap:20px; flex-wrap:wrap; margin-bottom:16px;">
             <div>
                 <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:4px;">Pre-Buffer (minutes)</label>
-                <input type="number" id="zone-pre-min" class="loc-input loc-input-small" min="0" step="5" value="${zone.transition.preMin}">
+                <input type="number" id="zone-pre-min" class="form-input form-input-small" min="0" step="5" value="${zone.transition.preMin}">
             </div>
             <div>
                 <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:4px;">Post-Buffer (minutes)</label>
-                <input type="number" id="zone-post-min" class="loc-input loc-input-small" min="0" step="5" value="${zone.transition.postMin}">
+                <input type="number" id="zone-post-min" class="form-input form-input-small" min="0" step="5" value="${zone.transition.postMin}">
             </div>
             <div>
                 <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:4px;">Max Concurrent Activities</label>
-                <input type="number" id="zone-max-concurrent" class="loc-input loc-input-small" min="1" value="${zone.maxConcurrent}">
+                <input type="number" id="zone-max-concurrent" class="form-input form-input-small" min="1" value="${zone.maxConcurrent}">
             </div>
         </div>
-        <p class="loc-muted" style="font-size:0.8rem;">
+        <p class="muted" style="font-size:0.8rem;">
             <strong>Max Concurrent</strong> limits how many activities can happen in this zone at once 
             (e.g., bus capacity for off-site locations). Set to 99 for no limit.
         </p>
@@ -936,7 +950,7 @@ function renderFieldsAndSpecialsSection(zone){
     if (!zone.specialActivities) zone.specialActivities = [];
     
     const updateSummary = () => {
-        const summaryEl = container.closest('.loc-detail-section')?.querySelector('.loc-detail-section-summary');
+        const summaryEl = container.closest('.detail-section')?.querySelector('.detail-section-summary');
         if(summaryEl) summaryEl.textContent = summaryFieldsAndSpecials(zone);
     };
     
@@ -960,7 +974,7 @@ function renderFieldsAndSpecialsSection(zone){
     });
     
     container.innerHTML = `
-        <p class="loc-muted" style="margin-top:0; margin-bottom:16px;">
+        <p class="muted" style="margin-top:0; margin-bottom:16px;">
             Select which fields and special activities belong to this zone. They inherit the zone's transition times.
         </p>
         <div id="fields-specials-multiselect" class="multi-select-dropdown"></div>
@@ -1237,15 +1251,15 @@ function renderLocationsSection(zone){
     const container = document.createElement("div");
     
     const updateSummary = () => {
-        const summaryEl = container.closest('.loc-detail-section')?.querySelector('.loc-detail-section-summary');
+        const summaryEl = container.closest('.detail-section')?.querySelector('.detail-section-summary');
         if(summaryEl) summaryEl.textContent = summaryLocations(zone);
     };
     
     const renderContent = () => {
         container.innerHTML = `
             <div id="locations-list"></div>
-            <div style="display:flex; gap:8px; margin-top:16px; padding-top:16px; border-top:1px solid #e5e7eb; align-items:center;">
-                <input type="text" id="new-location-input" class="loc-input" placeholder="New location (e.g., Lunchroom)" style="flex:1;">
+            <div style="display:flex; gap:8px; margin-top:16px; padding-top:16px; border-top:1px solid #E5E7EB; align-items:center;">
+                <input type="text" id="new-location-input" class="form-input" placeholder="New location (e.g., Lunchroom)" style="flex:1;">
                 <button id="add-location-btn" style="background:#111827; color:white; border:none; border-radius:8px; padding:10px 16px; cursor:pointer; font-weight:500; font-size:0.85rem; white-space:nowrap;">Add</button>
             </div>
         `;
@@ -1258,7 +1272,7 @@ function renderLocationsSection(zone){
         const locationNames = Object.keys(zone.locations || {});
         
         if(locationNames.length === 0){
-            listEl.innerHTML = `<div class="loc-muted" style="padding:16px; text-align:center; border:1px dashed #e5e7eb; border-radius:8px;">
+            listEl.innerHTML = `<div class="muted" style="padding:16px; text-align:center; border:1px dashed #E5E7EB; border-radius:8px;">
                 No locations in this zone yet.<br>
                 <span style="font-size:0.8rem;">Add facilities like Pool, Lunchroom, Gym, etc.</span>
             </div>`;
@@ -1435,7 +1449,7 @@ function renderPinnedTileDefaults(){
     const entries = Object.entries(pinnedTileDefaults);
     
     if(entries.length === 0){
-        listEl.innerHTML = `<div class="loc-muted" style="padding:12px; text-align:center; border:1px dashed #e5e7eb; border-radius:8px; font-size:0.85rem;">
+        listEl.innerHTML = `<div class="muted" style="padding:12px; text-align:center; border:1px dashed #E5E7EB; border-radius:8px; font-size:0.85rem;">
             No defaults set yet.
         </div>`;
         return;
@@ -1445,14 +1459,14 @@ function renderPinnedTileDefaults(){
     
     entries.forEach(([tileName, locationName]) => {
         const item = document.createElement("div");
-        item.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:6px;";
+        item.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:8px; margin-bottom:6px;";
         item.innerHTML = `
             <div>
                 <span style="font-weight:500; color:#111827;">${escapeHtml(tileName)}</span>
-                <span style="color:#6b7280; margin:0 8px;">→</span>
-                <span style="color:#2563eb;">${escapeHtml(locationName)}</span>
+                <span style="color:#6B7280; margin:0 8px;">→</span>
+                <span style="color:#10B981;">${escapeHtml(locationName)}</span>
             </div>
-            <button style="background:transparent; border:none; color:#dc2626; cursor:pointer; padding:4px 8px; border-radius:4px;" data-tile="${escapeHtml(tileName)}">✕</button>
+            <button style="background:transparent; border:none; color:#DC2626; cursor:pointer; padding:4px 8px; border-radius:4px;" data-tile="${escapeHtml(tileName)}">✕</button>
         `;
         
         item.querySelector('button').onclick = () => {
