@@ -1482,10 +1482,25 @@
                                 if (m.teamA) matchupTeams.add(m.teamA);
                                 if (m.teamB) matchupTeams.add(m.teamB);
                             } else if (typeof m === 'string') {
-                                const parts = m.split(' vs ');
-                                if (parts.length === 2) {
-                                    matchupTeams.add(parts[0].trim());
-                                    matchupTeams.add(parts[1].split('—')[0].trim());
+                                // Parse formats like:
+                                // "1 vs 5 @ Field B (Baseball)"
+                                // "Team A vs Team B — Field"
+                                // "Red vs Blue"
+                                const vsMatch = m.match(/^(.+?)\s+vs\s+(.+?)(?:\s+@|\s*—|$)/i);
+                                if (vsMatch) {
+                                    matchupTeams.add(vsMatch[1].trim());
+                                    matchupTeams.add(vsMatch[2].trim());
+                                } else {
+                                    // Fallback: simple split on ' vs '
+                                    const parts = m.split(' vs ');
+                                    if (parts.length === 2) {
+                                        matchupTeams.add(parts[0].trim());
+                                        // Remove @ field info or — field info
+                                        let teamB = parts[1].trim();
+                                        teamB = teamB.split(' @ ')[0].trim();
+                                        teamB = teamB.split('—')[0].trim();
+                                        matchupTeams.add(teamB);
+                                    }
                                 }
                             }
                         });
@@ -1527,10 +1542,24 @@
                             teamA = m.teamA;
                             teamB = m.teamB;
                         } else if (typeof m === 'string') {
-                            const parts = m.split(' vs ');
-                            if (parts.length === 2) {
-                                teamA = parts[0].trim();
-                                teamB = parts[1].split('—')[0].trim();
+                            // Parse formats like:
+                            // "1 vs 5 @ Field B (Baseball)"
+                            // "Team A vs Team B — Field"
+                            // "Red vs Blue"
+                            const vsMatch = m.match(/^(.+?)\s+vs\s+(.+?)(?:\s+@|\s*—|$)/i);
+                            if (vsMatch) {
+                                teamA = vsMatch[1].trim();
+                                teamB = vsMatch[2].trim();
+                            } else {
+                                // Fallback: simple split
+                                const parts = m.split(' vs ');
+                                if (parts.length === 2) {
+                                    teamA = parts[0].trim();
+                                    teamB = parts[1].trim();
+                                    // Remove @ field info or — field info
+                                    teamB = teamB.split(' @ ')[0].trim();
+                                    teamB = teamB.split('—')[0].trim();
+                                }
                             }
                         }
 
@@ -1576,7 +1605,8 @@
                             const matchupTeams = new Set();
                             allMatchups.forEach(m => {
                                 if (typeof m === 'string') {
-                                    const vsMatch = m.match(/^(.+?)\s+vs\s+(.+?)(?:\s*—|$)/i);
+                                    // Parse "1 vs 5 @ Field" or "A vs B — Field" or "A vs B"
+                                    const vsMatch = m.match(/^(.+?)\s+vs\s+(.+?)(?:\s+@|\s*—|$)/i);
                                     if (vsMatch) {
                                         matchupTeams.add(vsMatch[1].trim());
                                         matchupTeams.add(vsMatch[2].trim());
@@ -1600,7 +1630,8 @@
                         allMatchups.forEach(m => {
                             let teamA, teamB;
                             if (typeof m === 'string') {
-                                const vsMatch = m.match(/^(.+?)\s+vs\s+(.+?)(?:\s*—|$)/i);
+                                // Parse "1 vs 5 @ Field" or "A vs B — Field" or "A vs B"
+                                const vsMatch = m.match(/^(.+?)\s+vs\s+(.+?)(?:\s+@|\s*—|$)/i);
                                 if (vsMatch) {
                                     teamA = vsMatch[1].trim();
                                     teamB = vsMatch[2].trim();
