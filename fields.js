@@ -613,9 +613,7 @@ function renderDetailPane(){
     detailPaneEl.appendChild(section("Activities", summaryActivities(item), 
         () => renderActivities(item, allSports)));
 
-    // Transition & Zones
-    detailPaneEl.appendChild(section("Transition & Zone Rules", summaryTransition(item), 
-        () => renderTransition(item)));
+    
 
     // Access & Priority
     detailPaneEl.appendChild(section("Access & Restrictions", summaryAccess(item), 
@@ -684,7 +682,7 @@ function summaryAccess(f){
     if(f.preferences.exclusive) return "Exclusive to specific divisions";
     return "Priority/Restrictions Active";
 }
-function summaryTransition(f){ return `${f.transition.preMin}m Pre / ${f.transition.postMin}m Post`; }
+
 function summaryTime(f){ return f.timeRules.length ? `${f.timeRules.length} rule(s) active` : "Available all day"; }
 function summaryWeather(f) { return f.rainyDayAvailable ? "🏠 Indoor (Rain OK)" : "🌳 Outdoor"; }
 
@@ -846,11 +844,7 @@ function renderActivities(item, allSports){
     return box;
 }
 
-// 2. TRANSITION
-function renderTransition(item){
-    const t = item.transition;
-    const box = document.createElement("div");
-    const update = () => { saveData(); renderMasterLists(); };
+
 
     // Times
     const timeRow = document.createElement("div");
