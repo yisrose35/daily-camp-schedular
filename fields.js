@@ -60,6 +60,11 @@ function initFieldsTab(){
         .chip.active { background: #10B981; color: white; border-color: #10B981; box-shadow: 0 2px 5px rgba(16, 185, 129, 0.3); }
         .chip.inactive { background: #F3F4F6; color: #374151; }
         .chip:hover { transform: translateY(-1px); }
+        
+        .priority-list-item { display: flex; align-items: center; gap: 10px; padding: 8px; background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; margin-bottom: 6px; }
+        .priority-btn { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px solid #D1D5DB; border-radius: 4px; background: white; cursor: pointer; font-size: 0.8rem; transition: all 0.15s; }
+        .priority-btn:hover:not(:disabled) { border-color: #10B981; color: #10B981; }
+        .priority-btn:disabled { opacity: 0.4; cursor: default; }
 
         .activity-button { padding: 6px 12px; border: 1px solid #E5E7EB; border-radius: 8px; background: white; cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }
         .activity-button:hover { background: #F9FAFB; }
@@ -655,7 +660,7 @@ function summaryAccess(f){
     if(!f.limitUsage.enabled) return "Open to All Divisions";
     const allowedCount = Object.keys(f.limitUsage.divisions || {}).length;
     if (allowedCount === 0) return "Restricted (none selected)";
-    return `Restricted to ${allowedCount} division${allowedCount !== 1 ? 's' : ''}`;
+    return `${allowedCount} division${allowedCount !== 1 ? 's' : ''} with priority`;
 }
 function summaryTime(f){ return f.timeRules.length ? `${f.timeRules.length} rule(s) active` : "Available all day"; }
 function summaryWeather(f) { return f.rainyDayAvailable ? "🏠 Indoor (Rain OK)" : "🌳 Outdoor"; }
@@ -918,6 +923,9 @@ function renderAccess(item){
         container.innerHTML = "";
         
         const rules = item.limitUsage;
+        
+        // Ensure priorityList exists
+        if (!rules.priorityList) rules.priorityList = [];
 
         // Toggle Mode Buttons
         const modeWrap = document.createElement("div");
@@ -934,6 +942,7 @@ function renderAccess(item){
         btnAll.onclick = ()=>{ 
             rules.enabled=false; 
             rules.divisions = {};
+            rules.priorityList = [];
             saveData(); 
             renderContent(); 
             updateSummary();
@@ -953,14 +962,74 @@ function renderAccess(item){
         if(rules.enabled){
             const body = document.createElement("div");
 
-            // Description
-            const desc = document.createElement("p");
-            desc.className = "muted";
-            desc.style.marginBottom = "12px";
-            desc.textContent = "Only selected divisions can use this field:";
-            body.appendChild(desc);
+            // Priority List Header
+            const pHeader = document.createElement("div");
+            pHeader.textContent = "Priority Order (Top = First Choice):";
+            pHeader.style.fontSize="0.85rem"; pHeader.style.fontWeight="600"; pHeader.style.marginBottom="6px";
+            body.appendChild(pHeader);
+
+            const listContainer = document.createElement("div");
+            
+            // Clean up priorityList to only include divisions that are in rules.divisions
+            rules.priorityList = (rules.priorityList || []).filter(d => rules.divisions.hasOwnProperty(d));
+
+            if(rules.priorityList.length === 0) {
+                listContainer.innerHTML = `<div class="muted" style="font-size:0.8rem; font-style:italic; padding:4px; color:#6B7280;">No divisions selected. Click divisions below to allow access.</div>`;
+            }
+            
+            rules.priorityList.forEach((divName, idx) => {
+                const row = document.createElement("div"); 
+                row.className = "priority-list-item";
+                row.innerHTML = `<span style="font-weight:bold; color:#10B981; width:20px;">${idx+1}</span> <span style="flex:1;">${escapeHtml(divName)}</span>`;
+                
+                const ctrls = document.createElement("div"); 
+                ctrls.style.display="flex"; 
+                ctrls.style.gap="4px";
+                
+                const mkBtn = (txt, fn, dis) => {
+                    const b = document.createElement("button"); 
+                    b.className="priority-btn"; 
+                    b.textContent=txt;
+                    if(dis) b.disabled=true; 
+                    else b.onclick=fn;
+                    return b;
+                };
+                
+                ctrls.appendChild(mkBtn("↑", ()=>{ 
+                    [rules.priorityList[idx-1], rules.priorityList[idx]] = [rules.priorityList[idx], rules.priorityList[idx-1]]; 
+                    saveData(); 
+                    renderContent(); 
+                }, idx===0));
+                
+                ctrls.appendChild(mkBtn("↓", ()=>{ 
+                    [rules.priorityList[idx+1], rules.priorityList[idx]] = [rules.priorityList[idx], rules.priorityList[idx+1]]; 
+                    saveData(); 
+                    renderContent(); 
+                }, idx===rules.priorityList.length-1));
+                
+                const rm = mkBtn("✕", ()=>{ 
+                    rules.priorityList = rules.priorityList.filter(d=>d!==divName);
+                    delete rules.divisions[divName];
+                    saveData(); 
+                    renderContent();
+                    updateSummary();
+                }, false);
+                rm.style.color="#DC2626"; 
+                rm.style.borderColor="#FECACA";
+                ctrls.appendChild(rm);
+
+                row.appendChild(ctrls);
+                listContainer.appendChild(row);
+            });
+
+            body.appendChild(listContainer);
 
             // Division Selector Chips
+            const divHeader = document.createElement("div");
+            divHeader.textContent = "Allowed Divisions (Click to add/remove):";
+            divHeader.style.fontSize="0.85rem"; divHeader.style.fontWeight="600"; divHeader.style.marginTop="16px"; divHeader.style.marginBottom="6px";
+            body.appendChild(divHeader);
+
             const chipWrap = document.createElement("div");
             const availableDivisions = window.availableDivisions || [];
 
@@ -972,8 +1041,10 @@ function renderAccess(item){
                 c.onclick = ()=>{
                     if(isAllowed){
                         delete rules.divisions[divName];
+                        rules.priorityList = rules.priorityList.filter(d => d !== divName);
                     } else {
                         rules.divisions[divName] = [];
+                        if(!rules.priorityList.includes(divName)) rules.priorityList.push(divName);
                     }
                     saveData();
                     renderContent();
@@ -983,13 +1054,6 @@ function renderAccess(item){
             });
 
             body.appendChild(chipWrap);
-
-            // Hint
-            const hint = document.createElement("p");
-            hint.style.cssText = "margin-top: 12px; font-size: 0.8rem; color: #6B7280;";
-            hint.textContent = "💡 Click divisions to allow/disallow access. Unselected divisions cannot use this field.";
-            body.appendChild(hint);
-
             container.appendChild(body);
         }
     };
