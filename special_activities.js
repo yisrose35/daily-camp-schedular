@@ -320,46 +320,46 @@ function initSpecialActivitiesTab() {
     loadData();
     container.innerHTML = "";
 
-    // Inject Styles (matching fields.js)
+    // Inject Styles - ★ UNIFIED with fields.js styling (no sa- prefix)
     const style = document.createElement('style');
     style.innerHTML = `
-        /* Master List Styles */
-        .sa-master-list { border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
-        .sa-list-item { padding: 12px 14px; border-bottom: 1px solid #F3F4F6; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.15s; }
-        .sa-list-item:last-child { border-bottom: none; }
-        .sa-list-item:hover { background: #F9FAFB; }
-        .sa-list-item.selected { background: #F0FDF4; border-left: 3px solid #10B981; }
-        .sa-list-item-name { font-weight: 500; color: #1F2937; font-size: 0.9rem; }
-        .sa-list-item-meta { font-size: 0.75rem; color: #6B7280; margin-left: 6px; }
+        /* Master List - matches fields.js */
+        .master-list { border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
+        .list-item { padding: 12px 14px; border-bottom: 1px solid #F3F4F6; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.15s; }
+        .list-item:last-child { border-bottom: none; }
+        .list-item:hover { background: #F9FAFB; }
+        .list-item.selected { background: #F0FDF4; border-left: 3px solid #10B981; }
+        .list-item-name { font-weight: 500; color: #1F2937; font-size: 0.9rem; }
+        .list-item-meta { font-size: 0.75rem; color: #6B7280; margin-left: 6px; }
 
-        /* Accordion / Collapsible Sections */
-        .sa-detail-section { margin-bottom: 12px; border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
-        .sa-detail-section-header { padding: 12px 16px; background: #F9FAFB; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; }
-        .sa-detail-section-header:hover { background: #F3F4F6; }
-        .sa-detail-section-title { font-size: 0.9rem; font-weight: 600; color: #111; }
-        .sa-detail-section-summary { font-size: 0.8rem; color: #6B7280; margin-top: 2px; }
-        .sa-detail-section-body { display: none; padding: 16px; border-top: 1px solid #E5E7EB; }
+        /* Accordion / Collapsible Sections - matches fields.js */
+        .detail-section { margin-bottom: 12px; border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
+        .detail-section-header { padding: 12px 16px; background: #F9FAFB; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; }
+        .detail-section-header:hover { background: #F3F4F6; }
+        .detail-section-title { font-size: 0.9rem; font-weight: 600; color: #111; }
+        .detail-section-summary { font-size: 0.8rem; color: #6B7280; margin-top: 2px; }
+        .detail-section-body { display: none; padding: 16px; border-top: 1px solid #E5E7EB; }
 
-        /* Chips */
-        .sa-chip { display: inline-block; padding: 6px 12px; border-radius: 6px; margin: 4px; cursor: pointer; transition: all 0.15s; font-size: 0.85rem; }
-        .sa-chip.active { background: #ECFDF5; color: #047857; border: 1px solid #10B981; }
-        .sa-chip.inactive { background: #F9FAFB; color: #6B7280; border: 1px solid #E5E7EB; }
-        .sa-chip:hover { transform: scale(1.05); }
+        /* Chips - matches fields.js */
+        .chip { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; cursor: pointer; border: 1px solid #E5E7EB; margin-right: 4px; margin-bottom: 4px; transition: all 0.2s; }
+        .chip.active { background: #10B981; color: white; border-color: #10B981; box-shadow: 0 2px 5px rgba(16, 185, 129, 0.3); }
+        .chip.inactive { background: #F3F4F6; color: #374151; }
+        .chip:hover { transform: translateY(-1px); }
 
-        /* Toggle Switch */
-        .sa-switch { position: relative; width: 40px; height: 22px; display: inline-block; }
-        .sa-switch input { opacity: 0; width: 0; height: 0; }
-        .sa-slider { position: absolute; cursor: pointer; inset: 0; background: #ccc; border-radius: 22px; transition: 0.2s; }
-        .sa-slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.2s; }
-        .sa-switch input:checked + .sa-slider { background: #10B981; }
-        .sa-switch input:checked + .sa-slider:before { transform: translateX(18px); }
+        /* Toggle Switch - matches fields.js */
+        .switch { position: relative; display: inline-block; width: 34px; height: 20px; flex-shrink: 0; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #10B981; }
+        input:checked + .slider:before { transform: translateX(14px); }
 
-        /* Muted / Empty */
-        .sa-muted { color: #9CA3AF; font-style: italic; text-align: center; padding: 20px; }
+        /* Muted / Empty - matches fields.js */
+        .muted { color: #9CA3AF; font-style: italic; text-align: center; padding: 20px; }
 
         /* Rainy Day List Styles */
-        .sa-rainy-list { background: linear-gradient(to bottom, #f0f9ff, #fff) !important; border-color: #7dd3fc !important; }
-        .sa-rainy-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.7rem; color: #0284c7; background: #e0f2fe; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
+        .rainy-list { background: linear-gradient(to bottom, #f0f9ff, #fff) !important; border-color: #7dd3fc !important; }
+        .rainy-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.7rem; color: #0284c7; background: #e0f2fe; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
     `;
     container.appendChild(style);
 
@@ -386,7 +386,7 @@ function initSpecialActivitiesTab() {
                   <input id="new-special-input" placeholder="New Special (e.g., Canteen)" style="flex:1; border:none; outline:none; font-size:0.9rem;">
                   <button id="add-special-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
                 </div>
-                <div id="specials-master-list" class="sa-master-list" style="max-height:280px; overflow-y:auto;"></div>
+                <div id="specials-master-list" class="master-list" style="max-height:280px; overflow-y:auto;"></div>
 
                 <!-- Rainy Day Special Activities -->
                 <div style="margin-top:24px;">
@@ -400,7 +400,7 @@ function initSpecialActivitiesTab() {
                     <input id="new-rainy-day-input" placeholder="New Rainy Day Activity" style="flex:1; border:none; outline:none; font-size:0.9rem; background:transparent;">
                     <button id="add-rainy-day-btn" style="background:#0284c7; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
                   </div>
-                  <div id="rainy-day-master-list" class="sa-master-list sa-rainy-list" style="max-height:200px; overflow-y:auto;"></div>
+                  <div id="rainy-day-master-list" class="master-list rainy-list" style="max-height:200px; overflow-y:auto;"></div>
                 </div>
               </div>
 
@@ -619,7 +619,7 @@ function createMasterListItem(item, isRainyDay = false) {
     
     const id = `special-${item.name}`;
     const el = document.createElement("div");
-    el.className = "sa-list-item" + (id === selectedItemId ? " selected" : "");
+    el.className = "list-item" + (id === selectedItemId ? " selected" : "");
     el.onclick = () => { 
         selectedItemId = id; 
         renderMasterList(); 
@@ -630,13 +630,13 @@ function createMasterListItem(item, isRainyDay = false) {
     const infoDiv = document.createElement("div");
     
     const nameEl = document.createElement("div");
-    nameEl.className = "sa-list-item-name";
+    nameEl.className = "list-item-name";
     nameEl.textContent = item.name; // ★ FIX: Use textContent for safety
 
     // Add rainy day badge for rainy exclusive items
     if (isRainyDay) {
         const badge = document.createElement("span");
-        badge.className = "sa-rainy-badge";
+        badge.className = "rainy-badge";
         badge.textContent = "🌧️ Rainy Only";
         nameEl.appendChild(badge);
     }
@@ -646,7 +646,7 @@ function createMasterListItem(item, isRainyDay = false) {
 
     // Toggle Switch
     const tog = document.createElement("label");
-    tog.className = "sa-switch";
+    tog.className = "switch";
     tog.onclick = e => e.stopPropagation();
 
     const cb = document.createElement("input");
@@ -659,7 +659,7 @@ function createMasterListItem(item, isRainyDay = false) {
     };
 
     const slider = document.createElement("span");
-    slider.className = "sa-slider";
+    slider.className = "slider";
     tog.appendChild(cb);
     tog.appendChild(slider);
     el.appendChild(tog);
@@ -683,7 +683,7 @@ function renderDetailPane() {
 
     const [, name] = selectedItemId.split(/-(.+)/);
     if (!name) {
-        detailPaneEl.innerHTML = `<p class='sa-muted'>Invalid selection.</p>`;
+        detailPaneEl.innerHTML = `<p class='muted'>Invalid selection.</p>`;
         selectedItemId = null;
         return;
     }
@@ -698,7 +698,7 @@ function renderDetailPane() {
     }
     
     if (!item) {
-        detailPaneEl.innerHTML = `<p class='sa-muted'>Not found.</p>`;
+        detailPaneEl.innerHTML = `<p class='muted'>Not found.</p>`;
         selectedItemId = null;
         return;
     }
@@ -809,18 +809,18 @@ function renderDetailPane() {
 
     sections.forEach(sec => {
         const section = document.createElement("div");
-        section.className = "sa-detail-section";
+        section.className = "detail-section";
 
         const hdr = document.createElement("div");
-        hdr.className = "sa-detail-section-header";
+        hdr.className = "detail-section-header";
         hdr.innerHTML = `<div>
-            <div class="sa-detail-section-title">${escapeHtml(sec.title)}</div>
-            <div class="sa-detail-section-summary">${escapeHtml(sec.summary)}</div>
+            <div class="detail-section-title">${escapeHtml(sec.title)}</div>
+            <div class="detail-section-summary">${escapeHtml(sec.summary)}</div>
         </div>
         <span style="font-size:1rem;">▸</span>`;
 
         const body = document.createElement("div");
-        body.className = "sa-detail-section-body";
+        body.className = "detail-section-body";
         body.appendChild(sec.render());
 
         hdr.onclick = () => {
@@ -866,7 +866,7 @@ function renderSharing(item) {
     const container = document.createElement("div");
 
     const updateSummary = () => {
-        const summaryEl = container.closest('.sa-detail-section')?.querySelector('.sa-detail-section-summary');
+        const summaryEl = container.closest('.detail-section')?.querySelector('.detail-section-summary');
         if (summaryEl) summaryEl.textContent = summarySharing(item);
     };
 
@@ -945,7 +945,7 @@ function renderSharing(item) {
             availableDivisions.forEach(d => {
                 const isActive = rules.divisions.includes(d);
                 const chip = document.createElement("span");
-                chip.className = "sa-chip " + (isActive ? "active" : "inactive");
+                chip.className = "chip " + (isActive ? "active" : "inactive");
                 chip.textContent = d;
                 chip.onclick = () => {
                     if (isActive) {
@@ -955,7 +955,7 @@ function renderSharing(item) {
                     }
                     rules.type = rules.divisions.length > 0 ? 'custom' : 'all';
                     saveData();
-                    chip.className = "sa-chip " + (rules.divisions.includes(d) ? "active" : "inactive");
+                    chip.className = "chip " + (rules.divisions.includes(d) ? "active" : "inactive");
                 };
                 chipWrap.appendChild(chip);
             });
@@ -973,7 +973,7 @@ function renderAccess(item) {
     const container = document.createElement("div");
 
     const updateSummary = () => {
-        const summaryEl = container.closest('.sa-detail-section')?.querySelector('.sa-detail-section-summary');
+        const summaryEl = container.closest('.detail-section')?.querySelector('.detail-section-summary');
         if (summaryEl) summaryEl.textContent = summaryAccess(item);
     };
 
@@ -1101,7 +1101,7 @@ function renderAccess(item) {
             availableDivisions.forEach(divName => {
                 const isAllowed = divName in rules.divisions;
                 const c = document.createElement("span");
-                c.className = "sa-chip " + (isAllowed ? "active" : "inactive");
+                c.className = "chip " + (isAllowed ? "active" : "inactive");
                 c.textContent = divName;
                 c.onclick = () => {
                     if (isAllowed) {
@@ -1132,7 +1132,7 @@ function renderTimeRules(item) {
     const container = document.createElement("div");
 
     const updateSummary = () => {
-        const summaryEl = container.closest('.sa-detail-section')?.querySelector('.sa-detail-section-summary');
+        const summaryEl = container.closest('.detail-section')?.querySelector('.detail-section-summary');
         if (summaryEl) summaryEl.textContent = summaryTime(item);
     };
 
