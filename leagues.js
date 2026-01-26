@@ -1152,8 +1152,9 @@
         if (!container) return;
 
         container.innerHTML = '';
-        const game = gameIdx != null ? league.games[gameIdx] : { date: '', sport: '', matches: [] };
+        const game = gameIdx != null ? league.games[gameIdx] : { date: '', matches: [] };
 
+        // Date input
         const dateRow = document.createElement('div');
         dateRow.style.marginBottom = '12px';
         const dateLabel = document.createElement('label');
@@ -1168,36 +1169,20 @@
         dateRow.appendChild(dateInput);
         container.appendChild(dateRow);
 
-        const sportRow = document.createElement('div');
-        sportRow.style.marginBottom = '12px';
-        const sportLabel = document.createElement('label');
-        sportLabel.style.cssText = 'font-weight:500; display:block; margin-bottom:4px;';
-        sportLabel.textContent = 'Sport:';
-        sportRow.appendChild(sportLabel);
-        
-        const sportSelect = document.createElement('select');
-        sportSelect.style.cssText = 'padding:8px; border:1px solid #D1D5DB; border-radius:8px; width:100%;';
-        
-        // ★ FIX: Build options using DOM
-        const defaultSportOpt = document.createElement('option');
-        defaultSportOpt.value = '';
-        defaultSportOpt.textContent = '-- Select --';
-        sportSelect.appendChild(defaultSportOpt);
-        
-        (league.sports || []).forEach(function (s) {
-            const opt = document.createElement('option');
-            opt.value = s;
-            opt.textContent = s;
-            if (s === game.sport) opt.selected = true;
-            sportSelect.appendChild(opt);
-        });
-        sportRow.appendChild(sportSelect);
-        container.appendChild(sportRow);
-
+        // Matches section
         const matchesLabel = document.createElement('label');
         matchesLabel.textContent = 'Matches:';
-        matchesLabel.style.cssText = 'font-weight:500; display:block; margin-bottom:8px;';
+        matchesLabel.style.cssText = 'font-weight:500; display:block; margin-bottom:8px; margin-top:16px;';
         container.appendChild(matchesLabel);
+
+        // Only show "no matches" message if this is a new game with no matches
+        if (gameIdx == null && (!game.matches || game.matches.length === 0)) {
+            const noMatchesMsg = document.createElement('p');
+            noMatchesMsg.className = 'muted';
+            noMatchesMsg.style.cssText = 'text-align:center; padding:12px; background:#F9FAFB; border-radius:8px; margin-bottom:12px;';
+            noMatchesMsg.textContent = 'Click "+ Add Match" to add matchups, or use "Import from Schedule" to pull today\'s games.';
+            container.appendChild(noMatchesMsg);
+        }
 
         const matchesDiv = document.createElement('div');
         matchesDiv.id = 'matches-container';
@@ -1205,15 +1190,18 @@
 
         function renderMatches() {
             matchesDiv.innerHTML = '';
+            
+            // Only render rows for matches that have teams assigned
             (game.matches || []).forEach(function (m, i) {
                 const row = document.createElement('div');
-                row.style.cssText = 'display:flex; gap:8px; margin-bottom:8px; align-items:center;';
+                row.style.cssText = 'display:flex; gap:8px; margin-bottom:10px; align-items:center; padding:10px 12px; background:#FFFFFF; border:1px solid #E5E7EB; border-radius:10px;';
 
+                // Team A selector
                 const teamASelect = document.createElement('select');
-                teamASelect.style.flex = '1';
+                teamASelect.style.cssText = 'flex:1; padding:8px; border:1px solid #D1D5DB; border-radius:6px;';
                 const teamADefault = document.createElement('option');
                 teamADefault.value = '';
-                teamADefault.textContent = 'Team A';
+                teamADefault.textContent = '-- Select Team --';
                 teamASelect.appendChild(teamADefault);
                 league.teams.forEach(function (t) {
                     const opt = document.createElement('option');
@@ -1224,15 +1212,39 @@
                 });
                 teamASelect.onchange = function () { m.teamA = teamASelect.value; };
 
-                const vs = document.createElement('span');
-                vs.textContent = 'vs';
-                vs.style.color = '#6B7280';
+                // Score A input
+                const scoreAInput = document.createElement('input');
+                scoreAInput.type = 'number';
+                scoreAInput.min = '0';
+                scoreAInput.placeholder = '0';
+                scoreAInput.value = m.scoreA != null ? m.scoreA : '';
+                scoreAInput.style.cssText = 'width:50px; text-align:center; padding:8px; border:1px solid #D1D5DB; border-radius:6px; font-weight:600;';
+                scoreAInput.onchange = function () { 
+                    m.scoreA = scoreAInput.value !== '' ? parseInt(scoreAInput.value, 10) : null; 
+                };
 
+                // VS label
+                const vs = document.createElement('span');
+                vs.textContent = '-';
+                vs.style.cssText = 'color:#6B7280; font-weight:600; padding:0 4px;';
+
+                // Score B input
+                const scoreBInput = document.createElement('input');
+                scoreBInput.type = 'number';
+                scoreBInput.min = '0';
+                scoreBInput.placeholder = '0';
+                scoreBInput.value = m.scoreB != null ? m.scoreB : '';
+                scoreBInput.style.cssText = 'width:50px; text-align:center; padding:8px; border:1px solid #D1D5DB; border-radius:6px; font-weight:600;';
+                scoreBInput.onchange = function () { 
+                    m.scoreB = scoreBInput.value !== '' ? parseInt(scoreBInput.value, 10) : null; 
+                };
+
+                // Team B selector
                 const teamBSelect = document.createElement('select');
-                teamBSelect.style.flex = '1';
+                teamBSelect.style.cssText = 'flex:1; padding:8px; border:1px solid #D1D5DB; border-radius:6px;';
                 const teamBDefault = document.createElement('option');
                 teamBDefault.value = '';
-                teamBDefault.textContent = 'Team B';
+                teamBDefault.textContent = '-- Select Team --';
                 teamBSelect.appendChild(teamBDefault);
                 league.teams.forEach(function (t) {
                     const opt = document.createElement('option');
@@ -1243,45 +1255,16 @@
                 });
                 teamBSelect.onchange = function () { m.teamB = teamBSelect.value; };
 
-                const winnerSelect = document.createElement('select');
-                winnerSelect.style.width = '100px';
-                
-                const winnerDefault = document.createElement('option');
-                winnerDefault.value = '';
-                winnerDefault.textContent = 'Winner?';
-                winnerSelect.appendChild(winnerDefault);
-                
-                const tieOpt = document.createElement('option');
-                tieOpt.value = 'tie';
-                tieOpt.textContent = 'Tie';
-                if (m.winner === 'tie') tieOpt.selected = true;
-                winnerSelect.appendChild(tieOpt);
-                
-                if (m.teamA) {
-                    const teamAOpt = document.createElement('option');
-                    teamAOpt.value = m.teamA;
-                    teamAOpt.textContent = m.teamA;
-                    if (m.winner === m.teamA) teamAOpt.selected = true;
-                    winnerSelect.appendChild(teamAOpt);
-                }
-                if (m.teamB) {
-                    const teamBOpt = document.createElement('option');
-                    teamBOpt.value = m.teamB;
-                    teamBOpt.textContent = m.teamB;
-                    if (m.winner === m.teamB) teamBOpt.selected = true;
-                    winnerSelect.appendChild(teamBOpt);
-                }
-                winnerSelect.onchange = function () { m.winner = winnerSelect.value; };
-
+                // Remove button
                 const removeBtn = document.createElement('button');
                 removeBtn.textContent = '×';
-                removeBtn.style.cssText = 'background:#FEE2E2; color:#DC2626; border:none; border-radius:4px; padding:4px 8px; cursor:pointer;';
+                removeBtn.style.cssText = 'background:#FEE2E2; color:#DC2626; border:none; border-radius:6px; padding:8px 12px; cursor:pointer; font-weight:600;';
                 removeBtn.onclick = function () {
                     game.matches.splice(i, 1);
                     renderMatches();
                 };
 
-                row.append(teamASelect, vs, teamBSelect, winnerSelect, removeBtn);
+                row.append(teamASelect, scoreAInput, vs, scoreBInput, teamBSelect, removeBtn);
                 matchesDiv.appendChild(row);
             });
         }
@@ -1290,10 +1273,10 @@
 
         const addMatchBtn = document.createElement('button');
         addMatchBtn.textContent = '+ Add Match';
-        addMatchBtn.style.cssText = 'margin-top:8px; padding:6px 12px; border:1px dashed #D1D5DB; border-radius:8px; background:#fff; cursor:pointer;';
+        addMatchBtn.style.cssText = 'margin-top:8px; padding:8px 16px; border:1px dashed #D1D5DB; border-radius:8px; background:#fff; cursor:pointer;';
         addMatchBtn.onclick = function () {
             if (!game.matches) game.matches = [];
-            game.matches.push({ teamA: '', teamB: '', winner: '' });
+            game.matches.push({ teamA: '', teamB: '', scoreA: null, scoreB: null });
             renderMatches();
         };
         container.appendChild(addMatchBtn);
@@ -1303,7 +1286,14 @@
         saveBtn.style.cssText = 'margin-top:16px; padding:10px 20px; background:#10B981; color:#fff; border:none; border-radius:8px; cursor:pointer; font-weight:500; display:block;';
         saveBtn.onclick = function () {
             game.date = dateInput.value;
-            game.sport = sportSelect.value;
+
+            // Filter out matches without both teams selected
+            game.matches = (game.matches || []).filter(m => m.teamA && m.teamB);
+
+            if (game.matches.length === 0) {
+                alert('Please add at least one match with both teams selected.');
+                return;
+            }
 
             if (gameIdx != null) {
                 league.games[gameIdx] = game;
@@ -1319,29 +1309,228 @@
         container.appendChild(saveBtn);
     }
 
+    /**
+     * ★ Import games from the current day's schedule
+     * Finds league matchups and creates game entries for result entry
+     */
     function importGamesFromSchedule(league) {
-        alert('Import from schedule not yet implemented. Games must be entered manually for now.');
+        if (!league) {
+            alert('No league selected.');
+            return;
+        }
+
+        try {
+            // Get current schedule data
+            const daily = window.loadCurrentDailyData?.() || {};
+            const scheduleAssignments = daily.scheduleAssignments || window.scheduleAssignments || {};
+            const leagueAssignments = window.leagueAssignments || {};
+            const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+
+            // Find matchups for this league
+            const foundMatchups = [];
+            const processedMatchups = new Set(); // Avoid duplicates
+
+            // Method 1: Check leagueAssignments (primary source)
+            for (const divName of (league.divisions || [])) {
+                const divAssignments = leagueAssignments[divName];
+                if (!divAssignments) continue;
+
+                for (const slotIdx of Object.keys(divAssignments)) {
+                    const slotData = divAssignments[slotIdx];
+                    
+                    // Check if this is for our league
+                    const isOurLeague = slotData?.leagueName === league.name ||
+                        slotData?.gameLabel?.includes(league.name);
+                    
+                    if (!isOurLeague) continue;
+
+                    const matchups = slotData.matchups || [];
+
+                    matchups.forEach(m => {
+                        let teamA, teamB;
+                        if (typeof m === 'object') {
+                            teamA = m.teamA;
+                            teamB = m.teamB;
+                        } else if (typeof m === 'string') {
+                            const parts = m.split(' vs ');
+                            if (parts.length === 2) {
+                                teamA = parts[0].trim();
+                                teamB = parts[1].split('—')[0].trim();
+                            }
+                        }
+
+                        if (teamA && teamB && teamA !== 'BYE' && teamB !== 'BYE') {
+                            const key = [teamA, teamB].sort().join('|');
+                            if (!processedMatchups.has(key)) {
+                                processedMatchups.add(key);
+                                foundMatchups.push({ teamA, teamB });
+                            }
+                        }
+                    });
+                }
+            }
+
+            // Method 2: Scan scheduleAssignments for league entries (fallback)
+            if (foundMatchups.length === 0) {
+                for (const bunkName of Object.keys(scheduleAssignments)) {
+                    const bunkSchedule = scheduleAssignments[bunkName];
+                    if (!Array.isArray(bunkSchedule)) continue;
+
+                    for (let slotIdx = 0; slotIdx < bunkSchedule.length; slotIdx++) {
+                        const entry = bunkSchedule[slotIdx];
+                        if (!entry) continue;
+
+                        const activityName = entry._activity || entry.field || '';
+                        const entryLeagueName = entry._leagueName || '';
+                        const isH2H = entry._h2h === true;
+
+                        const isOurLeague = entryLeagueName === league.name ||
+                            activityName.includes(`League: ${league.name}`) ||
+                            (isH2H && activityName.includes(league.name));
+
+                        if (!isOurLeague) continue;
+
+                        const allMatchups = entry._allMatchups || [];
+
+                        allMatchups.forEach(m => {
+                            let teamA, teamB;
+                            if (typeof m === 'string') {
+                                const vsMatch = m.match(/^(.+?)\s+vs\s+(.+?)(?:\s*—|$)/i);
+                                if (vsMatch) {
+                                    teamA = vsMatch[1].trim();
+                                    teamB = vsMatch[2].trim();
+                                }
+                            } else if (typeof m === 'object') {
+                                teamA = m.teamA;
+                                teamB = m.teamB;
+                            }
+
+                            if (teamA && teamB && teamA !== 'BYE' && teamB !== 'BYE') {
+                                if (league.teams.includes(teamA) && league.teams.includes(teamB)) {
+                                    const key = [teamA, teamB].sort().join('|');
+                                    if (!processedMatchups.has(key)) {
+                                        processedMatchups.add(key);
+                                        foundMatchups.push({ teamA, teamB });
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+
+            // Check if we found any matchups
+            if (foundMatchups.length === 0) {
+                alert(
+                    'No league games found in today\'s schedule for "' + league.name + '".\n\n' +
+                    'Make sure:\n' +
+                    '1. A schedule has been generated for today\n' +
+                    '2. This league is assigned to divisions that were scheduled\n' +
+                    '3. The league has at least 2 teams configured'
+                );
+                return;
+            }
+
+            // Create a new game entry with the found matchups
+            const newGame = {
+                date: currentDate,
+                matches: foundMatchups.map(m => ({
+                    teamA: m.teamA,
+                    teamB: m.teamB,
+                    scoreA: null,
+                    scoreB: null
+                })),
+                importedFrom: 'schedule',
+                importedAt: new Date().toISOString()
+            };
+
+            // Check if a game for this date already exists
+            if (!league.games) league.games = [];
+            const existingGameIdx = league.games.findIndex(g => g.date === currentDate);
+            
+            if (existingGameIdx >= 0) {
+                const overwrite = confirm(
+                    'A game entry already exists for ' + currentDate + '.\n\n' +
+                    'Do you want to replace it with the imported matchups?\n' +
+                    '(Any existing scores will be lost)'
+                );
+                if (overwrite) {
+                    league.games[existingGameIdx] = newGame;
+                } else {
+                    return;
+                }
+            } else {
+                league.games.push(newGame);
+            }
+
+            // Save and refresh
+            saveLeaguesData();
+            
+            alert(
+                'Successfully imported ' + foundMatchups.length + ' match(es) from today\'s schedule!\n\n' +
+                'Matchups:\n' + foundMatchups.map(m => '• ' + m.teamA + ' vs ' + m.teamB).join('\n') +
+                '\n\nYou can now enter the scores.'
+            );
+            
+            renderDetailPane();
+
+        } catch (e) {
+            console.error('[LEAGUES] Import error:', e);
+            alert('Error importing games: ' + e.message);
+        }
     }
 
     // =========================================================================
-    // RECALC STANDINGS
+    // RECALC STANDINGS - ★ Score-based calculation
     // =========================================================================
     function recalcStandings(league) {
         if (!league || !league.teams) return;
 
+        // Reset all standings
         league.teams.forEach(function (t) {
             league.standings[t] = { w: 0, l: 0, t: 0 };
         });
 
+        // Calculate from games
         (league.games || []).forEach(function (g) {
             (g.matches || []).forEach(function (m) {
-                if (m.winner === 'tie') {
-                    if (league.standings[m.teamA]) league.standings[m.teamA].t++;
-                    if (league.standings[m.teamB]) league.standings[m.teamB].t++;
+                // Skip if teams don't exist or scores aren't entered
+                if (!m.teamA || !m.teamB) return;
+                if (!league.standings[m.teamA] || !league.standings[m.teamB]) return;
+                
+                // Check if scores are entered (allow 0 as valid score)
+                const hasScoreA = m.scoreA != null && m.scoreA !== '';
+                const hasScoreB = m.scoreB != null && m.scoreB !== '';
+                
+                if (hasScoreA && hasScoreB) {
+                    const scoreA = parseInt(m.scoreA, 10) || 0;
+                    const scoreB = parseInt(m.scoreB, 10) || 0;
+                    
+                    if (scoreA > scoreB) {
+                        // Team A wins
+                        league.standings[m.teamA].w++;
+                        league.standings[m.teamB].l++;
+                    } else if (scoreB > scoreA) {
+                        // Team B wins
+                        league.standings[m.teamB].w++;
+                        league.standings[m.teamA].l++;
+                    } else {
+                        // Tie
+                        league.standings[m.teamA].t++;
+                        league.standings[m.teamB].t++;
+                    }
                 } else if (m.winner) {
-                    if (league.standings[m.winner]) league.standings[m.winner].w++;
-                    const loser = m.winner === m.teamA ? m.teamB : m.teamA;
-                    if (league.standings[loser]) league.standings[loser].l++;
+                    // Legacy support: use winner field if scores not available
+                    if (m.winner === 'tie') {
+                        league.standings[m.teamA].t++;
+                        league.standings[m.teamB].t++;
+                    } else if (m.winner === m.teamA) {
+                        league.standings[m.teamA].w++;
+                        league.standings[m.teamB].l++;
+                    } else if (m.winner === m.teamB) {
+                        league.standings[m.teamB].w++;
+                        league.standings[m.teamA].l++;
+                    }
                 }
             });
         });
